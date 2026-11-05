@@ -63,7 +63,7 @@ pub fn read(text: &str) -> Result<RuleSpec, RulesError> {
     reader.space()?;
     let key_at = reader.position();
     let key = match reader.peek() {
-        Some('"') => reader.string()?.0,
+        Some('"') => reader.string()?.text,
         _ => String::new(),
     };
     if key != "rules" {
@@ -110,6 +110,8 @@ struct Reader {
     at: usize,
     line: usize,
     column: usize,
+    /// The UTF-16 units read so far.
+    units: usize,
     /// How many levels the one being read is nested in.
     depth: usize,
 }
@@ -121,6 +123,7 @@ impl Reader {
             at: 0,
             line: 1,
             column: 1,
+            units: 0,
             depth: 0,
         }
     }
@@ -132,6 +135,7 @@ impl Reader {
     fn bump(&mut self) {
         if let Some(c) = self.peek() {
             self.at += 1;
+            self.units += c.len_utf16();
             if c == '\n' {
                 self.line += 1;
                 self.column = 1;
@@ -235,23 +239,40 @@ impl Reader {
     }
 
     /// A JSON string, with the place of each decoded character (and of the closing quote).
-    fn string(&mut self) -> Result<(String, Vec<(usize, usize)>), RulesError> {
+    ///
+    /// The places count along the line the string starts on, whatever the string holds: the
+    /// official emulator places a character of an expression by its distance from the start of
+    /// the string in the file, so a raw line terminator inside the string is one more column
+    /// and does not start a line.
+    fn string(&mut self) -> Result<JsonString, RulesError> {
         self.bump();
+        let (line0, column0, units0) = (self.line, self.column, self.units);
+        let flat = |reader: &Self| Place {
+            line: line0,
+            column: column0 + reader.units - units0,
+        };
         let mut text = String::new();
         let mut places = Vec::new();
+        let mut second_units = Vec::new();
+        let mut lone_surrogates = Vec::new();
         loop {
-            let place = self.position();
+            let place = flat(self);
             match self.peek() {
                 None => return Err(self.error_here("Unexpected EOF.")),
                 Some('"') => {
                     places.push((place.line, place.column));
                     self.bump();
-                    return Ok((text, places));
+                    return Ok(JsonString {
+                        text,
+                        places,
+                        second_units,
+                        lone_surrogates,
+                    });
                 }
                 Some('\\') => {
                     self.bump();
                     // An escaped character is placed where its escape ends.
-                    let mut place = self.position();
+                    let mut place = flat(self);
                     let decoded = match self.peek() {
                         None => return Err(self.error_here("Unexpected EOF.")),
                         Some('n') => '\n',
@@ -260,22 +281,47 @@ impl Reader {
                         Some('b') => '\u{8}',
                         Some('f') => '\u{c}',
                         Some('u') => {
-                            // A JSON `\uXXXX` escape (not a percent escape): four hex digits,
-                            // refused at the first one that is not.
-                            let mut digits = String::with_capacity(4);
-                            for _ in 0..4 {
+                            let high = self.unit_escape()?;
+                            place = flat(self);
+                            // A high surrogate escape followed by a low one is one character
+                            // (two UTF-16 units, as Java reads them); its second unit is placed
+                            // where the second escape ends.
+                            let low = (0xD800..0xDC00).contains(&high).then(|| {
+                                let saved = (self.at, self.line, self.column, self.units);
                                 self.bump();
-                                let digit = self
-                                    .peek()
-                                    .filter(char::is_ascii_hexdigit)
-                                    .ok_or_else(|| self.error_here("Parse error."))?;
-                                digits.push(digit);
+                                let low = (self.peek() == Some('\\')
+                                    && self.chars.get(self.at + 1) == Some(&'u'))
+                                .then(|| {
+                                    self.bump();
+                                    self.unit_escape().ok()
+                                })
+                                .flatten()
+                                .filter(|low| (0xDC00..0xE000).contains(low));
+                                if low.is_none() {
+                                    (self.at, self.line, self.column, self.units) = saved;
+                                }
+                                low
+                            });
+                            match low.flatten() {
+                                Some(low) => {
+                                    let second = flat(self);
+                                    // (`places` holds one entry per character read so far: the index is
+                                    // read from it, never counted over `text`, so a string of many pairs is
+                                    // read in linear time. Counting the decoded text for every pair made
+                                    // 300,000 pairs read about 10^11 bytes.)
+                                    second_units.push((places.len(), (second.line, second.column)));
+                                    char::from_u32(
+                                        0x10000 + ((high - 0xD800) << 10) + (low - 0xDC00),
+                                    )
+                                    .unwrap_or('\u{fffd}')
+                                }
+                                None => char::from_u32(high).unwrap_or_else(|| {
+                                    // A Rust string cannot hold a surrogate: U+FFFD stands in,
+                                    // and the unit is kept to tell it from the others.
+                                    lone_surrogates.push((places.len(), high));
+                                    '\u{fffd}'
+                                }),
                             }
-                            place = self.position();
-                            u32::from_str_radix(&digits, 16)
-                                .ok()
-                                .and_then(char::from_u32)
-                                .unwrap_or('\u{fffd}')
                         }
                         Some(other) => other,
                     };
@@ -292,6 +338,21 @@ impl Reader {
         }
     }
 
+    /// The four hex digits of a JSON `\uXXXX` escape (not a percent escape), the reader on
+    /// its `u`; refused at the first one that is not. The reader stops on the last digit.
+    fn unit_escape(&mut self) -> Result<u32, RulesError> {
+        let mut digits = String::with_capacity(4);
+        for _ in 0..4 {
+            self.bump();
+            let digit = self
+                .peek()
+                .filter(char::is_ascii_hexdigit)
+                .ok_or_else(|| self.error_here("Parse error."))?;
+            digits.push(digit);
+        }
+        u32::from_str_radix(&digits, 16).map_err(|_| self.error_here("Parse error."))
+    }
+
     /// A rule value: `true`, `false` or an expression string. Anything else is refused at
     /// its start, without reading it; a word is refused where it stops spelling `true`,
     /// `false` or `null`.
@@ -305,9 +366,17 @@ impl Reader {
         };
         let word = match self.peek() {
             Some('"') => {
-                let (text, positions) = self.string()?;
+                let string = self.string()?;
+                let source = SourceExpr {
+                    text: string.text,
+                    positions: string.places,
+                    second_units: string.second_units,
+                };
+                // The official emulator parses each expression as it reads it: the first
+                // syntax error in the file is the only one it reports.
+                source.check_syntax()?;
                 return Ok(RuleSource::LocatedExpr(
-                    SourceExpr { text, positions },
+                    source,
                     (start.line, start.column + 1),
                 ));
             }
@@ -335,16 +404,36 @@ impl Reader {
             SourceExpr {
                 text: word.to_owned(),
                 positions,
+                second_units: Vec::new(),
             },
             (start.line, start.column),
         ))
+    }
+
+    /// An index name of `.indexOn`, refused where its string starts unless the official
+    /// emulator takes it.
+    fn index_name(&mut self) -> Result<String, RulesError> {
+        let start = self.position();
+        let string = self.string()?;
+        let name = string.text;
+        // (A surrogate written alone cannot be encoded in the path, so the name is refused.)
+        if string.lone_surrogates.is_empty() && valid_index_name(&name) {
+            Ok(name)
+        } else {
+            Err(Self::error_at(
+                start,
+                &format!(
+                    "Invalid key: {name}. Index must be either .value or declared on a valid path"
+                ),
+            ))
+        }
     }
 
     /// `.indexOn`: a string, or an array of strings.
     fn index_on(&mut self) -> Result<Vec<String>, RulesError> {
         let start = self.position();
         match self.peek() {
-            Some('"') => Ok(vec![self.string()?.0]),
+            Some('"') => Ok(vec![self.index_name()?]),
             Some('[') => {
                 self.bump();
                 let mut names = Vec::new();
@@ -356,7 +445,7 @@ impl Reader {
                             return Ok(names);
                         }
                         Some(',') => self.bump(),
-                        Some('"') => names.push(self.string()?.0),
+                        Some('"') => names.push(self.index_name()?),
                         None => return Err(self.error_here("Unexpected EOF.")),
                         _ => {
                             return Err(self.error_here("Invalid indexOn expression. Expected ']'"))
@@ -392,7 +481,8 @@ impl Reader {
         }
         self.bump();
         let mut spec = RuleSpec::default();
-        let mut wildcard: Option<String> = None;
+        let mut index_on = false;
+        let mut siblings = Siblings::default();
         loop {
             self.space()?;
             match self.peek() {
@@ -409,9 +499,26 @@ impl Reader {
                 Some(_) => return Err(self.error_here("Parse error.")),
             }
             let key_at = self.position();
-            let (key, _) = self.string()?;
+            let key_string = self.string()?;
+            let (key, lone_surrogates) = (key_string.text, key_string.lone_surrogates);
             if key.is_empty() {
                 return Err(Self::error_at(key_at, "Unexpected empty string."));
+            }
+            // A repeated rule or `.indexOn` is refused where its key starts.
+            let repeated = match key.as_str() {
+                ".read" => spec.read.is_some(),
+                ".write" => spec.write.is_some(),
+                ".validate" => spec.validate.is_some(),
+                ".indexOn" => std::mem::replace(&mut index_on, true),
+                _ => false,
+            };
+            if repeated {
+                let message = if key == ".indexOn" {
+                    "Cannot have multiple '.indexOn' keys.".to_owned()
+                } else {
+                    format!("Cannot have multiple '{key}' rules.")
+                };
+                return Err(Self::error_at(key_at, &message));
             }
             self.colon()?;
             match key.as_str() {
@@ -431,23 +538,7 @@ impl Reader {
                         line: self.line,
                         column: self.column - 1,
                     };
-                    if let Some(name) = key.strip_prefix('$') {
-                        if !valid_key(name) {
-                            return Err(Self::error_at(end, INVALID_KEY));
-                        }
-                        if let Some(other) = &wildcard {
-                            return Err(Self::error_at(
-                                end,
-                                &format!(
-                                    "Cannot have multiple default rules ('{other}' and '{key}')."
-                                ),
-                            ));
-                        }
-                        wildcard = Some(key.clone());
-                    } else if !valid_key(&key) {
-                        return Err(Self::error_at(end, INVALID_KEY));
-                    }
-                    spec.children.insert(key, child);
+                    siblings.add(&mut spec, key, &lone_surrogates, child, end)?;
                 }
             }
             // A member is followed by a comma or the closing brace.
@@ -461,6 +552,60 @@ impl Reader {
     }
 }
 
+/// The children of a level read so far.
+#[derive(Default)]
+struct Siblings {
+    /// The wildcard child (`$name`), of which a level has one.
+    wildcard: Option<String>,
+    /// The keys read, by what tells them apart in Java: the text and the lone surrogates it
+    /// could not hold (two of them are two keys, though both read as U+FFFD).
+    seen: std::collections::HashSet<(String, Vec<(usize, u32)>)>,
+}
+
+impl Siblings {
+    /// Adds the child `key` of `spec`, read up to `end` (its closing brace, where its key is
+    /// checked).
+    fn add(
+        &mut self,
+        spec: &mut RuleSpec,
+        key: String,
+        lone_surrogates: &[(usize, u32)],
+        child: RuleSpec,
+        end: Place,
+    ) -> Result<(), RulesError> {
+        if let Some(name) = key.strip_prefix('$') {
+            if !valid_key(name) {
+                return Err(Reader::error_at(end, INVALID_KEY));
+            }
+            if let Some(other) = &self.wildcard {
+                return Err(Reader::error_at(
+                    end,
+                    &format!("Cannot have multiple default rules ('{other}' and '{key}')."),
+                ));
+            }
+            self.wildcard = Some(key.clone());
+        } else if !valid_key(&key) {
+            return Err(Reader::error_at(end, INVALID_KEY));
+        }
+        if !self.seen.insert((key.clone(), lone_surrogates.to_owned())) {
+            return Err(Reader::error_at(
+                end,
+                &format!("'{key}' occurs multiple times."),
+            ));
+        }
+        // A named child with a lone surrogate in its key matches no path (a path holds no
+        // surrogate on its own); it is kept under a key no path can spell, so its rules are
+        // still read and checked, and two of them stay two.
+        let key = if lone_surrogates.is_empty() || key.starts_with('$') {
+            key
+        } else {
+            format!("{key}\u{0}{}", spec.children.len())
+        };
+        spec.children.insert(key, child);
+        Ok(())
+    }
+}
+
 const INVALID_KEY: &str = r##"String can't contain ".", "#", "$", "/", "[", or "]""##;
 
 /// Whether `key` may name a rules child: not empty, none of `.#$/[]`, and no ASCII control
@@ -469,6 +614,35 @@ fn valid_key(key: &str) -> bool {
     !key.is_empty()
         && !key.contains(['.', '#', '$', '/', '[', ']'])
         && !key.chars().any(|c| c.is_ascii_control())
+}
+
+/// A JSON string read from the rules file.
+struct JsonString {
+    /// The decoded text.
+    text: String,
+    /// The place of each character of `text`, and of the closing quote.
+    places: Vec<(usize, usize)>,
+    /// The second escapes of the characters written as surrogate pairs (see
+    /// [`SourceExpr::second_units`]).
+    second_units: Vec<(usize, (usize, usize))>,
+    /// The index in `text` and the UTF-16 unit of each surrogate written alone (an escape with
+    /// no partner), which `text` holds as U+FFFD.
+    lone_surrogates: Vec<(usize, u32)>,
+}
+
+/// Whether the official emulator takes `name` in `.indexOn`: `.value` and `.key`, or a path
+/// whose segments are keys (none of `.$#[]` or an ASCII control character), the last of which
+/// may be `.priority`; empty segments are dropped.
+fn valid_index_name(name: &str) -> bool {
+    if matches!(name, ".value" | ".key") {
+        return true;
+    }
+    let segments: Vec<&str> = name.split('/').filter(|s| !s.is_empty()).collect();
+    segments.iter().enumerate().all(|(i, segment)| {
+        (i + 1 == segments.len() && *segment == ".priority")
+            || !(segment.contains(['.', '$', '#', '[', ']'])
+                || segment.chars().any(|c| c.is_ascii_control()))
+    })
 }
 
 #[cfg(test)]

@@ -7,6 +7,8 @@
 //! one. Positions are character offsets into the expression text; the caller maps them to
 //! the line and column of the rules file.
 
+use std::fmt::Write as _;
+
 use super::java_chars;
 
 /// A syntax or type error, at a character offset of the expression.
@@ -16,6 +18,10 @@ pub struct ExprError {
     pub at: usize,
     /// The official emulator's text for it.
     pub message: String,
+    /// Whether the place is the second UTF-16 unit of the character at `at` (a character
+    /// outside the Basic Multilingual Plane, which the official emulator's reader takes one
+    /// unit at a time, is illegal at its first unit and reported after it).
+    pub second_unit: bool,
 }
 
 impl ExprError {
@@ -23,6 +29,19 @@ impl ExprError {
         Self {
             at,
             message: message.into(),
+            second_unit: false,
+        }
+    }
+
+    /// "illegal character", reported where the reader stands after reading `c` at `at`.
+    fn illegal(at: usize, c: char) -> Self {
+        if c.len_utf16() == 2 {
+            Self {
+                second_unit: true,
+                ..Self::new(at, "illegal character")
+            }
+        } else {
+            Self::new(at + 1, "illegal character")
         }
     }
 }
@@ -37,9 +56,89 @@ enum Token {
     End,
 }
 
-const PUNCTUATION: [&str; 28] = [
-    "===", "!==", "--", "++", "==", "!=", "<=", ">=", "&&", "||", "(", ")", "[", "]", "{", "}",
-    ".", ",", ";", "?", ":", "!", "+", "-", "*", "/", "%", "<",
+/// The operators and punctuators of the official emulator's JavaScript reader (Rhino 1.7R4),
+/// longest first. The rules refuse most of them, but only once the whole expression is read,
+/// so they are read as there. (`>` is added after the list where a `>` is wanted.)
+const PUNCTUATION: [&str; 48] = [
+    ">>>=", "===", "!==", ">>>", "<<=", ">>=", "--", "++", "==", "!=", "<=", ">=", "&&", "||",
+    "<<", ">>", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "(", ")", "[", "]", "{", "}", ".",
+    ",", ";", "?", ":", "!", "+", "-", "*", "/", "%", "<", "=", "&", "|", "^", "~", "@",
+];
+
+/// The punctuators that end without the reader looking at the character after them.
+const NO_LOOKAHEAD: [&str; 30] = [
+    "(", ")", "[", "]", "{", "}", ",", ";", "?", "~", "@", "===", "!==", "&&", "||", "<=", ">=",
+    "++", "--", ">>>=", "<<=", ">>=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=",
+];
+
+/// The characters the reader takes as (the start of) a punctuator; any other character that
+/// starts no name, number, string or escape is an illegal character there.
+const PUNCTUATOR_CHARS: &str = ";[](){},?:.|^&=!<>*/%~+-@";
+
+/// The words the reader treats as keywords: a name spelling one with a `\u` escape has its
+/// last character escaped again (`\u0074rue` is the name `tru\u0065`), as Rhino 1.7R4 does.
+const KEYWORDS: [&str; 61] = [
+    "break",
+    "case",
+    "catch",
+    "const",
+    "continue",
+    "debugger",
+    "default",
+    "delete",
+    "do",
+    "else",
+    "export",
+    "false",
+    "finally",
+    "for",
+    "function",
+    "if",
+    "import",
+    "in",
+    "instanceof",
+    "new",
+    "null",
+    "return",
+    "switch",
+    "this",
+    "throw",
+    "true",
+    "try",
+    "typeof",
+    "var",
+    "void",
+    "while",
+    "with",
+    "abstract",
+    "boolean",
+    "byte",
+    "char",
+    "class",
+    "double",
+    "enum",
+    "extends",
+    "final",
+    "float",
+    "goto",
+    "implements",
+    "int",
+    "interface",
+    "long",
+    "native",
+    "package",
+    "private",
+    "protected",
+    "public",
+    "short",
+    "static",
+    "super",
+    "synchronized",
+    "throws",
+    "transient",
+    "volatile",
+    "let",
+    "yield",
 ];
 
 /// A binary operator.
@@ -218,6 +317,21 @@ impl Drop for Expr {
 struct Lexer<'a> {
     chars: &'a [char],
     at: usize,
+    /// Whether a line ended in the space before the token read last.
+    newline: bool,
+    /// The refusals found while reading tokens (a regular expression the rules cannot take),
+    /// reported only once the whole expression has been read.
+    refusals: Vec<Refusal>,
+}
+
+/// An error the official emulator's rules check reports after its JavaScript reader has read
+/// the whole expression, at the node spanning `at..end`: any syntax error there comes first, and
+/// of several refusals it reports the outermost, leftmost one (it walks the tree from the root).
+#[derive(Debug, Clone)]
+struct Refusal {
+    at: usize,
+    end: usize,
+    error: ExprError,
 }
 
 impl Lexer<'_> {
@@ -236,6 +350,7 @@ impl Lexer<'_> {
                 return Ok(());
             };
             if is_space(c) {
+                self.newline |= is_line_terminator(c);
                 self.at += 1;
                 continue;
             }
@@ -291,6 +406,7 @@ impl Lexer<'_> {
     /// The next token and where it starts. `regex_allowed` is true where an operand is
     /// expected, so a `/` starts a regular expression there and divides elsewhere.
     fn next(&mut self, regex_allowed: bool) -> Result<(usize, Token), ExprError> {
+        self.newline = false;
         self.skip_space()?;
         let start = self.at;
         let Some(&c) = self.chars.get(self.at) else {
@@ -306,22 +422,26 @@ impl Lexer<'_> {
             return self.regex(start);
         }
         // Names follow Java's identifier classes, as the reader there reads them (review r8
-        // M18); a character outside the Basic Multilingual Plane is never one.
-        if java_chars::is_identifier_start(c) {
-            let mut name = String::new();
-            while let Some(&c) = self.chars.get(self.at) {
-                if is_format(c) {
-                    // Dropped from the name (`tr\u{200b}ue` is `true`).
+        // M18); a character outside the Basic Multilingual Plane is never one. A name may
+        // start with or hold a `\uXXXX` escape, which stands for any character.
+        let escaped_start = c == '\\' && {
+            self.at += 1;
+            self.skip_format();
+            let is_u = self.chars.get(self.at) == Some(&'u');
+            if !is_u {
+                // Not a name: the reader has looked at the character after the `\`.
+                if self.chars.get(self.at).is_some() {
                     self.at += 1;
-                } else if c != '\u{feff}' && java_chars::is_identifier_part(c) {
-                    // (U+FEFF is white space to the reader, so it ends the name.)
-                    name.push(c);
-                    self.at += 1;
-                } else {
-                    break;
                 }
+                return Err(ExprError::new(self.at, "illegal character"));
             }
-            return Ok((start, Token::Name(name)));
+            true
+        };
+        if escaped_start || java_chars::is_identifier_start(c) {
+            return self.name(start, escaped_start);
+        }
+        if !PUNCTUATOR_CHARS.contains(c) {
+            return Err(ExprError::illegal(start, c));
         }
         // A format character inside an operator is skipped, as there (review r7 S19).
         for punct in PUNCTUATION.iter().chain(&[">"]) {
@@ -343,6 +463,122 @@ impl Lexer<'_> {
         Err(ExprError::new(start, "Unsupported javascript syntax."))
     }
 
+    /// A name starting at `start`; `escaped` when it starts with `\u` (the reader stands on
+    /// the `u`).
+    fn name(&mut self, start: usize, escaped: bool) -> Result<(usize, Token), ExprError> {
+        let mut name = String::new();
+        let mut contains_escape = escaped;
+        let mut in_escape = escaped;
+        loop {
+            if in_escape {
+                // Four hex digits after `\u`, each read past format characters.
+                self.at += 1;
+                let mut digits = String::with_capacity(4);
+                for _ in 0..4 {
+                    self.skip_format();
+                    let Some(&digit) = self.chars.get(self.at) else {
+                        return Err(ExprError::new(self.at, "invalid Unicode escape sequence"));
+                    };
+                    self.at += 1;
+                    if !digit.is_ascii_hexdigit() {
+                        return Err(ExprError::new(self.at, "invalid Unicode escape sequence"));
+                    }
+                    digits.push(digit);
+                }
+                let value = u32::from_str_radix(&digits, 16).unwrap_or(0xfffd);
+                name.push(char::from_u32(value).unwrap_or('\u{fffd}'));
+                in_escape = false;
+                continue;
+            }
+            let Some(&c) = self.chars.get(self.at) else {
+                break;
+            };
+            if is_format(c) {
+                // Dropped from the name (`tr\u{200b}ue` is `true`).
+                self.at += 1;
+            } else if c == '\\' {
+                self.at += 1;
+                self.skip_format();
+                if self.chars.get(self.at) == Some(&'u') {
+                    in_escape = true;
+                    contains_escape = true;
+                    continue;
+                }
+                if self.chars.get(self.at).is_some() {
+                    self.at += 1;
+                }
+                return Err(ExprError::new(self.at, "illegal character"));
+            } else if c != '\u{feff}' && java_chars::is_identifier_part(c) {
+                // (U+FEFF is white space to the reader, so it ends the name.)
+                name.push(c);
+                self.at += 1;
+            } else {
+                break;
+            }
+        }
+        if contains_escape && KEYWORDS.contains(&name.as_str()) {
+            // An escaped keyword stays a name, its last character escaped again.
+            if let Some(last) = name.pop() {
+                // (Writing to a string cannot fail.)
+                let _ = write!(name, "\\u{:04x}", u32::from(last));
+            }
+        }
+        Ok((start, Token::Name(name)))
+    }
+
+    /// Where an error of the reader stands in the expression, counted as Rhino's reader counts
+    /// it: from the start of the line it is on (the character after the last line terminator it
+    /// read, a CR LF being one terminator), in UTF-16 units, and one less while the last
+    /// character it read is that terminator (`TokenStream.getOffset`). The rules check places
+    /// that offset from the start of the expression, so the answer is the character (and
+    /// whether its second UTF-16 unit) the offset falls on there.
+    fn on_line(&self, error: ExprError) -> ExprError {
+        let at = error.at.min(self.chars.len());
+        let terminator_before = |end: usize| {
+            (0..end.min(self.chars.len()))
+                .rev()
+                .find(|&i| is_line_terminator(self.chars[i]))
+        };
+        let Some(last) = terminator_before(at) else {
+            return error;
+        };
+        // The reader has read a character of the new line unless it stands at the second unit
+        // of a character, or right after the terminator.
+        let just_read = !error.second_unit && last + 1 == at;
+        let line_start = if just_read {
+            let sequence_start =
+                if last > 0 && self.chars[last - 1] == '\r' && self.chars[last] == '\n' {
+                    last - 1
+                } else {
+                    last
+                };
+            terminator_before(sequence_start).map_or(0, |before| before + 1)
+        } else {
+            last + 1
+        };
+        let units = |range: std::ops::Range<usize>| -> usize {
+            self.chars[range].iter().map(|c| c.len_utf16()).sum()
+        };
+        let offset =
+            units(line_start..at) + usize::from(error.second_unit) - usize::from(just_read);
+        // The character the offset falls on, counting from the start of the expression.
+        let mut start = 0;
+        for (index, c) in self.chars.iter().enumerate() {
+            let end = start + c.len_utf16();
+            if offset < end {
+                return ExprError {
+                    at: index,
+                    second_unit: offset > start,
+                    ..error
+                };
+            }
+            start = end;
+        }
+        // (The offset lies before the cursor, so some character holds it; an error that does
+        // not stand on a character of the text stays where it is.)
+        error
+    }
+
     /// Whether the character `ahead` places on, format characters skipped, is a digit.
     fn peek_digit(&self, ahead: usize) -> bool {
         let mut at = self.at + ahead;
@@ -354,12 +590,13 @@ impl Lexer<'_> {
 
     /// Where the JavaScript parser of the official emulator stands after a token that ends
     /// at `end` and needed a character of lookahead to end: one past it, unless that is the
-    /// end of the text.
+    /// end of the text. The reader skips format characters as it looks ahead.
     fn after_lookahead(&self, end: usize) -> usize {
-        if end < self.chars.len() {
-            end + 1
+        let next = self.past_format(end);
+        if next < self.chars.len() {
+            next + 1
         } else {
-            end
+            next
         }
     }
 
@@ -462,7 +699,10 @@ impl Lexer<'_> {
         let mut units: Vec<u16> = Vec::new();
         loop {
             let Some(&c) = self.chars.get(self.at) else {
-                return Err(ExprError::new(start, "Unterminated string literal."));
+                return Err(ExprError::new(
+                    self.chars.len(),
+                    "unterminated string literal",
+                ));
             };
             self.at += 1;
             if c == quote {
@@ -471,7 +711,8 @@ impl Lexer<'_> {
             }
             if is_line_terminator(c) {
                 // A line ends the literal there (review r7 M17).
-                return Err(ExprError::new(self.at - 1, "unterminated string literal"));
+                // (The reader has read the terminator: see `on_line`.)
+                return Err(ExprError::new(self.at, "unterminated string literal"));
             }
             if c != '\\' {
                 // A format character in the body is kept, as there.
@@ -483,7 +724,10 @@ impl Lexer<'_> {
             // body of a string (review r7 M15).
             self.skip_format();
             let Some(&escaped) = self.chars.get(self.at) else {
-                return Err(ExprError::new(start, "Unterminated string literal."));
+                return Err(ExprError::new(
+                    self.chars.len(),
+                    "unterminated string literal",
+                ));
             };
             self.at += 1;
             if is_line_terminator(escaped) {
@@ -590,8 +834,9 @@ impl Lexer<'_> {
             }
             if is_line_terminator(c) {
                 // A line ends the literal there (review r8 M21).
+                // (The reader has read the terminator: see `on_line`.)
                 return Err(ExprError::new(
-                    self.at - 1,
+                    self.at,
                     "unterminated regular expression literal",
                 ));
             }
@@ -652,16 +897,25 @@ impl Lexer<'_> {
                 }
             }
         }
-        if !flags.is_empty() && flags != "i" {
-            return Err(ExprError::new(
-                start,
-                "regular expressions do not support flags other than i",
-            ));
+        // The rules check refuses these once the expression is read (`/a/g +` is an
+        // unexpected end of expression there).
+        let refused = if !flags.is_empty() && flags != "i" {
+            Err("regular expressions do not support flags other than i".to_owned())
+        } else {
+            check_anchors(&pattern)
+                .map_err(str::to_owned)
+                .and_then(|()| check_groups_and_counts(&pattern))
+                .and_then(|()| {
+                    super::regex_admission::check(&pattern, flags == "i").map_err(str::to_owned)
+                })
+        };
+        if let Err(message) = refused {
+            self.refusals.push(Refusal {
+                at: start,
+                end: self.at,
+                error: ExprError::new(start, message),
+            });
         }
-        check_anchors(&pattern).map_err(|message| ExprError::new(start, message))?;
-        check_groups_and_counts(&pattern).map_err(|message| ExprError::new(start, message))?;
-        super::regex_admission::check(&pattern, flags == "i")
-            .map_err(|message| ExprError::new(start, message))?;
         Ok((start, Token::Regex(pattern, flags)))
     }
 }
@@ -671,24 +925,6 @@ fn radix_value(digits: &str, radix: u32) -> f64 {
     digits.chars().fold(0.0, |value, digit| {
         value * f64::from(radix) + f64::from(digit.to_digit(radix).unwrap_or(0))
     })
-}
-
-/// The official emulator's refusal of `--` or `++` (`op`) on `operand`: a name or member
-/// is a valid operand that the rules forbid, anything else an invalid one.
-fn update_refusal(op: &str, operand: &Expr, at: usize) -> ExprError {
-    let assignable = matches!(
-        operand.kind,
-        ExprKind::Name(_) | ExprKind::Member(..) | ExprKind::Index(..)
-    );
-    match (assignable, op) {
-        // The rules check reports a forbidden operator where its operand starts.
-        (true, _) => ExprError::new(
-            operand.at,
-            format!("Rule expressions may not contain '{op}' operator."),
-        ),
-        (false, "--") => ExprError::new(at, "Invalid decrement operand."),
-        (false, _) => ExprError::new(at, "Invalid increment operand."),
-    }
 }
 
 /// Whether `c` ends a line (and so a string literal or a `//` comment) there.
@@ -963,6 +1199,8 @@ fn parse_text(
         lexer: Lexer {
             chars: &chars,
             at: 0,
+            newline: false,
+            refusals: Vec::new(),
         },
         peeked: None,
         regex_next: true,
@@ -972,35 +1210,142 @@ fn parse_text(
         last_end: 0,
         templates: Vec::new(),
     };
-    let parsed = parser.statement();
+    let parsed = parser.script();
     (parsed, parser.deepest, parser.templates)
 }
 
+/// A statement of the text, where it starts, and its expression if it is an expression
+/// statement (an empty statement, a block or a labelled statement has none).
+struct Statement {
+    at: usize,
+    expr: Option<Expr>,
+}
+
 impl Parser<'_> {
-    fn statement(&mut self) -> Result<Expr, ExprError> {
-        let expr = self.ternary()?;
-        let (at, token) = self.next()?;
-        match token {
-            Token::End => Ok(expr),
-            Token::Punct(";") => {
-                let (at, token) = self.next()?;
-                if token == Token::End {
-                    Ok(expr)
-                } else {
-                    Err(ExprError::new(
-                        at,
-                        "Rule expressions may not contain multiple expressions.",
-                    ))
-                }
-            }
-            token @ Token::Punct(")" | "]") => {
-                Err(ExprError::new(self.rhino_end(at, &token), "syntax error"))
-            }
-            token => Err(ExprError::new(
-                self.rhino_end(at, &token),
-                "missing ; before statement",
-            )),
+    /// The text as the official emulator reads it: JavaScript statements, every one of them
+    /// parsed first (a syntax error anywhere comes first), of which the rules then take
+    /// exactly one expression statement.
+    fn script(&mut self) -> Result<Expr, ExprError> {
+        // The reader reports its own errors at an offset in the line it stands on; the rules
+        // check places that offset from the start of the expression.
+        let statements = self
+            .statements()
+            .map_err(|error| self.lexer.on_line(error))?;
+        let mut statements = statements.into_iter();
+        let first = statements.next();
+        if let Some(second) = statements.next() {
+            return Err(ExprError::new(
+                second.at,
+                "Rule expressions may not contain multiple expressions.",
+            ));
         }
+        let Some(first) = first else {
+            return Err(ExprError::new(0, "Rule expression may not be empty."));
+        };
+        let Some(expr) = first.expr else {
+            return Err(ExprError::new(first.at, "Unsupported javascript syntax."));
+        };
+        // The check walks the tree from its root, left to right: the outermost, leftmost
+        // refusal is the one reported.
+        match self
+            .lexer
+            .refusals
+            .iter()
+            .min_by_key(|refusal| (refusal.at, std::cmp::Reverse(refusal.end)))
+        {
+            Some(refusal) => Err(refusal.error.clone()),
+            None => Ok(expr),
+        }
+    }
+
+    /// Every statement of the text.
+    fn statements(&mut self) -> Result<Vec<Statement>, ExprError> {
+        let mut statements = Vec::new();
+        while !matches!(self.peek()?, (_, Token::End)) {
+            statements.push(self.statement()?);
+        }
+        Ok(statements)
+    }
+
+    /// One statement: `;`, a `{ … }` block, a labelled statement (`name: statement`) or an
+    /// expression ended by `;`, a line break, a `}` or the end of the text.
+    fn statement(&mut self) -> Result<Statement, ExprError> {
+        let (at, token) = self.peek()?.clone();
+        match token {
+            Token::Punct(";") => {
+                self.next()?;
+                Ok(Statement { at, expr: None })
+            }
+            Token::Punct("{") => {
+                self.next()?;
+                self.deeper()?;
+                loop {
+                    match self.peek()?.clone() {
+                        (_, Token::Punct("}")) => {
+                            self.next()?;
+                            break;
+                        }
+                        (end, Token::End) => {
+                            return Err(ExprError::new(end, "missing } in compound statement"));
+                        }
+                        _ => {
+                            self.statement()?;
+                        }
+                    }
+                }
+                self.depth -= 1;
+                Ok(Statement { at, expr: None })
+            }
+            _ => {
+                let expr = self.expression_list()?;
+                // A name alone, not in parentheses, followed by `:`.
+                let label = matches!(expr.kind, ExprKind::Name(_))
+                    && expr.at == at
+                    && expr.start == at
+                    && matches!(self.peek()?, (_, Token::Punct(":")));
+                if label {
+                    self.next()?;
+                    self.deeper()?;
+                    self.statement()?;
+                    self.depth -= 1;
+                    return Ok(Statement { at, expr: None });
+                }
+                self.end_statement()?;
+                Ok(Statement {
+                    at,
+                    expr: Some(expr),
+                })
+            }
+        }
+    }
+
+    /// The end of an expression statement, as the reader inserts semicolons.
+    fn end_statement(&mut self) -> Result<(), ExprError> {
+        let (at, token) = self.peek()?.clone();
+        match token {
+            Token::Punct(";") => {
+                self.next()?;
+                Ok(())
+            }
+            Token::End | Token::Punct("}") => Ok(()),
+            _ if self.newline_before_next()? => Ok(()),
+            token => {
+                self.next()?;
+                Err(ExprError::new(
+                    self.rhino_end(at, &token),
+                    "missing ; before statement",
+                ))
+            }
+        }
+    }
+
+    /// Records a refusal of the node at `at..end`, reported once the text has been read.
+    fn refuse(&mut self, at: usize, end: usize, message: impl Into<String>) {
+        self.lexer.refusals.push(Refusal {
+            at,
+            end,
+            error: ExprError::new(at, message),
+        });
     }
 }
 
@@ -1017,7 +1362,8 @@ pub(crate) const MAX_EXPRESSION_DEPTH: usize = 600;
 
 struct Parser<'a> {
     lexer: Lexer<'a>,
-    peeked: Option<(usize, Token)>,
+    /// The next token, whether a line ended before it, and where the reader stands after it.
+    peeked: Option<((usize, Token), bool, usize)>,
     /// Whether a `/` at the next token starts a regular expression.
     regex_next: bool,
     /// How deep the operand being read is nested.
@@ -1026,25 +1372,54 @@ struct Parser<'a> {
     limit: usize,
     /// The deepest `depth` reached.
     deepest: usize,
+    /// Where the token read last ends.
     last_end: usize,
     templates: Vec<super::coverage::Template>,
+}
+
+/// Whether `op` assigns (`=`, `+=`, …), which the rules refuse.
+fn is_assignment(op: &str) -> bool {
+    matches!(
+        op,
+        "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "|=" | "^=" | "<<=" | ">>=" | ">>>="
+    )
+}
+
+/// Whether `operand` is one `++` and `--` may change (the reader refuses any other): a
+/// name, member, index or call, in parentheses or not.
+fn assignable(operand: &Expr) -> bool {
+    matches!(
+        operand.kind,
+        ExprKind::Name(_) | ExprKind::Member(..) | ExprKind::Index(..) | ExprKind::Call(..)
+    )
 }
 
 impl Parser<'_> {
     fn peek(&mut self) -> Result<&(usize, Token), ExprError> {
         if self.peeked.is_none() {
             let token = self.lexer.next(self.regex_next)?;
-            self.peeked = Some(token);
+            self.peeked = Some((token, self.lexer.newline, self.lexer.at));
         }
-        Ok(self.peeked.as_ref().unwrap_or(&(0, Token::End)))
+        Ok(self
+            .peeked
+            .as_ref()
+            .map_or(&(0, Token::End), |(token, _, _)| token))
+    }
+
+    /// Whether a line ends before the next token.
+    fn newline_before_next(&mut self) -> Result<bool, ExprError> {
+        self.peek()?;
+        Ok(self.peeked.as_ref().is_some_and(|(_, newline, _)| *newline))
     }
 
     fn next(&mut self) -> Result<(usize, Token), ExprError> {
-        let token = match self.peeked.take() {
-            Some(token) => token,
-            None => self.lexer.next(self.regex_next)?,
+        let (token, end) = if let Some((token, _, end)) = self.peeked.take() {
+            (token, end)
+        } else {
+            let token = self.lexer.next(self.regex_next)?;
+            (token, self.lexer.at)
         };
-        self.last_end = self.lexer.at;
+        self.last_end = end;
         // After an operand a `/` divides; after an operator or `(` it starts a regex.
         self.regex_next = !matches!(
             token.1,
@@ -1065,16 +1440,32 @@ impl Parser<'_> {
         Ok(false)
     }
 
-    /// Where the official emulator's JavaScript parser reports an error at `token`, which
-    /// starts at `at`: its end, one further after a token that needs lookahead to end.
+    /// Where the official emulator's JavaScript parser reports an error at `token`, the token
+    /// read last, which starts at `at`: its end, one further after a token that needs
+    /// lookahead to end.
     fn rhino_end(&self, at: usize, token: &Token) -> usize {
+        self.rhino_end_of(at, token, self.last_end)
+    }
+
+    /// Where the reader stands once it has read the next token (peeked already): after an
+    /// operand it has looked at what follows.
+    fn after_next(&mut self) -> Result<usize, ExprError> {
+        self.peek()?;
+        Ok(match &self.peeked {
+            Some(((at, token), _, end)) => self.rhino_end_of(*at, token, *end),
+            None => self.lexer.at,
+        })
+    }
+
+    /// [`Self::rhino_end`] for a token that ends at `end`.
+    fn rhino_end_of(&self, at: usize, token: &Token, end: usize) -> usize {
         let chars = self.lexer.chars;
         match token {
             Token::End => at,
-            Token::Punct(p @ ("(" | ")" | "[" | "]" | "{" | "}" | "," | ";" | "?" | ":")) => {
-                at + p.len()
-            }
-            Token::Punct(p) => self.lexer.after_lookahead(at + p.len()),
+            // A punctuator or a name ends where the reader stopped reading it (a format
+            // character inside a punctuator, an escape inside a name, is part of it).
+            Token::Punct(p) if NO_LOOKAHEAD.contains(p) => end,
+            Token::Punct(_) | Token::Name(_) => self.lexer.after_lookahead(end),
             Token::Str(_) => {
                 // The closing quote ends it.
                 let quote = chars[at];
@@ -1084,8 +1475,8 @@ impl Parser<'_> {
                 }
                 (end + 1).min(chars.len())
             }
-            Token::Number(_) | Token::Name(_) | Token::Regex(..) => {
-                // A number runs over its digits, point and exponent; a name stops at a `.`.
+            Token::Number(_) | Token::Regex(..) => {
+                // A number runs over its digits, point and exponent.
                 let number = matches!(token, Token::Number(_));
                 let mut end = at + 1;
                 while end < chars.len()
@@ -1133,18 +1524,58 @@ impl Parser<'_> {
         id
     }
 
+    /// `a, b, …`: read as the reader reads it, refused once the text is read.
+    fn expression_list(&mut self) -> Result<Expr, ExprError> {
+        let first = self.assignment()?;
+        if !matches!(self.peek()?, (_, Token::Punct(","))) {
+            return Ok(first);
+        }
+        let mut end = first.end;
+        while self.eat(",")? {
+            end = self.assignment()?.end;
+        }
+        self.refuse(
+            first.at,
+            end,
+            "Rule expressions may not contain ',' operator.",
+        );
+        Ok(first)
+    }
+
+    /// `a = b`, `a += b`, …: read, and refused once the text is read.
+    fn assignment(&mut self) -> Result<Expr, ExprError> {
+        let target = self.ternary()?;
+        let assigns = matches!(self.peek()?, (_, Token::Punct(op)) if is_assignment(op));
+        if !assigns {
+            return Ok(target);
+        }
+        self.next()?;
+        self.deeper()?;
+        let value = self.assignment()?;
+        self.depth -= 1;
+        self.refuse(
+            target.at,
+            value.end,
+            "Rule expressions may not contain assignments.",
+        );
+        Ok(target)
+    }
+
     fn ternary(&mut self) -> Result<Expr, ExprError> {
         let condition = self.binary(0)?;
         if !self.eat("?")? {
             return Ok(condition);
         }
         self.deeper()?;
-        let then = self.ternary()?;
-        if !self.eat(":")? {
-            let (at, _) = self.peek()?.clone();
-            return Err(ExprError::new(at, "Unexpected end of expression"));
+        let then = self.assignment()?;
+        let (at, token) = self.next()?;
+        if token != Token::Punct(":") {
+            return Err(ExprError::new(
+                self.rhino_end(at, &token),
+                "missing : in conditional expression",
+            ));
         }
-        let otherwise = self.ternary()?;
+        let otherwise = self.assignment()?;
         self.depth -= 1;
         let children = vec![condition.diagnostic, then.diagnostic, otherwise.diagnostic];
         Ok(self.expression(
@@ -1161,30 +1592,32 @@ impl Parser<'_> {
         // The levels this chain of operators adds, given back when it ends.
         let mut nested = 0;
         let result = loop {
-            let (op, level) = match self.peek()? {
+            // The operator and its level; `None` for one the rules refuse.
+            let (op, level, refused) = match self.peek()? {
                 (_, Token::Punct(p)) => match *p {
-                    "||" => (BinaryOp::Or, 1),
-                    "&&" => (BinaryOp::And, 2),
-                    "==" | "===" => (BinaryOp::Eq, 3),
-                    "!=" | "!==" => (BinaryOp::Ne, 3),
-                    "<" => (BinaryOp::Lt, 4),
-                    "<=" => (BinaryOp::Le, 4),
-                    ">" => (BinaryOp::Gt, 4),
-                    ">=" => (BinaryOp::Ge, 4),
-                    "+" => (BinaryOp::Add, 5),
-                    "-" => (BinaryOp::Sub, 5),
-                    "*" => (BinaryOp::Mul, 6),
-                    "/" => (BinaryOp::Div, 6),
-                    "%" => (BinaryOp::Rem, 6),
+                    "||" => (Some(BinaryOp::Or), 1, ""),
+                    "&&" => (Some(BinaryOp::And), 2, ""),
+                    "|" => (None, 3, "|"),
+                    "^" => (None, 4, "^"),
+                    "&" => (None, 5, "&"),
+                    "==" | "===" => (Some(BinaryOp::Eq), 6, ""),
+                    "!=" | "!==" => (Some(BinaryOp::Ne), 6, ""),
+                    "<" => (Some(BinaryOp::Lt), 7, ""),
+                    "<=" => (Some(BinaryOp::Le), 7, ""),
+                    ">" => (Some(BinaryOp::Gt), 7, ""),
+                    ">=" => (Some(BinaryOp::Ge), 7, ""),
+                    "<<" => (None, 8, "<<"),
+                    ">>" => (None, 8, ">>"),
+                    ">>>" => (None, 8, ">>>"),
+                    "+" => (Some(BinaryOp::Add), 9, ""),
+                    "-" => (Some(BinaryOp::Sub), 9, ""),
+                    "*" => (Some(BinaryOp::Mul), 10, ""),
+                    "/" => (Some(BinaryOp::Div), 10, ""),
+                    "%" => (Some(BinaryOp::Rem), 10, ""),
                     _ => break Ok(left),
                 },
-                (_, Token::Name(name)) if name == "in" => {
-                    let at = left.at;
-                    break Err(ExprError::new(
-                        at,
-                        "Rule expressions may not contain 'in' operator.",
-                    ));
-                }
+                (_, Token::Name(name)) if name == "in" => (None, 7, "in"),
+                (_, Token::Name(name)) if name == "instanceof" => (None, 7, "instanceof"),
                 _ => break Ok(left),
             };
             if level <= min_level {
@@ -1192,6 +1625,15 @@ impl Parser<'_> {
             }
             self.next()?;
             let right = self.binary(level)?;
+            let Some(op) = op else {
+                // The rules check reports a forbidden operator where its left operand starts.
+                self.refuse(
+                    left.at,
+                    right.end,
+                    format!("Rule expressions may not contain '{refused}' operator."),
+                );
+                continue;
+            };
             let associative = matches!(op, BinaryOp::And | BinaryOp::Or | BinaryOp::Add);
             if associative {
                 if let ExprKind::Chain(chained, operands) = &mut left.kind {
@@ -1277,21 +1719,64 @@ impl Parser<'_> {
                 ))
             }
             Token::Punct(op @ ("--" | "++")) => {
-                // The JavaScript reader parses a prefix decrement or increment; the rules
-                // refuse it (review r8 M19).
+                // The JavaScript reader parses a prefix decrement or increment of a member
+                // expression (a name, member, index or call), which the rules refuse where the
+                // operator stands; it refuses any other operand itself, once it has read the
+                // token after it (review r8 M19).
                 self.next()?;
-                let operand = self.unary()?;
-                Err(update_refusal(op, &operand, at))
+                let operand = self.member_expression()?;
+                if !assignable(&operand) {
+                    let message = if op == "--" {
+                        "Invalid decrement operand."
+                    } else {
+                        "Invalid increment operand."
+                    };
+                    return Err(ExprError::new(self.after_next()?, message));
+                }
+                self.refuse(
+                    at,
+                    operand.end,
+                    format!("Rule expressions may not contain '{op}' operator."),
+                );
+                Ok(Self::starting_at(operand, at))
             }
-            Token::Name(name) if name == "typeof" => Err(ExprError::new(
-                at,
-                "Rule expressions may not contain 'typeof' operator.",
-            )),
+            Token::Punct("~") => self.refused_unary(at, "'~' operator"),
+            Token::Punct("+") => self.refused_unary(at, "'+' operator"),
+            Token::Name(name) if matches!(name.as_str(), "typeof" | "void" | "delete") => {
+                self.refused_unary(at, &format!("'{name}' operator"))
+            }
             _ => self.postfix(),
         }
     }
 
+    /// A unary operator the rules refuse (`~`, `typeof`, `void`, `delete`) at `at`, and its
+    /// operand.
+    fn refused_unary(&mut self, at: usize, what: &str) -> Result<Expr, ExprError> {
+        self.next()?;
+        let operand = self.unary()?;
+        self.refuse(
+            at,
+            operand.end,
+            format!("Rule expressions may not contain {what}."),
+        );
+        Ok(Self::starting_at(operand, at))
+    }
+
+    /// `operand` standing for a refused operator at `at` before it: an operator it is the
+    /// left operand of starts there.
+    fn starting_at(mut operand: Expr, at: usize) -> Expr {
+        operand.at = at;
+        operand.start = at;
+        operand
+    }
+
     fn postfix(&mut self) -> Result<Expr, ExprError> {
+        let expr = self.member_expression()?;
+        self.postfix_update(expr)
+    }
+
+    /// An operand and its member, index and call steps.
+    fn member_expression(&mut self) -> Result<Expr, ExprError> {
         let mut expr = self.primary()?;
         // Each step (member, index, call) is a level the evaluator recurses through.
         let mut steps = 0;
@@ -1303,8 +1788,18 @@ impl Parser<'_> {
             }
             if self.eat(".")? {
                 let (at, token) = self.next()?;
+                if token == Token::Punct("@") {
+                    // `.@name`, an XML attribute.
+                    self.xml_attribute()?;
+                    let end = self.last_end;
+                    self.refuse(expr.at, end, "Unsupported javascript.");
+                    continue;
+                }
                 let Token::Name(name) = token else {
-                    return Err(ExprError::new(at, "missing name after . operator"));
+                    return Err(ExprError::new(
+                        self.rhino_end(at, &token),
+                        "missing name after . operator",
+                    ));
                 };
                 let end = self.last_end;
                 let name_id = self.template(at, end, Vec::new());
@@ -1317,7 +1812,7 @@ impl Parser<'_> {
                     children,
                 );
             } else if self.eat("[")? {
-                let index = self.ternary()?;
+                let index = self.expression_list()?;
                 self.close("]", "missing ] in index expression")?;
                 let end = self.last_end;
                 let children = vec![expr.diagnostic, index.diagnostic];
@@ -1345,7 +1840,7 @@ impl Parser<'_> {
                 let mut arguments = Vec::new();
                 if !self.eat(")")? {
                     loop {
-                        arguments.push(self.ternary()?);
+                        arguments.push(self.assignment()?);
                         if !self.eat(",")? {
                             self.close(")", "missing ) after argument list")?;
                             break;
@@ -1364,16 +1859,86 @@ impl Parser<'_> {
                 );
             } else {
                 self.depth -= steps;
-                // A postfix decrement or increment, refused as there; after a call the
-                // reader ends the statement instead, which the caller then refuses.
-                if let (_, Token::Punct(op @ ("--" | "++"))) = self.peek()?.clone() {
-                    if !matches!(expr.kind, ExprKind::Call(..)) {
-                        // An invalid operand is reported where the operator ends.
-                        self.next()?;
-                        return Err(update_refusal(op, &expr, self.lexer.at));
-                    }
-                }
                 return Ok(expr);
+            }
+        }
+    }
+
+    /// A postfix decrement or increment of `expr` on the same line, refused as there.
+    fn postfix_update(&mut self, expr: Expr) -> Result<Expr, ExprError> {
+        if let (_, Token::Punct(op @ ("--" | "++"))) = self.peek()?.clone() {
+            if !self.newline_before_next()? {
+                self.next()?;
+                if !assignable(&expr) {
+                    // An invalid operand is reported where the operator ends.
+                    let message = if op == "--" {
+                        "Invalid decrement operand."
+                    } else {
+                        "Invalid increment operand."
+                    };
+                    return Err(ExprError::new(self.last_end, message));
+                }
+                let end = self.last_end;
+                self.refuse(
+                    expr.at,
+                    end,
+                    format!("Rule expressions may not contain '{op}' operator."),
+                );
+            }
+        }
+        Ok(expr)
+    }
+
+    /// What follows an `@` (read already): a name, `*` or `[expression]`, else the reader's
+    /// "missing name after .@". Answers where it starts.
+    fn xml_attribute(&mut self) -> Result<usize, ExprError> {
+        let (at, token) = self.next()?;
+        match token {
+            Token::Name(_) | Token::Punct("*") => Ok(at),
+            Token::Punct("[") => {
+                self.expression_list()?;
+                self.close("]", "missing ] in index expression")?;
+                Ok(at)
+            }
+            token => Err(ExprError::new(
+                self.rhino_end(at, &token),
+                "missing name after .@",
+            )),
+        }
+    }
+
+    /// `{ id: value, … }`, after its `{`: read as the reader reads it.
+    fn object_literal(&mut self) -> Result<(), ExprError> {
+        loop {
+            let (at, token) = self.next()?;
+            match token {
+                Token::Punct("}") => return Ok(()),
+                Token::Name(_) | Token::Str(_) | Token::Number(_) => {}
+                token => {
+                    return Err(ExprError::new(
+                        self.rhino_end(at, &token),
+                        "invalid property id",
+                    ))
+                }
+            }
+            let (at, token) = self.next()?;
+            if token != Token::Punct(":") {
+                return Err(ExprError::new(
+                    self.rhino_end(at, &token),
+                    "missing : after property id",
+                ));
+            }
+            self.assignment()?;
+            let (at, token) = self.next()?;
+            match token {
+                Token::Punct(",") => {}
+                Token::Punct("}") => return Ok(()),
+                token => {
+                    return Err(ExprError::new(
+                        self.rhino_end(at, &token),
+                        "missing } after property list",
+                    ))
+                }
             }
         }
     }
@@ -1390,10 +1955,15 @@ impl Parser<'_> {
                 "true" => ExprKind::Bool(true),
                 "false" => ExprKind::Bool(false),
                 "null" => ExprKind::Null,
+                "this" => {
+                    let end = self.last_end;
+                    self.refuse(at, end, "Rule expressions may not contain 'this' keyword.");
+                    ExprKind::Null
+                }
                 _ => ExprKind::Name(name),
             },
             Token::Punct("(") => {
-                let mut inner = self.ternary()?;
+                let mut inner = self.expression_list()?;
                 self.close(")", "missing ) in parenthetical")?;
                 inner.start = at;
                 inner.end = self.last_end;
@@ -1405,7 +1975,7 @@ impl Parser<'_> {
                     if let (end, Token::End) = self.peek()?.clone() {
                         return Err(ExprError::new(end, "missing ] after element list"));
                     }
-                    items.push(self.ternary()?);
+                    items.push(self.assignment()?);
                     if !self.eat(",")? {
                         self.close("]", "missing ] after element list")?;
                         break;
@@ -1413,8 +1983,18 @@ impl Parser<'_> {
                 }
                 ExprKind::Array(items)
             }
-            Token::Punct("{" | "}") => {
-                return Err(ExprError::new(at, "Unsupported javascript syntax."))
+            Token::Punct("{") => {
+                self.object_literal()?;
+                let end = self.last_end;
+                self.refuse(at, end, "Rule expressions may not contain object literals.");
+                ExprKind::Null
+            }
+            Token::Punct("@") => {
+                // `@name`, an XML attribute, refused where its name starts.
+                let name = self.xml_attribute()?;
+                let end = self.last_end;
+                self.refuse(name, end, "Unsupported javascript syntax.");
+                ExprKind::Null
             }
             Token::End => return Err(ExprError::new(at, "Unexpected end of expression")),
             token @ Token::Punct(_) => {
@@ -1541,5 +2121,87 @@ mod tests {
             .unwrap()
             .join()
             .unwrap();
+    }
+
+    /// Rhino's `TokenStream.getOffset` after it has read `cursor` UTF-16 units of `units`,
+    /// transcribed from `getChar`: the offset in the line it is on, one less while the last
+    /// character it read is a line terminator (a CR LF is read as one).
+    fn rhino_offset(units: &[u16], cursor: usize) -> usize {
+        let terminator = |c: u16| matches!(c, 0x0A | 0x0D | 0x2028 | 0x2029);
+        let (mut line_start, mut line_end, mut read) = (0, None::<u16>, 0);
+        while read < cursor {
+            let c = units[read];
+            read += 1;
+            if let Some(end) = line_end {
+                if end == 0x0D && c == 0x0A {
+                    line_end = Some(0x0A);
+                    continue;
+                }
+                line_end = None;
+                line_start = read - 1;
+            }
+            if terminator(c) {
+                line_end = Some(c);
+            }
+        }
+        read - line_start - usize::from(line_end.is_some())
+    }
+
+    fn mixed_text() -> impl Strategy<Value = Vec<char>> {
+        prop::collection::vec(
+            prop::sample::select(vec![
+                'a',
+                ' ',
+                '\t',
+                'é',
+                '\u{1F600}',
+                '\u{10000}',
+                '\n',
+                '\r',
+                '\u{2028}',
+                '\u{2029}',
+            ]),
+            0..24,
+        )
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(2048))]
+
+        /// An error of the reader is placed at Rhino's offset in its line, counted in UTF-16
+        /// units from the start of the expression, for every mix of supplementary characters
+        /// and of LF, CR, CR LF, U+2028 and U+2029, at every place and unit of a character.
+        #[test]
+        fn errors_are_placed_at_rhinos_offset_in_utf16_units(
+            chars in mixed_text(),
+            at in 0usize..25,
+            second in any::<bool>(),
+        ) {
+            let at = at.min(chars.len());
+            let second_unit = second && chars.get(at).is_some_and(|c| c.len_utf16() == 2);
+            let lexer = Lexer { chars: &chars, at: 0, newline: false, refusals: Vec::new() };
+            let placed = lexer.on_line(ExprError {
+                second_unit,
+                ..ExprError::new(at, "x")
+            });
+            let units: Vec<u16> = chars.iter().collect::<String>().encode_utf16().collect();
+            let before: usize = chars[..at].iter().map(|c| c.len_utf16()).sum();
+            let cursor = before + usize::from(second_unit);
+            let terminated = chars[..at].iter().any(|&c| is_line_terminator(c));
+            let placed_units = chars[..placed.at.min(chars.len())]
+                .iter()
+                .map(|c| c.len_utf16())
+                .sum::<usize>()
+                + usize::from(placed.second_unit);
+            if terminated {
+                let expected = rhino_offset(&units, cursor).min(units.len());
+                prop_assert_eq!(placed_units, expected);
+                // Past the end of the text, the place is the end (no second unit).
+                prop_assert!(!placed.second_unit || placed.at < chars.len());
+            } else {
+                // No line has ended: the place stays.
+                prop_assert_eq!((placed.at, placed.second_unit), (at, second_unit));
+            }
+        }
     }
 }

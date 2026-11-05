@@ -6,10 +6,12 @@ import platform
 import sys
 import traceback
 
+from . import appcheck
 from .dispatch import Dispatcher
+from .environment import EnvironmentGate, load_local_secrets
 from .framing import FrameWriter, ProtocolError, read_frame
 from .manifest import build_manifest
-from .serve import start_server
+from .serve import HTTP_TRIGGERS, start_server
 
 
 def _parse(argv):
@@ -27,13 +29,15 @@ def load_codebase(source: str) -> dict:
     return serving.get_functions()
 
 
-def serve(functions: dict, codebase: str, secret: str, stdin, writer: FrameWriter) -> int:
+def serve(
+    functions: dict, codebase: str, secret: str, stdin, writer: FrameWriter, gate: EnvironmentGate | None = None, app_check_verified: bool = False
+) -> int:
     """Says hello, then serves frames from `stdin` until `shutdown` or the end of the stream."""
-    manifest = build_manifest(functions)
+    manifest = build_manifest(functions, app_check_verified)
     server = None
     port = None
-    if any(spec["trigger"]["type"] == "http" for spec in manifest["functions"]):
-        server, port = start_server(functions, manifest, secret)
+    if any(spec["trigger"]["type"] in HTTP_TRIGGERS for spec in manifest["functions"]):
+        server, port = start_server(functions, manifest, secret, gate)
     writer.write(
         {
             "type": "hello",
@@ -44,7 +48,7 @@ def serve(functions: dict, codebase: str, secret: str, stdin, writer: FrameWrite
             "manifest": manifest,
         }
     )
-    dispatcher = Dispatcher(functions, manifest, writer)
+    dispatcher = Dispatcher(functions, manifest, writer, gate)
     try:
         while True:
             message = read_frame(stdin)
@@ -70,13 +74,19 @@ def run(argv) -> int:
     os.dup2(2, 1)
     writer = FrameWriter(protocol)
     secret = os.environ.get("FIREEMU_RUNNER_SECRET", "")
-    # The daemon's local secrets are for the SDK's parameter lookup; user code does not see the channel
-    # that carried them, nor the key to this runner's HTTP port.
-    os.environ.pop("FIREEMU_LOCAL_SECRETS_JSON", None)
+    # The daemon's local secrets are put back into the environment, a function at a time, by the gate; user code
+    # does not see the channel that carried them, nor the key to this runner's HTTP port.
     os.environ.pop("FIREEMU_RUNNER_SECRET", None)
+    try:
+        gate = EnvironmentGate(load_local_secrets(os.environ))
+    except ValueError as error:
+        sys.stderr.write(f"[functions] {error}\n")
+        return 1
+    # Before any user code runs, so the Admin SDK's App Check service is built against the emulator's keys.
+    app_check_verified = appcheck.install_from_environment(os.environ)
     try:
         functions = load_codebase(args.source)
     except BaseException:  # a failing import in user code is reported with its traceback
         traceback.print_exc()
         return 1
-    return serve(functions, args.codebase, secret, sys.stdin.buffer, writer)
+    return serve(functions, args.codebase, secret, sys.stdin.buffer, writer, gate, app_check_verified)

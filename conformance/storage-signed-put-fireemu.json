@@ -1,0 +1,821 @@
+{
+  "source": {
+    "observed": "2026-11-03",
+    "target": "fireemu, strict profile defaults, storage emulator only",
+    "flow": "the same recorder (run.mjs record-local) against the same 16 cases",
+    "recordings": 2,
+    "cases": 16
+  },
+  "rows": [
+    {
+      "recording": 1,
+      "id": "ok",
+      "status": 200,
+      "class": "accepted",
+      "code": null,
+      "shape": "empty",
+      "bodyBytes": 0,
+      "bodySha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body": "",
+      "headers": {
+        "access-control-expose-headers": "content-type,x-firebase-storage-version,X-Goog-Upload-Size-Received,x-goog-upload-url,x-goog-upload-command,x-gupload-uploadid,x-goog-upload-header-content-length,x-goog-upload-header-content-type,x-goog-upload-protocol,x-goog-upload-status,x-goog-upload-chunk-granularity,x-goog-upload-control-url",
+        "content-length": "0",
+        "content-type": "text/html; charset=UTF-8",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-goog-hash": "crc32c=GHybLA==, md5=O9r1lpKFGIrHVsM59p9ceQ==",
+        "x-goog-metageneration": "1",
+        "x-goog-stored-content-encoding": "identity",
+        "x-goog-stored-content-length": "4"
+      },
+      "volatileHeaders": {
+        "etag": "quoted-md5-hex",
+        "etagIsMd5": true,
+        "x-goog-generation": "digits-16"
+      }
+    },
+    {
+      "recording": 1,
+      "id": "ok-origin",
+      "status": 200,
+      "class": "accepted",
+      "code": null,
+      "shape": "empty",
+      "bodyBytes": 0,
+      "bodySha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body": "",
+      "headers": {
+        "access-control-allow-origin": "http://localhost:3000",
+        "access-control-expose-headers": "content-type,x-firebase-storage-version,X-Goog-Upload-Size-Received,x-goog-upload-url,x-goog-upload-command,x-gupload-uploadid,x-goog-upload-header-content-length,x-goog-upload-header-content-type,x-goog-upload-protocol,x-goog-upload-status,x-goog-upload-chunk-granularity,x-goog-upload-control-url",
+        "content-length": "0",
+        "content-type": "text/html; charset=UTF-8",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-goog-hash": "crc32c=GHybLA==, md5=O9r1lpKFGIrHVsM59p9ceQ==",
+        "x-goog-metageneration": "1",
+        "x-goog-stored-content-encoding": "identity",
+        "x-goog-stored-content-length": "4"
+      },
+      "volatileHeaders": {
+        "etag": "quoted-md5-hex",
+        "etagIsMd5": true,
+        "x-goog-generation": "digits-16"
+      }
+    },
+    {
+      "recording": 1,
+      "id": "wrong-content-type",
+      "status": 200,
+      "class": "accepted",
+      "code": null,
+      "shape": "empty",
+      "bodyBytes": 0,
+      "bodySha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body": "",
+      "headers": {
+        "access-control-expose-headers": "content-type,x-firebase-storage-version,X-Goog-Upload-Size-Received,x-goog-upload-url,x-goog-upload-command,x-gupload-uploadid,x-goog-upload-header-content-length,x-goog-upload-header-content-type,x-goog-upload-protocol,x-goog-upload-status,x-goog-upload-chunk-granularity,x-goog-upload-control-url",
+        "content-length": "0",
+        "content-type": "text/html; charset=UTF-8",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-goog-hash": "crc32c=GHybLA==, md5=O9r1lpKFGIrHVsM59p9ceQ==",
+        "x-goog-metageneration": "1",
+        "x-goog-stored-content-encoding": "identity",
+        "x-goog-stored-content-length": "4"
+      },
+      "volatileHeaders": {
+        "etag": "quoted-md5-hex",
+        "etagIsMd5": true,
+        "x-goog-generation": "digits-16"
+      }
+    },
+    {
+      "recording": 1,
+      "id": "missing-content-type",
+      "status": 400,
+      "class": "refused",
+      "code": "MalformedSecurityHeader",
+      "shape": "xml-error",
+      "bodyBytes": 285,
+      "bodySha256": "40c740386dc806d77fbe6a9cd33d57a2fd00b96a55222c19e4077937d8b33dd6",
+      "body": "<?xml version='1.0' encoding='UTF-8'?><Error><Code>MalformedSecurityHeader</Code><Message>Invalid argument.</Message><Details>Your request has a malformed header. Header was included in signedheaders, but not in the request.</Details><ParameterName>content-type</ParameterName></Error>",
+      "headers": {
+        "access-control-expose-headers": "content-type,x-firebase-storage-version,X-Goog-Upload-Size-Received,x-goog-upload-url,x-goog-upload-command,x-gupload-uploadid,x-goog-upload-header-content-length,x-goog-upload-header-content-type,x-goog-upload-protocol,x-goog-upload-status,x-goog-upload-chunk-granularity,x-goog-upload-control-url",
+        "content-length": "285",
+        "content-type": "application/xml; charset=UTF-8",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff"
+      },
+      "volatileHeaders": {
+        "etag": "absent",
+        "etagIsMd5": false,
+        "x-goog-generation": "absent"
+      }
+    },
+    {
+      "recording": 1,
+      "id": "over-range",
+      "status": 400,
+      "class": "refused",
+      "code": "EntityTooLarge",
+      "shape": "xml-error",
+      "bodyBytes": 255,
+      "bodySha256": "736336720e65361553bde90cd1b7df0735bd03229eb27386573d1531208f2f98",
+      "body": "<?xml version='1.0' encoding='UTF-8'?><Error><Code>EntityTooLarge</Code><Message>Your proposed upload is larger than the maximum object size specified in your Policy Document.</Message><Details>Content-length exceeds upper bound on range</Details></Error>",
+      "headers": {
+        "access-control-expose-headers": "content-type,x-firebase-storage-version,X-Goog-Upload-Size-Received,x-goog-upload-url,x-goog-upload-command,x-gupload-uploadid,x-goog-upload-header-content-length,x-goog-upload-header-content-type,x-goog-upload-protocol,x-goog-upload-status,x-goog-upload-chunk-granularity,x-goog-upload-control-url",
+        "content-length": "255",
+        "content-type": "application/xml; charset=UTF-8",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff"
+      },
+      "volatileHeaders": {
+        "etag": "absent",
+        "etagIsMd5": false,
+        "x-goog-generation": "absent"
+      }
+    },
+    {
+      "recording": 1,
+      "id": "under-range",
+      "status": 400,
+      "class": "refused",
+      "code": "EntityTooSmall",
+      "shape": "xml-error",
+      "bodyBytes": 261,
+      "bodySha256": "211351344d472238f0507b7277d2f080b44b9e8177d29516cdefb8661fc64e4a",
+      "body": "<?xml version='1.0' encoding='UTF-8'?><Error><Code>EntityTooSmall</Code><Message>Your proposed upload is smaller than the minimum object size specified in your Policy Document.</Message><Details>Content-length smaller than lower bound on range</Details></Error>",
+      "headers": {
+        "access-control-expose-headers": "content-type,x-firebase-storage-version,X-Goog-Upload-Size-Received,x-goog-upload-url,x-goog-upload-command,x-gupload-uploadid,x-goog-upload-header-content-length,x-goog-upload-header-content-type,x-goog-upload-protocol,x-goog-upload-status,x-goog-upload-chunk-granularity,x-goog-upload-control-url",
+        "content-length": "261",
+        "content-type": "application/xml; charset=UTF-8",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff"
+      },
+      "volatileHeaders": {
+        "etag": "absent",
+        "etagIsMd5": false,
+        "x-goog-generation": "absent"
+      }
+    },
+    {
+      "recording": 1,
+      "id": "range-min-ok",
+      "status": 200,
+      "class": "accepted",
+      "code": null,
+      "shape": "empty",
+      "bodyBytes": 0,
+      "bodySha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body": "",
+      "headers": {
+        "access-control-expose-headers": "content-type,x-firebase-storage-version,X-Goog-Upload-Size-Received,x-goog-upload-url,x-goog-upload-command,x-gupload-uploadid,x-goog-upload-header-content-length,x-goog-upload-header-content-type,x-goog-upload-protocol,x-goog-upload-status,x-goog-upload-chunk-granularity,x-goog-upload-control-url",
+        "content-length": "0",
+        "content-type": "text/html; charset=UTF-8",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-goog-hash": "crc32c=tq/hgw==, md5=Ls3eOVkFHZE/YbFFeeoTbQ==",
+        "x-goog-metageneration": "1",
+        "x-goog-stored-content-encoding": "identity",
+        "x-goog-stored-content-length": "5"
+      },
+      "volatileHeaders": {
+        "etag": "quoted-md5-hex",
+        "etagIsMd5": true,
+        "x-goog-generation": "digits-16"
+      }
+    },
+    {
+      "recording": 1,
+      "id": "range-max-ok",
+      "status": 200,
+      "class": "accepted",
+      "code": null,
+      "shape": "empty",
+      "bodyBytes": 0,
+      "bodySha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body": "",
+      "headers": {
+        "access-control-expose-headers": "content-type,x-firebase-storage-version,X-Goog-Upload-Size-Received,x-goog-upload-url,x-goog-upload-command,x-gupload-uploadid,x-goog-upload-header-content-length,x-goog-upload-header-content-type,x-goog-upload-protocol,x-goog-upload-status,x-goog-upload-chunk-granularity,x-goog-upload-control-url",
+        "content-length": "0",
+        "content-type": "text/html; charset=UTF-8",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-goog-hash": "crc32c=zcTmCg==, md5=R4PnhLT6L7qeTWUC28ZPjw==",
+        "x-goog-metageneration": "1",
+        "x-goog-stored-content-encoding": "identity",
+        "x-goog-stored-content-length": "8"
+      },
+      "volatileHeaders": {
+        "etag": "quoted-md5-hex",
+        "etagIsMd5": true,
+        "x-goog-generation": "digits-16"
+      }
+    },
+    {
+      "recording": 1,
+      "id": "range-header-missing",
+      "status": 400,
+      "class": "refused",
+      "code": "MalformedSecurityHeader",
+      "shape": "xml-error",
+      "bodyBytes": 300,
+      "bodySha256": "2b31d915e60860d84a2b17c4911dd3a5f707f38c52fb95fca79fd72b8ffc2639",
+      "body": "<?xml version='1.0' encoding='UTF-8'?><Error><Code>MalformedSecurityHeader</Code><Message>Invalid argument.</Message><Details>Your request has a malformed header. Header was included in signedheaders, but not in the request.</Details><ParameterName>x-goog-content-length-range</ParameterName></Error>",
+      "headers": {
+        "access-control-expose-headers": "content-type,x-firebase-storage-version,X-Goog-Upload-Size-Received,x-goog-upload-url,x-goog-upload-command,x-gupload-uploadid,x-goog-upload-header-content-length,x-goog-upload-header-content-type,x-goog-upload-protocol,x-goog-upload-status,x-goog-upload-chunk-granularity,x-goog-upload-control-url",
+        "content-length": "300",
+        "content-type": "application/xml; charset=UTF-8",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff"
+      },
+      "volatileHeaders": {
+        "etag": "absent",
+        "etagIsMd5": false,
+        "x-goog-generation": "absent"
+      }
+    },
+    {
+      "recording": 1,
+      "id": "range-header-mismatch",
+      "status": 200,
+      "class": "accepted",
+      "code": null,
+      "shape": "empty",
+      "bodyBytes": 0,
+      "bodySha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body": "",
+      "headers": {
+        "access-control-expose-headers": "content-type,x-firebase-storage-version,X-Goog-Upload-Size-Received,x-goog-upload-url,x-goog-upload-command,x-gupload-uploadid,x-goog-upload-header-content-length,x-goog-upload-header-content-type,x-goog-upload-protocol,x-goog-upload-status,x-goog-upload-chunk-granularity,x-goog-upload-control-url",
+        "content-length": "0",
+        "content-type": "text/html; charset=UTF-8",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-goog-hash": "crc32c=vZRE6g==, md5=uG/GsFH2PXPeJi1MNOOgqQ==",
+        "x-goog-metageneration": "1",
+        "x-goog-stored-content-encoding": "identity",
+        "x-goog-stored-content-length": "2"
+      },
+      "volatileHeaders": {
+        "etag": "quoted-md5-hex",
+        "etagIsMd5": true,
+        "x-goog-generation": "digits-16"
+      }
+    },
+    {
+      "recording": 1,
+      "id": "range-header-unsigned",
+      "status": 400,
+      "class": "refused",
+      "code": "MalformedSecurityHeader",
+      "shape": "xml-error",
+      "bodyBytes": 261,
+      "bodySha256": "a3bd3adbbba9bddb0b165cd161e3b0408f25d742ef7e6f55254d4ed8ac383f1f",
+      "body": "<?xml version='1.0' encoding='UTF-8'?><Error><Code>MalformedSecurityHeader</Code><Message>Invalid argument.</Message><Details>Your request has a malformed header. Header must be signed.</Details><ParameterName>x-goog-content-length-range</ParameterName></Error>",
+      "headers": {
+        "access-control-expose-headers": "content-type,x-firebase-storage-version,X-Goog-Upload-Size-Received,x-goog-upload-url,x-goog-upload-command,x-gupload-uploadid,x-goog-upload-header-content-length,x-goog-upload-header-content-type,x-goog-upload-protocol,x-goog-upload-status,x-goog-upload-chunk-granularity,x-goog-upload-control-url",
+        "content-length": "261",
+        "content-type": "application/xml; charset=UTF-8",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff"
+      },
+      "volatileHeaders": {
+        "etag": "absent",
+        "etagIsMd5": false,
+        "x-goog-generation": "absent"
+      }
+    },
+    {
+      "recording": 1,
+      "id": "no-range",
+      "status": 200,
+      "class": "accepted",
+      "code": null,
+      "shape": "empty",
+      "bodyBytes": 0,
+      "bodySha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body": "",
+      "headers": {
+        "access-control-expose-headers": "content-type,x-firebase-storage-version,X-Goog-Upload-Size-Received,x-goog-upload-url,x-goog-upload-command,x-gupload-uploadid,x-goog-upload-header-content-length,x-goog-upload-header-content-type,x-goog-upload-protocol,x-goog-upload-status,x-goog-upload-chunk-granularity,x-goog-upload-control-url",
+        "content-length": "0",
+        "content-type": "text/html; charset=UTF-8",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-goog-hash": "crc32c=GHybLA==, md5=O9r1lpKFGIrHVsM59p9ceQ==",
+        "x-goog-metageneration": "1",
+        "x-goog-stored-content-encoding": "identity",
+        "x-goog-stored-content-length": "4"
+      },
+      "volatileHeaders": {
+        "etag": "quoted-md5-hex",
+        "etagIsMd5": true,
+        "x-goog-generation": "digits-16"
+      }
+    },
+    {
+      "recording": 1,
+      "id": "tampered-signature",
+      "status": 200,
+      "class": "accepted",
+      "code": null,
+      "shape": "empty",
+      "bodyBytes": 0,
+      "bodySha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body": "",
+      "headers": {
+        "access-control-expose-headers": "content-type,x-firebase-storage-version,X-Goog-Upload-Size-Received,x-goog-upload-url,x-goog-upload-command,x-gupload-uploadid,x-goog-upload-header-content-length,x-goog-upload-header-content-type,x-goog-upload-protocol,x-goog-upload-status,x-goog-upload-chunk-granularity,x-goog-upload-control-url",
+        "content-length": "0",
+        "content-type": "text/html; charset=UTF-8",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-goog-hash": "crc32c=GHybLA==, md5=O9r1lpKFGIrHVsM59p9ceQ==",
+        "x-goog-metageneration": "1",
+        "x-goog-stored-content-encoding": "identity",
+        "x-goog-stored-content-length": "4"
+      },
+      "volatileHeaders": {
+        "etag": "quoted-md5-hex",
+        "etagIsMd5": true,
+        "x-goog-generation": "digits-16"
+      }
+    },
+    {
+      "recording": 1,
+      "id": "signature-missing",
+      "status": 400,
+      "class": "refused",
+      "code": "MissingSecurityHeader",
+      "shape": "xml-error",
+      "bodyBytes": 219,
+      "bodySha256": "57e2e65f76534e2b9a32a70a925d4e6da83f972ae7d2f56893920b8d04b78620",
+      "body": "<?xml version='1.0' encoding='UTF-8'?><Error><Code>MissingSecurityHeader</Code><Message>Invalid argument.</Message><Details>Your request was missing a required header. Missing headers: x-goog-signature</Details></Error>",
+      "headers": {
+        "access-control-expose-headers": "content-type,x-firebase-storage-version,X-Goog-Upload-Size-Received,x-goog-upload-url,x-goog-upload-command,x-gupload-uploadid,x-goog-upload-header-content-length,x-goog-upload-header-content-type,x-goog-upload-protocol,x-goog-upload-status,x-goog-upload-chunk-granularity,x-goog-upload-control-url",
+        "content-length": "219",
+        "content-type": "application/xml; charset=UTF-8",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff"
+      },
+      "volatileHeaders": {
+        "etag": "absent",
+        "etagIsMd5": false,
+        "x-goog-generation": "absent"
+      }
+    },
+    {
+      "recording": 1,
+      "id": "expired",
+      "status": 400,
+      "class": "refused",
+      "code": "ExpiredToken",
+      "shape": "xml-error",
+      "bodyBytes": 220,
+      "bodySha256": "4198fad6e98f6db735a92972aadeb3adc50bfb4091768642befd17eacd069a41",
+      "body": "<?xml version='1.0' encoding='UTF-8'?><Error><Code>ExpiredToken</Code><Message>Invalid argument.</Message><Details>The provided token has expired. Request signature expired at: <time></Details></Error>",
+      "headers": {
+        "access-control-expose-headers": "content-type,x-firebase-storage-version,X-Goog-Upload-Size-Received,x-goog-upload-url,x-goog-upload-command,x-gupload-uploadid,x-goog-upload-header-content-length,x-goog-upload-header-content-type,x-goog-upload-protocol,x-goog-upload-status,x-goog-upload-chunk-granularity,x-goog-upload-control-url",
+        "content-length": "220",
+        "content-type": "application/xml; charset=UTF-8",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff"
+      },
+      "volatileHeaders": {
+        "etag": "absent",
+        "etagIsMd5": false,
+        "x-goog-generation": "absent"
+      }
+    },
+    {
+      "recording": 1,
+      "id": "other-object",
+      "status": 200,
+      "class": "accepted",
+      "code": null,
+      "shape": "empty",
+      "bodyBytes": 0,
+      "bodySha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body": "",
+      "headers": {
+        "access-control-expose-headers": "content-type,x-firebase-storage-version,X-Goog-Upload-Size-Received,x-goog-upload-url,x-goog-upload-command,x-gupload-uploadid,x-goog-upload-header-content-length,x-goog-upload-header-content-type,x-goog-upload-protocol,x-goog-upload-status,x-goog-upload-chunk-granularity,x-goog-upload-control-url",
+        "content-length": "0",
+        "content-type": "text/html; charset=UTF-8",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-goog-hash": "crc32c=GHybLA==, md5=O9r1lpKFGIrHVsM59p9ceQ==",
+        "x-goog-metageneration": "1",
+        "x-goog-stored-content-encoding": "identity",
+        "x-goog-stored-content-length": "4"
+      },
+      "volatileHeaders": {
+        "etag": "quoted-md5-hex",
+        "etagIsMd5": true,
+        "x-goog-generation": "digits-16"
+      }
+    },
+    {
+      "recording": 2,
+      "id": "ok",
+      "status": 200,
+      "class": "accepted",
+      "code": null,
+      "shape": "empty",
+      "bodyBytes": 0,
+      "bodySha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body": "",
+      "headers": {
+        "access-control-expose-headers": "content-type,x-firebase-storage-version,X-Goog-Upload-Size-Received,x-goog-upload-url,x-goog-upload-command,x-gupload-uploadid,x-goog-upload-header-content-length,x-goog-upload-header-content-type,x-goog-upload-protocol,x-goog-upload-status,x-goog-upload-chunk-granularity,x-goog-upload-control-url",
+        "content-length": "0",
+        "content-type": "text/html; charset=UTF-8",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-goog-hash": "crc32c=GHybLA==, md5=O9r1lpKFGIrHVsM59p9ceQ==",
+        "x-goog-metageneration": "1",
+        "x-goog-stored-content-encoding": "identity",
+        "x-goog-stored-content-length": "4"
+      },
+      "volatileHeaders": {
+        "etag": "quoted-md5-hex",
+        "etagIsMd5": true,
+        "x-goog-generation": "digits-16"
+      }
+    },
+    {
+      "recording": 2,
+      "id": "ok-origin",
+      "status": 200,
+      "class": "accepted",
+      "code": null,
+      "shape": "empty",
+      "bodyBytes": 0,
+      "bodySha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body": "",
+      "headers": {
+        "access-control-allow-origin": "http://localhost:3000",
+        "access-control-expose-headers": "content-type,x-firebase-storage-version,X-Goog-Upload-Size-Received,x-goog-upload-url,x-goog-upload-command,x-gupload-uploadid,x-goog-upload-header-content-length,x-goog-upload-header-content-type,x-goog-upload-protocol,x-goog-upload-status,x-goog-upload-chunk-granularity,x-goog-upload-control-url",
+        "content-length": "0",
+        "content-type": "text/html; charset=UTF-8",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-goog-hash": "crc32c=GHybLA==, md5=O9r1lpKFGIrHVsM59p9ceQ==",
+        "x-goog-metageneration": "1",
+        "x-goog-stored-content-encoding": "identity",
+        "x-goog-stored-content-length": "4"
+      },
+      "volatileHeaders": {
+        "etag": "quoted-md5-hex",
+        "etagIsMd5": true,
+        "x-goog-generation": "digits-16"
+      }
+    },
+    {
+      "recording": 2,
+      "id": "wrong-content-type",
+      "status": 200,
+      "class": "accepted",
+      "code": null,
+      "shape": "empty",
+      "bodyBytes": 0,
+      "bodySha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body": "",
+      "headers": {
+        "access-control-expose-headers": "content-type,x-firebase-storage-version,X-Goog-Upload-Size-Received,x-goog-upload-url,x-goog-upload-command,x-gupload-uploadid,x-goog-upload-header-content-length,x-goog-upload-header-content-type,x-goog-upload-protocol,x-goog-upload-status,x-goog-upload-chunk-granularity,x-goog-upload-control-url",
+        "content-length": "0",
+        "content-type": "text/html; charset=UTF-8",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-goog-hash": "crc32c=GHybLA==, md5=O9r1lpKFGIrHVsM59p9ceQ==",
+        "x-goog-metageneration": "1",
+        "x-goog-stored-content-encoding": "identity",
+        "x-goog-stored-content-length": "4"
+      },
+      "volatileHeaders": {
+        "etag": "quoted-md5-hex",
+        "etagIsMd5": true,
+        "x-goog-generation": "digits-16"
+      }
+    },
+    {
+      "recording": 2,
+      "id": "missing-content-type",
+      "status": 400,
+      "class": "refused",
+      "code": "MalformedSecurityHeader",
+      "shape": "xml-error",
+      "bodyBytes": 285,
+      "bodySha256": "40c740386dc806d77fbe6a9cd33d57a2fd00b96a55222c19e4077937d8b33dd6",
+      "body": "<?xml version='1.0' encoding='UTF-8'?><Error><Code>MalformedSecurityHeader</Code><Message>Invalid argument.</Message><Details>Your request has a malformed header. Header was included in signedheaders, but not in the request.</Details><ParameterName>content-type</ParameterName></Error>",
+      "headers": {
+        "access-control-expose-headers": "content-type,x-firebase-storage-version,X-Goog-Upload-Size-Received,x-goog-upload-url,x-goog-upload-command,x-gupload-uploadid,x-goog-upload-header-content-length,x-goog-upload-header-content-type,x-goog-upload-protocol,x-goog-upload-status,x-goog-upload-chunk-granularity,x-goog-upload-control-url",
+        "content-length": "285",
+        "content-type": "application/xml; charset=UTF-8",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff"
+      },
+      "volatileHeaders": {
+        "etag": "absent",
+        "etagIsMd5": false,
+        "x-goog-generation": "absent"
+      }
+    },
+    {
+      "recording": 2,
+      "id": "over-range",
+      "status": 400,
+      "class": "refused",
+      "code": "EntityTooLarge",
+      "shape": "xml-error",
+      "bodyBytes": 255,
+      "bodySha256": "736336720e65361553bde90cd1b7df0735bd03229eb27386573d1531208f2f98",
+      "body": "<?xml version='1.0' encoding='UTF-8'?><Error><Code>EntityTooLarge</Code><Message>Your proposed upload is larger than the maximum object size specified in your Policy Document.</Message><Details>Content-length exceeds upper bound on range</Details></Error>",
+      "headers": {
+        "access-control-expose-headers": "content-type,x-firebase-storage-version,X-Goog-Upload-Size-Received,x-goog-upload-url,x-goog-upload-command,x-gupload-uploadid,x-goog-upload-header-content-length,x-goog-upload-header-content-type,x-goog-upload-protocol,x-goog-upload-status,x-goog-upload-chunk-granularity,x-goog-upload-control-url",
+        "content-length": "255",
+        "content-type": "application/xml; charset=UTF-8",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff"
+      },
+      "volatileHeaders": {
+        "etag": "absent",
+        "etagIsMd5": false,
+        "x-goog-generation": "absent"
+      }
+    },
+    {
+      "recording": 2,
+      "id": "under-range",
+      "status": 400,
+      "class": "refused",
+      "code": "EntityTooSmall",
+      "shape": "xml-error",
+      "bodyBytes": 261,
+      "bodySha256": "211351344d472238f0507b7277d2f080b44b9e8177d29516cdefb8661fc64e4a",
+      "body": "<?xml version='1.0' encoding='UTF-8'?><Error><Code>EntityTooSmall</Code><Message>Your proposed upload is smaller than the minimum object size specified in your Policy Document.</Message><Details>Content-length smaller than lower bound on range</Details></Error>",
+      "headers": {
+        "access-control-expose-headers": "content-type,x-firebase-storage-version,X-Goog-Upload-Size-Received,x-goog-upload-url,x-goog-upload-command,x-gupload-uploadid,x-goog-upload-header-content-length,x-goog-upload-header-content-type,x-goog-upload-protocol,x-goog-upload-status,x-goog-upload-chunk-granularity,x-goog-upload-control-url",
+        "content-length": "261",
+        "content-type": "application/xml; charset=UTF-8",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff"
+      },
+      "volatileHeaders": {
+        "etag": "absent",
+        "etagIsMd5": false,
+        "x-goog-generation": "absent"
+      }
+    },
+    {
+      "recording": 2,
+      "id": "range-min-ok",
+      "status": 200,
+      "class": "accepted",
+      "code": null,
+      "shape": "empty",
+      "bodyBytes": 0,
+      "bodySha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body": "",
+      "headers": {
+        "access-control-expose-headers": "content-type,x-firebase-storage-version,X-Goog-Upload-Size-Received,x-goog-upload-url,x-goog-upload-command,x-gupload-uploadid,x-goog-upload-header-content-length,x-goog-upload-header-content-type,x-goog-upload-protocol,x-goog-upload-status,x-goog-upload-chunk-granularity,x-goog-upload-control-url",
+        "content-length": "0",
+        "content-type": "text/html; charset=UTF-8",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-goog-hash": "crc32c=tq/hgw==, md5=Ls3eOVkFHZE/YbFFeeoTbQ==",
+        "x-goog-metageneration": "1",
+        "x-goog-stored-content-encoding": "identity",
+        "x-goog-stored-content-length": "5"
+      },
+      "volatileHeaders": {
+        "etag": "quoted-md5-hex",
+        "etagIsMd5": true,
+        "x-goog-generation": "digits-16"
+      }
+    },
+    {
+      "recording": 2,
+      "id": "range-max-ok",
+      "status": 200,
+      "class": "accepted",
+      "code": null,
+      "shape": "empty",
+      "bodyBytes": 0,
+      "bodySha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body": "",
+      "headers": {
+        "access-control-expose-headers": "content-type,x-firebase-storage-version,X-Goog-Upload-Size-Received,x-goog-upload-url,x-goog-upload-command,x-gupload-uploadid,x-goog-upload-header-content-length,x-goog-upload-header-content-type,x-goog-upload-protocol,x-goog-upload-status,x-goog-upload-chunk-granularity,x-goog-upload-control-url",
+        "content-length": "0",
+        "content-type": "text/html; charset=UTF-8",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-goog-hash": "crc32c=zcTmCg==, md5=R4PnhLT6L7qeTWUC28ZPjw==",
+        "x-goog-metageneration": "1",
+        "x-goog-stored-content-encoding": "identity",
+        "x-goog-stored-content-length": "8"
+      },
+      "volatileHeaders": {
+        "etag": "quoted-md5-hex",
+        "etagIsMd5": true,
+        "x-goog-generation": "digits-16"
+      }
+    },
+    {
+      "recording": 2,
+      "id": "range-header-missing",
+      "status": 400,
+      "class": "refused",
+      "code": "MalformedSecurityHeader",
+      "shape": "xml-error",
+      "bodyBytes": 300,
+      "bodySha256": "2b31d915e60860d84a2b17c4911dd3a5f707f38c52fb95fca79fd72b8ffc2639",
+      "body": "<?xml version='1.0' encoding='UTF-8'?><Error><Code>MalformedSecurityHeader</Code><Message>Invalid argument.</Message><Details>Your request has a malformed header. Header was included in signedheaders, but not in the request.</Details><ParameterName>x-goog-content-length-range</ParameterName></Error>",
+      "headers": {
+        "access-control-expose-headers": "content-type,x-firebase-storage-version,X-Goog-Upload-Size-Received,x-goog-upload-url,x-goog-upload-command,x-gupload-uploadid,x-goog-upload-header-content-length,x-goog-upload-header-content-type,x-goog-upload-protocol,x-goog-upload-status,x-goog-upload-chunk-granularity,x-goog-upload-control-url",
+        "content-length": "300",
+        "content-type": "application/xml; charset=UTF-8",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff"
+      },
+      "volatileHeaders": {
+        "etag": "absent",
+        "etagIsMd5": false,
+        "x-goog-generation": "absent"
+      }
+    },
+    {
+      "recording": 2,
+      "id": "range-header-mismatch",
+      "status": 200,
+      "class": "accepted",
+      "code": null,
+      "shape": "empty",
+      "bodyBytes": 0,
+      "bodySha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body": "",
+      "headers": {
+        "access-control-expose-headers": "content-type,x-firebase-storage-version,X-Goog-Upload-Size-Received,x-goog-upload-url,x-goog-upload-command,x-gupload-uploadid,x-goog-upload-header-content-length,x-goog-upload-header-content-type,x-goog-upload-protocol,x-goog-upload-status,x-goog-upload-chunk-granularity,x-goog-upload-control-url",
+        "content-length": "0",
+        "content-type": "text/html; charset=UTF-8",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-goog-hash": "crc32c=vZRE6g==, md5=uG/GsFH2PXPeJi1MNOOgqQ==",
+        "x-goog-metageneration": "1",
+        "x-goog-stored-content-encoding": "identity",
+        "x-goog-stored-content-length": "2"
+      },
+      "volatileHeaders": {
+        "etag": "quoted-md5-hex",
+        "etagIsMd5": true,
+        "x-goog-generation": "digits-16"
+      }
+    },
+    {
+      "recording": 2,
+      "id": "range-header-unsigned",
+      "status": 400,
+      "class": "refused",
+      "code": "MalformedSecurityHeader",
+      "shape": "xml-error",
+      "bodyBytes": 261,
+      "bodySha256": "a3bd3adbbba9bddb0b165cd161e3b0408f25d742ef7e6f55254d4ed8ac383f1f",
+      "body": "<?xml version='1.0' encoding='UTF-8'?><Error><Code>MalformedSecurityHeader</Code><Message>Invalid argument.</Message><Details>Your request has a malformed header. Header must be signed.</Details><ParameterName>x-goog-content-length-range</ParameterName></Error>",
+      "headers": {
+        "access-control-expose-headers": "content-type,x-firebase-storage-version,X-Goog-Upload-Size-Received,x-goog-upload-url,x-goog-upload-command,x-gupload-uploadid,x-goog-upload-header-content-length,x-goog-upload-header-content-type,x-goog-upload-protocol,x-goog-upload-status,x-goog-upload-chunk-granularity,x-goog-upload-control-url",
+        "content-length": "261",
+        "content-type": "application/xml; charset=UTF-8",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff"
+      },
+      "volatileHeaders": {
+        "etag": "absent",
+        "etagIsMd5": false,
+        "x-goog-generation": "absent"
+      }
+    },
+    {
+      "recording": 2,
+      "id": "no-range",
+      "status": 200,
+      "class": "accepted",
+      "code": null,
+      "shape": "empty",
+      "bodyBytes": 0,
+      "bodySha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body": "",
+      "headers": {
+        "access-control-expose-headers": "content-type,x-firebase-storage-version,X-Goog-Upload-Size-Received,x-goog-upload-url,x-goog-upload-command,x-gupload-uploadid,x-goog-upload-header-content-length,x-goog-upload-header-content-type,x-goog-upload-protocol,x-goog-upload-status,x-goog-upload-chunk-granularity,x-goog-upload-control-url",
+        "content-length": "0",
+        "content-type": "text/html; charset=UTF-8",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-goog-hash": "crc32c=GHybLA==, md5=O9r1lpKFGIrHVsM59p9ceQ==",
+        "x-goog-metageneration": "1",
+        "x-goog-stored-content-encoding": "identity",
+        "x-goog-stored-content-length": "4"
+      },
+      "volatileHeaders": {
+        "etag": "quoted-md5-hex",
+        "etagIsMd5": true,
+        "x-goog-generation": "digits-16"
+      }
+    },
+    {
+      "recording": 2,
+      "id": "tampered-signature",
+      "status": 200,
+      "class": "accepted",
+      "code": null,
+      "shape": "empty",
+      "bodyBytes": 0,
+      "bodySha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body": "",
+      "headers": {
+        "access-control-expose-headers": "content-type,x-firebase-storage-version,X-Goog-Upload-Size-Received,x-goog-upload-url,x-goog-upload-command,x-gupload-uploadid,x-goog-upload-header-content-length,x-goog-upload-header-content-type,x-goog-upload-protocol,x-goog-upload-status,x-goog-upload-chunk-granularity,x-goog-upload-control-url",
+        "content-length": "0",
+        "content-type": "text/html; charset=UTF-8",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-goog-hash": "crc32c=GHybLA==, md5=O9r1lpKFGIrHVsM59p9ceQ==",
+        "x-goog-metageneration": "1",
+        "x-goog-stored-content-encoding": "identity",
+        "x-goog-stored-content-length": "4"
+      },
+      "volatileHeaders": {
+        "etag": "quoted-md5-hex",
+        "etagIsMd5": true,
+        "x-goog-generation": "digits-16"
+      }
+    },
+    {
+      "recording": 2,
+      "id": "signature-missing",
+      "status": 400,
+      "class": "refused",
+      "code": "MissingSecurityHeader",
+      "shape": "xml-error",
+      "bodyBytes": 219,
+      "bodySha256": "57e2e65f76534e2b9a32a70a925d4e6da83f972ae7d2f56893920b8d04b78620",
+      "body": "<?xml version='1.0' encoding='UTF-8'?><Error><Code>MissingSecurityHeader</Code><Message>Invalid argument.</Message><Details>Your request was missing a required header. Missing headers: x-goog-signature</Details></Error>",
+      "headers": {
+        "access-control-expose-headers": "content-type,x-firebase-storage-version,X-Goog-Upload-Size-Received,x-goog-upload-url,x-goog-upload-command,x-gupload-uploadid,x-goog-upload-header-content-length,x-goog-upload-header-content-type,x-goog-upload-protocol,x-goog-upload-status,x-goog-upload-chunk-granularity,x-goog-upload-control-url",
+        "content-length": "219",
+        "content-type": "application/xml; charset=UTF-8",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff"
+      },
+      "volatileHeaders": {
+        "etag": "absent",
+        "etagIsMd5": false,
+        "x-goog-generation": "absent"
+      }
+    },
+    {
+      "recording": 2,
+      "id": "expired",
+      "status": 400,
+      "class": "refused",
+      "code": "ExpiredToken",
+      "shape": "xml-error",
+      "bodyBytes": 220,
+      "bodySha256": "aae0ac92ab88bf17990bd17fff74ae50165f7e50a48a234f13efdfa2c4727a65",
+      "body": "<?xml version='1.0' encoding='UTF-8'?><Error><Code>ExpiredToken</Code><Message>Invalid argument.</Message><Details>The provided token has expired. Request signature expired at: <time></Details></Error>",
+      "headers": {
+        "access-control-expose-headers": "content-type,x-firebase-storage-version,X-Goog-Upload-Size-Received,x-goog-upload-url,x-goog-upload-command,x-gupload-uploadid,x-goog-upload-header-content-length,x-goog-upload-header-content-type,x-goog-upload-protocol,x-goog-upload-status,x-goog-upload-chunk-granularity,x-goog-upload-control-url",
+        "content-length": "220",
+        "content-type": "application/xml; charset=UTF-8",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff"
+      },
+      "volatileHeaders": {
+        "etag": "absent",
+        "etagIsMd5": false,
+        "x-goog-generation": "absent"
+      }
+    },
+    {
+      "recording": 2,
+      "id": "other-object",
+      "status": 200,
+      "class": "accepted",
+      "code": null,
+      "shape": "empty",
+      "bodyBytes": 0,
+      "bodySha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body": "",
+      "headers": {
+        "access-control-expose-headers": "content-type,x-firebase-storage-version,X-Goog-Upload-Size-Received,x-goog-upload-url,x-goog-upload-command,x-gupload-uploadid,x-goog-upload-header-content-length,x-goog-upload-header-content-type,x-goog-upload-protocol,x-goog-upload-status,x-goog-upload-chunk-granularity,x-goog-upload-control-url",
+        "content-length": "0",
+        "content-type": "text/html; charset=UTF-8",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-goog-hash": "crc32c=GHybLA==, md5=O9r1lpKFGIrHVsM59p9ceQ==",
+        "x-goog-metageneration": "1",
+        "x-goog-stored-content-encoding": "identity",
+        "x-goog-stored-content-length": "4"
+      },
+      "volatileHeaders": {
+        "etag": "quoted-md5-hex",
+        "etagIsMd5": true,
+        "x-goog-generation": "digits-16"
+      }
+    }
+  ]
+}

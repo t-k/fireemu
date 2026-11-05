@@ -1370,6 +1370,336 @@ const fs = require('node:fs');
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// A directory outside the source tree for the files a reload handshake writes, so that writing
+/// them is not a change the reload watcher reacts to.
+#[cfg(unix)]
+fn reload_signals(name: &str) -> PathBuf {
+    let signals =
+        std::env::temp_dir().join(format!("fireemu-env-{name}-signals-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&signals);
+    std::fs::create_dir_all(&signals).unwrap();
+    signals
+}
+
+/// Polls in the command for a handshake file. It is the counterpart of
+/// [`run_with_reload_handshake`]: `published` appears once the daemon has published generation 1,
+/// `rejected` once it refused or failed a reload.
+#[cfg(unix)]
+const RELOAD_HANDSHAKE_JS: &str = r"
+const appear = file => new Promise(resolve => {
+  const poll = () => require('node:fs').existsSync(file) ? resolve() : setTimeout(poll, 20);
+  poll();
+});
+const published = signals => Promise.race([
+  appear(require('node:path').join(signals, 'published')),
+  appear(require('node:path').join(signals, 'rejected'))
+    .then(() => { throw new Error('the rewritten source did not load'); }),
+]);
+";
+
+/// Runs `command` to completion while reading the daemon's stderr line by line, and writes the
+/// handshake file for each reload outcome the daemon reports for the `default` codebase. The
+/// `reloaded generation` line is printed only after the new generation is published, so a
+/// command that waits for `published` observes the reload itself rather than a time limit.
+#[cfg(unix)]
+fn run_with_reload_handshake(mut command: Command, signals: &Path) -> Output {
+    use std::io::BufRead;
+
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let stdout = std::thread::spawn(move || std::io::read_to_string(stdout).unwrap());
+    let mut stderr = String::new();
+    for line in std::io::BufReader::new(child.stderr.take().unwrap()).lines() {
+        let line = line.unwrap();
+        for generation in 1..=2 {
+            if line.contains(&format!(
+                "functions[default]: reloaded generation {generation}"
+            )) {
+                write(signals, &format!("published-{generation}"), "");
+                if generation == 1 {
+                    write(signals, "published", "");
+                }
+            }
+        }
+        if line.contains("functions[default]: reload failed")
+            || line.contains("functions[default]: reload rejected")
+        {
+            write(signals, "rejected", "");
+        }
+        stderr.push_str(&line);
+        stderr.push('\n');
+    }
+    let status = child.wait().unwrap();
+    Output {
+        status,
+        stdout: stdout.join().unwrap().into_bytes(),
+        stderr: stderr.into_bytes(),
+    }
+}
+
+/// Actual HTTP, callable, streaming and queued task handlers retain their selected runner
+/// through two publications. Releasing generation 1 first must not stop generation 0.
+#[cfg(unix)]
+#[test]
+#[ignore = "requires tools/sdk-smoke dependencies; the manual SDK workflow runs this test"]
+#[allow(clippy::too_many_lines)]
+fn http_callable_stream_and_task_requests_finish_across_two_reloads() {
+    assert!(have_sdk(), "install tools/sdk-smoke dependencies first");
+    let dir = scratch_codebase("in-flight-reload");
+    let signals = reload_signals("in-flight-reload");
+    write(
+        &dir,
+        "index.js",
+        r"
+const fs = require('node:fs');
+const { onRequest, onCall } = require('firebase-functions/v2/https');
+const { onTaskDispatched } = require('firebase-functions/v2/tasks');
+const marker = 'before';
+const wait = data => {
+  fs.writeFileSync(data.started, JSON.stringify({ marker, pid: process.pid, cwd: process.cwd() }));
+  return new Promise(resolve => {
+    const poll = () => fs.existsSync(data.release) ? resolve() : setTimeout(poll, 20);
+    poll();
+  });
+};
+exports.fxMarker = onRequest((_request, response) => response.json({ marker }));
+exports.fxHold = onRequest(async (request, response) => {
+  await wait(request.query);
+  response.json({ marker });
+});
+exports.fxCallable = onCall(async request => { await wait(request.data); return { marker }; });
+exports.fxStream = onCall(async (request, response) => {
+  await response.sendChunk({ marker });
+  await wait(request.data);
+  return { marker };
+});
+exports.fxTask = onTaskDispatched(async request => {
+  await wait(request.data);
+  fs.writeFileSync(request.data.done, JSON.stringify({ marker }));
+});
+",
+    );
+    let script = format!(
+        r"{RELOAD_HANDSHAKE_JS}
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const guard = setTimeout(() => {{ console.error('two-reload completion timed out'); process.exit(1); }}, 45000);
+(async () => {{
+  const [source, signals] = process.argv.slice(1);
+  const base = `http://${{process.env.FIREEMU_FUNCTIONS_HOST}}/demo-in-flight-reload/us-central1/`;
+  const batches = [];
+  for (const [revision, marker, next] of [[0, 'before', 'middle'], [1, 'middle', 'after']]) {{
+    const data = kind => Object.fromEntries(['started', 'release', 'done'].map(name => [name, path.join(signals, `${{revision}}-${{kind}}-${{name}}`)]));
+    const http = data('http'), callable = data('callable'), stream = data('stream'), task = data('task');
+    const held = fetch(`${{base}}fxHold?${{new URLSearchParams(http)}}`, {{ method: 'POST' }}).then(async response => {{
+      assert.equal(response.status, 200); return response.json();
+    }});
+    const called = fetch(`${{base}}fxCallable`, {{ method: 'POST', headers: {{ 'content-type': 'application/json' }}, body: JSON.stringify({{ data: callable }}) }}).then(async response => {{
+      assert.equal(response.status, 200); return response.json();
+    }});
+    const streaming = await fetch(`${{base}}fxStream`, {{ method: 'POST', headers: {{ 'content-type': 'application/json', accept: 'text/event-stream' }}, body: JSON.stringify({{ data: stream }}) }});
+    assert.equal(streaming.status, 200);
+    const reader = streaming.body.getReader();
+    const first = await reader.read();
+    assert.ok(!first.done, 'stream sends a chunk before publication');
+    const streamed = (async () => {{
+      const chunks = [Buffer.from(first.value)];
+      for (;;) {{ const chunk = await reader.read(); if (chunk.done) break; chunks.push(Buffer.from(chunk.value)); }}
+      return Buffer.concat(chunks).toString();
+    }})();
+    const tasksHost = process.env.CLOUD_TASKS_EMULATOR_HOST.replace(/^http:\/\//, '');
+    const queued = await fetch(`http://${{tasksHost}}/projects/demo-in-flight-reload/locations/us-central1/queues/fxTask/tasks`, {{
+      method: 'POST', headers: {{ 'content-type': 'application/json' }},
+      body: JSON.stringify({{ task: {{ name: `projects/demo-in-flight-reload/locations/us-central1/queues/fxTask/tasks/held-${{revision}}`, httpRequest: {{ url: '', body: Buffer.from(JSON.stringify({{ data: task }})).toString('base64') }} }} }}),
+    }});
+    assert.equal(queued.status, 200, await queued.text());
+    await Promise.all([http, callable, stream, task].map(data => appear(data.started)));
+    const owners = [http, callable, stream, task].map(data => JSON.parse(fs.readFileSync(data.started)));
+    for (const owner of owners) assert.equal(owner.marker, marker);
+    assert.equal(new Set(owners.map(owner => owner.pid)).size, 1);
+    batches.push({{ marker, http, callable, stream, task, held, called, streamed, owner: owners[0] }});
+    fs.writeFileSync(source, fs.readFileSync(source, 'utf8').replace(`'${{marker}}'`, `'${{next}}'`));
+    await appear(path.join(signals, `published-${{revision + 1}}`));
+    if (revision === 0) {{
+      const fresh = await fetch(`${{base}}fxMarker`);
+      assert.equal(fresh.status, 200);
+      assert.deepEqual(await fresh.json(), {{ marker: next }});
+    }}
+  }}
+  for (const batch of batches.reverse()) {{
+    for (const data of [batch.http, batch.callable, batch.stream, batch.task]) fs.writeFileSync(data.release, '');
+    assert.deepEqual(await batch.held, {{ marker: batch.marker }});
+    assert.deepEqual(await batch.called, {{ result: {{ marker: batch.marker }} }});
+    const stream = await batch.streamed;
+    assert.ok(stream.includes(JSON.stringify({{ marker: batch.marker }})), stream);
+    assert.ok(stream.includes('result'), stream);
+    await appear(batch.task.done);
+    assert.deepEqual(JSON.parse(fs.readFileSync(batch.task.done)), {{ marker: batch.marker }});
+    if (batch.marker === 'middle') {{
+      while (fs.existsSync(batch.owner.cwd)) await new Promise(resolve => setTimeout(resolve, 20));
+    }} else {{
+      // Generation zero runs in the live source directory, which retirement must preserve.
+      for (;;) {{
+        try {{ process.kill(batch.owner.pid, 0); }}
+        catch (error) {{ assert.equal(error.code, 'ESRCH'); break; }}
+        await new Promise(resolve => setTimeout(resolve, 20));
+      }}
+      assert.equal(batch.owner.cwd, fs.realpathSync(path.dirname(source)));
+      assert.ok(fs.existsSync(batch.owner.cwd));
+    }}
+    const fresh = await fetch(`${{base}}fxMarker`);
+    assert.equal(fresh.status, 200);
+    assert.deepEqual(await fresh.json(), {{ marker: 'after' }});
+    if (batch.marker === 'middle') process.kill(batches[1].owner.pid, 0);
+  }}
+}})().catch(error => {{ console.error(error); process.exitCode = 1; }})
+  .finally(() => {{ clearTimeout(guard); process.exit(); }});
+"
+    );
+    let mut command = fireemu_exec(&dir, "demo-in-flight-reload");
+    command
+        .args(["--only", "functions", "--", "node", "-e", &script])
+        .arg(dir.join("index.js"))
+        .arg(&signals);
+    let output = run_with_reload_handshake(command, &signals);
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+    std::fs::remove_dir_all(signals).unwrap();
+}
+
+/// A source change made after generation 0 was loaded must reload, however long the watcher
+/// takes to finish its first scan. A 128 MiB sparse file that sorts before `index.js` keeps
+/// that first scan running for about two seconds (the scan reads at most 64 MiB/s), and the
+/// command rewrites `index.js` as its first action, while the scan is still reading the bulk
+/// file. When the watcher takes its baseline from that scan instead of from the source
+/// generation 0 loaded, the rewrite becomes the baseline and is never reloaded.
+///
+/// The pass condition is the daemon's `reloaded generation 1` line. The 60 second guard only
+/// keeps a missing reload from hanging the run; a correct reload arrives within a few scans.
+#[cfg(unix)]
+#[test]
+#[ignore = "requires tools/sdk-smoke dependencies; the manual SDK workflow runs this test"]
+fn a_change_made_while_the_watcher_takes_its_first_scan_is_reloaded() {
+    assert!(
+        have_sdk(),
+        "install tools/sdk-smoke dependencies before running this test"
+    );
+    let dir = scratch_codebase("first-scan-reload");
+    let signals = reload_signals("first-scan-reload");
+    std::fs::File::create(dir.join("aaa-bulk.bin"))
+        .unwrap()
+        .set_len(128 * 1024 * 1024)
+        .unwrap();
+    write(
+        &dir,
+        "index.js",
+        "const { onRequest } = require('firebase-functions/v2/https');\nconst marker = 'before';\nexports.fxMarker = onRequest((_request, response) => response.json({ marker }));\n",
+    );
+    let script = format!(
+        r"{RELOAD_HANDSHAKE_JS}
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+(async () => {{
+  const [source, signals] = process.argv.slice(1);
+  fs.writeFileSync(source, fs.readFileSync(source, 'utf8').replace(`'before'`, `'after'`));
+  const endpoint = `http://${{process.env.FIREEMU_FUNCTIONS_HOST}}/demo-first-scan-reload/us-central1/fxMarker`;
+  let guard;
+  await Promise.race([
+    published(signals),
+    new Promise((_resolve, reject) => {{
+      guard = setTimeout(async () => reject(new Error(
+        `no reload 60s after the rewrite; the function still answers ${{await (await fetch(endpoint)).text()}}`)), 60000);
+    }}),
+  ]);
+  clearTimeout(guard);
+  const response = await fetch(endpoint);
+  assert.equal(response.status, 200, await response.clone().text());
+  assert.deepEqual(await response.json(), {{ marker: 'after' }});
+}})().catch(error => {{ console.error(error); process.exitCode = 1; }})
+  .finally(() => process.exit());
+"
+    );
+    let mut command = fireemu_exec(&dir, "demo-first-scan-reload");
+    command
+        .args(["--only", "functions", "--", "node", "-e", &script])
+        .arg(dir.join("index.js"))
+        .arg(&signals);
+    let output = run_with_reload_handshake(command, &signals);
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+    std::fs::remove_dir_all(signals).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "requires tools/sdk-smoke dependencies; the manual SDK workflow runs this test"]
+fn daemon_exit_removes_the_published_reload_snapshot() {
+    assert!(have_sdk(), "install tools/sdk-smoke dependencies first");
+    let dir = scratch_codebase("reload-exit-cleanup");
+    let signals = reload_signals("reload-exit-cleanup");
+    write(
+        &dir,
+        "index.js",
+        "const { onRequest } = require('firebase-functions/v2/https');\nconst marker = 'before';\nexports.fxCwd = onRequest((_request, response) => response.json({ marker, cwd: process.cwd() }));\n",
+    );
+    let script = format!(
+        r"{RELOAD_HANDSHAKE_JS}
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+(async () => {{
+  const [source, signals] = process.argv.slice(1);
+  fs.writeFileSync(source, fs.readFileSync(source, 'utf8').replace(`'before'`, `'after'`));
+  await published(signals);
+  const endpoint = `http://${{process.env.FIREEMU_FUNCTIONS_HOST}}/demo-reload-exit-cleanup/us-central1/fxCwd`;
+  const response = await fetch(endpoint);
+  assert.equal(response.status, 200, await response.clone().text());
+  const value = await response.json();
+  assert.equal(value.marker, 'after');
+  assert.notEqual(fs.realpathSync(value.cwd), fs.realpathSync(path.dirname(source)));
+  assert.ok(fs.existsSync(value.cwd));
+  fs.writeFileSync(path.join(signals, 'snapshot'), value.cwd);
+}})().catch(error => {{ console.error(error); process.exitCode = 1; }})
+  .finally(() => process.exit());
+"
+    );
+    let mut command = fireemu_exec(&dir, "demo-reload-exit-cleanup");
+    command
+        .args(["--only", "functions", "--", "node", "-e", &script])
+        .arg(dir.join("index.js"))
+        .arg(&signals);
+    let output = run_with_reload_handshake(command, &signals);
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let snapshot = std::fs::read_to_string(signals.join("snapshot")).unwrap();
+    assert!(
+        !Path::new(&snapshot).exists(),
+        "reload snapshot survived exit"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+    std::fs::remove_dir_all(signals).unwrap();
+}
+
 #[test]
 #[ignore = "requires tools/sdk-smoke dependencies; the manual SDK workflow runs this test"]
 fn exec_preserves_an_external_pubsub_emulator_for_the_real_sdk() {

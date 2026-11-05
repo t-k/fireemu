@@ -179,6 +179,81 @@ fn write_number(out: &mut String, number: Number) {
     }
 }
 
+/// JSON whose object members come in a given order rather than the server's key order:
+/// what the official emulator writes from a Scala map (a query range, a shallow read, a
+/// `PATCH` echo). A [`Ordered::Value`] is written as [`render`] writes it.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Ordered<'a> {
+    /// A value in the server's own order.
+    Value(&'a Json),
+    /// An object whose members come in this order.
+    Members(Vec<(String, Ordered<'a>)>),
+}
+
+/// Renders [`Ordered`] JSON text.
+pub fn render_ordered(json: &Ordered<'_>, style: Style) -> String {
+    let mut out = String::new();
+    write_ordered(&mut out, json, style, 0);
+    out
+}
+
+fn write_ordered(out: &mut String, json: &Ordered<'_>, style: Style, objects_above: usize) {
+    let members = match json {
+        Ordered::Value(json) => return write_json(out, json, style, objects_above),
+        Ordered::Members(members) => members,
+    };
+    write_members(
+        out,
+        members.iter().map(|(key, value)| (key.as_str(), value)),
+        style,
+        objects_above,
+        |out, value, depth| write_ordered(out, value, style, depth),
+    );
+}
+
+/// Writes object members in the order given, compact or in Jackson's pretty layout.
+fn write_members<'v, V: 'v>(
+    out: &mut String,
+    members: impl ExactSizeIterator<Item = (&'v str, &'v V)>,
+    style: Style,
+    objects_above: usize,
+    mut value: impl FnMut(&mut String, &V, usize),
+) {
+    match style {
+        Style::Compact => {
+            out.push('{');
+            for (i, (key, member)) in members.enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                write_string(out, key);
+                out.push(':');
+                // The compact form has no indentation, so the depth is never read.
+                value(out, member, objects_above);
+            }
+            out.push('}');
+        }
+        Style::Pretty if members.len() == 0 => out.push_str("{ }"),
+        Style::Pretty => {
+            out.push('{');
+            let inner = "  ".repeat(objects_above + 1);
+            for (i, (key, member)) in members.enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                out.push('\n');
+                out.push_str(&inner);
+                write_string(out, key);
+                out.push_str(" : ");
+                value(out, member, objects_above + 1);
+            }
+            out.push('\n');
+            out.push_str(&"  ".repeat(objects_above));
+            out.push('}');
+        }
+    }
+}
+
 /// Renders JSON text.
 pub fn render(json: &Json, style: Style) -> String {
     let mut out = String::new();
@@ -243,38 +318,15 @@ fn write_object(
             .cmp(&(b.as_str() != VALUE_KEY))
             .then_with(|| name_compare(a, b))
     });
-    match style {
-        Style::Compact => {
-            out.push('{');
-            for (i, (key, value)) in entries.into_iter().enumerate() {
-                if i > 0 {
-                    out.push(',');
-                }
-                write_string(out, key);
-                out.push(':');
-                write_json(out, value, style, objects_above + 1);
-            }
-            out.push('}');
-        }
-        Style::Pretty if entries.is_empty() => out.push_str("{ }"),
-        Style::Pretty => {
-            out.push('{');
-            let inner = "  ".repeat(objects_above + 1);
-            for (i, (key, value)) in entries.into_iter().enumerate() {
-                if i > 0 {
-                    out.push(',');
-                }
-                out.push('\n');
-                out.push_str(&inner);
-                write_string(out, key);
-                out.push_str(" : ");
-                write_json(out, value, style, objects_above + 1);
-            }
-            out.push('\n');
-            out.push_str(&"  ".repeat(objects_above));
-            out.push('}');
-        }
-    }
+    write_members(
+        out,
+        entries
+            .into_iter()
+            .map(|(key, value)| (key.as_str(), value)),
+        style,
+        objects_above,
+        |out, value, depth| write_json(out, value, style, depth),
+    );
 }
 
 /// A double as Java's `Double.toString` writes it: the shortest digits that read back to

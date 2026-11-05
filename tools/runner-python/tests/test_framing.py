@@ -6,7 +6,7 @@ import random
 
 import pytest
 
-from fireemu_runner.framing import MAX_FRAME_BYTES, FrameWriter, ProtocolError, encode_frame, read_frame
+from fireemu_runner.framing import MAX_FRAME_BYTES, FrameWriter, ProtocolError, encode_frame, raw_event_data, read_frame
 
 
 def frame(payload: bytes) -> bytes:
@@ -195,3 +195,81 @@ def test_the_writer_flushes_each_frame_and_copes_with_a_stream_that_cannot():
     out = NoFlush()
     FrameWriter(out).write({"a": 1})
     assert out.data == encode_frame({"a": 1})
+
+
+# ---- the text of event.data, as the daemon framed it ---------------------------------------------------------------------------
+# A custom Eventarc event in the strict profile carries the publisher's JSON text in the frame (`runtime.rs`, `raw_data`); the
+# decoder turns it into Python values and forgets the text. `raw_event_data` returns the text of `event.data` as it stands in the
+# frame, so a request body can be the publisher's bytes.
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        '{ "run" : "pcrun-1" ,"label":"fraction" }',
+        '{"a":1e-7,"b":1e20,"c":"\\u00e9","d":-0.0,"e":[1E3,0.10,{"f":null}]}',
+        '"a \\"quoted\\" \\\\ text"',
+        "[1, 2 , 3]",
+        "12.50",
+        "true",
+        "null",
+        "{}",
+    ],
+)
+def test_the_text_of_event_data_is_returned_as_framed(data):
+    text = '{"attempt":1,"event":{"id":"e","data":' + data + ',"type":"t"},"function":"f","trigger":"eventarc"}'
+    assert raw_event_data(text) == data
+
+
+def test_event_data_is_found_after_members_that_hold_braces_quotes_and_the_word_data():
+    text = (
+        '{"deadline":"{\\"data\\":1}","event":{"attributes":{"data":2,"x":"}\\"{"},"source":"s","data" : {"k":"v"}},"z":1}'
+    )
+    assert raw_event_data(text) == '{"k":"v"}'
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        '{"event":{"id":"e"}}',
+        '{"event":[]}',
+        '{"event":"x"}',
+        '{"other":{"data":1}}',
+        '{"event":{"data":',
+        '{"event":{"data":}}',
+        "not json",
+        "",
+        "[]",
+        '{"event":{"data":1',
+        '{"event":{}}',
+        '{"event":{1:"x","data":{"a":1}}}',
+        '{"event":{"data" {"a":1}}}',
+        '{"event":{"data":1 x}}',
+        '{"event":{"data":{"a":1}x}}',
+    ],
+)
+def test_no_text_is_returned_when_event_data_is_absent_or_the_frame_is_malformed(text):
+    assert raw_event_data(text) is None
+
+
+def test_a_json_family_invoke_frame_carries_the_text_of_its_data():
+    payload = '{"event":{"data":{"b":1e-7,"a":1},"id":"e"},"function":"f","invocationId":"i-1","trigger":"eventarc","type":"invoke"}'
+    message = read_frame(io.BytesIO(frame(payload.encode())))
+    assert message["rawEventData"] == '{"b":1e-7,"a":1}'
+    assert message["event"]["data"] == {"b": 1e-7, "a": 1}
+
+
+@pytest.mark.parametrize("trigger", ["eventarc", "pubsub", "storage", "database"])
+def test_every_json_family_frame_carries_the_text(trigger):
+    payload = json.dumps({"type": "invoke", "invocationId": "i", "function": "f", "trigger": trigger, "event": {"data": {"n": 1.0}}})
+    assert read_frame(io.BytesIO(frame(payload.encode())))["rawEventData"] == '{"n": 1.0}'
+
+
+@pytest.mark.parametrize("trigger", ["firestore", "schedule", "http"])
+def test_other_frames_carry_no_text(trigger):
+    payload = json.dumps({"type": "invoke", "invocationId": "i", "function": "f", "trigger": trigger, "event": {"data": {"n": 1}}})
+    assert "rawEventData" not in read_frame(io.BytesIO(frame(payload.encode())))
+
+
+def test_a_frame_without_event_data_carries_no_text():
+    assert "rawEventData" not in read_frame(io.BytesIO(frame(json.dumps(invoke(trigger="eventarc", event={"id": "e"})).encode())))

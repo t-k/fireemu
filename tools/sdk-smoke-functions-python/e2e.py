@@ -22,6 +22,8 @@ AUTH = f"http://{os.environ['FIREBASE_AUTH_EMULATOR_HOST']}/identitytoolkit.goog
 PUBSUB = f"http://{os.environ['PUBSUB_EMULATOR_HOST']}/v1/projects/{PROJECT}"
 STORAGE = f"http://{os.environ['FIREBASE_STORAGE_EMULATOR_HOST'].removeprefix('http://')}"
 DATABASE = f"http://{os.environ['FIREBASE_DATABASE_EMULATOR_HOST']}"
+CONTROL = f"http://{os.environ['FIREBASE_AUTH_EMULATOR_HOST']}/v1/sessions/default"
+TASKS = "http://" + os.environ["CLOUD_TASKS_EMULATOR_HOST"].removeprefix("http://")
 EVENTARC = "http://" + os.environ["CLOUD_EVENTARC_EMULATOR_HOST"].removeprefix("http://")
 PROFILE = os.environ.get("E2E_PROFILE", "emulator")
 
@@ -170,6 +172,154 @@ def other_families():
     assert deleted["value"] == {"text": "hi", "n": 2}, deleted
 
 
+def await_idle():
+    status, body = call("POST", f"{CONTROL}:awaitIdle", {"timeoutSeconds": 60})
+    assert status == 200, (status, body)
+
+
+def request_families():
+    """Scheduler, task queue and Auth blocking functions: the daemon calls the Python SDK's HTTP wrappers."""
+    # Scheduler: the daemon's clock runs the five-minute schedule; a manual run works too.
+    status, body = call("POST", f"{CONTROL}/clock:advance", {"seconds": 6 * 60})
+    assert status == 200, (status, body)
+    await_idle()
+    ran = wait_for(lambda e: e["function"] == "sch_ok", "sch_ok")
+    assert ran["job_name"] == "firebase-schedule-sch_ok-us-central1" and ran["schedule_time"], ran
+    wait_for(lambda e: e["function"] == "sch_boom", "sch_boom (it raises; the attempt fails and is not retried)")
+    before = len([e for e in seen() if e["function"] == "sch_ok"])
+    status, body = call("POST", f"{CONTROL}/functions/sch_ok:run", {})
+    assert status == 200, (status, body)
+    await_idle()
+    assert len([e for e in seen() if e["function"] == "sch_ok"]) == before + 1
+
+    # Task queue: the Cloud Tasks emulator posts the callable-format body to the function.
+    task = {"httpRequest": {"url": "", "headers": {"Content-Type": "application/json"}, "body": base64.b64encode(json.dumps({"data": {"n": 5}}).encode()).decode()}}
+    status, body = call("POST", f"{TASKS}/projects/{PROJECT}/locations/us-central1/queues/tk_echo/tasks", {"task": task})
+    assert status == 200, (status, body)
+    await_idle()
+    wait_for(lambda e: e["function"] == "tk_echo" and e["data"] == {"n": 5}, "tk_echo")
+
+    # Auth blocking: beforeCreate runs when the Auth emulator creates the account, beforeSignIn when it signs in.
+    status, body = call("POST", f"{AUTH}/accounts:signUp?key=fake", {"email": "plain@example.com", "password": "secret1", "returnSecureToken": True})
+    assert status == 200, (status, body)
+    created = wait_for(lambda e: e["function"] == "bc_user" and e["email"] == "plain@example.com", "bc_user")
+    assert created["uid"] and created["event_type"].endswith("beforeCreate"), created
+    status, body = call("POST", f"{AUTH}/accounts:signUp?key=fake", {"email": "blocked@example.com", "password": "secret1", "returnSecureToken": True})
+    assert status == 400 and b"no accounts for you" in body, (status, body)
+    status, body = call("POST", f"{AUTH}/accounts:signUp?key=fake", {"email": "claims@example.com", "password": "secret1", "returnSecureToken": True})
+    assert status == 200, (status, body)
+    assert json.loads(base64.urlsafe_b64decode(json.loads(body)["idToken"].split(".")[1] + "==")).get("tier") == "gold", body
+    status, body = call("POST", f"{AUTH}/accounts:signInWithPassword?key=fake", {"email": "plain@example.com", "password": "secret1", "returnSecureToken": True})
+    assert status == 200, (status, body)
+    wait_for(lambda e: e["function"] == "bs_user" and e["email"] == "plain@example.com", "bs_user")
+
+
+def secrets_by_function():
+    """`.secret.local` holds API_KEY and TOKEN; a function sees only the ones it declares."""
+    def env(path):
+        status, body = call("GET", f"{FUNCTIONS}/{path}")
+        assert status == 200, (path, status, body)
+        return json.loads(body)["env"]
+
+    assert env("reads_key") == {"API_KEY": "e2e-key-value", "TOKEN": None}
+    assert env("reads_nothing") == {"API_KEY": None, "TOKEN": None}
+    status, body = call("GET", f"{FUNCTIONS}/reads_token")
+    assert status == 200 and json.loads(body)["param"] == "e2e-token-value", (status, body)
+    call("POST", f"{FIRESTORE}/secret?documentId=s1", {"fields": {}}, OWNER)
+    call("POST", f"{FIRESTORE}/plain?documentId=p1", {"fields": {}}, OWNER)
+    assert wait_for(lambda e: e["function"] == "fs_secret", "fs_secret")["env"] == {"API_KEY": "e2e-key-value", "TOKEN": None}
+    assert wait_for(lambda e: e["function"] == "fs_plain", "fs_plain")["env"] == {"API_KEY": None, "TOKEN": None}
+
+
+def negative_ingress():
+    """What the public Functions URL and the Auth emulator refuse for the new function kinds."""
+    ran = lambda: len([e for e in seen() if e["function"] == "tk_echo"])  # noqa: E731
+    before = ran()
+    body = {"data": {"n": 9}}
+    # NOTE: the bearer has an EMPTY signature. Strict Tasks admission only checks that a Google-issuer token has three
+    # non-empty segments, so a token with a made-up signature segment passes it (the documented Node-path limitation,
+    # which this test does not cover and does not claim to).
+    unsigned = b64({"alg": "none", "typ": "JWT"}) + "." + b64({"iss": "https://accounts.google.com", "aud": "x", "exp": 4102444800}) + "."
+    attempts = [("no credentials", {}), ("a forged bearer", {"Authorization": f"Bearer {unsigned}"}), ("the queue header alone", {"x-cloudtasks-queuename": "tk_echo"})]
+    for label, headers in attempts:
+        status, response = call("POST", f"{FUNCTIONS}/tk_echo", body, headers)
+        if PROFILE == "strict":
+            assert status in (401, 403) and b'"result"' not in response, (label, status, response)
+        else:
+            assert status == 200, (label, status, response)  # the official emulator serves a task function to anyone
+    assert ran() == before + (0 if PROFILE == "strict" else len(attempts)), (before, ran())
+    # An async handler is not run: the Python SDK never awaits one (production skips it silently).
+    status, response = call("GET", f"{FUNCTIONS}/async_http")
+    assert status == 500, (status, response)
+    # A blocking function has no public URL, whoever asks.
+    for headers in ({}, OWNER):
+        status, response = call("POST", f"{FUNCTIONS}/bc_user", {"data": {"jwt": unsigned}}, headers)
+        assert status == 404, (status, response)
+    # The SDK refuses a reserved claim name and an oversized payload.
+    for email, fragment in (("reserved@example.com", b""), ("oversized@example.com", b"")):
+        status, response = call("POST", f"{AUTH}/accounts:signUp?key=fake", {"email": email, "password": "secret1", "returnSecureToken": True})
+        assert status == 400 and fragment in response and b"idToken" not in response, (email, status, response)
+    # A `sub` claim passes the SDK, and the daemon keeps the protocol's own subject when it assembles the token.
+    status, response = call("POST", f"{AUTH}/accounts:signUp?key=fake", {"email": "subclaim@example.com", "password": "secret1", "returnSecureToken": True})
+    assert status == 200, (status, response)
+    answer = json.loads(response)
+    subject = json.loads(base64.urlsafe_b64decode(answer["idToken"].split(".")[1] + "=="))["sub"]
+    assert subject == answer["localId"] and subject != "someone-else", (subject, answer["localId"])
+    # Every refusal code a blocking function can use reaches the caller with its message.
+    status, response = call("POST", f"{AUTH}/accounts:signUp?key=fake", {"email": "code:permission-denied@example.com", "password": "secret1"})
+    assert status == 400 and b"refused with permission-denied" in response, (status, response)
+
+
+APP_ID = "1:1234567890:web:pyapp"
+
+
+def app_check_token():
+    """A token the App Check emulator signs, from a debug token it accepts."""
+    status, body = call(
+        "POST", f"http://{os.environ['FIREEMU_APP_CHECK_EMULATOR_HOST']}/v1/projects/{PROJECT}/apps/{APP_ID}:exchangeDebugToken",
+        {"debug_token": "0f6a8e1c-5b3d-4c7e-9a2f-1d4b6c8e0a3f"},
+    )
+    assert status == 200, (status, body)
+    return json.loads(body)["token"]
+
+
+def callable_with(name, token=None, extra=None):
+    headers = {} if token is None else {"X-Firebase-AppCheck": token}
+    status, body = call("POST", f"{FUNCTIONS}/{name}", {"data": {"a": 1, "b": 2}}, {**headers, **(extra or {})})
+    return status, json.loads(body)
+
+
+def app_check():
+    """SECURITY: an enforcing callable runs only for a token the emulator signed; a forged or foreign one never reaches it."""
+    if "FIREEMU_APP_CHECK_EMULATOR_HOST" not in os.environ:
+        # No App Check emulator in this run (the emulator profile does not start one unless asked): nothing can verify a
+        # token, so the daemon removes the header and no callable ever sees one, whatever it presents.
+        looks_real = b64({"alg": "RS256", "typ": "JWT", "kid": "k"}) + "." + b64({"aud": [f"projects/{PROJECT}"], "sub": APP_ID, "exp": 4102444800}) + "." + base64.urlsafe_b64encode(b"\x05" * 256).decode().rstrip("=")
+        status, body = callable_with("add_enforced", looks_real)
+        assert status == 401 and "result" not in body, (status, body)
+        status, body = callable_with("add_enforced_off", looks_real)
+        assert status == 200 and body["result"]["app"] is None, (status, body)
+        return
+    token = app_check_token()
+    status, body = callable_with("add_enforced", token)
+    assert status == 200 and body["result"] == {"sum": 3, "app": APP_ID}, (status, body)
+    status, body = callable_with("add_enforced_off", token)
+    assert status == 200 and body["result"]["app"] == APP_ID, (status, body)
+    header, payload, signature = token.split(".")
+    forged_claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+    forged_claims["sub"] = "1:1:web:forged"
+    forged = f"{header}.{b64(forged_claims)}.{signature}"
+    unsigned = b64({"alg": "none", "typ": "JWT"}) + "." + payload + "."
+    foreign = b64({"alg": "RS256", "typ": "JWT", "kid": json.loads(base64.urlsafe_b64decode(header + "=" * (-len(header) % 4)))["kid"]}) + "." + payload + "." + base64.urlsafe_b64encode(b"\x05" * 256).decode().rstrip("=")
+    for label, bad in (("a tampered payload", forged), ("alg none", unsigned), ("a foreign signature", foreign), ("junk", "not-a-token"), ("a doubled header", token + ", " + foreign)):
+        status, body = callable_with("add_enforced", bad)
+        assert status == 401 and "result" not in body, (label, status, body)
+        status, body = callable_with("add_enforced_off", bad)
+        assert status == 200 and body["result"]["app"] is None, (label, status, body)
+    status, body = callable_with("add_enforced")
+    assert status == 401 and "result" not in body, (status, body)
+
+
 def main():
     status, body = call("GET", f"{FUNCTIONS}/hello/a/b?q=1")
     assert status == 200, (status, body)
@@ -219,6 +369,11 @@ def main():
             status, body = call_with_two_authorizations(first, second)
             assert status == 401 and b"result" not in body, ("two Authorization headers", status, body)
     other_families()
+    # Before the clock moves: Python code runs on real time, and the emulator signs tokens on its own clock.
+    app_check()
+    request_families()
+    secrets_by_function()
+    negative_ingress()
     print(json.dumps({"ok": True, "profile": PROFILE}))
 
 
@@ -226,5 +381,8 @@ if __name__ == "__main__":
     try:
         main()
     except AssertionError as error:
+        import traceback
+
+        traceback.print_exc()
         print(f"e2e failed: {error}", file=sys.stderr)
         sys.exit(1)

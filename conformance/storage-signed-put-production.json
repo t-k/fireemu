@@ -1,0 +1,759 @@
+{
+  "source": {
+    "observed": "2026-11-03",
+    "target": "production: the default Firebase Storage bucket of a disposable project",
+    "flow": "Admin SDK File#getSignedUrl({version: 'v4', action: 'write', contentType: 'image/png', extensionHeaders: {'x-goog-content-length-range': '0,10485760'}}) then PUT",
+    "recordings": 2,
+    "cases": 16,
+    "sdk": {
+      "firebase-admin": "14.3.0",
+      "@google-cloud/storage": "7.22.0",
+      "google-auth-library": "9.15.1"
+    },
+    "note": "Bodies are normalized: project, bucket, signer, run id, dates, the StringToSign digest and expiry times are placeholders. bodyBytes and bodySha256 are of the exact bytes."
+  },
+  "rows": [
+    {
+      "recording": 1,
+      "id": "ok",
+      "status": 200,
+      "class": "accepted",
+      "code": null,
+      "shape": "empty",
+      "bodyBytes": 0,
+      "bodySha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body": "",
+      "headers": {
+        "content-length": "0",
+        "content-type": "text/html; charset=UTF-8",
+        "server": "UploadServer",
+        "vary": "Origin",
+        "x-goog-hash": "crc32c=GHybLA==, md5=O9r1lpKFGIrHVsM59p9ceQ==",
+        "x-goog-metageneration": "1",
+        "x-goog-stored-content-encoding": "identity",
+        "x-goog-stored-content-length": "4"
+      },
+      "volatileHeaders": {
+        "etag": "quoted-md5-hex",
+        "etagIsMd5": true,
+        "x-goog-generation": "digits-16"
+      }
+    },
+    {
+      "recording": 1,
+      "id": "ok-origin",
+      "status": 200,
+      "class": "accepted",
+      "code": null,
+      "shape": "empty",
+      "bodyBytes": 0,
+      "bodySha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body": "",
+      "headers": {
+        "content-length": "0",
+        "content-type": "text/html; charset=UTF-8",
+        "server": "UploadServer",
+        "x-goog-hash": "crc32c=GHybLA==, md5=O9r1lpKFGIrHVsM59p9ceQ==",
+        "x-goog-metageneration": "1",
+        "x-goog-stored-content-encoding": "identity",
+        "x-goog-stored-content-length": "4"
+      },
+      "volatileHeaders": {
+        "etag": "quoted-md5-hex",
+        "etagIsMd5": true,
+        "x-goog-generation": "digits-16"
+      }
+    },
+    {
+      "recording": 1,
+      "id": "wrong-content-type",
+      "status": 403,
+      "class": "refused",
+      "code": "SignatureDoesNotMatch",
+      "shape": "xml-error",
+      "bodyBytes": 1027,
+      "bodySha256": "93edd218930380e645a56dcc27c234550fb3f7198a019dd59b68440209b0d11d",
+      "body": "<?xml version='1.0' encoding='UTF-8'?><Error><Code>SignatureDoesNotMatch</Code><Message>Access denied.</Message><Details>The request signature we calculated does not match the signature you provided. Check your Google secret key and signing method.</Details><StringToSign>GOOG4-RSA-SHA256\n<date>\n20261103/auto/storage/goog4_request\n<string-to-sign-digest></StringToSign><CanonicalRequest>PUT\n/<bucket>/storage-signed-put/<run>/<rec>/wrong-content-type.png\nX-Goog-Algorithm=GOOG4-RSA-SHA256&amp;X-Goog-Credential=<redacted>&amp;X-Goog-Date=<date>&amp;X-Goog-Expires=300&amp;X-Goog-SignedHeaders=content-type%3Bhost%3Bx-goog-content-length-range\ncontent-type:text/plain\nhost:storage.googleapis.com\nx-goog-content-length-range:0,10485760\n\ncontent-type;host;x-goog-content-length-range\nUNSIGNED-PAYLOAD</CanonicalRequest></Error>",
+      "headers": {
+        "content-length": "1027",
+        "content-type": "application/xml; charset=UTF-8",
+        "server": "UploadServer",
+        "vary": "Origin"
+      },
+      "volatileHeaders": {
+        "etag": "absent",
+        "etagIsMd5": false,
+        "x-goog-generation": "absent"
+      }
+    },
+    {
+      "recording": 1,
+      "id": "missing-content-type",
+      "status": 400,
+      "class": "refused",
+      "code": "MalformedSecurityHeader",
+      "shape": "xml-error",
+      "bodyBytes": 285,
+      "bodySha256": "40c740386dc806d77fbe6a9cd33d57a2fd00b96a55222c19e4077937d8b33dd6",
+      "body": "<?xml version='1.0' encoding='UTF-8'?><Error><Code>MalformedSecurityHeader</Code><Message>Invalid argument.</Message><Details>Your request has a malformed header. Header was included in signedheaders, but not in the request.</Details><ParameterName>content-type</ParameterName></Error>",
+      "headers": {
+        "content-length": "285",
+        "content-type": "application/xml; charset=UTF-8",
+        "server": "UploadServer",
+        "vary": "Origin"
+      },
+      "volatileHeaders": {
+        "etag": "absent",
+        "etagIsMd5": false,
+        "x-goog-generation": "absent"
+      }
+    },
+    {
+      "recording": 1,
+      "id": "over-range",
+      "status": 400,
+      "class": "refused",
+      "code": "EntityTooLarge",
+      "shape": "xml-error",
+      "bodyBytes": 255,
+      "bodySha256": "736336720e65361553bde90cd1b7df0735bd03229eb27386573d1531208f2f98",
+      "body": "<?xml version='1.0' encoding='UTF-8'?><Error><Code>EntityTooLarge</Code><Message>Your proposed upload is larger than the maximum object size specified in your Policy Document.</Message><Details>Content-length exceeds upper bound on range</Details></Error>",
+      "headers": {
+        "content-length": "255",
+        "content-type": "application/xml; charset=UTF-8",
+        "server": "UploadServer",
+        "vary": "Origin"
+      },
+      "volatileHeaders": {
+        "etag": "absent",
+        "etagIsMd5": false,
+        "x-goog-generation": "absent"
+      }
+    },
+    {
+      "recording": 1,
+      "id": "under-range",
+      "status": 400,
+      "class": "refused",
+      "code": "EntityTooSmall",
+      "shape": "xml-error",
+      "bodyBytes": 261,
+      "bodySha256": "211351344d472238f0507b7277d2f080b44b9e8177d29516cdefb8661fc64e4a",
+      "body": "<?xml version='1.0' encoding='UTF-8'?><Error><Code>EntityTooSmall</Code><Message>Your proposed upload is smaller than the minimum object size specified in your Policy Document.</Message><Details>Content-length smaller than lower bound on range</Details></Error>",
+      "headers": {
+        "content-length": "261",
+        "content-type": "application/xml; charset=UTF-8",
+        "server": "UploadServer",
+        "vary": "Origin"
+      },
+      "volatileHeaders": {
+        "etag": "absent",
+        "etagIsMd5": false,
+        "x-goog-generation": "absent"
+      }
+    },
+    {
+      "recording": 1,
+      "id": "range-min-ok",
+      "status": 200,
+      "class": "accepted",
+      "code": null,
+      "shape": "empty",
+      "bodyBytes": 0,
+      "bodySha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body": "",
+      "headers": {
+        "content-length": "0",
+        "content-type": "text/html; charset=UTF-8",
+        "server": "UploadServer",
+        "vary": "Origin",
+        "x-goog-hash": "crc32c=tq/hgw==, md5=Ls3eOVkFHZE/YbFFeeoTbQ==",
+        "x-goog-metageneration": "1",
+        "x-goog-stored-content-encoding": "identity",
+        "x-goog-stored-content-length": "5"
+      },
+      "volatileHeaders": {
+        "etag": "quoted-md5-hex",
+        "etagIsMd5": true,
+        "x-goog-generation": "digits-16"
+      }
+    },
+    {
+      "recording": 1,
+      "id": "range-max-ok",
+      "status": 200,
+      "class": "accepted",
+      "code": null,
+      "shape": "empty",
+      "bodyBytes": 0,
+      "bodySha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body": "",
+      "headers": {
+        "content-length": "0",
+        "content-type": "text/html; charset=UTF-8",
+        "server": "UploadServer",
+        "vary": "Origin",
+        "x-goog-hash": "crc32c=zcTmCg==, md5=R4PnhLT6L7qeTWUC28ZPjw==",
+        "x-goog-metageneration": "1",
+        "x-goog-stored-content-encoding": "identity",
+        "x-goog-stored-content-length": "8"
+      },
+      "volatileHeaders": {
+        "etag": "quoted-md5-hex",
+        "etagIsMd5": true,
+        "x-goog-generation": "digits-16"
+      }
+    },
+    {
+      "recording": 1,
+      "id": "range-header-missing",
+      "status": 400,
+      "class": "refused",
+      "code": "MalformedSecurityHeader",
+      "shape": "xml-error",
+      "bodyBytes": 300,
+      "bodySha256": "2b31d915e60860d84a2b17c4911dd3a5f707f38c52fb95fca79fd72b8ffc2639",
+      "body": "<?xml version='1.0' encoding='UTF-8'?><Error><Code>MalformedSecurityHeader</Code><Message>Invalid argument.</Message><Details>Your request has a malformed header. Header was included in signedheaders, but not in the request.</Details><ParameterName>x-goog-content-length-range</ParameterName></Error>",
+      "headers": {
+        "content-length": "300",
+        "content-type": "application/xml; charset=UTF-8",
+        "server": "UploadServer",
+        "vary": "Origin"
+      },
+      "volatileHeaders": {
+        "etag": "absent",
+        "etagIsMd5": false,
+        "x-goog-generation": "absent"
+      }
+    },
+    {
+      "recording": 1,
+      "id": "range-header-mismatch",
+      "status": 403,
+      "class": "refused",
+      "code": "SignatureDoesNotMatch",
+      "shape": "xml-error",
+      "bodyBytes": 1022,
+      "bodySha256": "f4dba293cf66b40ee57db6079d54d42e9919099a9696fed22630b5f4abda6c60",
+      "body": "<?xml version='1.0' encoding='UTF-8'?><Error><Code>SignatureDoesNotMatch</Code><Message>Access denied.</Message><Details>The request signature we calculated does not match the signature you provided. Check your Google secret key and signing method.</Details><StringToSign>GOOG4-RSA-SHA256\n<date>\n20261103/auto/storage/goog4_request\n<string-to-sign-digest></StringToSign><CanonicalRequest>PUT\n/<bucket>/storage-signed-put/<run>/<rec>/range-header-mismatch.png\nX-Goog-Algorithm=GOOG4-RSA-SHA256&amp;X-Goog-Credential=<redacted>&amp;X-Goog-Date=<date>&amp;X-Goog-Expires=300&amp;X-Goog-SignedHeaders=content-type%3Bhost%3Bx-goog-content-length-range\ncontent-type:image/png\nhost:storage.googleapis.com\nx-goog-content-length-range:0,3\n\ncontent-type;host;x-goog-content-length-range\nUNSIGNED-PAYLOAD</CanonicalRequest></Error>",
+      "headers": {
+        "content-length": "1022",
+        "content-type": "application/xml; charset=UTF-8",
+        "server": "UploadServer",
+        "vary": "Origin"
+      },
+      "volatileHeaders": {
+        "etag": "absent",
+        "etagIsMd5": false,
+        "x-goog-generation": "absent"
+      }
+    },
+    {
+      "recording": 1,
+      "id": "range-header-unsigned",
+      "status": 400,
+      "class": "refused",
+      "code": "MalformedSecurityHeader",
+      "shape": "xml-error",
+      "bodyBytes": 261,
+      "bodySha256": "a3bd3adbbba9bddb0b165cd161e3b0408f25d742ef7e6f55254d4ed8ac383f1f",
+      "body": "<?xml version='1.0' encoding='UTF-8'?><Error><Code>MalformedSecurityHeader</Code><Message>Invalid argument.</Message><Details>Your request has a malformed header. Header must be signed.</Details><ParameterName>x-goog-content-length-range</ParameterName></Error>",
+      "headers": {
+        "content-length": "261",
+        "content-type": "application/xml; charset=UTF-8",
+        "server": "UploadServer",
+        "vary": "Origin"
+      },
+      "volatileHeaders": {
+        "etag": "absent",
+        "etagIsMd5": false,
+        "x-goog-generation": "absent"
+      }
+    },
+    {
+      "recording": 1,
+      "id": "no-range",
+      "status": 200,
+      "class": "accepted",
+      "code": null,
+      "shape": "empty",
+      "bodyBytes": 0,
+      "bodySha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body": "",
+      "headers": {
+        "content-length": "0",
+        "content-type": "text/html; charset=UTF-8",
+        "server": "UploadServer",
+        "vary": "Origin",
+        "x-goog-hash": "crc32c=GHybLA==, md5=O9r1lpKFGIrHVsM59p9ceQ==",
+        "x-goog-metageneration": "1",
+        "x-goog-stored-content-encoding": "identity",
+        "x-goog-stored-content-length": "4"
+      },
+      "volatileHeaders": {
+        "etag": "quoted-md5-hex",
+        "etagIsMd5": true,
+        "x-goog-generation": "digits-16"
+      }
+    },
+    {
+      "recording": 1,
+      "id": "tampered-signature",
+      "status": 403,
+      "class": "refused",
+      "code": "SignatureDoesNotMatch",
+      "shape": "xml-error",
+      "bodyBytes": 1026,
+      "bodySha256": "5896bca90389105bf509f2a852aa2534805c9cd8db082f590071ee6e87810931",
+      "body": "<?xml version='1.0' encoding='UTF-8'?><Error><Code>SignatureDoesNotMatch</Code><Message>Access denied.</Message><Details>The request signature we calculated does not match the signature you provided. Check your Google secret key and signing method.</Details><StringToSign>GOOG4-RSA-SHA256\n<date>\n20261103/auto/storage/goog4_request\n<string-to-sign-digest></StringToSign><CanonicalRequest>PUT\n/<bucket>/storage-signed-put/<run>/<rec>/tampered-signature.png\nX-Goog-Algorithm=GOOG4-RSA-SHA256&amp;X-Goog-Credential=<redacted>&amp;X-Goog-Date=<date>&amp;X-Goog-Expires=300&amp;X-Goog-SignedHeaders=content-type%3Bhost%3Bx-goog-content-length-range\ncontent-type:image/png\nhost:storage.googleapis.com\nx-goog-content-length-range:0,10485760\n\ncontent-type;host;x-goog-content-length-range\nUNSIGNED-PAYLOAD</CanonicalRequest></Error>",
+      "headers": {
+        "content-length": "1026",
+        "content-type": "application/xml; charset=UTF-8",
+        "server": "UploadServer",
+        "vary": "Origin"
+      },
+      "volatileHeaders": {
+        "etag": "absent",
+        "etagIsMd5": false,
+        "x-goog-generation": "absent"
+      }
+    },
+    {
+      "recording": 1,
+      "id": "signature-missing",
+      "status": 400,
+      "class": "refused",
+      "code": "MissingSecurityHeader",
+      "shape": "xml-error",
+      "bodyBytes": 219,
+      "bodySha256": "57e2e65f76534e2b9a32a70a925d4e6da83f972ae7d2f56893920b8d04b78620",
+      "body": "<?xml version='1.0' encoding='UTF-8'?><Error><Code>MissingSecurityHeader</Code><Message>Invalid argument.</Message><Details>Your request was missing a required header. Missing headers: x-goog-signature</Details></Error>",
+      "headers": {
+        "content-length": "219",
+        "content-type": "application/xml; charset=UTF-8",
+        "server": "UploadServer",
+        "vary": "Origin"
+      },
+      "volatileHeaders": {
+        "etag": "absent",
+        "etagIsMd5": false,
+        "x-goog-generation": "absent"
+      }
+    },
+    {
+      "recording": 1,
+      "id": "expired",
+      "status": 400,
+      "class": "refused",
+      "code": "ExpiredToken",
+      "shape": "xml-error",
+      "bodyBytes": 220,
+      "bodySha256": "06779c521c86be153b452c0d1987d9cc678925f32e55f0f93c4afb53b65e63a7",
+      "body": "<?xml version='1.0' encoding='UTF-8'?><Error><Code>ExpiredToken</Code><Message>Invalid argument.</Message><Details>The provided token has expired. Request signature expired at: <time></Details></Error>",
+      "headers": {
+        "content-length": "220",
+        "content-type": "application/xml; charset=UTF-8",
+        "server": "UploadServer",
+        "vary": "Origin"
+      },
+      "volatileHeaders": {
+        "etag": "absent",
+        "etagIsMd5": false,
+        "x-goog-generation": "absent"
+      }
+    },
+    {
+      "recording": 1,
+      "id": "other-object",
+      "status": 403,
+      "class": "refused",
+      "code": "SignatureDoesNotMatch",
+      "shape": "xml-error",
+      "bodyBytes": 1018,
+      "bodySha256": "55a251929ecb80969b7fd8cac58d43a8c792e49a951be8562fab05e5b4b4c9a1",
+      "body": "<?xml version='1.0' encoding='UTF-8'?><Error><Code>SignatureDoesNotMatch</Code><Message>Access denied.</Message><Details>The request signature we calculated does not match the signature you provided. Check your Google secret key and signing method.</Details><StringToSign>GOOG4-RSA-SHA256\n<date>\n20261103/auto/storage/goog4_request\n<string-to-sign-digest></StringToSign><CanonicalRequest>PUT\n/<bucket>/storage-signed-put/<run>/<rec>/other-sent.png\nX-Goog-Algorithm=GOOG4-RSA-SHA256&amp;X-Goog-Credential=<redacted>&amp;X-Goog-Date=<date>&amp;X-Goog-Expires=300&amp;X-Goog-SignedHeaders=content-type%3Bhost%3Bx-goog-content-length-range\ncontent-type:image/png\nhost:storage.googleapis.com\nx-goog-content-length-range:0,10485760\n\ncontent-type;host;x-goog-content-length-range\nUNSIGNED-PAYLOAD</CanonicalRequest></Error>",
+      "headers": {
+        "content-length": "1018",
+        "content-type": "application/xml; charset=UTF-8",
+        "server": "UploadServer",
+        "vary": "Origin"
+      },
+      "volatileHeaders": {
+        "etag": "absent",
+        "etagIsMd5": false,
+        "x-goog-generation": "absent"
+      }
+    },
+    {
+      "recording": 2,
+      "id": "ok",
+      "status": 200,
+      "class": "accepted",
+      "code": null,
+      "shape": "empty",
+      "bodyBytes": 0,
+      "bodySha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body": "",
+      "headers": {
+        "content-length": "0",
+        "content-type": "text/html; charset=UTF-8",
+        "server": "UploadServer",
+        "vary": "Origin",
+        "x-goog-hash": "crc32c=GHybLA==, md5=O9r1lpKFGIrHVsM59p9ceQ==",
+        "x-goog-metageneration": "1",
+        "x-goog-stored-content-encoding": "identity",
+        "x-goog-stored-content-length": "4"
+      },
+      "volatileHeaders": {
+        "etag": "quoted-md5-hex",
+        "etagIsMd5": true,
+        "x-goog-generation": "digits-16"
+      }
+    },
+    {
+      "recording": 2,
+      "id": "ok-origin",
+      "status": 200,
+      "class": "accepted",
+      "code": null,
+      "shape": "empty",
+      "bodyBytes": 0,
+      "bodySha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body": "",
+      "headers": {
+        "content-length": "0",
+        "content-type": "text/html; charset=UTF-8",
+        "server": "UploadServer",
+        "x-goog-hash": "crc32c=GHybLA==, md5=O9r1lpKFGIrHVsM59p9ceQ==",
+        "x-goog-metageneration": "1",
+        "x-goog-stored-content-encoding": "identity",
+        "x-goog-stored-content-length": "4"
+      },
+      "volatileHeaders": {
+        "etag": "quoted-md5-hex",
+        "etagIsMd5": true,
+        "x-goog-generation": "digits-16"
+      }
+    },
+    {
+      "recording": 2,
+      "id": "wrong-content-type",
+      "status": 403,
+      "class": "refused",
+      "code": "SignatureDoesNotMatch",
+      "shape": "xml-error",
+      "bodyBytes": 1027,
+      "bodySha256": "6d9c6a412b7f26371af47698b190a6cbb22259754d228342a5a918f6b73828f6",
+      "body": "<?xml version='1.0' encoding='UTF-8'?><Error><Code>SignatureDoesNotMatch</Code><Message>Access denied.</Message><Details>The request signature we calculated does not match the signature you provided. Check your Google secret key and signing method.</Details><StringToSign>GOOG4-RSA-SHA256\n<date>\n20261103/auto/storage/goog4_request\n<string-to-sign-digest></StringToSign><CanonicalRequest>PUT\n/<bucket>/storage-signed-put/<run>/<rec>/wrong-content-type.png\nX-Goog-Algorithm=GOOG4-RSA-SHA256&amp;X-Goog-Credential=<redacted>&amp;X-Goog-Date=<date>&amp;X-Goog-Expires=300&amp;X-Goog-SignedHeaders=content-type%3Bhost%3Bx-goog-content-length-range\ncontent-type:text/plain\nhost:storage.googleapis.com\nx-goog-content-length-range:0,10485760\n\ncontent-type;host;x-goog-content-length-range\nUNSIGNED-PAYLOAD</CanonicalRequest></Error>",
+      "headers": {
+        "content-length": "1027",
+        "content-type": "application/xml; charset=UTF-8",
+        "server": "UploadServer",
+        "vary": "Origin"
+      },
+      "volatileHeaders": {
+        "etag": "absent",
+        "etagIsMd5": false,
+        "x-goog-generation": "absent"
+      }
+    },
+    {
+      "recording": 2,
+      "id": "missing-content-type",
+      "status": 400,
+      "class": "refused",
+      "code": "MalformedSecurityHeader",
+      "shape": "xml-error",
+      "bodyBytes": 285,
+      "bodySha256": "40c740386dc806d77fbe6a9cd33d57a2fd00b96a55222c19e4077937d8b33dd6",
+      "body": "<?xml version='1.0' encoding='UTF-8'?><Error><Code>MalformedSecurityHeader</Code><Message>Invalid argument.</Message><Details>Your request has a malformed header. Header was included in signedheaders, but not in the request.</Details><ParameterName>content-type</ParameterName></Error>",
+      "headers": {
+        "content-length": "285",
+        "content-type": "application/xml; charset=UTF-8",
+        "server": "UploadServer",
+        "vary": "Origin"
+      },
+      "volatileHeaders": {
+        "etag": "absent",
+        "etagIsMd5": false,
+        "x-goog-generation": "absent"
+      }
+    },
+    {
+      "recording": 2,
+      "id": "over-range",
+      "status": 400,
+      "class": "refused",
+      "code": "EntityTooLarge",
+      "shape": "xml-error",
+      "bodyBytes": 255,
+      "bodySha256": "736336720e65361553bde90cd1b7df0735bd03229eb27386573d1531208f2f98",
+      "body": "<?xml version='1.0' encoding='UTF-8'?><Error><Code>EntityTooLarge</Code><Message>Your proposed upload is larger than the maximum object size specified in your Policy Document.</Message><Details>Content-length exceeds upper bound on range</Details></Error>",
+      "headers": {
+        "content-length": "255",
+        "content-type": "application/xml; charset=UTF-8",
+        "server": "UploadServer",
+        "vary": "Origin"
+      },
+      "volatileHeaders": {
+        "etag": "absent",
+        "etagIsMd5": false,
+        "x-goog-generation": "absent"
+      }
+    },
+    {
+      "recording": 2,
+      "id": "under-range",
+      "status": 400,
+      "class": "refused",
+      "code": "EntityTooSmall",
+      "shape": "xml-error",
+      "bodyBytes": 261,
+      "bodySha256": "211351344d472238f0507b7277d2f080b44b9e8177d29516cdefb8661fc64e4a",
+      "body": "<?xml version='1.0' encoding='UTF-8'?><Error><Code>EntityTooSmall</Code><Message>Your proposed upload is smaller than the minimum object size specified in your Policy Document.</Message><Details>Content-length smaller than lower bound on range</Details></Error>",
+      "headers": {
+        "content-length": "261",
+        "content-type": "application/xml; charset=UTF-8",
+        "server": "UploadServer",
+        "vary": "Origin"
+      },
+      "volatileHeaders": {
+        "etag": "absent",
+        "etagIsMd5": false,
+        "x-goog-generation": "absent"
+      }
+    },
+    {
+      "recording": 2,
+      "id": "range-min-ok",
+      "status": 200,
+      "class": "accepted",
+      "code": null,
+      "shape": "empty",
+      "bodyBytes": 0,
+      "bodySha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body": "",
+      "headers": {
+        "content-length": "0",
+        "content-type": "text/html; charset=UTF-8",
+        "server": "UploadServer",
+        "vary": "Origin",
+        "x-goog-hash": "crc32c=tq/hgw==, md5=Ls3eOVkFHZE/YbFFeeoTbQ==",
+        "x-goog-metageneration": "1",
+        "x-goog-stored-content-encoding": "identity",
+        "x-goog-stored-content-length": "5"
+      },
+      "volatileHeaders": {
+        "etag": "quoted-md5-hex",
+        "etagIsMd5": true,
+        "x-goog-generation": "digits-16"
+      }
+    },
+    {
+      "recording": 2,
+      "id": "range-max-ok",
+      "status": 200,
+      "class": "accepted",
+      "code": null,
+      "shape": "empty",
+      "bodyBytes": 0,
+      "bodySha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body": "",
+      "headers": {
+        "content-length": "0",
+        "content-type": "text/html; charset=UTF-8",
+        "server": "UploadServer",
+        "vary": "Origin",
+        "x-goog-hash": "crc32c=zcTmCg==, md5=R4PnhLT6L7qeTWUC28ZPjw==",
+        "x-goog-metageneration": "1",
+        "x-goog-stored-content-encoding": "identity",
+        "x-goog-stored-content-length": "8"
+      },
+      "volatileHeaders": {
+        "etag": "quoted-md5-hex",
+        "etagIsMd5": true,
+        "x-goog-generation": "digits-16"
+      }
+    },
+    {
+      "recording": 2,
+      "id": "range-header-missing",
+      "status": 400,
+      "class": "refused",
+      "code": "MalformedSecurityHeader",
+      "shape": "xml-error",
+      "bodyBytes": 300,
+      "bodySha256": "2b31d915e60860d84a2b17c4911dd3a5f707f38c52fb95fca79fd72b8ffc2639",
+      "body": "<?xml version='1.0' encoding='UTF-8'?><Error><Code>MalformedSecurityHeader</Code><Message>Invalid argument.</Message><Details>Your request has a malformed header. Header was included in signedheaders, but not in the request.</Details><ParameterName>x-goog-content-length-range</ParameterName></Error>",
+      "headers": {
+        "content-length": "300",
+        "content-type": "application/xml; charset=UTF-8",
+        "server": "UploadServer",
+        "vary": "Origin"
+      },
+      "volatileHeaders": {
+        "etag": "absent",
+        "etagIsMd5": false,
+        "x-goog-generation": "absent"
+      }
+    },
+    {
+      "recording": 2,
+      "id": "range-header-mismatch",
+      "status": 403,
+      "class": "refused",
+      "code": "SignatureDoesNotMatch",
+      "shape": "xml-error",
+      "bodyBytes": 1022,
+      "bodySha256": "35f3d007746f99b831cf80bff2fa00599ee68703d382148a77f0cd4796c3ece4",
+      "body": "<?xml version='1.0' encoding='UTF-8'?><Error><Code>SignatureDoesNotMatch</Code><Message>Access denied.</Message><Details>The request signature we calculated does not match the signature you provided. Check your Google secret key and signing method.</Details><StringToSign>GOOG4-RSA-SHA256\n<date>\n20261103/auto/storage/goog4_request\n<string-to-sign-digest></StringToSign><CanonicalRequest>PUT\n/<bucket>/storage-signed-put/<run>/<rec>/range-header-mismatch.png\nX-Goog-Algorithm=GOOG4-RSA-SHA256&amp;X-Goog-Credential=<redacted>&amp;X-Goog-Date=<date>&amp;X-Goog-Expires=300&amp;X-Goog-SignedHeaders=content-type%3Bhost%3Bx-goog-content-length-range\ncontent-type:image/png\nhost:storage.googleapis.com\nx-goog-content-length-range:0,3\n\ncontent-type;host;x-goog-content-length-range\nUNSIGNED-PAYLOAD</CanonicalRequest></Error>",
+      "headers": {
+        "content-length": "1022",
+        "content-type": "application/xml; charset=UTF-8",
+        "server": "UploadServer",
+        "vary": "Origin"
+      },
+      "volatileHeaders": {
+        "etag": "absent",
+        "etagIsMd5": false,
+        "x-goog-generation": "absent"
+      }
+    },
+    {
+      "recording": 2,
+      "id": "range-header-unsigned",
+      "status": 400,
+      "class": "refused",
+      "code": "MalformedSecurityHeader",
+      "shape": "xml-error",
+      "bodyBytes": 261,
+      "bodySha256": "a3bd3adbbba9bddb0b165cd161e3b0408f25d742ef7e6f55254d4ed8ac383f1f",
+      "body": "<?xml version='1.0' encoding='UTF-8'?><Error><Code>MalformedSecurityHeader</Code><Message>Invalid argument.</Message><Details>Your request has a malformed header. Header must be signed.</Details><ParameterName>x-goog-content-length-range</ParameterName></Error>",
+      "headers": {
+        "content-length": "261",
+        "content-type": "application/xml; charset=UTF-8",
+        "server": "UploadServer",
+        "vary": "Origin"
+      },
+      "volatileHeaders": {
+        "etag": "absent",
+        "etagIsMd5": false,
+        "x-goog-generation": "absent"
+      }
+    },
+    {
+      "recording": 2,
+      "id": "no-range",
+      "status": 200,
+      "class": "accepted",
+      "code": null,
+      "shape": "empty",
+      "bodyBytes": 0,
+      "bodySha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body": "",
+      "headers": {
+        "content-length": "0",
+        "content-type": "text/html; charset=UTF-8",
+        "server": "UploadServer",
+        "vary": "Origin",
+        "x-goog-hash": "crc32c=GHybLA==, md5=O9r1lpKFGIrHVsM59p9ceQ==",
+        "x-goog-metageneration": "1",
+        "x-goog-stored-content-encoding": "identity",
+        "x-goog-stored-content-length": "4"
+      },
+      "volatileHeaders": {
+        "etag": "quoted-md5-hex",
+        "etagIsMd5": true,
+        "x-goog-generation": "digits-16"
+      }
+    },
+    {
+      "recording": 2,
+      "id": "tampered-signature",
+      "status": 403,
+      "class": "refused",
+      "code": "SignatureDoesNotMatch",
+      "shape": "xml-error",
+      "bodyBytes": 1026,
+      "bodySha256": "e97b7799172a27855ea7962f7f3f5c3f2103099d82767067f2d0b7ad6424dad6",
+      "body": "<?xml version='1.0' encoding='UTF-8'?><Error><Code>SignatureDoesNotMatch</Code><Message>Access denied.</Message><Details>The request signature we calculated does not match the signature you provided. Check your Google secret key and signing method.</Details><StringToSign>GOOG4-RSA-SHA256\n<date>\n20261103/auto/storage/goog4_request\n<string-to-sign-digest></StringToSign><CanonicalRequest>PUT\n/<bucket>/storage-signed-put/<run>/<rec>/tampered-signature.png\nX-Goog-Algorithm=GOOG4-RSA-SHA256&amp;X-Goog-Credential=<redacted>&amp;X-Goog-Date=<date>&amp;X-Goog-Expires=300&amp;X-Goog-SignedHeaders=content-type%3Bhost%3Bx-goog-content-length-range\ncontent-type:image/png\nhost:storage.googleapis.com\nx-goog-content-length-range:0,10485760\n\ncontent-type;host;x-goog-content-length-range\nUNSIGNED-PAYLOAD</CanonicalRequest></Error>",
+      "headers": {
+        "content-length": "1026",
+        "content-type": "application/xml; charset=UTF-8",
+        "server": "UploadServer",
+        "vary": "Origin"
+      },
+      "volatileHeaders": {
+        "etag": "absent",
+        "etagIsMd5": false,
+        "x-goog-generation": "absent"
+      }
+    },
+    {
+      "recording": 2,
+      "id": "signature-missing",
+      "status": 400,
+      "class": "refused",
+      "code": "MissingSecurityHeader",
+      "shape": "xml-error",
+      "bodyBytes": 219,
+      "bodySha256": "57e2e65f76534e2b9a32a70a925d4e6da83f972ae7d2f56893920b8d04b78620",
+      "body": "<?xml version='1.0' encoding='UTF-8'?><Error><Code>MissingSecurityHeader</Code><Message>Invalid argument.</Message><Details>Your request was missing a required header. Missing headers: x-goog-signature</Details></Error>",
+      "headers": {
+        "content-length": "219",
+        "content-type": "application/xml; charset=UTF-8",
+        "server": "UploadServer",
+        "vary": "Origin"
+      },
+      "volatileHeaders": {
+        "etag": "absent",
+        "etagIsMd5": false,
+        "x-goog-generation": "absent"
+      }
+    },
+    {
+      "recording": 2,
+      "id": "expired",
+      "status": 400,
+      "class": "refused",
+      "code": "ExpiredToken",
+      "shape": "xml-error",
+      "bodyBytes": 220,
+      "bodySha256": "4913ecf76e263ffa6277d9377826b0ecaf1c40494633cbb08052277545c01c8c",
+      "body": "<?xml version='1.0' encoding='UTF-8'?><Error><Code>ExpiredToken</Code><Message>Invalid argument.</Message><Details>The provided token has expired. Request signature expired at: <time></Details></Error>",
+      "headers": {
+        "content-length": "220",
+        "content-type": "application/xml; charset=UTF-8",
+        "server": "UploadServer",
+        "vary": "Origin"
+      },
+      "volatileHeaders": {
+        "etag": "absent",
+        "etagIsMd5": false,
+        "x-goog-generation": "absent"
+      }
+    },
+    {
+      "recording": 2,
+      "id": "other-object",
+      "status": 403,
+      "class": "refused",
+      "code": "SignatureDoesNotMatch",
+      "shape": "xml-error",
+      "bodyBytes": 1018,
+      "bodySha256": "ebf7e6b892fb8c71d95a73bf6f1e461efdb970bab36773700fa5d5d1287b2f45",
+      "body": "<?xml version='1.0' encoding='UTF-8'?><Error><Code>SignatureDoesNotMatch</Code><Message>Access denied.</Message><Details>The request signature we calculated does not match the signature you provided. Check your Google secret key and signing method.</Details><StringToSign>GOOG4-RSA-SHA256\n<date>\n20261103/auto/storage/goog4_request\n<string-to-sign-digest></StringToSign><CanonicalRequest>PUT\n/<bucket>/storage-signed-put/<run>/<rec>/other-sent.png\nX-Goog-Algorithm=GOOG4-RSA-SHA256&amp;X-Goog-Credential=<redacted>&amp;X-Goog-Date=<date>&amp;X-Goog-Expires=300&amp;X-Goog-SignedHeaders=content-type%3Bhost%3Bx-goog-content-length-range\ncontent-type:image/png\nhost:storage.googleapis.com\nx-goog-content-length-range:0,10485760\n\ncontent-type;host;x-goog-content-length-range\nUNSIGNED-PAYLOAD</CanonicalRequest></Error>",
+      "headers": {
+        "content-length": "1018",
+        "content-type": "application/xml; charset=UTF-8",
+        "server": "UploadServer",
+        "vary": "Origin"
+      },
+      "volatileHeaders": {
+        "etag": "absent",
+        "etagIsMd5": false,
+        "x-goog-generation": "absent"
+      }
+    }
+  ]
+}

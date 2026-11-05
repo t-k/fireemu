@@ -90,3 +90,61 @@ def test_the_refusal_without_a_specversion_has_this_exact_message():
     with pytest.raises(ValueError) as error:
         firestore_cloud_event(event)
     assert str(error.value) == "the event has no specversion"
+
+
+# Production (recorded 2026-11-04, sandbox run PYCHECK-EVENTS-20261104-01, the raw twin of a created event): Eventarc sends
+# `ce-dataschema` with the Firestore events, and no other attribute beyond the ones the daemon already names.
+DATASCHEMA = "https://github.com/googleapis/google-cloudevents/blob/main/proto/google/events/cloud/firestore/v1/data.proto"
+
+
+# Only `created` was recorded; the other three follow the one schema document of the family and are UNRECORDED.
+@pytest.mark.parametrize(
+    "kind",
+    ["created", pytest.param("updated", id="updated-UNRECORDED"), pytest.param("deleted", id="deleted-UNRECORDED"), pytest.param("written", id="written-UNRECORDED")],
+)
+def test_the_strict_profile_gives_a_firestore_event_the_dataschema_production_sends(monkeypatch, kind):
+    monkeypatch.setenv("FIREEMU_HTTP_PROFILE", "strict")
+    attributes = firestore_cloud_event(structured(type=f"google.cloud.firestore.document.v1.{kind}"))._get_attributes()
+    assert attributes["dataschema"] == DATASCHEMA
+
+
+@pytest.mark.parametrize("profile", [None, "emulator", ""])
+def test_the_emulator_profile_keeps_the_official_emulators_attributes_without_a_dataschema(monkeypatch, profile):
+    if profile is None:
+        monkeypatch.delenv("FIREEMU_HTTP_PROFILE", raising=False)
+    else:
+        monkeypatch.setenv("FIREEMU_HTTP_PROFILE", profile)
+    assert "dataschema" not in firestore_cloud_event(structured())._get_attributes()
+
+
+def test_a_dataschema_the_daemon_names_is_kept_in_both_profiles(monkeypatch):
+    for profile in ("strict", "emulator"):
+        monkeypatch.setenv("FIREEMU_HTTP_PROFILE", profile)
+        attributes = firestore_cloud_event(structured(dataschema="https://example.com/schema"))._get_attributes()
+        assert attributes["dataschema"] == "https://example.com/schema", profile
+
+
+def test_the_dataschema_is_added_to_nothing_but_the_attributes(monkeypatch):
+    monkeypatch.setenv("FIREEMU_HTTP_PROFILE", "strict")
+    event = structured()
+    firestore_cloud_event(event)
+    assert "dataschema" not in event
+
+
+TRACEPARENT = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+
+
+def test_the_strict_profile_does_not_make_a_traceparent_member_a_firestore_attribute(monkeypatch):
+    monkeypatch.setenv("FIREEMU_HTTP_PROFILE", "strict")
+    attributes = firestore_cloud_event(structured(traceparent=TRACEPARENT))._get_attributes()
+    assert "traceparent" not in attributes
+    assert attributes["id"] == "e-1"
+
+
+@pytest.mark.parametrize("profile", [None, "emulator", ""])
+def test_the_emulator_profile_keeps_a_traceparent_member_as_a_firestore_attribute(monkeypatch, profile):
+    if profile is None:
+        monkeypatch.delenv("FIREEMU_HTTP_PROFILE", raising=False)
+    else:
+        monkeypatch.setenv("FIREEMU_HTTP_PROFILE", profile)
+    assert firestore_cloud_event(structured(traceparent=TRACEPARENT))._get_attributes()["traceparent"] == TRACEPARENT

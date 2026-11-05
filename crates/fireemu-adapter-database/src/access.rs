@@ -129,6 +129,46 @@ impl Access {
         }
     }
 
+    /// Whether the strict profile refuses a REST request because of an access token other than
+    /// the emulator's `owner`: a non-empty `Authorization: Bearer` token, or any `access_token`
+    /// (the empty value included). Production answers these 401 `Unauthorized request.` where it
+    /// answers any other refused credential 401 `Permission denied` (G10 rows bearer-random,
+    /// bearer-none-own, bearer-rs256, bearer-null, at-empty, at-random, at-rs256; an empty
+    /// Bearer, row bearer-empty, is not one).
+    pub(crate) fn is_unauthorized_token(
+        authorization: Option<&str>,
+        params: &BTreeMap<String, String>,
+        credentials: &Credentials,
+    ) -> bool {
+        if !credentials.strict {
+            return false;
+        }
+        let bearer = authorization
+            .and_then(|v| v.strip_prefix("Bearer "))
+            .filter(|token| !token.is_empty());
+        let token = bearer.or_else(|| params.get("access_token").map(String::as_str));
+        token.is_some_and(|token| token != OWNER)
+    }
+
+    /// Whether `auth=` carries an opaque token: the shape of the recorded `random` credential (G10
+    /// row auth-random-pub), 1 to 128 ASCII letters and digits. It judges the decoded value, as
+    /// production reads the query: `auth=%61` is `auth=a`, and `%61uth=a` names `auth`. A
+    /// JWT-shaped value (it has dots), an empty, symbol-bearing or huge one, `null` and `owner`
+    /// are not opaque.
+    pub(crate) fn is_opaque_auth(
+        authorization: Option<&str>,
+        params: &BTreeMap<String, String>,
+    ) -> bool {
+        authorization.is_none()
+            && !params.contains_key("access_token")
+            && params.get("auth").is_some_and(|token| {
+                (1..=128).contains(&token.len())
+                    && token.bytes().all(|b| b.is_ascii_alphanumeric())
+                    && token != "null"
+                    && token != OWNER
+            })
+    }
+
     /// The access an OAuth access token (or a realtime `gauth` credential) gives.
     pub(crate) fn administrator(token: &str, credentials: &Credentials) -> Result<Self, Refused> {
         if token == OWNER {
@@ -707,6 +747,51 @@ mod admin_override_tests {
                 Access::from_rest(None, &params, &credentials, "ns", 0),
                 Ok(expected.clone())
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod credential_answer_properties {
+    use super::*;
+    use proptest::prelude::*;
+
+    fn auth(value: &str) -> BTreeMap<String, String> {
+        BTreeMap::from([("auth".to_owned(), value.to_owned())])
+    }
+
+    proptest! {
+        // `auth=` is opaque exactly when it is 1 to 128 ASCII letters and digits, and is neither
+        // `null` nor `owner`: the shape of the recorded random credential (G10 auth-random-pub).
+        #[test]
+        fn opaque_auth_is_the_recorded_shape_and_nothing_wider(value in "\\PC{0,200}|[A-Za-z0-9]{0,140}|[a-z0-9.]{0,40}") {
+            let expected = (1..=128).contains(&value.len())
+                && value.chars().all(|c| c.is_ascii_alphanumeric())
+                && value != "null"
+                && value != "owner";
+            prop_assert_eq!(Access::is_opaque_auth(None, &auth(&value)), expected);
+            // Any other carrier makes it not an `auth=` credential at all.
+            prop_assert!(!Access::is_opaque_auth(Some("Bearer x"), &auth(&value)));
+            let mut with_token = auth(&value);
+            with_token.insert("access_token".to_owned(), "x".to_owned());
+            prop_assert!(!Access::is_opaque_auth(None, &with_token));
+        }
+
+        // Only the strict profile has unauthorized tokens; the owner's and an empty Bearer never do.
+        #[test]
+        fn unauthorized_tokens_are_strict_non_owner_access_tokens(token in "[ -~]{0,40}", query in any::<bool>()) {
+            let strict = Credentials { strict: true, ..Credentials::default() };
+            let lax = Credentials::default();
+            let (header, params) = if query {
+                (None, BTreeMap::from([("access_token".to_owned(), token.clone())]))
+            } else {
+                (Some(format!("Bearer {token}")), BTreeMap::new())
+            };
+            let expected = token != OWNER && (query || !token.is_empty());
+            prop_assert_eq!(Access::is_unauthorized_token(header.as_deref(), &params, &strict), expected);
+            prop_assert!(!Access::is_unauthorized_token(header.as_deref(), &params, &lax));
+            // A bare `auth=` credential is never one.
+            prop_assert!(!Access::is_unauthorized_token(None, &auth(&token), &strict));
         }
     }
 }

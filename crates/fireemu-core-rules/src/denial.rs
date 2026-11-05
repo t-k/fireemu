@@ -92,7 +92,7 @@ fn outcome(value: &ExprValue) -> String {
         // Only where: an error's message can carry an evaluated value (`missing key <claim>`).
         // The request trace (`GET /v1/sessions/default/rules/requests`, behind the control
         // token) keeps the message.
-        ExprValue::Undefined(cause) => {
+        ExprValue::Undefined(cause) | ExprValue::TruncatedUndefined(cause) => {
             format!("an error at {}:{}", cause.span.line, cause.span.column)
         }
         // Only the type: a condition such as `request.auth.token.secret` would otherwise print a
@@ -100,7 +100,9 @@ fn outcome(value: &ExprValue) -> String {
         ExprValue::Null => "null, not a boolean".to_owned(),
         ExprValue::Int(_) => "an int, not a boolean".to_owned(),
         ExprValue::Float(_) => "a float, not a boolean".to_owned(),
-        ExprValue::String(_) => "a string, not a boolean".to_owned(),
+        ExprValue::String(_) | ExprValue::TruncatedString(_) => {
+            "a string, not a boolean".to_owned()
+        }
         ExprValue::Composite(kind) => format!("a {kind}, not a boolean"),
     }
 }

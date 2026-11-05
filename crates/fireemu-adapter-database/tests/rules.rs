@@ -205,6 +205,270 @@ fn rules_put_reports_independent_errors_in_input_order_and_preserves_rules() {
     );
 }
 
+/// The two Rules-document answers of production run RTDB-RULES-20261104-01 (case
+/// load-token, 44 bytes, and load-validate-write, 55 bytes) that fireemu answered differently
+/// in both profiles, and the recorded two-path answer that must keep both lines (81 bytes).
+#[test]
+fn rules_put_answers_the_recorded_production_load_bytes() {
+    for (rules, body) in [
+        (
+            r#"{"rules":{".read":"auth # null"}}"#,
+            "{\n  \"error\" : \"1:26: illegal character\\n\"\n}\n",
+        ),
+        (
+            r#"{"rules":{"a":{".validate":"1 +",".write":"baz"}}}"#,
+            "{\n  \"error\" : \"1:32: Unexpected end of expression\\n\"\n}\n",
+        ),
+        (
+            r#"{"rules":{"a":{".read":"foo"},"b":{".write":"bar"}}}"#,
+            "{\n  \"error\" : \"1:25: Unknown variable 'foo'.\\n1:46: Unknown variable 'bar'.\\n\"\n}\n",
+        ),
+    ] {
+        let mut database = db();
+        let (status, answer) = call(&mut database, "PUT", "/.settings/rules.json", OWNER, rules);
+        assert_eq!((status, answer.as_str()), (400, body), "{rules}");
+    }
+}
+
+/// Every Rules document of the local probe of firebase-database-emulator v4.11.2 (illegal
+/// characters at every position and expression kind, which errors are reported together and in
+/// which order, index names, duplicates) is answered byte for byte as the jar answered it, in
+/// both profiles (production agrees on the recorded rows above).
+#[test]
+fn rules_put_answers_every_probed_document_as_the_official_emulator() {
+    const ROWS: &[(&str, &str, u16, &str)] = include!("fixtures/rules-load-official.rs");
+    // Shapes fireemu still answers otherwise, none recorded in production: `new` and function
+    // literals (which fireemu does not read as JavaScript does), the E4X operators `..` and
+    // `::`, and Jackson's upper-case `\u001F` escape in an error text.
+    const OPEN: [&str; 5] = [
+        "i:new auth",
+        "i:function(){}",
+        "i:auth..x",
+        "i:auth::x",
+        "h-index:\"\\u001f\"",
+    ];
+    for case in OPEN {
+        assert!(
+            ROWS.iter().any(|row| row.0 == case),
+            "{case} is a probed row"
+        );
+    }
+    let mut wrong = Vec::new();
+    for strict in [false, true] {
+        for &(case, rules, status, body) in ROWS.iter().filter(|row| !OPEN.contains(&row.0)) {
+            let options = RestOptions {
+                production_shapes: strict,
+                ..RestOptions::default()
+            };
+            let mut database = Database::new(options, 7);
+            let answer = call(&mut database, "PUT", "/.settings/rules.json", OWNER, rules);
+            if answer != (status, body.to_owned()) {
+                wrong.push(format!(
+                    "strict={strict} {case}: {answer:?}, the jar {:?}",
+                    (status, body)
+                ));
+            }
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "{} rows differ:\n{}",
+        wrong.len(),
+        wrong.join("\n")
+    );
+}
+
+/// Where a key or an index name holds a lone surrogate (or any supplementary character), the
+/// official emulator writes it in its error text as `\uD800` (Jackson escapes the surrogates of
+/// a string, in upper case); fireemu's text holds the character, a lone surrogate as U+FFFD
+/// (a Rust string cannot hold one). The status and the place are the jar's, which is what a
+/// client reads. The rows are the jar's answers (4.11.2, 2026-11-04), none recorded in
+/// production.
+#[test]
+fn rules_put_names_a_lone_surrogate_by_the_replacement_character() {
+    const ROWS: &[(&str, &str, u16, &str)] = &[
+    ("r2:k-d800-d800", "{\"rules\":{\"\\ud800\":{},\"\\ud800\":{}}}", 400, "{\n  \"error\" : \"1:33: '\\uD800' occurs multiple times.\\n\"\n}\n"),
+    ("r2:k-emoji-pair", "{\"rules\":{\"\u{1f600}\":{},\"\\ud83d\\ude00\":{}}}", 400, "{\n  \"error\" : \"1:35: '\\uD83D\\uDE00' occurs multiple times.\\n\"\n}\n"),
+    ("r2:k-wild-d800-d801", "{\"rules\":{\"$\\ud800\":{},\"$\\ud801\":{}}}", 400, "{\n  \"error\" : \"1:35: Cannot have multiple default rules ('$\\uD800' and '$\\uD801').\\n\"\n}\n"),
+    ("r2:idx-d800", "{\"rules\":{\".indexOn\":\"\\ud800\"}}", 400, "{\n  \"error\" : \"1:22: Invalid key: \\uD800. Index must be either .value or declared on a valid path\\n\"\n}\n"),
+    ("r2:idx-d800-d801", "{\"rules\":{\".indexOn\":[\"\\ud800\",\"\\ud801\"]}}", 400, "{\n  \"error\" : \"1:23: Invalid key: \\uD800. Index must be either .value or declared on a valid path\\n\"\n}\n"),
+    ("r2:idx-d800-d800", "{\"rules\":{\".indexOn\":[\"\\ud800\",\"\\ud800\"]}}", 400, "{\n  \"error\" : \"1:23: Invalid key: \\uD800. Index must be either .value or declared on a valid path\\n\"\n}\n"),
+    ];
+    /// The text with every `\uD800`-style escape of a surrogate written as the character
+    /// (a pair as one, a lone one as U+FFFD).
+    fn written_as_characters(jar: &str) -> String {
+        let mut out = String::new();
+        let mut rest = jar;
+        while let Some(at) = rest.find("\\uD") {
+            out.push_str(&rest[..at]);
+            let unit = |text: &str| u32::from_str_radix(text.get(2..6)?, 16).ok();
+            let high = unit(&rest[at..]).filter(|u| (0xD800..0xDC00).contains(u));
+            let low = rest[at + 6..]
+                .starts_with("\\uD")
+                .then(|| unit(&rest[at + 6..]))
+                .flatten()
+                .filter(|u| (0xDC00..0xE000).contains(u));
+            if let (Some(high), Some(low)) = (high, low) {
+                out.push(
+                    char::from_u32(0x10000 + ((high - 0xD800) << 10) + (low - 0xDC00))
+                        .unwrap_or('\u{fffd}'),
+                );
+                rest = &rest[at + 12..];
+            } else {
+                out.push('\u{fffd}');
+                rest = &rest[at + 6..];
+            }
+        }
+        out.push_str(rest);
+        out
+    }
+    let mut wrong = Vec::new();
+    for strict in [false, true] {
+        for &(case, rules, status, jar) in ROWS {
+            let options = RestOptions {
+                production_shapes: strict,
+                ..RestOptions::default()
+            };
+            let mut database = Database::new(options, 7);
+            let answer = call(&mut database, "PUT", "/.settings/rules.json", OWNER, rules);
+            if answer != (status, written_as_characters(jar)) {
+                wrong.push(format!(
+                    "strict={strict} {case}: {answer:?}, the jar {jar:?}"
+                ));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+mod key_identity {
+    //! Two children of a level share a key when Java reads their keys as the same string: the
+    //! same UTF-16 units, however the file spells them (an escape or the character, a pair as
+    //! one character or two escapes). A surrogate written alone is a key of its own: `\ud800` and
+    //! `\ud801` are two, and neither is `\ufffd`. Checked against the jar's rows in
+    //! `rules_put_answers_every_probed_document_as_the_official_emulator` (`r2:k-*`).
+    use super::*;
+    use proptest::prelude::*;
+
+    /// A piece of a key: its UTF-16 units and a way to write it in the rules file.
+    fn atom() -> impl Strategy<Value = (Vec<u16>, String)> {
+        let atoms: Vec<(Vec<u16>, &'static str)> = vec![
+            (vec![0x61], "a"),
+            (vec![0x61], "\\u0061"),
+            (vec![0x62], "b"),
+            (vec![0xFFFD], "\u{fffd}"),
+            (vec![0xFFFD], "\\ufffd"),
+            (vec![0xD83D, 0xDE00], "\u{1f600}"),
+            (vec![0xD83D, 0xDE00], "\\ud83d\\ude00"),
+            (vec![0xD800], "\\ud800"),
+            (vec![0xD801], "\\ud801"),
+            (vec![0xDE00], "\\ude00"),
+            (vec![0xD83D], "\\ud83d"),
+        ];
+        prop::sample::select(atoms).prop_map(|(units, spelling)| (units, spelling.to_owned()))
+    }
+
+    fn key() -> impl Strategy<Value = (Vec<u16>, String)> {
+        prop::collection::vec(atom(), 1..4).prop_map(|atoms| {
+            let units = atoms.iter().flat_map(|(units, _)| units.clone()).collect();
+            let spelling = atoms
+                .iter()
+                .map(|(_, spelling)| spelling.as_str())
+                .collect();
+            (units, spelling)
+        })
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(512))]
+
+        #[test]
+        fn children_collide_only_when_their_keys_are_the_same_java_string(
+            keys in prop::collection::vec(key(), 1..5),
+        ) {
+            let members: Vec<String> = keys.iter().map(|(_, spelling)| format!("\"{spelling}\":{{}}")).collect();
+            let rules = format!("{{\"rules\":{{{}}}}}", members.join(","));
+            let distinct: BTreeSet<&Vec<u16>> = keys.iter().map(|(units, _)| units).collect();
+            for strict in [false, true] {
+                let options = RestOptions { production_shapes: strict, ..RestOptions::default() };
+                let mut database = Database::new(options, 7);
+                let (status, body) = call(&mut database, "PUT", "/.settings/rules.json", OWNER, &rules);
+                if distinct.len() == keys.len() {
+                    prop_assert_eq!((status, body.as_str()), (200, r#"{"status":"ok"}"#), "{}", rules);
+                } else {
+                    prop_assert_eq!(status, 400, "{}", rules);
+                    prop_assert!(body.contains("occurs multiple times."), "{}: {}", rules, body);
+                }
+            }
+        }
+    }
+}
+
+/// A JSON surrogate-pair escape in the rules file is one character, as the official emulator
+/// (Java) reads it: the rule compares it with the character itself. A high escape followed by
+/// anything but a low escape stays alone (`\ud83dxude00` is seven units). Answers of the jar,
+/// probed 2026-11-04: each rule loads, and the read is allowed (200) or denied (401).
+#[test]
+fn rules_read_json_surrogate_pair_escapes_as_one_character() {
+    for (rule, read) in [
+        (r"'\ud83d\ude00' == '😀'", 200),
+        (r"'\ud83d\ude00' != '😀'", 401),
+        (r"'\ud83d\ude00'.length == 2", 200),
+        (r"'\ud83d\ude00a' == '😀a'", 200),
+        (r"'\ud800\udc00' == '\u{10000}'", 200),
+        (r"'\udbff\udfff' == '\u{10ffff}'", 200),
+        (r"'\ud83dxude00'.length == 7", 200),
+        (r"'\ud83dxude00'.length == 2", 401),
+        (r"'\ud83dxude00' != '😀'", 200),
+        (r"'\ud83d\tde00'.length == 6", 200),
+    ] {
+        let rule = rule
+            .replace(r"\u{10000}", "\u{10000}")
+            .replace(r"\u{10ffff}", "\u{10ffff}");
+        let mut database = db();
+        let rules = format!(r#"{{"rules":{{".read":"{rule}"}}}}"#);
+        assert_eq!(
+            call(&mut database, "PUT", "/.settings/rules.json", OWNER, &rules),
+            (200, r#"{"status":"ok"}"#.to_owned()),
+            "{rules}"
+        );
+        assert_eq!(
+            call(&mut database, "GET", "/.json", &[], "").0,
+            read,
+            "{rules}"
+        );
+    }
+}
+
+/// The diagnostics check at most 4,096 expressions (fireemu's own bound): past it they stop,
+/// say so, and the answer falls back to the first error the file has.
+#[test]
+fn rules_put_bounds_the_expressions_checked_for_diagnostics() {
+    use std::fmt::Write as _;
+    // 1,365 levels of three rules, then `z`: 4,096 expressions, all checked. One level more
+    // (`n9999`, before `z`) and the check stops before `z`.
+    let mut levels = String::new();
+    for i in 0..1365 {
+        write!(
+            levels,
+            r#""n{i:04}":{{".read":true,".write":true,".validate":true}},"#
+        )
+        .unwrap();
+    }
+    for (extra, truncated) in [("", false), (r#""n9999":{".read":true},"#, true)] {
+        let input = format!(r#"{{"rules":{{{levels}{extra}"z":{{".read":"foo"}}}}}}"#);
+        let mut database = db();
+        let (status, body) = call(&mut database, "PUT", "/.settings/rules.json", OWNER, &input);
+        assert_eq!(status, 400);
+        assert_eq!(body.matches("Unknown variable 'foo'.").count(), 1, "{body}");
+        assert_eq!(
+            body.contains("Additional diagnostics were truncated."),
+            truncated,
+            "{body}"
+        );
+    }
+}
+
 fn db() -> Database {
     Database::new(RestOptions::default(), 7)
 }
@@ -1125,7 +1389,9 @@ fn each_profile_reads_each_credential_shape_as_the_ruling_says() {
             200,
             401,
         ),
-        ("auth=garbage", "/anon?auth=x".to_owned(), vec![], 200, 401),
+        // G10 row auth-random-pub: production reads a public path for an opaque `auth=` token
+        // that names no one (the request is unauthenticated), so strict answers 200 too.
+        ("auth=garbage", "/anon?auth=x".to_owned(), vec![], 200, 200),
         ("no credential", "/anon".to_owned(), vec![], 200, 200),
     ];
     for strict in [false, true] {

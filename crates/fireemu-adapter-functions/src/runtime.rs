@@ -717,6 +717,12 @@ struct Inner {
     /// `http-<n>`) with the function name; a timed-out handler keeps its slot until it
     /// really finishes.
     running: BTreeMap<String, String>,
+    /// Runner identity selected for each invocation, linearized with reload publication.
+    running_runners: BTreeMap<String, u64>,
+    /// Wall-clock invocation deadlines, retained while timed-out handlers still own slots.
+    running_deadlines: BTreeMap<String, tokio::time::Instant>,
+    /// Replaced generations and the invocation keys that still need their runners.
+    draining: Vec<(CodebaseGeneration, BTreeSet<String>)>,
     #[cfg(test)]
     dispatch_candidate_visits: usize,
     next_event: u64,
@@ -1142,11 +1148,35 @@ enum RunnerGoneDisposition {
     FaultInterrupted,
 }
 
-struct CleanupDir(std::path::PathBuf);
+struct CleanupDir(std::path::PathBuf, Mutex<bool>);
+
+impl CleanupDir {
+    fn remove(&self) {
+        let mut armed = self
+            .1
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if std::mem::replace(&mut *armed, false) {
+            // Windows keeps a stopped runner's handles open for a moment after it exits, and
+            // refuses the removal until they close. The wait is bounded, and only runs there.
+            let attempts = if cfg!(windows) { 40 } else { 1 };
+            for attempt in 1..=attempts {
+                match std::fs::remove_dir_all(&self.0) {
+                    Err(error)
+                        if attempt < attempts && error.kind() != std::io::ErrorKind::NotFound =>
+                    {
+                        std::thread::sleep(std::time::Duration::from_millis(50));
+                    }
+                    _ => break,
+                }
+            }
+        }
+    }
+}
 
 impl Drop for CleanupDir {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        self.remove();
     }
 }
 
@@ -1176,7 +1206,7 @@ impl Codebase {
 
 impl CodebaseGeneration {
     fn cleanup(path: Option<std::path::PathBuf>) -> Option<Arc<CleanupDir>> {
-        path.map(|path| Arc::new(CleanupDir(path)))
+        path.map(|path| Arc::new(CleanupDir(path, Mutex::new(true))))
     }
 }
 
@@ -1511,6 +1541,9 @@ impl FunctionsRuntime {
                 active_eventarc_records: 0,
                 active_eventarc_bytes: 0,
                 running: BTreeMap::new(),
+                running_runners: BTreeMap::new(),
+                running_deadlines: BTreeMap::new(),
+                draining: Vec::new(),
                 #[cfg(test)]
                 dispatch_candidate_visits: 0,
                 next_event: 0,
@@ -1872,7 +1905,30 @@ impl FunctionsRuntime {
         for (_, runner) in self.current_runners() {
             shutdowns.spawn(async move { runner.shutdown().await });
         }
+        let draining = {
+            let mut inner = self
+                .inner
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            std::mem::take(&mut inner.draining)
+        };
+        for (generation, _) in &draining {
+            let runner = generation.runner.clone();
+            shutdowns.spawn(async move { runner.shutdown().await });
+        }
         while shutdowns.join_next().await.is_some() {}
+        // Other daemon tasks may still own the runtime or a respawn snapshot at exit.
+        // Remove the owned directories explicitly after their runners have stopped.
+        for codebase in &self.codebases {
+            if let Some(cleanup) = codebase.generation_mut().cleanup_dir.take() {
+                cleanup.remove();
+            }
+        }
+        for (generation, _) in draining {
+            if let Some(cleanup) = generation.cleanup_dir {
+                cleanup.remove();
+            }
+        }
     }
 
     /// The codebase that exported `function`.
@@ -1889,6 +1945,7 @@ impl FunctionsRuntime {
     /// to stay identical. Handler code and environment change atomically with the runner;
     /// adding or removing triggers keeps the last-known-good generation rather than exposing
     /// a new Node export behind stale Rust routing.
+    #[allow(clippy::too_many_lines)]
     pub fn reload_codebase(&self, spec: CodebaseSpec) -> Result<u64, String> {
         if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
             spec.runner.kill_now();
@@ -1943,6 +2000,10 @@ impl FunctionsRuntime {
                 return Err(error);
             }
         };
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let old = {
             let mut generation = codebase.generation_mut();
             if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
@@ -1971,10 +2032,23 @@ impl FunctionsRuntime {
         }
         *eventarc_registry = next_eventarc_registry;
         drop(eventarc_registry);
-        // In-flight invocations retain their `Arc`; killing after publication prevents any
-        // new dispatch from reaching the old generation and reaps it promptly.
-        old.runner.kill_now();
-        drop(old);
+        // Admission and publication share `inner`: only keys admitted before this swap
+        // can still be using the old runner. Later requests cannot prolong its lifetime.
+        let pending: BTreeSet<String> = inner
+            .running_runners
+            .iter()
+            .filter(|(_, runner)| **runner == old.runner.diagnostic_id())
+            .map(|(key, _)| key.clone())
+            .collect();
+        if pending.is_empty() {
+            old.runner.kill_now();
+            if let Some(cleanup) = &old.cleanup_dir {
+                cleanup.remove();
+            }
+        } else {
+            inner.draining.push((old, pending));
+        }
+        drop(inner);
         self.wake.notify_one();
         Ok(generation)
     }
@@ -3267,6 +3341,17 @@ impl FunctionsRuntime {
             status: 400,
             body: body.to_owned(),
         };
+        // The strict profile refuses a `scheduleTime` that is not a timestamp, as the JSON API does for a
+        // malformed `google.protobuf.Timestamp` (UNRECORDED); the emulator profile keeps the official emulator,
+        // which delivers the text unchanged.
+        if self.profile == FunctionsHttpProfile::Strict
+            && task
+                .schedule_time
+                .as_deref()
+                .is_some_and(|text| !crate::tasks::valid_schedule_time(text))
+        {
+            return Err(refuse("scheduleTime must be RFC 3339"));
+        }
         if self.config.honour_task_schedule_time {
             if let Some(text) = task.schedule_time.as_deref() {
                 let at = LogicalInstant::parse_rfc3339(text)
@@ -3342,6 +3427,32 @@ impl FunctionsRuntime {
         .await
     }
 
+    /// The headers one dispatch carries: production's in the strict profile, the official emulator's otherwise.
+    fn task_headers(
+        &self,
+        dispatch: &crate::task_scheduler::Dispatch,
+        attempt: u32,
+        execution_count: u32,
+        previous: Option<u16>,
+    ) -> Vec<(String, String)> {
+        let shape = if self.profile == FunctionsHttpProfile::Strict {
+            crate::tasks::DispatchShape::Production {
+                queue: &dispatch.queue,
+            }
+        } else {
+            crate::tasks::DispatchShape::Official
+        };
+        crate::tasks::dispatch_headers(
+            &dispatch.task,
+            &dispatch.queue_key,
+            attempt,
+            execution_count,
+            previous,
+            self.task_epoch_millis(),
+            shape,
+        )
+    }
+
     /// Delivers one task, retrying on the official schedule until it succeeds or runs out.
     ///
     /// Backoff follows the explicit task-clock policy. Request and shutdown deadlines always
@@ -3356,7 +3467,7 @@ impl FunctionsRuntime {
         let mut attempt = 1u32;
         let mut execution_count = 0u32;
         let mut previous: Option<u16> = None;
-        let body = serde_json::to_vec(&task.body).unwrap_or_default();
+        let body = task.delivery_body().to_vec();
         loop {
             // A reset supersedes every task accepted before it.
             if self.inner.lock().ok().map(|i| i.epoch) != Some(epoch) {
@@ -3381,14 +3492,7 @@ impl FunctionsRuntime {
                 );
                 return true;
             };
-            let headers = crate::tasks::dispatch_headers(
-                task,
-                &dispatch.queue_key,
-                attempt,
-                execution_count,
-                previous,
-                self.task_epoch_millis(),
-            );
+            let headers = self.task_headers(dispatch, attempt, execution_count, previous);
             // The runner's HTTP server routes on the public path, and strips it before the
             // handler sees the request, so the dispatch carries the function's own URL path
             // rather than the `/` the queue would send to an arbitrary address.
@@ -4282,6 +4386,9 @@ impl FunctionsRuntime {
                     current.blocking_restart_ticket = None;
                     current.runner.kill_now();
                 }
+                for (generation, _) in inner.draining.drain(..) {
+                    generation.runner.kill_now();
+                }
                 inner.outbox.discard_stale(epoch);
                 inner.causality.reset();
                 inner.admission_refusals.clear();
@@ -4293,6 +4400,8 @@ impl FunctionsRuntime {
                 inner.active_eventarc_records = 0;
                 inner.active_eventarc_bytes = 0;
                 inner.running.clear();
+                inner.running_runners.clear();
+                inner.running_deadlines.clear();
                 inner.delayed.clear();
                 inner.catch_up_pending = false;
                 inner.schedule_recheck_pending = false;
@@ -4571,36 +4680,65 @@ impl FunctionsRuntime {
         }
     }
 
-    async fn current_http_addr(self: &Arc<Self>, target: &HttpTarget) -> Result<String, String> {
+    async fn current_http_addr(
+        self: &Arc<Self>,
+        target: &HttpTarget,
+        key: &str,
+    ) -> Result<String, String> {
         let index = self
             .owner
             .get(&target.function)
             .copied()
             .ok_or_else(|| format!("function {} has no codebase owner", target.function))?;
-        let current = self.runner_at(index);
-        if current.is_alive() && target.origin_runner.ptr_eq(&Arc::downgrade(&current)) {
-            self.sync_runner_clock(&current).await?;
-            return Ok(target.addr.clone());
+        loop {
+            let runner = {
+                let mut inner = self
+                    .inner
+                    .lock()
+                    .map_err(|_| "runtime poisoned".to_owned())?;
+                if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+                    return Err("the Functions runtime is shutting down".to_owned());
+                }
+                let current = self.runner_at(index);
+                if current.is_alive() {
+                    inner
+                        .running_runners
+                        .insert(key.to_owned(), current.diagnostic_id());
+                    Some(current)
+                } else {
+                    None
+                }
+            };
+            if let Some(runner) = runner {
+                self.sync_runner_clock(&runner).await?;
+                if target.origin_runner.ptr_eq(&Arc::downgrade(&runner)) {
+                    return Ok(target.addr.clone());
+                }
+                let port = runner
+                    .hello()
+                    .http_port
+                    .ok_or_else(|| format!("function {} has no HTTP runner", target.function))?;
+                return Ok(format!("127.0.0.1:{port}"));
+            }
+            // Recovery can race another publication. Select and record its winner under
+            // the same lock as reload before any bytes are sent to that generation.
+            self.recover_dead_runner(index).await?;
         }
-        let runner = self.recover_dead_runner(index).await?;
-        self.sync_runner_clock(&runner).await?;
-        let port = runner
-            .hello()
-            .http_port
-            .ok_or_else(|| format!("function {} has no HTTP runner", target.function))?;
-        Ok(format!("127.0.0.1:{port}"))
     }
 
     async fn current_http_addr_before(
         self: &Arc<Self>,
         target: &HttpTarget,
         deadline: Option<tokio::time::Instant>,
+        key: &str,
     ) -> Result<String, StreamStartError> {
         match deadline {
-            Some(deadline) => tokio::time::timeout_at(deadline, self.current_http_addr(target))
-                .await
-                .map_err(|_| StreamStartError::TimedOut)?,
-            None => self.current_http_addr(target).await,
+            Some(deadline) => {
+                tokio::time::timeout_at(deadline, self.current_http_addr(target, key))
+                    .await
+                    .map_err(|_| StreamStartError::TimedOut)?
+            }
+            None => self.current_http_addr(target, key).await,
         }
         .map_err(StreamStartError::Upstream)
     }
@@ -4614,7 +4752,10 @@ impl FunctionsRuntime {
         timeout: u64,
         profile: FunctionsHttpProfile,
     ) -> Result<String, Result<ProxiedResponse, String>> {
-        match self.current_http_addr_before(target, deadline).await {
+        match self
+            .current_http_addr_before(target, deadline, &format!("http-{}", id.value()))
+            .await
+        {
             Ok(addr) => Ok(addr),
             Err(StreamStartError::TimedOut) => {
                 self.record_http_invocation(
@@ -5285,6 +5426,13 @@ impl FunctionsRuntime {
         inner.next_event = inner.next_event.saturating_add(1);
         let key = format!("blocking-auth-{}", inner.next_event);
         inner.running.insert(key.clone(), function.to_owned());
+        inner.running_deadlines.insert(
+            key.clone(),
+            tokio::time::Instant::now() + Duration::from_secs(u64::from(spec.timeout_seconds)),
+        );
+        inner
+            .running_runners
+            .insert(key.clone(), current.runner.diagnostic_id());
         let target = BlockingAuthTarget {
             function: function.to_owned(),
             region: spec.region.clone(),
@@ -5412,6 +5560,10 @@ impl FunctionsRuntime {
         let epoch = inner.epoch;
         let key = format!("http-{}", inner.next_event);
         inner.running.insert(key.clone(), target.function.clone());
+        inner.running_deadlines.insert(
+            key.clone(),
+            tokio::time::Instant::now() + Duration::from_secs(self.http_limits(target).0),
+        );
         Ok((
             id,
             epoch,
@@ -5641,6 +5793,9 @@ impl FunctionsRuntime {
             let key = format!("http-{}", inner.next_event);
             let epoch = inner.epoch;
             inner.running.insert(key.clone(), target.function.clone());
+            if let Some(deadline) = deadline {
+                inner.running_deadlines.insert(key.clone(), deadline);
+            }
             (id, key, epoch)
         };
         // The slot is released even if the client disconnects and this future is dropped.
@@ -5771,16 +5926,66 @@ impl FunctionsRuntime {
             if recheck {
                 self.on_clock_changed();
             }
+            let mut drain_deadline = None;
+            if !self.config.debug_mode {
+                let mut inner = self
+                    .inner
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let mut index = 0;
+                while index < inner.draining.len() {
+                    let deadline = inner.draining[index]
+                        .1
+                        .iter()
+                        .filter_map(|key| inner.running_deadlines.get(key))
+                        .max()
+                        .copied()
+                        .unwrap_or_else(tokio::time::Instant::now)
+                        + Duration::from_secs(1);
+                    if tokio::time::Instant::now() < deadline {
+                        drain_deadline = Some(
+                            drain_deadline.map_or(deadline, |previous: tokio::time::Instant| {
+                                previous.min(deadline)
+                            }),
+                        );
+                        index += 1;
+                        continue;
+                    }
+                    let (generation, keys) = inner.draining.remove(index);
+                    // Resolve late and unbounded protocol waiters with the invocation timeout verdict.
+                    if let Ok(mut waiters) = generation.runner.waiters.lock() {
+                        for (_, waiter) in waiters.drain() {
+                            let _ = waiter.send(InvokeOutcome::TimedOut);
+                        }
+                    }
+                    generation.runner.kill_now();
+                    for key in keys {
+                        inner.running.remove(&key);
+                        inner.running_runners.remove(&key);
+                        inner.running_deadlines.remove(&key);
+                    }
+                    if let Some(cleanup) = &generation.cleanup_dir {
+                        cleanup.remove();
+                    }
+                    self.idle.notify_waiters();
+                }
+            }
             self.dispatch_ready();
             let next_task_wake = self.dispatch_tasks_ready();
-            match next_task_wake {
-                Some(deadline) => {
-                    tokio::select! {
-                        () = &mut wake => {}
-                        () = self.wait_task_until(deadline) => {}
+            tokio::select! {
+                () = &mut wake => {}
+                () = async {
+                    match next_task_wake {
+                        Some(deadline) => self.wait_task_until(deadline).await,
+                        None => std::future::pending().await,
                     }
-                }
-                None => wake.await,
+                } => {}
+                () = async {
+                    match drain_deadline {
+                        Some(deadline) => tokio::time::sleep_until(deadline).await,
+                        None => std::future::pending().await,
+                    }
+                } => {}
             }
         }
     }
@@ -5871,14 +6076,14 @@ impl FunctionsRuntime {
         // event leased before a reset must not reach a runner spawned after it. One per
         // codebase, and a codebase whose runner is down holds only its own queued work: the
         // rest of the project keeps dispatching.
-        let runners: Vec<Arc<Runner>> = (0..self.codebases.len())
-            .map(|i| self.runner_at(i))
-            .collect();
         let now = self.now();
         let faults = self.faults();
         let Ok(mut inner) = self.inner.lock() else {
             return;
         };
+        let runners: Vec<Arc<Runner>> = (0..self.codebases.len())
+            .map(|i| self.runner_at(i))
+            .collect();
         if inner.running.len() >= self.config.max_running {
             return;
         }
@@ -5985,9 +6190,15 @@ impl FunctionsRuntime {
             let dispatch_at = self.now();
             let key = format!("{}-{attempt}", id.value());
             inner.running.insert(key.clone(), function_name.clone());
+            inner
+                .running_runners
+                .insert(key.clone(), runner.diagnostic_id());
             *running_counts.entry(function_name.clone()).or_default() += 1;
             let runner = runner.clone();
             let timeout = Duration::from_secs(u64::from(spec.timeout_seconds));
+            inner
+                .running_deadlines
+                .insert(key.clone(), tokio::time::Instant::now() + timeout);
             let retry = spec.retry;
             if crash {
                 // A planned crash gives back only this selected event's attempt. Other events
@@ -6245,6 +6456,20 @@ impl FunctionsRuntime {
     fn release(&self, key: &str) {
         if let Ok(mut inner) = self.inner.lock() {
             inner.running.remove(key);
+            inner.running_runners.remove(key);
+            inner.running_deadlines.remove(key);
+            inner.draining.retain_mut(|(generation, keys)| {
+                keys.remove(key);
+                if keys.is_empty() {
+                    generation.runner.kill_now();
+                    if let Some(cleanup) = &generation.cleanup_dir {
+                        cleanup.remove();
+                    }
+                    false
+                } else {
+                    true
+                }
+            });
         }
         self.idle.notify_waiters();
         self.wake.notify_one();
@@ -8110,6 +8335,337 @@ mod task_completion_tests {
             ));
         }
         runtime.shutdown().await;
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn reload_expires_never_settling_background_generations_except_in_debug_mode() {
+        for debug_mode in [false, true] {
+            let root = std::env::temp_dir().join(format!(
+                "fireemu-drain-deadline-{}-{debug_mode}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&root).unwrap();
+            let handler_source = r"
+const fs = require('node:fs');
+const path = require('node:path');
+for (const [name, topic, timeout] of [['hang', 'jobs', 1], ['longHang', 'long-jobs', 4]]) {
+  const fn = async event => {
+    fs.writeFileSync(path.join(process.cwd(), '..', event.signal || name), 'started');
+    await new Promise(() => {});
+  };
+  fn.run = fn;
+  fn.__endpoint = { platform: 'gcfv2', concurrency: 2, timeoutSeconds: timeout,
+    eventTrigger: { eventType: 'google.cloud.pubsub.topic.v1.messagePublished', eventFilters: { topic } } };
+  exports[name] = fn;
+}
+";
+            std::fs::create_dir_all(root.join("0")).unwrap();
+            std::fs::write(root.join("0/package.json"), r#"{"main":"index.cjs"}"#).unwrap();
+            std::fs::write(root.join("0/index.cjs"), handler_source).unwrap();
+            let spawn = SpawnSpec {
+                command: vec![
+                    "node".into(),
+                    concat!(
+                        env!("CARGO_MANIFEST_DIR"),
+                        "/../../tools/runner-node/index.mjs"
+                    )
+                    .into(),
+                    "--source".into(),
+                    ".".into(),
+                ],
+                cwd: Some(root.join("0").display().to_string()),
+                env: vec![("GCLOUD_PROJECT".into(), "demo-app".into())],
+                hello_timeout: Duration::from_secs(10),
+            };
+            let first = Arc::new(Runner::spawn_spec(&spawn).await.unwrap());
+            let manifest = parse_manifest(first.hello().manifest.as_ref().unwrap()).unwrap();
+            let runtime = FunctionsRuntime::with_codebases(
+                vec![super::CodebaseSpec {
+                    name: "default".into(),
+                    manifest: manifest.clone(),
+                    runner: first.clone(),
+                    spawn: None,
+                    cleanup_dir: Some(root.join("0")),
+                }],
+                FunctionsConfig {
+                    debug_mode,
+                    max_running: 3,
+                    retry_attempts: 1,
+                    ..FunctionsConfig::for_tests(1, "test-secret".into())
+                },
+                Arc::new(Mutex::new(VirtualClock::new(
+                    LogicalInstant::from_unix_seconds(0),
+                ))),
+                crate::http::FunctionsHttpProfile::Emulator,
+            )
+            .unwrap();
+            std::fs::create_dir_all(root.join("0")).unwrap();
+            let dispatcher = tokio::spawn(runtime.clone().dispatch_loop());
+            let mut runners = vec![first];
+            let mut waiters = Vec::new();
+            let mut oldest_deadline = None;
+            for revision in 0..2 {
+                if revision == 0 {
+                    runtime.publish("long-jobs", &[json!({"data": "YQ=="})]);
+                }
+                runtime.publish("jobs", &[json!({"data": "YQ=="})]);
+                tokio::time::timeout(Duration::from_secs(5), async {
+                    loop {
+                        if root.join("hang").exists()
+                            && (revision != 0 || root.join("longHang").exists())
+                        {
+                            break;
+                        }
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                })
+                .await
+                .unwrap();
+                // A separate unbounded waiter must receive the timeout verdict, not runner death.
+                let runner = runners[revision].clone();
+                waiters.push(tokio::spawn(async move {
+                    runner
+                        .invoke_unbounded(json!({"invocationId": format!("waiter-{revision}"), "function": "hang", "trigger": "pubsub", "event": {"signal": format!("waiter-{revision}")}}))
+                        .await
+                        .outcome
+                }));
+                tokio::time::timeout(Duration::from_secs(5), async {
+                    while !root.join(format!("waiter-{revision}")).exists() {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                })
+                .await
+                .unwrap();
+                std::fs::remove_file(root.join("hang")).unwrap();
+                if revision == 0 {
+                    std::fs::remove_file(root.join("longHang")).unwrap();
+                }
+                if revision == 0 {
+                    // Keep the original deadline so a publication-relative timeout cannot pass.
+                    oldest_deadline = {
+                        let inner = runtime.inner.lock().unwrap();
+                        inner
+                            .running
+                            .iter()
+                            .find(|(_, function)| function.as_str() == "longHang")
+                            .and_then(|(key, _)| inner.running_deadlines.get(key))
+                            .copied()
+                    };
+                    tokio::time::sleep(Duration::from_millis(1250)).await;
+                }
+                let source = root.join((revision + 1).to_string());
+                std::fs::create_dir_all(&source).unwrap();
+                std::fs::write(source.join("package.json"), r#"{"main":"index.cjs"}"#).unwrap();
+                std::fs::write(source.join("index.cjs"), handler_source).unwrap();
+                let mut replacement_spawn = spawn.clone();
+                replacement_spawn.cwd = Some(source.display().to_string());
+                let replacement = Arc::new(Runner::spawn_spec(&replacement_spawn).await.unwrap());
+                runtime
+                    .reload_codebase(super::CodebaseSpec {
+                        name: "default".into(),
+                        manifest: manifest.clone(),
+                        runner: replacement.clone(),
+                        spawn: None,
+                        cleanup_dir: Some(root.join((revision + 1).to_string())),
+                    })
+                    .unwrap();
+                runners.push(replacement);
+            }
+            if debug_mode {
+                tokio::time::sleep(Duration::from_millis(2400)).await;
+                assert!(runners.iter().all(|runner| runner.is_alive()));
+                assert_eq!(runtime.inner.lock().unwrap().running.len(), 3);
+                assert!(waiters.iter().all(|waiter| !waiter.is_finished()));
+            } else {
+                tokio::time::timeout(Duration::from_secs(4), async {
+                    while runners[1].is_alive() {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                })
+                .await
+                .unwrap();
+                assert!(
+                    runners[0].is_alive(),
+                    "the longer invocation must protect its generation"
+                );
+                tokio::time::timeout_at(
+                    oldest_deadline.unwrap() + Duration::from_millis(1500),
+                    async {
+                        while runners[0].is_alive() {
+                            tokio::time::sleep(Duration::from_millis(10)).await;
+                        }
+                    },
+                )
+                .await
+                .unwrap();
+                assert!(
+                    runners[..2].iter().all(|runner| !runner.is_alive()),
+                    "overdue draining generations must stop"
+                );
+                assert!(
+                    runtime.inner.lock().unwrap().running.is_empty(),
+                    "expired invocations release concurrency slots"
+                );
+                for waiter in waiters.drain(..) {
+                    assert_eq!(
+                        waiter.await.unwrap(),
+                        crate::runner::InvokeOutcome::TimedOut
+                    );
+                }
+                for revision in 0..2 {
+                    assert!(
+                        !root.join(revision.to_string()).exists(),
+                        "expired snapshots are removed"
+                    );
+                }
+                assert_eq!(
+                    runtime
+                        .history()
+                        .iter()
+                        .filter(|record| record.outcome == "timeout")
+                        .count(),
+                    3
+                );
+            }
+            if !debug_mode {
+                runtime.publish("jobs", &[json!({"data": "YQ=="})]);
+                tokio::time::timeout(Duration::from_secs(3), async {
+                    loop {
+                        if runtime.inner.lock().unwrap().running.len() == 1 {
+                            break;
+                        }
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                })
+                .await
+                .expect("released slots admit the current generation");
+            }
+            runtime.shutdown().await;
+            dispatcher.await.unwrap();
+            for waiter in waiters {
+                let _ = waiter.await;
+            }
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn reload_drains_selected_generations_and_shutdown_removes_their_snapshots() {
+        let spawn = SpawnSpec {
+            command: vec![
+                "node".into(),
+                "-e".into(),
+                r"
+const hello = JSON.stringify({ type: 'hello', runner: 'node', httpPort: 1 });
+process.stdout.write(`${Buffer.byteLength(hello)}\n${hello}`);
+process.stdin.resume();
+process.stdin.on('data', () => process.exit(0));
+"
+                .into(),
+            ],
+            cwd: None,
+            env: Vec::new(),
+            hello_timeout: Duration::from_secs(10),
+        };
+        let manifest = parse_manifest(
+            &json!({"functions":[{"name":"echo","trigger":{"type":"http","callable":false}}]}),
+        )
+        .unwrap();
+        let runner = Arc::new(Runner::spawn_spec(&spawn).await.unwrap());
+        let runtime = FunctionsRuntime::new(
+            manifest.clone(),
+            FunctionsConfig::for_tests(1, "test-secret".into()),
+            Arc::new(Mutex::new(VirtualClock::new(
+                LogicalInstant::from_unix_seconds(0),
+            ))),
+            runner.clone(),
+            None,
+        );
+        let target = runtime
+            .http_target("demo-app", "us-central1", "echo")
+            .unwrap();
+        let (_, _, first) = runtime.admit_http_stream(&target, 4).unwrap();
+        runtime
+            .current_http_addr(&target, &first.key)
+            .await
+            .unwrap();
+        let root = std::env::temp_dir().join(format!("fireemu-drain-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let mut runners = vec![runner];
+        let mut cleanups = Vec::new();
+        let mut admissions = vec![first];
+        for revision in 1..=2 {
+            let path = root.join(revision.to_string());
+            std::fs::create_dir_all(&path).unwrap();
+            let replacement = Arc::new(Runner::spawn_spec(&spawn).await.unwrap());
+            runtime
+                .reload_codebase(super::CodebaseSpec {
+                    name: "default".into(),
+                    manifest: manifest.clone(),
+                    runner: replacement.clone(),
+                    spawn: None,
+                    cleanup_dir: Some(path),
+                })
+                .unwrap();
+            cleanups.push(
+                runtime.codebases[0]
+                    .generation()
+                    .cleanup_dir
+                    .as_ref()
+                    .unwrap()
+                    .0
+                    .clone(),
+            );
+            assert!(
+                runners.iter().all(|runner| runner.is_alive()),
+                "busy old runners must survive publication"
+            );
+            runners.push(replacement);
+            let (_, _, admission) = runtime.admit_http_stream(&target, 4).unwrap();
+            // A route resolved before publication must select the new runner at admission.
+            runtime
+                .current_http_addr(&target, &admission.key)
+                .await
+                .unwrap();
+            assert_eq!(
+                runtime.inner.lock().unwrap().running_runners[&admission.key],
+                runners.last().unwrap().diagnostic_id()
+            );
+            admissions.push(admission);
+        }
+        drop(admissions.remove(1));
+        assert!(
+            !runners[1].is_alive(),
+            "a retired runner stops at its own last release"
+        );
+        assert!(runners[0].is_alive(), "another generation still has work");
+        assert!(!cleanups[0].exists(), "idle retired snapshots are removed");
+        let retained_cleanup = runtime.codebases[0]
+            .generation()
+            .cleanup_dir
+            .clone()
+            .unwrap();
+        runtime.shutdown().await;
+        assert!(
+            runners.iter().all(|runner| !runner.is_alive()),
+            "shutdown stops busy retired and current runners"
+        );
+        assert!(
+            cleanups.iter().all(|cleanup| !cleanup.exists()) && !retained_cleanup.0.exists(),
+            "shutdown removes snapshots even with retained runtime references"
+        );
+        let recreated = retained_cleanup.0.clone();
+        std::fs::create_dir_all(&recreated).unwrap();
+        std::fs::write(recreated.join("replacement"), "keep").unwrap();
+        drop(retained_cleanup);
+        assert!(
+            recreated.join("replacement").exists(),
+            "explicit cleanup disarms retained owners"
+        );
+        drop(admissions);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]

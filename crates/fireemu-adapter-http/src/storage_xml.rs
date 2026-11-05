@@ -8,8 +8,10 @@
 //! refused here: an expired URL or policy, a URL signed for a lifetime Cloud Storage does not allow,
 //! a form with no policy, and a form that breaks a condition of its own policy.
 //!
-//! The XML API's answers were not recorded (STORAGE-OBJECT scope decision 3). The refusals follow
-//! Cloud Storage's documented XML error codes and are UNRECORDED.
+//! Production's answers to a signed XML PUT were recorded on 2026-11-03 (run sp-edf103d2, two
+//! recordings of 16 cases): the expired, malformed-header, missing-header and content-length-range
+//! refusals of a V4 URL follow those bodies. The refusals of the other XML routes (the form
+//! policy, a signed GET) follow Cloud Storage's documented XML error codes and are UNRECORDED.
 
 use std::collections::BTreeMap;
 
@@ -72,6 +74,99 @@ pub fn check_signed_url(params: &BTreeMap<String, String>, now_unix: i64) -> Sig
         };
     }
     SignedUrl::Absent
+}
+
+/// The V4 signing parameters a signed URL carries besides its signature.
+const V4_SIGNING_PARAMETERS: [&str; 5] = [
+    "x-goog-algorithm",
+    "x-goog-credential",
+    "x-goog-date",
+    "x-goog-expires",
+    "x-goog-signedheaders",
+];
+
+/// Whether the query is a V4 signed URL that names every signing parameter and carries no
+/// signature. Production answers that with `MissingSecurityHeader` naming `x-goog-signature`
+/// (recorded 2026-11-03); a query that also lacks another signing parameter is not that shape.
+#[must_use]
+pub fn v4_signature_missing(params: &BTreeMap<String, String>) -> bool {
+    let lower: Vec<String> = params.keys().map(|k| k.to_ascii_lowercase()).collect();
+    !lower.iter().any(|k| k == "x-goog-signature")
+        && V4_SIGNING_PARAMETERS
+            .iter()
+            .all(|needed| lower.iter().any(|k| k == needed))
+}
+
+/// The names one `X-Goog-SignedHeaders` value lists, in the order the URL gives them.
+fn split_signed_headers(value: &str) -> Vec<String> {
+    value.split(';').map(str::to_owned).collect()
+}
+
+/// Every list the query gives under any spelling of `X-Goog-SignedHeaders`, from every
+/// occurrence of the parameter: `occurrences` holds the decoded `(name, value)` pairs in query
+/// order. Lists come in the byte order of the names and the query order within one name. The
+/// strict profile holds a request to all of them: a second spelling, a repeat or a
+/// percent-encoded respelling next to the canonical one must not hide a header the canonical
+/// list requires.
+#[must_use]
+pub fn signed_header_lists(occurrences: &[(String, String)]) -> Vec<Vec<String>> {
+    let mut found: Vec<&(String, String)> = occurrences
+        .iter()
+        .filter(|(k, _)| k.eq_ignore_ascii_case("x-goog-signedheaders"))
+        .collect();
+    found.sort_by(|a, b| a.0.cmp(&b.0));
+    found
+        .into_iter()
+        .map(|(_, v)| split_signed_headers(v))
+        .collect()
+}
+
+/// The signing parameters whose value decides whether a signed URL is still valid. When the query
+/// gives one of them twice with different values (the same name repeated, two spellings, or a
+/// percent-encoded key), the query map keeps only one occurrence and which one it keeps decides
+/// the verdict, so the strict profile refuses the request instead. Returns the lowercase name.
+#[must_use]
+pub fn conflicting_signing_parameter(occurrences: &[(String, String)]) -> Option<&'static str> {
+    ["x-goog-date", "x-goog-expires", "expires"]
+        .into_iter()
+        .find(|name| {
+            let mut values = occurrences
+                .iter()
+                .filter(|(k, _)| k.eq_ignore_ascii_case(name))
+                .map(|(_, v)| v.as_str());
+            values
+                .next()
+                .is_some_and(|first| values.any(|other| other != first))
+        })
+}
+
+/// The list under the canonical spelling `X-Goog-SignedHeaders` only: what the emulator profile
+/// has always read, so a lowercase or mixed-case spelling stays ignored there.
+#[must_use]
+pub fn canonical_signed_header_list(params: &BTreeMap<String, String>) -> Option<Vec<String>> {
+    params
+        .get("X-Goog-SignedHeaders")
+        .map(|v| split_signed_headers(v))
+}
+
+/// The sentence production gives for an expired V4 URL: the end of the signed lifetime in UTC with
+/// a `+00:00` offset (recorded 2026-11-03, signed at 15:35:11 for 1 second: `...expired at:
+/// 2026-11-03T15:35:12+00:00`). `None` when the date or lifetime cannot be read.
+#[must_use]
+pub fn v4_expiry_details(params: &BTreeMap<String, String>) -> Option<String> {
+    let lower: BTreeMap<String, &str> = params
+        .iter()
+        .map(|(k, v)| (k.to_ascii_lowercase(), v.as_str()))
+        .collect();
+    let date = parse_v4_date(lower.get("x-goog-date")?)?;
+    let seconds = lower.get("x-goog-expires")?.parse::<i64>().ok()?;
+    let end = LogicalInstant::from_unix_seconds(date.checked_add(seconds)?)
+        .to_rfc3339()
+        .ok()?;
+    let end = end.strip_suffix('Z')?;
+    Some(format!(
+        "The provided token has expired. Request signature expired at: {end}+00:00"
+    ))
 }
 
 /// `YYYYMMDDTHHMMSSZ` as Unix seconds.
@@ -657,5 +752,188 @@ mod tests {
                 key.starts_with(&prefix)
             );
         }
+    }
+
+    const SIGNING: [&str; 5] = [
+        "X-Goog-Algorithm",
+        "X-Goog-Credential",
+        "X-Goog-Date",
+        "X-Goog-Expires",
+        "X-Goog-SignedHeaders",
+    ];
+
+    proptest! {
+        /// A V4 URL is "missing only its signature" exactly when all five signing parameters are
+        /// there (in any letter case) and the signature is not.
+        #[test]
+        fn a_v4_url_misses_its_signature_only_when_every_other_parameter_is_there(
+            present in proptest::collection::vec(proptest::bool::ANY, 5),
+            signature in proptest::bool::ANY,
+            lower in proptest::bool::ANY,
+        ) {
+            let mut pairs: Vec<(String, String)> = SIGNING
+                .iter()
+                .zip(&present)
+                .filter(|(_, p)| **p)
+                .map(|(k, _)| ((if lower { k.to_ascii_lowercase() } else { (*k).to_owned() }), "v".to_owned()))
+                .collect();
+            if signature {
+                pairs.push(("X-Goog-Signature".to_owned(), "s".to_owned()));
+            }
+            let map: BTreeMap<String, String> = pairs.into_iter().collect();
+            prop_assert_eq!(v4_signature_missing(&map), !signature && present.iter().all(|p| *p));
+        }
+
+        /// The expiry named in an ExpiredToken is the signing date plus the lifetime, in UTC with
+        /// the `+00:00` offset.
+        #[test]
+        fn the_named_expiry_is_the_signing_date_plus_the_lifetime(
+            signed_at in 946_684_800i64..4_102_444_800,
+            lifetime in 1u64..=604_800,
+        ) {
+            let (year, month, day) = fireemu_core_types::time::civil_from_days(signed_at.div_euclid(86_400));
+            let secs = signed_at.rem_euclid(86_400);
+            let date = format!("{year:04}{month:02}{day:02}T{:02}{:02}{:02}Z", secs / 3600, secs % 3600 / 60, secs % 60);
+            let details = v4_expiry_details(&params(&[
+                ("X-Goog-Date", &date),
+                ("X-Goog-Expires", &lifetime.to_string()),
+            ]))
+            .unwrap();
+            let prefix = "The provided token has expired. Request signature expired at: ";
+            let named = details.strip_prefix(prefix).unwrap();
+            prop_assert_eq!(named.len(), 25);
+            let utc = format!("{}Z", named.strip_suffix("+00:00").unwrap());
+            let parsed = LogicalInstant::parse_rfc3339(&utc).unwrap();
+            let end = i64::try_from(parsed.as_nanos().div_euclid(1_000_000_000)).unwrap();
+            prop_assert_eq!(end, signed_at + i64::try_from(lifetime).unwrap());
+        }
+    }
+
+    #[test]
+    fn the_named_expiry_needs_a_readable_date_and_lifetime() {
+        for pairs in [
+            vec![],
+            vec![("X-Goog-Date", "20260829T110000Z")],
+            vec![("X-Goog-Expires", "1")],
+            vec![("X-Goog-Date", "bad"), ("X-Goog-Expires", "1")],
+            vec![
+                ("X-Goog-Date", "20260829T110000Z"),
+                ("X-Goog-Expires", "one"),
+            ],
+        ] {
+            assert_eq!(v4_expiry_details(&params(&pairs)), None, "{pairs:?}");
+        }
+        assert_eq!(
+            v4_expiry_details(&params(&[("x-goog-date", "20260829T110000Z"), ("x-goog-expires", "1")])).as_deref(),
+            Some("The provided token has expired. Request signature expired at: 2026-08-29T11:00:01+00:00"),
+            "parameter names are case-insensitive"
+        );
+    }
+
+    fn names(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    fn pairs(items: &[(&str, &str)]) -> Vec<(String, String)> {
+        items
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+            .collect()
+    }
+
+    #[test]
+    fn signed_header_lists_keep_the_url_order_and_empty_segments() {
+        assert!(signed_header_lists(&pairs(&[])).is_empty());
+        assert_eq!(
+            signed_header_lists(&pairs(&[(
+                "X-Goog-SignedHeaders",
+                "content-type;host;x-goog-content-length-range"
+            )])),
+            vec![names(&[
+                "content-type",
+                "host",
+                "x-goog-content-length-range"
+            ])]
+        );
+        assert_eq!(
+            signed_header_lists(&pairs(&[("x-goog-signedheaders", "a;;b")])),
+            vec![names(&["a", "", "b"])]
+        );
+        assert_eq!(
+            signed_header_lists(&pairs(&[("X-Goog-SignedHeaders", "")])),
+            vec![names(&[""])]
+        );
+    }
+
+    #[test]
+    fn every_occurrence_of_the_parameter_gives_its_own_list_in_name_then_query_order() {
+        let all = pairs(&[
+            ("X-Goog-SignedHeaders", "content-type;host"),
+            ("X-Goog-SIGNEDHEADERS", "host"),
+            ("x-goog-signedheaders", ""),
+            ("X-Goog-Date", "20260829T110000Z"),
+            ("X-Goog-SignedHeaders", "a"),
+        ]);
+        assert_eq!(
+            signed_header_lists(&all),
+            vec![
+                names(&["host"]),
+                names(&["content-type", "host"]),
+                names(&["a"]),
+                names(&[""])
+            ]
+        );
+        let lower = pairs(&[("x-goog-signedheaders", "host")]);
+        assert_eq!(signed_header_lists(&lower), vec![names(&["host"])]);
+    }
+
+    #[test]
+    fn the_canonical_list_is_the_last_occurrence_of_the_canonical_name_only() {
+        let both = params(&[
+            ("X-Goog-SignedHeaders", "content-type;host"),
+            ("X-Goog-SIGNEDHEADERS", "host"),
+            ("x-goog-signedheaders", ""),
+        ]);
+        assert_eq!(
+            canonical_signed_header_list(&both),
+            Some(names(&["content-type", "host"]))
+        );
+        let lower = params(&[("x-goog-signedheaders", "host")]);
+        assert_eq!(canonical_signed_header_list(&lower), None);
+        assert_eq!(canonical_signed_header_list(&params(&[])), None);
+    }
+
+    #[test]
+    fn a_signing_parameter_that_differs_between_occurrences_is_a_conflict() {
+        let conflict = |items: &[(&str, &str)]| conflicting_signing_parameter(&pairs(items));
+        assert_eq!(conflict(&[]), None);
+        assert_eq!(conflict(&[("X-Goog-Expires", "60")]), None);
+        assert_eq!(
+            conflict(&[("X-Goog-Expires", "60"), ("X-Goog-Expires", "60")]),
+            None,
+            "identical repeats agree"
+        );
+        assert_eq!(
+            conflict(&[("X-Goog-Expires", "60"), ("X-Goog-Expires", "61")]),
+            Some("x-goog-expires")
+        );
+        assert_eq!(
+            conflict(&[("x-goog-date", "a"), ("X-Goog-Date", "b")]),
+            Some("x-goog-date")
+        );
+        assert_eq!(
+            conflict(&[("Expires", "1"), ("expires", "2")]),
+            Some("expires")
+        );
+        assert_eq!(
+            conflict(&[("X-Goog-Expires", "60"), ("X-Goog-Date", "d")]),
+            None,
+            "different parameters never conflict"
+        );
+        assert_eq!(
+            conflict(&[("X-Goog-Signature", "a"), ("X-Goog-Signature", "b")]),
+            None,
+            "the signature is only checked for presence"
+        );
     }
 }

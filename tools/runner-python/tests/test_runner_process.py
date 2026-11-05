@@ -107,26 +107,22 @@ def test_a_missing_main_py_says_so(tmp_path):
     assert "main.py" in process.stderr
 
 
-def test_families_not_served_yet_are_reported_as_planned_never_dropped(tmp_path):
+def test_families_fireemu_does_not_serve_are_reported_never_dropped(tmp_path):
     (tmp_path / "main.py").write_text(
         "from firebase_admin import initialize_app\n"
-        "from firebase_functions import tasks_fn, scheduler_fn, firestore_fn\n"
+        "from firebase_functions import remote_config_fn, firestore_fn\n"
         "initialize_app()\n"
-        "@tasks_fn.on_task_dispatched()\n"
-        "def later_tasks(request):\n    pass\n"
-        "@scheduler_fn.on_schedule(schedule='every 5 minutes')\n"
-        "def later_schedule(request):\n    pass\n"
+        "@remote_config_fn.on_config_updated()\n"
+        "def later_config(event):\n    pass\n"
         "@firestore_fn.on_document_created(document='a/{id}')\n"
         "def served(event):\n    pass\n"
     )
     process = Runner(source=tmp_path)
     manifest = process.hello()["manifest"]
     assert [entry["name"] for entry in manifest["functions"]] == ["served"]
-    ignored = {entry["name"]: entry for entry in manifest["ignored"]}
-    assert set(ignored) == {"later_tasks", "later_schedule"}
-    assert (ignored["later_tasks"]["triggerType"], ignored["later_schedule"]["triggerType"]) == ("tasks", "schedule")
-    for entry in ignored.values():
-        assert entry["scope"] == "planned" and entry["region"] == "us-central1" and "Python" in entry["reason"]
+    (entry,) = manifest["ignored"]
+    assert (entry["name"], entry["triggerType"], entry["scope"], entry["region"]) == ("later_config", "remoteConfig", "deferred", "us-central1")
+    assert "Remote Config" in entry["reason"]
     assert process.close() == 0
 
 

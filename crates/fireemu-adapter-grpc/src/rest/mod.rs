@@ -999,17 +999,8 @@ impl RestState {
             ));
         };
         let loaded = rules.rules().snapshot().map_err(Status::internal)?;
-        let diagnostics = loaded
-            .diagnostics
-            .lock()
-            .map_err(|_| Status::internal("rules diagnostics lock poisoned"))?;
-        Ok(if html {
-            ok(json!({
-                coverage::HTML_KEY: coverage::coverage_html(&loaded, diagnostics.coverage()),
-            }))
-        } else {
-            ok(coverage::coverage_json(&loaded, diagnostics.coverage()))
-        })
+        let snapshot = coverage_snapshot(&loaded)?;
+        Ok(coverage_body(&loaded, &snapshot, html))
     }
 
     /// Handles one request.
@@ -2611,6 +2602,44 @@ fn writes_from_json(body: &Value) -> Result<Vec<pb::Write>, Status> {
     }
 }
 
+/// Copies the accumulated coverage under the diagnostics lock and releases it. Every Rules
+/// decision merges its coverage under that lock, so the report is built from this copy, never
+/// under the lock. The copy is small: each expression keeps at most
+/// [`fireemu_core_rules::coverage::COVERAGE_VALUES_PER_EXPRESSION`] values.
+fn coverage_snapshot(
+    loaded: &fireemu_core_rules::runtime::LoadedRules,
+) -> Result<fireemu_core_rules::coverage::Coverage, Status> {
+    let diagnostics = loaded
+        .diagnostics
+        .lock()
+        .map_err(|_| Status::internal("rules diagnostics lock poisoned"))?;
+    Ok(diagnostics.coverage().clone())
+}
+
+#[cfg(test)]
+thread_local! {
+    static COVERAGE_BODY_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = std::cell::RefCell::new(None);
+}
+
+/// The `:ruleCoverage` body built from a coverage snapshot; it takes no lock.
+fn coverage_body(
+    loaded: &fireemu_core_rules::runtime::LoadedRules,
+    snapshot: &fireemu_core_rules::coverage::Coverage,
+    html: bool,
+) -> RestResponse {
+    #[cfg(test)]
+    COVERAGE_BODY_HOOK.with(|hook| {
+        if let Some(hook) = hook.borrow_mut().take() {
+            hook();
+        }
+    });
+    if html {
+        ok(json!({ coverage::HTML_KEY: coverage::coverage_html(loaded, snapshot) }))
+    } else {
+        ok(coverage::coverage_json(loaded, snapshot))
+    }
+}
+
 fn batch_writes_from_json(
     body: &Value,
     field_order: &[Vec<String>],
@@ -2702,5 +2731,153 @@ mod strict_commit_route_tests {
             "POST",
             "/v1/projects/demo/databases/(default)/documents:commit?x=1"
         ));
+    }
+}
+
+#[cfg(test)]
+mod rule_coverage_bound_tests {
+    use std::sync::{Arc, Mutex};
+
+    use fireemu_core_auth::mfa::TotpPolicy;
+    use fireemu_core_auth::store::AuthStore;
+    use fireemu_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningContext};
+    use fireemu_core_rules::coverage::COVERAGE_VALUES_PER_EXPRESSION;
+    use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
+    use fireemu_core_session::clock::VirtualClock;
+    use fireemu_core_types::determinism::SplitMix64;
+    use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
+    use fireemu_core_types::time::LogicalInstant;
+    use serde_json::{json, Value};
+
+    use super::{RestRequest, RestState};
+    use crate::gateway::Gateway;
+    use crate::local::LocalBackend;
+    use crate::rules::RulesEnforcer;
+
+    const DOCS: &str = "/v1/projects/demo-app/databases/(default)/documents";
+    const COVERAGE: &str = "/emulator/v1/projects/demo-app:ruleCoverage";
+    const RULES: &str = "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{db}/documents {\n    match /notes/{id} {\n      allow get: if id != 'secret';\n    }\n  }\n}\n";
+
+    fn state() -> RestState {
+        let gateway = Gateway {
+            enforce_limits: true,
+            ctx: PlanningContext {
+                edition: FirestoreEdition::Standard,
+                api_mode: FirestoreApiMode::Native,
+                policy: IndexValidationPolicy::Production,
+            },
+            indexes: IndexSet::default(),
+        };
+        let clock = Arc::new(Mutex::new(VirtualClock::new(
+            LogicalInstant::from_unix_seconds(1_788_004_860),
+        )));
+        let local = Arc::new(LocalBackend::new(gateway.clone(), clock.clone(), 7));
+        let auth = Arc::new(Mutex::new(AuthStore::new(
+            "demo-app",
+            SplitMix64::new(3),
+            TotpPolicy::default(),
+        )));
+        let loaded = Arc::new(RulesetSlot::new(LoadedRules::from_source(RULES).unwrap()));
+        RestState {
+            local,
+            gateway: Arc::new(gateway),
+            rules: Some(Arc::new(RulesEnforcer::new(loaded, auth, clock))),
+            app_check: None,
+            control_token: None,
+        }
+    }
+
+    fn get(state: &RestState, path: &str) -> (u16, Value) {
+        let response = state.handle(&RestRequest {
+            method: "GET".to_owned(),
+            path: path.to_owned(),
+            query: String::new(),
+            authorization: None,
+            origin: None,
+            remote_peer: false,
+            browser_metadata: false,
+            app_check: Vec::new(),
+            body: json!({}),
+            batch_field_order: Vec::new(),
+            key_order: crate::rest::json_syntax::KeyOrder::default(),
+        });
+        (response.status, response.body)
+    }
+
+    /// The report node of the `id` operand of `id != 'secret'`.
+    fn id_node(report: &Value) -> Value {
+        let at = RULES.find("id != 'secret'").unwrap();
+        report["report"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|node| node["sourcePosition"]["currentOffset"] == json!(at))
+            .expect("the get condition is in the report")["children"][0]
+            .clone()
+    }
+
+    fn evaluations(node: &Value) -> u64 {
+        node["values"].as_array().map_or(0, |values| {
+            values.iter().map(|v| v["count"].as_u64().unwrap()).sum()
+        }) + node["valuesOmitted"].as_u64().unwrap_or(0)
+    }
+
+    #[test]
+    fn ten_thousand_distinct_ids_leave_a_bounded_report_and_unchanged_decisions() {
+        let state = state();
+        for index in 0..10_000 {
+            // Allowed by the rules; the document does not exist.
+            let (status, body) = get(&state, &format!("{DOCS}/notes/doc-{index}"));
+            assert_eq!(status, 404, "{index}: {body}");
+        }
+        // Past the bound, the denial is the denial it always was.
+        assert_eq!(get(&state, &format!("{DOCS}/notes/secret")).0, 403);
+
+        let (status, report) = get(&state, COVERAGE);
+        assert_eq!(status, 200, "{report}");
+        let id = id_node(&report);
+        let values = id["values"].as_array().unwrap();
+        assert_eq!(values.len(), COVERAGE_VALUES_PER_EXPRESSION);
+        assert_eq!(
+            values[0],
+            json!({"value": {"stringValue": "doc-0"}, "count": 1})
+        );
+        assert_eq!(id["valuesOmitted"], json!(10_001 - 64));
+        assert_eq!(evaluations(&id), 10_001);
+        // Bounded: the whole JSON report is a few KiB, not one entry per id.
+        let size = report.to_string().len();
+        assert!(size < 16 * 1024, "{size} bytes");
+
+        let (status, page) = get(&state, &format!("{COVERAGE}.html"));
+        assert_eq!(status, 200);
+        let html = page[super::coverage::HTML_KEY].as_str().unwrap();
+        assert!(html.contains("\"valuesOmitted\":9937"), "{html}");
+        assert!(
+            html.contains("9937 observations not kept; displayed counts may be lower than actual")
+        );
+        assert_eq!(id["valuesCountMayBeLower"], json!(true));
+        assert!(html.len() < 64 * 1024, "{} bytes", html.len());
+    }
+
+    #[test]
+    fn report_route_releases_lock_before_building_body() {
+        let state = state();
+        assert_eq!(get(&state, &format!("{DOCS}/notes/a")).0, 404);
+        let loaded = state.rules.as_ref().unwrap().rules().snapshot().unwrap();
+        let called = std::rc::Rc::new(std::cell::Cell::new(false));
+        let observed = called.clone();
+        super::COVERAGE_BODY_HOOK.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move || {
+                assert!(
+                    loaded.diagnostics.try_lock().is_ok(),
+                    "report construction holds the diagnostics lock"
+                );
+                observed.set(true);
+            }));
+        });
+        let (status, body) = get(&state, COVERAGE);
+        assert_eq!(status, 200);
+        assert!(called.get());
+        assert_eq!(evaluations(&id_node(&body)), 1);
     }
 }

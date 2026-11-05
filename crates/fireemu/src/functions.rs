@@ -1270,6 +1270,7 @@ fn start_reload_supervisors(
     runner_secret: &str,
     callable_trusted_protocol: bool,
     node_probe_cache: &Arc<NodeProbeCache>,
+    mut initial_stamps: BTreeMap<String, Result<FunctionsSourceStamp, String>>,
 ) {
     let resources = ReloadResources {
         scan_budget: Arc::new(FunctionsSourceScanBudget::new()),
@@ -1283,6 +1284,9 @@ fn start_reload_supervisors(
         );
     }
     for codebase in supervised {
+        let initial_stamp = initial_stamps
+            .remove(&codebase.codebase)
+            .expect("supervised startup baseline");
         tokio::spawn(supervise_codebase_reloads(
             Arc::downgrade(runtime),
             cfg.clone(),
@@ -1291,6 +1295,7 @@ fn start_reload_supervisors(
             runner_secret.to_owned(),
             callable_trusted_protocol,
             resources.clone(),
+            initial_stamp,
         ));
     }
 }
@@ -1367,10 +1372,6 @@ async fn changed_source_stamp(
         .await
         .unwrap_or(next_stamp);
     if stable_stamp != next_stamp {
-        return None;
-    }
-    if observed_stamp.is_none() {
-        *observed_stamp = Some(stable_stamp);
         return None;
     }
     if observed_stamp.map(|stamp| stamp.content_signature) == Some(stable_stamp.content_signature) {
@@ -1470,6 +1471,7 @@ async fn snapshot_consistent_reload_source(
     Some(snapshot)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn supervise_codebase_reloads(
     weak_runtime: std::sync::Weak<FunctionsRuntime>,
     cfg: RuntimeConfig,
@@ -1478,9 +1480,9 @@ async fn supervise_codebase_reloads(
     secret: String,
     callable_trusted_protocol: bool,
     resources: ReloadResources,
+    initial_stamp: Result<FunctionsSourceStamp, String>,
 ) {
     let root = PathBuf::from(&codebase.source);
-    let initial_stamp = resources.scan_budget.scan(&root, &codebase.ignore).await;
     let mut observed_stamp = initial_stamp.as_ref().ok().copied();
     let mut last_scan_error = false;
     let mut last_snapshot_error = false;
@@ -3004,6 +3006,22 @@ pub async fn start(
         ));
     }
     let node_probe_cache = Arc::new(NodeProbeCache::default());
+    // Capture the live watch baseline before loading generation 0, never after it is serving.
+    // An edit during startup may conservatively reload, but cannot become a lost baseline.
+    // Known limit: A -> B -> A edits entirely within the load can restore the baseline bytes.
+    let scan_budget = FunctionsSourceScanBudget::new();
+    let mut initial_stamps = BTreeMap::new();
+    for codebase in codebases
+        .iter()
+        .filter(|codebase| reload_supervised(codebase))
+    {
+        initial_stamps.insert(
+            codebase.codebase.clone(),
+            scan_budget
+                .scan(Path::new(&codebase.source), &codebase.ignore)
+                .await,
+        );
+    }
     #[cfg(unix)]
     drop(schedule_orphan_function_snapshot_sweep(std::env::temp_dir()));
     let starts = launch_codebases(
@@ -3063,6 +3081,7 @@ pub async fn start(
         runner_secret,
         callable_trusted_protocol,
         &node_probe_cache,
+        initial_stamps,
     );
     Ok(runtime)
 }
@@ -7930,12 +7949,10 @@ root	unchanged	small	firstGen";
     }
 
     #[tokio::test]
-    async fn first_successful_scan_after_startup_failure_sets_a_baseline() {
+    async fn first_successful_scan_after_startup_failure_requires_a_reload() {
         let root =
             std::env::temp_dir().join(format!("fireemu-scan-baseline-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).unwrap();
-        std::fs::write(root.join("index.js"), "exports.ok = 1;").unwrap();
         let codebase = crate::config::FunctionsCodebase {
             codebase: "default".to_owned(),
             source: root.display().to_string(),
@@ -7944,9 +7961,8 @@ root	unchanged	small	firstGen";
         };
         let budget = FunctionsSourceScanBudget::new();
         let mut observed = None;
-        let mut last_error = true;
+        let mut last_error = false;
         let mut retry_delay = Duration::from_secs(3);
-
         assert!(changed_source_stamp(
             &root,
             &codebase,
@@ -7957,24 +7973,52 @@ root	unchanged	small	firstGen";
         )
         .await
         .is_none());
-        assert!(
-            observed.is_some(),
-            "the first successful scan is the baseline"
-        );
-        assert!(!last_error);
-        assert_eq!(retry_delay, Duration::from_millis(750));
-
+        assert!(last_error, "the initial scan actually fails");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("index.js"), "exports.ok = 1;").unwrap();
+        let loaded = snapshot_functions_source(&root, &[]).unwrap();
         std::fs::write(root.join("index.js"), "exports.ok = 2;").unwrap();
-        assert!(changed_source_stamp(
+        assert_ne!(
+            functions_source_stamp(&loaded, &[])
+                .unwrap()
+                .content_signature,
+            functions_source_stamp(&root, &[])
+                .unwrap()
+                .content_signature
+        );
+        let changed = changed_source_stamp(
             &root,
             &codebase,
             &budget,
             &mut observed,
             &mut last_error,
-            &mut retry_delay
+            &mut retry_delay,
         )
-        .await
-        .is_some());
+        .await;
+        assert!(
+            changed.is_some(),
+            "the first successful scan must reload an unknown baseline"
+        );
+        assert!(
+            observed.is_none(),
+            "only publication establishes a baseline"
+        );
+        assert!(!last_error);
+        assert_eq!(retry_delay, Duration::from_millis(750));
+        observed = changed;
+        assert!(
+            changed_source_stamp(
+                &root,
+                &codebase,
+                &budget,
+                &mut observed,
+                &mut last_error,
+                &mut retry_delay
+            )
+            .await
+            .is_none(),
+            "an unchanged published generation must not reload"
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -8042,8 +8086,8 @@ root	unchanged	small	firstGen";
             &mut retry_delay
         )
         .await
-        .is_none());
-        assert!(observed.is_some());
+        .is_some());
+        assert!(observed.is_none());
         assert!(!last_error);
         assert_eq!(retry_delay, Duration::from_millis(750));
         std::fs::remove_dir_all(root).unwrap();
@@ -8260,20 +8304,21 @@ root	unchanged	small	firstGen";
         let budget = Arc::new(FunctionsSourceScanBudget::new());
         let task_root = root.clone();
         let task = tokio::spawn(async move { budget.snapshot(&task_root, &[]).await });
-        // Readiness is not a latency assertion: hashing and scheduling can exceed
-        // the minimum pacing delay under workspace-wide test load.
-        let ready = tokio::time::timeout(Duration::from_secs(60), async {
-            loop {
-                if !snapshots().is_empty() {
-                    return true;
-                }
-                if task.is_finished() {
-                    return false;
-                }
-                tokio::time::sleep(Duration::from_millis(10)).await;
+        // Readiness is not a latency assertion. The copy starts only after the whole source
+        // has been hashed, which takes the 2 s pacing delay when idle but has no upper bound
+        // when the CPU is starved: there the hash alone outlasted a 60 s deadline and the test
+        // failed with no copy in sight and the task still running. So the wait ends on one of
+        // two observable events, never on a clock: the partial copy appears, or the snapshot
+        // task finishes without ever exposing one (which fails below).
+        let ready = loop {
+            if !snapshots().is_empty() {
+                break true;
             }
-        })
-        .await;
+            if task.is_finished() {
+                break false;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        };
 
         task.abort();
         let _ = task.await;
@@ -8288,7 +8333,7 @@ root	unchanged	small	firstGen";
             "cancelling a paced 128 MiB snapshot did not stop and clean up within one second"
         );
         assert!(
-            matches!(ready, Ok(true)),
+            ready,
             "the snapshot task did not expose a partial copy before cancellation"
         );
         std::fs::remove_dir_all(root).unwrap();

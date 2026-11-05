@@ -34,6 +34,7 @@ fn compile(
     let source = RuleSource::Expr(SourceExpr {
         text: expr.to_owned(),
         positions: (0..=expr.chars().count()).map(|i| (1, i + 1)).collect(),
+        second_units: Vec::new(),
     });
     let mut node = RuleSpec::default();
     match context {

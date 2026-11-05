@@ -1588,6 +1588,41 @@ fn query_params(query: &str) -> BTreeMap<String, String> {
         .collect()
 }
 
+/// Every decoded `(name, value)` of the query, repeats included, in query order. `query_params`
+/// keeps one occurrence per name; the strict profile's signed-URL checks read all of them.
+fn query_occurrences(query: &str) -> Vec<(String, String)> {
+    query
+        .split('&')
+        .filter(|kv| !kv.is_empty())
+        .map(|kv| {
+            let (k, v) = kv.split_once('=').unwrap_or((kv, ""));
+            (form_decode(k), form_decode(v))
+        })
+        .collect()
+}
+
+/// The strict profile refuses a signed URL whose date or lifetime is given twice with different
+/// values: the query map keeps only one of the occurrences, so the verdict would depend on which
+/// (UNRECORDED: production's answer to a repeated signing parameter was not observed). The
+/// emulator profile reads the map as it always did.
+fn refuse_conflicting_signing_parameter(
+    state: &StorageState,
+    req: &StorageRequest,
+) -> Result<(), StorageResponse> {
+    if !state.is_strict() {
+        return Ok(());
+    }
+    match crate::storage_xml::conflicting_signing_parameter(&query_occurrences(&req.query)) {
+        Some(_) => Err(xml_error(
+            400,
+            "InvalidArgument",
+            "Invalid argument.",
+            Some("A signed URL parameter is given more than once with different values."),
+        )),
+        None => Ok(()),
+    }
+}
+
 fn encode_segment(s: &str) -> String {
     use std::fmt::Write as _;
     let mut out = String::with_capacity(s.len());
@@ -6921,6 +6956,7 @@ fn xml_read_admission(
     params: &BTreeMap<String, String>,
 ) -> Result<(), StorageResponse> {
     use crate::storage_xml::{check_signed_url, SignedUrl};
+    refuse_conflicting_signing_parameter(state, req)?;
     match check_signed_url(params, now_unix_seconds(state)) {
         SignedUrl::Valid => return Ok(()),
         SignedUrl::Expired => {
@@ -6966,14 +7002,20 @@ fn xml_style_put(
     req: StorageRequest,
     params: &BTreeMap<String, String>,
 ) -> Outcome {
-    use crate::storage_xml::{check_signed_url, SignedUrl};
+    use crate::storage_xml::{
+        check_signed_url, v4_expiry_details, v4_signature_missing, SignedUrl,
+    };
+    refuse_conflicting_signing_parameter(state, &req)?;
     match check_signed_url(params, now_unix_seconds(state)) {
         SignedUrl::Expired => {
             return Err(xml_error(
                 400,
                 "ExpiredToken",
                 "Invalid argument.",
-                Some("Request has expired."),
+                Some(
+                    &v4_expiry_details(params)
+                        .unwrap_or_else(|| "The provided token has expired.".to_owned()),
+                ),
             ))
         }
         SignedUrl::Invalid(details) => {
@@ -6984,43 +7026,25 @@ fn xml_style_put(
                 Some(details),
             ))
         }
+        // A V4 URL that names every signing parameter but the signature (recorded): production
+        // says which header is missing. Other unsigned requests are the anonymous kind.
+        SignedUrl::Absent if state.is_strict() && v4_signature_missing(params) => {
+            return Err(xml_error(
+                400,
+                "MissingSecurityHeader",
+                "Invalid argument.",
+                Some(
+                    "Your request was missing a required header. Missing headers: x-goog-signature",
+                ),
+            ))
+        }
         SignedUrl::Absent if state.is_strict() => {
             return Err(xml_error(403, "AccessDenied", "Access denied.", None))
         }
         SignedUrl::Valid | SignedUrl::Absent => {}
     }
-    if let Some(headers) = params.get("X-Goog-SignedHeaders") {
-        for header in headers.split(';') {
-            if header.is_empty()
-                || (header != "host" && req.header(&header.to_ascii_lowercase()).is_none())
-            {
-                return Err(xml_error(
-                    400,
-                    "InvalidArgument",
-                    "Missing signed header.",
-                    None,
-                ));
-            }
-        }
-    }
-    if let Some(range) = req.header("x-goog-content-length-range") {
-        let parsed = range.split_once(',').and_then(|(min, max)| {
-            Some((
-                min.trim().parse::<u64>().ok()?,
-                max.trim().parse::<u64>().ok()?,
-            ))
-        });
-        let valid = parsed
-            .is_some_and(|(min, max)| min <= max && (min..=max).contains(&(req.body.len() as u64)));
-        if !valid {
-            return Err(xml_error(
-                400,
-                "InvalidArgument",
-                "Invalid content length range.",
-                None,
-            ));
-        }
-    }
+    check_signed_headers(state, &req, params)?;
+    check_content_length_range(&req)?;
     let b = bucket_name(bucket)?;
     let n = upload_object_name(state, name)?;
     let meta = NewMetadata {
@@ -7030,10 +7054,150 @@ fn xml_style_put(
     };
     let prepared = PreparedObject::new(req.body);
     let mut store = state.store()?;
-    store
+    let stored = store
         .put_prepared(&b, &n, prepared, meta, Precondition::default(), state.now())
         .map_err(gcs_core_err)?;
-    Ok(StorageResponse::empty(200))
+    // What production sent with the 200 (recorded 2026-11-03): the stored generation, its
+    // checksums, length and encoding, and the MD5 as the quoted ETag, under `text/html`.
+    Ok(StorageResponse::empty(200)
+        .with_header("content-type", "text/html; charset=UTF-8")
+        .with_header(
+            "etag",
+            format!("\"{}\"", fireemu_core_storage::hash::hex(&stored.md5)),
+        )
+        .with_header("x-goog-generation", stored.generation.to_string())
+        .with_header("x-goog-metageneration", stored.metageneration.to_string())
+        .with_header(
+            "x-goog-hash",
+            format!(
+                "crc32c={}, md5={}",
+                stored.crc32c_base64(),
+                stored.md5_base64()
+            ),
+        )
+        .with_header(
+            "x-goog-stored-content-encoding",
+            stored
+                .content_encoding
+                .clone()
+                .unwrap_or_else(|| "identity".to_owned()),
+        )
+        .with_header("x-goog-stored-content-length", stored.size.to_string()))
+}
+
+/// The XML API's answer to a request header it finds malformed (recorded 2026-11-03).
+fn malformed_header(reason: &str, header: &str) -> StorageResponse {
+    let mut response = xml_error(
+        400,
+        "MalformedSecurityHeader",
+        "Invalid argument.",
+        Some(&format!("Your request has a malformed header. {reason}")),
+    );
+    let body = String::from_utf8_lossy(&response.body).into_owned();
+    response.body = bytes::Bytes::from(body.replacen(
+        "</Error>",
+        &format!(
+            "<ParameterName>{}</ParameterName></Error>",
+            xml_escape(header)
+        ),
+        1,
+    ));
+    response
+}
+
+/// The signed headers a V4 URL names must be in the request, and the range header must be among
+/// them when the URL names its signed headers (strict only for the second: recorded 2026-11-03).
+///
+/// Which lists count differs by profile on purpose. The emulator profile reads the canonical
+/// spelling `X-Goog-SignedHeaders` only, as it always did, so it refuses nothing it admitted
+/// before. The strict profile reads every spelling and holds the request to each list, so a second
+/// spelling cannot hide a requirement (Codex review 2026-11-04, M1 and M2).
+fn check_signed_headers(
+    state: &StorageState,
+    req: &StorageRequest,
+    params: &BTreeMap<String, String>,
+) -> Result<(), StorageResponse> {
+    use crate::storage_xml::{canonical_signed_header_list, signed_header_lists};
+    let lists = if state.is_strict() {
+        signed_header_lists(&query_occurrences(&req.query))
+    } else {
+        canonical_signed_header_list(params).into_iter().collect()
+    };
+    for header in lists.iter().flatten() {
+        if header.is_empty() {
+            return Err(xml_error(
+                400,
+                "InvalidArgument",
+                "Missing signed header.",
+                None,
+            ));
+        }
+        if header != "host" && req.header(&header.to_ascii_lowercase()).is_none() {
+            return Err(malformed_header(
+                "Header was included in signedheaders, but not in the request.",
+                &header.to_ascii_lowercase(),
+            ));
+        }
+    }
+    // The range header sent on a URL that names its signed headers without it (recorded). The
+    // emulator profile keeps accepting it: a local run has no signature to protect.
+    if state.is_strict()
+        && req.header("x-goog-content-length-range").is_some()
+        && lists.iter().any(|names| {
+            !names
+                .iter()
+                .any(|n| n.eq_ignore_ascii_case("x-goog-content-length-range"))
+        })
+    {
+        return Err(malformed_header(
+            "Header must be signed.",
+            "x-goog-content-length-range",
+        ));
+    }
+    Ok(())
+}
+
+/// `x-goog-content-length-range` bounds the body: production's Policy Document wording for a body
+/// above or below it, and the existing refusal for a range that cannot be read.
+fn check_content_length_range(req: &StorageRequest) -> Result<(), StorageResponse> {
+    if let Some(range) = req.header("x-goog-content-length-range") {
+        let parsed = range.split_once(',').and_then(|(min, max)| {
+            Some((
+                min.trim().parse::<u64>().ok()?,
+                max.trim().parse::<u64>().ok()?,
+            ))
+        });
+        let length = req.body.len() as u64;
+        match parsed {
+            // The bounds production names in its Policy Document wording (recorded).
+            Some((min, max)) if min <= max && length > max => {
+                return Err(xml_error(
+                    400,
+                    "EntityTooLarge",
+                    "Your proposed upload is larger than the maximum object size specified in your Policy Document.",
+                    Some("Content-length exceeds upper bound on range"),
+                ))
+            }
+            Some((min, max)) if min <= max && length < min => {
+                return Err(xml_error(
+                    400,
+                    "EntityTooSmall",
+                    "Your proposed upload is smaller than the minimum object size specified in your Policy Document.",
+                    Some("Content-length smaller than lower bound on range"),
+                ))
+            }
+            Some((min, max)) if min <= max => {}
+            _ => {
+                return Err(xml_error(
+                    400,
+                    "InvalidArgument",
+                    "Invalid content length range.",
+                    None,
+                ))
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The `GET /{bucket}/{object...}` fallback: object bytes when it exists, the JSON API's

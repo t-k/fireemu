@@ -8082,8 +8082,7 @@
   "query": "",
   "load": 400,
   "error": "1:35: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "true //x\u001c&& false",
@@ -8097,8 +8096,7 @@
   "query": "",
   "load": 400,
   "error": "1:35: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "true //x\u001d&& false",
@@ -8112,8 +8110,7 @@
   "query": "",
   "load": 400,
   "error": "1:35: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "true //x\u001e&& false",
@@ -8127,8 +8124,7 @@
   "query": "",
   "load": 400,
   "error": "1:35: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "true //x\u001f&& false",
@@ -8646,16 +8642,14 @@
   "query": "",
   "load": 400,
   "error": "1:33: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(true &&true)",
   "query": "",
   "load": 400,
   "error": "1:35: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "'a­'.length == 1",
@@ -9306,16 +9300,14 @@
   "query": "",
   "load": 400,
   "error": "1:28: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(tr𑂽ue)",
   "query": "",
   "load": 400,
   "error": "1:30: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "'ab'.matches(/a𑂽b/)",
@@ -9336,32 +9328,28 @@
   "query": "",
   "load": 400,
   "error": "1:33: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(true &&𑂽true)",
   "query": "",
   "load": 400,
   "error": "1:35: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "tr𝅳ue",
   "query": "",
   "load": 400,
   "error": "1:28: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(tr𝅳ue)",
   "query": "",
   "load": 400,
   "error": "1:30: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "'ab'.matches(/a𝅳b/)",
@@ -9382,32 +9370,28 @@
   "query": "",
   "load": 400,
   "error": "1:33: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(true &&𝅳true)",
   "query": "",
   "load": 400,
   "error": "1:35: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "tr󠀁ue",
   "query": "",
   "load": 400,
   "error": "1:28: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(tr󠀁ue)",
   "query": "",
   "load": 400,
   "error": "1:30: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "'ab'.matches(/a󠀁b/)",
@@ -9428,32 +9412,28 @@
   "query": "",
   "load": 400,
   "error": "1:33: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(true &&󠀁true)",
   "query": "",
   "load": 400,
   "error": "1:35: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "tr󠁁ue",
   "query": "",
   "load": 400,
   "error": "1:28: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(tr󠁁ue)",
   "query": "",
   "load": 400,
   "error": "1:30: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "'ab'.matches(/a󠁁b/)",
@@ -9474,16 +9454,14 @@
   "query": "",
   "load": 400,
   "error": "1:33: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(true &&󠁁true)",
   "query": "",
   "load": 400,
   "error": "1:35: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "tr؜ue",
@@ -11122,16 +11100,14 @@
   "query": "",
   "load": 400,
   "error": "1:59: unterminated comment\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!('é＄'.matches(// c /**[^s-BA-ky][s][`-1k]?|i()+*ä|./))",
   "query": "",
   "load": 400,
   "error": "1:60: unterminated comment\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "'\\''.matches(/^([I-~\\s]{1,2}()())| {2}{2}i)+*.$/)",
@@ -11152,16 +11128,14 @@
   "query": "",
   "load": 400,
   "error": "1:30: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!('+å'.matches(/^/i))",
   "query": "",
   "load": 400,
   "error": "1:32: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "'Ǆωſ'.matches(/[S]**\\+a|Z{2}$/)",
@@ -11542,16 +11516,14 @@
   "query": "",
   "load": 400,
   "error": "1:30: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!('é~'.matches(/^0?$/))",
   "query": "",
   "load": 400,
   "error": "1:32: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "'KÄ '.matches(/?IǄ+|Z|`$/i)",
@@ -16567,16 +16539,14 @@
   "query": "",
   "load": 400,
   "error": "1:42: unterminated string literal\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!('\\​'.length == 1)",
   "query": "",
   "load": 400,
   "error": "1:45: unterminated string literal\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "\"\\​n\" == '\\n'",
@@ -17045,16 +17015,14 @@
   "query": "",
   "load": 400,
   "error": "1:42: unterminated string literal\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!('\\­'.length == 1)",
   "query": "",
   "load": 400,
   "error": "1:45: unterminated string literal\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "\"\\­n\" == '\\n'",
@@ -17523,16 +17491,14 @@
   "query": "",
   "load": 400,
   "error": "1:42: unterminated string literal\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!('\\᠎'.length == 1)",
   "query": "",
   "load": 400,
   "error": "1:45: unterminated string literal\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "\"\\᠎n\" == '\\n'",
@@ -18001,16 +17967,14 @@
   "query": "",
   "load": 400,
   "error": "1:42: unterminated string literal\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!('\\⁠'.length == 1)",
   "query": "",
   "load": 400,
   "error": "1:45: unterminated string literal\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "\"\\⁠n\" == '\\n'",
@@ -18479,16 +18443,14 @@
   "query": "",
   "load": 400,
   "error": "1:42: unterminated string literal\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!('\\⁯'.length == 1)",
   "query": "",
   "load": 400,
   "error": "1:45: unterminated string literal\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "\"\\⁯n\" == '\\n'",
@@ -18943,16 +18905,14 @@
   "query": "",
   "load": 400,
   "error": "1:41: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!('\\﻿\\' == '\\\\')",
   "query": "",
   "load": 400,
   "error": "1:43: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "'\\﻿'.length == 1",
@@ -19029,32 +18989,28 @@
   "query": "",
   "load": 400,
   "error": "1:31: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(1 =﻿= 1)",
   "query": "",
   "load": 400,
   "error": "1:33: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "1 =﻿== 1",
   "query": "",
   "load": 400,
   "error": "1:32: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(1 =﻿== 1)",
   "query": "",
   "load": 400,
   "error": "1:34: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "1 !﻿= 2",
@@ -19089,64 +19045,56 @@
   "query": "",
   "load": 400,
   "error": "1:35: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(false |﻿| true)",
   "query": "",
   "load": 400,
   "error": "1:37: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "true &﻿& false",
   "query": "",
   "load": 400,
   "error": "1:34: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(true &﻿& false)",
   "query": "",
   "load": 400,
   "error": "1:36: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "2 >﻿= 1",
   "query": "",
   "load": 400,
   "error": "1:31: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(2 >﻿= 1)",
   "query": "",
   "load": 400,
   "error": "1:33: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "1 <﻿= 2",
   "query": "",
   "load": 400,
   "error": "1:31: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(1 <﻿= 2)",
   "query": "",
   "load": 400,
   "error": "1:33: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "1﻿0 == 10",
@@ -20389,32 +20337,28 @@
   "query": "",
   "load": 400,
   "error": "1:25: unterminated string literal\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!('a\\  b'.length == 2)",
   "query": "",
   "load": 400,
   "error": "1:25: unterminated string literal\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "'a\\\n\nb'.length == 3",
   "query": "",
   "load": 400,
   "error": "1:25: unterminated string literal\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!('a\\\n\nb'.length == 3)",
   "query": "",
   "load": 400,
   "error": "1:25: unterminated string literal\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "\" \" <= '\\n'",
@@ -20631,16 +20575,14 @@
   "query": "",
   "load": 400,
   "error": "1:43: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!('\\ \\f'.length ==﻿= 3)",
   "query": "",
   "load": 400,
   "error": "1:43: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "08 =⁯== 08",
@@ -20717,16 +20659,14 @@
   "query": "",
   "load": 400,
   "error": "1:25: unterminated string literal\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!('' ==⁠= '\\\r \\t')",
   "query": "",
   "load": 400,
   "error": "1:25: unterminated string literal\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "0x1F <= 1E-2",
@@ -21127,16 +21067,14 @@
   "query": "",
   "load": 400,
   "error": "1:46: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!('\\b\\0'.length !=﻿= 2)",
   "query": "",
   "load": 400,
   "error": "1:48: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "017 === 017",
@@ -21689,16 +21627,14 @@
   "query": "",
   "load": 400,
   "error": "1:34: unterminated string literal\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(\"\\ \" >= ' ')",
   "query": "",
   "load": 400,
   "error": "1:34: unterminated string literal\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "'z$'.matches(­/^[^0-!@1]$/)",
@@ -23072,16 +23008,14 @@
   "query": "",
   "load": 400,
   "error": "1:40: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!('.åß'.matches(/0|{()Y|[~](K{1,2}+){2}?-{0,2}?$/i))",
   "query": "",
   "load": 400,
   "error": "1:42: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "'^`' .matches(/$/i)",
@@ -23130,16 +23064,14 @@
   "query": "",
   "load": 400,
   "error": "1:40: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!('bÉß'.matches(/S.*.|**|Ω?+(Z\\?|.{2}Ä|){2}9/))",
   "query": "",
   "load": 400,
   "error": "1:42: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "\"⁠\".length && 1",
@@ -23440,16 +23372,14 @@
   "query": "",
   "load": 400,
   "error": "1:26: unterminated string literal\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(\"\\\\\\  \" !== ' \\ ')",
   "query": "",
   "load": 400,
   "error": "1:25: unterminated string literal\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "0x1F > 0﻿17",
@@ -24172,16 +24102,14 @@
   "query": "",
   "load": 400,
   "error": "1:26: unterminated string literal\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(\"\\  \\x­41\".length > 1)",
   "query": "",
   "load": 400,
   "error": "1:25: unterminated string literal\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "\"\\n\\b\".length === 0",
@@ -24484,16 +24412,14 @@
   "query": "",
   "load": 400,
   "error": "1:28: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(''.matches(/([^\\\\S-s\\s]+.*|[^ωI\\s]+0|().i)\\d{1,2}|\\^|i$/i))",
   "query": "",
   "load": 400,
   "error": "1:30: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "\"\" >= \"\\\r\n\"",
@@ -27853,16 +27779,14 @@
   "query": "",
   "load": 400,
   "error": "1:26: No such method/property 'hasChildren'.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!((data.val()).hasChildren([5]))",
   "query": "",
   "load": 400,
   "error": "1:28: No such method/property 'hasChildren'.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.token.n.val()",
@@ -27939,16 +27863,14 @@
   "query": "",
   "load": 400,
   "error": "1:52: Argument 1 of replace() must be a string.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.missing.replace(5, 'x'))",
   "query": "",
   "load": 400,
   "error": "1:54: Argument 1 of replace() must be a string.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "((-0).matches()) == null",
@@ -28095,16 +28017,14 @@
   "query": "",
   "load": 400,
   "error": "1:51: Argument 2 of replace() must be a string.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.n.replace('l', 5))",
   "query": "",
   "load": 400,
   "error": "1:53: Argument 2 of replace() must be a string.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "(data.child('d').val()).parent(1)",
@@ -28629,16 +28549,14 @@
   "query": "",
   "load": 400,
   "error": "1:27: Invalid property access: target is not an object.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(((-0).hasChildren([5])) == null)",
   "query": "",
   "load": 400,
   "error": "1:29: Invalid property access: target is not an object.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "(data.child('d').val()).beginsWith('H')",
@@ -28673,32 +28591,28 @@
   "query": "",
   "load": 400,
   "error": "1:58: Argument 1 of replace() must be a string.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(((data.child('x').val()).replace(5, 'x')) == null)",
   "query": "",
   "load": 400,
   "error": "1:60: Argument 1 of replace() must be a string.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "('a').replace('l', 5)",
   "query": "",
   "load": 400,
   "error": "1:44: Argument 2 of replace() must be a string.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(('a').replace('l', 5))",
   "query": "",
   "load": 400,
   "error": "1:46: Argument 2 of replace() must be a string.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "root.child('o/k')",
@@ -29279,16 +29193,14 @@
   "query": "",
   "load": 400,
   "error": "1:27: No such method/property 'hasChildren'.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!((('5').hasChildren([5])) == null)",
   "query": "",
   "load": 400,
   "error": "1:29: No such method/property 'hasChildren'.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "(auth.token.roles.x) == null",
@@ -29743,16 +29655,14 @@
   "query": "",
   "load": 400,
   "error": "1:26: No such method/property 'hasChildren'.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!((data.child('d').val()).hasChildren([5]))",
   "query": "",
   "load": 400,
   "error": "1:28: No such method/property 'hasChildren'.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "('5').parent()",
@@ -29801,16 +29711,14 @@
   "query": "",
   "load": 400,
   "error": "1:63: Argument 2 of replace() must be a string.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(((data.child('o').val()).replace('l', 5)) == null)",
   "query": "",
   "load": 400,
   "error": "1:65: Argument 2 of replace() must be a string.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "(((0 / 0)).isNumber()) == null",
@@ -31259,16 +31167,14 @@
   "query": "",
   "load": 400,
   "error": "1:26: No such method/property 'hasChildren'.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!((data.child('b').val()).hasChildren([5]))",
   "query": "",
   "load": 400,
   "error": "1:28: No such method/property 'hasChildren'.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "(data.child('z').val()).hasChild('s')",
@@ -31737,16 +31643,14 @@
   "query": "",
   "load": 400,
   "error": "1:64: Argument 2 of replace() must be a string.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!((data.child('arr').val()).replace('l', 5))",
   "query": "",
   "load": 400,
   "error": "1:66: Argument 2 of replace() must be a string.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "((data.child('x')).hasChild()) == null",
@@ -31991,16 +31895,14 @@
   "query": "",
   "load": 400,
   "error": "1:26: Invalid property access: target is not an object.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!((null.hasChildren([5])) == null)",
   "query": "",
   "load": 400,
   "error": "1:28: Invalid property access: target is not an object.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "((data.child('n').val()).child('o/k')) == null",
@@ -32483,16 +32385,14 @@
   "query": "",
   "load": 400,
   "error": "1:26: No such method/property 'hasChildren'.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!((data.child('x').val()).hasChildren([5]))",
   "query": "",
   "load": 400,
   "error": "1:28: No such method/property 'hasChildren'.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "(5.contains('e')) == null",
@@ -32597,16 +32497,14 @@
   "query": "",
   "load": 400,
   "error": "1:62: Argument 2 of replace() must be a string.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!((data.child('s').val()).replace('l', 5))",
   "query": "",
   "load": 400,
   "error": "1:64: Argument 2 of replace() must be a string.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "null.contains(5)",
@@ -33201,16 +33099,14 @@
   "query": "",
   "load": 400,
   "error": "1:47: Argument 1 of replace() must be a string.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!((auth.token.n.replace(5, 'x')) == null)",
   "query": "",
   "load": 400,
   "error": "1:49: Argument 1 of replace() must be a string.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "(5.beginsWith('H')) == null",
@@ -33763,16 +33659,14 @@
   "query": "",
   "load": 400,
   "error": "1:62: Argument 2 of replace() must be a string.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!((data.child('o').val()).replace('l', 5))",
   "query": "",
   "load": 400,
   "error": "1:64: Argument 2 of replace() must be a string.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "(now.endsWith()) == null",
@@ -33863,16 +33757,14 @@
   "query": "",
   "load": 400,
   "error": "1:55: Argument 2 of replace() must be a string.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.roles.replace('l', 5))",
   "query": "",
   "load": 400,
   "error": "1:57: Argument 2 of replace() must be a string.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "((data.child('b').val()).child(5)) == null",
@@ -33921,16 +33813,14 @@
   "query": "",
   "load": 400,
   "error": "1:44: Argument 2 of replace() must be a string.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!((auth.replace('l', 5)) == null)",
   "query": "",
   "load": 400,
   "error": "1:46: Argument 2 of replace() must be a string.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "newData.hasChildren(['s', 'n'])",
@@ -34329,16 +34219,14 @@
   "query": "",
   "load": 400,
   "error": "1:44: Argument 2 of replace() must be a string.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(('5').replace('l', 5))",
   "query": "",
   "load": 400,
   "error": "1:46: Argument 2 of replace() must be a string.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "0.val()",
@@ -34919,16 +34807,14 @@
   "query": "",
   "load": 400,
   "error": "1:56: Argument 2 of replace() must be a string.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!((auth.token.roles.replace('l', 5)) == null)",
   "query": "",
   "load": 400,
   "error": "1:58: Argument 2 of replace() must be a string.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "(data.child('x')).hasChild('s')",
@@ -35033,32 +34919,28 @@
   "query": "",
   "load": 400,
   "error": "1:63: Argument 2 of replace() must be a string.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(((data.child('b').val()).replace('l', 5)) == null)",
   "query": "",
   "load": 400,
   "error": "1:65: Argument 2 of replace() must be a string.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "(data.child('arr').val()).replace(5, 'x')",
   "query": "",
   "load": 400,
   "error": "1:59: Argument 1 of replace() must be a string.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!((data.child('arr').val()).replace(5, 'x'))",
   "query": "",
   "load": 400,
   "error": "1:61: Argument 1 of replace() must be a string.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "2.5['length']",
@@ -35317,16 +35199,14 @@
   "query": "",
   "load": 400,
   "error": "1:63: Argument 2 of replace() must be a string.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(((data.child('d').val()).replace('l', 5)) == null)",
   "query": "",
   "load": 400,
   "error": "1:65: Argument 2 of replace() must be a string.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "(((0 / 0)).isBoolean()) == null",
@@ -35473,16 +35353,14 @@
   "query": "",
   "load": 400,
   "error": "1:26: Type error: Function call on target that is not a function.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!((auth.token.missing.hasChildren([5])) == null)",
   "query": "",
   "load": 400,
   "error": "1:28: Type error: Function call on target that is not a function.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "((data.child('arr').val())[0]) == null",
@@ -35965,16 +35843,14 @@
   "query": "",
   "load": 400,
   "error": "1:60: Argument 1 of replace() must be a string.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(((data.child('arr').val()).replace(5, 'x')) == null)",
   "query": "",
   "load": 400,
   "error": "1:62: Argument 1 of replace() must be a string.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "(data.hasChild(5)) == null",
@@ -36163,16 +36039,14 @@
   "query": "",
   "load": 400,
   "error": "1:43: Argument 2 of replace() must be a string.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.replace('l', 5))",
   "query": "",
   "load": 400,
   "error": "1:45: Argument 2 of replace() must be a string.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "5.getPriority()",
@@ -36795,16 +36669,14 @@
   "query": "",
   "load": 400,
   "error": "1:26: No such method/property 'hasChildren'.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!((data.child('s').val()).hasChildren([5]))",
   "query": "",
   "load": 400,
   "error": "1:28: No such method/property 'hasChildren'.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "((data.child('arr').val()).replace('l')) == null",
@@ -37021,16 +36893,14 @@
   "query": "",
   "load": 400,
   "error": "1:25: Invalid property access: target is not an object.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(query.orderByKey.hasChildren([5]))",
   "query": "",
   "load": 400,
   "error": "1:27: Invalid property access: target is not an object.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "null.contains(data.child('s'))",
@@ -37191,16 +37061,14 @@
   "query": "",
   "load": 400,
   "error": "1:62: Argument 2 of replace() must be a string.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!((data.child('b').val()).replace('l', 5))",
   "query": "",
   "load": 400,
   "error": "1:64: Argument 2 of replace() must be a string.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "(root.beginsWith(5)) == null",
@@ -37277,16 +37145,14 @@
   "query": "",
   "load": 400,
   "error": "1:26: No such method/property 'hasChildren'.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!((data.child('n').val()).hasChildren([5]))",
   "query": "",
   "load": 400,
   "error": "1:28: No such method/property 'hasChildren'.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "(data.child('o').val()).hasChildren([])",
@@ -37895,16 +37761,14 @@
   "query": "",
   "load": 400,
   "error": "1:26: No such method/property 'hasChildren'.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(('a').hasChildren([5]))",
   "query": "",
   "load": 400,
   "error": "1:28: No such method/property 'hasChildren'.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "((data.child('x')).contains('e')) == null",
@@ -37939,16 +37803,14 @@
   "query": "",
   "load": 400,
   "error": "1:40: Argument 1 of replace() must be a string.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!((('a').replace(5, 'x')) == null)",
   "query": "",
   "load": 400,
   "error": "1:42: Argument 1 of replace() must be a string.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "(data.child('s').val()).replace('l')",
@@ -38473,16 +38335,14 @@
   "query": "",
   "load": 400,
   "error": "1:57: Argument 2 of replace() must be a string.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.missing.replace('l', 5))",
   "query": "",
   "load": 400,
   "error": "1:59: Argument 2 of replace() must be a string.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "((root.child('t')).child(5)) == null",
@@ -38727,16 +38587,14 @@
   "query": "",
   "load": 400,
   "error": "1:26: Type error: Function call on target that is not a function.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!((auth.token.roles.hasChildren([5])) == null)",
   "query": "",
   "load": 400,
   "error": "1:28: Type error: Function call on target that is not a function.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "((data.child('b').val()).child()) == null",
@@ -38813,16 +38671,14 @@
   "query": "",
   "load": 400,
   "error": "1:25: Type error: Function call on target that is not a function.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.roles.hasChildren([5]))",
   "query": "",
   "load": 400,
   "error": "1:27: Type error: Function call on target that is not a function.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "(auth.parent(1)) == null",
@@ -39053,16 +38909,14 @@
   "query": "",
   "load": 400,
   "error": "1:63: Argument 2 of replace() must be a string.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(((data.child('z').val()).replace('l', 5)) == null)",
   "query": "",
   "load": 400,
   "error": "1:65: Argument 2 of replace() must be a string.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "(data.child('d').val()).contains('e')",
@@ -40665,16 +40519,14 @@
   "query": "",
   "load": 400,
   "error": "1:25: Invalid != expression: left operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(root !== auth.uid)",
   "query": "",
   "load": 400,
   "error": "1:27: Invalid != expression: left operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "((5 / -0) + '').length > 3",
@@ -41045,16 +40897,14 @@
   "query": "",
   "load": 400,
   "error": "1:25: Invalid != expression: right operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.n !== data)",
   "query": "",
   "load": 400,
   "error": "1:27: Invalid != expression: right operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "(true - null) == null",
@@ -41201,16 +41051,14 @@
   "query": "",
   "load": 400,
   "error": "1:26: Invalid == expression: right operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!((1 / 0) === data)",
   "query": "",
   "load": 400,
   "error": "1:28: Invalid == expression: right operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "(1 / 0) || query.orderByKey",
@@ -41889,16 +41737,14 @@
   "query": "",
   "load": 400,
   "error": "1:25: Invalid != expression: left operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(data != data.child('x').val())",
   "query": "",
   "load": 400,
   "error": "1:27: Invalid != expression: left operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "(((0 / 0) % data.child('z').val()) + '').length > 3",
@@ -41947,16 +41793,14 @@
   "query": "",
   "load": 400,
   "error": "1:25: Invalid == expression: right operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.missing == root)",
   "query": "",
   "load": 400,
   "error": "1:27: Invalid == expression: right operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "'' < (0 / 0)",
@@ -44147,16 +43991,14 @@
   "query": "",
   "load": 400,
   "error": "1:25: Invalid != expression: right operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!('a' != root)",
   "query": "",
   "load": 400,
   "error": "1:27: Invalid != expression: right operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "(auth.token.n - query.orderByKey) == null",
@@ -46151,16 +45993,14 @@
   "query": "",
   "load": 400,
   "error": "1:25: Invalid == expression: right operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(data.child('x').val() === data)",
   "query": "",
   "load": 400,
   "error": "1:27: Invalid == expression: right operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "data.child('arr').val() >= 0",
@@ -46293,16 +46133,14 @@
   "query": "",
   "load": 400,
   "error": "1:25: Invalid != expression: right operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(-0 !== data)",
   "query": "",
   "load": 400,
   "error": "1:27: Invalid != expression: right operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "(data.child('s').val() * -0) === (data.child('s').val() * -0)",
@@ -49431,16 +49269,14 @@
   "query": "",
   "load": 400,
   "error": "1:25: Invalid == expression: right operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(0 === root)",
   "query": "",
   "load": 400,
   "error": "1:27: Invalid == expression: right operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "((data.child('d').val() * data.child('z').val()) + '').length > 3",
@@ -49909,16 +49745,14 @@
   "query": "",
   "load": 400,
   "error": "1:25: Invalid == expression: right operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(data.child('b').val() === root)",
   "query": "",
   "load": 400,
   "error": "1:27: Invalid == expression: right operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "(root - -0) === (root - -0)",
@@ -51745,16 +51579,14 @@
   "query": "",
   "load": 400,
   "error": "1:25: Invalid != expression: left operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(data !== '5')",
   "query": "",
   "load": 400,
   "error": "1:27: Invalid != expression: left operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "true && data.child('arr').val()",
@@ -52643,16 +52475,14 @@
   "query": "",
   "load": 400,
   "error": "1:25: Invalid != expression: right operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(data.child('arr').val() != root)",
   "query": "",
   "load": 400,
   "error": "1:27: Invalid != expression: right operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "(data.child('s').val() % 5) == null",
@@ -52841,16 +52671,14 @@
   "query": "",
   "load": 400,
   "error": "1:25: Invalid == expression: right operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(false === data)",
   "query": "",
   "load": 400,
   "error": "1:27: Invalid == expression: right operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "(data - false) == null",
@@ -52913,16 +52741,14 @@
   "query": "",
   "load": 400,
   "error": "1:25: Invalid != expression: left operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(data !== data.child('b').val())",
   "query": "",
   "load": 400,
   "error": "1:27: Invalid != expression: left operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "((0 / 0) % auth.token.missing) == null",
@@ -54189,16 +54015,14 @@
   "query": "",
   "load": 400,
   "error": "1:25: Invalid == expression: right operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!('a' == data)",
   "query": "",
   "load": 400,
   "error": "1:27: Invalid == expression: right operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "((null % data) + '').length > 3",
@@ -55003,16 +54827,14 @@
   "query": "",
   "load": 400,
   "error": "1:25: Invalid != expression: right operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(5 !== data)",
   "query": "",
   "load": 400,
   "error": "1:27: Invalid != expression: right operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "data.child('s').val() !== (0 / 0)",
@@ -58113,16 +57935,14 @@
   "query": "",
   "load": 400,
   "error": "1:25: Invalid == expression: right operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(data.val() === data)",
   "query": "",
   "load": 400,
   "error": "1:27: Invalid == expression: right operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "(data.child('z').val() - true) === (data.child('z').val() - true)",
@@ -58675,16 +58495,14 @@
   "query": "",
   "load": 400,
   "error": "1:26: Invalid == expression: right operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!((1 / 0) === root)",
   "query": "",
   "load": 400,
   "error": "1:28: Invalid == expression: right operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "((data.child('x').val() % auth.token.n) + '').length > 3",
@@ -59307,16 +59125,14 @@
   "query": "",
   "load": 400,
   "error": "1:25: Invalid != expression: left operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(data != data.child('b').val())",
   "query": "",
   "load": 400,
   "error": "1:27: Invalid != expression: left operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "data.child('z').val() >= false",
@@ -59379,16 +59195,14 @@
   "query": "",
   "load": 400,
   "error": "1:25: Invalid != expression: left operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(root != true)",
   "query": "",
   "load": 400,
   "error": "1:27: Invalid != expression: left operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.uid <= data.child('s').val()",
@@ -60291,16 +60105,14 @@
   "query": "",
   "load": 400,
   "error": "1:25: Invalid != expression: left operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(root !== 0)",
   "query": "",
   "load": 400,
   "error": "1:27: Invalid != expression: left operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "(data.child('b').val() + 2.5) == null",
@@ -75472,64 +75284,56 @@
   "query": "",
   "load": 400,
   "error": "1:25: Expression must evaluate to a boolean.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(root.hasCh‌ild )",
   "query": "",
   "load": 400,
   "error": "1:25: ! only operates on booleans.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.token.ß½܏!=￻﻿null",
   "query": "",
   "load": 400,
   "error": "1:38: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.ß½܏!=￻﻿null)",
   "query": "",
   "load": 400,
   "error": "1:40: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "1 / ￻2//\n == 0.5",
   "query": "",
   "load": 400,
   "error": "1:29: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(1 / ￻2//\n == 0.5)",
   "query": "",
   "load": 400,
   "error": "1:29: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "'\\u004'‏!= \"abc",
   "query": "",
   "load": 400,
   "error": "1:42: unterminated string literal\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!('\\u004'‏!= \"abc)",
   "query": "",
   "load": 400,
   "error": "1:45: unterminated string literal\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "((((data.child('n').val() > 4)) ))",
@@ -75550,32 +75354,28 @@
   "query": "",
   "load": 400,
   "error": "1:37: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.ः==null)",
   "query": "",
   "load": 400,
   "error": "1:39: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "ı፩/*\n*/== null",
   "query": "",
   "load": 400,
   "error": "1:27: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(ı፩/*\n*/== null)",
   "query": "",
   "load": 400,
   "error": "1:29: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "newDa⁯ta/*\n*/.finally!=n‮ull",
@@ -75596,16 +75396,14 @@
   "query": "",
   "load": 400,
   "error": "1:46: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth != nul­l   & &‪ a‏uth.᠎uid.length  == 2/* x)",
   "query": "",
   "load": 400,
   "error": "1:48: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "1e//c\n===-1/0",
@@ -75640,16 +75438,14 @@
   "query": "",
   "load": 400,
   "error": "1:39: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.token.x℘ == null",
   "query": "",
   "load": 400,
   "error": "1:38: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "09.5᠎>‍ 1.e3",
@@ -75712,16 +75508,14 @@
   "query": "",
   "load": 400,
   "error": "1:66: missing ; before statement\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!((( (data.child('s').val() ==￹ 'Hello')))))",
   "query": "",
   "load": 400,
   "error": "1:69: missing ; before statement\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "5.==00",
@@ -75784,16 +75578,14 @@
   "query": "",
   "load": 400,
   "error": "1:43: missing name after . operator\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(au࢐th.‌t‏oken.‍==nul/*\"*/l)",
   "query": "",
   "load": 400,
   "error": "1:45: missing name after . operator\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "(1e3)//c ===(5)",
@@ -75814,48 +75606,42 @@
   "query": "",
   "load": 400,
   "error": "1:57: missing ; before statement\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(('l/*l'.ma‏tches(/^l\\/\\*l$/))))",
   "query": "",
   "load": 400,
   "error": "1:60: missing ; before statement\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "//c (((now 𝅳> 0//c ))))",
   "query": "",
   "load": 400,
   "error": "1:33: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(//c (((now 𝅳> 0//c )))))",
   "query": "",
   "load": 400,
   "error": "1:33: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "dat𝅳a.child('a').val()==//c\n'\\x4'",
   "query": "",
   "load": 400,
   "error": "1:29: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(dat𝅳a.child('a').val()==//c\n'\\x4')",
   "query": "",
   "load": 400,
   "error": "1:31: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.؜length==null",
@@ -75876,16 +75662,14 @@
   "query": "",
   "load": 400,
   "error": "1:46: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.c؜o⁦ntinue\u001f==null)",
   "query": "",
   "load": 400,
   "error": "1:48: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "native!=‍null",
@@ -75906,16 +75690,14 @@
   "query": "",
   "load": 400,
   "error": "1:53: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(newData. package( )/* c */=𛲠= null)",
   "query": "",
   "load": 400,
   "error": "1:55: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "ºµ== n࢐ull",
@@ -75936,32 +75718,28 @@
   "query": "",
   "load": 400,
   "error": "1:29: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(let󠀁!=null)",
   "query": "",
   "load": 400,
   "error": "1:31: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "data.child('n').val()<=1..­5",
   "query": "",
   "load": 400,
   "error": "1:49: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(data.child('n').val()<=1..­5)",
   "query": "",
   "load": 400,
   "error": "1:51: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "da‪ta.chil‎d('·𝟎').᠎ex‏ist⁤s()؜||true",
@@ -75982,16 +75760,14 @@
   "query": "",
   "load": 400,
   "error": "1:32: missing ; before statement\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(data.child('n').‮val(‎)<=//c 1.5e3.5)",
   "query": "",
   "load": 400,
   "error": "1:33: missing ) in parenthetical\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "data.val() ./* c */break (/*\n*/)==null",
@@ -76061,8 +75837,7 @@
   "query": "",
   "load": 400,
   "error": "1:38: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth⁠.u id  =￹/* a // b */= '\ru1'",
@@ -76083,16 +75858,14 @@
   "query": "",
   "load": 400,
   "error": "1:32: missing ; before statement\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(data.ch/*\n*/ild‪('s').va￹l() == 'Hello')",
   "query": "",
   "load": 400,
   "error": "1:32: missing ) in parenthetical\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "data. in()\u000b!=null",
@@ -76113,16 +75886,14 @@
   "query": "",
   "load": 400,
   "error": "1:37: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.ᢅxº ==null)",
   "query": "",
   "load": 400,
   "error": "1:39: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "('a/*b*/c'.length == 7",
@@ -76213,16 +75984,14 @@
   "query": "",
   "load": 400,
   "error": "1:31: missing name after . operator\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!((5..​)===//c\n(0X5))",
   "query": "",
   "load": 400,
   "error": "1:33: missing name after . operator\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "\"\\\\\" ===࢐'\\u004'",
@@ -76299,8 +76068,7 @@
   "query": "",
   "load": 400,
   "error": "1:27: Invalid == expression: left operand is not a number, boolean, string, null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "data.child('s').val().length == 5",
@@ -76384,16 +76152,14 @@
   "query": "",
   "load": 400,
   "error": "1:61: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!('\u0001l/*l'.matches(/^l\\ /­/**/\\*l$/) //\n)",
   "query": "",
   "load": 400,
   "error": "1:63: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.token؜.aﬁ!=/**/null",
@@ -76512,16 +76278,14 @@
   "query": "",
   "load": 400,
   "error": "1:46: missing name after . operator\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.‌/*'*/==‎null)",
   "query": "",
   "load": 400,
   "error": "1:48: missing name after . operator\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "data.child('n').val()‌> -1/0",
@@ -76570,32 +76334,28 @@
   "query": "",
   "load": 400,
   "error": "1:61: unterminated comment\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(data//\n.child('‏s') .val() == 'Hello'/* x)",
   "query": "",
   "load": 400,
   "error": "1:62: unterminated comment\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "(0/0) <=(1e1e1)￹",
   "query": "",
   "load": 400,
   "error": "1:34: missing ) in parenthetical\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!((0/0) <=(1e1e1)￹)",
   "query": "",
   "load": 400,
   "error": "1:34: missing ) in parenthetical\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "1n===1.797693 1348623157e308",
@@ -76644,32 +76404,28 @@
   "query": "",
   "load": 400,
   "error": "1:63: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(dat܏a.child('s').v࣢al()/* a // b */!=𝅳'//')",
   "query": "",
   "load": 400,
   "error": "1:65: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "0.08\u0001-5. == Infinity",
   "query": "",
   "load": 400,
   "error": "1:35: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(0.08\u0001-5. == Infinity)",
   "query": "",
   "load": 400,
   "error": "1:37: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "'Hello'/**/==='\\u{48}'",
@@ -76704,16 +76460,14 @@
   "query": "",
   "load": 400,
   "error": "1:29: missing ; before statement\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(data.child('n').val()<//c\n1..5)",
   "query": "",
   "load": 400,
   "error": "1:30: missing ) in parenthetical\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "data.child('s').val() [᠎'var']/*/*/!=null",
@@ -76748,16 +76502,14 @@
   "query": "",
   "load": 400,
   "error": "1:34: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(data.v؜a𝅳l()/***/.࣢NaN !؀=null)",
   "query": "",
   "load": 400,
   "error": "1:36: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "'\\8' .toUpperCase()!='//'",
@@ -76820,16 +76572,14 @@
   "query": "",
   "load": 400,
   "error": "1:38: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token‌.᧚ıﬁ !=‮nu‍ll)",
   "query": "",
   "load": 400,
   "error": "1:40: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.token­.ıº々==/* c */null",
@@ -76850,16 +76600,14 @@
   "query": "",
   "load": 400,
   "error": "1:43: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.aǅ/**/٣!= 'z')",
   "query": "",
   "load": 400,
   "error": "1:45: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "(auth['uid'] == 'u1' ]࣢",
@@ -76950,16 +76698,14 @@
   "query": "",
   "load": 400,
   "error": "1:41: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(data.child('s')𝅳 .export!=n/***/ull)",
   "query": "",
   "load": 400,
   "error": "1:43: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "'a' 'b' ==‎'\\0'",
@@ -76980,16 +76726,14 @@
   "query": "",
   "load": 400,
   "error": "1:40: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.tok￹en.xᢅ·==‮null)",
   "query": "",
   "load": 400,
   "error": "1:42: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "0￹!=/* a // b */5.",
@@ -77024,16 +76768,14 @@
   "query": "",
   "load": 400,
   "error": "1:39: Rule expressions may not contain multiple expressions.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(/*\n*/aut//c\rh.token.sub/***/ == /*\n*/auth.uid)",
   "query": "",
   "load": 400,
   "error": "1:27: missing ) in parenthetical\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "\"\\\\⁤\"⁤== '\\'Hello'",
@@ -77068,16 +76810,14 @@
   "query": "",
   "load": 400,
   "error": "1:31: missing ; before statement\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(/*\n*/(auth.uid ==//c\n 'u1') == t/*\n*/rue)",
   "query": "",
   "load": 400,
   "error": "1:32: missing ) in parenthetical\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "data.child('\\'He࣢llo').val() ==\n'\\u0048ello'",
@@ -77098,16 +76838,14 @@
   "query": "",
   "load": 400,
   "error": "1:64: missing ; before statement\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(((((((auth.token.sub == auth.uid))))))))",
   "query": "",
   "load": 400,
   "error": "1:67: missing ; before statement\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "data.child('\\08'⁠).va‌l() ==\n'H\\ello'",
@@ -77156,32 +76894,28 @@
   "query": "",
   "load": 400,
   "error": "1:28: unterminated string literal\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(''< 'a\")",
   "query": "",
   "load": 400,
   "error": "1:29: unterminated string literal\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "'\\0­'>\"Hello\"",
   "query": "",
   "load": 400,
   "error": "1:34: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!('\\0­'>\"Hello\")",
   "query": "",
   "load": 400,
   "error": "1:36: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "5 . var!=null",
@@ -77202,16 +76936,14 @@
   "query": "",
   "load": 400,
   "error": "1:34: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth۝.uı²፩id == 'u￹1')",
   "query": "",
   "load": 400,
   "error": "1:36: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.token/*\"*/.matches",
@@ -77330,32 +77062,28 @@
   "query": "",
   "load": 400,
   "error": "1:41: unterminated string literal\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!((//c\nauth.uid == '//\nu1/*\n*/')  == true᠎)",
   "query": "",
   "load": 400,
   "error": "1:41: unterminated string literal\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "a­uth.token.٣￻ְ⁯!=࢐ n￹ull",
   "query": "",
   "load": 400,
   "error": "1:38: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(a­uth.token.٣￻ְ⁯!=࢐ n￹ull)",
   "query": "",
   "load": 400,
   "error": "1:40: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.in == null)",
@@ -77376,16 +77104,14 @@
   "query": "",
   "load": 400,
   "error": "1:26: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(ְⓐ==//c null)",
   "query": "",
   "load": 400,
   "error": "1:28: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "\"Hello\"࣢.toLowerCase() == '‍\\9'",
@@ -77420,16 +77146,14 @@
   "query": "",
   "load": 400,
   "error": "1:26: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(((((//\n( (auth.uid == 'u1'܏)))))))",
   "query": "",
   "load": 400,
   "error": "1:28: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "root᠎==܏null",
@@ -77478,16 +77202,14 @@
   "query": "",
   "load": 400,
   "error": "1:43: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(undef࣢ined!=\u0001null)",
   "query": "",
   "load": 400,
   "error": "1:45: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(au t￹h­ ⁠ ==  null)",
@@ -77536,16 +77258,14 @@
   "query": "",
   "load": 400,
   "error": "1:37: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.̃$Ⓐ!= null)",
   "query": "",
   "load": 400,
   "error": "1:39: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "data/**/['abstract']!=nul￻l",
@@ -77818,16 +77538,14 @@
   "query": "",
   "load": 400,
   "error": "1:70: missing ; before statement\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(((((data.܏chil⁦d(('s')).val() == 'Hello'))))))",
   "query": "",
   "load": 400,
   "error": "1:73: missing ; before statement\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "'Hello' .instanceof!=᠎null",
@@ -77962,16 +77680,14 @@
   "query": "",
   "load": 400,
   "error": "1:31: missing ; before statement\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(a//c\rut h != ‮null && auth.uid.length = = 2)",
   "query": "",
   "load": 400,
   "error": "1:28: missing ) in parenthetical\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "(((1 / 2‮ == 0.5\u000b)))",
@@ -77992,16 +77708,14 @@
   "query": "",
   "load": 400,
   "error": "1:32: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.u℘中id == ࢐'u࣢1﻿')",
   "query": "",
   "load": 400,
   "error": "1:34: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "(1e400)<=(00)",
@@ -78029,8 +77743,7 @@
   "query": "",
   "load": 400,
   "error": "1:25: Rule expressions may not contain '+' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth .t ok𛲠en܏.su/*/*/b == a uth.uid",
@@ -78123,32 +77836,28 @@
   "query": "",
   "load": 400,
   "error": "1:26: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(𝟎½𝅳== null)",
   "query": "",
   "load": 400,
   "error": "1:28: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "é‿℘==null",
   "query": "",
   "load": 400,
   "error": "1:28: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(é‿℘==null)",
   "query": "",
   "load": 400,
   "error": "1:30: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "(0᠎18)<= (5.)",
@@ -78197,32 +77906,28 @@
   "query": "",
   "load": 400,
   "error": "1:25: Rule expressions may not contain assignments.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.uid =​ 'u1')",
   "query": "",
   "load": 400,
   "error": "1:27: Rule expressions may not contain assignments.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "ः_=⁯=n‏ull",
   "query": "",
   "load": 400,
   "error": "1:26: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(ः_=⁯=n‏ull)",
   "query": "",
   "load": 400,
   "error": "1:28: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "؜((((((data.child(('s')).val() == 'Hello']܏)/*/*/))))",
@@ -78285,16 +77990,14 @@
   "query": "",
   "load": 400,
   "error": "1:38: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.a𝐚℮​==null)",
   "query": "",
   "load": 400,
   "error": "1:40: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "(((('a/*b*/c'.length == 7))))",
@@ -78315,16 +78018,14 @@
   "query": "",
   "load": 400,
   "error": "1:37: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(1‌­ / 2 = = 0.‮5 )",
   "query": "",
   "load": 400,
   "error": "1:39: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "da￻ta.child('n‌').val()‎!=5",
@@ -78345,16 +78046,14 @@
   "query": "",
   "load": 400,
   "error": "1:34: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(aut᠎h.u_½id == '‏u1')",
   "query": "",
   "load": 400,
   "error": "1:36: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "0o7/***/>//c\r007",
@@ -78375,16 +78074,14 @@
   "query": "",
   "load": 400,
   "error": "1:40: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!('a/ / b⁦'.leng󠀁th ==  4)",
   "query": "",
   "load": 400,
   "error": "1:42: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(!fa​lse)",
@@ -78461,16 +78158,14 @@
   "query": "",
   "load": 400,
   "error": "1:40: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(/*'a//b'.//c\rlength /**/== 4)",
   "query": "",
   "load": 400,
   "error": "1:40: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "50e-1⁯===0x1e3",
@@ -78491,16 +78186,14 @@
   "query": "",
   "load": 400,
   "error": "1:54: Rule expressions may not contain '+' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(data.child('n').val()//c !== +5)",
   "query": "",
   "load": 400,
   "error": "1:56: Rule expressions may not contain '+' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": " (auth.uid == 'u1')",
@@ -78535,16 +78228,14 @@
   "query": "",
   "load": 400,
   "error": "1:30: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!($ui々ⓐ€d == 'u1')",
   "query": "",
   "load": 400,
   "error": "1:32: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth[0] == null)",
@@ -78579,16 +78270,14 @@
   "query": "",
   "load": 400,
   "error": "1:27: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(a𛲠u‮th ⁯!= null && au𝅳th.u\nid‪.length == 2)",
   "query": "",
   "load": 400,
   "error": "1:29: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "(/**/(data.child(['s'/* a // b */][0]).val() == 'Hello')",
@@ -78637,16 +78326,14 @@
   "query": "",
   "load": 400,
   "error": "1:30: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(data.val() [⁯'import' ]/*\n*/==𝅳null)",
   "query": "",
   "load": 400,
   "error": "1:30: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "(data[‪'val']() == null",
@@ -78681,16 +78368,14 @@
   "query": "",
   "load": 400,
   "error": "1:41: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!('\\'Hello'\u0001.beginsWith('H')==\"\\\"\")",
   "query": "",
   "load": 400,
   "error": "1:43: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.token.xé/*'*/!=null۝",
@@ -78909,32 +78594,28 @@
   "query": "",
   "load": 400,
   "error": "1:44: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.İ\u0001፩ ==null)",
   "query": "",
   "load": 400,
   "error": "1:46: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth᠎.token.𝐚İ࢐!=null­",
   "query": "",
   "load": 400,
   "error": "1:38: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth᠎.token.𝐚İ࢐!=null­)",
   "query": "",
   "load": 400,
   "error": "1:40: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "'\\8'.length==''",
@@ -78955,8 +78636,7 @@
   "query": "",
   "load": 400,
   "error": "1:39: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.token.€x == null",
@@ -78984,16 +78664,14 @@
   "query": "",
   "load": 400,
   "error": "1:37: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.ְe٠ ==null)",
   "query": "",
   "load": 400,
   "error": "1:39: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "data.child('s').val()⁤!=/* a // b */\"\"",
@@ -79056,16 +78734,14 @@
   "query": "",
   "load": 400,
   "error": "1:49: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token[ 'ªªⅰ'/***/]𝅳== null)",
   "query": "",
   "load": 400,
   "error": "1:51: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "now.var⁠=‍=/* c */null",
@@ -79128,16 +78804,14 @@
   "query": "",
   "load": 400,
   "error": "1:60: unterminated string literal\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(\"\\\"\"‎.toUpperCase() !=/*/*/'abc)",
   "query": "",
   "load": 400,
   "error": "1:63: unterminated string literal\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(aut­h == n\fu‍ll)",
@@ -79158,16 +78832,14 @@
   "query": "",
   "load": 400,
   "error": "1:31: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(\"//x\"//c\r===\u001f'\\0')",
   "query": "",
   "load": 400,
   "error": "1:30: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "0400﻿>=NaN",
@@ -79300,16 +78972,14 @@
   "query": "",
   "load": 400,
   "error": "1:34: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(1 =؀==؀= 1)",
   "query": "",
   "load": 400,
   "error": "1:36: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "'\\'Hello'>'\"￹'",
@@ -79330,64 +79000,56 @@
   "query": "",
   "load": 400,
   "error": "1:53: missing ; before statement\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!((('a//b'.length == 4)/***/)))",
   "query": "",
   "load": 400,
   "error": "1:56: missing ; before statement\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.uid =­ 'u1')",
   "query": "",
   "load": 400,
   "error": "1:27: Rule expressions may not contain assignments.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "1 =­==­= 1",
   "query": "",
   "load": 400,
   "error": "1:34: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "(((((1 ‏/​ 2 == 0//c .5))))⁠)",
   "query": "",
   "load": 400,
   "error": "1:28: missing ) in parenthetical\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!((((((1 ‏/​ 2 == 0//c .5))))⁠))",
   "query": "",
   "load": 400,
   "error": "1:28: missing ) in parenthetical\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "a⁤uth.⁦token.é·==؀nul۝l",
   "query": "",
   "load": 400,
   "error": "1:40: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(a⁤uth.⁦token.é·==؀nul۝l)",
   "query": "",
   "load": 400,
   "error": "1:42: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "'a\"//c\n.contains(‍'a')　!⁯=￻\"abc",
@@ -79422,16 +79084,14 @@
   "query": "",
   "load": 400,
   "error": "1:58: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(\"\"‌.matches(/a\\/\\/b/)==\u001f'\\ u{48}')",
   "query": "",
   "load": 400,
   "error": "1:60: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "'\\u004'//\n< '\\u0048ello'",
@@ -79494,16 +79154,14 @@
   "query": "",
   "load": 400,
   "error": "1:33: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(--5​!=­018)",
   "query": "",
   "load": 400,
   "error": "1:35: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "1.e3 /0o7؀==\n08",
@@ -79608,16 +79266,14 @@
   "query": "",
   "load": 400,
   "error": "1:27: missing ) in parenthetical\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(((((((dat a.ch⁦ild('n').⁦val() > 4))))) ))",
   "query": "",
   "load": 400,
   "error": "1:27: missing ) in parenthetical\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "now/**/ > ⁠0/* c */",
@@ -79638,16 +79294,14 @@
   "query": "",
   "load": 400,
   "error": "1:71: unterminated string literal\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(\"a'/***/.endsWith('o'­)==/* a // b */'a' 'b')",
   "query": "",
   "load": 400,
   "error": "1:74: unterminated string literal\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "[(('a/*b*/c'.length == 7)‏))",
@@ -79675,8 +79329,7 @@
   "query": "",
   "load": 400,
   "error": "1:37: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "data.child('s')⁠.val()/**/.//c\n__proto__/***/( )==؀null",
@@ -79697,16 +79350,14 @@
   "query": "",
   "load": 400,
   "error": "1:41: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(1 / 2 =/*\"*/=­ 0.5 )",
   "query": "",
   "load": 400,
   "error": "1:43: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "root.​l‌et/**/==null",
@@ -79888,16 +79539,14 @@
   "query": "",
   "load": 400,
   "error": "1:27: missing ) in parenthetical\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(((('a/*b*/c'.length == 7\r)))",
   "query": "",
   "load": 400,
   "error": "1:28: missing ) in parenthetical\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth/* a // b */.token.//c eª == null",
@@ -79946,16 +79595,14 @@
   "query": "",
   "load": 400,
   "error": "1:33: Invalid increment operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(+⁠+5 == 5)",
   "query": "",
   "load": 400,
   "error": "1:35: Invalid increment operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "Infinity>1 .5",
@@ -79983,16 +79630,14 @@
   "query": "",
   "load": 400,
   "error": "1:25: Rule expressions may not contain 'void' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(data.child('n').val() -- 1 == 4)",
   "query": "",
   "load": 400,
   "error": "1:54: missing ) in parenthetical\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "(5)--1 == 6",
@@ -80006,16 +79651,14 @@
   "query": "",
   "load": 400,
   "error": "1:38: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.aⓐ=='z')",
   "query": "",
   "load": 400,
   "error": "1:40: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "finally==/*\n*/null",
@@ -80038,64 +79681,56 @@
   "query": "",
   "load": 400,
   "error": "1:61: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(data.child('\\110ello').val()\u0001==\"\")",
   "query": "",
   "load": 400,
   "error": "1:63: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "(\u001f('Hello'.matches(/l\\/*l/))",
   "query": "",
   "load": 400,
   "error": "1:32: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!((\u001f('Hello'.matches(/l\\/*l/)))",
   "query": "",
   "load": 400,
   "error": "1:34: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "root.c‌h⁦ild(\u001f't').c󠀁h\u000bi‮ld(' s').val().beginsWith('‪He܏')",
   "query": "",
   "load": 400,
   "error": "1:44: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(root.c‌h⁦ild(\u001f't').c󠀁h\u000bi‮ld(' s').val().beginsWith('‪He܏'))",
   "query": "",
   "load": 400,
   "error": "1:46: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "data.child('s').val⁦().else‎( )\u0001!=null",
   "query": "",
   "load": 400,
   "error": "1:62: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(data.child('s').val⁦().else‎( )\u0001!=null)",
   "query": "",
   "load": 400,
   "error": "1:64: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "no⁦w >\r 0",
@@ -80200,16 +79835,14 @@
   "query": "",
   "load": 400,
   "error": "1:52: missing ) in parenthetical\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "data.child('n').val() -- 1 == 4",
   "query": "",
   "load": 400,
   "error": "1:52: missing ; before statement\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "1 / 2 == 0.‎5",
@@ -80230,16 +79863,14 @@
   "query": "",
   "load": 400,
   "error": "1:71: missing ; before statement\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(((‍data.child([­'s'][0]).val() == 'He᠎llo' ))))",
   "query": "",
   "load": 400,
   "error": "1:74: missing ; before statement\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "data.child('/*\"*/s').val() == 'H‍ello'/**/",
@@ -80260,16 +79891,14 @@
   "query": "",
   "load": 400,
   "error": "1:35: missing ; before statement\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(\"\\\\\"!\r= '\\08')",
   "query": "",
   "load": 400,
   "error": "1:37: missing ) in parenthetical\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.token‮[/*'*/'/***/中؜x']­==࢐ nu⁯ll",
@@ -80318,32 +79947,28 @@
   "query": "",
   "load": 400,
   "error": "1:26: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(𝐚ⅰ\r==\fn⁤ull)",
   "query": "",
   "load": 400,
   "error": "1:28: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "data.child('ab￻c).val()==\"\"࢐",
   "query": "",
   "load": 400,
   "error": "1:55: unterminated string literal\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(data.child('ab￻c).val()==\"\"࢐)",
   "query": "",
   "load": 400,
   "error": "1:58: unterminated string literal\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "data.v/*\"*/al() .//c\nf￹inally!=null",
@@ -80364,8 +79989,7 @@
   "query": "",
   "load": 400,
   "error": "1:27: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(--5\n%　1E3­!=0x00)",
@@ -80506,16 +80130,14 @@
   "query": "",
   "load": 400,
   "error": "1:38: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.a·℮//c !='z')",
   "query": "",
   "load": 400,
   "error": "1:40: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "0X5==/***/0x1.5",
@@ -80550,16 +80172,14 @@
   "query": "",
   "load": 400,
   "error": "1:42: missing ; before statement\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(data.child('n').//c\rval()/*'*/==‌=0b1)",
   "query": "",
   "load": 400,
   "error": "1:43: missing ) in parenthetical\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(now.x == null)",
@@ -80650,16 +80270,14 @@
   "query": "",
   "load": 400,
   "error": "1:33: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.uⅫ·〇id == 'u1')",
   "query": "",
   "load": 400,
   "error": "1:35: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.token.in!=null",
@@ -80813,16 +80431,14 @@
   "query": "",
   "load": 400,
   "error": "1:40: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(data.chil\u001fd('€Ⅻ᧚').exis⁦ts()\t||‮true)",
   "query": "",
   "load": 400,
   "error": "1:42: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.//c\ntoken['·𝐚x']== null",
@@ -80941,32 +80557,28 @@
   "query": "",
   "load": 400,
   "error": "1:32: Rule expressions may not contain multiple expressions.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(data.c hil​d('s').val()࢐ =='\\8')",
   "query": "",
   "load": 400,
   "error": "1:31: missing ) in parenthetical\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.token.x℮̃​==null",
   "query": "",
   "load": 400,
   "error": "1:38: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.x℮̃​==null)",
   "query": "",
   "load": 400,
   "error": "1:40: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "((۝((auth.u࣢id /*\"*/== 'u1⁯'))))",
@@ -81057,16 +80669,14 @@
   "query": "",
   "load": 400,
   "error": "1:30: missing ; before statement\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token[ '‿']⁦==n/*\n*/ull)",
   "query": "",
   "load": 400,
   "error": "1:31: missing ) in parenthetical\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.token‍.function !=null",
@@ -81213,16 +80823,14 @@
   "query": "",
   "load": 400,
   "error": "1:39: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.ax𝟎½!=⁤null￹)",
   "query": "",
   "load": 400,
   "error": "1:41: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "0xFFFFFFFFFFFFFFFFFF ===//c 1e+3",
@@ -81271,32 +80879,28 @@
   "query": "",
   "load": 400,
   "error": "1:40: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(/*auth.//c\ruid == 'u/*/*/1')",
   "query": "",
   "load": 400,
   "error": "1:40: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.token.̃½==؀null",
   "query": "",
   "load": 400,
   "error": "1:37: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.̃½==؀null)",
   "query": "",
   "load": 400,
   "error": "1:39: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "true /⁯/ && false",
@@ -81380,16 +80984,14 @@
   "query": "",
   "load": 400,
   "error": "1:30: illegal octal literal digit 8; interpreting it as a decimal digit\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!((0777) <=(08e1))",
   "query": "",
   "load": 400,
   "error": "1:30: illegal octal literal digit 8; interpreting it as a decimal digit\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "data.child۝('s').val()==⁯ '//c\n\\'He؀llo'",
@@ -81438,16 +81040,14 @@
   "query": "",
   "load": 400,
   "error": "1:37: Rule expressions may not contain multiple expressions.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.uid.￻m a‍tches!=null)",
   "query": "",
   "load": 400,
   "error": "1:33: missing ) in parenthetical\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "data.child('s').val()​!=⁦'\\x48ello'",
@@ -81510,16 +81110,14 @@
   "query": "",
   "load": 400,
   "error": "1:30: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(1 / 𛲠2 /***/=؜= 0\u0001.5)",
   "query": "",
   "load": 400,
   "error": "1:32: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "0X5//c\n==007",
@@ -81668,8 +81266,7 @@
   "query": "",
   "load": 400,
   "error": "1:36: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "au᠎th.uid == 'u1'",
@@ -81683,16 +81280,14 @@
   "query": "",
   "load": 400,
   "error": "1:39: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.to⁦k​en.٣x‿ !=null)",
   "query": "",
   "load": 400,
   "error": "1:41: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "data.child('\\u004').val() =='//'",
@@ -81741,16 +81336,14 @@
   "query": "",
   "load": 400,
   "error": "1:29: illegal octal literal digit 9; interpreting it as a decimal digit\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(0/0/*\"*/-/*\n*/09.5\u000b>=1e-400)",
   "query": "",
   "load": 400,
   "error": "1:29: illegal octal literal digit 9; interpreting it as a decimal digit\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "(no￻w > 0)",
@@ -81785,16 +81378,14 @@
   "query": "",
   "load": 400,
   "error": "1:41: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!((((⁤(auth[\u001f(۝'uid' ) ] =⁠= 'u1' )࢐)/*\n*/))⁠)",
   "query": "",
   "load": 400,
   "error": "1:43: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "(\r((((!(auth == null))))))",
@@ -81829,32 +81420,28 @@
   "query": "",
   "load": 400,
   "error": "1:38: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.‎²‮ⅰ¢ ==⁠null)",
   "query": "",
   "load": 400,
   "error": "1:40: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "(𝅳auth ./*'*/uid/*\"*/ ؀== 'u1') ==­ tru//c e",
   "query": "",
   "load": 400,
   "error": "1:27: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!((𝅳auth ./*'*/uid/*\"*/ ؀== 'u1') ==­ tru//c e)",
   "query": "",
   "load": 400,
   "error": "1:29: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token['s⁠ub'] == 'u1')",
@@ -81875,32 +81462,28 @@
   "query": "",
   "load": 400,
   "error": "1:37: unterminated string literal\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(\"a\"‪>\"abc)",
   "query": "",
   "load": 400,
   "error": "1:40: unterminated string literal\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "/*\n*/au‎th != nul l &&‪ aut h.ui⁤d.leng۝th =/*\n*/=  2",
   "query": "",
   "load": 400,
   "error": "1:43: missing ; before statement\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(/*\n*/au‎th != nul l &&‪ aut h.ui⁤d.leng۝th =/*\n*/=  2)",
   "query": "",
   "load": 400,
   "error": "1:43: missing ) in parenthetical\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "false /​/ || true",
@@ -81935,16 +81518,14 @@
   "query": "",
   "load": 400,
   "error": "1:27: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(!(⁯a؜⁤uth/*\n*/ /* a // b */=//c\n= nu𝅳ll/* a // b */))",
   "query": "",
   "load": 400,
   "error": "1:27: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "'H￻ello' .⁦da‌t⁠a/* c */",
@@ -81979,16 +81560,14 @@
   "query": "",
   "load": 400,
   "error": "1:37: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.̃·؀!=࣢null)",
   "query": "",
   "load": 400,
   "error": "1:39: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "'a//b'.length == /**/4",
@@ -82037,16 +81616,14 @@
   "query": "",
   "load": 400,
   "error": "1:73: missing ; before statement\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!((data.child([᠎'s'][0]).val() == 'Hello'/* c */)))",
   "query": "",
   "load": 400,
   "error": "1:76: missing ; before statement\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "\"abc.matches(/\\/\\*/) !=4",
@@ -82137,16 +81714,14 @@
   "query": "",
   "load": 400,
   "error": "1:32: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(data.󠀁child('ﬁ々/*\n*/').exists()//\n||true)",
   "query": "",
   "load": 400,
   "error": "1:34: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "((((؜1 / 2 == 0.5)))­)",
@@ -82181,16 +81756,14 @@
   "query": "",
   "load": 400,
   "error": "1:44: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!((((!(auth == null)󠀁)) ))",
   "query": "",
   "load": 400,
   "error": "1:46: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.token‮.sub == auth.uid",
@@ -82211,16 +81784,14 @@
   "query": "",
   "load": 400,
   "error": "1:37: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(! (auth = = /**/null))",
   "query": "",
   "load": 400,
   "error": "1:39: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "//\nauth.t⁤oken.sub ==܏ auth.uid",
@@ -82283,32 +81854,28 @@
   "query": "",
   "load": 400,
   "error": "1:37: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.ः€ª== null)",
   "query": "",
   "load": 400,
   "error": "1:39: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "5 .toS//c\ntring==‎=࣢1e+",
   "query": "",
   "load": 400,
   "error": "1:39: missing exponent\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(5 .toS//c\ntring==‎=࣢1e+)",
   "query": "",
   "load": 400,
   "error": "1:31: missing ) in parenthetical\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "newDa؀ta .delete()==//c null",
@@ -82343,16 +81910,14 @@
   "query": "",
   "load": 400,
   "error": "1:38: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.aⓐ!=/*'*/'z')",
   "query": "",
   "load": 400,
   "error": "1:40: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "data.child('s').val()￻==//\n'\\110ello‮'",
@@ -82471,48 +82036,42 @@
   "query": "",
   "load": 400,
   "error": "1:47: missing ; before statement\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(/*\n*/'Hel⁯lo'.mat che᠎s(/l\\/*l/))",
   "query": "",
   "load": 400,
   "error": "1:47: missing ) in parenthetical\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "((((root.child('t').child([/**/'s'/***/][0]).val().beginsWith('He')//c\n) ))⁤)",
   "query": "",
   "load": 400,
   "error": "1:29: No such method/property 'child'.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(((((root.child('t').child([/**/'s'/***/][0]).val().beginsWith('He')//c\n) ))⁤))",
   "query": "",
   "load": 400,
   "error": "1:31: No such method/property 'child'.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(data.exists == null)",
   "query": "",
   "load": 400,
   "error": "1:27: Invalid == expression: left operand is not a number, boolean, string, null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "data.child('s').val == null",
   "query": "",
   "load": 400,
   "error": "1:25: Invalid == expression: left operand is not a number, boolean, string, null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "data.val()࢐.else==null",
@@ -82561,16 +82120,14 @@
   "query": "",
   "load": 400,
   "error": "1:58: missing ; before statement\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(((('Hello'.match​es(/l\\/*l/))))))",
   "query": "",
   "load": 400,
   "error": "1:61: missing ; before statement\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.token\t.sub == aut/*/*/‪h .u id",
@@ -82605,32 +82162,28 @@
   "query": "",
   "load": 400,
   "error": "1:55: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.to؜ken[/* c */'$'‌]/**/=𛲠=‪null)",
   "query": "",
   "load": 400,
   "error": "1:57: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "0‪===‮𝅳000",
   "query": "",
   "load": 400,
   "error": "1:32: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(0‪===‮𝅳000)",
   "query": "",
   "load": 400,
   "error": "1:34: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "'//'.replace(­'l', 'L')⁦== '\\8'",
@@ -82693,16 +82246,14 @@
   "query": "",
   "load": 400,
   "error": "1:43: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.t⁯oken[\u0001'１' ]==/* c */null)",
   "query": "",
   "load": 400,
   "error": "1:45: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": " ((((auth['uid'] == 'u1']܏)))",
@@ -82751,16 +82302,14 @@
   "query": "",
   "load": 400,
   "error": "1:56: missing ; before statement\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(/* a // b */(((1 / 2 == 0.5)))))",
   "query": "",
   "load": 400,
   "error": "1:59: missing ; before statement\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "'a/*b*/c '\f.le\fngth  ==  7",
@@ -82781,16 +82330,14 @@
   "query": "",
   "load": 400,
   "error": "1:30: missing ; before statement\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(/*\n*/aut/*\n*/h != nu ll && aut￹h؜.uid.length == 2)",
   "query": "",
   "load": 400,
   "error": "1:30: missing ) in parenthetical\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "((((࢐(((auth.uid == 'u1') == true)))/*\"*/)))",
@@ -82825,16 +82372,14 @@
   "query": "",
   "load": 400,
   "error": "1:30: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!((((((؜(auth.token.sub￻ == auth؀[('uid')]᠎)/* c */)⁤))‎)))",
   "query": "",
   "load": 400,
   "error": "1:32: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "/*⁤\n*/no​w > 0",
@@ -82911,32 +82456,28 @@
   "query": "",
   "load": 400,
   "error": "1:37: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.ᢅ==܏null)",
   "query": "",
   "load": 400,
   "error": "1:39: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "data.child('n').val()//c <=0x1.5",
   "query": "",
   "load": 400,
   "error": "1:32: missing ; before statement\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(data.child('n').val()//c <=0x1.5)",
   "query": "",
   "load": 400,
   "error": "1:33: missing ) in parenthetical\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "中⁦‌==null",
@@ -82999,16 +82540,14 @@
   "query": "",
   "load": 400,
   "error": "1:25: Rule expressions may not contain '+' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(+۝5!=017)",
   "query": "",
   "load": 400,
   "error": "1:27: Rule expressions may not contain '+' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(null <= null)",
@@ -83113,16 +82652,14 @@
   "query": "",
   "load": 400,
   "error": "1:38: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(au؀th.token.ⓐ!=\tnull⁠)",
   "query": "",
   "load": 400,
   "error": "1:40: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "now\f['delete'/*'*/]==null",
@@ -83157,16 +82694,14 @@
   "query": "",
   "load": 400,
   "error": "1:53: unterminated string literal\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(data.child('s').val()!=⁠'a\")",
   "query": "",
   "load": 400,
   "error": "1:56: unterminated string literal\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(true // \f && false)",
@@ -83355,16 +82890,14 @@
   "query": "",
   "load": 400,
   "error": "1:34: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!((((\u0001(᠎((‪data['val']() == null )))) ))",
   "query": "",
   "load": 400,
   "error": "1:36: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "now . data/* c */!=null",
@@ -83413,48 +82946,42 @@
   "query": "",
   "load": 400,
   "error": "1:57: missing ; before statement\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(( (auth['u‎id'] ­== 'u1'/***/))))",
   "query": "",
   "load": 400,
   "error": "1:60: missing ; before statement\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "data۝.child('n').val()󠀁<=‌05",
   "query": "",
   "load": 400,
   "error": "1:48: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(data۝.child('n').val()󠀁<=‌05)",
   "query": "",
   "load": 400,
   "error": "1:50: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "data==𛲠null",
   "query": "",
   "load": 400,
   "error": "1:32: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(data==𛲠null)",
   "query": "",
   "load": 400,
   "error": "1:34: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "05//c\r== 007",
@@ -83475,16 +83002,14 @@
   "query": "",
   "load": 400,
   "error": "1:32: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!('\\\\'󠀁.beginsWith('H')⁯==\u000b'/*')",
   "query": "",
   "load": 400,
   "error": "1:34: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "'Hello'.matches(/l\\/*l/)",
@@ -83589,16 +83114,14 @@
   "query": "",
   "load": 400,
   "error": "1:45: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!('Hel' + \"lo\"\u001f</***/'a')",
   "query": "",
   "load": 400,
   "error": "1:47: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "( ((((⁠('H࣢ello'.matches(/l\\/*l/))⁯))) ))",
@@ -83619,8 +83142,7 @@
   "query": "",
   "load": 400,
   "error": "1:39: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.token.Ⅰ == null",
@@ -83718,32 +83240,28 @@
   "query": "",
   "load": 400,
   "error": "1:27: illegal octal literal digit 9; interpreting it as a decimal digit\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(data.child('n').val()>=\r09.5)",
   "query": "",
   "load": 400,
   "error": "1:27: illegal octal literal digit 9; interpreting it as a decimal digit\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "//\nroot.ch܏ild(\u0001't')؀.child('s࣢').va​l().begins/**/With('‎He ')",
   "query": "",
   "load": 400,
   "error": "1:39: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(//\nroot.ch܏ild(\u0001't')؀.child('s࣢').va​l().begins/**/With('‎He '))",
   "query": "",
   "load": 400,
   "error": "1:39: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "'a/*b*/c'.len/* c */g‏th᠎ == 7",
@@ -83806,16 +83324,14 @@
   "query": "",
   "load": 400,
   "error": "1:37: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.̃x != null)",
   "query": "",
   "load": 400,
   "error": "1:39: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "return!=null",
@@ -83852,32 +83368,28 @@
   "query": "",
   "load": 400,
   "error": "1:37: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.𝐚℘!=null‮)",
   "query": "",
   "load": 400,
   "error": "1:39: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "$ui፩ःd == 'u1'",
   "query": "",
   "load": 400,
   "error": "1:29: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!($ui፩ःd == 'u1')",
   "query": "",
   "load": 400,
   "error": "1:31: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(1e+ == 1)",
@@ -83954,16 +83466,14 @@
   "query": "",
   "load": 400,
   "error": "1:33: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(-​-5 == -5)",
   "query": "",
   "load": 400,
   "error": "1:35: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "root.؜child('t').⁯void!= null",
@@ -84026,16 +83536,14 @@
   "query": "",
   "load": 400,
   "error": "1:39: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.t᠎oken.a℮‪== null)",
   "query": "",
   "load": 400,
   "error": "1:41: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "roo܏t.child('t')‮.uid⁤!=nu\fll",
@@ -84070,16 +83578,14 @@
   "query": "",
   "load": 400,
   "error": "1:33: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!((1e308)>=(08e1))",
   "query": "",
   "load": 400,
   "error": "1:35: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.token.firebase.email !=null",
@@ -84114,16 +83620,14 @@
   "query": "",
   "load": 400,
   "error": "1:32: missing name after . operator\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(5..!=‌=᠎1e3)",
   "query": "",
   "load": 400,
   "error": "1:34: missing name after . operator\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "1e1e1⁤!= 1.7976931348623157e308",
@@ -84214,16 +83718,14 @@
   "query": "",
   "load": 400,
   "error": "1:26: missing ) in parenthetical\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(((⁯((data.child('n').val()⁠ > 4⁠))//c\n))",
   "query": "",
   "load": 400,
   "error": "1:27: missing ) in parenthetical\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "1  / 2 == ­0 .5",
@@ -84370,16 +83872,14 @@
   "query": "",
   "load": 400,
   "error": "1:38: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.é፩e !=⁦null)",
   "query": "",
   "load": 400,
   "error": "1:40: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "08e1/**/>=0o7",
@@ -84428,16 +83928,14 @@
   "query": "",
   "load": 400,
   "error": "1:51: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(da⁤ta.child('s').val()!‏=𝅳'//')",
   "query": "",
   "load": 400,
   "error": "1:53: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.ui؜d == 'u1'",
@@ -84486,32 +83984,28 @@
   "query": "",
   "load": 400,
   "error": "1:39: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.token.\\u0073ub == 'u1'",
   "query": "",
   "load": 200,
   "error": null,
-  "read": 200,
-  "fireemu": "refuses"
+  "read": 200
  },
  {
   "expr": "a‎uth.t܏oken.firebase .۝󠀁root/***/",
   "query": "",
   "load": 400,
   "error": "1:50: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(a‎uth.t܏oken.firebase .۝󠀁root/***/)",
   "query": "",
   "load": 400,
   "error": "1:52: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(data['child']('s').val() == 'Hello')",
@@ -84546,16 +84040,14 @@
   "query": "",
   "load": 400,
   "error": "1:25: Rule expressions may not contain '|' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(true |⁠ false)",
   "query": "",
   "load": 400,
   "error": "1:27: Rule expressions may not contain '|' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "'Hel​' + \"lo\" .length!= 5",
@@ -84590,16 +84082,14 @@
   "query": "",
   "load": 400,
   "error": "1:57: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(/*\n*/'Hello'.matches/**/(/l\\/*l/\u001f))",
   "query": "",
   "load": 400,
   "error": "1:57: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "(auth/* c */.uid == '𛲠u1') == tr ue// x",
@@ -84620,8 +84110,7 @@
   "query": "",
   "load": 400,
   "error": "1:40: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.token.x〇 == null",
@@ -84635,16 +84124,14 @@
   "query": "",
   "load": 400,
   "error": "1:32: missing ) in parenthetical\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!((007)>\n(1 .5)᠎)",
   "query": "",
   "load": 400,
   "error": "1:31: missing ) in parenthetical\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "data/*\"*/.//c\nroot==null",
@@ -84749,16 +84236,14 @@
   "query": "",
   "load": 400,
   "error": "1:55: unterminated comment\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(/*auth  !//c\r= //\nnull && auth.uid.length == 2)",
   "query": "",
   "load": 400,
   "error": "1:56: unterminated comment\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "//\n((auth.uid == 'u1'⁤)​ == true)",
@@ -84891,16 +84376,14 @@
   "query": "",
   "load": 400,
   "error": "1:37: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.゛!=‪null)",
   "query": "",
   "load": 400,
   "error": "1:39: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "'a/*b*/c'.length == 7/**/",
@@ -84921,16 +84404,14 @@
   "query": "",
   "load": 400,
   "error": "1:38: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth⁤.token.ः¢µ/*/*/!=null)",
   "query": "",
   "load": 400,
   "error": "1:40: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.token.get‪Priority !=null",
@@ -85021,16 +84502,14 @@
   "query": "",
   "load": 400,
   "error": "1:44: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!('l/*l'.m࢐atch\u001fes(/^l\\/\\*l$/))",
   "query": "",
   "load": 400,
   "error": "1:46: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "data.child('s').val()== '\"'",
@@ -85177,16 +84656,14 @@
   "query": "",
   "load": 400,
   "error": "1:47: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.firebase .undefined۝==؜null)",
   "query": "",
   "load": 400,
   "error": "1:49: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth[ '￹Infinity'᠎]​==\fnull",
@@ -85305,48 +84782,42 @@
   "query": "",
   "load": 400,
   "error": "1:34: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!('l/*l'⁦.mat ch￹es(/^l\\/\\*l$ /))",
   "query": "",
   "load": 400,
   "error": "1:36: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "ͅ_￻==᠎null",
   "query": "",
   "load": 400,
   "error": "1:26: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(ͅ_￻==᠎null)",
   "query": "",
   "load": 400,
   "error": "1:28: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.token.１Ⅻ࢐==null",
   "query": "",
   "load": 400,
   "error": "1:37: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.１Ⅻ࢐==null)",
   "query": "",
   "load": 400,
   "error": "1:39: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "now .‎length==࣢null",
@@ -85367,16 +84838,14 @@
   "query": "",
   "load": 400,
   "error": "1:51: missing ; before statement\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(\u000b(((1 / 2 == 0.5‪)))))",
   "query": "",
   "load": 400,
   "error": "1:54: missing ; before statement\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "au‌th࢐.uְid == 'u 1'",
@@ -85495,8 +84964,7 @@
   "query": "",
   "load": 400,
   "error": "1:39: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.token.xᢆ == null",
@@ -85510,16 +84978,14 @@
   "query": "",
   "load": 400,
   "error": "1:47: missing ; before statement\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(0777 > 0/*\n*/xFFFFFFFFFFFFFFFFFF)",
   "query": "",
   "load": 400,
   "error": "1:48: missing ) in parenthetical\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "1e+//\n!=܏⁦4.9e-324‏",
@@ -85652,16 +85118,14 @@
   "query": "",
   "load": 400,
   "error": "1:38: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.x²ः==//c\nnull)",
   "query": "",
   "load": 400,
   "error": "1:40: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "2 /؀ 2 == 1",
@@ -85682,16 +85146,14 @@
   "query": "",
   "load": 400,
   "error": "1:54: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.uid/***/.if￻()/* c */!=null)",
   "query": "",
   "load": 400,
   "error": "1:56: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(root.child('t').val().length == null)",
@@ -85733,16 +85195,14 @@
   "query": "",
   "load": 400,
   "error": "1:31: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.$٠​‌⁯== null)",
   "query": "",
   "load": 400,
   "error": "1:33: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "newData.while () !=/***/null",
@@ -85791,16 +85251,14 @@
   "query": "",
   "load": 400,
   "error": "1:33: unterminated string literal\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!('' <'abc)",
   "query": "",
   "load": 400,
   "error": "1:36: unterminated string literal\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "0b1 <=۝09",
@@ -85821,16 +85279,14 @@
   "query": "",
   "load": 400,
   "error": "1:37: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.ͅः１!=n‌ull)",
   "query": "",
   "load": 400,
   "error": "1:39: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "('l/*l‮'.matches(/^l\\/​\\*l$/))",
@@ -85879,8 +85335,7 @@
   "query": "",
   "load": 400,
   "error": "1:33: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!᠎!true",
@@ -85908,32 +85363,28 @@
   "query": "",
   "load": 400,
   "error": "1:37: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(0400/‌00===󠀁0x00)",
   "query": "",
   "load": 400,
   "error": "1:39: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.u𝟎℮１id == 'u1'",
   "query": "",
   "load": 400,
   "error": "1:32: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.u𝟎℮１id == 'u1')",
   "query": "",
   "load": 400,
   "error": "1:34: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "(!(auth == null)]",
@@ -85954,16 +85405,14 @@
   "query": "",
   "load": 400,
   "error": "1:55: missing ; before statement\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(((auth.uid == 'u1') == true)‪))",
   "query": "",
   "load": 400,
   "error": "1:58: missing ; before statement\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "(a u/*/*/t⁯h.uid‎ == 'u1') == tr ue",
@@ -86054,16 +85503,14 @@
   "query": "",
   "load": 400,
   "error": "1:35: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(‪(((\u001f(data['val']() == null)) )‎))",
   "query": "",
   "load": 400,
   "error": "1:37: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "(-1e࢐400)==(1e400)",
@@ -86168,16 +85615,14 @@
   "query": "",
   "load": 400,
   "error": "1:50: missing ; before statement\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(//\n' a/*b۝*￹/­c'‍.﻿len gth == 7)",
   "query": "",
   "load": 400,
   "error": "1:50: missing ) in parenthetical\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.token['‍'/*\n*/] == null",
@@ -86296,32 +85741,28 @@
   "query": "",
   "load": 400,
   "error": "1:36: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token𛲠[‎'if']!=‍null)",
   "query": "",
   "load": 400,
   "error": "1:38: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "/*data .child('s').val() == //\n'He⁦l/*\"*/l࣢o'",
   "query": "",
   "load": 400,
   "error": "1:39: unterminated string literal\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(/*data .child('s').val() == //\n'He⁦l/*\"*/l࣢o')",
   "query": "",
   "load": 400,
   "error": "1:40: unterminated string literal\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth != nu　ll & &  auth/***/.uid.le؀n⁤gth‍ ==/*'*/  2",
@@ -86398,16 +85839,14 @@
   "query": "",
   "load": 400,
   "error": "1:33: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!((((((auth.to￹ken.sub == auth/* c */[࢐(//c\n'uid' )𝅳])࢐)᠎)‮)))",
   "query": "",
   "load": 400,
   "error": "1:33: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!('\\400' == ' 0')",
@@ -86470,16 +85909,14 @@
   "query": "",
   "load": 400,
   "error": "1:36: unterminated string literal\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(\"a⁦\"<\"a')",
   "query": "",
   "load": 400,
   "error": "1:39: unterminated string literal\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "-0==NaN",
@@ -86542,16 +85979,14 @@
   "query": "",
   "load": 400,
   "error": "1:41: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!( ((data.child((󠀁's')).val() == 'Hello'۝))",
   "query": "",
   "load": 400,
   "error": "1:43: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "4.9e-324+0x00 >/* a // b */5 .toString",
@@ -86656,48 +86091,42 @@
   "query": "",
   "load": 400,
   "error": "1:35: missing ; before statement\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(ro\u0001ot.ch⁠ild('t').ch//c\ri ld('s￻').va/***/l().beg‌insWi​th('He؀'))",
   "query": "",
   "load": 400,
   "error": "1:27: missing ) in parenthetical\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.token.𝐚== nu؜ll",
   "query": "",
   "load": 400,
   "error": "1:37: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.𝐚== nu؜ll)",
   "query": "",
   "load": 400,
   "error": "1:39: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "dat/*\n*/a.child('n').val() > ￹4",
   "query": "",
   "load": 400,
   "error": "1:29: missing ; before statement\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(dat/*\n*/a.child('n').val() > ￹4)",
   "query": "",
   "load": 400,
   "error": "1:29: missing ) in parenthetical\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "((((!(auth == null) ))/*/*/))",
@@ -86718,16 +86147,14 @@
   "query": "",
   "load": 400,
   "error": "1:34: missing ; before statement\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(a࣢//c\nut/**/h.t/* a // b */oken.sub == a/*/*/uth./* a // b */uid)",
   "query": "",
   "load": 400,
   "error": "1:28: missing ) in parenthetical\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "' a//b'.length == 4//",
@@ -86832,32 +86259,28 @@
   "query": "",
   "load": 400,
   "error": "1:45: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.‎token؜.sub == auth.ui؜d)",
   "query": "",
   "load": 400,
   "error": "1:47: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.token.aᢅⒶ‍ != '⁯z'",
   "query": "",
   "load": 400,
   "error": "1:39: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.aᢅⒶ‍ != '⁯z')",
   "query": "",
   "load": 400,
   "error": "1:41: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.token.ax== 'z'",
@@ -86962,16 +86385,14 @@
   "query": "",
   "load": 400,
   "error": "1:34: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.u〇￹²ªid == 'u1')",
   "query": "",
   "load": 400,
   "error": "1:36: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "data.child('\\u0048ello۝').val()//c\r==/*\n*/\"'\"",
@@ -87062,16 +86483,14 @@
   "query": "",
   "load": 400,
   "error": "1:33: Rule expressions may not contain multiple expressions.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(dat//c\na.child('s') .package!=null)",
   "query": "",
   "load": 400,
   "error": "1:27: missing ) in parenthetical\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "((((data.child(('s')).val() == 'Hello'))))",
@@ -87106,16 +86525,14 @@
   "query": "",
   "load": 400,
   "error": "1:28: missing ) in parenthetical\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(( ((⁠(((data⁠.ch​i\nld('s').val() ==‎ 'Hello')⁦))))))",
   "query": "",
   "load": 400,
   "error": "1:28: missing ) in parenthetical\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "''.length == 0",
@@ -87335,48 +86752,42 @@
   "query": "",
   "load": 400,
   "error": "1:33: missing ; before statement\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(data.c؜hi؜ld/*\"*/('s'/*\n*/).v\ta l() ⁤==؜ /*\n*/'Hello')",
   "query": "",
   "load": 400,
   "error": "1:33: missing ) in parenthetical\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "//\n'a//b'\f. length == 𛲠4",
   "query": "",
   "load": 400,
   "error": "1:47: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(//\n'a//b'\f. length == 𛲠4)",
   "query": "",
   "load": 400,
   "error": "1:47: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.tok܏en.sub == //\nau t/* c */h.uid",
   "query": "",
   "load": 400,
   "error": "1:30: missing ; before statement\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.tok܏en.sub == //\nau t/* c */h.uid)",
   "query": "",
   "load": 400,
   "error": "1:30: missing ) in parenthetical\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "'ǅ-'.matches(/()**|a+z*\\s?+/i)",
@@ -87397,16 +86808,14 @@
   "query": "",
   "load": 400,
   "error": "1:25: Rule expressions may not contain '+' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(+5==//c 0x)",
   "query": "",
   "load": 400,
   "error": "1:27: Rule expressions may not contain '+' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "1⁠.5 && 0",
@@ -87624,16 +87033,14 @@
   "query": "",
   "load": 400,
   "error": "1:42: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.\u0001!⁠=null)",
   "query": "",
   "load": 400,
   "error": "1:44: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "'['.matches(­/^\\\\.😀{1,2}+$/i)",
@@ -87683,16 +87090,14 @@
   "query": "",
   "load": 400,
   "error": "1:50: missing ] after element list\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(//c\n[data['val']() ⁠== null))",
   "query": "",
   "load": 400,
   "error": "1:50: missing ] after element list\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "'@'.matches(/^[kb-K\\D]z/i)",
@@ -87714,16 +87119,14 @@
   "query": "",
   "load": 400,
   "error": "1:37: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.²x == null)",
   "query": "",
   "load": 400,
   "error": "1:39: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "'\\᠎u004'.beginsWith('H')!=⁯'\"'",
@@ -87758,16 +87161,14 @@
   "query": "",
   "load": 400,
   "error": "1:27: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(((((((auth[( 'uid' )] =//c\n= 'u1') == true⁠)))᠎/* c */)))",
   "query": "",
   "load": 400,
   "error": "1:27: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "''.length || 1",
@@ -87930,16 +87331,14 @@
   "query": "",
   "load": 400,
   "error": "1:27: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth != null &//c\r&  \nau­t/*\n*/h.ui\u0001d࣢.leng‌th == 2)",
   "query": "",
   "load": 400,
   "error": "1:27: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "' '﻿.matches(/[Ik][\\w\\sK].|I/i)",
@@ -88003,16 +87402,14 @@
   "query": "",
   "load": 400,
   "error": "1:26: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(²½‌== null)",
   "query": "",
   "load": 400,
   "error": "1:28: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "'S' .matches(/^k{2}|([]a]*?\\|)\\?$/)",
@@ -88328,16 +87725,14 @@
   "query": "",
   "load": 400,
   "error": "1:54: unterminated string literal\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(da࢐ta.c‏hild('s').val()=='a\")",
   "query": "",
   "load": 400,
   "error": "1:57: unterminated string literal\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.token.אx == null",
@@ -88572,32 +87967,28 @@
   "query": "",
   "load": 400,
   "error": "1:37: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.ͅ𝟎/*\"*/==n࣢ull)",
   "query": "",
   "load": 400,
   "error": "1:39: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "(((((('a//b'.length == 4))­))⁯)))",
   "query": "",
   "load": 400,
   "error": "1:58: missing ; before statement\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!((((((('a//b'.length == 4))­))⁯))))",
   "query": "",
   "load": 400,
   "error": "1:61: missing ; before statement\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "'@å['.matches(/|[^z-IS]Y|$/i)",
@@ -88802,16 +88193,14 @@
   "query": "",
   "load": 400,
   "error": "1:34: unterminated string literal\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(\"\\\n\\3777\r\" && \"\")",
   "query": "",
   "load": 400,
   "error": "1:34: unterminated string literal\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.tok￹en.firebase⁦.typeof!= null",
@@ -88931,16 +88320,14 @@
   "query": "",
   "load": 400,
   "error": "1:43: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(data.child('s')‏.𝅳conta܏ins ==null)",
   "query": "",
   "load": 400,
   "error": "1:45: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.t​oken[࢐'_']== null",
@@ -89060,32 +88447,28 @@
   "query": "",
   "load": 400,
   "error": "1:35: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(dat//c\na./*\n*/child(𝅳 'n')⁯.࢐val() >  4)",
   "query": "",
   "load": 400,
   "error": "1:27: missing ) in parenthetical\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "''.matches(/$/i)",
   "query": "",
   "load": 400,
   "error": "1:28: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(''.matches(/$/i))",
   "query": "",
   "load": 400,
   "error": "1:30: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "'it''s'>‏'\\u004⁦8ello'",
@@ -89303,16 +88686,14 @@
   "query": "",
   "load": 400,
   "error": "1:45: Rule expressions may not contain multiple expressions.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!('Hello'//c\n.࢐ca//c se\r==null)",
   "query": "",
   "load": 400,
   "error": "1:27: missing ) in parenthetical\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "'Y1'.matches(/a+\\(1$/i)",
@@ -89347,16 +88728,14 @@
   "query": "",
   "load": 400,
   "error": "1:39: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.t࢐oken.aⒶⅰ ==/*/*/null࣢)",
   "query": "",
   "load": 400,
   "error": "1:41: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "'ß'.matches(/^Z\\$0/i)",
@@ -89462,32 +88841,28 @@
   "query": "",
   "load": 400,
   "error": "1:26: Unexpected end of expression\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(1 / 2 == //c\r0.5 /)",
   "query": "",
   "load": 400,
   "error": "1:27: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "\"abc>￹'\\'He⁦llo'",
   "query": "",
   "load": 400,
   "error": "1:43: unterminated string literal\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(\"abc>￹'\\'He⁦llo')",
   "query": "",
   "load": 400,
   "error": "1:46: unterminated string literal\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "'zy'.matches(/^().[ｚyA]||/i)",
@@ -89509,16 +88884,14 @@
   "query": "",
   "load": 400,
   "error": "1:38: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(a‎uth.token.𝐚᧚/*\n*/!= null)",
   "query": "",
   "load": 400,
   "error": "1:40: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.token.firebase࢐.￹toString⁠()==//\nnull",
@@ -89554,16 +88927,14 @@
   "query": "",
   "load": 400,
   "error": "1:28: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(‿〇·￻==/* a // b */null)",
   "query": "",
   "load": 400,
   "error": "1:30: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "'9]'.matches(// c /^{2}b{2}$/)",
@@ -89627,16 +88998,14 @@
   "query": "",
   "load": 400,
   "error": "1:27: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(e゛e==null)",
   "query": "",
   "load": 400,
   "error": "1:29: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "(5)>(1.5e3.5)",
@@ -89686,32 +89055,28 @@
   "query": "",
   "load": 400,
   "error": "1:33: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!('b' <﻿= '\ra\\﻿n')",
   "query": "",
   "load": 400,
   "error": "1:35: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "05%0x5࢐/*\n*/==+5",
   "query": "",
   "load": 400,
   "error": "1:40: Rule expressions may not contain '+' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(05%0x5࢐/*\n*/==+5)",
   "query": "",
   "load": 400,
   "error": "1:42: Rule expressions may not contain '+' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "'\r\\x4' != \"\"",
@@ -89790,16 +89155,14 @@
   "query": "",
   "load": 400,
   "error": "1:45: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(data.child('n').val𛲠() > 4)",
   "query": "",
   "load": 400,
   "error": "1:47: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "'_ǆ'.matches(/^(.[ i])B/)",
@@ -89921,16 +89284,14 @@
   "query": "",
   "load": 400,
   "error": "1:37: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth؀.\u001ftoken['᧚' ]==null)",
   "query": "",
   "load": 400,
   "error": "1:39: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "'k'.matches(/* a\nb *//^|}.{1,}[_-~y-KA-1]([\\w1I-1](()[^S-Y]|9{2}b{1,}|**[\\D\\s][^@-K\\si-z])*?|{,2}s|s(\\|*\\.|b|+){2}{2})|[\\\\]k9-@]/)",
@@ -90023,16 +89384,14 @@
   "query": "",
   "load": 400,
   "error": "1:25: Invalid != expression: left operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(root !=۝null)",
   "query": "",
   "load": 400,
   "error": "1:27: Invalid != expression: left operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "'' .matches(/SA|+[`-Kz-9]\\[S+$/)",
@@ -90180,16 +89539,14 @@
   "query": "",
   "load": 400,
   "error": "1:25: Invalid == expression: left operand is not a number, boolean, string, null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(data.parent == null)",
   "query": "",
   "load": 400,
   "error": "1:27: Invalid == expression: left operand is not a number, boolean, string, null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "data.child‌('n'￻⁯).val() > 4؜",
@@ -90478,16 +89835,14 @@
   "query": "",
   "load": 400,
   "error": "1:26: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(٠℮²⁤== null)",
   "query": "",
   "load": 400,
   "error": "1:28: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.uid <= data.child('o').val()",
@@ -90594,16 +89949,14 @@
   "query": "",
   "load": 400,
   "error": "1:39: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.a‿·󠀁==​'z')",
   "query": "",
   "load": 400,
   "error": "1:41: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "/*⁠*/ true",
@@ -90766,16 +90119,14 @@
   "query": "",
   "load": 400,
   "error": "1:39: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!((((( ((data.c𛲠hild(('s')).val() ==‎ 'Hello‎'࢐)))))))",
   "query": "",
   "load": 400,
   "error": "1:41: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "0b1 ===‪0xg",
@@ -90810,16 +90161,14 @@
   "query": "",
   "load": 400,
   "error": "1:25: Invalid == expression: left operand is not a number, boolean, string, null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(data.val == null)",
   "query": "",
   "load": 400,
   "error": "1:27: Invalid == expression: left operand is not a number, boolean, string, null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "data\f.throw ==⁯null",
@@ -90882,16 +90231,14 @@
   "query": "",
   "load": 400,
   "error": "1:52: unterminated string literal\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(data.child('s').val()==\"a')",
   "query": "",
   "load": 400,
   "error": "1:55: unterminated string literal\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "'𝅳l/* a // b *//*­l'.match⁠e/*'*/‎s(/᠎^l\\/\\*l$/)",
@@ -90912,16 +90259,14 @@
   "query": "",
   "load": 400,
   "error": "1:58: Rule expressions may not contain multiple expressions.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth ﻿!= null &&  auth.࣢uid.l//\nength == 2⁠)",
   "query": "",
   "load": 400,
   "error": "1:31: missing ) in parenthetical\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "'ǆ]I' .matches(/^[s-zi-9é]|[^k-K]|/)",
@@ -91167,16 +90512,14 @@
   "query": "",
   "load": 400,
   "error": "1:25: Invalid == expression: left operand is not a number, boolean, string, null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(data.child('s')/*\"*/.hasChild​==null)",
   "query": "",
   "load": 400,
   "error": "1:27: Invalid == expression: left operand is not a number, boolean, string, null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "' ß'.matches(/\\\\k\\^/i)",
@@ -91197,16 +90540,14 @@
   "query": "",
   "load": 400,
   "error": "1:31: missing ; before statement\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth !⁦=/***/ ‍nu/*\n*/l⁦l && auth.uid.le￹n‏gth ==  2)",
   "query": "",
   "load": 400,
   "error": "1:31: missing ) in parenthetical\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "5 .toString//c\n>=​4.9e-324",
@@ -91227,16 +90568,14 @@
   "query": "",
   "load": 400,
   "error": "1:30: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!( ((؀𛲠((('a//b'.length == 4))))))",
   "query": "",
   "load": 400,
   "error": "1:32: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "\"abc//c\n./*/*/matches(/'/ )/***/!=\"\\\\\"",
@@ -91271,16 +90610,14 @@
   "query": "",
   "load": 400,
   "error": "1:39: Rule expressions may not contain multiple expressions.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(now > 0// //c x)",
   "query": "",
   "load": 400,
   "error": "1:27: missing ) in parenthetical\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "now ['delete']!=null",
@@ -91455,32 +90792,28 @@
   "query": "",
   "load": 400,
   "error": "1:33: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(-​-5 == 5)",
   "query": "",
   "load": 400,
   "error": "1:35: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "+​+5 == 5",
   "query": "",
   "load": 400,
   "error": "1:33: Invalid increment operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(+​+5 == 5)",
   "query": "",
   "load": 400,
   "error": "1:35: Invalid increment operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "5 -​-1 == 6",
@@ -91501,48 +90834,42 @@
   "query": "",
   "load": 400,
   "error": "1:25: Rule expressions may not contain '<<' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(1 <​< 2 == 4)",
   "query": "",
   "load": 400,
   "error": "1:27: Rule expressions may not contain '<<' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "8 >​> 1 == 4",
   "query": "",
   "load": 400,
   "error": "1:25: Rule expressions may not contain '>>' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(8 >​> 1 == 4)",
   "query": "",
   "load": 400,
   "error": "1:27: Rule expressions may not contain '>>' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "8 >​>​> 1 == 4",
   "query": "",
   "load": 400,
   "error": "1:25: Rule expressions may not contain '>>>' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(8 >​>​> 1 == 4)",
   "query": "",
   "load": 400,
   "error": "1:27: Rule expressions may not contain '>>>' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "2 *​* 3 == 8",
@@ -91563,48 +90890,42 @@
   "query": "",
   "load": 400,
   "error": "1:25: Rule expressions may not contain '&' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(true &​ true)",
   "query": "",
   "load": 400,
   "error": "1:27: Rule expressions may not contain '&' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "true |​ false",
   "query": "",
   "load": 400,
   "error": "1:25: Rule expressions may not contain '|' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(true |​ false)",
   "query": "",
   "load": 400,
   "error": "1:27: Rule expressions may not contain '|' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "1 =​> 1",
   "query": "",
   "load": 400,
   "error": "1:31: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(1 =​> 1)",
   "query": "",
   "load": 400,
   "error": "1:33: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!​!true",
@@ -91625,16 +90946,14 @@
   "query": "",
   "load": 400,
   "error": "1:34: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(1 =​==​= 1)",
   "query": "",
   "load": 400,
   "error": "1:36: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth​.​uid == 'u1'",
@@ -91900,48 +91219,42 @@
   "query": "",
   "load": 400,
   "error": "1:33: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(-­-5 == 5)",
   "query": "",
   "load": 400,
   "error": "1:35: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "+­+5 == 5",
   "query": "",
   "load": 400,
   "error": "1:33: Invalid increment operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(+­+5 == 5)",
   "query": "",
   "load": 400,
   "error": "1:35: Invalid increment operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "-­-5 == -5",
   "query": "",
   "load": 400,
   "error": "1:33: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(-­-5 == -5)",
   "query": "",
   "load": 400,
   "error": "1:35: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "5 -­- 1 == 6",
@@ -91976,48 +91289,42 @@
   "query": "",
   "load": 400,
   "error": "1:25: Rule expressions may not contain '<<' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(1 <­< 2 == 4)",
   "query": "",
   "load": 400,
   "error": "1:27: Rule expressions may not contain '<<' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "8 >­> 1 == 4",
   "query": "",
   "load": 400,
   "error": "1:25: Rule expressions may not contain '>>' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(8 >­> 1 == 4)",
   "query": "",
   "load": 400,
   "error": "1:27: Rule expressions may not contain '>>' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "8 >­>­> 1 == 4",
   "query": "",
   "load": 400,
   "error": "1:25: Rule expressions may not contain '>>>' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(8 >­>­> 1 == 4)",
   "query": "",
   "load": 400,
   "error": "1:27: Rule expressions may not contain '>>>' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "2 *­* 3 == 8",
@@ -92038,48 +91345,42 @@
   "query": "",
   "load": 400,
   "error": "1:25: Rule expressions may not contain '&' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(true &­ true)",
   "query": "",
   "load": 400,
   "error": "1:27: Rule expressions may not contain '&' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "true |­ false",
   "query": "",
   "load": 400,
   "error": "1:25: Rule expressions may not contain '|' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(true |­ false)",
   "query": "",
   "load": 400,
   "error": "1:27: Rule expressions may not contain '|' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "1 =­> 1",
   "query": "",
   "load": 400,
   "error": "1:31: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(1 =­> 1)",
   "query": "",
   "load": 400,
   "error": "1:33: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!­!true",
@@ -92100,16 +91401,14 @@
   "query": "",
   "load": 400,
   "error": "1:25: Rule expressions may not contain assignments.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(1 =­==­= 1)",
   "query": "",
   "load": 400,
   "error": "1:36: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "au­th.uid == 'u1'",
@@ -92361,32 +91660,28 @@
   "query": "",
   "load": 400,
   "error": "1:33: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(-⁠-5 == 5)",
   "query": "",
   "load": 400,
   "error": "1:35: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "-⁠-5 == -5",
   "query": "",
   "load": 400,
   "error": "1:33: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(-⁠-5 == -5)",
   "query": "",
   "load": 400,
   "error": "1:35: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "5 -⁠- 1 == 6",
@@ -92421,48 +91716,42 @@
   "query": "",
   "load": 400,
   "error": "1:25: Rule expressions may not contain '<<' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(1 <⁠< 2 == 4)",
   "query": "",
   "load": 400,
   "error": "1:27: Rule expressions may not contain '<<' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "8 >⁠> 1 == 4",
   "query": "",
   "load": 400,
   "error": "1:25: Rule expressions may not contain '>>' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(8 >⁠> 1 == 4)",
   "query": "",
   "load": 400,
   "error": "1:27: Rule expressions may not contain '>>' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "8 >⁠>⁠> 1 == 4",
   "query": "",
   "load": 400,
   "error": "1:25: Rule expressions may not contain '>>>' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(8 >⁠>⁠> 1 == 4)",
   "query": "",
   "load": 400,
   "error": "1:27: Rule expressions may not contain '>>>' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "2 *⁠* 3 == 8",
@@ -92483,32 +91772,28 @@
   "query": "",
   "load": 400,
   "error": "1:25: Rule expressions may not contain '&' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(true &⁠ true)",
   "query": "",
   "load": 400,
   "error": "1:27: Rule expressions may not contain '&' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "1 =⁠> 1",
   "query": "",
   "load": 400,
   "error": "1:31: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(1 =⁠> 1)",
   "query": "",
   "load": 400,
   "error": "1:33: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!⁠!true",
@@ -92529,32 +91814,28 @@
   "query": "",
   "load": 400,
   "error": "1:25: Rule expressions may not contain assignments.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.uid =⁠ 'u1')",
   "query": "",
   "load": 400,
   "error": "1:27: Rule expressions may not contain assignments.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "1 =⁠==⁠= 1",
   "query": "",
   "load": 400,
   "error": "1:34: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(1 =⁠==⁠= 1)",
   "query": "",
   "load": 400,
   "error": "1:36: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "au⁠th.uid == 'u1'",
@@ -92792,48 +92073,42 @@
   "query": "",
   "load": 400,
   "error": "1:33: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(-᠎-5 == 5)",
   "query": "",
   "load": 400,
   "error": "1:35: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "+᠎+5 == 5",
   "query": "",
   "load": 400,
   "error": "1:33: Invalid increment operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(+᠎+5 == 5)",
   "query": "",
   "load": 400,
   "error": "1:35: Invalid increment operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "-᠎-5 == -5",
   "query": "",
   "load": 400,
   "error": "1:33: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(-᠎-5 == -5)",
   "query": "",
   "load": 400,
   "error": "1:35: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "5 -᠎- 1 == 6",
@@ -92868,48 +92143,42 @@
   "query": "",
   "load": 400,
   "error": "1:25: Rule expressions may not contain '<<' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(1 <᠎< 2 == 4)",
   "query": "",
   "load": 400,
   "error": "1:27: Rule expressions may not contain '<<' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "8 >᠎> 1 == 4",
   "query": "",
   "load": 400,
   "error": "1:25: Rule expressions may not contain '>>' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(8 >᠎> 1 == 4)",
   "query": "",
   "load": 400,
   "error": "1:27: Rule expressions may not contain '>>' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "8 >᠎>᠎> 1 == 4",
   "query": "",
   "load": 400,
   "error": "1:25: Rule expressions may not contain '>>>' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(8 >᠎>᠎> 1 == 4)",
   "query": "",
   "load": 400,
   "error": "1:27: Rule expressions may not contain '>>>' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "2 *᠎* 3 == 8",
@@ -92930,40 +92199,35 @@
   "query": "",
   "load": 400,
   "error": "1:25: Rule expressions may not contain '&' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(true &᠎ true)",
   "query": "",
   "load": 400,
   "error": "1:27: Rule expressions may not contain '&' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "true |᠎ false",
   "query": "",
   "load": 400,
   "error": "1:25: Rule expressions may not contain '|' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(true |᠎ false)",
   "query": "",
   "load": 400,
   "error": "1:27: Rule expressions may not contain '|' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "1 =᠎> 1",
   "query": "",
   "load": 400,
   "error": "1:31: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(!᠎!true)",
@@ -92977,24 +92241,21 @@
   "query": "",
   "load": 400,
   "error": "1:25: Rule expressions may not contain assignments.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.uid =᠎ 'u1')",
   "query": "",
   "load": 400,
   "error": "1:27: Rule expressions may not contain assignments.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "1 =᠎==᠎= 1",
   "query": "",
   "load": 400,
   "error": "1:34: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth᠎.᠎uid == 'u1'",
@@ -93218,48 +92479,42 @@
   "query": "",
   "load": 400,
   "error": "1:33: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(-⁯-5 == 5)",
   "query": "",
   "load": 400,
   "error": "1:35: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "+⁯+5 == 5",
   "query": "",
   "load": 400,
   "error": "1:33: Invalid increment operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(+⁯+5 == 5)",
   "query": "",
   "load": 400,
   "error": "1:35: Invalid increment operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "-⁯-5 == -5",
   "query": "",
   "load": 400,
   "error": "1:33: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(-⁯-5 == -5)",
   "query": "",
   "load": 400,
   "error": "1:35: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "5 -⁯- 1 == 6",
@@ -93294,96 +92549,84 @@
   "query": "",
   "load": 400,
   "error": "1:25: Rule expressions may not contain '<<' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(1 <⁯< 2 == 4)",
   "query": "",
   "load": 400,
   "error": "1:27: Rule expressions may not contain '<<' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "8 >⁯> 1 == 4",
   "query": "",
   "load": 400,
   "error": "1:25: Rule expressions may not contain '>>' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(8 >⁯> 1 == 4)",
   "query": "",
   "load": 400,
   "error": "1:27: Rule expressions may not contain '>>' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "8 >⁯>⁯> 1 == 4",
   "query": "",
   "load": 400,
   "error": "1:25: Rule expressions may not contain '>>>' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(8 >⁯>⁯> 1 == 4)",
   "query": "",
   "load": 400,
   "error": "1:27: Rule expressions may not contain '>>>' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "true &⁯ true",
   "query": "",
   "load": 400,
   "error": "1:25: Rule expressions may not contain '&' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(true &⁯ true)",
   "query": "",
   "load": 400,
   "error": "1:27: Rule expressions may not contain '&' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "true |⁯ false",
   "query": "",
   "load": 400,
   "error": "1:25: Rule expressions may not contain '|' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(true |⁯ false)",
   "query": "",
   "load": 400,
   "error": "1:27: Rule expressions may not contain '|' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "1 =⁯> 1",
   "query": "",
   "load": 400,
   "error": "1:31: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(1 =⁯> 1)",
   "query": "",
   "load": 400,
   "error": "1:33: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!⁯!true",
@@ -93404,32 +92647,28 @@
   "query": "",
   "load": 400,
   "error": "1:25: Rule expressions may not contain assignments.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.uid =⁯ 'u1')",
   "query": "",
   "load": 400,
   "error": "1:27: Rule expressions may not contain assignments.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "1 =⁯==⁯= 1",
   "query": "",
   "load": 400,
   "error": "1:34: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(1 =⁯==⁯= 1)",
   "query": "",
   "load": 400,
   "error": "1:36: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "au⁯th.uid == 'u1'",
@@ -93744,8 +92983,7 @@
   "query": "",
   "load": 400,
   "error": "1:27: Rule expressions may not contain '+' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "-﻿-5 == -5",
@@ -93852,48 +93090,42 @@
   "query": "",
   "load": 400,
   "error": "1:25: Rule expressions may not contain '&' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(true &﻿ true)",
   "query": "",
   "load": 400,
   "error": "1:27: Rule expressions may not contain '&' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "true |﻿ false",
   "query": "",
   "load": 400,
   "error": "1:25: Rule expressions may not contain '|' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(true |﻿ false)",
   "query": "",
   "load": 400,
   "error": "1:27: Rule expressions may not contain '|' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "1 =﻿> 1",
   "query": "",
   "load": 400,
   "error": "1:31: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(1 =﻿> 1)",
   "query": "",
   "load": 400,
   "error": "1:33: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!﻿!true",
@@ -93914,32 +93146,28 @@
   "query": "",
   "load": 400,
   "error": "1:25: Rule expressions may not contain assignments.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.uid =﻿ 'u1')",
   "query": "",
   "load": 400,
   "error": "1:27: Rule expressions may not contain assignments.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "1 =﻿==﻿= 1",
   "query": "",
   "load": 400,
   "error": "1:32: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(1 =﻿==﻿= 1)",
   "query": "",
   "load": 400,
   "error": "1:34: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "au﻿th.uid == 'u1'",
@@ -94233,48 +93461,42 @@
   "query": "",
   "load": 400,
   "error": "1:33: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(-؀-5 == 5)",
   "query": "",
   "load": 400,
   "error": "1:35: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "+؀+5 == 5",
   "query": "",
   "load": 400,
   "error": "1:33: Invalid increment operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(+؀+5 == 5)",
   "query": "",
   "load": 400,
   "error": "1:35: Invalid increment operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "-؀-5 == -5",
   "query": "",
   "load": 400,
   "error": "1:33: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(-؀-5 == -5)",
   "query": "",
   "load": 400,
   "error": "1:35: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "5 -؀- 1 == 6",
@@ -94309,48 +93531,42 @@
   "query": "",
   "load": 400,
   "error": "1:25: Rule expressions may not contain '<<' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(1 <؀< 2 == 4)",
   "query": "",
   "load": 400,
   "error": "1:27: Rule expressions may not contain '<<' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "8 >؀> 1 == 4",
   "query": "",
   "load": 400,
   "error": "1:25: Rule expressions may not contain '>>' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(8 >؀> 1 == 4)",
   "query": "",
   "load": 400,
   "error": "1:27: Rule expressions may not contain '>>' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "8 >؀>؀> 1 == 4",
   "query": "",
   "load": 400,
   "error": "1:25: Rule expressions may not contain '>>>' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(8 >؀>؀> 1 == 4)",
   "query": "",
   "load": 400,
   "error": "1:27: Rule expressions may not contain '>>>' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "2 *؀* 3 == 8",
@@ -94371,48 +93587,42 @@
   "query": "",
   "load": 400,
   "error": "1:25: Rule expressions may not contain '&' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(true &؀ true)",
   "query": "",
   "load": 400,
   "error": "1:27: Rule expressions may not contain '&' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "true |؀ false",
   "query": "",
   "load": 400,
   "error": "1:25: Rule expressions may not contain '|' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(true |؀ false)",
   "query": "",
   "load": 400,
   "error": "1:27: Rule expressions may not contain '|' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "1 =؀> 1",
   "query": "",
   "load": 400,
   "error": "1:31: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(1 =؀> 1)",
   "query": "",
   "load": 400,
   "error": "1:33: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!؀!true",
@@ -94433,16 +93643,14 @@
   "query": "",
   "load": 400,
   "error": "1:25: Rule expressions may not contain assignments.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.uid =؀ 'u1')",
   "query": "",
   "load": 400,
   "error": "1:27: Rule expressions may not contain assignments.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "au؀th.uid == 'u1'",
@@ -94561,32 +93769,28 @@
   "query": "",
   "load": 400,
   "error": "1:32: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(--5 == 5)",
   "query": "",
   "load": 400,
   "error": "1:34: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "++5 == 5",
   "query": "",
   "load": 400,
   "error": "1:32: Invalid increment operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(++5 == 5)",
   "query": "",
   "load": 400,
   "error": "1:34: Invalid increment operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "- -5 == 5",
@@ -94621,16 +93825,14 @@
   "query": "",
   "load": 400,
   "error": "1:25: Rule expressions may not contain '+' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(+ +5 == 5)",
   "query": "",
   "load": 400,
   "error": "1:27: Rule expressions may not contain '+' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!!true",
@@ -94651,64 +93853,56 @@
   "query": "",
   "load": 400,
   "error": "1:25: Rule expressions may not contain '~' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(~1 == -2)",
   "query": "",
   "load": 400,
   "error": "1:27: Rule expressions may not contain '~' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "1 << 2 == 4",
   "query": "",
   "load": 400,
   "error": "1:25: Rule expressions may not contain '<<' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(1 << 2 == 4)",
   "query": "",
   "load": 400,
   "error": "1:27: Rule expressions may not contain '<<' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "8 >> 1 == 4",
   "query": "",
   "load": 400,
   "error": "1:25: Rule expressions may not contain '>>' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(8 >> 1 == 4)",
   "query": "",
   "load": 400,
   "error": "1:27: Rule expressions may not contain '>>' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "8 >>> 1 == 4",
   "query": "",
   "load": 400,
   "error": "1:25: Rule expressions may not contain '>>>' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(8 >>> 1 == 4)",
   "query": "",
   "load": 400,
   "error": "1:27: Rule expressions may not contain '>>>' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "2 ** 3 == 8",
@@ -94729,80 +93923,70 @@
   "query": "",
   "load": 400,
   "error": "1:25: Rule expressions may not contain '&' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(1 & 1)",
   "query": "",
   "load": 400,
   "error": "1:27: Rule expressions may not contain '&' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "1 | 0",
   "query": "",
   "load": 400,
   "error": "1:25: Rule expressions may not contain '|' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(1 | 0)",
   "query": "",
   "load": 400,
   "error": "1:27: Rule expressions may not contain '|' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "1 ^ 1",
   "query": "",
   "load": 400,
   "error": "1:25: Rule expressions may not contain '^' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(1 ^ 1)",
   "query": "",
   "load": 400,
   "error": "1:27: Rule expressions may not contain '^' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.uid = 'u1'",
   "query": "",
   "load": 400,
   "error": "1:25: Rule expressions may not contain assignments.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.uid = 'u1')",
   "query": "",
   "load": 400,
   "error": "1:27: Rule expressions may not contain assignments.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "(1, true)",
   "query": "",
   "load": 400,
   "error": "1:26: Rule expressions may not contain ',' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!((1, true))",
   "query": "",
   "load": 400,
   "error": "1:28: Rule expressions may not contain ',' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "true ? true : false",
@@ -94816,8 +94000,7 @@
   "query": "",
   "load": 400,
   "error": "1:27: Rule expressions may not contain 'void' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "typeof 1 == 'number'",
@@ -94866,32 +94049,28 @@
   "query": "",
   "load": 400,
   "error": "1:29: syntax error\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!({}.x == null)",
   "query": "",
   "load": 400,
   "error": "1:27: Rule expressions may not contain object literals.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "this == null",
   "query": "",
   "load": 400,
   "error": "1:25: Rule expressions may not contain 'this' keyword.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(this == null)",
   "query": "",
   "load": 400,
   "error": "1:27: Rule expressions may not contain 'this' keyword.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "/* */ true",
@@ -95556,8 +94735,7 @@
   "query": "",
   "load": 400,
   "error": "1:25: Invalid == expression: left operand is not a number, boolean, string, null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(data.child('s').val().length == 5)",
@@ -95781,16 +94959,14 @@
   "query": "",
   "load": 400,
   "error": "1:25: Type error: Function call on target that is not a function.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!('Hello'.length() == 5)",
   "query": "",
   "load": 400,
   "error": "1:27: Type error: Function call on target that is not a function.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "'Hello'.size == null",
@@ -95909,16 +95085,14 @@
   "query": "",
   "load": 400,
   "error": "1:38: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.x² == null)",
   "query": "",
   "load": 400,
   "error": "1:40: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.token.x̃ == null",
@@ -95939,8 +95113,7 @@
   "query": "",
   "load": 400,
   "error": "1:37: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.€x == null)",
@@ -95982,16 +95155,14 @@
   "query": "",
   "load": 400,
   "error": "1:37: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.ⓐ == null)",
   "query": "",
   "load": 400,
   "error": "1:39: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.token.Ⅻ == null",
@@ -96019,32 +95190,28 @@
   "query": "",
   "load": 400,
   "error": "1:37: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.𝐚 == null)",
   "query": "",
   "load": 400,
   "error": "1:39: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.token.x𝐚 == null",
   "query": "",
   "load": 400,
   "error": "1:38: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.x𝐚 == null)",
   "query": "",
   "load": 400,
   "error": "1:40: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.token.x٣ == null",
@@ -96058,24 +95225,21 @@
   "query": "",
   "load": 400,
   "error": "1:39: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.token.x½ == null",
   "query": "",
   "load": 400,
   "error": "1:38: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.x½ == null)",
   "query": "",
   "load": 400,
   "error": "1:40: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.token.ª == null",
@@ -96110,184 +95274,161 @@
   "query": "",
   "load": 400,
   "error": "1:38: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.x· == null)",
   "query": "",
   "load": 400,
   "error": "1:40: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.token.x· == null",
   "query": "",
   "load": 400,
   "error": "1:38: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.x· == null)",
   "query": "",
   "load": 400,
   "error": "1:40: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.token.x፩ == null",
   "query": "",
   "load": 400,
   "error": "1:38: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.x፩ == null)",
   "query": "",
   "load": 400,
   "error": "1:40: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.token.℘ == null",
   "query": "",
   "load": 400,
   "error": "1:37: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.token.℮ == null",
   "query": "",
   "load": 400,
   "error": "1:37: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.℮ == null)",
   "query": "",
   "load": 400,
   "error": "1:39: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.token.゛ == null",
   "query": "",
   "load": 400,
   "error": "1:37: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.゛ == null)",
   "query": "",
   "load": 400,
   "error": "1:39: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.token.ᢅ == null",
   "query": "",
   "load": 400,
   "error": "1:37: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.ᢅ == null)",
   "query": "",
   "load": 400,
   "error": "1:39: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.token.x᧚ == null",
   "query": "",
   "load": 400,
   "error": "1:38: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.x᧚ == null)",
   "query": "",
   "load": 400,
   "error": "1:40: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.token.ͅ == null",
   "query": "",
   "load": 400,
   "error": "1:37: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.ͅ == null)",
   "query": "",
   "load": 400,
   "error": "1:39: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.token.Ⓐ == null",
   "query": "",
   "load": 400,
   "error": "1:37: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.\\u0073ub == 'u1')",
   "query": "",
   "load": 200,
   "error": null,
-  "read": 401,
-  "fireemu": "refuses"
+  "read": 401
  },
  {
   "expr": "\\u0061uth.uid == 'u1'",
   "query": "",
   "load": 200,
   "error": null,
-  "read": 200,
-  "fireemu": "refuses"
+  "read": 200
  },
  {
   "expr": "!(\\u0061uth.uid == 'u1')",
   "query": "",
   "load": 200,
   "error": null,
-  "read": 401,
-  "fireemu": "refuses"
+  "read": 401
  },
  {
   "expr": "auth.\\u0075id == 'u1'",
   "query": "",
   "load": 200,
   "error": null,
-  "read": 200,
-  "fireemu": "refuses"
+  "read": 200
  },
  {
   "expr": "!(auth.\\u0075id == 'u1')",
   "query": "",
   "load": 200,
   "error": null,
-  "read": 401,
-  "fireemu": "refuses"
+  "read": 401
  },
  {
   "expr": "auth.token.x‌ == null",
@@ -97715,16 +96856,14 @@
   "query": "",
   "load": 400,
   "error": "1:29: Rule expressions may not contain '+' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(5 + +1 == 6)",
   "query": "",
   "load": 400,
   "error": "1:31: Rule expressions may not contain '+' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "5 +​+ 1 == 6",
@@ -97759,16 +96898,14 @@
   "query": "",
   "load": 400,
   "error": "1:36: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(5 - --1 == 6)",
   "query": "",
   "load": 400,
   "error": "1:38: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "-(-(5)) == 5",
@@ -97817,32 +96954,28 @@
   "query": "",
   "load": 400,
   "error": "1:26: Rule expressions may not contain '+' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(-+5 == -5)",
   "query": "",
   "load": 400,
   "error": "1:28: Rule expressions may not contain '+' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "+-5 == -5",
   "query": "",
   "load": 400,
   "error": "1:25: Rule expressions may not contain '+' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(+-5 == -5)",
   "query": "",
   "load": 400,
   "error": "1:27: Rule expressions may not contain '+' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.uid-- == 1",
@@ -97891,8 +97024,7 @@
   "query": "",
   "load": 400,
   "error": "1:50: missing ; before statement\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!((5)--1 == 6)",
@@ -98032,16 +97164,14 @@
   "query": "",
   "load": 400,
   "error": "1:37: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.٠ == null)",
   "query": "",
   "load": 400,
   "error": "1:39: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.token.々 == null",
@@ -98076,16 +97206,14 @@
   "query": "",
   "load": 400,
   "error": "1:37: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.̀ == null)",
   "query": "",
   "load": 400,
   "error": "1:39: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.token.xः == null",
@@ -98099,16 +97227,14 @@
   "query": "",
   "load": 400,
   "error": "1:40: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.token.² == null",
   "query": "",
   "load": 400,
   "error": "1:37: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.Ⅰ == null)",
@@ -98164,64 +97290,56 @@
   "query": "",
   "load": 400,
   "error": "1:40: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.token.x゛ == null",
   "query": "",
   "load": 400,
   "error": "1:38: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.x゛ == null)",
   "query": "",
   "load": 400,
   "error": "1:40: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.token.፩ == null",
   "query": "",
   "load": 400,
   "error": "1:37: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.፩ == null)",
   "query": "",
   "load": 400,
   "error": "1:39: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.token.x⁰ == null",
   "query": "",
   "load": 400,
   "error": "1:38: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.x⁰ == null)",
   "query": "",
   "load": 400,
   "error": "1:40: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.token.x① == null",
   "query": "",
   "load": 400,
   "error": "1:38: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.x〇 == null)",
@@ -98305,16 +97423,14 @@
   "query": "",
   "load": 400,
   "error": "1:37: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.ֿ == null)",
   "query": "",
   "load": 400,
   "error": "1:39: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.token.xͅ == null",
@@ -98349,16 +97465,14 @@
   "query": "",
   "load": 400,
   "error": "1:38: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.xⒶ == null)",
   "query": "",
   "load": 400,
   "error": "1:40: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.token.xᢅ == null",
@@ -98379,8 +97493,7 @@
   "query": "",
   "load": 400,
   "error": "1:37: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.xᢆ == null)",
@@ -98394,16 +97507,14 @@
   "query": "",
   "load": 400,
   "error": "1:38: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.x𐐀 == null)",
   "query": "",
   "load": 400,
   "error": "1:40: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.token.µ == null",
@@ -98529,16 +97640,14 @@
   "query": "",
   "load": 400,
   "error": "1:43: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.x\u001c == null)",
   "query": "",
   "load": 400,
   "error": "1:45: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.u​id\u0001 == 'u1'",
@@ -98601,16 +97710,14 @@
   "query": "",
   "load": 400,
   "error": "1:28: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!($x² == null)",
   "query": "",
   "load": 400,
   "error": "1:30: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.token.İ == null",
@@ -98673,16 +97780,14 @@
   "query": "",
   "load": 400,
   "error": "1:37: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.token.Ᲊ == null)",
   "query": "",
   "load": 400,
   "error": "1:39: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.token.Ꟁ == null",
@@ -99162,16 +98267,14 @@
   "query": "",
   "load": 400,
   "error": "1:46: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!('ab'.matches(/^ab$/i))",
   "query": "",
   "load": 400,
   "error": "1:48: illegal character\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "'ab'.matches(/ab/)",
@@ -100215,128 +99318,112 @@
   "query": "",
   "load": 400,
   "error": "1:25: Invalid == expression: right operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth == data)",
   "query": "",
   "load": 400,
   "error": "1:27: Invalid == expression: right operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth != data",
   "query": "",
   "load": 400,
   "error": "1:25: Invalid != expression: right operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth != data)",
   "query": "",
   "load": 400,
   "error": "1:27: Invalid != expression: right operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth === data",
   "query": "",
   "load": 400,
   "error": "1:25: Invalid == expression: right operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth === data)",
   "query": "",
   "load": 400,
   "error": "1:27: Invalid == expression: right operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth !== data",
   "query": "",
   "load": 400,
   "error": "1:25: Invalid != expression: right operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth !== data)",
   "query": "",
   "load": 400,
   "error": "1:27: Invalid != expression: right operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth == root",
   "query": "",
   "load": 400,
   "error": "1:25: Invalid == expression: right operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth == root)",
   "query": "",
   "load": 400,
   "error": "1:27: Invalid == expression: right operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth != root",
   "query": "",
   "load": 400,
   "error": "1:25: Invalid != expression: right operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth != root)",
   "query": "",
   "load": 400,
   "error": "1:27: Invalid != expression: right operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth === root",
   "query": "",
   "load": 400,
   "error": "1:25: Invalid == expression: right operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth === root)",
   "query": "",
   "load": 400,
   "error": "1:27: Invalid == expression: right operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth !== root",
   "query": "",
   "load": 400,
   "error": "1:25: Invalid != expression: right operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth !== root)",
   "query": "",
   "load": 400,
   "error": "1:27: Invalid != expression: right operand is not a number, boolean, string, or null.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth == auth",

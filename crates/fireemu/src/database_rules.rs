@@ -8,10 +8,11 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use fireemu_adapter_database::rest::{Credentials, Database};
 use fireemu_core_auth::jwt::{
-    decode_token, is_unsigned_token, verify_rules_token_for_project, RulesTokenPolicy,
-    TokenAcceptance,
+    base64url_decode, decode_token, is_unsigned_token, verify_rules_token_for_project, JwtError,
+    RulesTokenPolicy, TokenAcceptance,
 };
 use fireemu_core_auth::store::AuthRegistry;
+use fireemu_core_types::json::{parse as json_parse, JsonValue};
 use fireemu_core_types::time::LogicalInstant;
 
 use crate::config::RuntimeConfig;
@@ -77,19 +78,79 @@ pub(crate) fn credentials(cfg: &RuntimeConfig, registry: &Arc<AuthRegistry>) -> 
                 None => registry.store_for(project).unwrap_or(default),
             };
             let store = store.lock().ok()?;
-            let decoded = verify_rules_token_for_project(
+            let verified = verify_rules_token_for_project(
                 token,
                 &store,
                 LogicalInstant::from_nanos(i128::from(now) * 1_000_000),
                 policy,
                 project,
-            )
-            .ok()?;
+            );
+            let no_signer = store.signer().is_none();
+            drop(store);
+            let decoded = match verified {
+                Ok(decoded) => decoded,
+                // The official emulator reads the claims of a signed token it cannot verify
+                // (G10 rows auth-rs256 and auth-hs256: jar 200). The emulator profile does the
+                // same when it admits unsigned tokens and issues none of its own signatures;
+                // see `unverified_signed_claims`.
+                Err(JwtError::UnsupportedAlgorithm(alg)) if any_mock_audience && no_signer => {
+                    let (claims, tenant) = unverified_signed_claims(token, &alg, project, now)?;
+                    // The token is routed as an unsigned one is: a tenant it names must exist
+                    // (a missing or deleted tenant leaves it nobody).
+                    if let Some(tenant) = tenant {
+                        registry.tenant_store(project, &tenant)?;
+                    }
+                    return Some(claims);
+                }
+                Err(_) => return None,
+            };
             // A token of another project is never a user here, whichever store verified it.
             let audience = decoded.payload.get("aud")?.as_str()?;
             (audience == project).then_some(decoded.payload_json)
         })),
     }
+}
+
+/// The claims of an `RS256` or `HS256` token the emulator profile cannot verify, read as the
+/// official emulator reads them (jar 4.11.2, G10 rows auth-rs256 and auth-hs256): unverified.
+/// Kept to the recorded shape: a non-empty signature, a payload that is a JSON object, an `aud`
+/// that names the instance's own project, and an `exp` still in the future. The answer is the
+/// claims text with the tenant the token names, if any; the claims still have to name a subject
+/// and an issue time to make a user, and the caller routes the tenant. Nothing else is admitted.
+fn unverified_signed_claims(
+    token: &str,
+    alg: &str,
+    project: &str,
+    now: i64,
+) -> Option<(String, Option<String>)> {
+    if !matches!(alg, "RS256" | "HS256") {
+        return None;
+    }
+    let mut parts = token.split('.');
+    let (Some(_), Some(payload), Some(signature), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return None;
+    };
+    if signature.is_empty() {
+        return None;
+    }
+    let text = String::from_utf8(base64url_decode(payload).ok()?).ok()?;
+    // The claims go through the parser (and the depth budget) the unsigned path reads them with.
+    let claims = json_parse(&text).ok()?;
+    if !matches!(claims, JsonValue::Object(_)) {
+        return None;
+    }
+    let live = claims.get("exp")?.as_i64()?.checked_mul(1000)? > now;
+    if !live || claims.get("aud")?.as_str()? != project {
+        return None;
+    }
+    let tenant = claims
+        .get("firebase")
+        .and_then(|firebase| firebase.get("tenant"))
+        .and_then(JsonValue::as_str)
+        .map(str::to_owned);
+    Some((text, tenant))
 }
 
 /// How often a rules file is looked at for a change.
@@ -208,6 +269,72 @@ pub(crate) fn start_reload_supervisors(
 mod tests {
     use super::*;
     use fireemu_adapter_database::rest::{Handled, HttpRequest, RestOptions};
+
+    /// The recorded shape of an unverifiable signed token (G10 rows auth-rs256, auth-hs256), and
+    /// each edge of it: the claims are read only with a non-empty signature, an `exp` strictly
+    /// after now, and an `aud` equal to the project.
+    #[test]
+    fn an_unverifiable_signed_token_is_read_only_in_the_recorded_shape() {
+        use fireemu_core_auth::jwt::base64url_encode;
+        let token = |alg: &str, claims: &str, signature: &str| {
+            format!(
+                "{}.{}.{signature}",
+                base64url_encode(format!(r#"{{"alg":"{alg}"}}"#).as_bytes()),
+                base64url_encode(claims.as_bytes())
+            )
+        };
+        let own = r#"{"aud":"p","sub":"u","iat":1,"exp":100}"#;
+        let now = 99_999;
+        let read = |alg: &str, claims: &str, signature: &str, project: &str, now: i64| {
+            unverified_signed_claims(&token(alg, claims, signature), alg, project, now)
+        };
+        for alg in ["RS256", "HS256"] {
+            assert_eq!(
+                read(alg, own, "c2ln", "p", now),
+                Some((own.to_owned(), None)),
+                "{alg}"
+            );
+            // exp is strictly in the future: now = exp * 1000 is expired.
+            assert!(read(alg, own, "c2ln", "p", 100_000).is_none(), "{alg}");
+            assert!(read(alg, own, "c2ln", "p", 100_001).is_none(), "{alg}");
+            assert!(read(alg, own, "", "p", now).is_none(), "{alg}");
+            assert!(read(alg, own, "c2ln", "q", now).is_none(), "{alg}");
+        }
+        assert!(read("ES256", own, "c2ln", "p", now).is_none());
+        assert!(read("none", own, "c2ln", "p", now).is_none());
+        // The tenant a token names is handed to the caller, which routes it.
+        let tenanted = r#"{"aud":"p","sub":"u","iat":1,"exp":100,"firebase":{"tenant":"acme"}}"#;
+        assert_eq!(
+            read("HS256", tenanted, "c2ln", "p", now),
+            Some((tenanted.to_owned(), Some("acme".to_owned())))
+        );
+        let untenanted = r#"{"aud":"p","exp":100,"firebase":{"tenant":7}}"#;
+        assert_eq!(
+            read("RS256", untenanted, "c2ln", "p", now).map(|c| c.1),
+            Some(None)
+        );
+        assert!(read(
+            "RS256",
+            r#"{"aud":"p","sub":"u","iat":1}"#,
+            "c2ln",
+            "p",
+            now
+        )
+        .is_none());
+        assert!(read("RS256", r#"{"aud":7,"exp":100}"#, "c2ln", "p", now).is_none());
+        assert!(read("RS256", "[1]", "c2ln", "p", now).is_none());
+        assert!(unverified_signed_claims("a.b", "RS256", "p", now).is_none());
+        assert!(unverified_signed_claims("a.b.c.d", "RS256", "p", now).is_none());
+        // exp * 1000 must not overflow.
+        assert!(read(
+            "RS256",
+            r#"{"aud":"p","exp":9223372036854775807}"#,
+            "c2ln",
+            "p",
+            now
+        )
+        .is_none());
+    }
 
     fn read(database: &Mutex<Database>, ns: &str) -> u16 {
         let request = HttpRequest {

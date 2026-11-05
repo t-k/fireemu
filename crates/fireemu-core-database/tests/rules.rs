@@ -40,6 +40,7 @@ fn read_rule_at_t(expr: &str) -> RuleSpec {
     t.read = Some(RuleSource::Expr(SourceExpr {
         text: expr.to_owned(),
         positions,
+        second_units: Vec::new(),
     }));
     let mut root = RuleSpec::default();
     root.children.insert("t".to_owned(), t);
@@ -166,7 +167,10 @@ fn every_recorded_pattern_decides_as_the_official_emulator_or_denies() {
     }
     // Refused at load here: a lone escaped surrogate, which has no counterpart in this text
     // (review r5 S13), where the official emulator loads it; and rules both refuse, with
-    // another text or place (a character that is no white space, an unterminated comment).
+    // another text (a statement keyword such as `return`, an E4X `<`, a character outside the
+    // Basic Multilingual Plane or U+0085 inside a name). The illegal characters, escaped names,
+    // line offsets and Rhino's error texts and places agree since the rules-load fix of
+    // 2026-11-04 and are in the agreeing rows.
     let (refused, corpus): (Vec<serde_json::Value>, Vec<serde_json::Value>) =
         corpus.into_iter().partition(marked("refuses"));
     assert!(refused.len() >= 8);
@@ -179,13 +183,10 @@ fn every_recorded_pattern_decides_as_the_official_emulator_or_denies() {
             entry.get("fireemu").is_some() && entry["fireemu_current"] != "official"
         });
     assert!(agreeing.len() > 1200 && denied.len() > 200);
-    // Both refuse it; the official emulator places the error of an expression that spans a
-    // line break elsewhere on the line.
-    let known = [
-        r#""!(true\n// x)" : error 1:38: missing ) in parenthetical vs 1:30: missing ) in parenthetical"#,
-    ];
+    // (An expression that spans a line break has its syntax errors placed as the official
+    // emulator places them, by their offset in the line, since the rules-load fix.)
     let failures = differences(&serde_json::to_string(&agreeing).unwrap());
-    assert_eq!(failures, known, "{failures:#?}");
+    assert!(failures.is_empty(), "{failures:#?}");
     let denied: Vec<serde_json::Value> = denied
         .into_iter()
         .map(|mut entry| {
@@ -314,6 +315,7 @@ fn expr(text: &str) -> RuleSource {
     RuleSource::Expr(SourceExpr {
         text: text.to_owned(),
         positions: (0..=text.chars().count()).map(|i| (1, i + 1)).collect(),
+        second_units: Vec::new(),
     })
 }
 
@@ -447,6 +449,7 @@ fn every_recorded_write_and_expression_error_matches_the_official_emulator() {
                     .map(|i| (1, 20 + i))
                     .collect(),
                 text: expr_text.clone(),
+                second_units: Vec::new(),
             }));
             let got = Rules::compile(&root).map_err(|e| e.to_string());
             let expected = entry["error"]

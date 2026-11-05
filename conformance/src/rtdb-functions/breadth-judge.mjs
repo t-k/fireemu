@@ -1,12 +1,13 @@
 import { NAMED_CONTEXT_MEMBERS, NAMED_EVENT_MEMBERS, isRecordedMember } from "./breadth-frames.mjs";
 
-export function judgeRun({ report, frames, writes, ignored, userUid }) {
+export function judgeRun({ report, frames, writes, ignored, userUid, deployed }) {
   const reasons = [];
   for (const step of report.steps) {
     if (step.write?.outcome && !["ok", "unknown"].includes(step.write.outcome))
       reasons.push(`write ${step.id} was not answered ok`);
     for (const leaf of step.leaves ?? [])
       for (const [name, seen] of Object.entries(leaf.handlers)) {
+        if (deployed && !deployed.includes(name)) continue;
         const label = `${step.id} ${name} ${leaf.group}/${leaf.id}`;
         if (
           step.write?.outcome &&
@@ -34,7 +35,11 @@ export function judgeRun({ report, frames, writes, ignored, userUid }) {
   for (const frame of frames) {
     const holder = frame.generation === 1 ? frame.event?.context : frame.event;
     const auth = frame.generation === 1 ? holder?.auth : null;
-    if (userUid && auth?.uid && auth.uid !== userUid)
+    if (
+      userUid &&
+      ((auth?.uid && auth.uid !== userUid) ||
+        (frame.generation === 2 && holder?.authId != null && holder.authId !== userUid))
+    )
       reasons.push(`stranger auth: ${frame.handler}`);
     const named = frame.generation === 1 ? NAMED_CONTEXT_MEMBERS : NAMED_EVENT_MEMBERS;
     const keys = frame.generation === 1 ? holder?.contextKeys : holder?.eventKeys;

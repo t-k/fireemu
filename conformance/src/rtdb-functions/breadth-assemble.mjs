@@ -4,6 +4,7 @@
 // test builds it from fakes. Everything between is this module, so the entry cannot differ from what the
 // test ran.
 
+import { writeFile } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { basename, join } from "node:path";
 
@@ -18,8 +19,10 @@ import { BREADTH_WINDOWS } from "./breadth-flow.mjs";
 import { diffPairs, readProjectIam } from "./iam.mjs";
 import { ownedEventarcNames, removeLeftovers, takeInventory } from "./inventory.mjs";
 import { createRtdb } from "./breadth-rtdb.mjs";
+import { resolveTarget } from "../../functions-http/harness.mjs";
+import { resolveGen1Target } from "./gen1.mjs";
 import { buildSteps } from "./breadth-sequence.mjs";
-import { TARGETS } from "./breadth-targets.mjs";
+import { CODEBASE, TARGETS } from "./breadth-targets.mjs";
 import {
   BREADTH_LIMITS,
   bindOps,
@@ -49,6 +52,38 @@ export function assembleBreadth({
   nonce = randomBytes(8).toString("hex"),
 }) {
   if (!auth || !sdk) throw new Error("breadth auth and SDK are required");
+  const specs = new Map(
+    TARGETS.map((target) => {
+      const { functionName, region, codebase, generation, project, runtime, entryPoint } = target;
+      return [
+        target,
+        (generation === "gcfv1" ? resolveGen1Target : resolveTarget)({
+          functionName,
+          region,
+          codebase,
+          generation,
+          project,
+          runtime,
+          entryPoint,
+        }),
+      ];
+    }),
+  );
+  const records = {};
+  const send = control;
+  control = async (...args) => {
+    const reply = await send(...args);
+    const spec = TARGETS.find(
+      (target) =>
+        args[1] ===
+        `https://cloudfunctions.googleapis.com/${target.generation === "gcfv1" ? "v1" : "v2"}/projects/${target.project}/locations/${target.region}/functions/${target.functionName}`,
+    );
+    if (args[0] === "GET" && reply.status === 200 && spec) {
+      records[spec.key] = reply.value;
+      await writeFile(join(runDir, "records.json"), JSON.stringify(records), { mode: 0o600 });
+    }
+    return reply;
+  };
   const uploads = openSourceUploads({
     ledgerPath: join(runDir, "owned-uploads.jsonl"),
     runId: basename(runDir),
@@ -70,6 +105,14 @@ export function assembleBreadth({
     sleep: clock.sleep,
     forms,
   });
+  for (const actions of Object.values(ops)) {
+    for (const [name, action] of Object.entries(actions)) {
+      actions[name] = async (target, ...args) => {
+        if (!specs.has(target)) throw Error("unreviewed breadth target");
+        return action(specs.get(target), ...args);
+      };
+    }
+  }
   const rtdb = createRtdb({
     fetchImpl: anonymousFetch,
     adminFetch,
@@ -80,6 +123,7 @@ export function assembleBreadth({
     sleep: clock.sleep,
     now: clock.now,
     nonce,
+    runDir,
     userToken: () => auth.idToken,
   });
   const grants = {
@@ -89,6 +133,8 @@ export function assembleBreadth({
     iam: { before: null, after: null, added: [], removed: [] },
   };
   const deps = {
+    records,
+    runDir,
     budget,
     targets: TARGETS,
     steps: buildSteps(nonce),
@@ -96,13 +142,26 @@ export function assembleBreadth({
     ops,
     // only a 2nd gen record names an Eventarc trigger and topic
     ownedNames: (record, spec) =>
-      spec.generation === "gcfv2" ? ownedEventarcNames(record, spec) : null,
+      spec.generation === "gcfv2" ? ownedEventarcNames(record, specs.get(spec)) : null,
     preflight: async () => {
       grants.before = await preflightStage2({ control, projectNumber });
       grants.iam.before = await readProjectIam(control, projectNumber);
     },
     inventory: {
-      take: () => takeInventory(control, "inventory"),
+      take: () =>
+        takeInventory(async (...args) => {
+          if (args[1].includes("/functions?"))
+            args[1] = args[1].replace(`/locations/${LOCATION}/`, "/locations/-/");
+          const reply = await control(...args);
+          if (
+            args[1].includes("/functions?") &&
+            reply.value?.functions?.some(
+              (entry) => entry.labels?.["firebase-functions-codebase"] === CODEBASE,
+            )
+          )
+            throw Error("breadth codebase already has a function");
+          return reply;
+        }, "inventory"),
       removeLeftovers: (before, owned) =>
         removeLeftovers(control, before, owned, { sleep: clock.sleep }),
     },

@@ -15,8 +15,26 @@ test("replays all CV14 frames without rejecting the observations", () => {
   const report = cvObserve({ writes, frames, steps: buildSteps(recording.recording.nonce) });
   assert.equal(frames.length, 28);
   assert.equal(report.totals.attributed, 28);
-  const reasons = judgeRun({ report, frames, writes, ignored: {} });
-  assert.ok(reasons.some((reason) => reason.includes("unnamed members")));
+  const written = frames.filter((frame) => frame.handler.startsWith("rtdbWritten"));
+  for (const handler of ["g9WrittenV2Retry", "g9WrittenV1Retry", "g9WrittenV2"]) {
+    const generation = handler.includes("V1") ? 1 : 2;
+    const mapped = written
+      .filter((frame) => frame.generation === generation)
+      .map((frame) => ({ ...frame, handler }));
+    assert.ok(mapped.length > 0);
+    assert.deepEqual(
+      judgeRun({ report: { steps: [], totals: {} }, frames: mapped, writes: {}, ignored: {} }),
+      [],
+    );
+    const holder = generation === 1 ? mapped[0].event.context : mapped[0].event;
+    holder.extras = { ...holder.extras, neverRecorded: true };
+    assert.ok(
+      judgeRun({ report: { steps: [], totals: {} }, frames: mapped, writes: {} }).some((reason) =>
+        reason.includes("neverRecorded"),
+      ),
+    );
+    delete holder.extras.neverRecorded;
+  }
 });
 test("judge reports strangers and missing observations without rejecting", () => {
   const writes = { w1: { outcome: "ok" } };
@@ -85,4 +103,63 @@ test("leaf deliveries distinguish retry duplicates and multiple event IDs", () =
       x.includes("multiple event ids"),
     ),
   );
+});
+
+test("recorded members require the handler generation and exact recorded shape", async () => {
+  const { isRecordedMember } = await import("./breadth-frames.mjs");
+  assert.equal(isRecordedMember("g9WrittenV1Retry", 1, "domain", "firebaseio.com"), true);
+  assert.equal(isRecordedMember("g9WrittenV1Retry", 1, "domain", "other"), false);
+  assert.equal(isRecordedMember("g9WrittenV2Retry", 1, "domain", "firebaseio.com"), false);
+  assert.equal(isRecordedMember("foreign", 1, "domain", "firebaseio.com"), false);
+  assert.equal(
+    isRecordedMember("g9WrittenV2", 2, "change", { type: "object", keys: ["after", "before"] }),
+    true,
+  );
+  for (const value of [
+    null,
+    {},
+    { type: "object", keys: ["after"] },
+    { type: "object", keys: ["before", "after"] },
+  ])
+    assert.equal(isRecordedMember("g9WrittenV2", 2, "change", value), false);
+});
+
+test("judge ignores refused optional handlers and reports second generation strangers", () => {
+  const report = {
+    steps: [
+      {
+        id: "w10",
+        path: "g9-rtdb/gu/items/a",
+        write: { outcome: "ok" },
+        leaves: [
+          {
+            group: "gu",
+            id: "a",
+            handlers: { g9WrittenV2: { frames: 0 }, g9WrittenV1Retry: { frames: 1 } },
+          },
+        ],
+      },
+    ],
+    totals: {},
+  };
+  const frames = [{ handler: "g9WrittenV2Retry", generation: 2, event: { authId: "stranger" } }];
+  const reasons = judgeRun({
+    report,
+    frames,
+    writes: {},
+    userUid: "owner",
+    deployed: ["g9WrittenV1Retry"],
+  });
+  assert.ok(!reasons.some((reason) => reason.includes("missing delivery")));
+  assert.ok(reasons.some((reason) => reason.includes("stranger auth")));
+  for (const authId of [null, undefined, "owner"])
+    assert.deepEqual(
+      judgeRun({
+        report: { steps: [], totals: {} },
+        frames: [{ generation: 2, event: { authId } }],
+        writes: {},
+        userUid: "owner",
+      }),
+      [],
+    );
 });

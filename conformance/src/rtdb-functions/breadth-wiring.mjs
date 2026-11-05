@@ -1,9 +1,9 @@
 export const BREADTH_LIMITS = Object.freeze({
   cliDeploy: 3,
-  upload: 15,
+  upload: 45,
   token: 12,
   control: 38,
-  cleanup: 70,
+  cleanup: 89,
   logs: 40,
   inventory: 100,
   userClient: 6,
@@ -71,7 +71,7 @@ export function breadthCli(run) {
     ) {
       throw new Error("invalid breadth deploy");
     }
-    return run([...args, "--config", "firebase-breadth.json"], ...rest);
+    return run([...args, "--config", "firebase-breadth.json", "--force"], ...rest);
   };
 }
 

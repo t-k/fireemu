@@ -7,7 +7,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { isAbsolute } from "node:path";
 import { execFileSync } from "node:child_process";
-import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -157,23 +157,7 @@ export async function executeRun({ environment, runDir, packetPins, assemble = a
   const auth = environment.createAuth?.(log) ?? environment.auth;
   const sdk = environment.createSdk?.(auth) ?? environment.sdk;
   const assembled = assemble({ ...environment, auth, sdk, packet, runDir, log });
-  let result;
-  try {
-    result = await runBreadth(assembled.deps);
-  } catch (error) {
-    result = {
-      outcome: "stopped-needs-review",
-      reasons: [`the run failed: ${error.message}`],
-      residual: true,
-      deployed: 0,
-      deploys: {},
-      report: null,
-      records: {},
-      frames: [],
-      logs: {},
-      cleanup: {},
-    };
-  }
+  const result = await runBreadth(assembled.deps);
   if (environment.budget.snapshot().cliDeploy > 0) {
     try {
       const grants = await assembled.readGrantsAfter();
@@ -238,6 +222,7 @@ export async function executeRun({ environment, runDir, packetPins, assemble = a
         reasons: result.reasons,
         residual: result.residual,
         nonce: result.nonce ?? null,
+        uid: result.uid ?? null,
         deployed: result.deployed,
         deploys: result.deploys,
         cleanup: result.cleanup,
@@ -328,143 +313,154 @@ export async function admitRun({ env, privateRoot, root, deps }) {
   assertApproval(await deps.readFile(reviewPath, "utf8"), gitSha, sha256(packet));
   const packetPins = parsePacketPins(packet.toString("utf8"));
   await deps.requiredSources();
+  const projectNumber = await deps.readPrivateProjectIdentity();
   const verdict = await deps.adcVerdict();
   if (!verdict.ok) throw new Error(`the ADC token is not usable (${verdict.reason})`);
-  return { gitSha, packetPins };
+  return { gitSha, packetPins, projectNumber };
 }
 
 /** The command-line entry: admission by approval file, pins and the ADC scope check, then the run. */
 export async function recordBreadth() {
-  const args = process.argv.slice(2);
-  if (args.length !== 2 || args[0] !== "--key-file" || !isAbsolute(args[1]))
-    throw Error("--key-file requires an absolute path");
-  let apiKey;
-  const root = fileURLToPath(new URL("../../..", import.meta.url));
-  const adc = await ownerAdc();
-  const budget = createBreadthBudget();
-  // every access token this process holds is a secret a stored file must not contain
-  const { getToken, secrets } = tokenProviderWithSecrets(adc.file, budget);
-  const { packetPins } = await admitRun({
-    env: process.env,
-    privateRoot: PRIVATE_ROOT,
-    root,
-    deps: {
-      git: async (args, cwd) => execFileSync("git", args, { cwd, encoding: "utf8" }),
-      readFile,
-      requiredSources: async () => {
-        await requiredBreadthSources();
-      },
-      adcVerdict: async () => {
-        apiKey = parseKeyFile(await readFile(args[1], "utf8"));
-        secrets.push(apiKey);
-        return adcPreflight(
-          async (...args) => {
-            budget.take("control");
-            return fetch(...args);
-          },
-          await getToken(),
-        );
-      },
-    },
-  });
-  const projectNumber = await readPrivateProjectIdentity(
-    PROJECT_IDENTITY_FILE,
-    PROJECT_IDENTITY_SHA,
-  );
-
-  const runDir = join(PRIVATE_ROOT, "runs", `cv14-${new Date().toISOString().replaceAll(":", "")}`);
-  await mkdir(runDir, { recursive: true, mode: 0o700 });
-  const nonce = randomBytes(8).toString("hex");
-  const email = `breadth-${nonce}@example.com`;
-  const password = randomBytes(24).toString("hex");
-  secrets.push(password, email);
-  const abort = { stopped: false };
-  const stop = { requested: false };
-  const onSignal = () => {
-    abort.stopped = true;
-    stop.requested = true;
-  };
-  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(signal, onSignal);
   try {
-    const environment = {
-      control: createControl(adc.file, budget, { extraHosts: [...BREADTH_HOSTS] }),
-      runCli: breadthCli((args, adcPath, runBudget, kind, dir, track) =>
-        cli(args, adcPath, runBudget, kind, dir, track, undefined, { cwd: STAGE_DIR }),
-      ),
-      adminFetch: async (...args) => {
-        budget.take("rtdbAdmin");
-        return bearerFetch(getToken, PROJECT)(...args);
+    const args = process.argv.slice(2);
+    if (args.length !== 2 || args[0] !== "--key-file" || !isAbsolute(args[1]))
+      throw Error("--key-file requires an absolute path");
+    let apiKey;
+    const root = fileURLToPath(new URL("../../..", import.meta.url));
+    let adc;
+    const budget = createBreadthBudget();
+    // every access token this process holds is a secret a stored file must not contain
+    let getToken;
+    const secrets = [];
+    const { packetPins, projectNumber } = await admitRun({
+      env: process.env,
+      privateRoot: PRIVATE_ROOT,
+      root,
+      deps: {
+        git: async (args, cwd) => execFileSync("git", args, { cwd, encoding: "utf8" }),
+        readFile,
+        requiredSources: async () => {
+          await requiredBreadthSources();
+          apiKey = parseKeyFile(await readFile(args[1], "utf8"));
+          secrets.push(apiKey);
+        },
+        readPrivateProjectIdentity: () =>
+          readPrivateProjectIdentity(PROJECT_IDENTITY_FILE, PROJECT_IDENTITY_SHA),
+        adcVerdict: async () => {
+          adc = await ownerAdc();
+          getToken = createTokenProvider(adc.file, budget, {
+            onToken: (token) => secrets.push(token),
+          });
+          return adcPreflight(
+            async (...args) => {
+              budget.take("control");
+              return fetch(...args);
+            },
+            await getToken(),
+          );
+        },
       },
-      anonymousFetch: async (...args) => {
-        budget.take("userClient");
-        return fetch(...args);
-      },
-      budget,
-      adcPath: adc.path,
-      projectNumber,
-      projectId: PROJECT,
-      clock: {
-        now: Date.now,
-        sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-      },
-      abort,
-      stop,
-      secrets,
-      nonce,
-      createAuth: (log) => {
-        const auth = createAuth({
-          adminFetch: async (...args) => {
-            budget.take("breadthAuth");
-            return bearerFetch(getToken, PROJECT)(...args);
-          },
-          fetchImpl: async (...args) => {
-            budget.take("breadthAuth");
-            return fetch(...args);
-          },
-          projectId: PROJECT,
-          apiKey,
-          email,
-          password,
-          log: (row) => log("auth", row),
-          stop,
-          secrets,
-        });
-        const signIn = auth.signIn;
-        auth.signIn = async () => {
-          const result = await signIn();
-          if (auth.idToken) secrets.push(auth.idToken);
-          return result;
-        };
-        return auth;
-      },
-      createSdk: (auth) =>
-        openSdk(
-          browserRunner({
-            modules: join(root, "conformance/node_modules"),
-            budget,
-            allowHost: (host) =>
-              [
-                "identitytoolkit.googleapis.com",
-                "securetoken.googleapis.com",
-                `${INSTANCE}.firebaseio.com`,
-              ].includes(host),
-            stop,
-          }),
-          { apiKey, projectId: PROJECT, databaseURL: `https://${INSTANCE}.firebaseio.com` },
-          () => ({ email, password, uid: auth.uid, nonce }),
-        ),
+    });
+    const runDir = join(
+      PRIVATE_ROOT,
+      "runs",
+      `breadth-${new Date().toISOString().replaceAll(":", "")}`,
+    );
+    await mkdir(runDir, { recursive: true, mode: 0o700 });
+    const nonce = randomBytes(8).toString("hex");
+    const email = `breadth-${nonce}@example.com`;
+    const password = randomBytes(24).toString("hex");
+    secrets.push(password, email);
+    const abort = { stopped: false };
+    const stop = { requested: false };
+    const onSignal = () => {
+      abort.stopped = true;
+      stop.requested = true;
+      void stop.closeBrowser?.();
     };
-    const summary = await executeRun({ environment, runDir, packetPins });
-    console.log(JSON.stringify({ outcome: summary.outcome, residual: summary.residual, runDir }));
-    process.exitCode = exitCodeOf(summary);
+    for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(signal, onSignal);
+    try {
+      const environment = {
+        control: createControl(adc.file, budget, { extraHosts: [...BREADTH_HOSTS] }),
+        runCli: breadthCli((args, adcPath, runBudget, kind, dir, track) =>
+          cli(args, adcPath, runBudget, kind, dir, track, undefined, { cwd: STAGE_DIR }),
+        ),
+        adminFetch: async (...args) => {
+          budget.take("rtdbAdmin");
+          return bearerFetch(getToken, PROJECT)(...args);
+        },
+        anonymousFetch: async (...args) => {
+          budget.take("userClient");
+          return fetch(...args);
+        },
+        budget,
+        adcPath: adc.path,
+        projectNumber,
+        projectId: PROJECT,
+        clock: {
+          now: Date.now,
+          sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+        },
+        abort,
+        stop,
+        secrets,
+        nonce,
+        createAuth: (log) => {
+          const auth = createAuth({
+            adminFetch: async (...args) => {
+              budget.take("breadthAuth");
+              return bearerFetch(getToken, PROJECT)(...args);
+            },
+            fetchImpl: async (...args) => {
+              budget.take("breadthAuth");
+              return fetch(...args);
+            },
+            projectId: PROJECT,
+            apiKey,
+            email,
+            password,
+            log: (row) => log("auth", row),
+            stop,
+            secrets,
+          });
+          const signIn = auth.signIn;
+          auth.signIn = async () => {
+            const result = await signIn();
+            if (auth.idToken) secrets.push(auth.idToken);
+            return result;
+          };
+          return auth;
+        },
+        createSdk: (auth) =>
+          openSdk(
+            browserRunner({
+              modules: join(root, "conformance/node_modules"),
+              budget,
+              allowHost: (host) =>
+                ["identitytoolkit.googleapis.com", "securetoken.googleapis.com"].includes(host) ||
+                /^[a-z0-9-]+\.firebaseio\.com$/u.test(host),
+              stop,
+            }),
+            { apiKey, projectId: PROJECT, databaseURL: `https://${INSTANCE}.firebaseio.com` },
+            () => ({ email, password, uid: auth.uid, nonce }),
+          ),
+      };
+      const summary = await executeRun({ environment, runDir, packetPins });
+      console.log(JSON.stringify({ outcome: summary.outcome, residual: summary.residual, runDir }));
+      process.exitCode = exitCodeOf(summary);
+    } finally {
+      for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.off(signal, onSignal);
+    }
   } finally {
-    for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.off(signal, onSignal);
+    for (const file of await readdir(STAGE_DIR)) {
+      if (/^firebase-debug.*\.log$/u.test(file)) await rm(join(STAGE_DIR, file), { force: true });
+    }
   }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   recordBreadth().catch((error) => {
-    console.error(error.message);
+    console.error("breadth recorder failed", error?.constructor?.name ?? "Error");
     process.exitCode = 1;
   });
 }

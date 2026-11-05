@@ -1,3 +1,6 @@
+import { createHash } from "node:crypto";
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { adminClient } from "../../../tools/sdk-smoke-database/cv11-genuine-auth.mjs";
 import { Stop, createRtdbAdmin } from "../../../tools/sdk-smoke-database/rtdb-admin.mjs";
 import { INSTANCE, LOCATION, PREFIX } from "./breadth-frames.mjs";
@@ -37,6 +40,7 @@ export function createRtdb({
   now = Date.now,
   nonce,
   userToken,
+  runDir,
 }) {
   const written = new Set();
   const admin = adminClient({ fetchImpl: adminFetch, headers, log, stop, secrets, caps: CAPS });
@@ -79,7 +83,18 @@ export function createRtdb({
     run,
     async setup() {
       await fns.setupProduction(run, sleep);
-      await fns.installRules(run, options);
+      run.baseline = await fns.read(
+        run,
+        "rules-before",
+        "GET",
+        run.u.data(".settings/rules"),
+        (_, text) => createHash("sha256").update(text).digest("hex") === packet.baselineRulesSha256,
+      );
+      if (runDir)
+        await writeFile(join(runDir, "baseline.rules.json"), run.baseline, { mode: 0o600 });
+      await fns.read(run, "prefix-before", "GET", run.u.data(PREFIX), (value) => value === null);
+      run.state.data = "ours";
+      await fns.putRules(run, "rules-install", rulesFor(PREFIX, nonce));
       run.propagation = false;
     },
     async write(step) {

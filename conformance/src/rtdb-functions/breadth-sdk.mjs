@@ -127,8 +127,11 @@ export function browserRunner({ modules, allowHost, budget = { take() {} }, stop
       return { counts };
     } finally {
       delete stop.closeBrowser;
-      if (browser) await browser.close();
-      await new Promise((resolve) => server.close(resolve));
+      try {
+        if (browser) await browser.close();
+      } finally {
+        await new Promise((resolve) => server.close(resolve));
+      }
     }
   };
 }
@@ -140,6 +143,7 @@ export function openSdk(runner, config, credentialsFn) {
     closing = false;
   return {
     async write(id) {
+      if (closing) throw Error("SDK stopped");
       if (!running) {
         ready = new Promise((resolve, reject) => {
           running = Promise.resolve()
@@ -164,7 +168,21 @@ export function openSdk(runner, config, credentialsFn) {
         });
       }
       const write = await Promise.race([ready, running]);
-      return Promise.race([write(id), running]);
+      let timer;
+      try {
+        return await Promise.race([
+          write(id),
+          running,
+          new Promise((resolve) => {
+            timer = setTimeout(() => {
+              closing = true;
+              resolve({ outcome: "unknown" });
+            }, 60000);
+          }),
+        ]);
+      } finally {
+        clearTimeout(timer);
+      }
     },
     async close() {
       if (!running) return;

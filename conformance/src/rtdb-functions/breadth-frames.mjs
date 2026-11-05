@@ -9,7 +9,12 @@ export const FIXTURE_HANDLERS = [
   { name: "g9WrittenV2", generation: 2, event: "write", retry: false },
 ];
 export { NAMED_CONTEXT_MEMBERS, NAMED_EVENT_MEMBERS } from "./frames.mjs";
-export const RECORDED_MEMBERS = Object.freeze([]);
-export function isRecordedMember() {
-  return false;
+import { RECORDED_MEMBERS as CV14_MEMBERS, isRecordedMember as cv14Member } from "./frames.mjs";
+export const RECORDED_MEMBERS = Object.freeze(
+  CV14_MEMBERS.filter((entry) => entry.event === "write"),
+);
+export function isRecordedMember(handler, generation, member, value) {
+  if (!FIXTURE_HANDLERS.some((entry) => entry.name === handler && entry.generation === generation))
+    return false;
+  return cv14Member(`rtdbWrittenV${generation}`, generation, member, value);
 }

@@ -1,3 +1,5 @@
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { observe } from "./breadth-sequence.mjs";
 import { judgeRun } from "./breadth-judge.mjs";
 
@@ -17,11 +19,13 @@ export async function runBreadth(deps) {
   const writes = {};
   const result = {
     outcome: "recorded",
+    nonce: deps.nonce,
+    uid: null,
     reasons,
     residual: false,
     deployed: 0,
     deploys: {},
-    records: {},
+    records: deps.records ?? {},
     frames: [],
     logs: { reads: 0, entries: 0, incomplete: false, ignored: {} },
     cleanup: { targets: {}, user: null, inventory: null, rtdb: null },
@@ -49,11 +53,25 @@ export async function runBreadth(deps) {
     if (deps.budget?.exhausted) throw Error("total request ceiling reached");
   };
   try {
+    if (deps.runDir)
+      await writeFile(
+        join(deps.runDir, "run-identity.json"),
+        JSON.stringify({
+          nonce: deps.nonce,
+          email: `breadth-${deps.nonce}@example.com`,
+          uid: null,
+        }),
+        { mode: 0o600 },
+      );
     await phase("preflight");
     await deps.preflight();
     await phase("inventory");
     before = await deps.inventory.take();
     if (!before.complete) throw Error("inventory incomplete");
+    if (deps.runDir)
+      await writeFile(join(deps.runDir, "inventory-before.json"), JSON.stringify(before), {
+        mode: 0o600,
+      });
     for (const spec of targets) await ops[spec.generation].assertAbsent(spec);
     await phase("rtdb-up");
     rtdbAttempted = true;
@@ -61,6 +79,17 @@ export async function runBreadth(deps) {
     await phase("user-up");
     userAttempted = true;
     if ((await deps.auth.create()).outcome !== "ok") throw Error("user create failed or unknown");
+    result.uid = deps.auth.uid;
+    if (deps.runDir)
+      await writeFile(
+        join(deps.runDir, "run-identity.json"),
+        JSON.stringify({
+          nonce: deps.nonce,
+          email: `breadth-${deps.nonce}@example.com`,
+          uid: result.uid,
+        }),
+        { mode: 0o600 },
+      );
     if ((await deps.auth.signIn()).outcome !== "ok") throw Error("user sign-in failed or unknown");
     await phase("deploy");
     start = new Date(clock.now() - 60000).toISOString();
@@ -73,8 +102,15 @@ export async function runBreadth(deps) {
         if (!spec.required && state.deployFailure?.class === "refused") continue;
         throw error;
       }
-      await ops[spec.generation].read(spec, state);
-      result.records[spec.key] = state.record ?? null;
+      try {
+        await ops[spec.generation].read(spec, state);
+      } finally {
+        result.records[spec.key] = state.record ?? result.records[spec.key] ?? null;
+        if (deps.runDir)
+          await writeFile(join(deps.runDir, "records.json"), JSON.stringify(result.records), {
+            mode: 0o600,
+          });
+      }
       result.deployed++;
     }
     await phase("propagation-wait");
@@ -148,6 +184,9 @@ export async function runBreadth(deps) {
           writes,
           ignored: result.logs.ignored,
           userUid: deps.auth.uid,
+          deployed: targets
+            .filter((target) => result.records[target.key] !== undefined)
+            .map((target) => target.functionName),
         }),
       );
     }
@@ -160,7 +199,11 @@ export async function runBreadth(deps) {
     reasons.push(`SDK cleanup: ${error.message}`);
   }
   deps.budget?.startCleanup();
-  await phase("cleanup");
+  try {
+    await phase("cleanup");
+  } catch (error) {
+    reasons.push(`cleanup journal: ${error.message}`);
+  }
   const owned = [];
   for (const spec of targets) {
     const state = states.get(spec.key);
@@ -189,8 +232,14 @@ export async function runBreadth(deps) {
       }
     }
     if (state.record) {
-      const names = deps.ownedNames(state.record, spec);
-      if (names) owned.push(names);
+      result.records[spec.key] = state.record;
+      try {
+        const names = deps.ownedNames(state.record, spec);
+        if (names) owned.push(names);
+      } catch (error) {
+        result.residual = true;
+        reasons.push(`${spec.key} ownership: ${error.message}`);
+      }
     }
   }
   if (userAttempted) {
@@ -231,15 +280,24 @@ export async function runBreadth(deps) {
       reasons.push(`RTDB cleanup: ${error.message}`);
     }
   }
-  if (!deps.uploads.report().closureReady) {
+  try {
+    if (!deps.uploads.report().closureReady) {
+      result.residual = true;
+      reasons.push("source upload ledger is not closed");
+    }
+  } catch (error) {
     result.residual = true;
-    reasons.push("source upload ledger is not closed");
+    reasons.push(`source upload cleanup: ${error.message}`);
   }
   if (deps.budget?.cleanupExhausted) {
     result.residual = true;
     reasons.push("request ceiling reached; recovery required");
   }
+  try {
+    await phase("closed");
+  } catch (error) {
+    reasons.push(`closed journal: ${error.message}`);
+  }
   if (reasons.length) result.outcome = "stopped-needs-review";
-  await phase("closed");
   return result;
 }

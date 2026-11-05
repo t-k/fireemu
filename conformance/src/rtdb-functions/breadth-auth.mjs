@@ -76,13 +76,13 @@ export function createAuth({
         r.value.idToken
       )
         idToken = r.value.idToken;
-      else if (r.outcome === "unknown" || r.outcome === "ok") {
-        unknown = true;
-        state = "unknown";
-      }
-      return { outcome: unknown ? "unknown" : r.outcome, status: r.status };
+      return {
+        outcome: idToken ? "ok" : r.outcome === "refused" ? "refused" : "unknown",
+        status: r.status,
+      };
     },
     async delete() {
+      admin.cleanup();
       if (unknown || state !== "live") return "skipped";
       const r = await admin.call("user-delete", "POST", `${base}/accounts:delete`, {
         localId: uid,

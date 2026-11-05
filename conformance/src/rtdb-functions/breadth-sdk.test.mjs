@@ -195,3 +195,167 @@ test("closing releases a handed-over runner promptly", async () => {
     clearTimeout(timer);
   }
 });
+
+test("a hung SDK write becomes unknown after sixty seconds and closes without retry", async (t) => {
+  const { openSdk } = await import("./breadth-sdk.mjs");
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let writes = 0,
+    closed = false;
+  const sdk = openSdk(
+    async (_config, _credentials, observe) => {
+      try {
+        await observe({
+          write: () => {
+            writes++;
+            return new Promise(() => {});
+          },
+        });
+      } finally {
+        closed = true;
+      }
+    },
+    {},
+    () => ({}),
+  );
+  const pending = sdk.write("w10");
+  await new Promise((resolve) => setImmediate(resolve));
+  t.mock.timers.tick(59999);
+  let settled = false;
+  pending.then(() => {
+    settled = true;
+  });
+  await Promise.resolve();
+  assert.equal(settled, false);
+  t.mock.timers.tick(1);
+  assert.deepEqual(await pending, { outcome: "unknown" });
+  await assert.rejects(sdk.write("w11"), /stopped/);
+  await sdk.close();
+  assert.equal(writes, 1);
+  assert.equal(closed, true);
+});
+
+test("WebSocket observer counts allowed reconnects and closes on host count or budget refusal", async () => {
+  const { browserRunner } = await import("./breadth-sdk.mjs");
+  const path = await import("node:path");
+  for (const mode of ["allowed", "host", "count", "budget"]) {
+    const handlers = {},
+      counts = [],
+      stop = {};
+    let pageClosed = 0,
+      browserClosed = 0,
+      serverClosed = 0;
+    const page = {
+      route: async () => {},
+      on: (name, cb) => {
+        handlers[name] = cb;
+      },
+      goto: async () => {},
+      waitForFunction: async () => {},
+      evaluate: async () => ({ outcome: "ok" }),
+      close: async () => {
+        pageClosed++;
+      },
+    };
+    const deps = {
+      createRequire: () => () => ({
+        chromium: {
+          launch: async () => ({
+            newContext: async () => ({ newPage: async () => page }),
+            close: async () => {
+              browserClosed++;
+            },
+          }),
+        },
+      }),
+      path,
+      LAUNCH: {},
+      createSdk,
+      createServer: () => ({
+        listen: (_port, _host, cb) => cb(),
+        address: () => ({ port: 12345 }),
+        close: (cb) => {
+          serverClosed++;
+          cb();
+        },
+      }),
+    };
+    const runnerFactory = new Function(
+      ...Object.keys(deps),
+      `return (${browserRunner.toString().replaceAll("import.meta.url", JSON.stringify(import.meta.url))});`,
+    )(...Object.values(deps));
+    const runner = runnerFactory({
+      modules: ".",
+      stop,
+      allowHost: (host) => host.endsWith(".firebaseio.com"),
+      budget: {
+        take: (kind) => {
+          counts.push(kind);
+          if (mode === "budget") throw Error("limit");
+        },
+      },
+    });
+    const result = await runner({}, {}, async ({ write }) => {
+      const socket = () => ({
+        url: () =>
+          mode === "host"
+            ? "wss://foreign.test/.ws"
+            : "wss://s-gke-usc1-nssi2-1.firebaseio.com/.ws",
+      });
+      for (let i = 0; i < (mode === "count" ? 5 : 1); i++) handlers.websocket(socket());
+      if (mode === "allowed") assert.equal((await write("w10")).outcome, "ok");
+      else await assert.rejects(write("w10"), /stopped/);
+      assert.equal(typeof stop.closeBrowser, "function");
+    });
+    assert.equal(result.counts.ws, mode === "host" ? 0 : mode === "count" ? 5 : 1);
+    assert.equal(counts.length, mode === "host" ? 0 : mode === "count" ? 4 : 1);
+    assert.equal(pageClosed, mode === "allowed" ? 0 : 1);
+    assert.equal(browserClosed, 1);
+    assert.equal(serverClosed, 1);
+    assert.equal(stop.closeBrowser, undefined);
+  }
+});
+
+test("browser close failure still closes the SDK HTTP server", async () => {
+  const { browserRunner } = await import("./breadth-sdk.mjs");
+  const path = await import("node:path");
+  let serverClosed = false;
+  const page = {
+    route: async () => {},
+    on: () => {},
+    goto: async () => {},
+    waitForFunction: async () => {},
+    evaluate: async () => ({ outcome: "ok" }),
+  };
+  const deps = {
+    path,
+    LAUNCH: {},
+    createSdk,
+    createRequire: () => () => ({
+      chromium: {
+        launch: async () => ({
+          newContext: async () => ({ newPage: async () => page }),
+          close: async () => {
+            throw Error("browser already failed");
+          },
+        }),
+      },
+    }),
+    createServer: () => ({
+      listen: (_port, _host, cb) => cb(),
+      address: () => ({ port: 12345 }),
+      close: (cb) => {
+        serverClosed = true;
+        cb();
+      },
+    }),
+  };
+  const factory = new Function(
+    ...Object.keys(deps),
+    `return (${browserRunner.toString().replaceAll("import.meta.url", JSON.stringify(import.meta.url))});`,
+  )(...Object.values(deps));
+  await assert.rejects(
+    factory({ modules: ".", allowHost: () => true })({}, {}, async () => {}),
+    /browser already failed/,
+  );
+  assert.equal(serverClosed, true);
+});

@@ -1431,3 +1431,51 @@ fn query_equals_itself_through_a_ternary() {
         );
     }
 }
+
+/// Replacing the empty string in a string that is valid UTF-16 and holds a character outside the Basic Multilingual Plane is
+/// an error here (the rule is false, negated or not), where the official emulator answers: this is older than the units
+/// strings and stays as it was (a string without a lone surrogate keeps its own path).
+#[test]
+fn replacing_the_empty_string_in_an_astral_string_stays_an_error() {
+    for expr in [
+        "'😀'.replace('', 'x').length == 5",
+        "!('😀'.replace('', 'x').length == 5)",
+        "'\\uD83D\\uDE00'.replace('', 'y').length == 5",
+    ] {
+        let rules = Rules::compile(&read_rule_at_t(expr)).unwrap();
+        let tree = seed();
+        let auth = auth();
+        let requester = Requester {
+            auth: &auth,
+            now: 123,
+        };
+        assert!(
+            !rules.can_read(tree.root(), &p("t"), None, &requester),
+            "{expr}"
+        );
+    }
+}
+
+/// The Rules coverage report names a value by a JSON string, which cannot hold a lone surrogate: a literal that holds one
+/// is shown with U+FFFD for each (the character the report would otherwise lose). Decisions are not affected.
+#[test]
+fn the_coverage_report_shows_a_lone_surrogate_literal_with_the_replacement_character() {
+    let spec = read_rule_at_t(r"'\uD83D'.length == 1");
+    let rules = Rules::compile(&spec).unwrap();
+    rules.set_coverage_enabled(true);
+    let tree = seed();
+    let auth = auth();
+    let requester = Requester {
+        auth: &auth,
+        now: 123,
+    };
+    assert!(rules.can_read(tree.root(), &p("t"), None, &requester));
+    let report = format!("{:?}", rules.coverage_report());
+    assert!(
+        report.contains(&format!(
+            r#"String("'\\uD83D'"), "values": Array([Object({{"count": Number(Int(1)), "value": String("{}")}})])"#,
+            '\u{fffd}'
+        )),
+        "{report}"
+    );
+}

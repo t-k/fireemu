@@ -1748,5 +1748,68 @@
   "load": 200,
   "error": null,
   "read": 401
+ },
+ {
+  "expr": "'ab'.replace('', 'x') == 'xaxbx'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'ab'.replace('', 'x') == 'ab'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'ab'.replace('', '\\uD83D') == '\\uD83Da\\uD83Db\\uD83D'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'\\uD83Dx'.replace('', 'y') == 'y\\uD83Dyxy'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'\\uD83Dx'.replace('', 'y').length == 5",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'a'.replace('', '\\uD83D\\uDE00') == '\\uD83D\\uDE00a\\uD83D\\uDE00'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'a\\uD83D'.replace('a', '\\uDE00') == '\\uDE00\\uD83D'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'a\\uD83D'.replace('a', '\\uDE00').length == 2",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "''.replace('', '\\uD83D') == '\\uD83D'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
  }
 ]

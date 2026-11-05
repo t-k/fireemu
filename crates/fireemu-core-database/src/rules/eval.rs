@@ -580,8 +580,7 @@ fn find_units(haystack: &[u16], needle: &[u16]) -> Option<usize> {
 }
 
 /// The string methods on a string that holds a lone surrogate, or whose argument does, read by UTF-16
-/// unit as Java reads them. A method that cannot be read this way (`replace` with an empty target,
-/// which Java splits between surrogates) is an error, so the rule is false negated or not.
+/// unit as Java reads them. A method not listed here is an error, so the rule is false negated or not.
 fn units_call<'a>(units: &[u16], name: &str, arguments: &[Value<'a>]) -> Option<Value<'a>> {
     let argument = |i: usize| arguments.get(i).and_then(units_of);
     match name {
@@ -591,7 +590,13 @@ fn units_call<'a>(units: &[u16], name: &str, arguments: &[Value<'a>]) -> Option<
         "replace" => {
             let (from, to) = (argument(0)?, argument(1)?);
             if from.is_empty() {
-                return None;
+                // Java puts the replacement before every unit and after the last, even between the halves of a pair.
+                let mut out = to.clone();
+                for unit in units {
+                    out.push(*unit);
+                    out.extend_from_slice(&to);
+                }
+                return Some(from_units(out));
             }
             let mut out = Vec::with_capacity(units.len());
             let mut rest = units;

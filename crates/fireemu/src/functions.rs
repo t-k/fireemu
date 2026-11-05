@@ -8260,20 +8260,21 @@ root	unchanged	small	firstGen";
         let budget = Arc::new(FunctionsSourceScanBudget::new());
         let task_root = root.clone();
         let task = tokio::spawn(async move { budget.snapshot(&task_root, &[]).await });
-        // Readiness is not a latency assertion: hashing and scheduling can exceed
-        // the minimum pacing delay under workspace-wide test load.
-        let ready = tokio::time::timeout(Duration::from_secs(60), async {
-            loop {
-                if !snapshots().is_empty() {
-                    return true;
-                }
-                if task.is_finished() {
-                    return false;
-                }
-                tokio::time::sleep(Duration::from_millis(10)).await;
+        // Readiness is not a latency assertion. The copy starts only after the whole source
+        // has been hashed, which takes the 2 s pacing delay when idle but has no upper bound
+        // when the CPU is starved: there the hash alone outlasted a 60 s deadline and the test
+        // failed with no copy in sight and the task still running. So the wait ends on one of
+        // two observable events, never on a clock: the partial copy appears, or the snapshot
+        // task finishes without ever exposing one (which fails below).
+        let ready = loop {
+            if !snapshots().is_empty() {
+                break true;
             }
-        })
-        .await;
+            if task.is_finished() {
+                break false;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        };
 
         task.abort();
         let _ = task.await;
@@ -8288,7 +8289,7 @@ root	unchanged	small	firstGen";
             "cancelling a paced 128 MiB snapshot did not stop and clean up within one second"
         );
         assert!(
-            matches!(ready, Ok(true)),
+            ready,
             "the snapshot task did not expose a partial copy before cancellation"
         );
         std::fs::remove_dir_all(root).unwrap();

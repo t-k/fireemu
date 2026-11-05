@@ -66,6 +66,15 @@ impl Pattern {
             .is_full_match(&utf16_view(subject))
             .ok()
     }
+
+    /// [`Pattern::matches`] for a subject given as UTF-16 units, which may hold a surrogate
+    /// without its pair (a Rules string literal such as `'\uD83D'`).
+    pub fn matches_units(&self, subject: &[u16]) -> Option<bool> {
+        self.search
+            .as_ref()?
+            .is_full_match(&view_of_units(subject.iter().copied()))
+            .ok()
+    }
 }
 
 /// Text as a sequence of UTF-16 units, which is what the official emulator (Java) matches:
@@ -79,7 +88,12 @@ fn utf16_view(text: &str) -> String {
     if text.chars().all(|c| u32::from(c) < 0xD800) {
         return text.to_owned();
     }
-    text.encode_utf16()
+    view_of_units(text.encode_utf16())
+}
+
+/// [`utf16_view`] of units that may hold a surrogate without its pair.
+fn view_of_units(units: impl Iterator<Item = u16>) -> String {
+    units
         .map(|unit| {
             let code = match unit {
                 0xD800.. => 0xF_0000 + u32::from(unit - 0xD800),

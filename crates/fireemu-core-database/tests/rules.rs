@@ -165,12 +165,11 @@ fn every_recorded_pattern_decides_as_the_official_emulator_or_denies() {
     fn marked(mark: &'static str) -> impl Fn(&serde_json::Value) -> bool {
         move |entry| entry.get("fireemu").is_some_and(|f| f == mark)
     }
-    // Refused at load here: a lone escaped surrogate, which has no counterpart in this text
-    // (review r5 S13), where the official emulator loads it; and rules both refuse, with
-    // another text (a statement keyword such as `return`, an E4X `<`, a character outside the
-    // Basic Multilingual Plane or U+0085 inside a name). The illegal characters, escaped names,
-    // line offsets and Rhino's error texts and places agree since the rules-load fix of
-    // 2026-11-04 and are in the agreeing rows.
+    // Refused at load here, and by the official emulator with another text: a statement keyword such as `return`, an
+    // E4X `<`, a character outside the Basic Multilingual Plane or U+0085 inside a name (a lone escaped
+    // surrogate is held as UTF-16 units since 2026-11-06, and its rows are in the agreeing set).
+    // The illegal characters, escaped names, line offsets and Rhino's error texts and places agree
+    // since the rules-load fix of 2026-11-04 and are in the agreeing rows.
     let (refused, corpus): (Vec<serde_json::Value>, Vec<serde_json::Value>) =
         corpus.into_iter().partition(marked("refuses"));
     assert!(refused.len() >= 8);
@@ -198,6 +197,21 @@ fn every_recorded_pattern_decides_as_the_official_emulator_or_denies() {
         .collect();
     let failures = differences(&serde_json::to_string(&denied).unwrap());
     assert!(failures.is_empty(), "{failures:#?}");
+}
+
+/// Strings that hold a lone surrogate (an escape such as `'\uD83D'`, which Java holds as one UTF-16 unit), probed on the official
+/// emulator jar 4.11.2 (docs.local/runs/rtdb-lone-surrogate): length, `+`, equality, ordering and the string methods. Production
+/// has not answered these, so both profiles follow the jar.
+#[test]
+fn lone_surrogate_strings_load_and_decide_as_the_official_emulator() {
+    let failures = differences(include_str!(
+        "fixtures/rules-lone-surrogates-official-emulator-4.11.2.json"
+    ));
+    assert!(
+        failures.is_empty(),
+        "{} rows differ: {failures:#?}",
+        failures.len()
+    );
 }
 
 #[test]
@@ -231,15 +245,10 @@ fn every_recorded_expression_loads_and_decides_as_the_official_emulator() {
         r#""!'aa'.matches(/^(a)\\1$/)" : read false, expected true"#,
         // Ranges whose endpoints are surrogates of one character are, read by UTF-16 unit,
         // reversed or not ranges at all: an error here, false and true there.
-        // A lone escaped surrogate has no counterpart in this text: refused at load.
         // `\u` and `\x` in a pattern are escaped letters of the dialect: an error.
         r#""!('\u{e000}'.matches(/^[\u{e000}-😀]$/))" : read false, expected true"#,
         r#""!('😀'.matches(/^[😀-😁]$/))" : read false, expected true"#,
         r#""!('😀'.matches(/^[😀-😁]+$/))" : read false, expected true"#,
-        r#""'\\ud83d'.length == 1" : refused: 1:25: Unsupported javascript syntax."#,
-        r#""!('\\ud83d'.length == 1)" : refused: 1:27: Unsupported javascript syntax."#,
-        r#""'\\ude00\\ud83d'.length == 2" : refused: 1:25: Unsupported javascript syntax."#,
-        r#""!('\\ude00\\ud83d'.length == 2)" : refused: 1:27: Unsupported javascript syntax."#,
         r#""!('A'.matches(/\\u0041/))" : read false, expected true"#,
         r#""!('A'.matches(/\\x41/))" : read false, expected true"#,
         // `\W` and `\D` complement a language there; `i` is read only for ASCII patterns.
@@ -535,6 +544,65 @@ fn every_recorded_write_and_expression_error_matches_the_official_emulator() {
 mod properties {
     use super::*;
     use proptest::prelude::*;
+    use std::fmt::Write as _;
+
+    /// A string made of units a Rules literal can spell: ASCII, an astral character, and the surrogates alone or together.
+    fn unit_text() -> impl Strategy<Value = Vec<u16>> {
+        prop::collection::vec(
+            prop::sample::select(vec![
+                0x61_u16, 0x62, 0xD83D, 0xDE00, 0xD800, 0xDBFF, 0xDC00, 0xDFFF, 0x20AC,
+            ]),
+            0..5,
+        )
+    }
+
+    /// The literal that spells `units`: every unit as a `\u` escape, so a pair is two escapes.
+    fn literal(units: &[u16]) -> String {
+        let mut escapes = String::new();
+        for unit in units {
+            write!(escapes, "\\u{unit:04X}").unwrap();
+        }
+        format!("'{escapes}'")
+    }
+
+    fn holds(expr: &str) -> Option<bool> {
+        let rules = Rules::compile(&read_rule_at_t(expr)).ok()?;
+        let tree = seed();
+        let auth = auth();
+        let requester = Requester {
+            auth: &auth,
+            now: 1_792_464_733_000,
+        };
+        Some(rules.can_read(tree.root(), &p("/t"), None, &requester))
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig {cases: 400, rng_seed: proptest::test_runner::RngSeed::Fixed(0x10_5e), ..ProptestConfig::default()})]
+
+        /// Strings with lone surrogates behave as Java's UTF-16 strings: length counts units, `+` joins them (and a pair spelled
+        /// by two escapes is the character), `==` and the order compare unit by unit, and the searches are unit searches.
+        #[test]
+        fn strings_of_utf16_units_behave_as_java_strings(a in unit_text(), b in unit_text()) {
+            let (la, lb) = (literal(&a), literal(&b));
+            let joined: Vec<u16> = a.iter().chain(&b).copied().collect();
+            prop_assert_eq!(holds(&format!("{la}.length == {}", a.len())), Some(true));
+            prop_assert_eq!(holds(&format!("{la}.length == {}", a.len() + 1)), Some(false));
+            prop_assert_eq!(holds(&format!("{la} + {lb} == {}", literal(&joined))), Some(true));
+            prop_assert_eq!(holds(&format!("({la} + {lb}).length == {}", joined.len())), Some(true));
+            prop_assert_eq!(holds(&format!("{la} == {lb}")), Some(a == b));
+            prop_assert_eq!(holds(&format!("{la} != {lb}")), Some(a != b));
+            prop_assert_eq!(holds(&format!("{la} < {lb}")), Some(a < b));
+            prop_assert_eq!(holds(&format!("{la} >= {lb}")), Some(a >= b));
+            prop_assert_eq!(holds(&format!("{la}.beginsWith({lb})")), Some(a.starts_with(&b)));
+            prop_assert_eq!(holds(&format!("{la}.endsWith({lb})")), Some(a.ends_with(&b)));
+            let found = b.is_empty() || a.windows(b.len()).any(|window| window == b.as_slice());
+            prop_assert_eq!(holds(&format!("{la}.contains({lb})")), Some(found));
+            // A string that is valid UTF-16 equals the character it spells.
+            if let Ok(text) = String::from_utf16(&a) {
+                prop_assert_eq!(holds(&format!("{la} == '{text}'")), Some(!text.contains(['\'', '\\'])));
+            }
+        }
+    }
 
     /// Small expressions over the whole grammar, well-formed or not.
     fn expression() -> impl Strategy<Value = String> {

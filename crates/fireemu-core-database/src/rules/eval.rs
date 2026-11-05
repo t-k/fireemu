@@ -128,6 +128,9 @@ enum Value<'a> {
     Bool(bool),
     Num(f64),
     Str(String),
+    /// A string that holds a lone surrogate, as the UTF-16 units Java holds it (a `String` cannot). A string
+    /// whose units are valid UTF-16 is always a [`Value::Str`], so the two never hold the same string.
+    Units(Vec<u16>),
     /// An object or array inside `auth`: a new value each time it is read.
     Json(Json),
     /// `auth` itself, one object.
@@ -230,6 +233,7 @@ fn record_value(observer: &mut Observer<'_>, id: usize, value: &Value<'_>, varia
             .map_or_else(|| Json::string(number_text(*value)), Json::Number),
         Value::Long(value) => Json::int(*value),
         Value::Str(value) => Json::String(value.clone()),
+        Value::Units(units) => Json::String(String::from_utf16_lossy(units)),
         Value::Ordering(keys) => Json::String(keys.join("/")),
         _ => observer.opaque(variable),
     };
@@ -245,6 +249,7 @@ fn eval_inner<'a>(
         ExprKind::Bool(b) => Some(Value::Bool(*b)),
         ExprKind::Number(n) => Some(Value::Num(*n)),
         ExprKind::Str(s) => Some(Value::Str(s.clone())),
+        ExprKind::Units(units) => Some(Value::Units(units.clone())),
         ExprKind::Null => Some(Value::Null),
         ExprKind::Ordering(keys) => Some(Value::Ordering(keys.clone())),
         ExprKind::Regex(pattern) => Some(Value::Regex(pattern.clone())),
@@ -274,7 +279,10 @@ fn eval_inner<'a>(
             };
             let object = eval(object, scope, observer)?;
             observer.member_name(callee.diagnostic, name);
-            let callable = matches!(object, Value::Snapshot(..) | Value::Str(_));
+            let callable = matches!(
+                object,
+                Value::Snapshot(..) | Value::Str(_) | Value::Units(_)
+            );
             if callable {
                 let method = observer.opaque(None);
                 observer.record(callee.diagnostic, method);
@@ -355,6 +363,11 @@ fn member<'a>(object: Value<'a>, name: &str, scope: &Scope<'a>) -> Option<Value<
         {
             #[allow(clippy::cast_precision_loss)]
             Some(Value::Num(s.encode_utf16().count() as f64))
+        }
+        Value::Units(units) if name == "length" =>
+        {
+            #[allow(clippy::cast_precision_loss)]
+            Some(Value::Num(units.len() as f64))
         }
         Value::Query => Some(query_member(scope.query, scope.read_kind, name)),
         _ => None,
@@ -515,6 +528,10 @@ fn string_argument(arguments: &[Value<'_>], i: usize) -> Option<String> {
 fn call<'a>(object: Value<'a>, name: &str, arguments: &[Value<'a>]) -> Option<Value<'a>> {
     match object {
         Value::Snapshot(snapshot, version) => snapshot_call(&snapshot, version, name, arguments),
+        Value::Str(s) if arguments.iter().any(|a| matches!(a, Value::Units(_))) => {
+            units_call(&s.encode_utf16().collect::<Vec<_>>(), name, arguments)
+        }
+        Value::Units(units) => units_call(&units, name, arguments),
         Value::Str(s) => match name {
             "contains" => Some(Value::Bool(s.contains(&string_argument(arguments, 0)?))),
             "beginsWith" => Some(Value::Bool(s.starts_with(&string_argument(arguments, 0)?))),
@@ -531,6 +548,79 @@ fn call<'a>(object: Value<'a>, name: &str, arguments: &[Value<'a>]) -> Option<Va
                 Value::Regex(pattern) => pattern.matches(&s).map(Value::Bool),
                 _ => None,
             },
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// The UTF-16 units of a string value.
+fn units_of(value: &Value<'_>) -> Option<Vec<u16>> {
+    match value {
+        Value::Str(s) => Some(s.encode_utf16().collect()),
+        Value::Units(units) => Some(units.clone()),
+        _ => None,
+    }
+}
+
+/// A string value from UTF-16 units: a [`Value::Str`] when they are valid UTF-16, so a pair written as two
+/// escapes is the same string as the character.
+fn from_units<'a>(units: Vec<u16>) -> Value<'a> {
+    String::from_utf16(&units).map_or_else(|_| Value::Units(units), Value::Str)
+}
+
+/// Where `needle` starts in `haystack`, as Java's `String.indexOf` reads UTF-16 units.
+fn find_units(haystack: &[u16], needle: &[u16]) -> Option<usize> {
+    if needle.is_empty() {
+        return Some(0);
+    }
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
+/// The string methods on a string that holds a lone surrogate, or whose argument does, read by UTF-16
+/// unit as Java reads them. A method that cannot be read this way (`replace` with an empty target,
+/// which Java splits between surrogates) is an error, so the rule is false negated or not.
+fn units_call<'a>(units: &[u16], name: &str, arguments: &[Value<'a>]) -> Option<Value<'a>> {
+    let argument = |i: usize| arguments.get(i).and_then(units_of);
+    match name {
+        "contains" => Some(Value::Bool(find_units(units, &argument(0)?).is_some())),
+        "beginsWith" => Some(Value::Bool(units.starts_with(&argument(0)?))),
+        "endsWith" => Some(Value::Bool(units.ends_with(&argument(0)?))),
+        "replace" => {
+            let (from, to) = (argument(0)?, argument(1)?);
+            if from.is_empty() {
+                return None;
+            }
+            let mut out = Vec::with_capacity(units.len());
+            let mut rest = units;
+            while let Some(at) = find_units(rest, &from) {
+                out.extend_from_slice(&rest[..at]);
+                out.extend_from_slice(&to);
+                rest = &rest[at + from.len()..];
+            }
+            out.extend_from_slice(rest);
+            Some(from_units(out))
+        }
+        "toLowerCase" | "toUpperCase" => {
+            let lower = name == "toLowerCase";
+            let mut out = Vec::with_capacity(units.len());
+            let mut run = String::new();
+            for decoded in char::decode_utf16(units.iter().copied()) {
+                match decoded {
+                    Ok(c) => run.push(c),
+                    Err(lone) => {
+                        out.extend(java_case(&std::mem::take(&mut run), lower)?.encode_utf16());
+                        out.push(lone.unpaired_surrogate());
+                    }
+                }
+            }
+            out.extend(java_case(&run, lower)?.encode_utf16());
+            Some(from_units(out))
+        }
+        "matches" => match arguments.first()? {
+            Value::Regex(pattern) => pattern.matches_units(units).map(Value::Bool),
             _ => None,
         },
         _ => None,
@@ -705,6 +795,9 @@ fn combine<'a>(op: BinaryOp, l: &Value<'a>, r: &Value<'a>) -> Option<Value<'a>> 
                     None => return Some(Value::Bool(false)),
                 },
                 (Value::Str(a), Value::Str(b)) => a.encode_utf16().cmp(b.encode_utf16()),
+                (Value::Str(_) | Value::Units(_), Value::Str(_) | Value::Units(_)) => {
+                    units_of(l)?.cmp(&units_of(r)?)
+                }
                 // Any other pair is an error there, so the rule is false negated or not
                 // (review r8 M22).
                 _ => return None,
@@ -718,6 +811,11 @@ fn combine<'a>(op: BinaryOp, l: &Value<'a>, r: &Value<'a>) -> Option<Value<'a>> 
         }
         BinaryOp::Add => match (l, r) {
             (Value::Num(a), Value::Num(b)) => Some(Value::Num(a + b)),
+            (Value::Units(_), _) | (_, Value::Units(_)) => {
+                let mut units = units_text(l)?;
+                units.extend(units_text(r)?);
+                Some(from_units(units))
+            }
             (Value::Str(a), _) => Some(Value::Str(format!("{a}{}", text(r)?))),
             (_, Value::Str(b)) => Some(Value::Str(format!("{}{b}", text(l)?))),
             _ => None,
@@ -739,6 +837,14 @@ fn combine<'a>(op: BinaryOp, l: &Value<'a>, r: &Value<'a>) -> Option<Value<'a>> 
             }))
         }
         BinaryOp::And | BinaryOp::Or => None,
+    }
+}
+
+/// [`text`] as UTF-16 units, for a sum that holds a string with a lone surrogate.
+fn units_text(value: &Value<'_>) -> Option<Vec<u16>> {
+    match value {
+        Value::Num(n) => Some(number_text(*n).encode_utf16().collect()),
+        other => units_of(other),
     }
 }
 
@@ -773,6 +879,7 @@ fn equal(l: &Value<'_>, r: &Value<'_>) -> bool {
         #[allow(clippy::cast_precision_loss)]
         (Value::Long(a), Value::Num(b)) | (Value::Num(b), Value::Long(a)) => *a as f64 == *b,
         (Value::Str(a), Value::Str(b)) => a == b,
+        (Value::Units(a), Value::Units(b)) => a == b,
         (Value::Ordering(a), Value::Ordering(b)) => a == b,
         _ => false,
     }

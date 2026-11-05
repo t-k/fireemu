@@ -230,6 +230,51 @@ fn rules_put_answers_the_recorded_production_load_bytes() {
     }
 }
 
+/// A Rules string that holds a lone surrogate (`'\uD83D'`) loads (PUT 200) and is judged by its UTF-16 units, as the official
+/// emulator judges it (owner row 2270; 250 rows of the core test). Production has not answered these shapes; both profiles follow
+/// the jar. What stays an error (a lone-surrogate child name) is false, negated or not, so nothing is allowed that was not.
+#[test]
+fn a_lone_surrogate_string_in_a_rule_loads_and_decides_by_utf16_units() {
+    let rows: [(&str, u16); 9] = [
+        ("'\\uD83D'.length == 1", 200),
+        ("!('\\uD83D'.length == 1)", 401),
+        ("'\\uD83D' + '\\uDE00' == '😀'", 200),
+        ("'\\uDE00'.length == 1", 200),
+        ("'a\\uD83D'.length == 2", 200),
+        ("'\\uD83D' == '\\uDE00'", 401),
+        ("'\\uD83D\\uDE00'.length == 1", 401),
+        ("root.child('\\uD83D').exists()", 401),
+        ("!root.child('\\uD83D').exists()", 401),
+    ];
+    for strict in [false, true] {
+        for (expression, read) in rows {
+            let options = RestOptions {
+                production_shapes: strict,
+                ..RestOptions::default()
+            };
+            let mut database = Database::new(options, 7);
+            let rules = format!(
+                r#"{{"rules":{{".read":"{}"}}}}"#,
+                expression.replace('\\', "\\\\").replace('"', "\\\"")
+            );
+            let put = call(
+                &mut database,
+                "PUT",
+                "/.settings/rules.json?ns=t",
+                OWNER,
+                &rules,
+            );
+            assert_eq!(
+                put,
+                (200, r#"{"status":"ok"}"#.to_owned()),
+                "strict={strict} {expression}"
+            );
+            let got = call(&mut database, "GET", "/x.json?ns=t", &[], "");
+            assert_eq!(got.0, read, "strict={strict} {expression}");
+        }
+    }
+}
+
 /// Every Rules document of the local probe of firebase-database-emulator v4.11.2 (illegal
 /// characters at every position and expression kind, which errors are reported together and in
 /// which order, index names, duplicates) is answered byte for byte as the jar answered it, in

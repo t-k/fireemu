@@ -185,7 +185,7 @@ impl Checker<'_> {
         match &mut expr.kind {
             ExprKind::Bool(_) => Ok(Types::one(Tok::Bool)),
             ExprKind::Number(_) => Ok(Types::one(Tok::Num)),
-            ExprKind::Str(_) => Ok(Types::one(Tok::Str)),
+            ExprKind::Str(_) | ExprKind::Units(_) => Ok(Types::one(Tok::Str)),
             ExprKind::Null => Ok(Types::one(Tok::Null)),
             ExprKind::Regex(..) => Ok(Types::one(Tok::Regex)),
             ExprKind::Ordering(_) => Ok(Types::one(Tok::OrderBy)),

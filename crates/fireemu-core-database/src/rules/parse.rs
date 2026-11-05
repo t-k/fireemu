@@ -50,6 +50,8 @@ impl ExprError {
 enum Token {
     Number(f64),
     Str(String),
+    /// A string literal that holds a lone surrogate: the UTF-16 units Java holds, which no `String` can.
+    StrUnits(Vec<u16>),
     Regex(String, String),
     Name(String),
     Punct(&'static str),
@@ -215,6 +217,8 @@ pub enum ExprKind {
     Number(f64),
     /// A string literal.
     Str(String),
+    /// A string literal that holds a lone surrogate: its UTF-16 units (a `String` cannot hold it).
+    Units(Vec<u16>),
     /// `null`
     Null,
     /// The ordering by the child at these keys: a string literal compared with an ordering
@@ -252,6 +256,7 @@ impl ExprKind {
             Self::Bool(_)
             | Self::Number(_)
             | Self::Str(_)
+            | Self::Units(_)
             | Self::Null
             | Self::Ordering(_)
             | Self::Regex(_)
@@ -270,6 +275,7 @@ impl ExprKind {
             Self::Bool(_)
             | Self::Number(_)
             | Self::Str(_)
+            | Self::Units(_)
             | Self::Null
             | Self::Ordering(_)
             | Self::Regex(_)
@@ -691,11 +697,11 @@ impl Lexer<'_> {
     /// A string literal, with its escapes read as the official emulator's JavaScript reads
     /// them: `\n \t \r \b \f \v`, `\xXX`, `\uXXXX` (a pair of escaped surrogates is one
     /// character), legacy octal (`\101`, `\0`), and any other escaped character standing for
-    /// itself (so an incomplete `\u004` is `u004`). An escaped surrogate that pairs with
-    /// nothing has no counterpart in this text and is refused.
+    /// itself (so an incomplete `\u004` is `u004`). The literal is the UTF-16 units it spells, as Java
+    /// holds a string: an escaped high surrogate followed by an escaped low one is one character, and
+    /// a surrogate that pairs with nothing stays a unit of its own ([`Token::StrUnits`]).
     fn string(&mut self, start: usize, quote: char) -> Result<(usize, Token), ExprError> {
         self.at += 1;
-        let mut text = String::new();
         let mut units: Vec<u16> = Vec::new();
         loop {
             let Some(&c) = self.chars.get(self.at) else {
@@ -706,8 +712,10 @@ impl Lexer<'_> {
             };
             self.at += 1;
             if c == quote {
-                Self::flush_units(start, &mut units, &mut text)?;
-                return Ok((start, Token::Str(text)));
+                return Ok((
+                    start,
+                    String::from_utf16(&units).map_or(Token::StrUnits(units), Token::Str),
+                ));
             }
             if is_line_terminator(c) {
                 // A line ends the literal there (review r7 M17).
@@ -716,8 +724,7 @@ impl Lexer<'_> {
             }
             if c != '\\' {
                 // A format character in the body is kept, as there.
-                Self::flush_units(start, &mut units, &mut text)?;
-                text.push(c);
+                units.extend(c.encode_utf16(&mut [0; 2]).iter());
                 continue;
             }
             // After `\` the reader skips format characters, as it does everywhere but the
@@ -770,9 +777,8 @@ impl Lexer<'_> {
                 'u' | 'x' => match hex(self, if escaped == 'u' { 4 } else { 2 }) {
                     Ok(code) => code,
                     Err(digits) => {
-                        Self::flush_units(start, &mut units, &mut text)?;
-                        text.push(escaped);
-                        text.push_str(&digits);
+                        units.extend(escaped.encode_utf16(&mut [0; 2]).iter());
+                        units.extend(digits.encode_utf16());
                         continue;
                     }
                 },
@@ -800,20 +806,10 @@ impl Lexer<'_> {
             };
             if let Ok(unit) = u16::try_from(code) {
                 units.push(unit);
-            } else {
-                Self::flush_units(start, &mut units, &mut text)?;
-                text.extend(char::from_u32(code));
+            } else if let Some(c) = char::from_u32(code) {
+                units.extend(c.encode_utf16(&mut [0; 2]).iter());
             }
         }
-    }
-
-    /// Decodes the UTF-16 units read from escapes; a surrogate without its pair is refused.
-    fn flush_units(start: usize, units: &mut Vec<u16>, text: &mut String) -> Result<(), ExprError> {
-        for decoded in char::decode_utf16(units.drain(..)) {
-            let c = decoded.map_err(|_| ExprError::new(start, "Unsupported javascript syntax."))?;
-            text.push(c);
-        }
-        Ok(())
     }
 
     fn regex(&mut self, start: usize) -> Result<(usize, Token), ExprError> {
@@ -1425,6 +1421,7 @@ impl Parser<'_> {
             token.1,
             Token::Number(_)
                 | Token::Str(_)
+                | Token::StrUnits(_)
                 | Token::Regex(..)
                 | Token::Name(_)
                 | Token::Punct(")" | "]")
@@ -1466,7 +1463,7 @@ impl Parser<'_> {
             // character inside a punctuator, an escape inside a name, is part of it).
             Token::Punct(p) if NO_LOOKAHEAD.contains(p) => end,
             Token::Punct(_) | Token::Name(_) => self.lexer.after_lookahead(end),
-            Token::Str(_) => {
+            Token::Str(_) | Token::StrUnits(_) => {
                 // The closing quote ends it.
                 let quote = chars[at];
                 let mut end = at + 1;
@@ -1913,7 +1910,7 @@ impl Parser<'_> {
             let (at, token) = self.next()?;
             match token {
                 Token::Punct("}") => return Ok(()),
-                Token::Name(_) | Token::Str(_) | Token::Number(_) => {}
+                Token::Name(_) | Token::Str(_) | Token::StrUnits(_) | Token::Number(_) => {}
                 token => {
                     return Err(ExprError::new(
                         self.rhino_end(at, &token),
@@ -1948,6 +1945,7 @@ impl Parser<'_> {
         let kind = match token {
             Token::Number(n) => ExprKind::Number(n),
             Token::Str(s) => ExprKind::Str(s),
+            Token::StrUnits(units) => ExprKind::Units(units),
             Token::Regex(pattern, flags) => {
                 ExprKind::Regex(super::pattern::Pattern::new(pattern, flags))
             }

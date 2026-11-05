@@ -9,6 +9,7 @@ test("runs T1 writes and cleans owned resources in order", async () => {
   assert.equal(result.outcome, "stopped-needs-review");
   assert.ok(result.reasons.includes("no frames read"));
   assert.equal(world.events.filter((e) => e.startsWith("write ")).length, 12);
+  assert.ok(world.events.indexOf("close sdk") < world.events.indexOf("cleanup user"));
   assert.deepEqual(
     world.events.filter((e) => e.startsWith("cleanup ")),
     [
@@ -35,7 +36,7 @@ test("optional refusal continues but an unknown deploy stops", async () => {
 test("preflight failure creates nothing", async () => {
   const world = makeWorld({ preflightFails: true });
   await runBreadth(world.deps);
-  assert.deepEqual(world.events, ["preflight"]);
+  assert.deepEqual(world.events, ["preflight", "close sdk"]);
 });
 
 test("stops tail after all deployed handlers arrive and thirty seconds of quiet", async () => {

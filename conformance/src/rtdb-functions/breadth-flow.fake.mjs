@@ -62,6 +62,7 @@ export function makeWorld(options = {}) {
       confirmGone: async () => true,
     },
     sdk: {
+      close: async () => events.push("close sdk"),
       write: async (id) => {
         events.push(`write ${id}`);
         return { outcome: "ok", status: 200 };

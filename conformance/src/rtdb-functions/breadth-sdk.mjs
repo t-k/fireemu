@@ -117,3 +117,46 @@ export function browserRunner({ modules, allowHost, stop = {} }) {
     }
   };
 }
+
+export function openSdk(runner, config, credentialsFn) {
+  let running,
+    ready,
+    finish,
+    closing = false;
+  return {
+    async write(id) {
+      if (!running) {
+        ready = new Promise((resolve, reject) => {
+          running = Promise.resolve()
+            .then(() =>
+              runner(config, credentialsFn(), async ({ write }) => {
+                resolve(write);
+                await new Promise((done) => {
+                  finish = done;
+                });
+              }),
+            )
+            .then(
+              () => {
+                if (!closing) throw Error("SDK runner ended");
+              },
+              (error) => {
+                reject(error);
+                throw error;
+              },
+            );
+          running.catch(() => {});
+        });
+      }
+      const write = await Promise.race([ready, running]);
+      return Promise.race([write(id), running]);
+    },
+    async close() {
+      if (!running) return;
+      closing = true;
+      if (finish) finish();
+      else await Promise.race([ready.then(() => finish()), running]);
+      await running;
+    },
+  };
+}

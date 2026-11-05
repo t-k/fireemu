@@ -4,11 +4,17 @@
 // the sandbox ledger, and the recorder writes only inside its private run directory. The run itself is
 // flow.mjs; `executeRun` takes an environment so the whole path is exercised on fakes.
 
+import { randomBytes } from "node:crypto";
+import { isAbsolute } from "node:path";
 import { execFileSync } from "node:child_process";
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import { parseKeyFile, redact } from "../../../tools/sdk-smoke-database/cv11-genuine-auth.mjs";
+import { createAuth } from "./breadth-auth.mjs";
+import { browserRunner, openSdk } from "./breadth-sdk.mjs";
+import { INSTANCE } from "./breadth-frames.mjs";
 import { adcPreflight } from "../../../tools/sdk-smoke-database/adc-preflight.mjs";
 import { PROJECT } from "../../functions-http/harness.mjs";
 import {
@@ -106,7 +112,7 @@ export async function executeRun({ environment, runDir, packetPins, assemble = a
   const log = (action, detail) =>
     appendFile(
       journalPath,
-      `${JSON.stringify({ ts: new Date().toISOString(), action, detail })}\n`,
+      `${redact(JSON.stringify({ ts: new Date().toISOString(), action, detail }), environment.secrets)}\n`,
       {
         mode: 0o600,
       },
@@ -118,7 +124,9 @@ export async function executeRun({ environment, runDir, packetPins, assemble = a
     }),
     baselineRulesSha256: packetPins.baselineRulesSha256,
   };
-  const assembled = assemble({ ...environment, packet, runDir, log });
+  const auth = environment.createAuth?.(log) ?? environment.auth;
+  const sdk = environment.createSdk?.(auth) ?? environment.sdk;
+  const assembled = assemble({ ...environment, auth, sdk, packet, runDir, log });
   let result;
   try {
     result = await runBreadth(assembled.deps);
@@ -291,6 +299,10 @@ export async function admitRun({ env, privateRoot, root, deps }) {
 
 /** The command-line entry: admission by approval file, pins and the ADC scope check, then the run. */
 export async function recordBreadth() {
+  const args = process.argv.slice(2);
+  if (args.length !== 2 || args[0] !== "--key-file" || !isAbsolute(args[1]))
+    throw Error("--key-file requires an absolute path");
+  let apiKey;
   const root = fileURLToPath(new URL("../../..", import.meta.url));
   const adc = await ownerAdc();
   const budget = createBreadthBudget();
@@ -307,7 +319,11 @@ export async function recordBreadth() {
         await requiredStage2Sources();
         await requiredInstalledDependencies();
       },
-      adcVerdict: async () => adcPreflight(fetch, await getToken()),
+      adcVerdict: async () => {
+        apiKey = parseKeyFile(await readFile(args[1], "utf8"));
+        secrets.push(apiKey);
+        return adcPreflight(fetch, await getToken());
+      },
     },
   });
   const projectNumber = await readPrivateProjectIdentity(
@@ -317,6 +333,10 @@ export async function recordBreadth() {
 
   const runDir = join(PRIVATE_ROOT, "runs", `cv14-${new Date().toISOString().replaceAll(":", "")}`);
   await mkdir(runDir, { recursive: true, mode: 0o700 });
+  const nonce = randomBytes(8).toString("hex");
+  const email = `breadth-${nonce}@example.com`;
+  const password = randomBytes(24).toString("hex");
+  secrets.push(password, email);
   const abort = { stopped: false };
   const stop = { requested: false };
   const onSignal = () => {
@@ -342,6 +362,41 @@ export async function recordBreadth() {
       abort,
       stop,
       secrets,
+      nonce,
+      createAuth: (log) => {
+        const auth = createAuth({
+          adminFetch: bearerFetch(getToken, PROJECT),
+          projectId: PROJECT,
+          apiKey,
+          email,
+          password,
+          log: (row) => log("auth", row),
+          stop,
+          secrets,
+        });
+        const signIn = auth.signIn;
+        auth.signIn = async () => {
+          const result = await signIn();
+          if (auth.idToken) secrets.push(auth.idToken);
+          return result;
+        };
+        return auth;
+      },
+      createSdk: (auth) =>
+        openSdk(
+          browserRunner({
+            modules: join(root, "conformance/node_modules"),
+            allowHost: (host) =>
+              [
+                "identitytoolkit.googleapis.com",
+                "securetoken.googleapis.com",
+                `${INSTANCE}.firebaseio.com`,
+              ].includes(host),
+            stop,
+          }),
+          { apiKey, projectId: PROJECT, databaseURL: `https://${INSTANCE}.firebaseio.com` },
+          () => ({ email, password, uid: auth.uid, nonce }),
+        ),
     };
     const summary = await executeRun({ environment, runDir, packetPins });
     console.log(JSON.stringify({ outcome: summary.outcome, residual: summary.residual, runDir }));

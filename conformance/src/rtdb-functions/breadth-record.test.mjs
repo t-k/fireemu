@@ -64,3 +64,40 @@ test("admission refuses an invalid ADC verdict", async () => {
     /ADC token is not usable/,
   );
 });
+
+test("journal redacts current secrets from every row", async () => {
+  const { mkdtemp, readFile, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { executeRun } = await import("./breadth-record.mjs");
+  const { makeWorld } = await import("./breadth-flow.fake.mjs");
+  const dir = await mkdtemp(join(tmpdir(), "breadth-test-"));
+  const secrets = ["sentinel-key", "sentinel-password", "sentinel-token"];
+  try {
+    const world = makeWorld({ preflightFails: true });
+    await executeRun({
+      environment: {
+        projectId: "project",
+        projectNumber: "12345",
+        secrets,
+        budget: { snapshot: () => ({ cliDeploy: 0 }) },
+      },
+      runDir: dir,
+      packetPins: { baselineRulesSha256: rulesSha },
+      assemble: ({ log }) => ({
+        deps: {
+          ...world.deps,
+          log: async (action, detail) => log(action, `${detail} ${secrets.join(" ")}`),
+        },
+        uploads: { close() {} },
+        forms: { summary: () => ({}), maskedLines: () => [] },
+        grants: {},
+      }),
+    });
+    const journal = await readFile(join(dir, "journal.jsonl"), "utf8");
+    for (const secret of secrets) assert.ok(!journal.includes(secret));
+    assert.match(journal, /\*\*\*/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

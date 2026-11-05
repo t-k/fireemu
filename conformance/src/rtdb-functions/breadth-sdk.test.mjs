@@ -81,3 +81,73 @@ test("page guards the app and current user before every write", async () => {
   await assert.rejects(context.window.__breadth({ action: "w12" }));
   assert.deepEqual(writes, ["set"]);
 });
+
+test("opens lazily with current credentials and closes the runner", async () => {
+  const { openSdk } = await import("./breadth-sdk.mjs");
+  const events = [];
+  let credentials = { uid: "before" };
+  const sdk = openSdk(
+    async (config, actual, observe) => {
+      events.push([config, actual]);
+      await observe({ write: async (id) => ({ id }) });
+      events.push("closed");
+    },
+    { projectId: "project" },
+    () => credentials,
+  );
+  assert.deepEqual(events, []);
+  credentials = { uid: "after" };
+  assert.deepEqual(await sdk.write("w10"), { id: "w10" });
+  await sdk.close();
+  assert.deepEqual(events, [[{ projectId: "project" }, credentials], "closed"]);
+});
+
+test("runner failure rejects current and later writes without retry", async () => {
+  const { openSdk } = await import("./breadth-sdk.mjs");
+  let calls = 0;
+  const sdk = openSdk(
+    async () => {
+      calls++;
+      throw Error("runner failed");
+    },
+    {},
+    () => ({}),
+  );
+  await assert.rejects(sdk.write("w10"), /runner failed/);
+  await assert.rejects(sdk.write("w11"), /runner failed/);
+  await assert.rejects(sdk.close(), /runner failed/);
+  assert.equal(calls, 1);
+});
+
+test("closing an unused SDK does not start the runner", async () => {
+  const { openSdk } = await import("./breadth-sdk.mjs");
+  const sdk = openSdk(
+    () => {
+      throw Error("started");
+    },
+    {},
+    () => ({}),
+  );
+  await sdk.close();
+});
+
+test("runner failure after handover rejects pending and later writes", async () => {
+  const { openSdk } = await import("./breadth-sdk.mjs");
+  let fail;
+  const sdk = openSdk(
+    async (_config, _credentials, observe) => {
+      void observe({ write: () => new Promise(() => {}) });
+      await new Promise((_resolve, reject) => {
+        fail = reject;
+      });
+    },
+    {},
+    () => ({}),
+  );
+  const pending = sdk.write("w10");
+  await new Promise((resolve) => setImmediate(resolve));
+  fail(Error("runner crashed"));
+  await assert.rejects(pending, /runner crashed/);
+  await assert.rejects(sdk.write("w11"), /runner crashed/);
+  await assert.rejects(sdk.close(), /runner crashed/);
+});

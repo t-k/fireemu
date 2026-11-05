@@ -153,6 +153,11 @@ export async function runBreadth(deps) {
   } catch (error) {
     reasons.push(error.message);
   }
+  try {
+    await deps.sdk.close();
+  } catch (error) {
+    reasons.push(`SDK cleanup: ${error.message}`);
+  }
   await phase("cleanup");
   const owned = [];
   for (const spec of targets) {

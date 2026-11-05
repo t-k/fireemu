@@ -5,7 +5,7 @@
 // rest (G7, packet 2: plain REST requests through the admin REST path, 2 rounds x 72 cases, no SDK, no browser),
 // rules (G8, packet 3: Rules leftovers and REST neighbours, 2 rounds x 70 cases as admin, anonymous and auth_variable_override requests),
 // tokens (G10, packet 5: invalid credentials as auth=, access_token= and Bearer, 2 rounds x 27 cases, generated tokens only).
-//   node --max-old-space-size=1024 observer.mjs --target production|emulator [--suite small|events|admin|events+admin|rest|rules|tokens] --run-id ID --prefix /p --direct-cap N --out <new dir> [--production-config <file>] [--continue-on-failure] | --print-manifest
+//   node --max-old-space-size=1024 observer.mjs --target production|emulator [--suite small|events|admin|events+admin|rest|rules|tokens|rules-load] --run-id ID --prefix /p --direct-cap N --out <new dir> [--production-config <file>] [--continue-on-failure] | --print-manifest
 // The SDK comes from the parent package (tools/sdk-smoke-database/node_modules). --production-config names a file outside the
 // repository with the private inputs: principalSha256, legacyPacket, runtimeProposal and paths {owner, lease, recording}.
 // Restoration (prefix delete, Rules back byte-equal) runs in `finally`; the ledgers are never written by this script.
@@ -26,6 +26,7 @@ import { EVENT_CASES } from './events-actor.mjs';
 import { ADMIN_CASES } from './admin-suite.mjs';
 import { REST_AREA, REST_CASES, REST_PROFILES, restRules, runRestProfile } from './rest-suite.mjs';
 import { RULES_AREA, RULES_CASES, RULES_PROFILES, globalRules, runRulesProfile } from './rules-suite.mjs';
+import { RULES_LOAD_CASES, RULES_LOAD_PROFILES, runRulesLoadProfile } from './rules-load-suite.mjs';
 import { TOKENS_AREA, TOKENS_CASES, TOKENS_PROFILES, runTokensProfile, tokensRules } from './tokens-suite.mjs';
 import tls from 'node:tls';
 import net from 'node:net';
@@ -37,6 +38,7 @@ const eventsPlan = EVENTS_PROFILES.map(name => ({ name, suite: 'events', transpo
 const adminPlan = ADMIN_PROFILES.map(name => ({ name, suite: 'admin', transport: 'admin' }));
 const restPlan = REST_PROFILES.map(name => ({ name, suite: 'rest', transport: 'rest' }));
 const rulesPlan = RULES_PROFILES.map(name => ({ name, suite: 'rules', transport: 'rules' }));
+const rulesLoadPlan = RULES_LOAD_PROFILES.map(name => ({ name, suite: 'rules-load', transport: 'rules-load' }));
 const tokensPlan = TOKENS_PROFILES.map(name => ({ name, suite: 'tokens', transport: 'tokens' }));
 export const SUITES = {
   small: { parts: ['small'], basis: '2196', capMax: 180, plan: PROFILES.map(([round, transport]) => ({ name: `r${round}-${transport}`, suite: 'small', transport })), profileMs: 90000, runMs: 600000 },
@@ -45,13 +47,14 @@ export const SUITES = {
   'events+admin': { parts: ['events', 'admin'], basis: '2217', capMax: 250, plan: [...eventsPlan, ...adminPlan], profileMs: 200000, runMs: 900000 },
   rest: { parts: ['rest'], basis: '2217', capMax: 250, plan: restPlan, profileMs: 120000, runMs: 360000 },   // 72 requests per profile, 10 s timeout each, a transport failure stops the profile
   rules: { parts: ['rules'], basis: '2217', capMax: 250, plan: rulesPlan, profileMs: 300000, runMs: 720000 },   // about 80 requests per profile plus the ready probes (at most 20 per install, 2 s apart: 5 installs x 19 delays = 190 s worst case)
+  'rules-load': { parts: ['rules-load'], basis: '2217', capMax: 60, plan: rulesLoadPlan, profileMs: 120000, runMs: 360000 },
   tokens: { parts: ['tokens'], basis: '2217', capMax: 100, plan: tokensPlan, profileMs: 120000, runMs: 360000 },   // 28 requests per profile (one install: at most 20 probes, 38 s of delays)
 };
-const SUITE_CASES = { small: null, events: EVENT_CASES, admin: ADMIN_CASES, rest: REST_CASES, rules: RULES_CASES, tokens: TOKENS_CASES };
-const AREAS = { small: 'sdk-next', ...SUITE_AREAS, rest: REST_AREA, rules: RULES_AREA, tokens: TOKENS_AREA };
+const SUITE_CASES = { small: null, events: EVENT_CASES, admin: ADMIN_CASES, rest: REST_CASES, rules: RULES_CASES, tokens: TOKENS_CASES, 'rules-load': RULES_LOAD_CASES };
+const AREAS = { small: 'sdk-next', ...SUITE_AREAS, rest: REST_AREA, rules: RULES_AREA, tokens: TOKENS_AREA, 'rules-load': 'rules-load' };
 /** The pause between two ready probes of the rules suite: production Rules take effect after a delay, a local emulator at once. */
 export const PROBE_DELAY_MS = { production: 2000, emulator: 100 };
-const REST_PARTS = ['rest', 'rules', 'tokens'];   // the plain-HTTP suites: their profiles abort the run at their deadline
+const REST_PARTS = ['rest', 'rules', 'tokens', 'rules-load'];   // the plain-HTTP suites: their profiles abort the run at their deadline
 /** The process backstop: above the suite's run deadline plus the bounded cleanup (small: 12 min as before). */
 export const backstopMs = suite => (Object.hasOwn(SUITES, suite) ? SUITES[suite].runMs : SUITES.small.runMs) + 2 * 60 * 1000;
 /** How many case rows a finished run of the suite holds. */
@@ -220,7 +223,8 @@ export const restProfile = ctx => runRestProfile({ send: ctx.rest, url: ctx.rest
 export const rulesProfile = ctx => runRulesProfile({ send: ctx.rest, url: ctx.restUrl, scope: ctx.scope, installBody: ctx.installBody, probeDelayMs: ctx.probeDelayMs, cancelled: () => ctx.cancelled === true, emit: row => ctx.journal.write({ ...row, profile: ctx.profile }) });
 /** One tokens profile: the case table through the same guarded admin REST, with the run's project as the aud of the own-project tokens. */
 export const tokensProfile = ctx => runTokensProfile({ send: ctx.rest, url: ctx.restUrl, scope: ctx.scope, projectId: ctx.projectId, probeDelayMs: ctx.probeDelayMs, cancelled: () => ctx.cancelled === true, emit: row => ctx.journal.write({ ...row, profile: ctx.profile }) });
-const suiteProfiles = { events: { ws: eventsWsProfile, lp: eventsLpProfile }, admin: { admin: adminProfile }, rest: { rest: restProfile }, rules: { rules: rulesProfile }, tokens: { tokens: tokensProfile } };
+export const rulesLoadProfile = ctx => runRulesLoadProfile({ send: ctx.rest, url: ctx.restUrl, baselineText: ctx.baselineText, canSend: () => ctx.counter.caps().direct - ctx.counter.used().direct >= 3, cancelled: () => ctx.cancelled === true, emit: row => ctx.journal.write({ ...row, profile: ctx.profile }) });
+const suiteProfiles = { events: { ws: eventsWsProfile, lp: eventsLpProfile }, admin: { admin: adminProfile }, rest: { rest: restProfile }, rules: { rules: rulesProfile }, tokens: { tokens: tokensProfile }, 'rules-load': { 'rules-load': rulesLoadProfile } };
 
 // ---- the run -----------------------------------------------------------------------------------------------------------------------------------
 export async function run(opts, deps = {}) {
@@ -258,7 +262,7 @@ export async function run(opts, deps = {}) {
       return guard(o.adminMs + 2000, label, p);
     };
     const rulesUrl = urls.data('.settings/rules'), prefixUrl = urls.data(o.prefix.slice(1));
-    const want = suite === 'small' ? packetRules(o.prefix) : suite === 'rest' ? restRules(o.prefix) : suite === 'rules' ? globalRules(o.prefix) : suite === 'tokens' ? tokensRules(o.prefix) : suiteRules(S.parts, o.prefix), installBody = JSON.stringify(want);
+    const want = suite === 'rules-load' ? null : suite === 'small' ? packetRules(o.prefix) : suite === 'rest' ? restRules(o.prefix) : suite === 'rules' ? globalRules(o.prefix) : suite === 'tokens' ? tokensRules(o.prefix) : suiteRules(S.parts, o.prefix), installBody = JSON.stringify(want);
     if (production) {
       const r = await rest('instance', 'GET', urls.instance), v = JSON.parse(r.text);
       if (r.status !== 200 || v.type !== 'USER_DATABASE' || v.state !== 'ACTIVE' || !v.name.endsWith(`/instances/${T.namespace}`)) throw new Error('instance is not ACTIVE');
@@ -266,17 +270,19 @@ export async function run(opts, deps = {}) {
     const before = await rest('rules-before', 'GET', rulesUrl);
     if (before.status !== 200 || (production && sha256(before.text) !== T.baselineRulesSha256)) throw new Error('Rules are not the baseline');
     state.baselineText = before.text;
-    const pre = await rest('prefix-before', 'GET', prefixUrl);
-    if (pre.status !== 200 || pre.text.trim() !== 'null') throw new Error('prefix is not null');
-    state.touched = true;   // from the PUT on, the cleanup runs even if the answer never arrives
-    const put = await rest('rules-install', 'PUT', rulesUrl, { body: installBody });
-    if (unknownStatus(put.status)) result.unverified.push('unknown mutation outcome: rules-install');   // below 200, 3xx or 5xx: the Rules may or may not have changed: exit 3, claims kept, A2
-    const back = await rest('rules-installed', 'GET', rulesUrl);
-    if (put.status !== 200 || back.status !== 200 || !isDeepStrictEqual(JSON.parse(back.text), want)) throw new Error('Rules install not read back');
+    if (suite !== 'rules-load') {
+      const pre = await rest('prefix-before', 'GET', prefixUrl);
+      if (pre.status !== 200 || pre.text.trim() !== 'null') throw new Error('prefix is not null');
+      state.touched = true;   // from the PUT on, the cleanup runs even if the answer never arrives
+      const put = await rest('rules-install', 'PUT', rulesUrl, { body: installBody });
+      if (unknownStatus(put.status)) result.unverified.push('unknown mutation outcome: rules-install');   // below 200, 3xx or 5xx: the Rules may or may not have changed: exit 3, claims kept, A2
+      const back = await rest('rules-installed', 'GET', rulesUrl);
+      if (put.status !== 200 || back.status !== 200 || !isDeepStrictEqual(JSON.parse(back.text), want)) throw new Error('Rules install not read back');
+    } else { state.touched = true; }
     for (const { name: profile, suite: part, transport } of S.plan) {
       if (abortReason) break;
       const area = AREAS[part];
-      const ctx = { profile, scope: `${o.prefix}/${area}/${profile}`.slice(1), transport, databaseURL: urls.databaseURL, projectId: T.projectId, local: !production, target: T, journal, counter, abort: abortFn, caseMs: o.caseMs, closeMs: o.closeMs, closers: [], ...(part === 'admin' ? { adminToken } : {}), ...(REST_PARTS.includes(part) ? { rest, restUrl: urls.raw } : {}), ...(part === 'rules' ? { installBody } : {}), ...(part === 'rules' || part === 'tokens' ? { probeDelayMs: o.probeDelayMs ?? PROBE_DELAY_MS[production ? 'production' : 'emulator'] } : {}) };
+      const ctx = { profile, scope: `${o.prefix}/${area}/${profile}`.slice(1), transport, databaseURL: urls.databaseURL, projectId: T.projectId, local: !production, target: T, journal, counter, abort: abortFn, caseMs: o.caseMs, closeMs: o.closeMs, closers: [], ...(part === 'admin' ? { adminToken } : {}), ...(REST_PARTS.includes(part) ? { rest, restUrl: urls.raw } : {}), ...(part === 'rules' ? { installBody } : {}), ...(part === 'rules-load' ? { baselineText: state.baselineText } : {}), ...(part === 'rules' || part === 'tokens' ? { probeDelayMs: o.probeDelayMs ?? PROBE_DELAY_MS[production ? 'production' : 'emulator'] } : {}) };
       let rows;
       const profilePromise = (async () => (part === 'small' ? d.profiles[transport](ctx) : d.suiteProfiles[part][transport](ctx)))(), drain = async () => { for (const close of ctx.closers.splice(0).reverse()) await withTimeout(o.closeMs, `close ${profile}`, close()).catch(() => result.unverified.push(`close ${profile}`)); };
       try { rows = await guard(o.profileMs, `profile ${profile}`, profilePromise); }
@@ -286,7 +292,7 @@ export async function run(opts, deps = {}) {
       for (const label of rows.flatMap(row => row.unknown ?? [])) result.unverified.push(`unknown ${REST_PARTS.includes(part) ? 'REST' : 'SDK'} mutation outcome: ${profile}/${label}`);   // a write, push or transaction that hit its deadline: like an unknown REST mutation it keeps the claims for the A2 read-back
       for (const label of rows.flatMap(row => row.unknownObservation ?? [])) (result.unknownObservations ??= []).push(`${profile}/${label}`);   // a GET whose answer cannot be judged: nothing changed, so no A2 read-back, but the case is not ok and is never counted
       result.cases.push(...rows.map(({ value, steps, ...row }) => ({ profile, ...row })));
-      if (rows.some(row => !row.ok) && !o.continueOnFailure) break;
+      if (rows.some(row => !row.ok) && (!o.continueOnFailure || part === 'rules-load')) break;
     }
     const partOf = name => S.plan.find(p => p.name === name)?.suite;
     const adminNames = S.plan.filter(p => p.suite === 'admin').map(p => p.name);
@@ -307,11 +313,13 @@ export async function run(opts, deps = {}) {
     if (state.touched) {   // restoration: bounded, independent steps, never re-sent on an unknown answer, paid from the reserve
       const cleanup = async (label, method, url, extra, ok) => { try { const r = await admin.rest(label, method, url, { ...extra, cleanup: true }); return ok(r) ? 'verified' : 'unverified'; } catch { return 'unverified'; } };
       const rulesUrl = urls.data('.settings/rules'), prefixUrl = urls.data(o.prefix.slice(1));
-      const del = await cleanup('prefix-delete', 'DELETE', prefixUrl, {}, r => r.status === 200), nul = await cleanup('prefix-null', 'GET', prefixUrl, {}, r => r.status === 200 && r.text.trim() === 'null');
-      result.cleanup.prefix = del === 'verified' && nul === 'verified' ? 'verified' : 'unverified';
+      if (suite !== 'rules-load') {
+        const del = await cleanup('prefix-delete', 'DELETE', prefixUrl, {}, r => r.status === 200), nul = await cleanup('prefix-null', 'GET', prefixUrl, {}, r => r.status === 200 && r.text.trim() === 'null');
+        result.cleanup.prefix = del === 'verified' && nul === 'verified' ? 'verified' : 'unverified';
+      }
       const restore = await cleanup('rules-restore', 'PUT', urls.data('.settings/rules'), { body: state.baselineText }, r => r.status === 200), same = await cleanup('rules-restored', 'GET', rulesUrl, {}, r => r.status === 200 && r.text === state.baselineText);
       result.cleanup.rules = restore === 'verified' && same === 'verified' ? 'verified' : 'unverified';
-      if (result.cleanup.prefix !== 'verified' || result.cleanup.rules !== 'verified') result.unverified.push('cleanup');
+      if ((suite !== 'rules-load' && result.cleanup.prefix !== 'verified') || result.cleanup.rules !== 'verified') result.unverified.push('cleanup');
     }
     if (admin?.unknownMutations.length) result.unverified.push(`unknown mutation outcome: ${admin.unknownMutations.join()}`);
     if (result.unverified.length) { exit = 3; result.status = 'unverified'; }
@@ -363,7 +371,7 @@ async function main(argv) {
   if (argv[0] === 'readback') return readbackCommand(argv);
   if (arg('--target') === 'production') productionEnvironment();
   const kind = arg('--target'), runId = arg('--run-id'), prefix = arg('--prefix'), directCap = Number(arg('--direct-cap')), suite = arg('--suite') ?? 'small';
-  if (!Object.hasOwn(SUITES, suite)) throw new Error('usage: --suite small|events|admin|events+admin|rest|rules|tokens');
+  if (!Object.hasOwn(SUITES, suite)) throw new Error('usage: --suite small|events|admin|events+admin|rest|rules|tokens|rules-load');
   const capMax = SUITES[suite].capMax;
   if (!['production', 'emulator'].includes(kind) || !/^[A-Za-z0-9-]{4,64}$/.test(runId ?? '') || !Number.isSafeInteger(directCap) || directCap < 20 || directCap > capMax) throw new Error(`usage: --target production|emulator --run-id ID --prefix /p --direct-cap 20..${capMax}`);
   packetRules(prefix);

@@ -369,3 +369,11 @@ test('the small suite result keeps its recorded members: no prefix', async () =>
     assert.equal(Object.hasOwn(result, 'prefix'), false); assert.equal(Object.hasOwn(result, 'suite'), false); assert.equal(Object.hasOwn(result, 'adminStartup'), false);
   } finally { server.close(); rmSync(out, { recursive: true, force: true }); }
 });
+
+test('rules-load approval requires its own suite line', () => {
+  const want = { runId: 'RULES-LOAD-01', scriptSha256: 'a'.repeat(64), directCap: 60, prefix: '/p', suite: 'rules-load' };
+  const line = suite => `- 2026-11-05 | RTDB-SMALL-OBSERVER ${want.runId} | decision=APPROVE; scriptSha256=${want.scriptSha256}; directCap=60; adc=1; prefix=/p; suite=${suite}; basis=2217 | coordinator | test`;
+  assert.throws(() => checkApproval('', want));
+  assert.throws(() => checkApproval(line('tokens'), want));
+  assert.doesNotThrow(() => checkApproval(line('rules-load'), want));
+});

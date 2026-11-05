@@ -38,7 +38,7 @@
     },
     {
       "path": "tools/sdk-smoke-database/rtdb-sdk-small-fixture.mjs",
-      "sha256": "edd29af9b584763123db23117140d502cd4a80299797f68170ea9beb15e64d6d"
+      "sha256": "8ad27925cf5b52d2488cdd2b226d415eabf05d2b1597800ebfe24f5aa0f78daf"
     },
     {
       "path": "tools/sdk-smoke-database/rtdb-sdk-small-judge.mjs",
@@ -70,15 +70,15 @@
     },
     {
       "path": "tools/sdk-smoke-database/sdk-observer/lib.mjs",
-      "sha256": "f666623f92c2b5b64a32e3bd8710ca4458e3b2fcf061e64a9e5d1633197319ad"
+      "sha256": "6459e3ecae58a36f0b2037dab03c2490f96d93c707de681cb7e585822d89a7ab"
     },
     {
       "path": "tools/sdk-smoke-database/sdk-observer/observer.mjs",
-      "sha256": "3f77a487397e4ab192321371394cad73058dcf2d474a20058dfefb11d1aeaad6"
+      "sha256": "4a071f4e19c36e5f528a939cc9a19e7ea57ebdf38fbb89818029b8a89c2e2765"
     },
     {
       "path": "conformance/src/rtdb-release-replay.mjs",
-      "sha256": "7acc4576342e051c9daa76949295ec4b75023ead1de91b8743c6aee7a8d6ab82"
+      "sha256": "5f369cc3930589edad87bd71718fda682f2019832c6df03211f7c193ac5cc814"
     },
     {
       "path": "tools/sdk-smoke-database/cv11-genuine-auth.mjs",
@@ -132,21 +132,21 @@
   "command": "node conformance/src/rtdb-release-replay.mjs local sdk-small --fireemu <binary> --out <dir> --export <file> (strict, as the release job runs it); node tools/sdk-smoke-database/rtdb-sdk-small.mjs local --fireemu <binary> --out <dir> --profile emulator --modules tools/sdk-smoke-database/node_modules, then conformance/src/rtdb-release-replay.mjs's adjudicate for the same export shape",
   "sdk": "firebase 12.18.0, firebase-admin 14.3.0, playwright 1.62.1 (headless Chromium)",
   "binding": {
-    "release": "v0.43.0",
-    "releaseAsset": "fireemu-0.43.0-darwin-arm64.tar.gz",
-    "releaseAssetSha256": "bea548069451e642cdc5d4736f61b520a0f9ec6ff091add0df380bceb4dd08ef",
-    "sourceCommit": "afe1234851c593031c1eea2e2304f3e2a0dc3f01",
-    "tagObject": "8253a0dce77bb605e28946ce283473149c10ee13",
-    "binarySha256": "a0e1688bf4e915c0be5d973019e3e643cb15a3f869e596cdf63937aeae506e7b",
+    "release": "closure-build",
+    "releaseAsset": "unpublished release-profile build of source commit cae9f99c8f0fc3285839cfe6ee02c10c27505ca9 (cargo build --release --locked -p fireemu, RUSTC_WRAPPER empty, fresh worktree-local target directory)",
+    "releaseAssetSha256": "44c3c889b81a07d570e0eeb34eb42f730a42066d03f981c0dac46255279c8401",
+    "sourceCommit": "cae9f99c8f0fc3285839cfe6ee02c10c27505ca9",
+    "tagObject": null,
+    "binarySha256": "44c3c889b81a07d570e0eeb34eb42f730a42066d03f981c0dac46255279c8401",
     "version": "fireemu 0.43.0",
-    "toolCommit": "5f92a92c42ec8f6309b9b55c8eef91addeeb687a",
+    "toolCommit": "dc7253f12a56e386d0cf674e7f5f1e93172901d0",
     "host": "Darwin arm64",
     "productionRequests": 0
   },
   "profiles": {
     "strict": {
       "profile": "strict",
-      "binarySha256": "a0e1688bf4e915c0be5d973019e3e643cb15a3f869e596cdf63937aeae506e7b",
+      "binarySha256": "44c3c889b81a07d570e0eeb34eb42f730a42066d03f981c0dac46255279c8401",
       "match": true,
       "counts": {
         "MATCH": 32,
@@ -337,7 +337,7 @@
           "verdict": "MATCH"
         }
       ],
-      "exportSha256": "039fe965e9f6660e95389650dcfe70fa404c796f2eed8b2fa4f4ba2b6aad2273",
+      "exportSha256": "89757ab5e83249a658425219194ce4bae96d354e094e8dae284086a8b541cc6e",
       "sdkResources": {
         "package-lock.json": "fa9dab58f70425ee28c86a59f42135ab5533c3d8a19d3ffab6abe3bde5428a53",
         "node_modules/firebase/package.json": "8b02ad75fe0a38e30f4ab8116c0a46f076206bb5f924890c198434243bdb2232",
@@ -350,7 +350,7 @@
     },
     "emulator": {
       "profile": "emulator",
-      "binarySha256": "a0e1688bf4e915c0be5d973019e3e643cb15a3f869e596cdf63937aeae506e7b",
+      "binarySha256": "44c3c889b81a07d570e0eeb34eb42f730a42066d03f981c0dac46255279c8401",
       "match": true,
       "counts": {
         "MATCH": 32,
@@ -541,7 +541,7 @@
           "verdict": "MATCH"
         }
       ],
-      "exportSha256": "70b72f18be79949f595009cbc4094f0bc168bb61e3d6794e72186229a9550bbf",
+      "exportSha256": "4679fbdf88a45ee27a10ec4bd11e32ac8b9f09a46dfadc1b060a7553acd9dcb8",
       "sdkResources": {
         "package-lock.json": "fa9dab58f70425ee28c86a59f42135ab5533c3d8a19d3ffab6abe3bde5428a53",
         "node_modules/firebase/package.json": "8b02ad75fe0a38e30f4ab8116c0a46f076206bb5f924890c198434243bdb2232",

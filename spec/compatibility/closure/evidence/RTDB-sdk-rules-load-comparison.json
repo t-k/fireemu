@@ -1,0 +1,283 @@
+{
+  "kind": "rtdb-production-comparison-v1",
+  "parent": "RTDB",
+  "comparison": "sdk-rules-load",
+  "conditions": [
+    "RTDB/rules-document-load-diagnostics"
+  ],
+  "production": {
+    "recording": "RTDB-RULES-LOAD-20261105-01",
+    "project": "fireemu-oracle-query",
+    "instance": "fireemu-q-rtdb2",
+    "recordedOn": "2026-11-05",
+    "suite": "rules-load",
+    "observations": 14,
+    "requests": {
+      "requests": 27,
+      "direct": 25,
+      "reserve": 2,
+      "adc": 1,
+      "overflow": 0
+    },
+    "scriptSha256": "9c2cb8b9d9a25e56e1458e04cddfa2f09e963a464cee4d958300687c2d52ebf2",
+    "sourceHead": "cae9f99c8f0fc3285839cfe6ee02c10c27505ca9",
+    "packetSha256": "e4de3fe6ebcba64eb7da79d63bb97c718ded616146fe756d8d2dac3a4003c2df",
+    "approvals": [
+      2266,
+      2267
+    ],
+    "sandboxLedger": {
+      "booking": 1268,
+      "close": 1269
+    }
+  },
+  "fixture": {
+    "path": "tools/sdk-smoke-database/fixtures/production-sdk-rules-load.json",
+    "sha256": "298f58e842e3982e42c0638017bfc285224867ac39359da7b65eb8b2b43c061b"
+  },
+  "tool": [
+    {
+      "path": "tools/sdk-smoke-database/rtdb-sdk-rules-load.mjs",
+      "sha256": "af1e060d3d120dc5e17c57341131bdf0ac25471a4820bbb19d5e6b4897aba9b1"
+    },
+    {
+      "path": "tools/sdk-smoke-database/rtdb-sdk-rules-load-fixture.mjs",
+      "sha256": "2e6d3de6b75536172415ff224586240cd605b95a2d3ac48063f20ddfea086e97"
+    },
+    {
+      "path": "tools/sdk-smoke-database/rtdb-sdk-rules-load-judge.mjs",
+      "sha256": "cc8870a27367e872f96252a3db0b9feebd22eefb7419fd0763355ddff262d2bd"
+    },
+    {
+      "path": "tools/sdk-smoke-database/sdk-observer/rules-load-suite.mjs",
+      "sha256": "b38ac554bd3baed9d7c683528cd45acfdf5a8d0f16820b6b6f1a502a3ae517d9"
+    },
+    {
+      "path": "tools/sdk-smoke-database/sdk-observer/lib.mjs",
+      "sha256": "6459e3ecae58a36f0b2037dab03c2490f96d93c707de681cb7e585822d89a7ab"
+    },
+    {
+      "path": "tools/sdk-smoke-database/sdk-observer/observer.mjs",
+      "sha256": "4a071f4e19c36e5f528a939cc9a19e7ea57ebdf38fbb89818029b8a89c2e2765"
+    }
+  ],
+  "observerManifestSha256": "9c2cb8b9d9a25e56e1458e04cddfa2f09e963a464cee4d958300687c2d52ebf2",
+  "command": "node tools/sdk-smoke-database/rtdb-sdk-rules-load.mjs local --fireemu <binary> --out <dir> --profile strict|emulator --against tools/sdk-smoke-database/fixtures/production-sdk-rules-load.json",
+  "binding": {
+    "release": "closure-build",
+    "releaseAsset": "unpublished release-profile build of source commit cae9f99c8f0fc3285839cfe6ee02c10c27505ca9 (cargo build --release --locked -p fireemu, RUSTC_WRAPPER empty, fresh worktree-local target directory)",
+    "releaseAssetSha256": "44c3c889b81a07d570e0eeb34eb42f730a42066d03f981c0dac46255279c8401",
+    "sourceCommit": "cae9f99c8f0fc3285839cfe6ee02c10c27505ca9",
+    "tagObject": null,
+    "binarySha256": "44c3c889b81a07d570e0eeb34eb42f730a42066d03f981c0dac46255279c8401",
+    "version": "fireemu 0.43.0",
+    "toolCommit": "dc7253f12a56e386d0cf674e7f5f1e93172901d0",
+    "host": "Darwin arm64",
+    "productionRequests": 0
+  },
+  "profiles": {
+    "strict": {
+      "profile": "strict",
+      "binarySha256": "44c3c889b81a07d570e0eeb34eb42f730a42066d03f981c0dac46255279c8401",
+      "match": true,
+      "counts": {
+        "MATCH": 14,
+        "MISMATCH": 0,
+        "NEEDS_REVIEW": 0
+      },
+      "rows": [
+        {
+          "profile": "r1-rules-load",
+          "case": "g-dup-key",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-load",
+          "case": "g-dup-read",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-load",
+          "case": "h-dup-indexOn",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-load",
+          "case": "e-index-root-dot",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-load",
+          "case": "e-index-root-dollar",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-load",
+          "case": "e-index-root-empty",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-load",
+          "case": "h-index:\"a//b\"",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-load",
+          "case": "g-dup-key",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-load",
+          "case": "g-dup-read",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-load",
+          "case": "h-dup-indexOn",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-load",
+          "case": "e-index-root-dot",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-load",
+          "case": "e-index-root-dollar",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-load",
+          "case": "e-index-root-empty",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-load",
+          "case": "h-index:\"a//b\"",
+          "verdict": "MATCH"
+        }
+      ],
+      "journalSha256": "121ba9a84803ac7839e71c6cb021cc852e8b83b19f25803342640152c55a8463"
+    },
+    "emulator": {
+      "profile": "emulator",
+      "binarySha256": "44c3c889b81a07d570e0eeb34eb42f730a42066d03f981c0dac46255279c8401",
+      "match": true,
+      "counts": {
+        "MATCH": 14,
+        "MISMATCH": 0,
+        "NEEDS_REVIEW": 0
+      },
+      "rows": [
+        {
+          "profile": "r1-rules-load",
+          "case": "g-dup-key",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-load",
+          "case": "g-dup-read",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-load",
+          "case": "h-dup-indexOn",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-load",
+          "case": "e-index-root-dot",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-load",
+          "case": "e-index-root-dollar",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-load",
+          "case": "e-index-root-empty",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-load",
+          "case": "h-index:\"a//b\"",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-load",
+          "case": "g-dup-key",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-load",
+          "case": "g-dup-read",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-load",
+          "case": "h-dup-indexOn",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-load",
+          "case": "e-index-root-dot",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-load",
+          "case": "e-index-root-dollar",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-load",
+          "case": "e-index-root-empty",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-load",
+          "case": "h-index:\"a//b\"",
+          "verdict": "MATCH"
+        }
+      ],
+      "journalSha256": "121ba9a84803ac7839e71c6cb021cc852e8b83b19f25803342640152c55a8463"
+    }
+  },
+  "official": {
+    "jar": {
+      "name": "firebase-database-emulator",
+      "version": "4.11.2",
+      "sha256": "b70d99344caf17c98b6f910fa8f6edf32a7c016cb1035e8915f70d38901eb97f"
+    },
+    "fixture": {
+      "path": "tools/sdk-smoke-database/fixtures/jar-sdk-rules-load.json",
+      "sha256": "121ba9a84803ac7839e71c6cb021cc852e8b83b19f25803342640152c55a8463"
+    },
+    "tool": [
+      {
+        "path": "tools/sdk-smoke-database/rtdb-sdk-jar.mjs",
+        "sha256": "f7c9179bf449baf09e21986c9bf9f72d544d5a7d173f25186168a8a1dc064fe2"
+      },
+      {
+        "path": "tools/sdk-smoke-database/jar.mjs",
+        "sha256": "2648dbdb0fc0312bd92e61a5ac7f6edb6e36737be003b439884cb666a8885801"
+      }
+    ],
+    "officialVsProduction": {
+      "counts": {
+        "MATCH": 14,
+        "MISMATCH": 0,
+        "NEEDS_REVIEW": 0
+      }
+    },
+    "emulatorVsOfficial": {
+      "counts": {
+        "MATCH": 14,
+        "MISMATCH": 0,
+        "NEEDS_REVIEW": 0
+      },
+      "rows": "all MATCH"
+    },
+    "emulatorDifferencesFromProduction": []
+  }
+}

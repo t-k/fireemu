@@ -1,0 +1,1506 @@
+{
+  "kind": "rtdb-production-comparison-v1",
+  "parent": "RTDB",
+  "comparison": "sdk-rules",
+  "conditions": [
+    "RTDB/rules-claims-indexes-and-load-texts"
+  ],
+  "production": {
+    "recording": "RTDB-RULES-20261104-01",
+    "project": "fireemu-oracle-query",
+    "instance": "fireemu-q-rtdb2",
+    "recordedOn": "2026-11-04",
+    "suite": "rules",
+    "observations": 140,
+    "requests": {
+      "requests": 168,
+      "direct": 164,
+      "reserve": 4,
+      "adc": 1,
+      "overflow": 0
+    },
+    "scriptSha256": "a6efb24ffabf5cfefa99264136dac0c2c3928a04e3514ee13dcf23d21f7d29c1",
+    "sourceHead": "667411cccd8226f52b324a7834c2f8841376ff53",
+    "packetSha256": "fc7e33651aad67bcf60a06dac4f27a556e5c194e45ec45920c12847710d49868",
+    "approvals": [
+      2239,
+      2240
+    ],
+    "sandboxLedger": {
+      "booking": 1257,
+      "close": 1258
+    }
+  },
+  "fixture": {
+    "path": "tools/sdk-smoke-database/fixtures/production-sdk-rules.json",
+    "sha256": "455517043f3628bf3930c8db9792bf297e077c07152726f76c27982f6d4ce49b"
+  },
+  "tool": [
+    {
+      "path": "tools/sdk-smoke-database/rtdb-sdk-rules.mjs",
+      "sha256": "e58f4896855c8155010106986407d70078692eb7bffc9e196a0a3295af729e24"
+    },
+    {
+      "path": "tools/sdk-smoke-database/rtdb-sdk-rules-fixture.mjs",
+      "sha256": "214ddcdeb8048e4cbc078079e4a64a8d27b82e71af5ee34e143638e8ed591593"
+    },
+    {
+      "path": "tools/sdk-smoke-database/rtdb-sdk-rules-judge.mjs",
+      "sha256": "ecef85684b3afe3721223c40c29621d406aedac203ec873696d2a6817922d13e"
+    },
+    {
+      "path": "tools/sdk-smoke-database/sdk-observer/rules-suite.mjs",
+      "sha256": "2e44d5e785d519e675d0b904a2eaeb6ad523aee63d0e528ecaf712d8b0f79fe2"
+    },
+    {
+      "path": "tools/sdk-smoke-database/sdk-observer/lib.mjs",
+      "sha256": "6459e3ecae58a36f0b2037dab03c2490f96d93c707de681cb7e585822d89a7ab"
+    },
+    {
+      "path": "tools/sdk-smoke-database/sdk-observer/observer.mjs",
+      "sha256": "4a071f4e19c36e5f528a939cc9a19e7ea57ebdf38fbb89818029b8a89c2e2765"
+    }
+  ],
+  "observerManifestSha256": "9c2cb8b9d9a25e56e1458e04cddfa2f09e963a464cee4d958300687c2d52ebf2",
+  "command": "node tools/sdk-smoke-database/rtdb-sdk-rules.mjs local --fireemu <binary> --out <dir> --profile strict|emulator --against tools/sdk-smoke-database/fixtures/production-sdk-rules.json",
+  "binding": {
+    "release": "closure-build",
+    "releaseAsset": "unpublished release-profile build of source commit cae9f99c8f0fc3285839cfe6ee02c10c27505ca9 (cargo build --release --locked -p fireemu, RUSTC_WRAPPER empty, fresh worktree-local target directory)",
+    "releaseAssetSha256": "44c3c889b81a07d570e0eeb34eb42f730a42066d03f981c0dac46255279c8401",
+    "sourceCommit": "cae9f99c8f0fc3285839cfe6ee02c10c27505ca9",
+    "tagObject": null,
+    "binarySha256": "44c3c889b81a07d570e0eeb34eb42f730a42066d03f981c0dac46255279c8401",
+    "version": "fireemu 0.43.0",
+    "toolCommit": "dc7253f12a56e386d0cf674e7f5f1e93172901d0",
+    "host": "Darwin arm64",
+    "productionRequests": 0
+  },
+  "profiles": {
+    "strict": {
+      "profile": "strict",
+      "binarySha256": "44c3c889b81a07d570e0eeb34eb42f730a42066d03f981c0dac46255279c8401",
+      "match": true,
+      "counts": {
+        "MATCH": 140,
+        "MISMATCH": 0,
+        "NEEDS_REVIEW": 0
+      },
+      "rows": [
+        {
+          "profile": "r1-rules",
+          "case": "seed",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "tok-admin-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "tok-admin-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "tok-level-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "tok-level-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "tok-provider-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "tok-provider-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "tok-verified-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "tok-verified-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "tok-name-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "tok-name-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "tok-email-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "tok-email-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "tok-not-object",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "ix-a",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "ix-b-first",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "ix-c",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "ix-c-last",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "ix-key-last",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "ix-value-unindexed",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "ixv-value-first",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "ixn-inner",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "ixn-parent",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "ix-none",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "wv-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "wv-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "vd-null",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "mp-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "mp-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "rc-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "rc-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "nw-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "rp-child",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "rp-parent",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "q-ochild-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "q-ochild-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "q-lfirst-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "q-lfirst-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "q-start",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "q-end",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "q-equal",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "q-below",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "cc-d15",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "cc-d1e7",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "cc-d100",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "cc-dlong",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "cc-dsmall",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "cw-etag",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "cw-ifmatch",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "pn-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "pn-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "pp-patch",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "nb-timeout-1min",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "nb-shallow-start",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "nb-shallow-all",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "nb-range",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "load-paren",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "load-token",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "load-ident",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "load-types",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "load-read-number",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "load-indexon-number",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "load-two-paths",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "load-validate-write",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "load-regex",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "load-long",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "lex-feff",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "lex-nel",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "lex-lazy",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "lex-number",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "seed",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "tok-admin-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "tok-admin-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "tok-level-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "tok-level-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "tok-provider-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "tok-provider-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "tok-verified-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "tok-verified-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "tok-name-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "tok-name-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "tok-email-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "tok-email-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "tok-not-object",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "ix-a",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "ix-b-first",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "ix-c",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "ix-c-last",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "ix-key-last",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "ix-value-unindexed",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "ixv-value-first",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "ixn-inner",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "ixn-parent",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "ix-none",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "wv-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "wv-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "vd-null",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "mp-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "mp-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "rc-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "rc-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "nw-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "rp-child",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "rp-parent",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "q-ochild-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "q-ochild-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "q-lfirst-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "q-lfirst-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "q-start",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "q-end",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "q-equal",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "q-below",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "cc-d15",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "cc-d1e7",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "cc-d100",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "cc-dlong",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "cc-dsmall",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "cw-etag",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "cw-ifmatch",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "pn-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "pn-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "pp-patch",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "nb-timeout-1min",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "nb-shallow-start",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "nb-shallow-all",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "nb-range",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "load-paren",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "load-token",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "load-ident",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "load-types",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "load-read-number",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "load-indexon-number",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "load-two-paths",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "load-validate-write",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "load-regex",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "load-long",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "lex-feff",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "lex-nel",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "lex-lazy",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "lex-number",
+          "verdict": "MATCH"
+        }
+      ],
+      "journalSha256": "2343b336d6ce40d762b772b217035ca4fe3cc68f0333de6acdb2b9996dfe7a6c"
+    },
+    "emulator": {
+      "profile": "emulator",
+      "binarySha256": "44c3c889b81a07d570e0eeb34eb42f730a42066d03f981c0dac46255279c8401",
+      "match": true,
+      "counts": {
+        "MATCH": 140,
+        "MISMATCH": 0,
+        "NEEDS_REVIEW": 0
+      },
+      "rows": [
+        {
+          "profile": "r1-rules",
+          "case": "seed",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "tok-admin-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "tok-admin-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "tok-level-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "tok-level-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "tok-provider-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "tok-provider-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "tok-verified-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "tok-verified-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "tok-name-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "tok-name-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "tok-email-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "tok-email-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "tok-not-object",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "ix-a",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "ix-b-first",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "ix-c",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "ix-c-last",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "ix-key-last",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "ix-value-unindexed",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "ixv-value-first",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "ixn-inner",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "ixn-parent",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "ix-none",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "wv-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "wv-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "vd-null",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "mp-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "mp-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "rc-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "rc-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "nw-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "rp-child",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "rp-parent",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "q-ochild-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "q-ochild-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "q-lfirst-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "q-lfirst-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "q-start",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "q-end",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "q-equal",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "q-below",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "cc-d15",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "cc-d1e7",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "cc-d100",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "cc-dlong",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "cc-dsmall",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "cw-etag",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "cw-ifmatch",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "pn-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "pn-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "pp-patch",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "nb-timeout-1min",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "nb-shallow-start",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "nb-shallow-all",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "nb-range",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "load-paren",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "load-token",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "load-ident",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "load-types",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "load-read-number",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "load-indexon-number",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "load-two-paths",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "load-validate-write",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "load-regex",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "load-long",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "lex-feff",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "lex-nel",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "lex-lazy",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules",
+          "case": "lex-number",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "seed",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "tok-admin-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "tok-admin-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "tok-level-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "tok-level-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "tok-provider-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "tok-provider-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "tok-verified-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "tok-verified-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "tok-name-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "tok-name-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "tok-email-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "tok-email-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "tok-not-object",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "ix-a",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "ix-b-first",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "ix-c",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "ix-c-last",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "ix-key-last",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "ix-value-unindexed",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "ixv-value-first",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "ixn-inner",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "ixn-parent",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "ix-none",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "wv-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "wv-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "vd-null",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "mp-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "mp-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "rc-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "rc-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "nw-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "rp-child",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "rp-parent",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "q-ochild-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "q-ochild-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "q-lfirst-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "q-lfirst-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "q-start",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "q-end",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "q-equal",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "q-below",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "cc-d15",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "cc-d1e7",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "cc-d100",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "cc-dlong",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "cc-dsmall",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "cw-etag",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "cw-ifmatch",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "pn-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "pn-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "pp-patch",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "nb-timeout-1min",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "nb-shallow-start",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "nb-shallow-all",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "nb-range",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "load-paren",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "load-token",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "load-ident",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "load-types",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "load-read-number",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "load-indexon-number",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "load-two-paths",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "load-validate-write",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "load-regex",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "load-long",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "lex-feff",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "lex-nel",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "lex-lazy",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules",
+          "case": "lex-number",
+          "verdict": "MATCH"
+        }
+      ],
+      "journalSha256": "2343b336d6ce40d762b772b217035ca4fe3cc68f0333de6acdb2b9996dfe7a6c"
+    }
+  }
+}

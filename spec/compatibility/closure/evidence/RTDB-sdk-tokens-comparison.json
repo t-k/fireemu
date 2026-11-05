@@ -1,0 +1,1307 @@
+{
+  "kind": "rtdb-production-comparison-v1",
+  "parent": "RTDB",
+  "comparison": "sdk-tokens",
+  "conditions": [
+    "RTDB/invalid-credentials-rest"
+  ],
+  "production": {
+    "recording": "RTDB-TOKENS-20261104-01",
+    "project": "fireemu-oracle-query",
+    "instance": "fireemu-q-rtdb2",
+    "recordedOn": "2026-11-04",
+    "suite": "tokens",
+    "observations": 54,
+    "requests": {
+      "requests": 66,
+      "direct": 62,
+      "reserve": 4,
+      "adc": 1,
+      "overflow": 0
+    },
+    "scriptSha256": "be76c05bc729d07e215dbb807d68cdfb901d258bf412d0353be740a249fab90a",
+    "sourceHead": "acac9bde8dc50e8731860fedeec867b6383fe8bb",
+    "packetSha256": "de4f14acefd5b1a8c7a4764939cff80d9ecd7a23384c0137cf6ba7d54892177d",
+    "approvals": [
+      2253,
+      2254
+    ],
+    "sandboxLedger": {
+      "booking": 1262,
+      "close": 1263
+    }
+  },
+  "fixture": {
+    "path": "tools/sdk-smoke-database/fixtures/production-sdk-tokens.json",
+    "sha256": "877d31ba10797590672527623da0b07429ce614d7f1e8240f457bd1168e1e502"
+  },
+  "tool": [
+    {
+      "path": "tools/sdk-smoke-database/rtdb-sdk-tokens.mjs",
+      "sha256": "8ad8d2f9c32ca3ff6457a06e1c7fcb3714d11f4f3b67d6fefbf6861065484f0c"
+    },
+    {
+      "path": "tools/sdk-smoke-database/rtdb-sdk-tokens-fixture.mjs",
+      "sha256": "224e82e5ebf6d142b46179c313b56cbfdb13c9ec28daeedc207bf6821f84dc7f"
+    },
+    {
+      "path": "tools/sdk-smoke-database/rtdb-sdk-tokens-judge.mjs",
+      "sha256": "219dca27ff7d7abf48555fc0f69039d9e270cf375ffee993988edc7279f8af60"
+    },
+    {
+      "path": "tools/sdk-smoke-database/sdk-observer/tokens-suite.mjs",
+      "sha256": "2420c5dd2059fe0e8eca7f6b0e91f8a25826551950a257f3dbd3de5b5940074b"
+    },
+    {
+      "path": "tools/sdk-smoke-database/sdk-observer/lib.mjs",
+      "sha256": "6459e3ecae58a36f0b2037dab03c2490f96d93c707de681cb7e585822d89a7ab"
+    },
+    {
+      "path": "tools/sdk-smoke-database/sdk-observer/observer.mjs",
+      "sha256": "4a071f4e19c36e5f528a939cc9a19e7ea57ebdf38fbb89818029b8a89c2e2765"
+    }
+  ],
+  "observerManifestSha256": "9c2cb8b9d9a25e56e1458e04cddfa2f09e963a464cee4d958300687c2d52ebf2",
+  "command": "node tools/sdk-smoke-database/rtdb-sdk-tokens.mjs local --fireemu <binary> --out <dir> --profile strict|emulator --against tools/sdk-smoke-database/fixtures/production-sdk-tokens.json",
+  "binding": {
+    "release": "closure-build",
+    "releaseAsset": "unpublished release-profile build of source commit cae9f99c8f0fc3285839cfe6ee02c10c27505ca9 (cargo build --release --locked -p fireemu, RUSTC_WRAPPER empty, fresh worktree-local target directory)",
+    "releaseAssetSha256": "44c3c889b81a07d570e0eeb34eb42f730a42066d03f981c0dac46255279c8401",
+    "sourceCommit": "cae9f99c8f0fc3285839cfe6ee02c10c27505ca9",
+    "tagObject": null,
+    "binarySha256": "44c3c889b81a07d570e0eeb34eb42f730a42066d03f981c0dac46255279c8401",
+    "version": "fireemu 0.43.0",
+    "toolCommit": "dc7253f12a56e386d0cf674e7f5f1e93172901d0",
+    "host": "Darwin arm64",
+    "productionRequests": 0
+  },
+  "profiles": {
+    "strict": {
+      "profile": "strict",
+      "binarySha256": "44c3c889b81a07d570e0eeb34eb42f730a42066d03f981c0dac46255279c8401",
+      "match": true,
+      "counts": {
+        "MATCH": 54,
+        "MISMATCH": 0,
+        "NEEDS_REVIEW": 0
+      },
+      "rows": [
+        {
+          "profile": "r1-tokens",
+          "case": "seed",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "ctl-anon-authreq",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "ctl-anon-pub",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "ctl-admin-authreq",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "auth-empty",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "auth-random",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "auth-none-other",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "auth-none-own",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "auth-rs256",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "auth-hs256",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "auth-two-seg",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "auth-huge",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "auth-pct",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "auth-null",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "auth-adc",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "auth-adc-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "auth-random-pub",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "bearer-empty",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "bearer-random",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "bearer-none-own",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "bearer-rs256",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "bearer-null",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "bearer-random-pub",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "at-empty",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "at-random",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "at-rs256",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "at-random-pub",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "seed",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "ctl-anon-authreq",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "ctl-anon-pub",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "ctl-admin-authreq",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "auth-empty",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "auth-random",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "auth-none-other",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "auth-none-own",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "auth-rs256",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "auth-hs256",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "auth-two-seg",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "auth-huge",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "auth-pct",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "auth-null",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "auth-adc",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "auth-adc-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "auth-random-pub",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "bearer-empty",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "bearer-random",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "bearer-none-own",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "bearer-rs256",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "bearer-null",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "bearer-random-pub",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "at-empty",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "at-random",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "at-rs256",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "at-random-pub",
+          "verdict": "MATCH"
+        }
+      ],
+      "journalSha256": "dd4a33a8ab91da612c265dc4c4c57d7ca12dd95d4f0a6d0bce1cd14457605fdf"
+    },
+    "emulator": {
+      "profile": "emulator",
+      "binarySha256": "44c3c889b81a07d570e0eeb34eb42f730a42066d03f981c0dac46255279c8401",
+      "match": false,
+      "counts": {
+        "MATCH": 26,
+        "MISMATCH": 28,
+        "NEEDS_REVIEW": 0
+      },
+      "rows": [
+        {
+          "profile": "r1-tokens",
+          "case": "seed",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "ctl-anon-authreq",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "ctl-anon-pub",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "ctl-admin-authreq",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "auth-empty",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "auth-random",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "auth-none-other",
+          "verdict": "MISMATCH",
+          "differences": [
+            "status",
+            "header:content-length",
+            "body",
+            "bodyBytes"
+          ]
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "auth-none-own",
+          "verdict": "MISMATCH",
+          "differences": [
+            "status",
+            "header:content-length",
+            "body",
+            "bodyBytes"
+          ]
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "auth-rs256",
+          "verdict": "MISMATCH",
+          "differences": [
+            "status",
+            "header:content-length",
+            "body",
+            "bodyBytes"
+          ]
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "auth-hs256",
+          "verdict": "MISMATCH",
+          "differences": [
+            "status",
+            "header:content-length",
+            "body",
+            "bodyBytes"
+          ]
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "auth-two-seg",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "auth-huge",
+          "verdict": "MISMATCH",
+          "differences": [
+            "status",
+            "header:content-length",
+            "body",
+            "bodyBytes"
+          ]
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "auth-pct",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "auth-null",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "auth-adc",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "auth-adc-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "auth-random-pub",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "bearer-empty",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "bearer-random",
+          "verdict": "MISMATCH",
+          "differences": [
+            "status",
+            "header:content-length",
+            "body",
+            "bodyBytes"
+          ]
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "bearer-none-own",
+          "verdict": "MISMATCH",
+          "differences": [
+            "status",
+            "header:content-length",
+            "body",
+            "bodyBytes"
+          ]
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "bearer-rs256",
+          "verdict": "MISMATCH",
+          "differences": [
+            "status",
+            "header:content-length",
+            "body",
+            "bodyBytes"
+          ]
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "bearer-null",
+          "verdict": "MISMATCH",
+          "differences": [
+            "status",
+            "header:content-length",
+            "body",
+            "bodyBytes"
+          ]
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "bearer-random-pub",
+          "verdict": "MISMATCH",
+          "differences": [
+            "status",
+            "header:content-length",
+            "body",
+            "bodyBytes"
+          ]
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "at-empty",
+          "verdict": "MISMATCH",
+          "differences": [
+            "status",
+            "header:content-length",
+            "body",
+            "bodyBytes"
+          ]
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "at-random",
+          "verdict": "MISMATCH",
+          "differences": [
+            "status",
+            "header:content-length",
+            "body",
+            "bodyBytes"
+          ]
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "at-rs256",
+          "verdict": "MISMATCH",
+          "differences": [
+            "status",
+            "header:content-length",
+            "body",
+            "bodyBytes"
+          ]
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "at-random-pub",
+          "verdict": "MISMATCH",
+          "differences": [
+            "status",
+            "header:content-length",
+            "body",
+            "bodyBytes"
+          ]
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "seed",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "ctl-anon-authreq",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "ctl-anon-pub",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "ctl-admin-authreq",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "auth-empty",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "auth-random",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "auth-none-other",
+          "verdict": "MISMATCH",
+          "differences": [
+            "status",
+            "header:content-length",
+            "body",
+            "bodyBytes"
+          ]
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "auth-none-own",
+          "verdict": "MISMATCH",
+          "differences": [
+            "status",
+            "header:content-length",
+            "body",
+            "bodyBytes"
+          ]
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "auth-rs256",
+          "verdict": "MISMATCH",
+          "differences": [
+            "status",
+            "header:content-length",
+            "body",
+            "bodyBytes"
+          ]
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "auth-hs256",
+          "verdict": "MISMATCH",
+          "differences": [
+            "status",
+            "header:content-length",
+            "body",
+            "bodyBytes"
+          ]
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "auth-two-seg",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "auth-huge",
+          "verdict": "MISMATCH",
+          "differences": [
+            "status",
+            "header:content-length",
+            "body",
+            "bodyBytes"
+          ]
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "auth-pct",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "auth-null",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "auth-adc",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "auth-adc-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "auth-random-pub",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "bearer-empty",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "bearer-random",
+          "verdict": "MISMATCH",
+          "differences": [
+            "status",
+            "header:content-length",
+            "body",
+            "bodyBytes"
+          ]
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "bearer-none-own",
+          "verdict": "MISMATCH",
+          "differences": [
+            "status",
+            "header:content-length",
+            "body",
+            "bodyBytes"
+          ]
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "bearer-rs256",
+          "verdict": "MISMATCH",
+          "differences": [
+            "status",
+            "header:content-length",
+            "body",
+            "bodyBytes"
+          ]
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "bearer-null",
+          "verdict": "MISMATCH",
+          "differences": [
+            "status",
+            "header:content-length",
+            "body",
+            "bodyBytes"
+          ]
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "bearer-random-pub",
+          "verdict": "MISMATCH",
+          "differences": [
+            "status",
+            "header:content-length",
+            "body",
+            "bodyBytes"
+          ]
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "at-empty",
+          "verdict": "MISMATCH",
+          "differences": [
+            "status",
+            "header:content-length",
+            "body",
+            "bodyBytes"
+          ]
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "at-random",
+          "verdict": "MISMATCH",
+          "differences": [
+            "status",
+            "header:content-length",
+            "body",
+            "bodyBytes"
+          ]
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "at-rs256",
+          "verdict": "MISMATCH",
+          "differences": [
+            "status",
+            "header:content-length",
+            "body",
+            "bodyBytes"
+          ]
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "at-random-pub",
+          "verdict": "MISMATCH",
+          "differences": [
+            "status",
+            "header:content-length",
+            "body",
+            "bodyBytes"
+          ]
+        }
+      ],
+      "journalSha256": "66388583b700e5a846b0a64c6fddf6e116e4289f7e3ef1a8cffa95493dc605bc"
+    }
+  },
+  "official": {
+    "jar": {
+      "name": "firebase-database-emulator",
+      "version": "4.11.2",
+      "sha256": "b70d99344caf17c98b6f910fa8f6edf32a7c016cb1035e8915f70d38901eb97f"
+    },
+    "fixture": {
+      "path": "tools/sdk-smoke-database/fixtures/jar-sdk-tokens.json",
+      "sha256": "f817274f2e869855d4bdde178e7a785b2cdcfa389c6c19a2be3a6295106f584d"
+    },
+    "tool": [
+      {
+        "path": "tools/sdk-smoke-database/rtdb-sdk-jar.mjs",
+        "sha256": "f7c9179bf449baf09e21986c9bf9f72d544d5a7d173f25186168a8a1dc064fe2"
+      },
+      {
+        "path": "tools/sdk-smoke-database/jar.mjs",
+        "sha256": "2648dbdb0fc0312bd92e61a5ac7f6edb6e36737be003b439884cb666a8885801"
+      }
+    ],
+    "officialVsProduction": {
+      "counts": {
+        "MATCH": 26,
+        "MISMATCH": 28,
+        "NEEDS_REVIEW": 0
+      }
+    },
+    "emulatorVsOfficial": {
+      "counts": {
+        "MATCH": 52,
+        "MISMATCH": 2,
+        "NEEDS_REVIEW": 0
+      },
+      "rows": [
+        {
+          "profile": "r1-tokens",
+          "case": "seed",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "ctl-anon-authreq",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "ctl-anon-pub",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "ctl-admin-authreq",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "auth-empty",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "auth-random",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "auth-none-other",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "auth-none-own",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "auth-rs256",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "auth-hs256",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "auth-two-seg",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "auth-huge",
+          "verdict": "MISMATCH",
+          "differences": [
+            "status",
+            "header:content-type",
+            "header:content-length",
+            "header:+cache-control",
+            "body",
+            "bodyBytes"
+          ]
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "auth-pct",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "auth-null",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "auth-adc",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "auth-adc-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "auth-random-pub",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "bearer-empty",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "bearer-random",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "bearer-none-own",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "bearer-rs256",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "bearer-null",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "bearer-random-pub",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "at-empty",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "at-random",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "at-rs256",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-tokens",
+          "case": "at-random-pub",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "seed",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "ctl-anon-authreq",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "ctl-anon-pub",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "ctl-admin-authreq",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "auth-empty",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "auth-random",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "auth-none-other",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "auth-none-own",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "auth-rs256",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "auth-hs256",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "auth-two-seg",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "auth-huge",
+          "verdict": "MISMATCH",
+          "differences": [
+            "status",
+            "header:content-type",
+            "header:content-length",
+            "header:+cache-control",
+            "body",
+            "bodyBytes"
+          ]
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "auth-pct",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "auth-null",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "auth-adc",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "auth-adc-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "auth-random-pub",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "bearer-empty",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "bearer-random",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "bearer-none-own",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "bearer-rs256",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "bearer-null",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "bearer-random-pub",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "at-empty",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "at-random",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "at-rs256",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-tokens",
+          "case": "at-random-pub",
+          "verdict": "MATCH"
+        }
+      ]
+    },
+    "emulatorDifferencesFromProduction": [
+      {
+        "profile": "r1-tokens",
+        "case": "auth-none-other",
+        "emulatorMatchesOfficialEmulator": true,
+        "officialEmulatorMatchesProduction": false
+      },
+      {
+        "profile": "r1-tokens",
+        "case": "auth-none-own",
+        "emulatorMatchesOfficialEmulator": true,
+        "officialEmulatorMatchesProduction": false
+      },
+      {
+        "profile": "r1-tokens",
+        "case": "auth-rs256",
+        "emulatorMatchesOfficialEmulator": true,
+        "officialEmulatorMatchesProduction": false
+      },
+      {
+        "profile": "r1-tokens",
+        "case": "auth-hs256",
+        "emulatorMatchesOfficialEmulator": true,
+        "officialEmulatorMatchesProduction": false
+      },
+      {
+        "profile": "r1-tokens",
+        "case": "auth-huge",
+        "emulatorMatchesOfficialEmulator": false,
+        "officialEmulatorMatchesProduction": false
+      },
+      {
+        "profile": "r1-tokens",
+        "case": "bearer-random",
+        "emulatorMatchesOfficialEmulator": true,
+        "officialEmulatorMatchesProduction": false
+      },
+      {
+        "profile": "r1-tokens",
+        "case": "bearer-none-own",
+        "emulatorMatchesOfficialEmulator": true,
+        "officialEmulatorMatchesProduction": false
+      },
+      {
+        "profile": "r1-tokens",
+        "case": "bearer-rs256",
+        "emulatorMatchesOfficialEmulator": true,
+        "officialEmulatorMatchesProduction": false
+      },
+      {
+        "profile": "r1-tokens",
+        "case": "bearer-null",
+        "emulatorMatchesOfficialEmulator": true,
+        "officialEmulatorMatchesProduction": false
+      },
+      {
+        "profile": "r1-tokens",
+        "case": "bearer-random-pub",
+        "emulatorMatchesOfficialEmulator": true,
+        "officialEmulatorMatchesProduction": false
+      },
+      {
+        "profile": "r1-tokens",
+        "case": "at-empty",
+        "emulatorMatchesOfficialEmulator": true,
+        "officialEmulatorMatchesProduction": false
+      },
+      {
+        "profile": "r1-tokens",
+        "case": "at-random",
+        "emulatorMatchesOfficialEmulator": true,
+        "officialEmulatorMatchesProduction": false
+      },
+      {
+        "profile": "r1-tokens",
+        "case": "at-rs256",
+        "emulatorMatchesOfficialEmulator": true,
+        "officialEmulatorMatchesProduction": false
+      },
+      {
+        "profile": "r1-tokens",
+        "case": "at-random-pub",
+        "emulatorMatchesOfficialEmulator": true,
+        "officialEmulatorMatchesProduction": false
+      },
+      {
+        "profile": "r2-tokens",
+        "case": "auth-none-other",
+        "emulatorMatchesOfficialEmulator": true,
+        "officialEmulatorMatchesProduction": false
+      },
+      {
+        "profile": "r2-tokens",
+        "case": "auth-none-own",
+        "emulatorMatchesOfficialEmulator": true,
+        "officialEmulatorMatchesProduction": false
+      },
+      {
+        "profile": "r2-tokens",
+        "case": "auth-rs256",
+        "emulatorMatchesOfficialEmulator": true,
+        "officialEmulatorMatchesProduction": false
+      },
+      {
+        "profile": "r2-tokens",
+        "case": "auth-hs256",
+        "emulatorMatchesOfficialEmulator": true,
+        "officialEmulatorMatchesProduction": false
+      },
+      {
+        "profile": "r2-tokens",
+        "case": "auth-huge",
+        "emulatorMatchesOfficialEmulator": false,
+        "officialEmulatorMatchesProduction": false
+      },
+      {
+        "profile": "r2-tokens",
+        "case": "bearer-random",
+        "emulatorMatchesOfficialEmulator": true,
+        "officialEmulatorMatchesProduction": false
+      },
+      {
+        "profile": "r2-tokens",
+        "case": "bearer-none-own",
+        "emulatorMatchesOfficialEmulator": true,
+        "officialEmulatorMatchesProduction": false
+      },
+      {
+        "profile": "r2-tokens",
+        "case": "bearer-rs256",
+        "emulatorMatchesOfficialEmulator": true,
+        "officialEmulatorMatchesProduction": false
+      },
+      {
+        "profile": "r2-tokens",
+        "case": "bearer-null",
+        "emulatorMatchesOfficialEmulator": true,
+        "officialEmulatorMatchesProduction": false
+      },
+      {
+        "profile": "r2-tokens",
+        "case": "bearer-random-pub",
+        "emulatorMatchesOfficialEmulator": true,
+        "officialEmulatorMatchesProduction": false
+      },
+      {
+        "profile": "r2-tokens",
+        "case": "at-empty",
+        "emulatorMatchesOfficialEmulator": true,
+        "officialEmulatorMatchesProduction": false
+      },
+      {
+        "profile": "r2-tokens",
+        "case": "at-random",
+        "emulatorMatchesOfficialEmulator": true,
+        "officialEmulatorMatchesProduction": false
+      },
+      {
+        "profile": "r2-tokens",
+        "case": "at-rs256",
+        "emulatorMatchesOfficialEmulator": true,
+        "officialEmulatorMatchesProduction": false
+      },
+      {
+        "profile": "r2-tokens",
+        "case": "at-random-pub",
+        "emulatorMatchesOfficialEmulator": true,
+        "officialEmulatorMatchesProduction": false
+      }
+    ]
+  }
+}

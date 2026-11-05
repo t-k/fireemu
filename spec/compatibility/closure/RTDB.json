@@ -72,7 +72,7 @@
         "outcome": "Independent CV14 final artifact review: candidate R6 suitable, conditional on mutation, current bindings and final CI."
       }
     ],
-    "note": "The record was refreshed on 2026-11-03 to the committed evidence; the parent remains IMPLEMENTING."
+    "note": "The record was refreshed on 2026-11-03 to the committed evidence, and on 2026-11-06 with the recordings of RTDB-REST-20261104-01, RTDB-RULES-20261104-01, RTDB-TOKENS-20261104-01, RTDB-TRIGGERS-BREADTH-20261105-02 and RTDB-RULES-LOAD-20261105-01 (scope decision R11); the review of that refresh is pending, the decision stays CHANGES_REQUESTED and the parent remains IMPLEMENTING."
   },
   "scopeDecisions": [
     {
@@ -169,6 +169,16 @@
       "decidedBy": "project coordinator (delegated by the owner)",
       "decidedOn": "2026-11-04",
       "decisionRef": "docs.local/instructions/owner-decisions.md (2217, 2218, 2227, 2228); docs.local/runs/rtdb-closure-4a/inventory.md (G6, G13)"
+    },
+    {
+      "id": "R11",
+      "decision": "R2 (as amended by R4 to R7, R9 and R10) is amended for the recordings of 2026-11-04 and 2026-11-05, replayed on the closure build in both profiles and for the recorded cases only: REST options, POST and push forms, .sv, orderBy and shallow windows, ETag, method override, callback and download and the malformed escape (RTDB/rest-options-and-refusals, run RTDB-REST-20261104-01); Rules claims, indexes, cascade grammar, query members, concatenation, conditional writes and load texts (RTDB/rules-claims-indexes-and-load-texts, RTDB-RULES-20261104-01); seven Rules documents that fail or load (RTDB/rules-document-load-diagnostics, RTDB-RULES-LOAD-20261105-01); generated invalid credentials over REST (RTDB/invalid-credentials-rest, RTDB-TOKENS-20261104-01); and RTDB-triggered Functions for an end user's write, ancestor and multi-path writes and redelivery (RTDB/functions-trigger-breadth-and-user-auth, RTDB-TRIGGERS-BREADTH-20261105-02). Inventory items G7, G8, G9 and G10 leave /outOfScope as far as these recordings reach; what lies beyond them stays listed in /outOfScope and /knownGaps. The sdk-small and sdk-events comparisons are rebound to the same build. The closure build is an unpublished release-profile build of source commit cae9f99c8 (binary 44c3c889...), built with --locked and an empty RUSTC_WRAPPER in a fresh worktree-local target directory; the Rust sources are unchanged since. The parent remains IMPLEMENTING; the Mac controls named in /knownGaps stay bound to the older binaries.",
+      "rationale": "Nine production runs (2026-11-04 and 2026-11-05) answered the questions the frozen inventory listed as unobserved; their reductions are committed as fixtures and replayed in both profiles, and every defect they found in the strict or the emulator profile was fixed and merged before the replay.",
+      "amends": "R2",
+      "status": "FROZEN",
+      "decidedBy": "project coordinator (delegated by the owner)",
+      "decidedOn": "2026-11-06",
+      "decisionRef": "docs.local/instructions/owner-decisions.md (2217, 2218, 2251, 2231, 2232, 2239, 2240, 2253, 2254, 2262, 2263, 2266, 2267); docs.local/runs/rtdb-closure-4a/inventory.md (G7 to G10)"
     }
   ],
   "conditions": [
@@ -1129,11 +1139,11 @@
         "fixtureSha256": "ed2b866ffa7d33ba76c3bab870a02293d2033a4a2587b01eb897affd88deb57f",
         "comparisonTool": "tools/sdk-smoke-database/rtdb-sdk-small-judge.mjs",
         "comparisonPath": "spec/compatibility/closure/evidence/RTDB-sdk-small-comparison.json",
-        "comparisonSha256": "6f2a3cd1eaeef8ecb092c75de83a88de85bad4e21cabcf7af86a3429361393af",
-        "release": "v0.43.0",
-        "sourceCommit": "afe1234851c593031c1eea2e2304f3e2a0dc3f01",
-        "binarySha256": "a0e1688bf4e915c0be5d973019e3e643cb15a3f869e596cdf63937aeae506e7b",
-        "toolCommit": "5f92a92c42ec8f6309b9b55c8eef91addeeb687a",
+        "comparisonSha256": "da9f3988750898c9cb1fdad0eea62cb2789af8b33869186632fcfb0182a6fc72",
+        "release": "closure-build",
+        "sourceCommit": "cae9f99c8f0fc3285839cfe6ee02c10c27505ca9",
+        "binarySha256": "44c3c889b81a07d570e0eeb34eb42f730a42066d03f981c0dac46255279c8401",
+        "toolCommit": "dc7253f12a56e386d0cf674e7f5f1e93172901d0",
         "rows": {
           "strict": {
             "MATCH": 32
@@ -1151,7 +1161,7 @@
           "conformance/src/rtdb-finite-families-closure.test.mjs"
         ],
         "scope": "The 32 recorded observations only: one-shot gets, not listeners; child events, windows, compound cursors, transaction variants and Admin SDK paths stay unobserved (/outOfScope).",
-        "releaseRun": "R28 in conformance/src/release-strict-regression.mjs (rtdb-production-comparison-v1, campaign sdk-small)"
+        "releaseRun": "R28 in conformance/src/release-strict-regression.mjs (rtdb-production-comparison-v1, campaign sdk-small); the evidence is rebound to the closure build (an unpublished release-profile build of source commit cae9f99c8); the release job replays the same campaign on the installed binary and judges it against the fixture"
       }
     },
     {
@@ -1188,11 +1198,11 @@
         "fixtureSha256": "75a8e586267e6681d9f88085219920bc829a94d7600699557c08d91b85de2fe8",
         "comparisonTool": "tools/sdk-smoke-database/rtdb-sdk-events-judge.mjs",
         "comparisonPath": "spec/compatibility/closure/evidence/RTDB-sdk-events-comparison.json",
-        "comparisonSha256": "f73d959ca5dada4e44b3bbc66b26a72cd9fd22cdcf9e10faca7fd7c71efbbfc7",
-        "release": "v0.43.0",
-        "sourceCommit": "afe1234851c593031c1eea2e2304f3e2a0dc3f01",
-        "binarySha256": "a0e1688bf4e915c0be5d973019e3e643cb15a3f869e596cdf63937aeae506e7b",
-        "toolCommit": "bcce71689e65c12d58f424376f983b91b6ac25e4",
+        "comparisonSha256": "a659fb45bfc6d29f3fd3d95f2fa6bbe5e4fa7005d932db39df0b3d1eba03d7c8",
+        "release": "closure-build",
+        "sourceCommit": "cae9f99c8f0fc3285839cfe6ee02c10c27505ca9",
+        "binarySha256": "44c3c889b81a07d570e0eeb34eb42f730a42066d03f981c0dac46255279c8401",
+        "toolCommit": "dc7253f12a56e386d0cf674e7f5f1e93172901d0",
         "rows": {
           "strict": {
             "MATCH": 128
@@ -1212,7 +1222,7 @@
           "conformance/src/rtdb-finite-families-closure.test.mjs"
         ],
         "scope": "The 128 recorded steps of the four web SDK profiles only. Not claimed: other windows, cursors and query combinations, applyLocally false, raw wire frames and timings; a write that covers several per-path listens of one connection stays /knownDifferences/rootWriteListenOrder (the recorded fanout case is a multi-path update with listeners at a parent and its children).",
-        "releaseRun": "R29 in conformance/src/release-strict-regression.mjs (rtdb-production-comparison-v1, campaign sdk-events)"
+        "releaseRun": "R29 in conformance/src/release-strict-regression.mjs (rtdb-production-comparison-v1, campaign sdk-events); the evidence is rebound to the closure build (an unpublished release-profile build of source commit cae9f99c8); the release job replays the same campaign on the installed binary and judges it against the fixture"
       }
     },
     {
@@ -1245,11 +1255,11 @@
         "fixtureSha256": "75a8e586267e6681d9f88085219920bc829a94d7600699557c08d91b85de2fe8",
         "comparisonTool": "tools/sdk-smoke-database/rtdb-sdk-events-judge.mjs",
         "comparisonPath": "spec/compatibility/closure/evidence/RTDB-sdk-events-comparison.json",
-        "comparisonSha256": "f73d959ca5dada4e44b3bbc66b26a72cd9fd22cdcf9e10faca7fd7c71efbbfc7",
-        "release": "v0.43.0",
-        "sourceCommit": "afe1234851c593031c1eea2e2304f3e2a0dc3f01",
-        "binarySha256": "a0e1688bf4e915c0be5d973019e3e643cb15a3f869e596cdf63937aeae506e7b",
-        "toolCommit": "bcce71689e65c12d58f424376f983b91b6ac25e4",
+        "comparisonSha256": "a659fb45bfc6d29f3fd3d95f2fa6bbe5e4fa7005d932db39df0b3d1eba03d7c8",
+        "release": "closure-build",
+        "sourceCommit": "cae9f99c8f0fc3285839cfe6ee02c10c27505ca9",
+        "binarySha256": "44c3c889b81a07d570e0eeb34eb42f730a42066d03f981c0dac46255279c8401",
+        "toolCommit": "dc7253f12a56e386d0cf674e7f5f1e93172901d0",
         "rows": {
           "strict": {
             "MATCH": 32
@@ -1269,7 +1279,303 @@
           "conformance/src/rtdb-finite-families-closure.test.mjs"
         ],
         "scope": "The 32 recorded steps only. In production the Admin SDK authenticated with the operator's gcloud user OAuth access token passed as a custom credential, not a service account; locally it uses fireemu's owner credential. An Admin SDK with a service-account credential, the Java and Python Admin SDKs and other Admin SDK shapes are not claimed.",
-        "releaseRun": "R29 in conformance/src/release-strict-regression.mjs (rtdb-production-comparison-v1, campaign sdk-events)"
+        "releaseRun": "R29 in conformance/src/release-strict-regression.mjs (rtdb-production-comparison-v1, campaign sdk-events); the evidence is rebound to the closure build (an unpublished release-profile build of source commit cae9f99c8); the release job replays the same campaign on the installed binary and judges it against the fixture"
+      }
+    },
+    {
+      "conditionId": "RTDB/rest-options-and-refusals",
+      "coverageLedgerRows": [
+        "RTDB-CV-02"
+      ],
+      "source": "spec/compatibility/contract.json#database",
+      "cases": [
+        "72 REST cases in two rounds (r1-rest, r2-rest) under one Rules document, as plain HTTP with the operator's token: timeout (5s, 5, abc, 0s); writeSizeLimit tiny, medium, large, unlimited, a word and a number; print=pretty on GET and PUT, print=bogus and print=silent on DELETE",
+        "POST of a scalar, of an object with .priority, of null, of an array and with .sv; PATCH with .sv increments (a fraction, a bogus value, an overflow)",
+        "orderBy $priority, $value and $key windows with startAt, endAt and equalTo (integer keys included), limitToFirst and limitToLast, orderBy on an unindexed child, format=export; shallow with a leaf, a missing path, orderBy and a limit",
+        "ETag and if-none-match (a match, a bogus tag, on PUT, with shallow); X-HTTP-Method-Override on PUT and DELETE; callback= names; download=; a PATCH on an emptied node and its export; a malformed % escape in the path; a DELETE"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recording": "RTDB-REST-20261104-01",
+            "project": "fireemu-oracle-query",
+            "recordedOn": "2026-11-04",
+            "observations": 144
+          }
+        ],
+        "fixturePath": "tools/sdk-smoke-database/fixtures/production-sdk-rest.json",
+        "fixtureSha256": "d3fb07dedd12c1a066c39ea167eda6ef948e3c43e2e4eb97ed8453eb5e16d7bb",
+        "comparisonTool": "tools/sdk-smoke-database/rtdb-sdk-rest-judge.mjs",
+        "comparisonPath": "spec/compatibility/closure/evidence/RTDB-sdk-rest-comparison.json",
+        "comparisonSha256": "3c6a478701d54e1569fcf3ba535ced961246049e45c6d5c0bdff57b76617e600",
+        "release": "closure-build",
+        "sourceCommit": "cae9f99c8f0fc3285839cfe6ee02c10c27505ca9",
+        "binarySha256": "44c3c889b81a07d570e0eeb34eb42f730a42066d03f981c0dac46255279c8401",
+        "toolCommit": "dc7253f12a56e386d0cf674e7f5f1e93172901d0",
+        "rows": {
+          "strict": {
+            "MATCH": 144
+          },
+          "emulator": {
+            "MATCH": 138,
+            "DECLARED_DIFFERENCE": 6
+          }
+        },
+        "productionRequests": 0,
+        "ownerDecisions": "docs.local/instructions/owner-decisions.md (2231, 2232: the approval and V lines of run RTDB-REST-20261104-01; 2217, 2218 and 2251: the path and caps); sandbox-ledger lines 1254 (booking) and 1255 (close)",
+        "tests": [
+          "tools/sdk-smoke-database/rtdb-sdk-rest-judge.test.mjs",
+          "tools/sdk-smoke-database/rtdb-sdk-rest.test.mjs",
+          "tools/sdk-smoke-database/rtdb-sdk-rest-fixture.test.mjs",
+          "tools/sdk-smoke-database/rtdb-sdk-jar.test.mjs",
+          "crates/fireemu-adapter-database/tests/rest.rs",
+          "conformance/src/rtdb-finite-families-closure.test.mjs",
+          "conformance/src/release-strict-regression.test.mjs"
+        ],
+        "scope": "The 144 recorded observations only. The strict profile matches production in all of them. The emulator profile answers 138 as production and 6 (writeSizeLimit with a word and with a number, and the malformed % escape in the path, in both rounds) as the official emulator, which is declared; against the official emulator jar 4.11.2 it matches 142 of 144 (the other 2 are the content-length of a print=silent DELETE, where the emulator profile answers as production).",
+        "officialEmulatorFixture": {
+          "path": "tools/sdk-smoke-database/fixtures/jar-sdk-rest.json",
+          "sha256": "4199724a4c3cccfec9c3c30a1c0d86f29cde4570b1bd5a583181297c2dddc130"
+        },
+        "knownDifferences": [
+          "/knownDifferences/restEmulatorFollowsOfficialEmulator"
+        ]
+      }
+    },
+    {
+      "conditionId": "RTDB/rules-claims-indexes-and-load-texts",
+      "coverageLedgerRows": [
+        "RTDB-CV-03",
+        "RTDB-CV-05"
+      ],
+      "source": "spec/compatibility/contract.json#database",
+      "cases": [
+        "70 cases in two rounds (r1-rules, r2-rules): one global Rules document with one path per case, and 14 Rules documents PUT to /.settings/rules.json; as admin, anonymous and auth_variable_override requests, no ID token",
+        "auth.token claims through auth_variable_override (admin, level, firebase.sign_in_provider, email_verified, name and email, an allow and a deny each, and a token that is not an object); .indexOn variants (indexed, partly indexed and unindexed children, with and without a limit, $key and $value orderings, nested paths)",
+        "cascade and validation grammar (a .validate with wildcards, a null write, a multi-path PATCH allowed and denied, a root.child read across paths, now in .write, parent and child reads); query.* members in .read (orderBy child and key, limitToFirst, startAt, endAt, equalTo, a query below the rule); string concatenation of five numbers",
+        "the conditional writes (x-firebase-etag, if-match), a .priority write judged at the node and a PATCH of a/.priority; four REST neighbours (timeout=1min, shallow with startAfter, shallow, a key range)",
+        "14 Rules documents: ten that production refuses with their load texts and columns (an unbalanced parenthesis, an illegal character, an unknown variable, an operator on a string, a number where a rule expression belongs and one where .indexOn belongs, two unknown variables in two paths, an unexpected end after a trailing operator and in a long expression, an unterminated regular expression), and four lexing documents that production accepts (U+FEFF, U+0085, a lazy quantifier, a number literal)"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recording": "RTDB-RULES-20261104-01",
+            "project": "fireemu-oracle-query",
+            "recordedOn": "2026-11-04",
+            "observations": 140
+          }
+        ],
+        "fixturePath": "tools/sdk-smoke-database/fixtures/production-sdk-rules.json",
+        "fixtureSha256": "455517043f3628bf3930c8db9792bf297e077c07152726f76c27982f6d4ce49b",
+        "comparisonTool": "tools/sdk-smoke-database/rtdb-sdk-rules-judge.mjs",
+        "comparisonPath": "spec/compatibility/closure/evidence/RTDB-sdk-rules-comparison.json",
+        "comparisonSha256": "fc955ada47c69f3e8e005f76c66568657be2c3af44d4e85b390955d749b382dc",
+        "release": "closure-build",
+        "sourceCommit": "cae9f99c8f0fc3285839cfe6ee02c10c27505ca9",
+        "binarySha256": "44c3c889b81a07d570e0eeb34eb42f730a42066d03f981c0dac46255279c8401",
+        "toolCommit": "dc7253f12a56e386d0cf674e7f5f1e93172901d0",
+        "rows": {
+          "strict": {
+            "MATCH": 140
+          },
+          "emulator": {
+            "MATCH": 140
+          }
+        },
+        "productionRequests": 0,
+        "ownerDecisions": "docs.local/instructions/owner-decisions.md (2239, 2240: the approval and V lines of run RTDB-RULES-20261104-01; 2217, 2218 and 2251: the path and caps); sandbox-ledger lines 1257 (booking) and 1258 (close)",
+        "tests": [
+          "tools/sdk-smoke-database/rtdb-sdk-rules-judge.test.mjs",
+          "tools/sdk-smoke-database/rtdb-sdk-rules.test.mjs",
+          "tools/sdk-smoke-database/rtdb-sdk-rules-fixture.test.mjs",
+          "crates/fireemu-adapter-database/tests/rules.rs",
+          "crates/fireemu-adapter-database/tests/rules_cells.rs",
+          "conformance/src/rtdb-finite-families-closure.test.mjs",
+          "conformance/src/release-strict-regression.test.mjs"
+        ],
+        "scope": "The 140 recorded observations only, as admin, anonymous and auth_variable_override requests; no ID token. Both profiles match production in all of them, including the load texts with their line and column. A rejected WebSocket auth falling back to anonymous is not recorded."
+      }
+    },
+    {
+      "conditionId": "RTDB/rules-document-load-diagnostics",
+      "coverageLedgerRows": [
+        "RTDB-CV-05"
+      ],
+      "source": "spec/compatibility/contract.json#database",
+      "cases": [
+        "7 Rules documents in two rounds (r1-rules-load, r2-rules-load) PUT to /.settings/rules.json: a duplicate key, a duplicate .read, a duplicate .indexOn, an .indexOn of a.b, of $x and of the empty string, and an .indexOn of a//b",
+        "the status, the body text with its line and column, and the recorded headers of the 3 + 2 refusals and of the 2 accepted documents (the empty .indexOn and a//b are accepted)"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recording": "RTDB-RULES-LOAD-20261105-01",
+            "project": "fireemu-oracle-query",
+            "recordedOn": "2026-11-05",
+            "observations": 14
+          }
+        ],
+        "fixturePath": "tools/sdk-smoke-database/fixtures/production-sdk-rules-load.json",
+        "fixtureSha256": "298f58e842e3982e42c0638017bfc285224867ac39359da7b65eb8b2b43c061b",
+        "comparisonTool": "tools/sdk-smoke-database/rtdb-sdk-rules-load-judge.mjs",
+        "comparisonPath": "spec/compatibility/closure/evidence/RTDB-sdk-rules-load-comparison.json",
+        "comparisonSha256": "9a291f4e81f0d8990fbdc82b946bb4dc2aed48b59f91a7e06f629f0cccac53c0",
+        "release": "closure-build",
+        "sourceCommit": "cae9f99c8f0fc3285839cfe6ee02c10c27505ca9",
+        "binarySha256": "44c3c889b81a07d570e0eeb34eb42f730a42066d03f981c0dac46255279c8401",
+        "toolCommit": "dc7253f12a56e386d0cf674e7f5f1e93172901d0",
+        "rows": {
+          "strict": {
+            "MATCH": 14
+          },
+          "emulator": {
+            "MATCH": 14
+          }
+        },
+        "productionRequests": 0,
+        "ownerDecisions": "docs.local/instructions/owner-decisions.md (2266, 2267: the approval and V lines of run RTDB-RULES-LOAD-20261105-01; 2217, 2218 and 2251: the path and caps); sandbox-ledger lines 1268 (booking) and 1269 (close)",
+        "tests": [
+          "tools/sdk-smoke-database/rtdb-sdk-rules-load.test.mjs",
+          "tools/sdk-smoke-database/rtdb-sdk-rules-load-entry.test.mjs",
+          "tools/sdk-smoke-database/rtdb-sdk-rules-load-fixture.test.mjs",
+          "tools/sdk-smoke-database/sdk-observer/rules-load.test.mjs",
+          "tools/sdk-smoke-database/rtdb-sdk-jar.test.mjs",
+          "crates/fireemu-adapter-database/tests/rules.rs",
+          "conformance/src/rtdb-finite-families-closure.test.mjs",
+          "conformance/src/release-strict-regression.test.mjs"
+        ],
+        "scope": "The 14 recorded observations only. Both profiles and the official emulator jar 4.11.2 match production in all of them. The ledger's 30 requests are the 27 the recorder counted plus 3 close read-backs.",
+        "officialEmulatorFixture": {
+          "path": "tools/sdk-smoke-database/fixtures/jar-sdk-rules-load.json",
+          "sha256": "121ba9a84803ac7839e71c6cb021cc852e8b83b19f25803342640152c55a8463"
+        },
+        "requestsNote": "sandbox-ledger close row 1269: 25 direct, 2 reserve, 3 close reads; 4 accepted documents"
+      }
+    },
+    {
+      "conditionId": "RTDB/invalid-credentials-rest",
+      "coverageLedgerRows": [
+        "RTDB-CV-04"
+      ],
+      "source": "spec/compatibility/contract.json#database",
+      "cases": [
+        "27 cases in two rounds (r1-tokens, r2-tokens) as plain HTTP under one Rules document (a public path, a denied path, a path that needs auth != null): invalid credentials as auth=, access_token= and Authorization: Bearer, and 3 controls",
+        "the credentials are generated, never real: empty, a random string, an alg:none token for the own and for another project, an RS256-shaped token with a random signature, an HS256 token with a throw-away key, a two-segment token, a multi-kilobyte token, a percent-encoded one, the string null, and the operator's own access token as auth=",
+        "production answers every invalid auth= on the protected path 401 Permission denied, reads a public path for an opaque auth= value, and answers a non-empty Bearer or any access_token 401 Unauthorized request."
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recording": "RTDB-TOKENS-20261104-01",
+            "project": "fireemu-oracle-query",
+            "recordedOn": "2026-11-04",
+            "observations": 54
+          }
+        ],
+        "fixturePath": "tools/sdk-smoke-database/fixtures/production-sdk-tokens.json",
+        "fixtureSha256": "877d31ba10797590672527623da0b07429ce614d7f1e8240f457bd1168e1e502",
+        "comparisonTool": "tools/sdk-smoke-database/rtdb-sdk-tokens-judge.mjs",
+        "comparisonPath": "spec/compatibility/closure/evidence/RTDB-sdk-tokens-comparison.json",
+        "comparisonSha256": "ded8685cea546b2b0bcc0c6cdcb7007c41890d5450c3c23dd8a0b593aa73ddf0",
+        "release": "closure-build",
+        "sourceCommit": "cae9f99c8f0fc3285839cfe6ee02c10c27505ca9",
+        "binarySha256": "44c3c889b81a07d570e0eeb34eb42f730a42066d03f981c0dac46255279c8401",
+        "toolCommit": "dc7253f12a56e386d0cf674e7f5f1e93172901d0",
+        "rows": {
+          "strict": {
+            "MATCH": 54
+          },
+          "emulator": {
+            "MATCH": 26,
+            "DECLARED_DIFFERENCE": 28
+          }
+        },
+        "productionRequests": 0,
+        "ownerDecisions": "docs.local/instructions/owner-decisions.md (2253, 2254: the approval and V lines of run RTDB-TOKENS-20261104-01; 2217, 2218 and 2251: the path and caps); sandbox-ledger lines 1262 (booking) and 1263 (close)",
+        "tests": [
+          "tools/sdk-smoke-database/rtdb-sdk-tokens-judge.test.mjs",
+          "tools/sdk-smoke-database/rtdb-sdk-tokens.test.mjs",
+          "tools/sdk-smoke-database/rtdb-sdk-tokens-fixture.test.mjs",
+          "tools/sdk-smoke-database/rtdb-sdk-jar.test.mjs",
+          "crates/fireemu-adapter-database/tests/rest.rs",
+          "crates/fireemu/tests/database.rs",
+          "conformance/src/rtdb-finite-families-closure.test.mjs",
+          "conformance/src/release-strict-regression.test.mjs"
+        ],
+        "scope": "The 54 recorded observations only: generated invalid credentials, no real ID token and no API key. The strict profile matches production in all of them. The emulator profile answers 26 as production and 28 (14 cases in two rounds) differently: 13 cases follow the official emulator, which admits alg:none and RS256 or HS256-shaped tokens and any Bearer or access_token; the huge token is answered 200 where the jar answers 400 (its request-line limit) and production 401. The emulator profile matches the jar in 52 of 54 observations.",
+        "officialEmulatorFixture": {
+          "path": "tools/sdk-smoke-database/fixtures/jar-sdk-tokens.json",
+          "sha256": "f817274f2e869855d4bdde178e7a785b2cdcfa389c6c19a2be3a6295106f584d"
+        },
+        "knownDifferences": [
+          "/knownDifferences/invalidCredentialsEmulatorProfile"
+        ]
+      }
+    },
+    {
+      "conditionId": "RTDB/functions-trigger-breadth-and-user-auth",
+      "coverageLedgerRows": [
+        "RTDB-CV-04",
+        "RTDB-CV-14"
+      ],
+      "source": "spec/compatibility/contract.json#database",
+      "cases": [
+        "1st gen onWrite with failurePolicy and 2nd gen onValueWritten with and without retry on the nested pattern /g9-rtdb/{group}/items/{id}: 12 writes, 76 production deliveries compared as 69 rows",
+        "an end user's write (a real email/password Auth user, once over REST with the ID token and once through the web SDK over WebSocket: set, multi-path update, remove at the parent): 2nd gen authType app_user with authId the uid, 1st gen authType USER with context.auth",
+        "an ancestor write that creates and removes children, an ancestor write one level down, a multi-path update over two groups, and an ancestor remove: one event per changed matching leaf, none for an unchanged leaf",
+        "redelivery of a failed invocation: retry-on v1 and v2 handlers are redelivered under the same event id, the retry-off v2 handler is not"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recording": "RTDB-TRIGGERS-BREADTH-20261105-02",
+            "project": "fireemu-oracle-query",
+            "recordedOn": "2026-11-05",
+            "observations": 69
+          }
+        ],
+        "fixturePath": "conformance/src/rtdb-functions/recorded/production-rtdb-breadth.json",
+        "fixtureSha256": "3e67cd9f12bd1fedf3fabf66ace0b9f956ce6cdfda4d0bab22a99239d568987f",
+        "comparisonTool": "conformance/src/rtdb-functions/breadth-judge.mjs",
+        "comparisonPath": "spec/compatibility/closure/evidence/RTDB-breadth-comparison.json",
+        "comparisonSha256": "122b22c41c3c5a2d83eced9e5ba964076772ff892dc35065b3f7433ce1791143",
+        "release": "closure-build",
+        "sourceCommit": "cae9f99c8f0fc3285839cfe6ee02c10c27505ca9",
+        "binarySha256": "44c3c889b81a07d570e0eeb34eb42f730a42066d03f981c0dac46255279c8401",
+        "toolCommit": "dc7253f12a56e386d0cf674e7f5f1e93172901d0",
+        "rows": {
+          "strict": {
+            "MATCH": 69
+          },
+          "emulator": {
+            "DECLARED_DIFFERENCE": 69
+          }
+        },
+        "productionRequests": 0,
+        "ownerDecisions": "docs.local/instructions/owner-decisions.md (2262, 2263: the approval and V lines of run RTDB-TRIGGERS-BREADTH-20261105-02; 2217, 2218 and 2251: the path and caps); sandbox-ledger lines 1266 (booking) and 1267 (close)",
+        "tests": [
+          "conformance/src/rtdb-functions/breadth-recorded.test.mjs",
+          "conformance/src/rtdb-functions/breadth-compare.test.mjs",
+          "conformance/src/rtdb-functions/breadth-judge.test.mjs",
+          "conformance/src/rtdb-functions/breadth-sequence.test.mjs",
+          "crates/fireemu-adapter-functions/tests/database_event_shape.rs",
+          "crates/fireemu-adapter-functions/tests/database_events.rs",
+          "conformance/src/rtdb-finite-families-closure.test.mjs",
+          "conformance/src/release-strict-regression.test.mjs"
+        ],
+        "scope": "The recorded 12 writes only, over 3 handlers and one instance. The strict profile matches production in all 69 rows (attempt patterns by shape). The emulator profile keeps the official emulator's event shape in every row, which is declared. Delivery latency, retry timing, the order across handlers and the other cases in /knownGaps/triggerDeliveryBeyondBreadth are not claimed.",
+        "knownDifferences": [
+          "/knownDifferences/triggerEventShapeEmulatorProfile"
+        ],
+        "localRecordings": {
+          "strict": "conformance/src/rtdb-functions/recorded/local-strict-rtdb-breadth.json",
+          "emulator": "conformance/src/rtdb-functions/recorded/local-emulator-rtdb-breadth.json"
+        }
       }
     }
   ],
@@ -1364,7 +1670,7 @@
       },
       {
         "path": "spec/compatibility/closure/evidence/RTDB-sdk-small-comparison.json",
-        "sha256": "6f2a3cd1eaeef8ecb092c75de83a88de85bad4e21cabcf7af86a3429361393af",
+        "sha256": "da9f3988750898c9cb1fdad0eea62cb2789af8b33869186632fcfb0182a6fc72",
         "rows": 32,
         "summary": {
           "strict": {
@@ -1378,11 +1684,11 @@
             "NEEDS_REVIEW": 0
           }
         },
-        "binding": "the published v0.43.0 release binary a0e1688bf4e915c0be5d973019e3e643cb15a3f869e596cdf63937aeae506e7b (fireemu-0.43.0-darwin-arm64.tar.gz, verified against the release's SHA256SUMS) of tag commit afe1234851c593031c1eea2e2304f3e2a0dc3f01; release run R28"
+        "binding": "the closure build, an unpublished release-profile build of source commit cae9f99c8 (binary 44c3c889...), --locked, RUSTC_WRAPPER empty; the release job still replays it (R28) on the installed binary"
       },
       {
         "path": "spec/compatibility/closure/evidence/RTDB-sdk-events-comparison.json",
-        "sha256": "f73d959ca5dada4e44b3bbc66b26a72cd9fd22cdcf9e10faca7fd7c71efbbfc7",
+        "sha256": "a659fb45bfc6d29f3fd3d95f2fa6bbe5e4fa7005d932db39df0b3d1eba03d7c8",
         "rows": 160,
         "summary": {
           "strict": {
@@ -1396,7 +1702,97 @@
             "NEEDS_REVIEW": 0
           }
         },
-        "binding": "the published v0.43.0 release binary a0e1688bf4e915c0be5d973019e3e643cb15a3f869e596cdf63937aeae506e7b (fireemu-0.43.0-darwin-arm64.tar.gz, verified against the release's SHA256SUMS) of tag commit afe1234851c593031c1eea2e2304f3e2a0dc3f01; release run R29"
+        "binding": "the closure build, an unpublished release-profile build of source commit cae9f99c8 (binary 44c3c889...), --locked, RUSTC_WRAPPER empty; the release job still replays it (R29) on the installed binary"
+      },
+      {
+        "path": "spec/compatibility/closure/evidence/RTDB-sdk-rest-comparison.json",
+        "sha256": "3c6a478701d54e1569fcf3ba535ced961246049e45c6d5c0bdff57b76617e600",
+        "rows": 144,
+        "summary": {
+          "strict": {
+            "MATCH": 144,
+            "MISMATCH": 0,
+            "NEEDS_REVIEW": 0
+          },
+          "emulator": {
+            "MATCH": 138,
+            "MISMATCH": 6,
+            "NEEDS_REVIEW": 0
+          }
+        },
+        "binding": "the closure build, an unpublished release-profile build of source commit cae9f99c8 (binary 44c3c889...), --locked, RUSTC_WRAPPER empty"
+      },
+      {
+        "path": "spec/compatibility/closure/evidence/RTDB-sdk-rules-comparison.json",
+        "sha256": "fc955ada47c69f3e8e005f76c66568657be2c3af44d4e85b390955d749b382dc",
+        "rows": 140,
+        "summary": {
+          "strict": {
+            "MATCH": 140,
+            "MISMATCH": 0,
+            "NEEDS_REVIEW": 0
+          },
+          "emulator": {
+            "MATCH": 140,
+            "MISMATCH": 0,
+            "NEEDS_REVIEW": 0
+          }
+        },
+        "binding": "the closure build, an unpublished release-profile build of source commit cae9f99c8 (binary 44c3c889...), --locked, RUSTC_WRAPPER empty"
+      },
+      {
+        "path": "spec/compatibility/closure/evidence/RTDB-sdk-tokens-comparison.json",
+        "sha256": "ded8685cea546b2b0bcc0c6cdcb7007c41890d5450c3c23dd8a0b593aa73ddf0",
+        "rows": 54,
+        "summary": {
+          "strict": {
+            "MATCH": 54,
+            "MISMATCH": 0,
+            "NEEDS_REVIEW": 0
+          },
+          "emulator": {
+            "MATCH": 26,
+            "MISMATCH": 28,
+            "NEEDS_REVIEW": 0
+          }
+        },
+        "binding": "the closure build, an unpublished release-profile build of source commit cae9f99c8 (binary 44c3c889...), --locked, RUSTC_WRAPPER empty"
+      },
+      {
+        "path": "spec/compatibility/closure/evidence/RTDB-sdk-rules-load-comparison.json",
+        "sha256": "9a291f4e81f0d8990fbdc82b946bb4dc2aed48b59f91a7e06f629f0cccac53c0",
+        "rows": 14,
+        "summary": {
+          "strict": {
+            "MATCH": 14,
+            "MISMATCH": 0,
+            "NEEDS_REVIEW": 0
+          },
+          "emulator": {
+            "MATCH": 14,
+            "MISMATCH": 0,
+            "NEEDS_REVIEW": 0
+          }
+        },
+        "binding": "the closure build, an unpublished release-profile build of source commit cae9f99c8 (binary 44c3c889...), --locked, RUSTC_WRAPPER empty"
+      },
+      {
+        "path": "spec/compatibility/closure/evidence/RTDB-breadth-comparison.json",
+        "sha256": "122b22c41c3c5a2d83eced9e5ba964076772ff892dc35065b3f7433ce1791143",
+        "rows": 69,
+        "summary": {
+          "strict": {
+            "rows": 69,
+            "match": 69,
+            "difference": 0
+          },
+          "emulator": {
+            "rows": 69,
+            "match": 0,
+            "difference": 69
+          }
+        },
+        "binding": "the closure build, an unpublished release-profile build of source commit cae9f99c8 (binary 44c3c889...), --locked, RUSTC_WRAPPER empty"
       }
     ],
     "productionRequests": 0,
@@ -1512,7 +1908,7 @@
       "statement": "Local RTDB accepts only ID tokens issued by fireemu's Auth (or the owner credential); production Google-signed tokens are not accepted locally, and strict refuses a non-owner gauth credential with production's permission_denied."
     },
     "triggerEventShapeEmulatorProfile": {
-      "statement": "The emulator profile delivers an RTDB trigger event in the official emulator's shape, not production's: a UUID event id instead of the base64 of twenty bytes, the full-precision time (nine fraction digits) instead of three, the session's project instead of `_` in a 2nd gen `source`, `datacontenttype: application/json`, and authType admin or unauthenticated (with the matching 2nd gen `context.authType`) where production says unknown; it sends no `traceparent`. The strict profile matches production in all 72 rows. Compared on 28 deliveries of the 8 handlers over 9 writes (recorded 2026-10-27, CV14-RTDB-TRIGGERS-20261027-02).",
+      "statement": "The emulator profile delivers an RTDB trigger event in the official emulator's shape, not production's: a UUID event id instead of the base64 of twenty bytes, the full-precision time (nine fraction digits) instead of three, the session's project instead of `_` in a 2nd gen `source`, `datacontenttype: application/json`, and authType admin or unauthenticated (with the matching 2nd gen `context.authType`) where production says unknown; it sends no `traceparent`. The strict profile matches production in all 72 rows. Compared on 28 deliveries of the 8 handlers over 9 writes (recorded 2026-10-27, CV14-RTDB-TRIGGERS-20261027-02). The same holds for the 69 rows of the trigger breadth recording (RTDB-TRIGGERS-BREADTH-20261105-02), where the emulator profile also names a user's write authType admin or unauthenticated instead of app_user and USER.",
       "evidence": "spec/compatibility/closure/evidence/RTDB-functions-trigger-comparison.json"
     },
     "rootWriteListenOrder": {
@@ -1524,6 +1920,22 @@
       "statement": "Official-emulator-only difference with no production answer: a key of 768 bytes in a write's JSON body is accepted by fireemu and refused with 400 by the official emulator 4.11.2 (which accepts the same key in the URL path, as fireemu does). Production documents keys of up to 768 bytes but was not observed for this shape; the emulator profile refuses less than the official emulator here, and the difference is registered as a known difference and not changed.",
       "decisionRef": "docs.local/instructions/owner-decisions.md (2218 D2)",
       "issue": "docs.local/issues/open/rtdb-body-key-768-bytes.md"
+    },
+    "restEmulatorFollowsOfficialEmulator": {
+      "statement": "In 3 of the 72 REST cases the emulator profile answers as the official emulator (jar 4.11.2) and not as production: writeSizeLimit with a word or a number (the jar's text lists the limits in its own order, production in another) and a malformed % escape in the path (the jar answers 400 JSON Bad Request with CORS, production 400 octet-stream Bad request. 33 bytes without CORS or cache headers). The strict profile answers all 72 as production. In the print=silent DELETE the emulator profile answers as production (no content-length), where the jar answers 0.",
+      "rows": [
+        "rest r1/r2 wsl-foo",
+        "rest r1/r2 wsl-10",
+        "rest r1/r2 malformed-zz"
+      ],
+      "evidence": "spec/compatibility/closure/evidence/RTDB-sdk-rest-comparison.json"
+    },
+    "invalidCredentialsEmulatorProfile": {
+      "statement": "The emulator profile follows the official emulator for invalid credentials, which production refuses: an alg:none token, an RS256 or HS256-shaped token with a signature fireemu cannot verify (read for its claims when the project, a tenant it names and a future expiry fit, and no session signer is installed), any non-empty Bearer token and any access_token are accepted (13 of the 27 cases; 11 when rs256 and hs256 under auth= are not counted). The huge token (about 4.8 KB, otherwise the same shape) is also accepted, where the jar answers 400 because its request line exceeds 4 KB and production answers 401; fireemu has no request-line limit. The strict profile answers all 27 cases as production, and the emulator profile never refuses what the jar admits.",
+      "rows": [
+        "tokens r1/r2 auth-none-other, auth-none-own, auth-rs256, auth-hs256, auth-huge, bearer-random, bearer-none-own, bearer-rs256, bearer-null, bearer-random-pub, at-empty, at-random, at-rs256, at-random-pub"
+      ],
+      "evidence": "spec/compatibility/closure/evidence/RTDB-sdk-tokens-comparison.json"
     }
   },
   "knownGaps": {
@@ -1536,20 +1948,20 @@
     "prioritizedSplitBeyondTheRecordedShape": {
       "statement": "Beyond the earlier recorded S5 shape and the three named v0.35 recorded priority shapes (heal-reregister, nested-priority and string-priority), onDisconnect priority behavior remains unverified in production."
     },
-    "triggerUserAuthContext": {
-      "statement": "Not claimed: the event of a write made by an end user (a Firebase ID token). The recording holds only admin writes (the ADC token) and unauthenticated writes. The 2nd gen `authType` of a user's write is not recorded: production may say unknown there too, as it does for the two recorded kinds; the strict profile still names it `app_user` with the uid, and a 1st gen `context.auth` still carries the token claims. Needs an Auth user and a client SDK write path (R3)."
+    "triggerDeliveryBeyondBreadth": {
+      "statement": "RTDB-triggered Functions beyond the 12 recorded writes (RTDB-TRIGGERS-BREADTH-20261105-02): per-kind handlers (create, update, delete) on a nested pattern or under an ancestor write; a wildcard instance glob and a second instance; auth providers other than email/password; writes by a service account, by onDisconnect, by a transaction or by the Node Admin SDK; SDK writes over long polling; delivery latency, retry timing, the 24-hour and 7-day retry limits and the order of deliveries across handlers. The single-path kinds are recorded by RTDB/functions-trigger-delivery."
     },
-    "triggerBreadth": {
-      "statement": "One recording of eight handlers on one path pattern (/cv14-rtdb/items/{id}, one instance, one region) and nine writes. Not claimed: wildcard instances, nested wildcard patterns, a trigger on a path that a parent write creates or deletes (an ancestor write fanning out to several children), multi-path updates, writes made by the web SDK, delivery latency (1 to 3 seconds were seen, not compared), redelivery after a failed invocation, and event ordering across handlers."
+    "credentialsBeyondInvalidRest": {
+      "statement": "Not recorded: the WebSocket auth and gauth message texts for a rejected credential (strict refuses a non-owner gauth with production's permission_denied; the texts are the official emulator's), a genuine ID token that is expired, revoked, tampered, for another project or for a deleted user (the tokens recorded here are generated), an unsigned token without aud, and the strict profile's answer to an invalid auth= on a write, an event stream or the settings path (only the data read is recorded)."
     }
   },
   "outOfScope": [
     "UNVERIFIED web SDK listener, query and transaction shapes beyond the recorded cases of RTDB/sdk-events-queries-and-transactions, RTDB/sdk-small-queries-and-writes and RTDB/sdk-reconnect-and-query-order: other windows, cursors and query combinations, and transactions with applyLocally false",
     "UNVERIFIED Node Admin SDK with a service-account credential, and Admin SDK shapes beyond the recorded cases of RTDB/admin-sdk-websocket (which authenticated with a user OAuth access token)",
-    "UNVERIFIED REST options (inventory G7): timeout; writeSizeLimit tiny, medium, large, unlimited and numeric or invalid values (only small is recorded); print=pretty and an invalid print value; POST at the root and POST of a scalar, of an object with .priority and of null, and other push-ID forms; .sv through POST and through .priority; orderBy=\"$priority\", \"$key\" and \"$value\" outside the Rules-gated queries of the recorded operators cases, and orderBy=\"$key\" with 32-bit integer keys; limitToFirst/limitToLast alone or with shallow, and orderBy with shallow=true; format=export with a window; if-none-match and the Mixing refusal; X-HTTP-Method-Override; callback= JSONP names; download=; a PATCH of a priority on an emptied node; a malformed % escape; the SSE patch event of an ancestor PATCH; .settings/rules.json GET and PUT",
-    "UNVERIFIED Security Rules beyond the recorded cases (inventory G8): auth.token custom claims and auth.token.firebase.sign_in_provider; .indexOn refusal variants (several keys, .value, .key, orderBy on a non-indexed child with and without limitToFirst, nested paths); cascade grammar beyond the recorded cases ($var wildcards with a parent .validate, .validate on deleted nodes, newData.hasChildren after a multi-path update, root.child cross-path reads, now in .write); query members beyond the recorded query-Rules and operators cases; numeric string concatenation (Java Double.toString); syntax-error and multi-diagnostic load texts beyond the 8 recorded regular expressions and the 3 recorded identity refusals; lexing of U+0085, U+FEFF and other Cf characters, a+? and /a|q/; the read a conditional write needs, a .priority write judged at the node, and a rejected WebSocket auth falling back to anonymous",
-    "UNVERIFIED RTDB-triggered Cloud Functions delivery beyond the recorded one (inventory G9): an end user's write context (1st gen context.auth, 2nd gen authType/authId), wildcard instances, nested wildcard patterns, an ancestor write fanning out to several children, multi-path updates, web SDK writes, redelivery after a failed invocation and its timing, ordering across handlers and delivery latency: see /knownGaps/triggerUserAuthContext and /knownGaps/triggerBreadth",
-    "UNVERIFIED token edge cases (inventory G10): REST auth= with a tampered signature, a wrong-project token, alg:none and an expired token; the REST Bearer/access_token and invalid-auth refusal texts; the WebSocket auth texts \"Could not parse auth token.\" and invalid_token; an unsigned token without aud; revocation and tenants stay with the AUTH parents",
+    "UNVERIFIED REST options beyond the 72 recorded cases of RTDB/rest-options-and-refusals (inventory G7): writeSizeLimit with other numeric values and other limits' error texts; print values other than pretty, bogus and silent; POST at the root and other push-ID forms; .sv through .priority; orderBy windows of other shapes; format=export with a window; the SSE patch event of an ancestor PATCH; and the settings path with a non-administrator credential",
+    "UNVERIFIED Security Rules beyond the recorded cases (inventory G8): cascade grammar and query members beyond the 70 cases of RTDB/rules-claims-indexes-and-load-texts and the 7 documents of RTDB/rules-document-load-diagnostics, further syntax-error and multi-diagnostic load texts, lexing of other Cf characters, and a rejected WebSocket auth falling back to anonymous",
+    "UNVERIFIED RTDB-triggered Cloud Functions delivery beyond the recorded ones (inventory G9): see /knownGaps/triggerDeliveryBeyondBreadth",
+    "UNVERIFIED token edge cases beyond RTDB/invalid-credentials-rest (inventory G10): see /knownGaps/credentialsBeyondInvalidRest; revocation and tenants stay with the AUTH parents",
     "UNVERIFIED official-emulator behaviour copied without a recording (inventory G17, design memo items 33 to 38): the items named above; item 36 (the regular-expression limits) is recorded by the 48 M14 loads, and item 38 is /knownDifferences/bodyKey768Bytes",
     "by decision: latency, throughput, quotas, billing, multi-region and instance management (not behaviour parity)",
     "by decision: Android, Apple, Unity, Java and Python SDKs (owner 1471 Q8: a later separate parent)"

@@ -98,11 +98,11 @@
     },
     {
       "path": "tools/sdk-smoke-database/sdk-observer/lib.mjs",
-      "sha256": "e6da959b718ab21c8b66dbfab1c53531da508bfb3b1676cc0b1f43e8c64c7d6f"
+      "sha256": "6459e3ecae58a36f0b2037dab03c2490f96d93c707de681cb7e585822d89a7ab"
     },
     {
       "path": "tools/sdk-smoke-database/sdk-observer/observer.mjs",
-      "sha256": "482109e664d56ffda6672db670892a6e60a6edc8f73a4da6c2f3fc8631933bb7"
+      "sha256": "4a071f4e19c36e5f528a939cc9a19e7ea57ebdf38fbb89818029b8a89c2e2765"
     },
     {
       "path": "tools/sdk-smoke-database/sdk-observer/actor.mjs",
@@ -126,7 +126,7 @@
     },
     {
       "path": "tools/sdk-smoke-database/sdk-observer/readback.mjs",
-      "sha256": "93cb23ad6a278c62accbf228258d163f3a51c6e58786fbf16cb46c44bcf9602b"
+      "sha256": "7e55c364326c690386ed0c7f5f974a8b141e3497ef33cffff1d9eccd75848d33"
     },
     {
       "path": "conformance/src/rtdb-release-replay.mjs",
@@ -184,21 +184,21 @@
   "command": "node conformance/src/rtdb-release-replay.mjs local sdk-events --fireemu <binary> --out <dir> --export <file> (strict, as the release job runs it); node tools/sdk-smoke-database/rtdb-sdk-events.mjs local --fireemu <binary> --out <dir> --profile emulator --modules tools/sdk-smoke-database/node_modules, then conformance/src/rtdb-release-replay.mjs's adjudicate for the same export shape",
   "sdk": "firebase 12.18.0 (@firebase/database 1.1.5), firebase-admin 14.3.0, playwright 1.62.1 (headless Chromium)",
   "binding": {
-    "release": "v0.43.0",
-    "releaseAsset": "fireemu-0.43.0-darwin-arm64.tar.gz",
-    "releaseAssetSha256": "bea548069451e642cdc5d4736f61b520a0f9ec6ff091add0df380bceb4dd08ef",
-    "sourceCommit": "afe1234851c593031c1eea2e2304f3e2a0dc3f01",
-    "tagObject": "8253a0dce77bb605e28946ce283473149c10ee13",
-    "binarySha256": "a0e1688bf4e915c0be5d973019e3e643cb15a3f869e596cdf63937aeae506e7b",
+    "release": "closure-build",
+    "releaseAsset": "unpublished release-profile build of source commit cae9f99c8f0fc3285839cfe6ee02c10c27505ca9 (cargo build --release --locked -p fireemu, RUSTC_WRAPPER empty, fresh worktree-local target directory)",
+    "releaseAssetSha256": "44c3c889b81a07d570e0eeb34eb42f730a42066d03f981c0dac46255279c8401",
+    "sourceCommit": "cae9f99c8f0fc3285839cfe6ee02c10c27505ca9",
+    "tagObject": null,
+    "binarySha256": "44c3c889b81a07d570e0eeb34eb42f730a42066d03f981c0dac46255279c8401",
     "version": "fireemu 0.43.0",
-    "toolCommit": "bcce71689e65c12d58f424376f983b91b6ac25e4",
+    "toolCommit": "dc7253f12a56e386d0cf674e7f5f1e93172901d0",
     "host": "Darwin arm64",
     "productionRequests": 0
   },
   "profiles": {
     "strict": {
       "profile": "strict",
-      "binarySha256": "a0e1688bf4e915c0be5d973019e3e643cb15a3f869e596cdf63937aeae506e7b",
+      "binarySha256": "44c3c889b81a07d570e0eeb34eb42f730a42066d03f981c0dac46255279c8401",
       "match": true,
       "counts": {
         "MATCH": 160,
@@ -1199,7 +1199,7 @@
           "verdict": "MATCH"
         }
       ],
-      "exportSha256": "ab558bee3ef60b590493394f7a9c8a623da6bba5a05b2cc68dbdc142c198b0ee",
+      "exportSha256": "93376ad4b00cb226ff3272801c23b537eb36b5093715a580f61b6000cd7b7444",
       "sdkResources": {
         "package-lock.json": "fa9dab58f70425ee28c86a59f42135ab5533c3d8a19d3ffab6abe3bde5428a53",
         "node_modules/firebase/package.json": "8b02ad75fe0a38e30f4ab8116c0a46f076206bb5f924890c198434243bdb2232",
@@ -1212,7 +1212,7 @@
     },
     "emulator": {
       "profile": "emulator",
-      "binarySha256": "a0e1688bf4e915c0be5d973019e3e643cb15a3f869e596cdf63937aeae506e7b",
+      "binarySha256": "44c3c889b81a07d570e0eeb34eb42f730a42066d03f981c0dac46255279c8401",
       "match": true,
       "counts": {
         "MATCH": 160,
@@ -2213,7 +2213,7 @@
           "verdict": "MATCH"
         }
       ],
-      "exportSha256": "20c627c1bfea7b8645a4583d5f1d0576b1930da822861741272f37ff600a43a7",
+      "exportSha256": "8c8444de63617b3bb9d118702f809ccf15d55d96b0d09c80b7251f0172560a8d",
       "sdkResources": {
         "package-lock.json": "fa9dab58f70425ee28c86a59f42135ab5533c3d8a19d3ffab6abe3bde5428a53",
         "node_modules/firebase/package.json": "8b02ad75fe0a38e30f4ab8116c0a46f076206bb5f924890c198434243bdb2232",

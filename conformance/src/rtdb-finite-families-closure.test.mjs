@@ -21,9 +21,12 @@ const V041 = {
   binarySha256: "0030b466385dd160c0521ff8e985141d1d0adc67a3a8841c97744b0f27ed9315",
 };
 const SDK_SMALL = "spec/compatibility/closure/evidence/RTDB-sdk-small-comparison.json";
+// The closure build: an unpublished release-profile build of the source commit (cargo build --release
+// --locked -p fireemu, RUSTC_WRAPPER empty, a fresh worktree-local target directory). The Rust sources
+// are unchanged between that commit and the commit that carries these records.
 const V043 = {
-  sourceCommit: "afe1234851c593031c1eea2e2304f3e2a0dc3f01",
-  binarySha256: "a0e1688bf4e915c0be5d973019e3e643cb15a3f869e596cdf63937aeae506e7b",
+  sourceCommit: "cae9f99c8f0fc3285839cfe6ee02c10c27505ca9",
+  binarySha256: "44c3c889b81a07d570e0eeb34eb42f730a42066d03f981c0dac46255279c8401",
 };
 const SDK_EVENTS = "spec/compatibility/closure/evidence/RTDB-sdk-events-comparison.json";
 const EVENTS_FIXTURE = "tools/sdk-smoke-database/fixtures/production-sdk-events.json";
@@ -137,7 +140,7 @@ test("the three v0.35 priority shapes stay under the prioritized-split condition
   assert.ok(!ids.includes("RTDB/priority-shapes"));
 });
 
-test("the small SDK observer comparison binds the v0.43.0 release binary in both profiles", () => {
+test("the small SDK observer comparison binds the closure build in both profiles", () => {
   const entry = condition("RTDB/sdk-small-queries-and-writes");
   assert.ok(entry);
   assert.equal(entry.status, "VERIFIED");
@@ -173,27 +176,14 @@ const STILL_UNOBSERVED = [
   "beyond the recorded cases of RTDB/sdk-events-queries-and-transactions",
   "applyLocally false",
   "Node Admin SDK with a service-account credential",
-  "timeout",
   "writeSizeLimit",
-  "print=pretty",
-  "if-none-match",
-  "X-HTTP-Method-Override",
-  "callback=",
-  "download=",
-  ".settings/rules.json",
-  "auth.token",
-  "sign_in_provider",
-  ".indexOn",
-  "numeric string concatenation",
   "syntax-error",
-  "U+0085",
-  "end user",
-  "wildcard",
-  "redelivery",
-  "tampered",
-  "wrong-project",
-  "alg:none",
-  "expired",
+  "beyond the 72 recorded cases of RTDB/rest-options-and-refusals",
+  "the settings path with a non-administrator credential",
+  "beyond the 70 cases of RTDB/rules-claims-indexes-and-load-texts",
+  "a rejected WebSocket auth falling back to anonymous",
+  "/knownGaps/triggerDeliveryBeyondBreadth",
+  "/knownGaps/credentialsBeyondInvalidRest",
   "Android, Apple, Unity",
   "latency",
 ];
@@ -208,6 +198,13 @@ const NOW_RECORDED = [
   "UNVERIFIED REST POST/push ids, DELETE",
   "print=silent, equalTo/endAt/startAfter/endBefore",
   "Security Rules .validate, cascading, data/newData/root, query-based rules",
+  "UNVERIFIED REST options (inventory G7): timeout",
+  "not observed in production: REST timeout, writeSizeLimit values other than small",
+  "UNVERIFIED Security Rules beyond the recorded cases (inventory G8): auth.token custom claims",
+  "not observed in production: Rules auth.token custom claims and sign-in providers",
+  "UNVERIFIED RTDB-triggered Cloud Functions delivery beyond the recorded one (inventory G9)",
+  "UNVERIFIED token edge cases (inventory G10): REST auth= with a tampered signature",
+  "not observed in production: ID token expiry, tampered signatures",
 ];
 
 test("outOfScope lists exactly the still-unobserved shapes and the decided exclusions", () => {
@@ -227,8 +224,8 @@ test("the contract's database entry no longer calls the recorded families unveri
   for (const item of ["print=silent", "startAfter", "increment", "serverTimestamp"])
     assert.ok(database.decision.includes(item), item);
   for (const item of [
-    "timeout",
-    "auth.token",
+    "writeSizeLimit",
+    "WebSocket auth",
     "Node Admin SDK",
     "service-account",
     "tampered",
@@ -257,7 +254,7 @@ test("the Mac controls stay bound to older binaries and the two jar-only differe
   }
 });
 
-test("the SDK events and Admin SDK comparison binds the v0.43.0 release binary in both profiles", () => {
+test("the SDK events and Admin SDK comparison binds the closure build in both profiles", () => {
   const comparison = json(SDK_EVENTS);
   assert.equal(comparison.kind, "rtdb-production-comparison-v1");
   assert.equal(comparison.parent, "RTDB");
@@ -319,7 +316,7 @@ test("the events and Admin SDK conditions cite the recording and never claim a s
     assert.equal(evidence.comparisonSha256, sha(SDK_EVENTS));
     assert.equal(evidence.fixturePath, EVENTS_FIXTURE);
     assert.equal(evidence.fixtureSha256, sha(EVENTS_FIXTURE));
-    assert.equal(evidence.release, "v0.43.0");
+    assert.equal(evidence.release, "closure-build");
     assert.equal(evidence.sourceCommit, V043.sourceCommit);
     assert.equal(evidence.binarySha256, V043.binarySha256);
     assert.equal(evidence.productionRequests, 0);
@@ -344,4 +341,208 @@ test("the events and Admin SDK conditions cite the recording and never claim a s
   for (const id of ["RTDB/sdk-events-queries-and-transactions", "RTDB/admin-sdk-websocket"])
     assert.ok(r10.decision.includes(id), id);
   assert.match(r10.decision, /service account/);
+});
+
+// ---- the recordings of 2026-11-04 and 2026-11-05 (scope decision R11), replayed on the closure build ----
+const EV = "spec/compatibility/closure/evidence/";
+const RECORDINGS = [
+  {
+    file: "RTDB-sdk-rest-comparison.json",
+    condition: "RTDB/rest-options-and-refusals",
+    recording: "RTDB-REST-20261104-01",
+    comparison: "sdk-rest",
+    strict: { MATCH: 144, MISMATCH: 0, NEEDS_REVIEW: 0 },
+    emulator: { MATCH: 138, MISMATCH: 6, NEEDS_REVIEW: 0 },
+    official: { cases: 144, match: 142 },
+    declared: ["wsl-foo", "wsl-10", "malformed-zz"],
+  },
+  {
+    file: "RTDB-sdk-rules-comparison.json",
+    condition: "RTDB/rules-claims-indexes-and-load-texts",
+    recording: "RTDB-RULES-20261104-01",
+    comparison: "sdk-rules",
+    strict: { MATCH: 140, MISMATCH: 0, NEEDS_REVIEW: 0 },
+    emulator: { MATCH: 140, MISMATCH: 0, NEEDS_REVIEW: 0 },
+  },
+  {
+    file: "RTDB-sdk-rules-load-comparison.json",
+    condition: "RTDB/rules-document-load-diagnostics",
+    recording: "RTDB-RULES-LOAD-20261105-01",
+    comparison: "sdk-rules-load",
+    strict: { MATCH: 14, MISMATCH: 0, NEEDS_REVIEW: 0 },
+    emulator: { MATCH: 14, MISMATCH: 0, NEEDS_REVIEW: 0 },
+    official: { cases: 14, match: 14 },
+    declared: [],
+  },
+  {
+    file: "RTDB-sdk-tokens-comparison.json",
+    condition: "RTDB/invalid-credentials-rest",
+    recording: "RTDB-TOKENS-20261104-01",
+    comparison: "sdk-tokens",
+    strict: { MATCH: 54, MISMATCH: 0, NEEDS_REVIEW: 0 },
+    emulator: { MATCH: 26, MISMATCH: 28, NEEDS_REVIEW: 0 },
+    official: { cases: 54, match: 52 },
+    declared: [
+      "auth-none-other",
+      "auth-none-own",
+      "auth-rs256",
+      "auth-hs256",
+      "auth-huge",
+      "bearer-random",
+      "bearer-none-own",
+      "bearer-rs256",
+      "bearer-null",
+      "bearer-random-pub",
+      "at-empty",
+      "at-random",
+      "at-rs256",
+      "at-random-pub",
+    ],
+  },
+];
+
+test("every recording of 2026-11-04/05 binds its fixture, tools and the closure build, and its condition cites it", () => {
+  for (const spec of RECORDINGS) {
+    const path = EV + spec.file;
+    const evidence = json(path);
+    assert.equal(evidence.kind, "rtdb-production-comparison-v1", spec.file);
+    assert.equal(evidence.parent, "RTDB");
+    assert.equal(evidence.comparison, spec.comparison);
+    assert.deepEqual(evidence.conditions, [spec.condition]);
+    assert.equal(evidence.production.recording, spec.recording);
+    assert.equal(evidence.production.project, "fireemu-oracle-query");
+    assert.equal(evidence.production.requests.overflow, 0);
+    assert.equal(evidence.production.requests.adc, 1);
+    assert.equal(evidence.fixture.sha256, sha(evidence.fixture.path), spec.file);
+    for (const { path: toolPath, sha256 } of evidence.tool)
+      assert.equal(sha(toolPath), sha256, toolPath);
+    assert.equal(evidence.binding.sourceCommit, V043.sourceCommit);
+    assert.equal(evidence.binding.binarySha256, V043.binarySha256);
+    assert.equal(evidence.binding.productionRequests, 0);
+    for (const profile of ["strict", "emulator"]) {
+      const run = evidence.profiles[profile];
+      assert.equal(run.binarySha256, V043.binarySha256, `${spec.file} ${profile}`);
+      assert.deepEqual(run.counts, spec[profile], `${spec.file} ${profile}`);
+      assert.equal(run.rows.length, evidence.production.observations);
+      assert.equal(run.match, run.counts.MATCH === run.rows.length);
+    }
+    assert.equal(evidence.profiles.strict.match, true, `${spec.file}: strict matches production`);
+    const entry = condition(spec.condition);
+    assert.ok(entry, spec.condition);
+    assert.equal(entry.status, "VERIFIED");
+    assert.equal(entry.evidence.comparisonPath, path);
+    assert.equal(entry.evidence.comparisonSha256, sha(path));
+    assert.equal(entry.evidence.fixturePath, evidence.fixture.path);
+    assert.equal(entry.evidence.fixtureSha256, sha(evidence.fixture.path));
+    assert.equal(entry.evidence.binarySha256, V043.binarySha256);
+    assert.equal(entry.evidence.sourceCommit, V043.sourceCommit);
+    assert.equal(entry.evidence.productionRequests, 0);
+    for (const file of entry.evidence.tests) assert.ok(exists(file), file);
+    const regression = closure().integratedRegression.comparisons.find((c) => c.path === path);
+    assert.ok(regression, path);
+    assert.equal(regression.sha256, sha(path));
+    assert.equal(regression.rows, evidence.production.observations);
+  }
+});
+
+test("the emulator profile differs from production only where the official emulator jar is the reference, and each difference is declared", () => {
+  for (const spec of RECORDINGS.filter((s) => s.official)) {
+    const evidence = json(EV + spec.file);
+    const official = evidence.official;
+    assert.equal(official.jar.version, "4.11.2");
+    assert.equal(official.fixture.sha256, sha(official.fixture.path));
+    assert.equal(official.emulatorVsOfficial.counts.MATCH, spec.official.match, spec.file);
+    const different = evidence.profiles.emulator.rows.filter((row) => row.verdict !== "MATCH");
+    assert.deepEqual([...new Set(different.map((row) => row.case))], spec.declared, spec.file);
+    assert.equal(official.emulatorDifferencesFromProduction.length, different.length);
+    // The emulator profile answers as the jar wherever it differs from production, save the one
+    // oversized token (about 4.8 KB) that the jar cannot take through its request-line limit.
+    for (const row of official.emulatorDifferencesFromProduction) {
+      if (row.case === "auth-huge") assert.equal(row.emulatorMatchesOfficialEmulator, false);
+      else assert.equal(row.emulatorMatchesOfficialEmulator, true, `${spec.file} ${row.case}`);
+    }
+  }
+  const record = closure();
+  for (const key of ["restEmulatorFollowsOfficialEmulator", "invalidCredentialsEmulatorProfile"]) {
+    assert.match(record.knownDifferences[key].statement, /official emulator/);
+    assert.ok(exists(record.knownDifferences[key].evidence), key);
+  }
+  assert.match(record.knownDifferences.invalidCredentialsEmulatorProfile.statement, /request line/);
+});
+
+test("the trigger breadth recording binds the production fixture and the local recordings on the closure build", () => {
+  const evidence = json(`${EV}RTDB-breadth-comparison.json`);
+  assert.equal(evidence.kind, "rtdb-production-comparison-v1");
+  assert.deepEqual(evidence.conditions, ["RTDB/functions-trigger-breadth-and-user-auth"]);
+  assert.equal(evidence.production.recording, "RTDB-TRIGGERS-BREADTH-20261105-02");
+  assert.deepEqual(evidence.production.functions, [
+    "g9WrittenV2Retry",
+    "g9WrittenV1Retry",
+    "g9WrittenV2",
+  ]);
+  assert.equal(evidence.production.writes, 12);
+  assert.equal(evidence.fixture.sha256, sha(evidence.fixture.path));
+  for (const profile of ["strict", "emulator"]) {
+    assert.equal(
+      evidence.localRecordings[profile].sha256,
+      sha(evidence.localRecordings[profile].path),
+      profile,
+    );
+    assert.equal(evidence.profiles[profile].binarySha256, V043.binarySha256, profile);
+    assert.deepEqual(evidence.profiles[profile].unattributed, { production: 0, local: 0 });
+  }
+  for (const { path, sha256 } of evidence.tool) assert.equal(sha(path), sha256, path);
+  assert.deepEqual(evidence.profiles.strict.totals, { rows: 69, match: 69, difference: 0 });
+  assert.deepEqual(evidence.profiles.emulator.totals, { rows: 69, match: 0, difference: 69 });
+  assert.equal(evidence.binding.binarySha256, V043.binarySha256);
+  const entry = condition("RTDB/functions-trigger-breadth-and-user-auth");
+  assert.ok(entry);
+  assert.equal(entry.status, "VERIFIED");
+  assert.equal(entry.evidence.comparisonSha256, sha(`${EV}RTDB-breadth-comparison.json`));
+  assert.deepEqual(entry.evidence.rows, {
+    strict: { MATCH: 69 },
+    emulator: { DECLARED_DIFFERENCE: 69 },
+  });
+  assert.match(entry.cases.join("\n"), /app_user/);
+  assert.match(entry.cases.join("\n"), /USER/);
+  for (const file of entry.evidence.tests) assert.ok(exists(file), file);
+  const regression = closure().integratedRegression.comparisons.find(
+    (c) => c.path === `${EV}RTDB-breadth-comparison.json`,
+  );
+  assert.ok(regression);
+  assert.equal(regression.rows, 69);
+});
+
+test("the trigger gaps the breadth recording closes are gone, and what it leaves is named", () => {
+  const record = closure();
+  assert.equal(record.knownGaps.triggerUserAuthContext, undefined);
+  assert.equal(record.knownGaps.triggerBreadth, undefined);
+  const beyond = record.knownGaps.triggerDeliveryBeyondBreadth.statement;
+  for (const item of [
+    "wildcard instance",
+    "per-kind handlers",
+    "latency",
+    "retry timing",
+    "order of deliveries",
+  ])
+    assert.ok(beyond.includes(item), item);
+  assert.match(record.knownGaps.credentialsBeyondInvalidRest.statement, /WebSocket auth/);
+  assert.match(record.knownGaps.credentialsBeyondInvalidRest.statement, /generated/);
+});
+
+test("scope decision R11 amends R2 for the recorded cases and keeps the parent open", () => {
+  const record = closure();
+  const r11 = record.scopeDecisions.find((entry) => entry.id === "R11");
+  assert.ok(r11);
+  assert.equal(r11.amends, "R2");
+  for (const row of ["2217", "2218", "2251", "2231", "2239", "2253", "2262", "2266"])
+    assert.match(r11.decisionRef, new RegExp(`\\b${row}\\b`), row);
+  for (const id of RECORDINGS.map((s) => s.condition).concat(
+    "RTDB/functions-trigger-breadth-and-user-auth",
+  ))
+    assert.ok(r11.decision.includes(id), id);
+  assert.match(r11.decision, /The parent remains IMPLEMENTING/);
+  assert.equal(record.parentStatus, "IMPLEMENTING");
+  assert.equal(record.closureReview.decision, "CHANGES_REQUESTED");
+  assert.match(record.closureReview.note, /review of that refresh is pending/);
 });

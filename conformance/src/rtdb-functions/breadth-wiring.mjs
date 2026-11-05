@@ -12,15 +12,68 @@ export const BREADTH_LIMITS = Object.freeze({
 });
 
 import { createBudget } from "../../functions-http/harness.mjs";
+import { CODEBASE, TARGETS } from "./breadth-targets.mjs";
 import { INVENTORY_HOSTS } from "./inventory.mjs";
 import { LOGGING_HOST, listRequest, parseEntries } from "./breadth-logs.mjs";
 export { bearerFetch, bindOps, createFormsCollector, preflightStage2 } from "./wiring.mjs";
 export const BREADTH_HOSTS = Object.freeze([LOGGING_HOST, ...INVENTORY_HOSTS]);
-export const createBreadthBudget = () =>
-  createBudget(
-    { ...BREADTH_LIMITS },
-    { logs: BREADTH_LIMITS.logs, inventory: BREADTH_LIMITS.inventory },
-  );
+export const createBreadthBudget = () => {
+  const { userClient, browserHttp, browserWs, ...caps } = BREADTH_LIMITS;
+  const budget = createBudget(caps, {
+    logs: caps.logs,
+    inventory: caps.inventory,
+    userClient,
+    browserHttp,
+    browserWs,
+    rtdbAdmin: 200,
+    breadthAuth: 200,
+  });
+  let total = 0;
+  let cleanup = false;
+  let exhausted = false;
+  let cleanupExhausted = false;
+  return {
+    take(kind) {
+      const limit = cleanup ? 212 : 200;
+      if (total >= limit) {
+        exhausted = true;
+        if (cleanup) cleanupExhausted = true;
+        throw new Error(`total request ceiling ${limit} reached`);
+      }
+      const count = budget.take(kind);
+      total++;
+      return count;
+    },
+    startCleanup() {
+      cleanup = true;
+    },
+    get exhausted() {
+      return exhausted;
+    },
+    get cleanupExhausted() {
+      return cleanupExhausted;
+    },
+    snapshot: () => ({ ...budget.snapshot(), total }),
+  };
+};
+
+export function breadthCli(run) {
+  return async (args, ...rest) => {
+    const only = args.indexOf("--only");
+    if (
+      args[0] !== "deploy" ||
+      only < 0 ||
+      !TARGETS.some(
+        (target) => args[only + 1] === `functions:${CODEBASE}:${target.functionName}`,
+      ) ||
+      args.filter((arg) => arg === "--only").length !== 1 ||
+      args.includes("--config")
+    ) {
+      throw new Error("invalid breadth deploy");
+    }
+    return run([...args, "--config", "firebase-breadth.json"], ...rest);
+  };
+}
 
 const LOG_PAGES = 3;
 

@@ -46,6 +46,7 @@ export async function runBreadth(deps) {
     for (const [key, count] of Object.entries(reply.ignored ?? {}))
       result.logs.ignored[key] = Math.max(result.logs.ignored[key] ?? 0, count);
     result.frames.push(...reply.frames.map((frame) => frame.frame ?? frame));
+    if (deps.budget?.exhausted) throw Error("total request ceiling reached");
   };
   try {
     await phase("preflight");
@@ -158,6 +159,7 @@ export async function runBreadth(deps) {
   } catch (error) {
     reasons.push(`SDK cleanup: ${error.message}`);
   }
+  deps.budget?.startCleanup();
   await phase("cleanup");
   const owned = [];
   for (const spec of targets) {
@@ -232,6 +234,10 @@ export async function runBreadth(deps) {
   if (!deps.uploads.report().closureReady) {
     result.residual = true;
     reasons.push("source upload ledger is not closed");
+  }
+  if (deps.budget?.cleanupExhausted) {
+    result.residual = true;
+    reasons.push("request ceiling reached; recovery required");
   }
   if (reasons.length) result.outcome = "stopped-needs-review";
   await phase("closed");

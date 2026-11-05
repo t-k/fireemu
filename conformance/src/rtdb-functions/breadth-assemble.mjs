@@ -89,6 +89,7 @@ export function assembleBreadth({
     iam: { before: null, after: null, added: [], removed: [] },
   };
   const deps = {
+    budget,
     targets: TARGETS,
     steps: buildSteps(nonce),
     nonce,

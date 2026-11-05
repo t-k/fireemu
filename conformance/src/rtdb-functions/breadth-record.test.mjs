@@ -80,7 +80,7 @@ test("journal redacts current secrets from every row", async () => {
         projectId: "project",
         projectNumber: "12345",
         secrets,
-        budget: { snapshot: () => ({ cliDeploy: 0 }) },
+        budget: { snapshot: () => ({ cliDeploy: 0, total: 42 }) },
       },
       runDir: dir,
       packetPins: { baselineRulesSha256: rulesSha },
@@ -97,6 +97,7 @@ test("journal redacts current secrets from every row", async () => {
     const journal = await readFile(join(dir, "journal.jsonl"), "utf8");
     for (const secret of secrets) assert.ok(!journal.includes(secret));
     assert.match(journal, /\*\*\*/);
+    assert.equal(JSON.parse(journal.trim().split("\n").at(-1)).detail.total, 42);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

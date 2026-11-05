@@ -85,3 +85,23 @@ test("an incomplete log read remains incomplete after later successful reads", a
   assert.equal(result.logs.incomplete, true);
   assert.ok(result.reasons.includes("a Cloud Logging read was incomplete"));
 });
+
+test("total limit enters cleanup and cleanup exhaustion requires recovery", async () => {
+  const { createBreadthBudget } = await import("./breadth-wiring.mjs");
+  const world = makeWorld();
+  const budget = createBreadthBudget();
+  world.deps.budget = budget;
+  world.deps.rtdb.setup = async () => {
+    for (let i = 0; i < 200; i++) budget.take("rtdbAdmin");
+    budget.take("control");
+  };
+  world.deps.rtdb.cleanup = async () => {
+    for (let i = 0; i < 12; i++) budget.take("cleanup");
+    budget.take("cleanup");
+    return { closed: true };
+  };
+  const result = await runBreadth(world.deps);
+  assert.equal(budget.snapshot().total, 212);
+  assert.equal(result.residual, true);
+  assert.ok(result.reasons.includes("request ceiling reached; recovery required"));
+});

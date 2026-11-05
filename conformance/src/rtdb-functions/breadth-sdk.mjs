@@ -45,7 +45,7 @@ export function createSdk({ page, config, email, password, uid, nonce }) {
   };
 }
 
-export function browserRunner({ modules, allowHost, stop = {} }) {
+export function browserRunner({ modules, allowHost, budget, stop = {} }) {
   const require = createRequire(path.resolve(modules, "x.js"));
   const { chromium } = require("playwright");
   return async (config, credentials, observe) => {
@@ -88,13 +88,27 @@ export function browserRunner({ modules, allowHost, stop = {} }) {
           exceeded = true;
           return route.abort();
         }
+        try {
+          budget.take("browserHttp");
+        } catch {
+          exceeded = true;
+          return route.abort();
+        }
         return route.continue();
       });
-      page.on("websocket", () => {
-        if (++counts.ws > 4) {
+      await page.routeWebSocket("**/*", (ws) => {
+        const url = new URL(ws.url());
+        if (!allowHost(url.host) || ++counts.ws > 4) {
           exceeded = true;
-          void page.close();
+          return ws.close();
         }
+        try {
+          budget.take("browserWs");
+        } catch {
+          exceeded = true;
+          return ws.close();
+        }
+        ws.connectToServer();
       });
       await page.goto(`http://${origin}/`);
       await page.waitForFunction(() => typeof window.__breadth === "function");

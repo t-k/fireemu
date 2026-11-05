@@ -4,7 +4,7 @@
 // the sandbox ledger, and the recorder writes only inside its private run directory. The run itself is
 // flow.mjs; `executeRun` takes an environment so the whole path is exercised on fakes.
 
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { isAbsolute } from "node:path";
 import { execFileSync } from "node:child_process";
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
@@ -29,10 +29,40 @@ import {
 } from "../../functions-http/production.mjs";
 import { assembleBreadth } from "./breadth-assemble.mjs";
 import { runBreadth } from "./breadth-flow.mjs";
-import { requiredInstalledDependencies, requiredStage2Sources } from "./pins.mjs";
-import { BREADTH_HOSTS, bearerFetch, createBreadthBudget } from "./breadth-wiring.mjs";
+import { BREADTH_HOSTS, bearerFetch, breadthCli, createBreadthBudget } from "./breadth-wiring.mjs";
 
 const STAGE_DIR = fileURLToPath(new URL("./", import.meta.url));
+const BREADTH_PINS = {
+  "firebase-breadth.json": "3ff5295c2cba9ad4223d35460217a9e9ed3271ed3f0e9018942ac991b046d2b9",
+  "fixtures-breadth/index.js": "fae657ab58b72becef3f84d946d5dfa04766fa5c3759d625eed78ebcf1ff5657",
+  "fixtures-breadth/frames.js": "bece49be99ebfc28ba69ef8848ed0d7f1e40df0c55b692b594e7974524f975c7",
+  "fixtures-breadth/package.json":
+    "7da22ccd9851e3119b81462c2c1e071fc0d72f0196415c52acd69e1b12ebdd1e",
+  "fixtures-breadth/package-lock.json":
+    "c492afe0fa1e5336d78be6f1fa76e594d357e0412cacfd9d963d2569389b7dea",
+};
+async function requiredBreadthSources() {
+  for (const [file, expected] of Object.entries(BREADTH_PINS)) {
+    const hash = createHash("sha256")
+      .update(await readFile(join(STAGE_DIR, file)))
+      .digest("hex");
+    if (hash !== expected) throw Error(`reviewed source changed: ${file}`);
+  }
+  for (const [name, version] of [
+    ["firebase-functions", "7.3.2"],
+    ["firebase-admin", "14.3.0"],
+  ]) {
+    const installed = JSON.parse(
+      await readFile(join(STAGE_DIR, "fixtures-breadth/node_modules", name, "package.json")),
+    );
+    if (installed.name !== name || installed.version !== version)
+      throw Error(`fixture dependency ${name} ${version} is required`);
+  }
+  const cliPackage = JSON.parse(
+    await readFile(join(STAGE_DIR, "../../node_modules/firebase-tools/package.json")),
+  );
+  if (cliPackage.version !== "15.28.2") throw Error("pinned Firebase CLI 15.28.2 is required");
+}
 const MASK = "123456789012";
 const SECRET_SHAPES =
   /ya29\.|AIza[0-9A-Za-z_-]{20,}|eyJ[0-9A-Za-z_-]{8,}|Bearer\s+\S{8,}|X-Goog-Signature|Signature=/u;
@@ -157,7 +187,12 @@ export async function executeRun({ environment, runDir, packetPins, assemble = a
     }
   }
   assembled.uploads.close();
+  if (environment.budget.cleanupExhausted) {
+    result.residual = true;
+    result.reasons.push("request ceiling reached; recovery required");
+  }
   const requests = environment.budget.snapshot();
+  await log("requests", requests);
 
   const write = async (name, text) => {
     const masked = maskNumber(text, environment.projectNumber);
@@ -261,7 +296,7 @@ export async function admitRun({ env, privateRoot, root, deps }) {
     root,
   );
   if (dirty) throw new Error("CV14 needs a clean reviewed commit");
-  // The CLI uploads everything in fixtures/ except node_modules and .git and reads its .env files; an
+  // The CLI uploads everything in fixtures-breadth/ except node_modules and .git and reads its .env files; an
   // ignored file there would be deployed without showing in the status above.
   const ignored = (
     await deps.git(
@@ -274,14 +309,15 @@ export async function admitRun({ env, privateRoot, root, deps }) {
         "--untracked-files=normal",
         "--ignored",
         "--",
-        "conformance/src/rtdb-functions/fixtures",
+        "conformance/src/rtdb-functions/fixtures-breadth",
       ],
       root,
     )
   )
     .split("\n")
     .filter(
-      (line) => line !== "" && line !== "!! conformance/src/rtdb-functions/fixtures/node_modules/",
+      (line) =>
+        line !== "" && line !== "!! conformance/src/rtdb-functions/fixtures-breadth/node_modules/",
     );
   if (ignored.length > 0) {
     throw new Error(
@@ -316,13 +352,18 @@ export async function recordBreadth() {
       git: async (args, cwd) => execFileSync("git", args, { cwd, encoding: "utf8" }),
       readFile,
       requiredSources: async () => {
-        await requiredStage2Sources();
-        await requiredInstalledDependencies();
+        await requiredBreadthSources();
       },
       adcVerdict: async () => {
         apiKey = parseKeyFile(await readFile(args[1], "utf8"));
         secrets.push(apiKey);
-        return adcPreflight(fetch, await getToken());
+        return adcPreflight(
+          async (...args) => {
+            budget.take("control");
+            return fetch(...args);
+          },
+          await getToken(),
+        );
       },
     },
   });
@@ -347,10 +388,17 @@ export async function recordBreadth() {
   try {
     const environment = {
       control: createControl(adc.file, budget, { extraHosts: [...BREADTH_HOSTS] }),
-      runCli: (args, adcPath, runBudget, kind, dir, track) =>
+      runCli: breadthCli((args, adcPath, runBudget, kind, dir, track) =>
         cli(args, adcPath, runBudget, kind, dir, track, undefined, { cwd: STAGE_DIR }),
-      adminFetch: bearerFetch(getToken, PROJECT),
-      anonymousFetch: fetch,
+      ),
+      adminFetch: async (...args) => {
+        budget.take("rtdbAdmin");
+        return bearerFetch(getToken, PROJECT)(...args);
+      },
+      anonymousFetch: async (...args) => {
+        budget.take("userClient");
+        return fetch(...args);
+      },
       budget,
       adcPath: adc.path,
       projectNumber,
@@ -365,7 +413,14 @@ export async function recordBreadth() {
       nonce,
       createAuth: (log) => {
         const auth = createAuth({
-          adminFetch: bearerFetch(getToken, PROJECT),
+          adminFetch: async (...args) => {
+            budget.take("breadthAuth");
+            return bearerFetch(getToken, PROJECT)(...args);
+          },
+          fetchImpl: async (...args) => {
+            budget.take("breadthAuth");
+            return fetch(...args);
+          },
           projectId: PROJECT,
           apiKey,
           email,
@@ -386,6 +441,7 @@ export async function recordBreadth() {
         openSdk(
           browserRunner({
             modules: join(root, "conformance/node_modules"),
+            budget,
             allowHost: (host) =>
               [
                 "identitytoolkit.googleapis.com",

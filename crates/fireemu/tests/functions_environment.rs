@@ -1370,6 +1370,216 @@ const fs = require('node:fs');
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// A directory outside the source tree for the files a reload handshake writes, so that writing
+/// them is not a change the reload watcher reacts to.
+#[cfg(unix)]
+fn reload_signals(name: &str) -> PathBuf {
+    let signals =
+        std::env::temp_dir().join(format!("fireemu-env-{name}-signals-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&signals);
+    std::fs::create_dir_all(&signals).unwrap();
+    signals
+}
+
+/// Polls in the command for a handshake file. It is the counterpart of
+/// [`run_with_reload_handshake`]: `published` appears once the daemon has published generation 1,
+/// `rejected` once it refused or failed a reload.
+#[cfg(unix)]
+const RELOAD_HANDSHAKE_JS: &str = r"
+const appear = file => new Promise(resolve => {
+  const poll = () => require('node:fs').existsSync(file) ? resolve() : setTimeout(poll, 20);
+  poll();
+});
+const published = signals => Promise.race([
+  appear(require('node:path').join(signals, 'published')),
+  appear(require('node:path').join(signals, 'rejected'))
+    .then(() => { throw new Error('the rewritten source did not load'); }),
+]);
+";
+
+/// Runs `command` to completion while reading the daemon's stderr line by line, and writes the
+/// handshake file for each reload outcome the daemon reports for the `default` codebase. The
+/// `reloaded generation` line is printed only after the new generation is published, so a
+/// command that waits for `published` observes the reload itself rather than a time limit.
+#[cfg(unix)]
+fn run_with_reload_handshake(mut command: Command, signals: &Path) -> Output {
+    use std::io::BufRead;
+
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let stdout = std::thread::spawn(move || std::io::read_to_string(stdout).unwrap());
+    let mut stderr = String::new();
+    for line in std::io::BufReader::new(child.stderr.take().unwrap()).lines() {
+        let line = line.unwrap();
+        if line.contains("functions[default]: reloaded generation 1") {
+            write(signals, "published", "");
+        }
+        if line.contains("functions[default]: reload failed")
+            || line.contains("functions[default]: reload rejected")
+        {
+            write(signals, "rejected", "");
+        }
+        stderr.push_str(&line);
+        stderr.push('\n');
+    }
+    let status = child.wait().unwrap();
+    Output {
+        status,
+        stdout: stdout.join().unwrap().into_bytes(),
+        stderr: stderr.into_bytes(),
+    }
+}
+
+/// A request that generation 0 is still answering when generation 1 is published must be
+/// answered by generation 0. The official emulator lets a busy worker finish its request
+/// when the pool is refreshed for a reload; it only stops idle workers
+/// (`firebase-tools@15.28.2` `lib/emulator/functionsRuntimeWorker.js` `refresh`, `:242`).
+///
+/// Nothing here waits on a time limit. The held handler signals that it is running, the
+/// source is rewritten, the command waits for the daemon's own `reloaded generation 1` line,
+/// checks that a new request reaches generation 1, and only then lets the held handler answer.
+#[cfg(unix)]
+#[test]
+#[ignore = "requires tools/sdk-smoke dependencies; the manual SDK workflow runs this test"]
+fn a_request_in_flight_when_a_reload_is_published_is_answered_by_its_generation() {
+    assert!(
+        have_sdk(),
+        "install tools/sdk-smoke dependencies before running this test"
+    );
+    let dir = scratch_codebase("in-flight-reload");
+    let signals = reload_signals("in-flight-reload");
+    write(
+        &dir,
+        "index.js",
+        r"
+const fs = require('node:fs');
+const { onRequest } = require('firebase-functions/v2/https');
+const marker = 'before';
+exports.fxMarker = onRequest((_request, response) => response.json({ marker }));
+exports.fxHold = onRequest((request, response) => {
+  fs.writeFileSync(request.query.started, String(process.pid));
+  const poll = () => fs.existsSync(request.query.release)
+    ? response.json({ marker }) : setTimeout(poll, 20);
+  poll();
+});
+",
+    );
+    let script = format!(
+        r"{RELOAD_HANDSHAKE_JS}
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+(async () => {{
+  const [source, signals] = process.argv.slice(1);
+  const base = `http://${{process.env.FIREEMU_FUNCTIONS_HOST}}/demo-in-flight-reload/us-central1/`;
+  const started = path.join(signals, 'started');
+  const release = path.join(signals, 'release');
+  const held = fetch(`${{base}}fxHold?${{new URLSearchParams({{ started, release }})}}`)
+    .then(async response => ({{ status: response.status, body: await response.text() }}));
+  await appear(started);
+  fs.writeFileSync(source, fs.readFileSync(source, 'utf8').replace(`'before'`, `'after'`));
+  await published(signals);
+  const fresh = await fetch(`${{base}}fxMarker`);
+  assert.equal(fresh.status, 200, await fresh.clone().text());
+  assert.deepEqual(await fresh.json(), {{ marker: 'after' }});
+  fs.writeFileSync(release, '');
+  const answer = await held;
+  assert.equal(answer.status, 200, `the in-flight request was not answered by its generation: ${{answer.body}}`);
+  assert.deepEqual(JSON.parse(answer.body), {{ marker: 'before' }});
+}})().catch(error => {{ console.error(error); process.exitCode = 1; }})
+  // The losing side of the race in `published` keeps polling; leave without waiting for it.
+  .finally(() => process.exit());
+"
+    );
+    let mut command = fireemu_exec(&dir, "demo-in-flight-reload");
+    command
+        .args(["--only", "functions", "--", "node", "-e", &script])
+        .arg(dir.join("index.js"))
+        .arg(&signals);
+    let output = run_with_reload_handshake(command, &signals);
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+    std::fs::remove_dir_all(signals).unwrap();
+}
+
+/// A source change made after generation 0 was loaded must reload, however long the watcher
+/// takes to finish its first scan. A 128 MiB sparse file that sorts before `index.js` keeps
+/// that first scan running for about two seconds (the scan reads at most 64 MiB/s), and the
+/// command rewrites `index.js` as its first action, while the scan is still reading the bulk
+/// file. When the watcher takes its baseline from that scan instead of from the source
+/// generation 0 loaded, the rewrite becomes the baseline and is never reloaded.
+///
+/// The pass condition is the daemon's `reloaded generation 1` line. The 60 second guard only
+/// keeps a missing reload from hanging the run; a correct reload arrives within a few scans.
+#[cfg(unix)]
+#[test]
+#[ignore = "requires tools/sdk-smoke dependencies; the manual SDK workflow runs this test"]
+fn a_change_made_while_the_watcher_takes_its_first_scan_is_reloaded() {
+    assert!(
+        have_sdk(),
+        "install tools/sdk-smoke dependencies before running this test"
+    );
+    let dir = scratch_codebase("first-scan-reload");
+    let signals = reload_signals("first-scan-reload");
+    std::fs::File::create(dir.join("aaa-bulk.bin"))
+        .unwrap()
+        .set_len(128 * 1024 * 1024)
+        .unwrap();
+    write(
+        &dir,
+        "index.js",
+        "const { onRequest } = require('firebase-functions/v2/https');\nconst marker = 'before';\nexports.fxMarker = onRequest((_request, response) => response.json({ marker }));\n",
+    );
+    let script = format!(
+        r"{RELOAD_HANDSHAKE_JS}
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+(async () => {{
+  const [source, signals] = process.argv.slice(1);
+  fs.writeFileSync(source, fs.readFileSync(source, 'utf8').replace(`'before'`, `'after'`));
+  const endpoint = `http://${{process.env.FIREEMU_FUNCTIONS_HOST}}/demo-first-scan-reload/us-central1/fxMarker`;
+  let guard;
+  await Promise.race([
+    published(signals),
+    new Promise((_resolve, reject) => {{
+      guard = setTimeout(async () => reject(new Error(
+        `no reload 60s after the rewrite; the function still answers ${{await (await fetch(endpoint)).text()}}`)), 60000);
+    }}),
+  ]);
+  clearTimeout(guard);
+  const response = await fetch(endpoint);
+  assert.equal(response.status, 200, await response.clone().text());
+  assert.deepEqual(await response.json(), {{ marker: 'after' }});
+}})().catch(error => {{ console.error(error); process.exitCode = 1; }})
+  .finally(() => process.exit());
+"
+    );
+    let mut command = fireemu_exec(&dir, "demo-first-scan-reload");
+    command
+        .args(["--only", "functions", "--", "node", "-e", &script])
+        .arg(dir.join("index.js"))
+        .arg(&signals);
+    let output = run_with_reload_handshake(command, &signals);
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+    std::fs::remove_dir_all(signals).unwrap();
+}
+
 #[test]
 #[ignore = "requires tools/sdk-smoke dependencies; the manual SDK workflow runs this test"]
 fn exec_preserves_an_external_pubsub_emulator_for_the_real_sdk() {

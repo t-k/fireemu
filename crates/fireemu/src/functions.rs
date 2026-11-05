@@ -1374,10 +1374,6 @@ async fn changed_source_stamp(
     if stable_stamp != next_stamp {
         return None;
     }
-    if observed_stamp.is_none() {
-        *observed_stamp = Some(stable_stamp);
-        return None;
-    }
     if observed_stamp.map(|stamp| stamp.content_signature) == Some(stable_stamp.content_signature) {
         *observed_stamp = Some(stable_stamp);
         return None;
@@ -3010,8 +3006,9 @@ pub async fn start(
         ));
     }
     let node_probe_cache = Arc::new(NodeProbeCache::default());
-    // Capture the watch baseline before loading generation 0, never after it is serving.
+    // Capture the live watch baseline before loading generation 0, never after it is serving.
     // An edit during startup may conservatively reload, but cannot become a lost baseline.
+    // Known limit: A -> B -> A edits entirely within the load can restore the baseline bytes.
     let scan_budget = FunctionsSourceScanBudget::new();
     let mut initial_stamps = BTreeMap::new();
     for codebase in codebases
@@ -7952,12 +7949,10 @@ root	unchanged	small	firstGen";
     }
 
     #[tokio::test]
-    async fn first_successful_scan_after_startup_failure_sets_a_baseline() {
+    async fn first_successful_scan_after_startup_failure_requires_a_reload() {
         let root =
             std::env::temp_dir().join(format!("fireemu-scan-baseline-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).unwrap();
-        std::fs::write(root.join("index.js"), "exports.ok = 1;").unwrap();
         let codebase = crate::config::FunctionsCodebase {
             codebase: "default".to_owned(),
             source: root.display().to_string(),
@@ -7966,9 +7961,8 @@ root	unchanged	small	firstGen";
         };
         let budget = FunctionsSourceScanBudget::new();
         let mut observed = None;
-        let mut last_error = true;
+        let mut last_error = false;
         let mut retry_delay = Duration::from_secs(3);
-
         assert!(changed_source_stamp(
             &root,
             &codebase,
@@ -7979,24 +7973,52 @@ root	unchanged	small	firstGen";
         )
         .await
         .is_none());
-        assert!(
-            observed.is_some(),
-            "the first successful scan is the baseline"
-        );
-        assert!(!last_error);
-        assert_eq!(retry_delay, Duration::from_millis(750));
-
+        assert!(last_error, "the initial scan actually fails");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("index.js"), "exports.ok = 1;").unwrap();
+        let loaded = snapshot_functions_source(&root, &[]).unwrap();
         std::fs::write(root.join("index.js"), "exports.ok = 2;").unwrap();
-        assert!(changed_source_stamp(
+        assert_ne!(
+            functions_source_stamp(&loaded, &[])
+                .unwrap()
+                .content_signature,
+            functions_source_stamp(&root, &[])
+                .unwrap()
+                .content_signature
+        );
+        let changed = changed_source_stamp(
             &root,
             &codebase,
             &budget,
             &mut observed,
             &mut last_error,
-            &mut retry_delay
+            &mut retry_delay,
         )
-        .await
-        .is_some());
+        .await;
+        assert!(
+            changed.is_some(),
+            "the first successful scan must reload an unknown baseline"
+        );
+        assert!(
+            observed.is_none(),
+            "only publication establishes a baseline"
+        );
+        assert!(!last_error);
+        assert_eq!(retry_delay, Duration::from_millis(750));
+        observed = changed;
+        assert!(
+            changed_source_stamp(
+                &root,
+                &codebase,
+                &budget,
+                &mut observed,
+                &mut last_error,
+                &mut retry_delay
+            )
+            .await
+            .is_none(),
+            "an unchanged published generation must not reload"
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -8064,8 +8086,8 @@ root	unchanged	small	firstGen";
             &mut retry_delay
         )
         .await
-        .is_none());
-        assert!(observed.is_some());
+        .is_some());
+        assert!(observed.is_none());
         assert!(!last_error);
         assert_eq!(retry_delay, Duration::from_millis(750));
         std::fs::remove_dir_all(root).unwrap();

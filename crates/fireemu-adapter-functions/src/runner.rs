@@ -456,7 +456,7 @@ pub struct Runner {
     _lifetime_guard: RunnerLifetimeGuard,
     stdin: Arc<AsyncMutex<Option<ChildStdin>>>,
     hello: Hello,
-    waiters: Arc<Mutex<HashMap<String, oneshot::Sender<InvokeOutcome>>>>,
+    pub(crate) waiters: Arc<Mutex<HashMap<String, oneshot::Sender<InvokeOutcome>>>>,
     logs: Arc<Mutex<LogBuffer>>,
     label: String,
     alive: Arc<AtomicBool>,

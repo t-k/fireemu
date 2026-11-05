@@ -1416,8 +1416,15 @@ fn run_with_reload_handshake(mut command: Command, signals: &Path) -> Output {
     let mut stderr = String::new();
     for line in std::io::BufReader::new(child.stderr.take().unwrap()).lines() {
         let line = line.unwrap();
-        if line.contains("functions[default]: reloaded generation 1") {
-            write(signals, "published", "");
+        for generation in 1..=2 {
+            if line.contains(&format!(
+                "functions[default]: reloaded generation {generation}"
+            )) {
+                write(signals, &format!("published-{generation}"), "");
+                if generation == 1 {
+                    write(signals, "published", "");
+                }
+            }
         }
         if line.contains("functions[default]: reload failed")
             || line.contains("functions[default]: reload rejected")
@@ -1435,22 +1442,14 @@ fn run_with_reload_handshake(mut command: Command, signals: &Path) -> Output {
     }
 }
 
-/// A request that generation 0 is still answering when generation 1 is published must be
-/// answered by generation 0. The official emulator lets a busy worker finish its request
-/// when the pool is refreshed for a reload; it only stops idle workers
-/// (`firebase-tools@15.28.2` `lib/emulator/functionsRuntimeWorker.js` `refresh`, `:242`).
-///
-/// Nothing here waits on a time limit. The held handler signals that it is running, the
-/// source is rewritten, the command waits for the daemon's own `reloaded generation 1` line,
-/// checks that a new request reaches generation 1, and only then lets the held handler answer.
+/// Actual HTTP, callable, streaming and queued task handlers retain their selected runner
+/// through two publications. Releasing generation 1 first must not stop generation 0.
 #[cfg(unix)]
 #[test]
 #[ignore = "requires tools/sdk-smoke dependencies; the manual SDK workflow runs this test"]
-fn a_request_in_flight_when_a_reload_is_published_is_answered_by_its_generation() {
-    assert!(
-        have_sdk(),
-        "install tools/sdk-smoke dependencies before running this test"
-    );
+#[allow(clippy::too_many_lines)]
+fn http_callable_stream_and_task_requests_finish_across_two_reloads() {
+    assert!(have_sdk(), "install tools/sdk-smoke dependencies first");
     let dir = scratch_codebase("in-flight-reload");
     let signals = reload_signals("in-flight-reload");
     write(
@@ -1458,14 +1457,30 @@ fn a_request_in_flight_when_a_reload_is_published_is_answered_by_its_generation(
         "index.js",
         r"
 const fs = require('node:fs');
-const { onRequest } = require('firebase-functions/v2/https');
+const { onRequest, onCall } = require('firebase-functions/v2/https');
+const { onTaskDispatched } = require('firebase-functions/v2/tasks');
 const marker = 'before';
+const wait = data => {
+  fs.writeFileSync(data.started, JSON.stringify({ marker, pid: process.pid, cwd: process.cwd() }));
+  return new Promise(resolve => {
+    const poll = () => fs.existsSync(data.release) ? resolve() : setTimeout(poll, 20);
+    poll();
+  });
+};
 exports.fxMarker = onRequest((_request, response) => response.json({ marker }));
-exports.fxHold = onRequest((request, response) => {
-  fs.writeFileSync(request.query.started, String(process.pid));
-  const poll = () => fs.existsSync(request.query.release)
-    ? response.json({ marker }) : setTimeout(poll, 20);
-  poll();
+exports.fxHold = onRequest(async (request, response) => {
+  await wait(request.query);
+  response.json({ marker });
+});
+exports.fxCallable = onCall(async request => { await wait(request.data); return { marker }; });
+exports.fxStream = onCall(async (request, response) => {
+  await response.sendChunk({ marker });
+  await wait(request.data);
+  return { marker };
+});
+exports.fxTask = onTaskDispatched(async request => {
+  await wait(request.data);
+  fs.writeFileSync(request.data.done, JSON.stringify({ marker }));
 });
 ",
     );
@@ -1474,26 +1489,77 @@ exports.fxHold = onRequest((request, response) => {
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const guard = setTimeout(() => {{ console.error('two-reload completion timed out'); process.exit(1); }}, 45000);
 (async () => {{
   const [source, signals] = process.argv.slice(1);
   const base = `http://${{process.env.FIREEMU_FUNCTIONS_HOST}}/demo-in-flight-reload/us-central1/`;
-  const started = path.join(signals, 'started');
-  const release = path.join(signals, 'release');
-  const held = fetch(`${{base}}fxHold?${{new URLSearchParams({{ started, release }})}}`)
-    .then(async response => ({{ status: response.status, body: await response.text() }}));
-  await appear(started);
-  fs.writeFileSync(source, fs.readFileSync(source, 'utf8').replace(`'before'`, `'after'`));
-  await published(signals);
-  const fresh = await fetch(`${{base}}fxMarker`);
-  assert.equal(fresh.status, 200, await fresh.clone().text());
-  assert.deepEqual(await fresh.json(), {{ marker: 'after' }});
-  fs.writeFileSync(release, '');
-  const answer = await held;
-  assert.equal(answer.status, 200, `the in-flight request was not answered by its generation: ${{answer.body}}`);
-  assert.deepEqual(JSON.parse(answer.body), {{ marker: 'before' }});
+  const batches = [];
+  for (const [revision, marker, next] of [[0, 'before', 'middle'], [1, 'middle', 'after']]) {{
+    const data = kind => Object.fromEntries(['started', 'release', 'done'].map(name => [name, path.join(signals, `${{revision}}-${{kind}}-${{name}}`)]));
+    const http = data('http'), callable = data('callable'), stream = data('stream'), task = data('task');
+    const held = fetch(`${{base}}fxHold?${{new URLSearchParams(http)}}`, {{ method: 'POST' }}).then(async response => {{
+      assert.equal(response.status, 200); return response.json();
+    }});
+    const called = fetch(`${{base}}fxCallable`, {{ method: 'POST', headers: {{ 'content-type': 'application/json' }}, body: JSON.stringify({{ data: callable }}) }}).then(async response => {{
+      assert.equal(response.status, 200); return response.json();
+    }});
+    const streaming = await fetch(`${{base}}fxStream`, {{ method: 'POST', headers: {{ 'content-type': 'application/json', accept: 'text/event-stream' }}, body: JSON.stringify({{ data: stream }}) }});
+    assert.equal(streaming.status, 200);
+    const reader = streaming.body.getReader();
+    const first = await reader.read();
+    assert.ok(!first.done, 'stream sends a chunk before publication');
+    const streamed = (async () => {{
+      const chunks = [Buffer.from(first.value)];
+      for (;;) {{ const chunk = await reader.read(); if (chunk.done) break; chunks.push(Buffer.from(chunk.value)); }}
+      return Buffer.concat(chunks).toString();
+    }})();
+    const tasksHost = process.env.CLOUD_TASKS_EMULATOR_HOST.replace(/^http:\/\//, '');
+    const queued = await fetch(`http://${{tasksHost}}/projects/demo-in-flight-reload/locations/us-central1/queues/fxTask/tasks`, {{
+      method: 'POST', headers: {{ 'content-type': 'application/json' }},
+      body: JSON.stringify({{ task: {{ name: `projects/demo-in-flight-reload/locations/us-central1/queues/fxTask/tasks/held-${{revision}}`, httpRequest: {{ url: '', body: Buffer.from(JSON.stringify({{ data: task }})).toString('base64') }} }} }}),
+    }});
+    assert.equal(queued.status, 200, await queued.text());
+    await Promise.all([http, callable, stream, task].map(data => appear(data.started)));
+    const owners = [http, callable, stream, task].map(data => JSON.parse(fs.readFileSync(data.started)));
+    for (const owner of owners) assert.equal(owner.marker, marker);
+    assert.equal(new Set(owners.map(owner => owner.pid)).size, 1);
+    batches.push({{ marker, http, callable, stream, task, held, called, streamed, owner: owners[0] }});
+    fs.writeFileSync(source, fs.readFileSync(source, 'utf8').replace(`'${{marker}}'`, `'${{next}}'`));
+    await appear(path.join(signals, `published-${{revision + 1}}`));
+    if (revision === 0) {{
+      const fresh = await fetch(`${{base}}fxMarker`);
+      assert.equal(fresh.status, 200);
+      assert.deepEqual(await fresh.json(), {{ marker: next }});
+    }}
+  }}
+  for (const batch of batches.reverse()) {{
+    for (const data of [batch.http, batch.callable, batch.stream, batch.task]) fs.writeFileSync(data.release, '');
+    assert.deepEqual(await batch.held, {{ marker: batch.marker }});
+    assert.deepEqual(await batch.called, {{ result: {{ marker: batch.marker }} }});
+    const stream = await batch.streamed;
+    assert.ok(stream.includes(JSON.stringify({{ marker: batch.marker }})), stream);
+    assert.ok(stream.includes('result'), stream);
+    await appear(batch.task.done);
+    assert.deepEqual(JSON.parse(fs.readFileSync(batch.task.done)), {{ marker: batch.marker }});
+    if (batch.marker === 'middle') {{
+      while (fs.existsSync(batch.owner.cwd)) await new Promise(resolve => setTimeout(resolve, 20));
+    }} else {{
+      // Generation zero runs in the live source directory, which retirement must preserve.
+      for (;;) {{
+        try {{ process.kill(batch.owner.pid, 0); }}
+        catch (error) {{ assert.equal(error.code, 'ESRCH'); break; }}
+        await new Promise(resolve => setTimeout(resolve, 20));
+      }}
+      assert.equal(batch.owner.cwd, fs.realpathSync(path.dirname(source)));
+      assert.ok(fs.existsSync(batch.owner.cwd));
+    }}
+    const fresh = await fetch(`${{base}}fxMarker`);
+    assert.equal(fresh.status, 200);
+    assert.deepEqual(await fresh.json(), {{ marker: 'after' }});
+    if (batch.marker === 'middle') process.kill(batches[1].owner.pid, 0);
+  }}
 }})().catch(error => {{ console.error(error); process.exitCode = 1; }})
-  // The losing side of the race in `published` keeps polling; leave without waiting for it.
-  .finally(() => process.exit());
+  .finally(() => {{ clearTimeout(guard); process.exit(); }});
 "
     );
     let mut command = fireemu_exec(&dir, "demo-in-flight-reload");

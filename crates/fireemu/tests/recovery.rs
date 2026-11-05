@@ -652,7 +652,18 @@ fn a_missing_measurement_is_reported_and_never_counts_as_a_release() {
     assert_eq!(json["phases"][2]["sample"]["logicalBytes"], Value::Null);
     assert_eq!(json["verdict"]["recovered"], false);
     assert_eq!(json["kind"], "post-pressure-recovery");
-    assert!(json["commit"].is_string());
+    // `report_json` asks `git rev-parse HEAD` in the working directory and records `null` when
+    // that fails. A copy of the tree without `.git` (as cargo-mutants makes) has no commit, so
+    // the expectation follows whether the working directory sits inside a checkout.
+    let in_checkout = std::env::current_dir()
+        .expect("current directory")
+        .ancestors()
+        .any(|dir| dir.join(".git").exists());
+    if in_checkout {
+        assert!(json["commit"].is_string(), "{}", json["commit"]);
+    } else {
+        assert_eq!(json["commit"], Value::Null);
+    }
     assert!(json["toolchain"].is_string());
     assert!(json["machine"]["os"].is_string());
     assert_eq!(

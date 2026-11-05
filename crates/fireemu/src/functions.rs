@@ -1270,6 +1270,7 @@ fn start_reload_supervisors(
     runner_secret: &str,
     callable_trusted_protocol: bool,
     node_probe_cache: &Arc<NodeProbeCache>,
+    mut initial_stamps: BTreeMap<String, Result<FunctionsSourceStamp, String>>,
 ) {
     let resources = ReloadResources {
         scan_budget: Arc::new(FunctionsSourceScanBudget::new()),
@@ -1283,6 +1284,9 @@ fn start_reload_supervisors(
         );
     }
     for codebase in supervised {
+        let initial_stamp = initial_stamps
+            .remove(&codebase.codebase)
+            .expect("supervised startup baseline");
         tokio::spawn(supervise_codebase_reloads(
             Arc::downgrade(runtime),
             cfg.clone(),
@@ -1291,6 +1295,7 @@ fn start_reload_supervisors(
             runner_secret.to_owned(),
             callable_trusted_protocol,
             resources.clone(),
+            initial_stamp,
         ));
     }
 }
@@ -1470,6 +1475,7 @@ async fn snapshot_consistent_reload_source(
     Some(snapshot)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn supervise_codebase_reloads(
     weak_runtime: std::sync::Weak<FunctionsRuntime>,
     cfg: RuntimeConfig,
@@ -1478,9 +1484,9 @@ async fn supervise_codebase_reloads(
     secret: String,
     callable_trusted_protocol: bool,
     resources: ReloadResources,
+    initial_stamp: Result<FunctionsSourceStamp, String>,
 ) {
     let root = PathBuf::from(&codebase.source);
-    let initial_stamp = resources.scan_budget.scan(&root, &codebase.ignore).await;
     let mut observed_stamp = initial_stamp.as_ref().ok().copied();
     let mut last_scan_error = false;
     let mut last_snapshot_error = false;
@@ -3004,6 +3010,21 @@ pub async fn start(
         ));
     }
     let node_probe_cache = Arc::new(NodeProbeCache::default());
+    // Capture the watch baseline before loading generation 0, never after it is serving.
+    // An edit during startup may conservatively reload, but cannot become a lost baseline.
+    let scan_budget = FunctionsSourceScanBudget::new();
+    let mut initial_stamps = BTreeMap::new();
+    for codebase in codebases
+        .iter()
+        .filter(|codebase| reload_supervised(codebase))
+    {
+        initial_stamps.insert(
+            codebase.codebase.clone(),
+            scan_budget
+                .scan(Path::new(&codebase.source), &codebase.ignore)
+                .await,
+        );
+    }
     #[cfg(unix)]
     drop(schedule_orphan_function_snapshot_sweep(std::env::temp_dir()));
     let starts = launch_codebases(
@@ -3063,6 +3084,7 @@ pub async fn start(
         runner_secret,
         callable_trusted_protocol,
         &node_probe_cache,
+        initial_stamps,
     );
     Ok(runtime)
 }

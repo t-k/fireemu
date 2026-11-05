@@ -717,6 +717,10 @@ struct Inner {
     /// `http-<n>`) with the function name; a timed-out handler keeps its slot until it
     /// really finishes.
     running: BTreeMap<String, String>,
+    /// Runner identity selected for each invocation, linearized with reload publication.
+    running_runners: BTreeMap<String, u64>,
+    /// Replaced generations and the invocation keys that still need their runners.
+    draining: Vec<(CodebaseGeneration, BTreeSet<String>)>,
     #[cfg(test)]
     dispatch_candidate_visits: usize,
     next_event: u64,
@@ -1511,6 +1515,8 @@ impl FunctionsRuntime {
                 active_eventarc_records: 0,
                 active_eventarc_bytes: 0,
                 running: BTreeMap::new(),
+                running_runners: BTreeMap::new(),
+                draining: Vec::new(),
                 #[cfg(test)]
                 dispatch_candidate_visits: 0,
                 next_event: 0,
@@ -1872,7 +1878,30 @@ impl FunctionsRuntime {
         for (_, runner) in self.current_runners() {
             shutdowns.spawn(async move { runner.shutdown().await });
         }
+        let draining = {
+            let mut inner = self
+                .inner
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            std::mem::take(&mut inner.draining)
+        };
+        for (generation, _) in &draining {
+            let runner = generation.runner.clone();
+            shutdowns.spawn(async move { runner.shutdown().await });
+        }
         while shutdowns.join_next().await.is_some() {}
+        // Other daemon tasks may still own the runtime or a respawn snapshot at exit.
+        // Remove the owned directories explicitly after their runners have stopped.
+        for codebase in &self.codebases {
+            if let Some(cleanup) = codebase.generation_mut().cleanup_dir.take() {
+                let _ = std::fs::remove_dir_all(&cleanup.0);
+            }
+        }
+        for (generation, _) in draining {
+            if let Some(cleanup) = generation.cleanup_dir {
+                let _ = std::fs::remove_dir_all(&cleanup.0);
+            }
+        }
     }
 
     /// The codebase that exported `function`.
@@ -1943,6 +1972,10 @@ impl FunctionsRuntime {
                 return Err(error);
             }
         };
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let old = {
             let mut generation = codebase.generation_mut();
             if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
@@ -1971,10 +2004,20 @@ impl FunctionsRuntime {
         }
         *eventarc_registry = next_eventarc_registry;
         drop(eventarc_registry);
-        // In-flight invocations retain their `Arc`; killing after publication prevents any
-        // new dispatch from reaching the old generation and reaps it promptly.
-        old.runner.kill_now();
-        drop(old);
+        // Admission and publication share `inner`: only keys admitted before this swap
+        // can still be using the old runner. Later requests cannot prolong its lifetime.
+        let pending: BTreeSet<String> = inner
+            .running_runners
+            .iter()
+            .filter(|(_, runner)| **runner == old.runner.diagnostic_id())
+            .map(|(key, _)| key.clone())
+            .collect();
+        if pending.is_empty() {
+            old.runner.kill_now();
+        } else {
+            inner.draining.push((old, pending));
+        }
+        drop(inner);
         self.wake.notify_one();
         Ok(generation)
     }
@@ -4312,6 +4355,9 @@ impl FunctionsRuntime {
                     current.blocking_restart_ticket = None;
                     current.runner.kill_now();
                 }
+                for (generation, _) in inner.draining.drain(..) {
+                    generation.runner.kill_now();
+                }
                 inner.outbox.discard_stale(epoch);
                 inner.causality.reset();
                 inner.admission_refusals.clear();
@@ -4323,6 +4369,7 @@ impl FunctionsRuntime {
                 inner.active_eventarc_records = 0;
                 inner.active_eventarc_bytes = 0;
                 inner.running.clear();
+                inner.running_runners.clear();
                 inner.delayed.clear();
                 inner.catch_up_pending = false;
                 inner.schedule_recheck_pending = false;
@@ -4601,36 +4648,65 @@ impl FunctionsRuntime {
         }
     }
 
-    async fn current_http_addr(self: &Arc<Self>, target: &HttpTarget) -> Result<String, String> {
+    async fn current_http_addr(
+        self: &Arc<Self>,
+        target: &HttpTarget,
+        key: &str,
+    ) -> Result<String, String> {
         let index = self
             .owner
             .get(&target.function)
             .copied()
             .ok_or_else(|| format!("function {} has no codebase owner", target.function))?;
-        let current = self.runner_at(index);
-        if current.is_alive() && target.origin_runner.ptr_eq(&Arc::downgrade(&current)) {
-            self.sync_runner_clock(&current).await?;
-            return Ok(target.addr.clone());
+        loop {
+            let runner = {
+                let mut inner = self
+                    .inner
+                    .lock()
+                    .map_err(|_| "runtime poisoned".to_owned())?;
+                if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+                    return Err("the Functions runtime is shutting down".to_owned());
+                }
+                let current = self.runner_at(index);
+                if current.is_alive() {
+                    inner
+                        .running_runners
+                        .insert(key.to_owned(), current.diagnostic_id());
+                    Some(current)
+                } else {
+                    None
+                }
+            };
+            if let Some(runner) = runner {
+                self.sync_runner_clock(&runner).await?;
+                if target.origin_runner.ptr_eq(&Arc::downgrade(&runner)) {
+                    return Ok(target.addr.clone());
+                }
+                let port = runner
+                    .hello()
+                    .http_port
+                    .ok_or_else(|| format!("function {} has no HTTP runner", target.function))?;
+                return Ok(format!("127.0.0.1:{port}"));
+            }
+            // Recovery can race another publication. Select and record its winner under
+            // the same lock as reload before any bytes are sent to that generation.
+            self.recover_dead_runner(index).await?;
         }
-        let runner = self.recover_dead_runner(index).await?;
-        self.sync_runner_clock(&runner).await?;
-        let port = runner
-            .hello()
-            .http_port
-            .ok_or_else(|| format!("function {} has no HTTP runner", target.function))?;
-        Ok(format!("127.0.0.1:{port}"))
     }
 
     async fn current_http_addr_before(
         self: &Arc<Self>,
         target: &HttpTarget,
         deadline: Option<tokio::time::Instant>,
+        key: &str,
     ) -> Result<String, StreamStartError> {
         match deadline {
-            Some(deadline) => tokio::time::timeout_at(deadline, self.current_http_addr(target))
-                .await
-                .map_err(|_| StreamStartError::TimedOut)?,
-            None => self.current_http_addr(target).await,
+            Some(deadline) => {
+                tokio::time::timeout_at(deadline, self.current_http_addr(target, key))
+                    .await
+                    .map_err(|_| StreamStartError::TimedOut)?
+            }
+            None => self.current_http_addr(target, key).await,
         }
         .map_err(StreamStartError::Upstream)
     }
@@ -4644,7 +4720,10 @@ impl FunctionsRuntime {
         timeout: u64,
         profile: FunctionsHttpProfile,
     ) -> Result<String, Result<ProxiedResponse, String>> {
-        match self.current_http_addr_before(target, deadline).await {
+        match self
+            .current_http_addr_before(target, deadline, &format!("http-{}", id.value()))
+            .await
+        {
             Ok(addr) => Ok(addr),
             Err(StreamStartError::TimedOut) => {
                 self.record_http_invocation(
@@ -5315,6 +5394,9 @@ impl FunctionsRuntime {
         inner.next_event = inner.next_event.saturating_add(1);
         let key = format!("blocking-auth-{}", inner.next_event);
         inner.running.insert(key.clone(), function.to_owned());
+        inner
+            .running_runners
+            .insert(key.clone(), current.runner.diagnostic_id());
         let target = BlockingAuthTarget {
             function: function.to_owned(),
             region: spec.region.clone(),
@@ -5901,14 +5983,14 @@ impl FunctionsRuntime {
         // event leased before a reset must not reach a runner spawned after it. One per
         // codebase, and a codebase whose runner is down holds only its own queued work: the
         // rest of the project keeps dispatching.
-        let runners: Vec<Arc<Runner>> = (0..self.codebases.len())
-            .map(|i| self.runner_at(i))
-            .collect();
         let now = self.now();
         let faults = self.faults();
         let Ok(mut inner) = self.inner.lock() else {
             return;
         };
+        let runners: Vec<Arc<Runner>> = (0..self.codebases.len())
+            .map(|i| self.runner_at(i))
+            .collect();
         if inner.running.len() >= self.config.max_running {
             return;
         }
@@ -6015,6 +6097,9 @@ impl FunctionsRuntime {
             let dispatch_at = self.now();
             let key = format!("{}-{attempt}", id.value());
             inner.running.insert(key.clone(), function_name.clone());
+            inner
+                .running_runners
+                .insert(key.clone(), runner.diagnostic_id());
             *running_counts.entry(function_name.clone()).or_default() += 1;
             let runner = runner.clone();
             let timeout = Duration::from_secs(u64::from(spec.timeout_seconds));
@@ -6275,6 +6360,16 @@ impl FunctionsRuntime {
     fn release(&self, key: &str) {
         if let Ok(mut inner) = self.inner.lock() {
             inner.running.remove(key);
+            inner.running_runners.remove(key);
+            inner.draining.retain_mut(|(generation, keys)| {
+                keys.remove(key);
+                if keys.is_empty() {
+                    generation.runner.kill_now();
+                    false
+                } else {
+                    true
+                }
+            });
         }
         self.idle.notify_waiters();
         self.wake.notify_one();
@@ -8140,6 +8235,116 @@ mod task_completion_tests {
             ));
         }
         runtime.shutdown().await;
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn reload_drains_selected_generations_and_shutdown_removes_their_snapshots() {
+        let spawn = SpawnSpec {
+            command: vec![
+                "node".into(),
+                "-e".into(),
+                r"
+const hello = JSON.stringify({ type: 'hello', runner: 'node', httpPort: 1 });
+process.stdout.write(`${Buffer.byteLength(hello)}\n${hello}`);
+process.stdin.resume();
+process.stdin.on('data', () => process.exit(0));
+"
+                .into(),
+            ],
+            cwd: None,
+            env: Vec::new(),
+            hello_timeout: Duration::from_secs(10),
+        };
+        let manifest = parse_manifest(
+            &json!({"functions":[{"name":"echo","trigger":{"type":"http","callable":false}}]}),
+        )
+        .unwrap();
+        let runner = Arc::new(Runner::spawn_spec(&spawn).await.unwrap());
+        let runtime = FunctionsRuntime::new(
+            manifest.clone(),
+            FunctionsConfig::for_tests(1, "test-secret".into()),
+            Arc::new(Mutex::new(VirtualClock::new(
+                LogicalInstant::from_unix_seconds(0),
+            ))),
+            runner.clone(),
+            None,
+        );
+        let target = runtime
+            .http_target("demo-app", "us-central1", "echo")
+            .unwrap();
+        let (_, _, first) = runtime.admit_http_stream(&target, 4).unwrap();
+        runtime
+            .current_http_addr(&target, &first.key)
+            .await
+            .unwrap();
+        let root = std::env::temp_dir().join(format!("fireemu-drain-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let mut runners = vec![runner];
+        let mut cleanups = Vec::new();
+        let mut admissions = vec![first];
+        for revision in 1..=2 {
+            let path = root.join(revision.to_string());
+            std::fs::create_dir_all(&path).unwrap();
+            let replacement = Arc::new(Runner::spawn_spec(&spawn).await.unwrap());
+            runtime
+                .reload_codebase(super::CodebaseSpec {
+                    name: "default".into(),
+                    manifest: manifest.clone(),
+                    runner: replacement.clone(),
+                    spawn: None,
+                    cleanup_dir: Some(path),
+                })
+                .unwrap();
+            cleanups.push(
+                runtime.codebases[0]
+                    .generation()
+                    .cleanup_dir
+                    .as_ref()
+                    .unwrap()
+                    .0
+                    .clone(),
+            );
+            assert!(
+                runners.iter().all(|runner| runner.is_alive()),
+                "busy old runners must survive publication"
+            );
+            runners.push(replacement);
+            let (_, _, admission) = runtime.admit_http_stream(&target, 4).unwrap();
+            // A route resolved before publication must select the new runner at admission.
+            runtime
+                .current_http_addr(&target, &admission.key)
+                .await
+                .unwrap();
+            assert_eq!(
+                runtime.inner.lock().unwrap().running_runners[&admission.key],
+                runners.last().unwrap().diagnostic_id()
+            );
+            admissions.push(admission);
+        }
+        drop(admissions.remove(1));
+        assert!(
+            !runners[1].is_alive(),
+            "a retired runner stops at its own last release"
+        );
+        assert!(runners[0].is_alive(), "another generation still has work");
+        assert!(!cleanups[0].exists(), "idle retired snapshots are removed");
+        let retained_cleanup = runtime.codebases[0]
+            .generation()
+            .cleanup_dir
+            .clone()
+            .unwrap();
+        runtime.shutdown().await;
+        assert!(
+            runners.iter().all(|runner| !runner.is_alive()),
+            "shutdown stops busy retired and current runners"
+        );
+        assert!(
+            cleanups.iter().all(|cleanup| !cleanup.exists()) && !retained_cleanup.0.exists(),
+            "shutdown removes snapshots even with retained runtime references"
+        );
+        drop(admissions);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]

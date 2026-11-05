@@ -1580,6 +1580,60 @@ const fs = require('node:fs');
     std::fs::remove_dir_all(signals).unwrap();
 }
 
+#[cfg(unix)]
+#[test]
+#[ignore = "requires tools/sdk-smoke dependencies; the manual SDK workflow runs this test"]
+fn daemon_exit_removes_the_published_reload_snapshot() {
+    assert!(have_sdk(), "install tools/sdk-smoke dependencies first");
+    let dir = scratch_codebase("reload-exit-cleanup");
+    let signals = reload_signals("reload-exit-cleanup");
+    write(
+        &dir,
+        "index.js",
+        "const { onRequest } = require('firebase-functions/v2/https');\nconst marker = 'before';\nexports.fxCwd = onRequest((_request, response) => response.json({ marker, cwd: process.cwd() }));\n",
+    );
+    let script = format!(
+        r"{RELOAD_HANDSHAKE_JS}
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+(async () => {{
+  const [source, signals] = process.argv.slice(1);
+  fs.writeFileSync(source, fs.readFileSync(source, 'utf8').replace(`'before'`, `'after'`));
+  await published(signals);
+  const endpoint = `http://${{process.env.FIREEMU_FUNCTIONS_HOST}}/demo-reload-exit-cleanup/us-central1/fxCwd`;
+  const response = await fetch(endpoint);
+  assert.equal(response.status, 200, await response.clone().text());
+  const value = await response.json();
+  assert.equal(value.marker, 'after');
+  assert.notEqual(fs.realpathSync(value.cwd), fs.realpathSync(path.dirname(source)));
+  assert.ok(fs.existsSync(value.cwd));
+  fs.writeFileSync(path.join(signals, 'snapshot'), value.cwd);
+}})().catch(error => {{ console.error(error); process.exitCode = 1; }})
+  .finally(() => process.exit());
+"
+    );
+    let mut command = fireemu_exec(&dir, "demo-reload-exit-cleanup");
+    command
+        .args(["--only", "functions", "--", "node", "-e", &script])
+        .arg(dir.join("index.js"))
+        .arg(&signals);
+    let output = run_with_reload_handshake(command, &signals);
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let snapshot = std::fs::read_to_string(signals.join("snapshot")).unwrap();
+    assert!(
+        !Path::new(&snapshot).exists(),
+        "reload snapshot survived exit"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+    std::fs::remove_dir_all(signals).unwrap();
+}
+
 #[test]
 #[ignore = "requires tools/sdk-smoke dependencies; the manual SDK workflow runs this test"]
 fn exec_preserves_an_external_pubsub_emulator_for_the_real_sdk() {

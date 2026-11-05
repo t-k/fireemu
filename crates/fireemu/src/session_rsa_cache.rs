@@ -458,6 +458,40 @@ fn still_the_rejected_entry(
         } == rejected
 }
 
+/// A step of `publish_entry` that a test can make fail on the calling thread.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+enum PublishStep {
+    /// Creating the owner-only temporary file.
+    CreateTemporary,
+    /// Writing and syncing the envelope into the temporary file.
+    Write,
+    /// Renaming the temporary file onto the entry name.
+    Rename,
+}
+
+/// Answers whether a test asked `step` to fail on this thread; outside tests it never does.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn publish_step_fails(step: PublishStep) -> bool {
+    #[cfg(test)]
+    return tests::PUBLISH_FAULT.with(std::cell::Cell::get) == Some(step);
+    #[cfg(not(test))]
+    {
+        let _ = step;
+        false
+    }
+}
+
+/// Lets `step` proceed, or fails it with an I/O error when a test asked for that.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn publish_step(step: PublishStep) -> rustix::io::Result<()> {
+    if publish_step_fails(step) {
+        Err(rustix::io::Errno::IO)
+    } else {
+        Ok(())
+    }
+}
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn publish_entry(
     directory: &std::fs::File,
@@ -474,17 +508,19 @@ fn publish_entry(
     for _ in 0..32 {
         let sequence = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
         let temporary = format!(".session-rsa-{}-{sequence}.tmp", std::process::id());
-        let descriptor = match rustix::fs::openat(
-            directory,
-            &temporary,
-            OFlags::WRONLY
-                | OFlags::CREATE
-                | OFlags::EXCL
-                | OFlags::NOFOLLOW
-                | OFlags::CLOEXEC
-                | OFlags::NONBLOCK,
-            Mode::RUSR | Mode::WUSR,
-        ) {
+        let descriptor = match publish_step(PublishStep::CreateTemporary).and_then(|()| {
+            rustix::fs::openat(
+                directory,
+                &temporary,
+                OFlags::WRONLY
+                    | OFlags::CREATE
+                    | OFlags::EXCL
+                    | OFlags::NOFOLLOW
+                    | OFlags::CLOEXEC
+                    | OFlags::NONBLOCK,
+                Mode::RUSR | Mode::WUSR,
+            )
+        }) {
             Ok(descriptor) => descriptor,
             Err(rustix::io::Errno::EXIST) => continue,
             Err(_) => return,
@@ -509,12 +545,15 @@ fn publish_entry(
                 return;
             }
         }
-        let written = file.write_all(envelope).and_then(|()| file.sync_all());
+        let written = publish_step(PublishStep::Write)
+            .map_err(std::io::Error::from)
+            .and_then(|()| file.write_all(envelope))
+            .and_then(|()| file.sync_all());
         if written.is_err() {
             let _ = rustix::fs::unlinkat(directory, &temporary, AtFlags::empty());
             return;
         }
-        let published = match publication {
+        let published = publish_step(PublishStep::Rename).and_then(|()| match publication {
             Publication::Create => rustix::fs::renameat_with(
                 directory,
                 &temporary,
@@ -530,7 +569,7 @@ fn publish_entry(
                 rustix::fs::renameat(directory, &temporary, directory, name)
             }
             Publication::Replace(_) => Err(rustix::io::Errno::EXIST),
-        };
+        });
         if published.is_ok() {
             let _ = rustix::fs::fsync(directory);
         } else {
@@ -553,6 +592,27 @@ mod tests {
     use super::{cache_entry_path, entry_name, load_entry, open_cache_directory, EntryLoad};
     #[cfg(unix)]
     use crate::import_export::trusted_temp::TrustedTempDir;
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    thread_local! {
+        /// The step of `publish_entry` that fails on this thread, if any.
+        pub(super) static PUBLISH_FAULT: std::cell::Cell<Option<super::PublishStep>> =
+            const { std::cell::Cell::new(None) };
+    }
+
+    /// Runs `body` with `step` of `publish_entry` failing on this thread.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn with_publish_fault<T>(step: super::PublishStep, body: impl FnOnce() -> T) -> T {
+        struct Restore;
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                PUBLISH_FAULT.with(|slot| slot.set(None));
+            }
+        }
+        PUBLISH_FAULT.with(|slot| slot.set(Some(step)));
+        let _restore = Restore;
+        body()
+    }
 
     #[cfg(target_os = "macos")]
     thread_local! {
@@ -754,9 +814,16 @@ mod tests {
 
         let root = scratch("unsafe");
         let first = load_or_generate_at(&root, 8).unwrap();
+        // Publishing is best effort, so the load above may or may not have left an entry.
+        // The test places the valid entry for the seed itself, with a mode other than 0600.
+        let document = first.signer.to_pkcs8_der().unwrap();
+        let original = super::encode_envelope(8, document.as_bytes()).to_vec();
+        let directory = place_entry(&root, 8, &original, 0o644);
+        assert!(matches!(
+            load_entry(&directory, &entry_name(8), 8),
+            EntryLoad::Unsafe(_)
+        ));
         let entry = cache_entry_path(&root, 8);
-        let original = std::fs::read(&entry).unwrap();
-        std::fs::set_permissions(&entry, std::fs::Permissions::from_mode(0o644)).unwrap();
 
         let uncached = load_or_generate_at(&root, 8).unwrap();
         assert!(!uncached.hit);
@@ -803,15 +870,92 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    /// Places `bytes` as the entry for `seed`: a regular, single-link file with `mode`, owned
+    /// by the caller, under the managed directories as the cache creates them.
+    ///
+    /// Publishing is best effort, so an earlier load may or may not have left an entry. A
+    /// missing old entry is accepted; any other error clearing the path or writing the new
+    /// file fails the test. Returns the opened entry directory.
+    #[cfg(unix)]
+    fn place_entry(root: &std::path::Path, seed: u64, bytes: &[u8], mode: u32) -> std::fs::File {
+        use std::io::Write as _;
+        use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
+
+        let directory = open_cache_directory(root).expect("the managed directories are usable");
+        let entry = cache_entry_path(root, seed);
+        match std::fs::remove_file(&entry) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => panic!("clear the entry path {}: {error}", entry.display()),
+        }
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&entry)
+            .unwrap_or_else(|error| panic!("create the entry {}: {error}", entry.display()));
+        file.write_all(bytes)
+            .unwrap_or_else(|error| panic!("write the entry {}: {error}", entry.display()));
+        std::fs::set_permissions(&entry, std::fs::Permissions::from_mode(mode))
+            .unwrap_or_else(|error| panic!("set the entry mode {}: {error}", entry.display()));
+        directory
+    }
+
     /// Replaces the entry for `seed` with `bytes` as a regular, owner-only, single-link file.
     #[cfg(unix)]
     fn overwrite_owner_only_entry(root: &std::path::Path, seed: u64, bytes: &[u8]) {
-        use std::os::unix::fs::PermissionsExt as _;
+        let _ = place_entry(root, seed, bytes, 0o600);
+    }
 
-        let entry = cache_entry_path(root, seed);
-        std::fs::remove_file(&entry).unwrap();
-        std::fs::write(&entry, bytes).unwrap();
-        std::fs::set_permissions(&entry, std::fs::Permissions::from_mode(0o600)).unwrap();
+    /// Makes `step` of `publish_entry` fail after the managed directories opened, first for a
+    /// missing entry and then for an invalid one, and checks that neither load is fatal: the
+    /// key is generated with `hit` false, and the entry is left as it was.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn a_failed_publication_is_not_fatal(step: super::PublishStep, seed: u64) {
+        let root = scratch("publish-fault");
+        let directory = open_cache_directory(&root).expect("the managed directories are usable");
+        let managed = cache_entry_path(&root, seed).parent().unwrap().to_owned();
+
+        // A missing entry: the failed publication leaves no entry and no temporary file.
+        let created = with_publish_fault(step, || load_or_generate_at(&root, seed))
+            .unwrap_or_else(|error| panic!("{step:?} on a miss is not fatal: {error}"));
+        assert!(!created.hit);
+        assert!(matches!(
+            load_entry(&directory, &entry_name(seed), seed),
+            EntryLoad::Missing
+        ));
+        assert_eq!(std::fs::read_dir(&managed).unwrap().count(), 0);
+
+        // An invalid entry: the failed replacement leaves it unchanged and alone.
+        overwrite_owner_only_entry(&root, seed, b"corrupt cache entry");
+        let replaced = with_publish_fault(step, || load_or_generate_at(&root, seed))
+            .unwrap_or_else(|error| panic!("{step:?} on a repair is not fatal: {error}"));
+        assert!(!replaced.hit);
+        assert_eq!(created.signer.kid(), replaced.signer.kid());
+        assert_eq!(
+            std::fs::read(cache_entry_path(&root, seed)).unwrap(),
+            b"corrupt cache entry"
+        );
+        assert_eq!(std::fs::read_dir(&managed).unwrap().count(), 1);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn a_publication_whose_temporary_file_cannot_be_created_is_not_fatal() {
+        a_failed_publication_is_not_fatal(super::PublishStep::CreateTemporary, 14);
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn a_publication_whose_write_fails_is_not_fatal() {
+        a_failed_publication_is_not_fatal(super::PublishStep::Write, 15);
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn a_publication_whose_rename_fails_is_not_fatal() {
+        a_failed_publication_is_not_fatal(super::PublishStep::Rename, 16);
     }
 
     #[cfg(unix)]

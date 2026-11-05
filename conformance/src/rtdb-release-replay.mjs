@@ -10,6 +10,18 @@ import { summarize as summarizeS5 } from "../../tools/sdk-smoke-database/rtdb-s5
 import { summarize as summarizeSdkSmall } from "../../tools/sdk-smoke-database/rtdb-sdk-small-judge.mjs";
 import { summarize as summarizeSdkEvents } from "../../tools/sdk-smoke-database/rtdb-sdk-events-judge.mjs";
 import { recordedJournal } from "../../tools/sdk-smoke-database/rtdb-sdk-events-fixture.mjs";
+import { recordedJournal as recordedRest } from "../../tools/sdk-smoke-database/rtdb-sdk-rest-fixture.mjs";
+import { summarize as summarizeRest } from "../../tools/sdk-smoke-database/rtdb-sdk-rest-judge.mjs";
+import { recordedJournal as recordedRules } from "../../tools/sdk-smoke-database/rtdb-sdk-rules-fixture.mjs";
+import { summarize as summarizeRules } from "../../tools/sdk-smoke-database/rtdb-sdk-rules-judge.mjs";
+import { recordedJournal as recordedTokens } from "../../tools/sdk-smoke-database/rtdb-sdk-tokens-fixture.mjs";
+import { summarize as summarizeTokens } from "../../tools/sdk-smoke-database/rtdb-sdk-tokens-judge.mjs";
+import { recordedJournal as recordedRulesLoad } from "../../tools/sdk-smoke-database/rtdb-sdk-rules-load-fixture.mjs";
+import { summarize as summarizeRulesLoad } from "../../tools/sdk-smoke-database/rtdb-sdk-rules-load-judge.mjs";
+import {
+  compareRecordings as compareBreadth,
+  readFrames as readBreadthFrames,
+} from "./rtdb-functions/breadth-compare.mjs";
 import { comparison as compareAuth } from "../../tools/sdk-smoke-database/cv11-fixture.mjs";
 import { judgeCaptured } from "../../tools/sdk-smoke-database/cv07-ondisconnect.mjs";
 import { judgeRow, judgeM14, localRequests } from "../../tools/sdk-smoke-database/rest-replay.mjs";
@@ -27,6 +39,11 @@ const names = {
   s5: "s5",
   "sdk-small": "sdk-small",
   "sdk-events": "sdk-events",
+  "sdk-rest": "sdk-rest",
+  "sdk-rules": "sdk-rules",
+  "sdk-tokens": "sdk-tokens",
+  "sdk-rules-load": "sdk-rules-load",
+  breadth: "breadth",
   functions: "functions",
   smoke: "smoke",
 };
@@ -38,7 +55,39 @@ const scripts = {
   s5: `${T}/rtdb-s5.mjs`,
   "sdk-small": `${T}/rtdb-sdk-small.mjs`,
   "sdk-events": `${T}/rtdb-sdk-events.mjs`,
+  "sdk-rest": `${T}/rtdb-sdk-rest.mjs`,
+  "sdk-rules": `${T}/rtdb-sdk-rules.mjs`,
+  "sdk-tokens": `${T}/rtdb-sdk-tokens.mjs`,
+  "sdk-rules-load": `${T}/rtdb-sdk-rules-load.mjs`,
+  breadth: "conformance/src/rtdb-functions/breadth-local-run.mjs",
   functions: "conformance/src/rtdb-functions/local-run.mjs",
+};
+// The recorded observer suites replayed under the strict profile: their fixture, reduction and judge.
+const SUITES = {
+  "sdk-rest": {
+    fixture: "production-sdk-rest.json",
+    recorded: recordedRest,
+    summarize: summarizeRest,
+    rows: 144,
+  },
+  "sdk-rules": {
+    fixture: "production-sdk-rules.json",
+    recorded: recordedRules,
+    summarize: summarizeRules,
+    rows: 140,
+  },
+  "sdk-tokens": {
+    fixture: "production-sdk-tokens.json",
+    recorded: recordedTokens,
+    summarize: summarizeTokens,
+    rows: 54,
+  },
+  "sdk-rules-load": {
+    fixture: "production-sdk-rules-load.json",
+    recorded: recordedRulesLoad,
+    summarize: summarizeRulesLoad,
+    rows: 14,
+  },
 };
 export function campaignPlan(name, binary, out) {
   const campaign = Object.hasOwn(names, name) ? names[name] : undefined;
@@ -60,9 +109,22 @@ export function campaignPlan(name, binary, out) {
       ],
     };
   const argv = [process.execPath, repo(scripts[campaign])];
-  if (campaign !== "functions") argv.push("local");
+  if (campaign !== "functions" && campaign !== "breadth") argv.push("local");
   argv.push("--fireemu", binary, "--out", out);
-  if (["residual", "s5", "sdk-small", "sdk-events", "functions"].includes(campaign))
+  if (
+    [
+      "residual",
+      "s5",
+      "sdk-small",
+      "sdk-events",
+      "sdk-rest",
+      "sdk-rules",
+      "sdk-tokens",
+      "sdk-rules-load",
+      "breadth",
+      "functions",
+    ].includes(campaign)
+  )
     argv.push("--profile", "strict");
   if (["ondisconnect", "auth", "residual", "s5", "sdk-small", "sdk-events"].includes(campaign))
     argv.push("--modules", repo(`${T}/node_modules`));
@@ -166,6 +228,29 @@ export function sourceResources(campaign) {
         "readback.mjs",
       ].map((name) => `${T}/sdk-observer/${name}`),
     ],
+    ...Object.fromEntries(
+      Object.entries(SUITES).map(([name, suite]) => [
+        name,
+        [
+          `${T}/rtdb-${name}.mjs`,
+          `${T}/rtdb-${name}-fixture.mjs`,
+          `${T}/rtdb-${name}-judge.mjs`,
+          `${T}/fixtures/${suite.fixture}`,
+          `${T}/sdk-observer/${name.replace("sdk-", "")}-suite.mjs`,
+          `${T}/sdk-observer/lib.mjs`,
+          `${T}/sdk-observer/observer.mjs`,
+        ],
+      ]),
+    ),
+    breadth: [
+      "conformance/src/rtdb-functions/breadth-local-run.mjs",
+      "conformance/src/rtdb-functions/breadth-compare.mjs",
+      "conformance/src/rtdb-functions/breadth-sequence.mjs",
+      "conformance/src/rtdb-functions/breadth-frames.mjs",
+      "conformance/src/rtdb-functions/breadth-rtdb.mjs",
+      "conformance/src/rtdb-functions/breadth-sdk.mjs",
+      "conformance/src/rtdb-functions/recorded/production-rtdb-breadth.json",
+    ],
     functions: [
       "conformance/src/rtdb-functions/local-run.mjs",
       "conformance/src/rtdb-functions/compare-local.mjs",
@@ -196,9 +281,15 @@ export function sourceResources(campaign) {
 }
 export function runtimeResources(
   campaign,
-  root = repo(campaign === "functions" ? "conformance/src/rtdb-functions/fixtures" : T),
+  root = repo(
+    campaign === "functions"
+      ? "conformance/src/rtdb-functions/fixtures"
+      : campaign === "breadth"
+        ? "conformance/src/rtdb-functions/fixtures-breadth"
+        : T,
+  ),
 ) {
-  if (campaign === "functions") {
+  if (campaign === "functions" || campaign === "breadth") {
     for (const [name, version] of [
       ["firebase-functions", "7.3.2"],
       ["firebase-admin", "14.3.0"],
@@ -398,6 +489,34 @@ export function adjudicate(campaign, out) {
       json(join(out, "journal.json")),
     );
     return { match: result.match && result.counts.MATCH === 160, result };
+  }
+  if (Object.hasOwn(SUITES, campaign)) {
+    const suite = SUITES[campaign];
+    const result = suite.summarize(
+      suite.recorded(fixture(suite.fixture)),
+      json(join(out, "journal.json")),
+    );
+    return {
+      // `match` already holds only when every row matches and the runs are complete and clean.
+      match: result.match && result.counts.MATCH === suite.rows,
+      result,
+    };
+  }
+  if (campaign === "breadth") {
+    const production = json(
+      repo("conformance/src/rtdb-functions/recorded/production-rtdb-breadth.json"),
+    ).frames;
+    const result = compareBreadth({
+      production,
+      local: readBreadthFrames(join(out, "frames.jsonl")),
+    });
+    return {
+      match:
+        isDeepStrictEqual(result.totals, { rows: 69, match: 69, difference: 0 }) &&
+        result.unattributed.production.length === 0 &&
+        result.unattributed.local.length === 0,
+      result,
+    };
   }
   if (campaign === "functions") {
     const production = json(

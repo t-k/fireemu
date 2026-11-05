@@ -1,0 +1,3100 @@
+{
+ "kind": "rtdb-sdk-rest-journal-v1",
+ "suite": "rest",
+ "result": {
+  "status": "complete",
+  "observed": 144,
+  "exit": 0,
+  "cleanup": {
+   "prefix": "verified",
+   "rules": "verified"
+  },
+  "unverified": [],
+  "prefixLength": 16
+ },
+ "faults": [],
+ "profiles": [
+  {
+   "name": "r1-rest",
+   "rows": [
+    {
+     "id": "setup-mix",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "{scope}/mix.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": "{\"a\":{\".value\":3,\".priority\":2},\"b\":{\".value\":\"x\",\".priority\":\"p\"},\"c\":{\".value\":true,\".priority\":1},\"d\":{\"h\":1,\".priority\":3},\"e\":7,\"f\":\"abc\"}",
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "149",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"a\":{\".value\":3,\".priority\":2.0},\"b\":{\".value\":\"x\",\".priority\":\"p\"},\"c\":{\".value\":true,\".priority\":1.0},\"d\":{\".priority\":3.0,\"h\":1},\"e\":7,\"f\":\"abc\"}",
+     "bodyBytes": 149,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "setup-ints",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "{scope}/ints.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": "{\"-1\":1,\"01\":2,\"2147483648\":3,\"10\":4,\"2\":5,\"a\":6,\"B\":7}",
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "55",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"-1\":1,\"01\":2,\"2\":5,\"10\":4,\"2147483648\":3,\"B\":7,\"a\":6}",
+     "bodyBytes": 55,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "setup-leaf",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "{scope}/leaf.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": "\"text\"",
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "6",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "\"text\"",
+     "bodyBytes": 6,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "setup-emptied",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "{scope}/emptied.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": "{\"b\":{\"c\":1}}",
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "13",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"b\":{\"c\":1}}",
+     "bodyBytes": 13,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "setup-etag",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "{scope}/etag.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": "{\"x\":1}",
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "7",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"x\":1}",
+     "bodyBytes": 7,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "timeout-5s",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/mix.json",
+     "query": "timeout=5s",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "52",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"a\":3,\"b\":\"x\",\"c\":true,\"d\":{\"h\":1},\"e\":7,\"f\":\"abc\"}",
+     "bodyBytes": 52,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "timeout-5",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/mix.json",
+     "query": "timeout=5",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 400,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "110",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"timeout must contain length and unit (s/seconds/min/minutes), such as 1s, 2seconds, or 3min\"\n}\n",
+     "bodyBytes": 110,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "timeout-abc",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/mix.json",
+     "query": "timeout=abc",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 400,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "110",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"timeout must contain length and unit (s/seconds/min/minutes), such as 1s, 2seconds, or 3min\"\n}\n",
+     "bodyBytes": 110,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "timeout-0s",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/mix.json",
+     "query": "timeout=0s",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 400,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "43",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"timeout must be positive\"\n}\n",
+     "bodyBytes": 43,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "wsl-tiny",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "{scope}/wl.json",
+     "query": "writeSizeLimit=tiny",
+     "requestHeaders": {},
+     "requestBody": "{\"k\":1}",
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "7",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"k\":1}",
+     "bodyBytes": 7,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "wsl-medium",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "{scope}/wl.json",
+     "query": "writeSizeLimit=medium",
+     "requestHeaders": {},
+     "requestBody": "{\"k\":1}",
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "7",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"k\":1}",
+     "bodyBytes": 7,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "wsl-large",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "{scope}/wl.json",
+     "query": "writeSizeLimit=large",
+     "requestHeaders": {},
+     "requestBody": "{\"k\":1}",
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "7",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"k\":1}",
+     "bodyBytes": 7,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "wsl-unlimited",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "{scope}/wl.json",
+     "query": "writeSizeLimit=unlimited",
+     "requestHeaders": {},
+     "requestBody": "{\"k\":1}",
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "7",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"k\":1}",
+     "bodyBytes": 7,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "wsl-foo",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "{scope}/wl.json",
+     "query": "writeSizeLimit=foo",
+     "requestHeaders": {},
+     "requestBody": "{\"k\":1}",
+     "status": 400,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "90",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"writeSizeLimit should be one of {medium, tiny, large, unlimited, small}\"\n}\n",
+     "bodyBytes": 90,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "wsl-10",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "{scope}/wl.json",
+     "query": "writeSizeLimit=10",
+     "requestHeaders": {},
+     "requestBody": "{\"k\":1}",
+     "status": 400,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "90",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"writeSizeLimit should be one of {medium, tiny, large, unlimited, small}\"\n}\n",
+     "bodyBytes": 90,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "print-pretty-get",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/mix.json",
+     "query": "print=pretty",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "94",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"a\" : 3,\n  \"b\" : \"x\",\n  \"c\" : true,\n  \"d\" : {\n    \"h\" : 1\n  },\n  \"e\" : 7,\n  \"f\" : \"abc\"\n}\n",
+     "bodyBytes": 94,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "print-pretty-put",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "{scope}/pr.json",
+     "query": "print=pretty",
+     "requestHeaders": {},
+     "requestBody": "{\"a\":1}",
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "14",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"a\" : 1\n}\n",
+     "bodyBytes": 14,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "print-bogus-get",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/mix.json",
+     "query": "print=bogus",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "52",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"a\":3,\"b\":\"x\",\"c\":true,\"d\":{\"h\":1},\"e\":7,\"f\":\"abc\"}",
+     "bodyBytes": 52,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "print-silent-delete",
+     "ok": true,
+     "outcome": "answered",
+     "method": "DELETE",
+     "path": "{scope}/pr.json",
+     "query": "print=silent",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 204,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "",
+     "bodyBytes": 0,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "post-scalar",
+     "ok": true,
+     "outcome": "answered",
+     "method": "POST",
+     "path": "{scope}/po1.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": "\"hello\"",
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "31",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"name\":\"{pushId}\"}",
+     "bodyBytes": 31,
+     "utf8": true,
+     "clipped": false,
+     "pushIdShapeOk": true
+    },
+    {
+     "id": "post-scalar-get",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/po1.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "32",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"{pushId}\":\"hello\"}",
+     "bodyBytes": 32,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "post-priority",
+     "ok": true,
+     "outcome": "answered",
+     "method": "POST",
+     "path": "{scope}/po2.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": "{\"a\":1,\".priority\":5}",
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "31",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"name\":\"{pushId}\"}",
+     "bodyBytes": 31,
+     "utf8": true,
+     "clipped": false,
+     "pushIdShapeOk": true
+    },
+    {
+     "id": "post-priority-export",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/po2.json",
+     "query": "format=export",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "48",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"{pushId}\":{\".priority\":5.0,\"a\":1}}",
+     "bodyBytes": 48,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "post-null",
+     "ok": true,
+     "outcome": "answered",
+     "method": "POST",
+     "path": "{scope}/po3.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": "null",
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "31",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"name\":\"{pushId}\"}",
+     "bodyBytes": 31,
+     "utf8": true,
+     "clipped": false,
+     "pushIdShapeOk": true
+    },
+    {
+     "id": "post-null-get",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/po3.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "4",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "null",
+     "bodyBytes": 4,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "post-array",
+     "ok": true,
+     "outcome": "answered",
+     "method": "POST",
+     "path": "{scope}/po4.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": "[1,2]",
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "31",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"name\":\"{pushId}\"}",
+     "bodyBytes": 31,
+     "utf8": true,
+     "clipped": false,
+     "pushIdShapeOk": true
+    },
+    {
+     "id": "post-array-get",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/po4.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "30",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"{pushId}\":[1,2]}",
+     "bodyBytes": 30,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "post-sv",
+     "ok": true,
+     "outcome": "answered",
+     "method": "POST",
+     "path": "{scope}/po5.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": "{\".sv\":{\"increment\":3}}",
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "31",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"name\":\"{pushId}\"}",
+     "bodyBytes": 31,
+     "utf8": true,
+     "clipped": false,
+     "pushIdShapeOk": true
+    },
+    {
+     "id": "post-sv-get",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/po5.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "26",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"{pushId}\":3}",
+     "bodyBytes": 26,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "sv-patch",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PATCH",
+     "path": "{scope}/svp.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": "{\"n\":{\".sv\":{\"increment\":2}}}",
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "7",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"n\":2}",
+     "bodyBytes": 7,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "sv-patch-get",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/svp.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "7",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"n\":2}",
+     "bodyBytes": 7,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "sv-fraction",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "{scope}/svf.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": "{\"n\":{\".sv\":{\"increment\":1.5}}}",
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "9",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"n\":1.5}",
+     "bodyBytes": 9,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "sv-fraction-get",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/svf.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "9",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"n\":1.5}",
+     "bodyBytes": 9,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "sv-bogus",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "{scope}/svb.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": "{\"n\":{\".sv\":\"bogus\"}}",
+     "status": 400,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "77",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"Invalid data; couldn't parse JSON object, array, or value.\"\n}\n",
+     "bodyBytes": 77,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "sv-overflow-put",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "{scope}/svo.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": "{\"n\":{\".sv\":{\"increment\":1.7976931348623157e308}}}",
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "28",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"n\":1.7976931348623157E308}",
+     "bodyBytes": 28,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "sv-overflow-patch",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PATCH",
+     "path": "{scope}/svo.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": "{\"n\":{\".sv\":{\"increment\":1.7976931348623157e308}}}",
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "28",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"n\":1.7976931348623157E308}",
+     "bodyBytes": 28,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "sv-overflow-get",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/svo.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "28",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"n\":1.7976931348623157E308}",
+     "bodyBytes": 28,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "order-priority",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/mix.json",
+     "query": "orderBy=%22%24priority%22",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "52",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"a\":3,\"b\":\"x\",\"c\":true,\"d\":{\"h\":1},\"e\":7,\"f\":\"abc\"}",
+     "bodyBytes": 52,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "order-priority-range",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/mix.json",
+     "query": "orderBy=%22%24priority%22&startAt=1&endAt=2",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "16",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"c\":true,\"a\":3}",
+     "bodyBytes": 16,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "order-value-first",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/mix.json",
+     "query": "orderBy=%22%24value%22&limitToFirst=3",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "22",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"a\":3,\"c\":true,\"e\":7}",
+     "bodyBytes": 22,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "order-value-last",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/mix.json",
+     "query": "orderBy=%22%24value%22&limitToLast=3",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "31",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"b\":\"x\",\"d\":{\"h\":1},\"f\":\"abc\"}",
+     "bodyBytes": 31,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "order-key-first",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/mix.json",
+     "query": "orderBy=%22%24key%22&limitToFirst=3",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "24",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"a\":3,\"b\":\"x\",\"c\":true}",
+     "bodyBytes": 24,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "order-key-ints",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/ints.json",
+     "query": "orderBy=%22%24key%22",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "55",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"-1\":1,\"01\":2,\"2\":5,\"10\":4,\"2147483648\":3,\"B\":7,\"a\":6}",
+     "bodyBytes": 55,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "order-key-start-end",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/ints.json",
+     "query": "orderBy=%22%24key%22&startAt=%2201%22&endAt=%222%22",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "14",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"01\":2,\"2\":5}",
+     "bodyBytes": 14,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "order-key-equal",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/ints.json",
+     "query": "orderBy=%22%24key%22&equalTo=%2210%22",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "8",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"10\":4}",
+     "bodyBytes": 8,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "order-key-start-number",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/ints.json",
+     "query": "orderBy=%22%24key%22&startAt=2",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 400,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "69",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"Provided key index type is invalid, must be string\"\n}\n",
+     "bodyBytes": 69,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "order-value-unindexed",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/ints.json",
+     "query": "orderBy=%22%24value%22&limitToFirst=2",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 400,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "133",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"Index not defined, add \\\".indexOn\\\": \\\".value\\\", for path \\\"/{scope}/ints\\\", to the rules\"\n}\n",
+     "bodyBytes": 133,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "limit-first",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/mix.json",
+     "query": "limitToFirst=2",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 400,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "82",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"orderBy must be defined when other query parameters are defined\"\n}\n",
+     "bodyBytes": 82,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "limit-last",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/mix.json",
+     "query": "limitToLast=2",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 400,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "82",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"orderBy must be defined when other query parameters are defined\"\n}\n",
+     "bodyBytes": 82,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "order-priority-export",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/mix.json",
+     "query": "orderBy=%22%24priority%22&limitToFirst=2&format=export",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "17",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"e\":7,\"f\":\"abc\"}",
+     "bodyBytes": 17,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "shallow-leaf",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/leaf.json",
+     "query": "shallow=true",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "6",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "\"text\"",
+     "bodyBytes": 6,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "shallow-missing",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/missing.json",
+     "query": "shallow=true",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "4",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "null",
+     "bodyBytes": 4,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "shallow-orderby",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/mix.json",
+     "query": "shallow=true&orderBy=%22%24key%22",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 400,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "105",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"orderBy not supported for with shallow GET, keys are returned in lexicographical order\"\n}\n",
+     "bodyBytes": 105,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "shallow-limit",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/mix.json",
+     "query": "shallow=true&limitToFirst=1",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "10",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"a\":true}",
+     "bodyBytes": 10,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "etag-get",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/etag.json",
+     "query": "",
+     "requestHeaders": {
+      "x-firebase-etag": "true"
+     },
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "etag": "LkoDN24bwRWG2p4jGZoe8M/Acf8=",
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "7",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*",
+      "access-control-expose-headers": "ETag"
+     },
+     "body": "{\"x\":1}",
+     "bodyBytes": 7,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "etag-inm-match",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/etag.json",
+     "query": "",
+     "requestHeaders": {
+      "if-none-match": "{etag}"
+     },
+     "requestBody": null,
+     "status": 304,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "0",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "",
+     "bodyBytes": 0,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "etag-inm-bogus",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/etag.json",
+     "query": "",
+     "requestHeaders": {
+      "if-none-match": "\"bogus\""
+     },
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "etag": "LkoDN24bwRWG2p4jGZoe8M/Acf8=",
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "7",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*",
+      "access-control-expose-headers": "ETag"
+     },
+     "body": "{\"x\":1}",
+     "bodyBytes": 7,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "etag-inm-put",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "{scope}/etag2.json",
+     "query": "",
+     "requestHeaders": {
+      "if-none-match": "{etag}"
+     },
+     "requestBody": "{\"x\":1}",
+     "status": 200,
+     "responseHeaders": {
+      "etag": "LkoDN24bwRWG2p4jGZoe8M/Acf8=",
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "7",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*",
+      "access-control-expose-headers": "ETag"
+     },
+     "body": "{\"x\":1}",
+     "bodyBytes": 7,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "etag-inm-shallow",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/etag.json",
+     "query": "shallow=true",
+     "requestHeaders": {
+      "if-none-match": "{etag}"
+     },
+     "requestBody": null,
+     "status": 400,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "130",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"Mixing 'shallow', querying parameters or 'print=silent' and if-match or if-none-match requests is not supported\"\n}\n",
+     "bodyBytes": 130,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "override-put",
+     "ok": true,
+     "outcome": "answered",
+     "method": "POST",
+     "path": "{scope}/ov1.json",
+     "query": "",
+     "requestHeaders": {
+      "x-http-method-override": "PUT"
+     },
+     "requestBody": "{\"a\":1}",
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "7",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"a\":1}",
+     "bodyBytes": 7,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "override-put-get",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/ov1.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "7",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"a\":1}",
+     "bodyBytes": 7,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "override-delete",
+     "ok": true,
+     "outcome": "answered",
+     "method": "POST",
+     "path": "{scope}/ov1.json",
+     "query": "",
+     "requestHeaders": {
+      "x-http-method-override": "DELETE"
+     },
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "4",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "null",
+     "bodyBytes": 4,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "override-delete-get",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/ov1.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "4",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "null",
+     "bodyBytes": 4,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "callback-cb",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/leaf.json",
+     "query": "callback=cb",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/javascript; charset=utf-8",
+      "content-length": "16",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "/**/ cb(\"text\");",
+     "bodyBytes": 16,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "callback-script",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/leaf.json",
+     "query": "callback=%3C%2Fscript%3E",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/javascript; charset=utf-8",
+      "content-length": "23",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "/**/ </script>(\"text\");",
+     "bodyBytes": 23,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "callback-alert",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/leaf.json",
+     "query": "callback=alert(1)%2F%2F",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/javascript; charset=utf-8",
+      "content-length": "24",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "/**/ alert(1)//(\"text\");",
+     "bodyBytes": 24,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "callback-digit",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/leaf.json",
+     "query": "callback=1a",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/javascript; charset=utf-8",
+      "content-length": "16",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "/**/ 1a(\"text\");",
+     "bodyBytes": 16,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "download-file",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/leaf.json",
+     "query": "download=file.json",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/octet-stream; charset=utf-8",
+      "content-length": "6",
+      "content-disposition": "attachment; filename=\"file.json\"",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "\"text\"",
+     "bodyBytes": 6,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "emptied-patch",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PATCH",
+     "path": "{scope}/emptied.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": "{\"b/c\":null,\"b/.priority\":1}",
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "30",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"b\":{\"c\":null,\".priority\":1}}",
+     "bodyBytes": 30,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "emptied-export",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/emptied.json",
+     "query": "format=export",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "4",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "null",
+     "bodyBytes": 4,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "malformed-zz",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/bad%zz.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 400,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "30",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"Bad Request\"\n}\n",
+     "bodyBytes": 30,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "end-delete",
+     "ok": true,
+     "outcome": "answered",
+     "method": "DELETE",
+     "path": "{scope}.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "4",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "null",
+     "bodyBytes": 4,
+     "utf8": true,
+     "clipped": false
+    }
+   ]
+  },
+  {
+   "name": "r2-rest",
+   "rows": [
+    {
+     "id": "setup-mix",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "{scope}/mix.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": "{\"a\":{\".value\":3,\".priority\":2},\"b\":{\".value\":\"x\",\".priority\":\"p\"},\"c\":{\".value\":true,\".priority\":1},\"d\":{\"h\":1,\".priority\":3},\"e\":7,\"f\":\"abc\"}",
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "149",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"a\":{\".value\":3,\".priority\":2.0},\"b\":{\".value\":\"x\",\".priority\":\"p\"},\"c\":{\".value\":true,\".priority\":1.0},\"d\":{\".priority\":3.0,\"h\":1},\"e\":7,\"f\":\"abc\"}",
+     "bodyBytes": 149,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "setup-ints",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "{scope}/ints.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": "{\"-1\":1,\"01\":2,\"2147483648\":3,\"10\":4,\"2\":5,\"a\":6,\"B\":7}",
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "55",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"-1\":1,\"01\":2,\"2\":5,\"10\":4,\"2147483648\":3,\"B\":7,\"a\":6}",
+     "bodyBytes": 55,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "setup-leaf",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "{scope}/leaf.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": "\"text\"",
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "6",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "\"text\"",
+     "bodyBytes": 6,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "setup-emptied",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "{scope}/emptied.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": "{\"b\":{\"c\":1}}",
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "13",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"b\":{\"c\":1}}",
+     "bodyBytes": 13,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "setup-etag",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "{scope}/etag.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": "{\"x\":1}",
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "7",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"x\":1}",
+     "bodyBytes": 7,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "timeout-5s",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/mix.json",
+     "query": "timeout=5s",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "52",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"a\":3,\"b\":\"x\",\"c\":true,\"d\":{\"h\":1},\"e\":7,\"f\":\"abc\"}",
+     "bodyBytes": 52,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "timeout-5",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/mix.json",
+     "query": "timeout=5",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 400,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "110",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"timeout must contain length and unit (s/seconds/min/minutes), such as 1s, 2seconds, or 3min\"\n}\n",
+     "bodyBytes": 110,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "timeout-abc",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/mix.json",
+     "query": "timeout=abc",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 400,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "110",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"timeout must contain length and unit (s/seconds/min/minutes), such as 1s, 2seconds, or 3min\"\n}\n",
+     "bodyBytes": 110,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "timeout-0s",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/mix.json",
+     "query": "timeout=0s",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 400,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "43",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"timeout must be positive\"\n}\n",
+     "bodyBytes": 43,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "wsl-tiny",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "{scope}/wl.json",
+     "query": "writeSizeLimit=tiny",
+     "requestHeaders": {},
+     "requestBody": "{\"k\":1}",
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "7",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"k\":1}",
+     "bodyBytes": 7,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "wsl-medium",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "{scope}/wl.json",
+     "query": "writeSizeLimit=medium",
+     "requestHeaders": {},
+     "requestBody": "{\"k\":1}",
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "7",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"k\":1}",
+     "bodyBytes": 7,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "wsl-large",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "{scope}/wl.json",
+     "query": "writeSizeLimit=large",
+     "requestHeaders": {},
+     "requestBody": "{\"k\":1}",
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "7",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"k\":1}",
+     "bodyBytes": 7,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "wsl-unlimited",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "{scope}/wl.json",
+     "query": "writeSizeLimit=unlimited",
+     "requestHeaders": {},
+     "requestBody": "{\"k\":1}",
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "7",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"k\":1}",
+     "bodyBytes": 7,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "wsl-foo",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "{scope}/wl.json",
+     "query": "writeSizeLimit=foo",
+     "requestHeaders": {},
+     "requestBody": "{\"k\":1}",
+     "status": 400,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "90",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"writeSizeLimit should be one of {medium, tiny, large, unlimited, small}\"\n}\n",
+     "bodyBytes": 90,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "wsl-10",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "{scope}/wl.json",
+     "query": "writeSizeLimit=10",
+     "requestHeaders": {},
+     "requestBody": "{\"k\":1}",
+     "status": 400,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "90",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"writeSizeLimit should be one of {medium, tiny, large, unlimited, small}\"\n}\n",
+     "bodyBytes": 90,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "print-pretty-get",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/mix.json",
+     "query": "print=pretty",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "94",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"a\" : 3,\n  \"b\" : \"x\",\n  \"c\" : true,\n  \"d\" : {\n    \"h\" : 1\n  },\n  \"e\" : 7,\n  \"f\" : \"abc\"\n}\n",
+     "bodyBytes": 94,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "print-pretty-put",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "{scope}/pr.json",
+     "query": "print=pretty",
+     "requestHeaders": {},
+     "requestBody": "{\"a\":1}",
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "14",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"a\" : 1\n}\n",
+     "bodyBytes": 14,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "print-bogus-get",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/mix.json",
+     "query": "print=bogus",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "52",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"a\":3,\"b\":\"x\",\"c\":true,\"d\":{\"h\":1},\"e\":7,\"f\":\"abc\"}",
+     "bodyBytes": 52,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "print-silent-delete",
+     "ok": true,
+     "outcome": "answered",
+     "method": "DELETE",
+     "path": "{scope}/pr.json",
+     "query": "print=silent",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 204,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "",
+     "bodyBytes": 0,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "post-scalar",
+     "ok": true,
+     "outcome": "answered",
+     "method": "POST",
+     "path": "{scope}/po1.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": "\"hello\"",
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "31",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"name\":\"{pushId}\"}",
+     "bodyBytes": 31,
+     "utf8": true,
+     "clipped": false,
+     "pushIdShapeOk": true
+    },
+    {
+     "id": "post-scalar-get",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/po1.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "32",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"{pushId}\":\"hello\"}",
+     "bodyBytes": 32,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "post-priority",
+     "ok": true,
+     "outcome": "answered",
+     "method": "POST",
+     "path": "{scope}/po2.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": "{\"a\":1,\".priority\":5}",
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "31",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"name\":\"{pushId}\"}",
+     "bodyBytes": 31,
+     "utf8": true,
+     "clipped": false,
+     "pushIdShapeOk": true
+    },
+    {
+     "id": "post-priority-export",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/po2.json",
+     "query": "format=export",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "48",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"{pushId}\":{\".priority\":5.0,\"a\":1}}",
+     "bodyBytes": 48,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "post-null",
+     "ok": true,
+     "outcome": "answered",
+     "method": "POST",
+     "path": "{scope}/po3.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": "null",
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "31",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"name\":\"{pushId}\"}",
+     "bodyBytes": 31,
+     "utf8": true,
+     "clipped": false,
+     "pushIdShapeOk": true
+    },
+    {
+     "id": "post-null-get",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/po3.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "4",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "null",
+     "bodyBytes": 4,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "post-array",
+     "ok": true,
+     "outcome": "answered",
+     "method": "POST",
+     "path": "{scope}/po4.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": "[1,2]",
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "31",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"name\":\"{pushId}\"}",
+     "bodyBytes": 31,
+     "utf8": true,
+     "clipped": false,
+     "pushIdShapeOk": true
+    },
+    {
+     "id": "post-array-get",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/po4.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "30",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"{pushId}\":[1,2]}",
+     "bodyBytes": 30,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "post-sv",
+     "ok": true,
+     "outcome": "answered",
+     "method": "POST",
+     "path": "{scope}/po5.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": "{\".sv\":{\"increment\":3}}",
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "31",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"name\":\"{pushId}\"}",
+     "bodyBytes": 31,
+     "utf8": true,
+     "clipped": false,
+     "pushIdShapeOk": true
+    },
+    {
+     "id": "post-sv-get",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/po5.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "26",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"{pushId}\":3}",
+     "bodyBytes": 26,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "sv-patch",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PATCH",
+     "path": "{scope}/svp.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": "{\"n\":{\".sv\":{\"increment\":2}}}",
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "7",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"n\":2}",
+     "bodyBytes": 7,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "sv-patch-get",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/svp.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "7",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"n\":2}",
+     "bodyBytes": 7,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "sv-fraction",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "{scope}/svf.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": "{\"n\":{\".sv\":{\"increment\":1.5}}}",
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "9",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"n\":1.5}",
+     "bodyBytes": 9,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "sv-fraction-get",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/svf.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "9",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"n\":1.5}",
+     "bodyBytes": 9,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "sv-bogus",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "{scope}/svb.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": "{\"n\":{\".sv\":\"bogus\"}}",
+     "status": 400,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "77",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"Invalid data; couldn't parse JSON object, array, or value.\"\n}\n",
+     "bodyBytes": 77,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "sv-overflow-put",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "{scope}/svo.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": "{\"n\":{\".sv\":{\"increment\":1.7976931348623157e308}}}",
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "28",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"n\":1.7976931348623157E308}",
+     "bodyBytes": 28,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "sv-overflow-patch",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PATCH",
+     "path": "{scope}/svo.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": "{\"n\":{\".sv\":{\"increment\":1.7976931348623157e308}}}",
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "28",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"n\":1.7976931348623157E308}",
+     "bodyBytes": 28,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "sv-overflow-get",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/svo.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "28",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"n\":1.7976931348623157E308}",
+     "bodyBytes": 28,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "order-priority",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/mix.json",
+     "query": "orderBy=%22%24priority%22",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "52",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"a\":3,\"b\":\"x\",\"c\":true,\"d\":{\"h\":1},\"e\":7,\"f\":\"abc\"}",
+     "bodyBytes": 52,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "order-priority-range",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/mix.json",
+     "query": "orderBy=%22%24priority%22&startAt=1&endAt=2",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "16",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"c\":true,\"a\":3}",
+     "bodyBytes": 16,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "order-value-first",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/mix.json",
+     "query": "orderBy=%22%24value%22&limitToFirst=3",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "22",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"a\":3,\"c\":true,\"e\":7}",
+     "bodyBytes": 22,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "order-value-last",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/mix.json",
+     "query": "orderBy=%22%24value%22&limitToLast=3",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "31",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"b\":\"x\",\"d\":{\"h\":1},\"f\":\"abc\"}",
+     "bodyBytes": 31,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "order-key-first",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/mix.json",
+     "query": "orderBy=%22%24key%22&limitToFirst=3",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "24",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"a\":3,\"b\":\"x\",\"c\":true}",
+     "bodyBytes": 24,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "order-key-ints",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/ints.json",
+     "query": "orderBy=%22%24key%22",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "55",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"-1\":1,\"01\":2,\"2\":5,\"10\":4,\"2147483648\":3,\"B\":7,\"a\":6}",
+     "bodyBytes": 55,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "order-key-start-end",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/ints.json",
+     "query": "orderBy=%22%24key%22&startAt=%2201%22&endAt=%222%22",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "14",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"01\":2,\"2\":5}",
+     "bodyBytes": 14,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "order-key-equal",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/ints.json",
+     "query": "orderBy=%22%24key%22&equalTo=%2210%22",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "8",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"10\":4}",
+     "bodyBytes": 8,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "order-key-start-number",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/ints.json",
+     "query": "orderBy=%22%24key%22&startAt=2",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 400,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "69",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"Provided key index type is invalid, must be string\"\n}\n",
+     "bodyBytes": 69,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "order-value-unindexed",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/ints.json",
+     "query": "orderBy=%22%24value%22&limitToFirst=2",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 400,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "133",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"Index not defined, add \\\".indexOn\\\": \\\".value\\\", for path \\\"/{scope}/ints\\\", to the rules\"\n}\n",
+     "bodyBytes": 133,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "limit-first",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/mix.json",
+     "query": "limitToFirst=2",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 400,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "82",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"orderBy must be defined when other query parameters are defined\"\n}\n",
+     "bodyBytes": 82,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "limit-last",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/mix.json",
+     "query": "limitToLast=2",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 400,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "82",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"orderBy must be defined when other query parameters are defined\"\n}\n",
+     "bodyBytes": 82,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "order-priority-export",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/mix.json",
+     "query": "orderBy=%22%24priority%22&limitToFirst=2&format=export",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "17",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"e\":7,\"f\":\"abc\"}",
+     "bodyBytes": 17,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "shallow-leaf",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/leaf.json",
+     "query": "shallow=true",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "6",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "\"text\"",
+     "bodyBytes": 6,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "shallow-missing",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/missing.json",
+     "query": "shallow=true",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "4",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "null",
+     "bodyBytes": 4,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "shallow-orderby",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/mix.json",
+     "query": "shallow=true&orderBy=%22%24key%22",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 400,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "105",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"orderBy not supported for with shallow GET, keys are returned in lexicographical order\"\n}\n",
+     "bodyBytes": 105,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "shallow-limit",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/mix.json",
+     "query": "shallow=true&limitToFirst=1",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "10",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"a\":true}",
+     "bodyBytes": 10,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "etag-get",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/etag.json",
+     "query": "",
+     "requestHeaders": {
+      "x-firebase-etag": "true"
+     },
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "etag": "LkoDN24bwRWG2p4jGZoe8M/Acf8=",
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "7",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*",
+      "access-control-expose-headers": "ETag"
+     },
+     "body": "{\"x\":1}",
+     "bodyBytes": 7,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "etag-inm-match",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/etag.json",
+     "query": "",
+     "requestHeaders": {
+      "if-none-match": "{etag}"
+     },
+     "requestBody": null,
+     "status": 304,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "0",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "",
+     "bodyBytes": 0,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "etag-inm-bogus",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/etag.json",
+     "query": "",
+     "requestHeaders": {
+      "if-none-match": "\"bogus\""
+     },
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "etag": "LkoDN24bwRWG2p4jGZoe8M/Acf8=",
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "7",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*",
+      "access-control-expose-headers": "ETag"
+     },
+     "body": "{\"x\":1}",
+     "bodyBytes": 7,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "etag-inm-put",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "{scope}/etag2.json",
+     "query": "",
+     "requestHeaders": {
+      "if-none-match": "{etag}"
+     },
+     "requestBody": "{\"x\":1}",
+     "status": 200,
+     "responseHeaders": {
+      "etag": "LkoDN24bwRWG2p4jGZoe8M/Acf8=",
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "7",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*",
+      "access-control-expose-headers": "ETag"
+     },
+     "body": "{\"x\":1}",
+     "bodyBytes": 7,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "etag-inm-shallow",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/etag.json",
+     "query": "shallow=true",
+     "requestHeaders": {
+      "if-none-match": "{etag}"
+     },
+     "requestBody": null,
+     "status": 400,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "130",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"Mixing 'shallow', querying parameters or 'print=silent' and if-match or if-none-match requests is not supported\"\n}\n",
+     "bodyBytes": 130,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "override-put",
+     "ok": true,
+     "outcome": "answered",
+     "method": "POST",
+     "path": "{scope}/ov1.json",
+     "query": "",
+     "requestHeaders": {
+      "x-http-method-override": "PUT"
+     },
+     "requestBody": "{\"a\":1}",
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "7",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"a\":1}",
+     "bodyBytes": 7,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "override-put-get",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/ov1.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "7",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"a\":1}",
+     "bodyBytes": 7,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "override-delete",
+     "ok": true,
+     "outcome": "answered",
+     "method": "POST",
+     "path": "{scope}/ov1.json",
+     "query": "",
+     "requestHeaders": {
+      "x-http-method-override": "DELETE"
+     },
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "4",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "null",
+     "bodyBytes": 4,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "override-delete-get",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/ov1.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "4",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "null",
+     "bodyBytes": 4,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "callback-cb",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/leaf.json",
+     "query": "callback=cb",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/javascript; charset=utf-8",
+      "content-length": "16",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "/**/ cb(\"text\");",
+     "bodyBytes": 16,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "callback-script",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/leaf.json",
+     "query": "callback=%3C%2Fscript%3E",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/javascript; charset=utf-8",
+      "content-length": "23",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "/**/ </script>(\"text\");",
+     "bodyBytes": 23,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "callback-alert",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/leaf.json",
+     "query": "callback=alert(1)%2F%2F",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/javascript; charset=utf-8",
+      "content-length": "24",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "/**/ alert(1)//(\"text\");",
+     "bodyBytes": 24,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "callback-digit",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/leaf.json",
+     "query": "callback=1a",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/javascript; charset=utf-8",
+      "content-length": "16",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "/**/ 1a(\"text\");",
+     "bodyBytes": 16,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "download-file",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/leaf.json",
+     "query": "download=file.json",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/octet-stream; charset=utf-8",
+      "content-length": "6",
+      "content-disposition": "attachment; filename=\"file.json\"",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "\"text\"",
+     "bodyBytes": 6,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "emptied-patch",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PATCH",
+     "path": "{scope}/emptied.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": "{\"b/c\":null,\"b/.priority\":1}",
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "30",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"b\":{\"c\":null,\".priority\":1}}",
+     "bodyBytes": 30,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "emptied-export",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/emptied.json",
+     "query": "format=export",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "4",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "null",
+     "bodyBytes": 4,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "malformed-zz",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/bad%zz.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 400,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "30",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"Bad Request\"\n}\n",
+     "bodyBytes": 30,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "end-delete",
+     "ok": true,
+     "outcome": "answered",
+     "method": "DELETE",
+     "path": "{scope}.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "4",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "null",
+     "bodyBytes": 4,
+     "utf8": true,
+     "clipped": false
+    }
+   ]
+  }
+ ]
+}

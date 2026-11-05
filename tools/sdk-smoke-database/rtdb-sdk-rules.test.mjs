@@ -10,6 +10,8 @@ import { fileURLToPath } from 'node:url';
 
 import { LOCAL_DIRECT_CAP, daemonConfig, execPlan, finish, localPrefix, options } from './rtdb-sdk-rules.mjs';
 
+import { recordedJournal } from './rtdb-sdk-rules-fixture.mjs';
+import { summarize } from './rtdb-sdk-rules-judge.mjs';
 const here = path.dirname(fileURLToPath(import.meta.url)), script = path.join(here, 'rtdb-sdk-rules.mjs');
 const FIXTURE = JSON.parse(readFileSync(path.join(here, 'fixtures', 'local-sdk-rules.json'), 'utf8'));
 const RESULT = { runId: 'LOCAL-X', suite: 'rules', target: 'emulator', prefix: '/sdkrules01234567', ...FIXTURE.result, counts: { direct: 162, reserve: 4, adc: 0 } };
@@ -99,21 +101,42 @@ test('the entry refuses an existing --out, fails with the observer status, and e
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-// Opt-in: FIREEMU_BIN=<fireemu binary> runs the suite locally in both profiles and judges strict against emulator.
-// Measured on fireemu v0.43.0 and on the REST parity branch: none (the two reductions are byte-identical).
-const EXPECTED_DIFFERENCES = [];
-test('live: strict against emulator on a real fireemu (FIREEMU_BIN); differences are listed, a 5xx fails', { skip: !process.env.FIREEMU_BIN, timeout: 25 * 60 * 1000 }, () => {
+
+// The closure replays of the recording on the release-profile build 44c3c889 (fireemu 0.43.0, both profiles) are committed as
+// reductions (fixtures/closure-sdk-rules-<profile>.json). The strict profile reproduces production in every observation; the emulator
+// profile differs only in the cases named here, in each round, and the closure record declares them (knownDifferences).
+const PRODUCTION = path.join(here, 'fixtures', 'production-sdk-rules.json');
+const ROUNDS = ['r1-rules', 'r2-rules'];
+const EMULATOR_DIFFERENCES = [];
+const differing = (s) => s.rows.filter(r => r.verdict !== 'MATCH').map(r => `${r.profile} ${r.case}`).sort();
+const declared = ROUNDS.flatMap(round => EMULATOR_DIFFERENCES.map(id => `${round} ${id}`)).sort();
+
+test('offline: the committed closure reductions give strict all MATCH against production and the emulator profile exactly the declared differences', () => {
+  const production = recordedJournal(JSON.parse(readFileSync(PRODUCTION, 'utf8')));
+  const read = profile => JSON.parse(readFileSync(path.join(here, 'fixtures', `closure-sdk-rules-${profile}.json`), 'utf8'));
+  const strict = summarize(production, read('strict')), emulator = summarize(production, read('emulator'));
+  assert.deepEqual([strict.match, strict.problems, strict.counts], [true, [], { MATCH: 140, MISMATCH: 0, NEEDS_REVIEW: 0 }]);
+  assert.deepEqual(emulator.problems, []); assert.deepEqual(differing(emulator), declared);
+  assert.deepEqual(emulator.counts, { MATCH: 140 - declared.length, MISMATCH: declared.length, NEEDS_REVIEW: 0 });
+  assert.equal(emulator.match, declared.length === 0);
+  assert.deepEqual(emulator.defects, [], 'a local 5xx is a defect in any profile');
+  // The comparison binds the recorded rows: a changed status in the strict reduction is a mismatch, a changed case id is not matched.
+  const altered = structuredClone(read('strict')); altered.profiles[0].rows[1].status += 1;
+  assert.equal(summarize(production, altered).match, false); assert.equal(summarize(production, altered).counts.MISMATCH, 1);
+});
+
+// Opt-in: FIREEMU_BIN=<fireemu binary> runs the suite locally in both profiles against the production reduction.
+test('live: strict matches production and the emulator profile differs only in the declared cases (FIREEMU_BIN); a 5xx fails', { skip: !process.env.FIREEMU_BIN, timeout: 25 * 60 * 1000 }, () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'sdk-rules-live-'));
   try {
-    const out = p => path.join(dir, p);
     for (const p of ['strict', 'emulator']) {
-      const r = spawnSync(process.execPath, [script, 'local', '--fireemu', process.env.FIREEMU_BIN, '--out', out(p), '--profile', p, '--against', path.join(here, 'fixtures', 'local-sdk-rules.json')], { encoding: 'utf8', timeout: 11 * 60 * 1000 });
+      const out = path.join(dir, p);
+      const r = spawnSync(process.execPath, [script, 'local', '--fireemu', process.env.FIREEMU_BIN, '--out', out, '--profile', p, '--against', PRODUCTION], { encoding: 'utf8', timeout: 11 * 60 * 1000 });
       assert.equal(r.status, 0, `${p}: ${r.stdout}${r.stderr}`);
+      const comparison = JSON.parse(readFileSync(path.join(out, 'comparison.json'), 'utf8'));
+      assert.deepEqual(comparison.defects, [], `${p}: local 5xx`);
+      assert.deepEqual(differing(comparison), p === 'strict' ? [] : declared, p);
+      assert.equal(comparison.match, p === 'strict' || declared.length === 0, p);
     }
-    const c = spawnSync(process.execPath, [script, 'compare', path.join(out('strict'), 'journal.json'), path.join(out('emulator'), 'journal.json')], { encoding: 'utf8' });
-    const differing = c.stdout.split('\n').filter(l => /^ {2}r[12]-rules /.test(l)).map(l => l.trim());
-    if (differing.length) console.log(differing.join('\n'));
-    assert.deepEqual(differing, EXPECTED_DIFFERENCES);
-    for (const p of ['strict', 'emulator']) assert.deepEqual(JSON.parse(readFileSync(path.join(out(p), 'comparison.json'), 'utf8')).defects, [], `${p}: local 5xx`);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

@@ -1,3 +1,6 @@
+// The comparison of the rules-load suite: a local reduced journal against a recorded one. A case row records the request body
+// (the table's) and the answer; the request itself (PUT to /.settings/rules.json as the operator) is fixed in the suite, so a row
+// carries no method, path or request headers to compare. The answer is judged exactly: status, body text, body bytes and headers.
 import { KIND } from './rtdb-sdk-rules-load-fixture.mjs';
 import { RULES_LOAD_PROFILES, TABLE } from './sdk-observer/rules-load-suite.mjs';
 
@@ -20,14 +23,3 @@ export function summarize(production, local) {
   }
   return { match: !problems.length && counts.MATCH === caseCount(), counts, problems, rows, defects: rows.filter(r => r.local?.status >= 500).map(r => `${r.profile}/${r.case}: local 5xx`) };
 }
-
-// These are the local emulator and strict profile answers, derived from the official-emulator fixture.
-export const FIREEMU_ANSWERS = Object.fromEntries(['emulator', 'strict'].map(profile => [profile, [
-  [400, '{\n  "error" : "1:47: \'a\' occurs multiple times.\\n"\n}\n'],
-  [400, '{\n  "error" : "1:24: Cannot have multiple \'.read\' rules.\\n"\n}\n'],
-  [400, '{\n  "error" : "1:26: Cannot have multiple \'.indexOn\' keys.\\n"\n}\n'],
-  [400, '{\n  "error" : "1:22: Invalid key: a.b. Index must be either .value or declared on a valid path\\n"\n}\n'],
-  [400, '{\n  "error" : "1:22: Invalid key: $x. Index must be either .value or declared on a valid path\\n"\n}\n'],
-  [200, '{"status":"ok"}'],
-  [200, '{"status":"ok"}'],
-].map(([status, body], i) => ({ id: TABLE[i].id, status, body }))]));

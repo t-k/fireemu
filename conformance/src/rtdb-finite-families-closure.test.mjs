@@ -546,3 +546,78 @@ test("scope decision R11 amends R2 for the recorded cases and keeps the parent o
   assert.equal(record.closureReview.decision, "CHANGES_REQUESTED");
   assert.match(record.closureReview.note, /review of that refresh is pending/);
 });
+
+test("the closure basis lists every item that is not claimed, each with a local behaviour and a reason", () => {
+  const basis = closure().closureBasis;
+  assert.match(basis.ownerDecision, /2217/);
+  assert.equal(basis.productionRequests, 0);
+  const keys = basis.notClaimedItems.map((item) => item.key);
+  assert.equal(new Set(keys).size, keys.length);
+  const behaviours = new Set([
+    "own-implementation",
+    "follows-official-emulator",
+    "refused-as-unobserved",
+    "out-of-scope-by-decision",
+  ]);
+  for (const item of basis.notClaimedItems) {
+    assert.match(item.key, /^notClaimed_[A-Za-z0-9_]+$/, item.key);
+    assert.ok(behaviours.has(item.localBehaviour), item.key);
+    assert.ok(item.item.length > 10 && item.detail.length > 30, item.key);
+  }
+  // Every gap and declared exclusion of the record has its entry.
+  const text = JSON.stringify(basis.notClaimedItems);
+  for (const needle of [
+    "service-account",
+    "rtdb-rest-parity-leftovers",
+    "rtdb-rules-load-leftovers",
+    "WebSocket auth",
+    "wildcard instance",
+    "retry timing",
+    "CV03, CV09, CV12",
+    "Android",
+  ])
+    assert.ok(text.includes(needle), needle);
+});
+
+test("the aggregate regression separates the historical binding from the closure build", () => {
+  const regression = closure().integratedRegression;
+  assert.equal(regression.integrationCommit, "8cda683b8e38d585586293cb649c2974d4f73ffa");
+  assert.match(regression.historicalBinding.statement, /2026-10-28/);
+  const current = regression.currentBinding;
+  assert.equal(current.sourceCommit, V043.sourceCommit);
+  assert.equal(current.binarySha256, V043.binarySha256);
+  assert.deepEqual(
+    current.comparisons.toSorted(),
+    [
+      `${EV}RTDB-breadth-comparison.json`,
+      `${EV}RTDB-sdk-events-comparison.json`,
+      `${EV}RTDB-sdk-rest-comparison.json`,
+      `${EV}RTDB-sdk-rules-comparison.json`,
+      `${EV}RTDB-sdk-rules-load-comparison.json`,
+      `${EV}RTDB-sdk-small-comparison.json`,
+      `${EV}RTDB-sdk-tokens-comparison.json`,
+    ].toSorted(),
+  );
+  for (const path of current.comparisons)
+    assert.ok(
+      regression.comparisons.some((entry) => entry.path === path),
+      path,
+    );
+});
+
+test("the older conditions point at the recordings that went past their scope statements", () => {
+  for (const [id, needle] of [
+    ["RTDB/rest-verbs-and-options", "RTDB/rest-options-and-refusals"],
+    ["RTDB/rules-evaluation-finite", "RTDB/rules-claims-indexes-and-load-texts"],
+    ["RTDB/sdk-small-queries-and-writes", "RTDB/sdk-events-queries-and-transactions"],
+  ])
+    assert.ok(condition(id).evidence.scope.includes(needle), id);
+  for (const id of ["RTDB/sdk-small-queries-and-writes", "RTDB/admin-sdk-websocket"])
+    assert.doesNotMatch(
+      condition(id).evidence.ownerDecisions,
+      /the closure binary is the v0\.43\.0 release/,
+    );
+  const huge = closure().knownDifferences.invalidCredentialsEmulatorProfile.statement;
+  assert.match(huge, /request line/);
+  assert.doesNotMatch(huge, /because its request line exceeds 4 KB and production/);
+});

@@ -173,5 +173,5 @@
     "a handler that fails gets redelivered only when it has the retry flag: v2 retry:true and v1 failurePolicy; the retry-off v2 handler is not redelivered; the retry-on handlers needed up to 4 failures",
     "events keep their event id across redeliveries; the attempt pattern is compared by shape, not by count or timing"
   ],
-  "scope": "69 compared rows of 12 writes over 3 handlers on the nested pattern /g9-rtdb/{group}/items/{id}, one instance, one region. The strict profile matches production in all 69 rows, attempt patterns by shape; the emulator profile keeps the official emulator's event shape (see the declared difference). Not compared: delivery latency, retry timing and the order of deliveries across handlers."
+  "scope": "69 compared rows of 12 writes over 3 handlers on the nested pattern /g9-rtdb/{group}/items/{id}, one instance, one region. The strict profile matches production in all 69 rows, attempt patterns by shape; the emulator profile's event shape is the declared difference /knownDifferences/triggerEventShapeEmulatorProfile, recorded against the official emulator's shape in CV14; no run of this recording compares firebase-tools. Not compared: delivery latency, retry timing and the order of deliveries across handlers."
 }

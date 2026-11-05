@@ -46,7 +46,7 @@ test('finish: the observer journal becomes journal.json; with a recorded reducti
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('the production reduction: seven documents in two rounds, the four accepted and three refused answers as recorded', () => {
+test('the production reduction: seven documents in two rounds, five refused and two accepted answers per round as recorded', () => {
   assert.deepEqual(RECORDED.result, { status: 'complete', observed: 14, exit: 0, cleanup: { prefix: 'not-needed', rules: 'verified' }, unverified: [] });
   for (const p of RECORDED.profiles) {
     assert.deepEqual(p.rows.map(r => [r.id, r.status]), [['g-dup-key', 400], ['g-dup-read', 400], ['h-dup-indexOn', 400], ['e-index-root-dot', 400], ['e-index-root-dollar', 400], ['e-index-root-empty', 200], ['h-index:"a//b"', 200]]);

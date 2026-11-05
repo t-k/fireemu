@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -12,6 +13,11 @@ const paths = [
   "s5",
   "sdk-small",
   "sdk-events",
+  "sdk-rest",
+  "sdk-rules",
+  "sdk-tokens",
+  "sdk-rules-load",
+  "breadth",
   "functions",
   "rest-v033",
 ];
@@ -21,7 +27,7 @@ test("each comparison resolves to its actual local producer and installed binary
     assert.ok(plan, name);
     assert.ok(plan.argv.includes("/installed/fireemu"), name);
     assert.ok(plan.argv[1].startsWith(fileURLToPath(new URL("../../", import.meta.url))), name);
-    assert.ok(plan.argv.includes("local") || name === "functions", name);
+    assert.ok(plan.argv.includes("local") || ["functions", "breadth"].includes(name), name);
   }
   assert.equal(campaignPlan("unknown", "/installed/fireemu", "/output"), undefined);
   for (const name of ["toString", "__proto__", "constructor"])
@@ -155,6 +161,11 @@ test("campaign selection pins the actual distinct producer scripts", () => {
     s5: "rtdb-s5.mjs",
     "sdk-small": "rtdb-sdk-small.mjs",
     "sdk-events": "rtdb-sdk-events.mjs",
+    "sdk-rest": "rtdb-sdk-rest.mjs",
+    "sdk-rules": "rtdb-sdk-rules.mjs",
+    "sdk-tokens": "rtdb-sdk-tokens.mjs",
+    "sdk-rules-load": "rtdb-sdk-rules-load.mjs",
+    breadth: "breadth-local-run.mjs",
     functions: "local-run.mjs",
   };
   for (const [name, script] of Object.entries(expected))
@@ -297,6 +308,11 @@ test("every RTDB campaign binds its recorded fixture and local producer sources"
     "s5",
     "sdk-small",
     "sdk-events",
+    "sdk-rest",
+    "sdk-rules",
+    "sdk-tokens",
+    "sdk-rules-load",
+    "breadth",
     "functions",
     "smoke",
   ]) {
@@ -707,6 +723,126 @@ test("SDK events adjudication needs all 160 steps to match the committed fixture
     const bound = run(unsettled);
     assert.equal(bound.match, false);
     assert.equal(bound.result.counts.NEEDS_REVIEW, 1);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the closure campaigns replay strict, judge the committed production reductions and refuse an altered local observation", async () => {
+  const {
+    adjudicate,
+    campaignPlan: plan,
+    runtimeResources,
+  } = await import("./rtdb-release-replay.mjs");
+  const { mkdtempSync, rmSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const fixtures = new URL("../../tools/sdk-smoke-database/fixtures/", import.meta.url);
+  const read = (url) => JSON.parse(readFileSync(url, "utf8"));
+  for (const name of ["sdk-rest", "sdk-rules", "sdk-tokens", "sdk-rules-load", "breadth"]) {
+    const argv = plan(name, "/installed/fireemu", "/output").argv;
+    assert.equal(
+      argv.includes("local"),
+      name !== "breadth",
+      `${name}: only the breadth producer has no local mode`,
+    );
+    assert.deepEqual(argv.slice(argv.indexOf("--fireemu")), [
+      "--fireemu",
+      "/installed/fireemu",
+      "--out",
+      "/output",
+      "--profile",
+      "strict",
+    ]);
+  }
+  assert.deepEqual(runtimeResources("sdk-rest"), {});
+  // The breadth fixture is its own directory (fixtures-breadth): installed, its handler source is bound; not installed, the error names it.
+  try {
+    const resources = runtimeResources("breadth");
+    assert.ok(Object.hasOwn(resources, "node_modules/firebase-functions/package.json"));
+    assert.equal(
+      resources["index.js"],
+      createHash("sha256")
+        .update(
+          readFileSync(new URL("./rtdb-functions/fixtures-breadth/index.js", import.meta.url)),
+        )
+        .digest("hex"),
+    );
+  } catch (error) {
+    assert.match(String(error.message), /fixtures-breadth/);
+  }
+  const { sourceResources } = await import("./rtdb-release-replay.mjs");
+  for (const [name, suiteFile] of [
+    ["sdk-rest", "rest-suite.mjs"],
+    ["sdk-rules", "rules-suite.mjs"],
+    ["sdk-tokens", "tokens-suite.mjs"],
+    ["sdk-rules-load", "rules-load-suite.mjs"],
+  ]) {
+    const keys = Object.keys(sourceResources(name));
+    assert.ok(
+      keys.some((key) => key.endsWith(`/sdk-observer/${suiteFile}`)),
+      name,
+    );
+    assert.ok(
+      keys.some((key) => key.endsWith(`/fixtures/production-${name}.json`)),
+      name,
+    );
+  }
+  assert.ok(
+    Object.keys(sourceResources("breadth")).includes(
+      "conformance/src/rtdb-functions/recorded/production-rtdb-breadth.json",
+    ),
+  );
+  for (const name of ["rest", "rules", "tokens", "rules-load"]) {
+    const dir = mkdtempSync(join(tmpdir(), `rtdb-closure-${name}-`));
+    try {
+      const strict = read(new URL(`closure-sdk-${name}-strict.json`, fixtures));
+      writeFileSync(join(dir, "journal.json"), JSON.stringify(strict));
+      const good = adjudicate(`sdk-${name}`, dir);
+      assert.equal(good.match, true, name);
+      strict.profiles[0].rows[0].status += 1;
+      writeFileSync(join(dir, "journal.json"), JSON.stringify(strict));
+      assert.equal(adjudicate(`sdk-${name}`, dir).match, false, name);
+      // The emulator profile is not a strict production comparison: it does not satisfy the strict judge where it differs.
+      if (name === "rest" || name === "tokens") {
+        writeFileSync(
+          join(dir, "journal.json"),
+          readFileSync(new URL(`closure-sdk-${name}-emulator.json`, fixtures)),
+        );
+        assert.equal(adjudicate(`sdk-${name}`, dir).match, false, `${name} emulator`);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+  const dir = mkdtempSync(join(tmpdir(), "rtdb-closure-breadth-"));
+  try {
+    const recorded = read(
+      new URL("./rtdb-functions/recorded/local-strict-rtdb-breadth.json", import.meta.url),
+    );
+    const lines = recorded.frames.map(({ n: _n, step: _step, ...frame }) => JSON.stringify(frame));
+    writeFileSync(join(dir, "frames.jsonl"), `${lines.join("\n")}\n`);
+    assert.equal(adjudicate("breadth", dir).match, true);
+    writeFileSync(join(dir, "frames.jsonl"), `${lines.slice(1).join("\n")}\n`);
+    assert.equal(adjudicate("breadth", dir).match, false, "a missing delivery is a difference");
+    // A delivery nothing explains is not matched even when every compared row still agrees.
+    writeFileSync(
+      join(dir, "frames.jsonl"),
+      `${[...lines, JSON.stringify({ handler: "g9WrittenV2", generation: 2, event: { params: { group: "zz", id: "q" } }, attempt: { threw: false }, seq: 999, receivedAt: 0 })].join("\n")}\n`,
+    );
+    assert.equal(adjudicate("breadth", dir).match, false, "an unattributed local delivery");
+    const emulator = read(
+      new URL("./rtdb-functions/recorded/local-emulator-rtdb-breadth.json", import.meta.url),
+    );
+    writeFileSync(
+      join(dir, "frames.jsonl"),
+      `${emulator.frames.map(({ n: _n, step: _step, ...frame }) => JSON.stringify(frame)).join("\n")}\n`,
+    );
+    assert.equal(
+      adjudicate("breadth", dir).match,
+      false,
+      "the emulator event shape is declared, not strict",
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

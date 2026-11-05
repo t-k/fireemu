@@ -5,6 +5,6 @@ test("T1 frame metadata keeps only recorded write members", () => {
   assert.equal(FRAME_MARKER, "G9_FRAME ");
   assert.equal(PREFIX, "g9-rtdb");
   assert.equal(FIXTURE_HANDLERS.length, 3);
-  assert.equal(RECORDED_MEMBERS.length, 4);
+  assert.equal(RECORDED_MEMBERS.length, 5);
   assert.ok(RECORDED_MEMBERS.every((entry) => entry.event === "write"));
 });

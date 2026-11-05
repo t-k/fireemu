@@ -7,7 +7,7 @@ function normalizeFrame(frame) {
   const event = normalizeCV14(frame);
   const context = frame.generation === 1 ? event.context : event;
   if (context.auth?.uid != null) context.auth.uid = "<uid>";
-  if (context.authId != null && ["USER", "api_key"].includes(context.authType))
+  if (context.authId != null && ["USER", "api_key", "app_user"].includes(context.authType))
     context.authId = "<uid>";
   if (Array.isArray(context.auth?.tokenKeys))
     context.auth.tokenKeys = Object.fromEntries(context.auth.tokenKeys.map((key) => [key, true]));
@@ -40,12 +40,31 @@ function events(frames) {
     grouped.get(id).push(frame);
   }
   return [...grouped.values()]
-    .map((attempts) => ({
-      pattern: attempts.map((f) =>
+    .map((attempts) => {
+      const pattern = attempts.map((f) =>
         f.attempt?.threw === true ? "threw" : f.attempt?.threw === false ? "ok" : null,
-      ),
-      frames: attempts.map(normalizeFrame),
-    }))
+      );
+      const frames = attempts.map(normalizeFrame);
+      if (
+        pattern.length > 2 &&
+        pattern.at(-1) === "ok" &&
+        pattern.slice(0, -1).every((p) => p === "threw")
+      ) {
+        const failures = frames.slice(0, -1);
+        return {
+          pattern: ["threw", "ok"],
+          frames: [
+            ...failures.filter(
+              (frame, index) =>
+                failures.findIndex((other) => JSON.stringify(other) === JSON.stringify(frame)) ===
+                index,
+            ),
+            frames.at(-1),
+          ],
+        };
+      }
+      return { pattern, frames };
+    })
     .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
 }
 export function compareRecordings({ production, local }) {
@@ -55,8 +74,6 @@ export function compareRecordings({ production, local }) {
     const a = p.rows.get(key) ?? [],
       b = l.rows.get(key) ?? [];
     const differences = diffValues(events(a), events(b));
-    if (a.length !== b.length)
-      differences.unshift({ path: "deliveries", production: a.length, local: b.length });
     return {
       row: JSON.parse(key),
       verdict: differences.length ? "DIFFERENCE" : "MATCH",

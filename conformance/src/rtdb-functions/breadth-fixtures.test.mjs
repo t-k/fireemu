@@ -93,3 +93,30 @@ test("v1 auth projects claim names without claim values", () => {
     emailVerified: true,
   });
 });
+
+test("failure duration uses the smaller of the configured window and cap", () => {
+  const { exports } = fixture();
+  const originalLog = console.log;
+  const originalNow = Date.now;
+  console.log = () => {};
+  Date.now = () => 100000;
+  try {
+    for (const [age, window, shouldThrow] of [
+      [999, 1000, true],
+      [1000, 1000, false],
+      [45000, 90000, false],
+      [45000, 45000, false],
+    ]) {
+      const event = {
+        params: { group: "gr", id: "a" },
+        time: new Date(100000 - age).toISOString(),
+        data: { before: snap(null), after: snap({ failForMs: window }) },
+      };
+      if (shouldThrow) assert.throws(() => exports.g9WrittenV2.handler(event));
+      else assert.doesNotThrow(() => exports.g9WrittenV2.handler(event));
+    }
+  } finally {
+    console.log = originalLog;
+    Date.now = originalNow;
+  }
+});

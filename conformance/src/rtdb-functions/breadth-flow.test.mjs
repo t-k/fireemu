@@ -63,3 +63,25 @@ test("cleans resources when report evaluation fails", async () => {
   assert.ok(result.reasons.includes("report failure"));
   assert.ok(world.events.includes("cleanup rtdb"));
 });
+
+test("a refused required deployment stops observation", async () => {
+  const world = makeWorld({ failure: "g9WrittenV2Retry", kind: "refused" });
+  const result = await runBreadth(world.deps);
+  assert.ok(result.reasons.includes("deploy failed"));
+  assert.equal(world.events.filter((e) => e.startsWith("write ")).length, 0);
+});
+
+test("an incomplete log read remains incomplete after later successful reads", async () => {
+  const world = makeWorld();
+  let reads = 0;
+  world.deps.logs.read = async () => ({
+    frames: [],
+    entries: 0,
+    ignored: {},
+    complete: ++reads > 1,
+  });
+  const result = await runBreadth(world.deps);
+  assert.ok(reads > 1);
+  assert.equal(result.logs.incomplete, true);
+  assert.ok(result.reasons.includes("a Cloud Logging read was incomplete"));
+});

@@ -122,3 +122,42 @@ test("PICT combinations exercise each writer, operation and handler", async () =
     assert.ok(["yes", "no"].includes(failing));
   }
 });
+
+test("duplicate count excludes the first frame of each event", () => {
+  const frame = {
+    handler: "g9WrittenV2Retry",
+    generation: 2,
+    event: {
+      id: "event",
+      params: { group: "ga", id: "a1" },
+      data: {
+        before: { exists: false, value: null },
+        after: { exists: true, value: { value: 1 } },
+      },
+    },
+  };
+  const seen = observe({ frames: [frame, frame] }).steps[0].leaves[0].handlers.g9WrittenV2Retry;
+  assert.equal(seen.duplicateFrames, 1);
+});
+
+test("identical transitions are left unattributed", () => {
+  const steps = [
+    { id: "one", method: "PUT", path: "g9-rtdb/ga/items/a", body: 1 },
+    { id: "delete", method: "DELETE", path: "g9-rtdb/ga/items/a" },
+    { id: "two", method: "PUT", path: "g9-rtdb/ga/items/a", body: 1 },
+  ];
+  const frame = {
+    handler: "g9WrittenV2",
+    generation: 2,
+    event: {
+      id: "x",
+      params: { group: "ga", id: "a" },
+      data: {
+        before: { exists: false, value: null },
+        after: { exists: true, value: 1 },
+      },
+    },
+  };
+  assert.deepEqual(observe({ steps, frames: [frame] }).unattributed[0].candidates, ["one", "two"]);
+  assert.equal(observe({ steps, frames: [frame] }).unattributed[0].reason, "ambiguous");
+});

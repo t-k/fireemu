@@ -52,3 +52,23 @@ test("unknown answers stop further state changes and never expose secrets", asyn
   assert.equal(calls, 1);
   assert.ok(!JSON.stringify(rows).includes("sentinel"));
 });
+
+test("successful sign-in cannot be repeated", async () => {
+  let calls = 0;
+  const auth = createAuth({
+    projectId: "demo",
+    apiKey: "key",
+    email: "user@example.test",
+    password: "password",
+    log: () => {},
+    fetchImpl: async () => ({
+      status: 200,
+      text: async () =>
+        JSON.stringify(++calls === 1 ? { localId: "uid" } : { localId: "uid", idToken: "id" }),
+    }),
+  });
+  await auth.create();
+  await auth.signIn();
+  await assert.rejects(auth.signIn(), /sign in unavailable/);
+  assert.equal(calls, 2);
+});

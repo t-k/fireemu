@@ -151,3 +151,47 @@ test("runner failure after handover rejects pending and later writes", async () 
   await assert.rejects(sdk.write("w11"), /runner crashed/);
   await assert.rejects(sdk.close(), /runner crashed/);
 });
+
+test("a successful SDK write cannot be sent twice", async () => {
+  const calls = [];
+  const sdk = createSdk({
+    page: {
+      evaluate: async (_fn, arg) => {
+        calls.push(arg.action);
+        return { outcome: "ok" };
+      },
+    },
+    config: {},
+    email: "user@example.test",
+    password: "password",
+    uid: "uid",
+    nonce: "nonce",
+  });
+  await sdk.signIn();
+  await sdk.write("w10");
+  await assert.rejects(sdk.write("w10"), /write unavailable/);
+  assert.deepEqual(calls, ["signIn", "w10"]);
+});
+
+test("closing releases a handed-over runner promptly", async () => {
+  const { openSdk } = await import("./breadth-sdk.mjs");
+  const sdk = openSdk(
+    async (_config, _credentials, observe) => {
+      await observe({ write: async () => ({ outcome: "ok" }) });
+    },
+    {},
+    () => ({}),
+  );
+  await sdk.write("w10");
+  let timer;
+  try {
+    await Promise.race([
+      sdk.close(),
+      new Promise((_resolve, reject) => {
+        timer = setTimeout(() => reject(Error("close timed out")), 200);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+});

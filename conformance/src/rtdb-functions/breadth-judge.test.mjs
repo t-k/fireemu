@@ -56,3 +56,33 @@ test("ancestor counts and retry-off redelivery remain observations", () => {
   const report = observe({ steps, writes, frames: [...frames, ...frames] });
   assert.deepEqual(judgeRun({ report, frames: [...frames, ...frames], writes, ignored: {} }), []);
 });
+
+test("leaf deliveries distinguish retry duplicates and multiple event IDs", () => {
+  const reasonsFor = (group, value, seen) =>
+    judgeRun({
+      report: {
+        steps: [
+          {
+            id: "w",
+            path: `g9-rtdb/${group}/items/a`,
+            write: { outcome: "ok" },
+            leaves: [{ group, id: "a", after: value, handlers: { handler: seen } }],
+          },
+        ],
+        totals: { unattributed: 0 },
+      },
+      frames: [{}],
+      writes: {},
+      ignored: {},
+    });
+  const seen = { frames: 2, distinctEventIds: 1, duplicateFrames: 1 };
+  assert.ok(reasonsFor("ga", { value: 1 }, seen).some((x) => x.includes("repeated delivery")));
+  assert.ok(
+    !reasonsFor("gr", { failForMs: 1000 }, seen).some((x) => x.includes("repeated delivery")),
+  );
+  assert.ok(
+    reasonsFor("ga", { value: 1 }, { ...seen, distinctEventIds: 2 }).some((x) =>
+      x.includes("multiple event ids"),
+    ),
+  );
+});

@@ -99,8 +99,6 @@ export async function runLocal({ fireemu, profile, out }) {
       firebaseJson,
       "--only",
       "auth,database,functions",
-      "--auth-port",
-      String(ports.auth),
       "--database-port",
       String(ports.database),
       "--http-port",
@@ -157,7 +155,7 @@ export async function runLocal({ fireemu, profile, out }) {
     const email = "breadth-local@example.test",
       password = "local-password";
     const response = await fetch(
-      `http://127.0.0.1:${ports.auth}/identitytoolkit.googleapis.com/v1/accounts:signUp?key=fake-api-key`,
+      `http://127.0.0.1:${ports.http}/identitytoolkit.googleapis.com/v1/accounts:signUp?key=fake-api-key`,
       {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -170,7 +168,7 @@ export async function runLocal({ fireemu, profile, out }) {
       browserRunner({
         modules: path.resolve(here, "../../node_modules"),
         allowHost: (host) =>
-          [ports.auth, ports.database].some(
+          [ports.http, ports.database].some(
             (port) => host === `127.0.0.1:${port}` || host === `localhost:${port}`,
           ),
       }),
@@ -179,7 +177,7 @@ export async function runLocal({ fireemu, profile, out }) {
         projectId: "demo-cv14",
         databaseURL: db,
         emulator: {
-          auth: `http://127.0.0.1:${ports.auth}`,
+          auth: `http://127.0.0.1:${ports.http}`,
           host: "127.0.0.1",
           dbPort: ports.database,
         },

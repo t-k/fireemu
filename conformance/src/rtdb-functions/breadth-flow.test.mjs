@@ -92,11 +92,11 @@ test("total limit enters cleanup and cleanup exhaustion requires recovery", asyn
   const budget = createBreadthBudget();
   world.deps.budget = budget;
   world.deps.rtdb.setup = async () => {
-    for (let i = 0; i < 200; i++) budget.take("rtdbAdmin");
+    for (let i = 0; i < 130; i++) budget.take("rtdbAdmin");
     budget.take("control");
   };
   world.deps.rtdb.cleanup = async () => {
-    for (let i = 0; i < 12; i++) budget.take("cleanup");
+    for (let i = 0; i < 82; i++) budget.take("cleanup");
     budget.take("cleanup");
     return { closed: true };
   };
@@ -257,7 +257,7 @@ test("a swallowed logging budget refusal stops observation and preserves cleanup
   const budget = createBreadthBudget();
   world.deps.budget = budget;
   world.deps.rtdb.setup = async () => {
-    for (let i = 0; i < 200; i++) budget.take("rtdbAdmin");
+    for (let i = 0; i < 130; i++) budget.take("rtdbAdmin");
   };
   world.deps.logs.read = async () => {
     try {
@@ -268,7 +268,7 @@ test("a swallowed logging budget refusal stops observation and preserves cleanup
     return { frames: [], complete: false };
   };
   world.deps.rtdb.cleanup = async () => {
-    for (let i = 0; i < 12; i++) budget.take("cleanup");
+    for (let i = 0; i < 82; i++) budget.take("cleanup");
     return { closed: true };
   };
   const result = await runBreadth(world.deps);

@@ -1,6 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { BREADTH_LIMITS, createBreadthBudget } from "./breadth-wiring.mjs";
+import {
+  BREADTH_LIMITS,
+  NORMAL_CEILING,
+  CLEANUP_CEILING,
+  createBreadthBudget,
+} from "./breadth-wiring.mjs";
 
 test("T1 request limits are pinned for three functions", () => {
   assert.deepEqual(BREADTH_LIMITS, {
@@ -19,16 +24,28 @@ test("T1 request limits are pinned for three functions", () => {
 
 test("shared budget enforces the normal and cleanup total boundaries", () => {
   const budget = createBreadthBudget();
-  for (let i = 0; i < 200; i++) budget.take("rtdbAdmin");
-  assert.equal(budget.snapshot().total, 200);
-  assert.throws(() => budget.take("control"), /200/);
+  for (let i = 0; i < 130; i++) budget.take("rtdbAdmin");
+  assert.equal(budget.snapshot().total, 130);
+  assert.throws(() => budget.take("control"), /130/);
   budget.startCleanup();
   budget.take("cleanup");
-  assert.equal(budget.snapshot().total, 201);
-  for (let i = 0; i < 11; i++) budget.take("cleanup");
+  assert.equal(budget.snapshot().total, 131);
+  for (let i = 0; i < 81; i++) budget.take("cleanup");
   assert.equal(budget.snapshot().total, 212);
   assert.throws(() => budget.take("cleanup"), /212/);
   assert.equal(budget.snapshot().total, 212);
+});
+
+test("normal ceiling leaves room for 65 cleanup requests", () => {
+  assert.equal(NORMAL_CEILING, 130);
+  assert.equal(CLEANUP_CEILING, 212);
+  const budget = createBreadthBudget();
+  for (let i = 0; i < NORMAL_CEILING; i++) budget.take("rtdbAdmin");
+  assert.throws(() => budget.take("control"), /130/);
+  budget.startCleanup();
+  for (let i = 0; i < 65; i++) budget.take("cleanup");
+  assert.equal(budget.snapshot().total, 195);
+  assert.equal(budget.snapshot().cleanup, 65);
 });
 
 test("breadth CLI pins force and config and rejects non-breadth commands", async () => {

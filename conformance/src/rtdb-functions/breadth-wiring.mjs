@@ -17,6 +17,8 @@ import { INVENTORY_HOSTS } from "./inventory.mjs";
 import { LOGGING_HOST, listRequest, parseEntries } from "./breadth-logs.mjs";
 export { bearerFetch, bindOps, createFormsCollector, preflightStage2 } from "./wiring.mjs";
 export const BREADTH_HOSTS = Object.freeze([LOGGING_HOST, ...INVENTORY_HOSTS]);
+export const NORMAL_CEILING = 130;
+export const CLEANUP_CEILING = 212;
 export const createBreadthBudget = () => {
   const { userClient, browserHttp, browserWs, ...caps } = BREADTH_LIMITS;
   const budget = createBudget(caps, {
@@ -34,7 +36,7 @@ export const createBreadthBudget = () => {
   let cleanupExhausted = false;
   return {
     take(kind) {
-      const limit = cleanup ? 212 : 200;
+      const limit = cleanup ? CLEANUP_CEILING : NORMAL_CEILING;
       if (total >= limit) {
         exhausted = true;
         if (cleanup) cleanupExhausted = true;

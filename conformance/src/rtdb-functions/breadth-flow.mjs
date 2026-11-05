@@ -1,0 +1,234 @@
+import { observe } from "./breadth-sequence.mjs";
+import { judgeRun } from "./breadth-judge.mjs";
+
+export const BREADTH_WINDOWS = Object.freeze({
+  propagationMs: 300000,
+  writeMs: 6000,
+  pollMs: 15000,
+  quietMs: 30000,
+  tailMs: 150000,
+});
+
+export async function runBreadth(deps) {
+  const { targets, ops, clock, abort, log } = deps;
+  const windows = BREADTH_WINDOWS;
+  const states = new Map(targets.map((t) => [t.key, { started: false, cleaned: false }]));
+  const reasons = [];
+  const writes = {};
+  const result = {
+    outcome: "recorded",
+    reasons,
+    residual: false,
+    deployed: 0,
+    deploys: {},
+    records: {},
+    frames: [],
+    logs: { reads: 0, entries: 0, incomplete: false, ignored: {} },
+    cleanup: { targets: {}, user: null, inventory: null, rtdb: null },
+    report: null,
+  };
+  let before,
+    rtdbAttempted = false,
+    userAttempted = false,
+    start;
+  const phase = (name) => log("phase", name);
+  const readLogs = async () => {
+    const reply = await deps.logs.read({
+      start,
+      end: new Date(clock.now() + 300000).toISOString(),
+    });
+    result.logs.reads++;
+    result.logs.entries += reply.entries ?? 0;
+    if (!reply.complete && !result.logs.incomplete) {
+      result.logs.incomplete = true;
+      reasons.push("a Cloud Logging read was incomplete");
+    }
+    for (const [key, count] of Object.entries(reply.ignored ?? {}))
+      result.logs.ignored[key] = Math.max(result.logs.ignored[key] ?? 0, count);
+    result.frames.push(...reply.frames.map((frame) => frame.frame ?? frame));
+  };
+  try {
+    await phase("preflight");
+    await deps.preflight();
+    await phase("inventory");
+    before = await deps.inventory.take();
+    if (!before.complete) throw Error("inventory incomplete");
+    for (const spec of targets) await ops[spec.generation].assertAbsent(spec);
+    await phase("rtdb-up");
+    rtdbAttempted = true;
+    await deps.rtdb.setup();
+    await phase("user-up");
+    userAttempted = true;
+    if ((await deps.auth.create()).outcome !== "ok") throw Error("user create failed or unknown");
+    if ((await deps.auth.signIn()).outcome !== "ok") throw Error("user sign-in failed or unknown");
+    await phase("deploy");
+    start = new Date(clock.now() - 60000).toISOString();
+    for (const spec of targets) {
+      if (abort.stopped) throw Error("signal before deploy");
+      const state = states.get(spec.key);
+      try {
+        await ops[spec.generation].deploy(spec, state);
+      } catch (error) {
+        if (!spec.required && state.deployFailure?.class === "refused") continue;
+        throw error;
+      }
+      await ops[spec.generation].read(spec, state);
+      result.records[spec.key] = state.record ?? null;
+      result.deployed++;
+    }
+    await phase("propagation-wait");
+    for (
+      const deadline = clock.now() + windows.propagationMs;
+      clock.now() < deadline && !abort.stopped;
+    )
+      await clock.sleep(Math.min(windows.pollMs, deadline - clock.now()));
+    if (abort.stopped) throw Error("signal during propagation");
+    await phase("observe");
+    let nextRead = clock.now() + windows.pollMs;
+    for (const step of deps.steps) {
+      if (abort.stopped) throw Error("signal during observation");
+      const answer =
+        step.context === "user-sdk" ? await deps.sdk.write(step.id) : await deps.rtdb.write(step);
+      writes[step.id] = answer;
+      if (answer.outcome !== "ok") throw Error(`write ${step.id} ${answer.outcome}`);
+      const deadline = clock.now() + windows.writeMs;
+      while (clock.now() < deadline) {
+        await clock.sleep(Math.min(deadline, nextRead) - clock.now());
+        if (clock.now() >= nextRead) {
+          await readLogs();
+          nextRead += windows.pollMs;
+        }
+      }
+    }
+    await phase("tail");
+    const deadline = clock.now() + windows.tailMs;
+    let quietSince = null;
+    while (clock.now() < deadline && !abort.stopped) {
+      await clock.sleep(Math.min(deadline, nextRead) - clock.now());
+      if (clock.now() >= nextRead) {
+        const previous = result.frames.length;
+        await readLogs();
+        nextRead += windows.pollMs;
+        const report = observe({ writes, frames: result.frames, steps: deps.steps });
+        const deployed = targets.filter((target) => result.records[target.key] !== undefined);
+        const complete =
+          !result.logs.incomplete &&
+          report.steps.every((step) =>
+            step.leaves.every((leaf) =>
+              deployed.every((target) => {
+                const seen = leaf.handlers[target.functionName];
+                return (
+                  seen?.frames > 0 &&
+                  (leaf.group !== "gr" ||
+                    !target.required ||
+                    Object.values(seen.attempts).some((attempts) =>
+                      attempts.some((attempt) => attempt?.threw === false),
+                    ))
+                );
+              }),
+            ),
+          );
+        if (!complete) quietSince = null;
+        else if (quietSince === null || result.frames.length !== previous) quietSince = clock.now();
+        if (quietSince !== null && clock.now() - quietSince >= windows.quietMs) break;
+      }
+    }
+    if (abort.stopped) throw Error("signal during tail");
+  } catch (error) {
+    reasons.push(error.message);
+  }
+  try {
+    if (Object.keys(writes).length || result.frames.length) {
+      result.report = observe({ writes, frames: result.frames, steps: deps.steps });
+      reasons.push(
+        ...judgeRun({
+          report: result.report,
+          frames: result.frames,
+          writes,
+          ignored: result.logs.ignored,
+          userUid: deps.auth.uid,
+        }),
+      );
+    }
+  } catch (error) {
+    reasons.push(error.message);
+  }
+  await phase("cleanup");
+  const owned = [];
+  for (const spec of targets) {
+    const state = states.get(spec.key);
+    if (!state.started) continue;
+    try {
+      await ops[spec.generation].cleanup(spec, state);
+    } catch (error) {
+      state.cleanupError = error.message;
+    }
+    result.cleanup.targets[spec.key] = {
+      cleaned: state.cleaned === true,
+      error: state.cleanupError ?? null,
+    };
+    if (!state.cleaned) {
+      result.residual = true;
+      reasons.push(`${spec.key} was not cleaned`);
+    }
+    if (state.deployFailure) {
+      result.deploys[spec.key] = {
+        ...state.deployFailure,
+        functionSeen: state.functionSeen === true,
+      };
+      if (state.deployFailure.class !== "refused" && !state.functionSeen) {
+        result.residual = true;
+        reasons.push(`${spec.key} create remains unknown`);
+      }
+    }
+    if (state.record) {
+      const names = deps.ownedNames(state.record, spec);
+      if (names) owned.push(names);
+    }
+  }
+  if (userAttempted) {
+    try {
+      const deleted = await deps.auth.delete();
+      const gone = deleted === "ok" && (await deps.auth.confirmGone());
+      result.cleanup.user = { deleted, gone };
+      if (!gone && deps.auth.state !== "create-refused") {
+        result.residual = true;
+        reasons.push("user cleanup unresolved");
+      }
+    } catch (error) {
+      result.residual = true;
+      reasons.push(`user cleanup: ${error.message}`);
+    }
+  }
+  if ([...states.values()].some((state) => state.started) && before) {
+    try {
+      result.cleanup.inventory = await deps.inventory.removeLeftovers(before, owned);
+      if (!result.cleanup.inventory.ok) {
+        result.residual = true;
+        reasons.push("inventory cleanup unresolved");
+      }
+    } catch (error) {
+      result.residual = true;
+      reasons.push(`inventory cleanup: ${error.message}`);
+    }
+  }
+  if (rtdbAttempted) {
+    try {
+      result.cleanup.rtdb = await deps.rtdb.cleanup();
+      if (!result.cleanup.rtdb.closed) {
+        result.residual = true;
+        reasons.push("RTDB cleanup unresolved");
+      }
+    } catch (error) {
+      result.residual = true;
+      reasons.push(`RTDB cleanup: ${error.message}`);
+    }
+  }
+  if (!deps.uploads.report().closureReady) {
+    result.residual = true;
+    reasons.push("source upload ledger is not closed");
+  }
+  if (reasons.length) result.outcome = "stopped-needs-review";
+  await phase("closed");
+  return result;
+}

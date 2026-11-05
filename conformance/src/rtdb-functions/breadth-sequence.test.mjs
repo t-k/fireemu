@@ -79,14 +79,16 @@ test("attempts group by event id and handlers expect every changed leaf", () => 
 });
 
 test("PICT combinations exercise each writer, operation and handler", async () => {
-  const { execFileSync } = await import("node:child_process");
-  const { fileURLToPath } = await import("node:url");
-  const model = fileURLToPath(new URL("./breadth-pict.model", import.meta.url));
-  const seed = fileURLToPath(new URL("./breadth-pict.seed.tsv", import.meta.url));
-  const rows = execFileSync("pict", [model, `/e:${seed}`], { encoding: "utf8" })
-    .trim()
-    .split(/\r?\n/)
-    .slice(1);
+  const { readFileSync } = await import("node:fs");
+  // The committed table: CI has no pict binary. It is regenerated with
+  // `pict breadth-pict.model /e:breadth-pict.seed.tsv > breadth-pict.tsv`.
+  const read = (name) =>
+    readFileSync(new URL(name, import.meta.url), "utf8")
+      .trim()
+      .split(/\r?\n/)
+      .slice(1);
+  const rows = read("./breadth-pict.tsv");
+  for (const seed of read("./breadth-pict.seed.tsv")) assert.ok(rows.includes(seed), seed);
   const operations = {
     "leaf-set": ["PUT", "ga/items/a", { value: 1 }],
     "leaf-update": ["PATCH", "ga/items/a", { value: 2 }],

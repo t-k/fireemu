@@ -1157,7 +1157,19 @@ impl CleanupDir {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if std::mem::replace(&mut *armed, false) {
-            let _ = std::fs::remove_dir_all(&self.0);
+            // Windows keeps a stopped runner's handles open for a moment after it exits, and
+            // refuses the removal until they close. The wait is bounded, and only runs there.
+            let attempts = if cfg!(windows) { 40 } else { 1 };
+            for attempt in 1..=attempts {
+                match std::fs::remove_dir_all(&self.0) {
+                    Err(error)
+                        if attempt < attempts && error.kind() != std::io::ErrorKind::NotFound =>
+                    {
+                        std::thread::sleep(std::time::Duration::from_millis(50));
+                    }
+                    _ => break,
+                }
+            }
         }
     }
 }

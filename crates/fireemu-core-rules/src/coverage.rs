@@ -1043,6 +1043,30 @@ mod bound_tests {
     }
 
     #[test]
+    fn coverages_that_differ_only_in_what_they_omitted_are_unequal() {
+        let mut first = Coverage::default();
+        for index in 0..=LIMIT {
+            first.record(Span::default(), 1, string(index));
+        }
+        let mut second = first.clone();
+        assert_eq!(first, second);
+        // Same kept values, one more omitted observation.
+        second.record(Span::default(), 1, string(LIMIT + 1));
+        assert_eq!(first.entries(), second.entries());
+        assert_ne!(first, second);
+        // Same omitted counts, different kept values.
+        let mut third = Coverage::default();
+        for index in 1..=LIMIT + 1 {
+            third.record(Span::default(), 1, string(index));
+        }
+        assert_eq!(
+            third.omitted_at(Span::default(), 1),
+            first.omitted_at(Span::default(), 1)
+        );
+        assert_ne!(first, third);
+    }
+
+    #[test]
     fn a_long_string_is_cut_on_a_character_boundary() {
         // `a` then two-byte characters: byte `BYTES` falls inside a character.
         let long = format!("a{}", "é".repeat(BYTES));

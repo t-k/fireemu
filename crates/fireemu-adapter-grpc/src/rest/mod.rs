@@ -2864,6 +2864,8 @@ mod rule_coverage_bound_tests {
         assert_eq!(get(&state, &format!("{DOCS}/notes/secret")).0, 403);
         let body = super::coverage_body(&loaded, &snapshot, false).body;
         assert_eq!(evaluations(&id_node(&body)), 1);
+        // Below the bound nothing is left out, and the report says nothing about it.
+        assert!(id_node(&body).get("valuesOmitted").is_none(), "{body}");
         // The live coverage has both decisions.
         assert_eq!(evaluations(&id_node(&get(&state, COVERAGE).1)), 2);
     }

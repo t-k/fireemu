@@ -669,3 +669,34 @@ pub fn required_index(order_by: &OrderBy) -> Option<String> {
         OrderBy::Key | OrderBy::Priority => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A length beyond 2^53 is read as a long (Scala's `new FiniteDuration(length, unit)`), and
+    /// its nanoseconds are the length times the unit's nanoseconds, exactly. Microseconds are
+    /// the only unit above nanoseconds whose bound (`i64::MAX / 1000`) is above 2^53, so they are
+    /// the only unit that reaches this multiplication with more than one nanosecond per unit.
+    #[test]
+    fn a_long_length_in_microseconds_is_multiplied_by_a_thousand_exactly() {
+        // 9007199254740995 is not a double: the double path would read 9007199254740996.
+        assert_eq!(
+            duration_nanos("9007199254740995micros"),
+            Ok(9_007_199_254_740_995_000)
+        );
+        assert_eq!(
+            duration_nanos("-9007199254740995micros"),
+            Ok(-9_007_199_254_740_995_000)
+        );
+        // The bound itself still reads; one more microsecond is beyond a long of nanoseconds.
+        assert_eq!(
+            duration_nanos("9223372036854775micros"),
+            Ok(9_223_372_036_854_775_000)
+        );
+        assert_eq!(
+            duration_nanos("9223372036854776micros"),
+            Err(DurationError::Range)
+        );
+    }
+}

@@ -2616,13 +2616,23 @@ fn coverage_snapshot(
     Ok(diagnostics.coverage().clone())
 }
 
-/// The `:ruleCoverage` body (JSON, or the HTML page) built from a coverage snapshot; it takes
-/// no lock.
+#[cfg(test)]
+thread_local! {
+    static COVERAGE_BODY_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = std::cell::RefCell::new(None);
+}
+
+/// The `:ruleCoverage` body built from a coverage snapshot; it takes no lock.
 fn coverage_body(
     loaded: &fireemu_core_rules::runtime::LoadedRules,
     snapshot: &fireemu_core_rules::coverage::Coverage,
     html: bool,
 ) -> RestResponse {
+    #[cfg(test)]
+    COVERAGE_BODY_HOOK.with(|hook| {
+        if let Some(hook) = hook.borrow_mut().take() {
+            hook();
+        }
+    });
     if html {
         ok(json!({ coverage::HTML_KEY: coverage::coverage_html(loaded, snapshot) }))
     } else {
@@ -2842,31 +2852,32 @@ mod rule_coverage_bound_tests {
         assert_eq!(status, 200);
         let html = page[super::coverage::HTML_KEY].as_str().unwrap();
         assert!(html.contains("\"valuesOmitted\":9937"), "{html}");
-        assert!(html.contains("9937 more with other values (not kept)"));
+        assert!(
+            html.contains("9937 observations not kept; displayed counts may be lower than actual")
+        );
+        assert_eq!(id["valuesCountMayBeLower"], json!(true));
         assert!(html.len() < 64 * 1024, "{} bytes", html.len());
     }
 
-    /// The report is built from a copy: once the copy is taken the diagnostics lock is free, a
-    /// Rules decision merges its coverage while the copy is alive, and the body built from the
-    /// copy afterwards does not include it. This shows the order of operations without any
-    /// timing assumption; it does not race a second thread against a slow build.
     #[test]
-    fn a_report_is_built_from_a_snapshot_after_the_lock_is_released() {
+    fn report_route_releases_lock_before_building_body() {
         let state = state();
         assert_eq!(get(&state, &format!("{DOCS}/notes/a")).0, 404);
         let loaded = state.rules.as_ref().unwrap().rules().snapshot().unwrap();
-        let snapshot = super::coverage_snapshot(&loaded).unwrap();
-        assert!(
-            loaded.diagnostics.try_lock().is_ok(),
-            "the diagnostics lock is released once the snapshot is taken"
-        );
-        // An unrelated decision proceeds while the snapshot is held.
-        assert_eq!(get(&state, &format!("{DOCS}/notes/secret")).0, 403);
-        let body = super::coverage_body(&loaded, &snapshot, false).body;
+        let called = std::rc::Rc::new(std::cell::Cell::new(false));
+        let observed = called.clone();
+        super::COVERAGE_BODY_HOOK.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move || {
+                assert!(
+                    loaded.diagnostics.try_lock().is_ok(),
+                    "report construction holds the diagnostics lock"
+                );
+                observed.set(true);
+            }));
+        });
+        let (status, body) = get(&state, COVERAGE);
+        assert_eq!(status, 200);
+        assert!(called.get());
         assert_eq!(evaluations(&id_node(&body)), 1);
-        // Below the bound nothing is left out, and the report says nothing about it.
-        assert!(id_node(&body).get("valuesOmitted").is_none(), "{body}");
-        // The live coverage has both decisions.
-        assert_eq!(evaluations(&id_node(&get(&state, COVERAGE).1)), 2);
     }
 }

@@ -946,9 +946,11 @@ fn rules_requests_route(state: &ControlState, method: &str, is_default: bool) ->
         ExprValue::Bool(b) => json!({"kind": "bool", "bool": b}),
         ExprValue::Int(i) => json!({"kind": "int", "int": i.to_string()}),
         ExprValue::Float(f) => json!({"kind": "float", "float": f}),
-        ExprValue::String(s) => json!({"kind": "string", "string": s}),
+        ExprValue::String(s) | ExprValue::TruncatedString(s) => {
+            json!({"kind": "string", "string": s})
+        }
         ExprValue::Composite(t) => json!({"kind": "composite", "type": t}),
-        ExprValue::Undefined(cause) => json!({
+        ExprValue::Undefined(cause) | ExprValue::TruncatedUndefined(cause) => json!({
             "kind": "undefined",
             "cause": {
                 "line": cause.span.line,

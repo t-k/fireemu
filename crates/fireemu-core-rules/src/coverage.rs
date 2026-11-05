@@ -42,8 +42,12 @@ pub enum ExprValue {
     Float(f64),
     /// String.
     String(String),
+    /// A prefix of a longer string.
+    TruncatedString(String),
     /// The expression raised; the cause names where and why.
     Undefined(UndefinedCause),
+    /// A prefix of a longer undefined cause.
+    TruncatedUndefined(UndefinedCause),
     /// A value with no scalar rendering (a list, a map, a timestamp, ...); the type name is
     /// kept so a report still shows that the expression produced something.
     Composite(&'static str),
@@ -69,7 +73,10 @@ impl ExprValue {
             RulesValue::Bool(b) => Self::Bool(*b),
             RulesValue::Int(i) => Self::Int(*i),
             RulesValue::Float(f) => Self::Float(*f),
-            RulesValue::String(s) => Self::String(s[..kept_len(s)].to_owned()),
+            RulesValue::String(s) if kept_len(s) < s.len() => {
+                Self::TruncatedString(s[..kept_len(s)].to_owned())
+            }
+            RulesValue::String(s) => Self::String(s.to_owned()),
             other => Self::Composite(other.type_name()),
         }
     }
@@ -140,9 +147,9 @@ fn fingerprint(value: &ExprValue) -> Option<u64> {
         ExprValue::Int(value) => value.hash(&mut hash),
         // PartialEq coalesces signed zero but never NaNs; retain its original scan path.
         ExprValue::Float(_) => return None,
-        ExprValue::String(value) => value.hash(&mut hash),
+        ExprValue::String(value) | ExprValue::TruncatedString(value) => value.hash(&mut hash),
         ExprValue::Composite(value) => value.hash(&mut hash),
-        ExprValue::Undefined(cause) => {
+        ExprValue::Undefined(cause) | ExprValue::TruncatedUndefined(cause) => {
             cause.span.hash(&mut hash);
             cause.end.hash(&mut hash);
             cause.message.hash(&mut hash);
@@ -168,29 +175,53 @@ fn kept_len(text: &str) -> usize {
 /// [`kept_len`]. Lookups use the cut form too, so a long value matches what was kept of it.
 fn bounded(value: Cow<'_, ExprValue>) -> Cow<'_, ExprValue> {
     let long = match &*value {
-        ExprValue::String(text) => kept_len(text) < text.len(),
-        ExprValue::Undefined(cause) => kept_len(&cause.message) < cause.message.len(),
+        ExprValue::String(text) | ExprValue::TruncatedString(text) => kept_len(text) < text.len(),
+        ExprValue::Undefined(cause) | ExprValue::TruncatedUndefined(cause) => {
+            kept_len(&cause.message) < cause.message.len()
+        }
         _ => false,
     };
     if !long {
-        return value;
+        return match value {
+            Cow::Owned(ExprValue::TruncatedString(mut text)) => {
+                text.shrink_to_fit();
+                Cow::Owned(ExprValue::TruncatedString(text))
+            }
+            Cow::Owned(ExprValue::TruncatedUndefined(mut cause)) => {
+                cause.message.shrink_to_fit();
+                Cow::Owned(ExprValue::TruncatedUndefined(cause))
+            }
+            Cow::Owned(ExprValue::String(mut text)) => {
+                text.shrink_to_fit();
+                Cow::Owned(ExprValue::String(text))
+            }
+            Cow::Owned(ExprValue::Undefined(mut cause)) => {
+                cause.message.shrink_to_fit();
+                Cow::Owned(ExprValue::Undefined(cause))
+            }
+            other => other,
+        };
     }
     let cut = |text: &str| text[..kept_len(text)].to_owned();
     Cow::Owned(match &*value {
-        ExprValue::String(text) => ExprValue::String(cut(text)),
-        ExprValue::Undefined(cause) => ExprValue::Undefined(UndefinedCause {
-            span: cause.span,
-            end: cause.end,
-            message: cut(&cause.message),
-        }),
+        ExprValue::String(text) | ExprValue::TruncatedString(text) => {
+            ExprValue::TruncatedString(cut(text))
+        }
+        ExprValue::Undefined(cause) | ExprValue::TruncatedUndefined(cause) => {
+            ExprValue::TruncatedUndefined(UndefinedCause {
+                span: cause.span,
+                end: cause.end,
+                message: cut(&cause.message),
+            })
+        }
         other => other.clone(),
     })
 }
 
 /// Adds `count` observations of `value` to `entry`. A value the entry does not hold yet is
 /// kept only while it holds fewer than [`COVERAGE_VALUES_PER_EXPRESSION`] values; otherwise
-/// the observations are added to `omitted`. A kept value is never evicted, so every kept
-/// count is the exact number of times that value was observed.
+/// the observations are added to `omitted`. Merging omitted observations can leave a kept
+/// count lower than the number of times that value was observed.
 fn observe(
     entry: &mut CoverageEntry,
     index: &mut ValueIndex,
@@ -343,8 +374,12 @@ impl Coverage {
             for (value, seen) in &entry.values {
                 observations = observations.saturating_add(*seen);
                 bytes = bytes.saturating_add(match value {
-                    ExprValue::String(value) => count(value.capacity()),
-                    ExprValue::Undefined(cause) => count(cause.message.capacity()),
+                    ExprValue::String(value) | ExprValue::TruncatedString(value) => {
+                        count(value.capacity())
+                    }
+                    ExprValue::Undefined(cause) | ExprValue::TruncatedUndefined(cause) => {
+                        count(cause.message.capacity())
+                    }
                     _ => 0,
                 });
             }
@@ -1067,13 +1102,63 @@ mod bound_tests {
     }
 
     #[test]
+    fn truncated_prefix_is_distinct_from_the_observed_literal() {
+        let prefix = "x".repeat(BYTES);
+        let mut coverage = Coverage::default();
+        for value in [format!("{prefix}a"), format!("{prefix}b"), prefix.clone()] {
+            coverage.record(Span::default(), 1, ExprValue::String(value));
+        }
+        let values = &coverage.entries()[0].values;
+        assert_eq!(values.len(), 2);
+        assert_eq!(values[0].1, 2);
+        assert_eq!(values[1], (ExprValue::String(prefix.clone()), 1));
+        let mut converted = Coverage::default();
+        converted.record(
+            Span::default(),
+            1,
+            ExprValue::of(&RulesValue::String(format!("{prefix}a"))),
+        );
+        converted.record(
+            Span::default(),
+            1,
+            ExprValue::of(&RulesValue::String(prefix.clone())),
+        );
+        assert_eq!(converted.entries()[0].values.len(), 2);
+        let mut causes = Coverage::default();
+        for message in [format!("{prefix}a"), prefix] {
+            causes.record(
+                Span::default(),
+                1,
+                ExprValue::Undefined(UndefinedCause {
+                    span: Span::default(),
+                    end: 1,
+                    message,
+                }),
+            );
+        }
+        assert_eq!(causes.entries()[0].values.len(), 2);
+    }
+
+    #[test]
+    fn short_owned_string_does_not_retain_excess_capacity() {
+        let mut text = String::with_capacity(100_000);
+        text.push('x');
+        let mut coverage = Coverage::default();
+        coverage.record(Span::default(), 1, ExprValue::String(text));
+        let ExprValue::String(value) = &coverage.entries()[0].values[0].0 else {
+            panic!("string")
+        };
+        assert_eq!(value.capacity(), value.len());
+    }
+
+    #[test]
     fn a_long_string_is_cut_on_a_character_boundary() {
         // `a` then two-byte characters: byte `BYTES` falls inside a character.
         let long = format!("a{}", "é".repeat(BYTES));
         assert!(!long.is_char_boundary(BYTES));
         let mut coverage = Coverage::default();
         coverage.record(Span::default(), 1, ExprValue::String(long.clone()));
-        let ExprValue::String(kept) = &coverage.entries()[0].values[0].0 else {
+        let ExprValue::TruncatedString(kept) = &coverage.entries()[0].values[0].0 else {
             panic!("a string value");
         };
         assert_eq!(kept.len(), BYTES - 1);
@@ -1088,7 +1173,7 @@ mod bound_tests {
             coverage.entries()[1].values,
             vec![
                 (ExprValue::String(exact), 1),
-                (ExprValue::String("y".repeat(BYTES)), 1)
+                (ExprValue::TruncatedString("y".repeat(BYTES)), 1)
             ]
         );
 
@@ -1107,13 +1192,14 @@ mod bound_tests {
                 message: message.clone(),
             }),
         );
-        let ExprValue::Undefined(cause) = &coverage.entries()[2].values[0].0 else {
+        let ExprValue::TruncatedUndefined(cause) = &coverage.entries()[2].values[0].0 else {
             panic!("an undefined value");
         };
         assert!(cause.message.len() <= BYTES && cause.message.len() > BYTES - 4);
         assert!(message.starts_with(cause.message.as_str()));
         // `ExprValue::of` does not copy more than it keeps either.
-        let ExprValue::String(of) = ExprValue::of(&RulesValue::String(long.clone())) else {
+        let ExprValue::TruncatedString(of) = ExprValue::of(&RulesValue::String(long.clone()))
+        else {
             panic!("a string value");
         };
         assert_eq!(of.len(), BYTES - 1);

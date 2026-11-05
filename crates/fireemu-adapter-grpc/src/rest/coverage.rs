@@ -10,7 +10,8 @@
 //! [`COVERAGE_VALUES_PER_EXPRESSION`](fireemu_core_rules::coverage::COVERAGE_VALUES_PER_EXPRESSION)
 //! distinct values. When it took more, the node adds `valuesOmitted` (a fireemu extension):
 //! how many evaluations produced a value that was counted but not kept, so `values` counts
-//! plus `valuesOmitted` is every evaluation.
+//! plus `valuesOmitted` is every evaluation. When present, kept counts may be lower than
+//! their true counts because omitted observations may belong to kept values.
 //!
 //! `.html` is the same document embedded in a page that underlines every evaluated
 //! expression, exactly as the official report does, so the same link works.
@@ -63,6 +64,7 @@ fn node_json(node: &CoverageNode) -> Value {
     }
     if node.omitted > 0 {
         out.insert("valuesOmitted".to_owned(), json!(node.omitted));
+        out.insert("valuesCountMayBeLower".to_owned(), json!(true));
     }
     if !node.children.is_empty() {
         out.insert(
@@ -82,25 +84,32 @@ fn position(node: &CoverageNode) -> Value {
     })
 }
 
-fn value_json(value: &ExprValue) -> Value {
-    match value {
+fn value_json(value_ref: &ExprValue) -> Value {
+    match value_ref {
         ExprValue::Null => json!({ "nullValue": Value::Null }),
         ExprValue::Bool(b) => json!({ "boolValue": b }),
         ExprValue::Int(i) => json!({ "intValue": i.to_string() }),
         ExprValue::Float(f) => json!({ "floatValue": f }),
         ExprValue::String(s) => json!({ "stringValue": s }),
+        ExprValue::TruncatedString(s) => json!({ "stringValue": s, "truncated": true }),
         ExprValue::Composite(kind) => json!({ "typeValue": kind }),
-        ExprValue::Undefined(cause) => json!({
-            "undefined": {
-                "sourcePosition": {
-                    "line": cause.span.line,
-                    "column": cause.span.column,
-                    "currentOffset": cause.span.offset,
-                    "endOffset": cause.end,
-                },
-                "causeMessage": cause.message,
+        ExprValue::Undefined(cause) | ExprValue::TruncatedUndefined(cause) => {
+            let mut value = json!({
+                "undefined": {
+                    "sourcePosition": {
+                        "line": cause.span.line,
+                        "column": cause.span.column,
+                        "currentOffset": cause.span.offset,
+                        "endOffset": cause.end,
+                    },
+                    "causeMessage": cause.message,
+                }
+            });
+            if matches!(value_ref, ExprValue::TruncatedUndefined(_)) {
+                value["truncated"] = json!(true);
             }
-        }),
+            value
+        }
     }
 }
 
@@ -200,11 +209,11 @@ fn collect_spans(data: &Value, out: &mut Vec<(usize, usize, String)>) {
                     v["count"].as_u64().unwrap_or(0)
                 )
             })
-            .chain(
-                node["valuesOmitted"]
-                    .as_u64()
-                    .map(|omitted| format!("{omitted} more with other values (not kept)")),
-            )
+            .chain(node["valuesOmitted"].as_u64().map(|omitted| {
+                format!(
+                    "{omitted} observations not kept; displayed counts may be lower than actual"
+                )
+            }))
             .collect::<Vec<_>>()
             .join(", ");
         let (Ok(start), Ok(end)) = (usize::try_from(start), usize::try_from(end)) else {
@@ -215,6 +224,11 @@ fn collect_spans(data: &Value, out: &mut Vec<(usize, usize, String)>) {
 }
 
 fn describe_value(value: &Value) -> String {
+    if value["truncated"] == true {
+        let mut full = value.clone();
+        full.as_object_mut().unwrap().remove("truncated");
+        return format!("observations cut to prefix: {}", describe_value(&full));
+    }
     for key in [
         "boolValue",
         "intValue",
@@ -260,6 +274,65 @@ mod tests {
     use fireemu_core_rules::runtime::LoadedRules;
 
     use super::coverage_json;
+
+    #[test]
+    fn truncated_values_are_marked_in_json_and_html() {
+        use fireemu_core_rules::ast::Span;
+        use fireemu_core_rules::coverage::{
+            CoverageNode, ExprValue, UndefinedCause, COVERAGE_STRING_BYTES_PER_VALUE,
+        };
+        let prefix = "x".repeat(COVERAGE_STRING_BYTES_PER_VALUE);
+        let mut coverage = Coverage::default();
+        coverage.record(Span::default(), 1, ExprValue::String(format!("{prefix}a")));
+        coverage.record(
+            Span::default(),
+            1,
+            ExprValue::Undefined(UndefinedCause {
+                span: Span::default(),
+                end: 1,
+                message: format!("{prefix}a"),
+            }),
+        );
+        let node = CoverageNode {
+            span: Span::default(),
+            end: 1,
+            values: coverage.entries()[0].values.clone(),
+            omitted: 0,
+            children: vec![],
+        };
+        let json = super::node_json(&node);
+        for value in json["values"].as_array().unwrap() {
+            assert_eq!(value["value"]["truncated"], true);
+            assert!(super::describe_value(&value["value"]).contains("observations cut to prefix"));
+        }
+    }
+
+    #[test]
+    fn merged_omissions_disclose_lower_counts_and_preserve_total() {
+        use fireemu_core_rules::ast::Span;
+        use fireemu_core_rules::coverage::{
+            CoverageNode, ExprValue, COVERAGE_VALUES_PER_EXPRESSION,
+        };
+        let mut first = Coverage::default();
+        let mut second = Coverage::default();
+        first.record(Span::default(), 1, ExprValue::String("x".into()));
+        for i in 0..COVERAGE_VALUES_PER_EXPRESSION {
+            second.record(Span::default(), 1, ExprValue::String(format!("v{i}")));
+        }
+        second.record(Span::default(), 1, ExprValue::String("x".into()));
+        first.merge(&second);
+        let node = CoverageNode {
+            span: Span::default(),
+            end: 1,
+            values: first.entries()[0].values.clone(),
+            omitted: first.omitted_at(Span::default(), 1),
+            children: vec![],
+        };
+        let json = super::node_json(&node);
+        assert_eq!(json["values"][0]["count"], 1);
+        assert_eq!(json["valuesCountMayBeLower"], true);
+        assert_eq!(node.total(), (COVERAGE_VALUES_PER_EXPRESSION + 2) as u64);
+    }
 
     #[test]
     fn coverage_json_handles_the_maximum_expression_depth_on_a_worker_stack() {

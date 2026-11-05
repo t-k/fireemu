@@ -45,7 +45,7 @@ export function createSdk({ page, config, email, password, uid, nonce }) {
   };
 }
 
-export function browserRunner({ modules, allowHost, budget, stop = {} }) {
+export function browserRunner({ modules, allowHost, budget = { take() {} }, stop = {} }) {
   const require = createRequire(path.resolve(modules, "x.js"));
   const { chromium } = require("playwright");
   return async (config, credentials, observe) => {
@@ -96,19 +96,20 @@ export function browserRunner({ modules, allowHost, budget, stop = {} }) {
         }
         return route.continue();
       });
-      await page.routeWebSocket("**/*", (ws) => {
-        const url = new URL(ws.url());
-        if (!allowHost(url.host) || ++counts.ws > 4) {
-          exceeded = true;
-          return ws.close();
+      // Observed, never routed: the harness keeps Playwright out of the WebSocket path.
+      page.on("websocket", (ws) => {
+        let refused = !allowHost(new URL(ws.url()).host) || ++counts.ws > 4;
+        if (!refused) {
+          try {
+            budget.take("browserWs");
+          } catch {
+            refused = true;
+          }
         }
-        try {
-          budget.take("browserWs");
-        } catch {
+        if (refused) {
           exceeded = true;
-          return ws.close();
+          void page.close();
         }
-        ws.connectToServer();
       });
       await page.goto(`http://${origin}/`);
       await page.waitForFunction(() => typeof window.__breadth === "function");

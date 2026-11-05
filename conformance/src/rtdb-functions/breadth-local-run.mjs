@@ -175,7 +175,8 @@ export async function runLocal({ fireemu, profile, out }) {
       {
         apiKey: "fake-api-key",
         projectId: "demo-cv14",
-        databaseURL: db,
+        // The SDK names the same instance the REST writes use, or its writes land elsewhere.
+        databaseURL: `${db}/?ns=${INSTANCE}`,
         emulator: {
           auth: `http://127.0.0.1:${ports.http}`,
           host: "127.0.0.1",

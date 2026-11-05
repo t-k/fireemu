@@ -946,4 +946,40 @@ mod tests {
             ]
         );
     }
+
+    /// Collects a response's body and reports the exact length hyper would know for it.
+    async fn written(response: Response<Body>) -> (u16, Option<u64>, Vec<u8>) {
+        use hyper::body::Body as _;
+        let status = response.status().as_u16();
+        let body = response.into_body();
+        let exact = body.size_hint().exact();
+        let bytes = body.collect().await.unwrap().to_bytes().to_vec();
+        (status, exact, bytes)
+    }
+
+    /// Only a 304 that asks for an explicit `Content-Length` goes as a stream of unknown
+    /// length; a 304 without one, and any other status with one, keep their full body of
+    /// known length.
+    #[tokio::test]
+    async fn only_a_304_with_an_explicit_content_length_streams_its_empty_body() {
+        let length = || vec![("Content-Length".to_owned(), "0".to_owned())];
+        let streamed = full(HttpResponse {
+            status: 304,
+            headers: length(),
+            body: Vec::new(),
+        });
+        assert_eq!(written(streamed).await, (304, None, Vec::new()));
+        let no_length = full(HttpResponse {
+            status: 304,
+            headers: Vec::new(),
+            body: Vec::new(),
+        });
+        assert_eq!(written(no_length).await, (304, Some(0), Vec::new()));
+        let ordinary = full(HttpResponse {
+            status: 200,
+            headers: vec![("Content-Length".to_owned(), "5".to_owned())],
+            body: b"hello".to_vec(),
+        });
+        assert_eq!(written(ordinary).await, (200, Some(5), b"hello".to_vec()));
+    }
 }

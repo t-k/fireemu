@@ -3935,4 +3935,116 @@ mod tests {
             }
         }
     }
+
+    /// Starts the daemon in this process with only the Realtime Database, under `profile`,
+    /// sends `request` to the database port and returns the raw HTTP answer. The daemon is
+    /// stopped with a SIGTERM to this process, which the daemon's own handler takes.
+    #[cfg(unix)]
+    fn database_answer_of_a_daemon(profile: &str, request: &str) -> String {
+        use std::io::{Read, Write};
+        let dir =
+            std::env::temp_dir().join(format!("fireemu-daemon-{profile}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let config = dir.join("fireemu.json");
+        std::fs::write(
+            &config,
+            format!(r#"{{"schemaVersion":1,"profile":"{profile}"}}"#),
+        )
+        .unwrap();
+        let ready = dir.join("ready.json");
+        let args: Vec<String> = [
+            "--no-config-discovery",
+            "--config",
+            config.to_str().unwrap(),
+            "--project",
+            "demo-rtdb",
+            "--only",
+            "database",
+            "--database-port",
+            "0",
+            "--http-port",
+            "0",
+            "--ui-port",
+            "0",
+            "--hub-port",
+            "0",
+            "--log-verbosity",
+            "quiet",
+            "--ready-file",
+            ready.to_str().unwrap(),
+        ]
+        .map(str::to_owned)
+        .to_vec();
+        let Ok((options, _)) = crate::parse_options(&args, crate::OptionContext::Start) else {
+            panic!("the {profile} daemon options do not parse");
+        };
+        let daemon = std::thread::spawn(move || super::run(options, None));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let descriptor: serde_json::Value = loop {
+            if let Ok(bytes) = std::fs::read(&ready) {
+                break serde_json::from_slice(&bytes).unwrap();
+            }
+            assert!(
+                !daemon.is_finished() && std::time::Instant::now() < deadline,
+                "the {profile} daemon did not become ready"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        let host = descriptor["environment"]["FIREBASE_DATABASE_EMULATOR_HOST"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let mut stream = std::net::TcpStream::connect(&host).unwrap();
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+            .unwrap();
+        stream.write_all(request.as_bytes()).unwrap();
+        let mut answer = String::new();
+        stream.read_to_string(&mut answer).unwrap();
+        let stopped = std::process::Command::new("kill")
+            .args(["-TERM", &std::process::id().to_string()])
+            .status()
+            .unwrap();
+        assert!(stopped.success());
+        daemon.join().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        answer
+    }
+
+    /// The daemon hands its compatibility profile to the Realtime Database: under strict a
+    /// malformed percent escape in the path is answered in production's shape (an
+    /// octet-stream body indented by four, no CORS header), under the emulator profile in the
+    /// official emulator's JSON. Both run in one test because each stops its daemon with a
+    /// process-wide SIGTERM.
+    #[cfg(unix)]
+    #[test]
+    fn the_daemon_answers_a_malformed_escape_in_production_shape_only_under_strict() {
+        let request =
+            "GET /a%zz.json?ns=demo-rtdb HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+        let strict = database_answer_of_a_daemon("strict", request).to_ascii_lowercase();
+        assert!(strict.starts_with("http/1.1 400"), "{strict}");
+        assert!(
+            strict.contains("content-type: application/octet-stream"),
+            "{strict}"
+        );
+        assert!(!strict.contains("access-control-allow-origin"), "{strict}");
+        assert!(
+            strict.ends_with("\r\n\r\n{\n    \"error\" : \"bad request.\"\n}\n"),
+            "{strict}"
+        );
+        let emulator = database_answer_of_a_daemon("emulator", request).to_ascii_lowercase();
+        assert!(emulator.starts_with("http/1.1 400"), "{emulator}");
+        assert!(
+            emulator.contains("content-type: application/json; charset=utf-8"),
+            "{emulator}"
+        );
+        assert!(
+            emulator.contains("access-control-allow-origin: *"),
+            "{emulator}"
+        );
+        assert!(
+            emulator.ends_with("\r\n\r\n{\n  \"error\" : \"bad request\"\n}\n"),
+            "{emulator}"
+        );
+    }
 }

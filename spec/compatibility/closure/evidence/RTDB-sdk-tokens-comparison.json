@@ -71,7 +71,7 @@
     "tagObject": null,
     "binarySha256": "44c3c889b81a07d570e0eeb34eb42f730a42066d03f981c0dac46255279c8401",
     "version": "fireemu 0.43.0",
-    "toolCommit": "dc7253f12a56e386d0cf674e7f5f1e93172901d0",
+    "toolCommit": "df27654ef3b5f0d18851a686229d4c78589c4d47",
     "host": "Darwin arm64",
     "productionRequests": 0
   },

@@ -78,7 +78,7 @@
     },
     {
       "path": "conformance/src/rtdb-release-replay.mjs",
-      "sha256": "5f369cc3930589edad87bd71718fda682f2019832c6df03211f7c193ac5cc814"
+      "sha256": "50ff4b5fa7f7cd2993c110537102610159bdeffe4327c2ca5ad2a07e961decbd"
     },
     {
       "path": "tools/sdk-smoke-database/cv11-genuine-auth.mjs",
@@ -139,7 +139,7 @@
     "tagObject": null,
     "binarySha256": "44c3c889b81a07d570e0eeb34eb42f730a42066d03f981c0dac46255279c8401",
     "version": "fireemu 0.43.0",
-    "toolCommit": "dc7253f12a56e386d0cf674e7f5f1e93172901d0",
+    "toolCommit": "df27654ef3b5f0d18851a686229d4c78589c4d47",
     "host": "Darwin arm64",
     "productionRequests": 0
   },
@@ -337,7 +337,7 @@
           "verdict": "MATCH"
         }
       ],
-      "exportSha256": "89757ab5e83249a658425219194ce4bae96d354e094e8dae284086a8b541cc6e",
+      "exportSha256": "0878315a44516758706da2dfaedc6e5bae423d8c3843fc8f12f5d1797a574f5f",
       "sdkResources": {
         "package-lock.json": "fa9dab58f70425ee28c86a59f42135ab5533c3d8a19d3ffab6abe3bde5428a53",
         "node_modules/firebase/package.json": "8b02ad75fe0a38e30f4ab8116c0a46f076206bb5f924890c198434243bdb2232",
@@ -541,7 +541,7 @@
           "verdict": "MATCH"
         }
       ],
-      "exportSha256": "4679fbdf88a45ee27a10ec4bd11e32ac8b9f09a46dfadc1b060a7553acd9dcb8",
+      "exportSha256": "f82daf70071b1dfaaeea2097dfaeb1f21f5f5595999ed768a566b0e5123faed7",
       "sdkResources": {
         "package-lock.json": "fa9dab58f70425ee28c86a59f42135ab5533c3d8a19d3ffab6abe3bde5428a53",
         "node_modules/firebase/package.json": "8b02ad75fe0a38e30f4ab8116c0a46f076206bb5f924890c198434243bdb2232",

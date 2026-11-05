@@ -773,15 +773,28 @@ mod tests {
     #[test]
     fn a_symlink_entry_is_ignored_without_touching_its_victim() {
         let root = scratch("symlink");
-        let _ = load_or_generate_at(&root, 9).unwrap();
+        let first = load_or_generate_at(&root, 9).unwrap();
+        // Publishing is best effort, so the load above may or may not have left an entry.
+        // The test builds its own precondition: the managed directories exist as the cache
+        // creates them, and the entry path holds nothing before the link is placed there.
+        let directory = open_cache_directory(&root).expect("the managed directories are usable");
         let entry = cache_entry_path(&root, 9);
-        std::fs::remove_file(&entry).unwrap();
+        match std::fs::remove_file(&entry) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => panic!("clear the entry path {}: {error}", entry.display()),
+        }
         let victim = root.join("victim");
         std::fs::write(&victim, b"must stay unchanged").unwrap();
         std::os::unix::fs::symlink(&victim, &entry).unwrap();
+        assert!(matches!(
+            load_entry(&directory, &entry_name(9), 9),
+            EntryLoad::Unsafe(_)
+        ));
 
         let result = load_or_generate_at(&root, 9).unwrap();
         assert!(!result.hit);
+        assert_eq!(first.signer.kid(), result.signer.kid());
         assert_eq!(std::fs::read(victim).unwrap(), b"must stay unchanged");
         assert!(std::fs::symlink_metadata(entry)
             .unwrap()

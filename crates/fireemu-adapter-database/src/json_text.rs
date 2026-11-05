@@ -228,7 +228,8 @@ fn write_members<'v, V: 'v>(
                 }
                 write_string(out, key);
                 out.push(':');
-                value(out, member, objects_above + 1);
+                // The compact form has no indentation, so the depth is never read.
+                value(out, member, objects_above);
             }
             out.push('}');
         }

@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { adcVerdict, checkApproval, createAdmin, writeAll, createCounter, createJournal, mintToken, scriptManifest, sha256, targetUrls } from './lib.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-export const READBACK_SUITES = ['events', 'admin', 'events+admin', 'rest', 'rules', 'tokens'];
+export const READBACK_SUITES = ['events', 'admin', 'events+admin', 'rest', 'rules', 'tokens', 'rules-load'];
 export const WAIT_MS = 10 * 60 * 1000;
 
 /** The admin REST of the run, narrowed to GET: any other method is refused before it reaches the network. */

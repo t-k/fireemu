@@ -20,6 +20,7 @@ export async function runRulesLoadProfile({ send, url, baselineText, emit = () =
     try { answer = await send(spec.id, 'PUT', rulesUrl, { body: spec.body, record: true }); }
     catch (error) { outcome = error instanceof CapExceeded ? 'not-sent' : 'unknown'; }
     if (answer && (unknownStatus(answer.status) || answer.utf8 === false || answer.clipped)) outcome = 'unknown';
+    if (answer && answer.status !== 200 && answer.status !== 400) outcome = 'unknown';
     const row = { kind: 'case', suite: 'rules-load', id: spec.id, ok: outcome === 'answered', outcome, requestBody: spec.body, ...(answer ? { status: answer.status, body: answer.text, bodyBytes: answer.bodyBytes, utf8: answer.utf8, clipped: answer.clipped, responseHeaders: answer.headers ?? {} } : {}), ...(outcome === 'unknown' ? { unknown: [spec.id] } : {}) };
     rows.push(row);
     if (outcome === 'unknown' || (answer?.status >= 200 && answer.status < 300)) {

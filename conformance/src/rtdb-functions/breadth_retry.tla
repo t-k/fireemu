@@ -19,7 +19,7 @@ Attempt == /\ state = "ready"
            /\ UNCHANGED age
 
 Backoff == /\ state = "backoff"
-           /\ age' = age + 10
+           /\ \E backoff \in {10, 20} : age' = age + backoff
            /\ state' = "ready"
            /\ UNCHANGED <<failures, lastFailureAge>>
 

@@ -26,14 +26,16 @@ export function parse(argv) {
   return { suite, out: path.resolve(opt('--out')), timeout: Number(opt('--timeout') ?? 9 * 60 * 1000) };
 }
 
-export async function run({ suite, out, timeout }) {
-  const mod = await SUITES[suite]();
+/** `deps` replaces the jar, the child process and the suite entries in tests. */
+export async function run({ suite, out, timeout }, deps = {}) {
+  const start = deps.startJar ?? startJar, spawn = deps.spawnSync ?? spawnSync;
+  const mod = await (deps.suites ?? SUITES)[suite]();
   mkdirSync(out);   // refuses an existing directory
-  const { host, stop } = await startJar();
+  const { host, stop } = await start();
   try {
     const plan = mod.execPlan('unused', path.join(out, 'config.json'), path.join(out, 'observer'), `JAR-${suite.toUpperCase()}-01`);
     const command = plan.slice(plan.indexOf('--') + 1);
-    const child = spawnSync(command[0], command.slice(1), { env: { ...process.env, FIREBASE_DATABASE_EMULATOR_HOST: host }, encoding: 'utf8', timeout });
+    const child = spawn(command[0], command.slice(1), { env: { ...process.env, FIREBASE_DATABASE_EMULATOR_HOST: host }, encoding: 'utf8', timeout });
     if (child.error) throw child.error;
     mod.finish(out);
     return child.status;

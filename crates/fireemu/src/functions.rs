@@ -1129,6 +1129,27 @@ fn snapshot_functions_source_with_charge_at(
     cancelled: &AtomicBool,
     snapshot_root: &Path,
 ) -> Result<FunctionsSourceSnapshot, String> {
+    snapshot_functions_source_with_charge_at_and_acl_check(
+        root,
+        ignores,
+        charge,
+        cancelled,
+        snapshot_root,
+        secure_snapshot_directory,
+    )
+}
+
+fn snapshot_functions_source_with_charge_at_and_acl_check<F>(
+    root: &Path,
+    ignores: &[String],
+    charge: &mut dyn FnMut(u64, u64) -> Result<(), String>,
+    cancelled: &AtomicBool,
+    snapshot_root: &Path,
+    acl_check: F,
+) -> Result<FunctionsSourceSnapshot, String>
+where
+    F: FnOnce(&Path) -> Result<(), String>,
+{
     static NEXT_SNAPSHOT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let source_root = std::fs::canonicalize(root)
         .map_err(|error| format!("snapshot {}: {error}", root.display()))?;
@@ -1159,7 +1180,7 @@ fn snapshot_functions_source_with_charge_at(
         }
     }
     let snapshot = FunctionsSourceSnapshot::new(destination.clone(), source_path.clone());
-    secure_snapshot_directory(&destination)?;
+    acl_check(&destination)?;
     charge(1, 0)?;
     std::fs::create_dir_all(&source_path)
         .map_err(|error| format!("snapshot {}: {error}", source_path.display()))?;
@@ -1203,14 +1224,7 @@ fn secure_snapshot_directory(path: &Path) -> Result<(), String> {
 }
 
 #[cfg(windows)]
-fn secure_snapshot_directory(path: &Path) -> Result<(), String> {
-    use process_wrap::tokio::{JobObject, KillOnDrop, TokioCommandWrap};
-    use std::process::Stdio;
-    use std::time::Duration;
-
-    // The helper reads ACLs and attributes from the same handle and retains checked handles
-    // until the root-to-leaf pass finishes, preventing path replacement during validation.
-    const ACL_CHECK: &str = r#"
+const WINDOWS_SNAPSHOT_ACL_CHECK: &str = r#"
 $ErrorActionPreference = 'Stop'
 $native = @'
 using System;
@@ -1343,15 +1357,42 @@ try {
 exit $exitCode
 "#;
 
-    if !path.is_absolute() {
-        return Err("snapshot ACL validation refused a non-absolute directory".to_owned());
-    }
+#[cfg(windows)]
+fn secure_snapshot_directory(path: &Path) -> Result<(), String> {
+    let powershell = windows_powershell_path()?;
+    run_snapshot_acl_checker(
+        path,
+        &powershell,
+        WINDOWS_SNAPSHOT_ACL_CHECK,
+        Duration::from_secs(5),
+    )
+}
+
+#[cfg(windows)]
+fn windows_powershell_path() -> Result<PathBuf, String> {
     let system_root = std::env::var_os("SystemRoot")
         .map(PathBuf::from)
         .filter(|root| root.is_absolute())
         .ok_or_else(|| "snapshot ACL validation could not locate Windows PowerShell".to_owned())?;
-    let powershell = system_root.join(r"System32\WindowsPowerShell\v1.0\powershell.exe");
+    Ok(system_root.join(r"System32\WindowsPowerShell\v1.0\powershell.exe"))
+}
+
+#[cfg(windows)]
+fn run_snapshot_acl_checker(
+    path: &Path,
+    program: &Path,
+    script: &str,
+    timeout: Duration,
+) -> Result<(), String> {
+    use process_wrap::tokio::{JobObject, KillOnDrop, TokioCommandWrap};
+    use std::process::Stdio;
+
+    if !path.is_absolute() {
+        return Err("snapshot ACL validation refused a non-absolute directory".to_owned());
+    }
     let path = path.to_owned();
+    let program = program.to_owned();
+    let script = script.to_owned();
     std::thread::Builder::new()
         .name("fireemu-snapshot-acl".to_owned())
         .spawn(move || {
@@ -1362,14 +1403,14 @@ exit $exitCode
                     "snapshot ACL validation could not initialize its runtime".to_owned()
                 })?;
             runtime.block_on(async move {
-                let mut command = tokio::process::Command::new(powershell);
+                let mut command = tokio::process::Command::new(program);
                 command
                     .args([
                         "-NoLogo",
                         "-NoProfile",
                         "-NonInteractive",
                         "-Command",
-                        ACL_CHECK,
+                        script.as_str(),
                     ])
                     .env("FIREEMU_SNAPSHOT_ACL_PATH", &path)
                     .stdin(Stdio::null())
@@ -1380,8 +1421,7 @@ exit $exitCode
                 let mut child = wrapped.spawn().map_err(|_| {
                     "snapshot ACL validation could not start Windows PowerShell".to_owned()
                 })?;
-                let status =
-                    tokio::time::timeout(Duration::from_secs(5), Box::into_pin(child.wait())).await;
+                let status = tokio::time::timeout(timeout, Box::into_pin(child.wait())).await;
                 match status {
                     Ok(Ok(status)) if status.success() => Ok(()),
                     Ok(Ok(_)) => Err(format!(
@@ -1390,11 +1430,7 @@ exit $exitCode
                     )),
                     Ok(Err(_)) | Err(_) => {
                         let _ = child.start_kill();
-                        let _ = tokio::time::timeout(
-                            Duration::from_secs(5),
-                            Box::into_pin(child.wait()),
-                        )
-                        .await;
+                        let _ = tokio::time::timeout(timeout, Box::into_pin(child.wait())).await;
                         Err(format!(
                             "snapshot ACL validation timed out or failed for {}",
                             path.display()
@@ -13190,6 +13226,468 @@ sys.stdin.buffer.read()
             "failed to create junction: {}",
             String::from_utf8_lossy(&output.stderr)
         );
+    }
+
+    #[cfg(windows)]
+    fn set_windows_null_dacl(path: &std::path::Path) {
+        use std::process::Command;
+
+        const SCRIPT: &str = r#"
+$ErrorActionPreference = 'Stop'
+$native = @'
+using System;
+using System.Runtime.InteropServices;
+public static class FireemuNullDaclFixture {
+    [DllImport("advapi32.dll", EntryPoint = "SetNamedSecurityInfoW", CharSet = CharSet.Unicode)]
+    private static extern uint SetNamedSecurityInfo(string name, int type, uint info,
+        IntPtr owner, IntPtr group, IntPtr dacl, IntPtr sacl);
+    [DllImport("advapi32.dll", EntryPoint = "GetNamedSecurityInfoW", CharSet = CharSet.Unicode)]
+    private static extern uint GetNamedSecurityInfo(string name, int type, uint info,
+        out IntPtr owner, out IntPtr group, out IntPtr dacl, out IntPtr sacl, out IntPtr descriptor);
+    [DllImport("advapi32.dll", EntryPoint = "GetSecurityDescriptorDacl")]
+    private static extern bool GetSecurityDescriptorDacl(IntPtr descriptor,
+        out bool present, out IntPtr dacl, out bool defaulted);
+    [DllImport("kernel32.dll", EntryPoint = "LocalFree")]
+    private static extern IntPtr LocalFree(IntPtr memory);
+    public static void SetAndVerify(string path) {
+        uint error = SetNamedSecurityInfo(path, 1, 4, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
+        if (error != 0) throw new System.ComponentModel.Win32Exception((int)error);
+        IntPtr owner, group, dacl, sacl, descriptor;
+        error = GetNamedSecurityInfo(path, 1, 5, out owner, out group, out dacl, out sacl, out descriptor);
+        if (error != 0) throw new System.ComponentModel.Win32Exception((int)error);
+        try {
+            bool present, defaulted;
+            if (!GetSecurityDescriptorDacl(descriptor, out present, out dacl, out defaulted) ||
+                !present || dacl != IntPtr.Zero)
+                throw new InvalidOperationException("fixture DACL is not null");
+        } finally {
+            if (descriptor != IntPtr.Zero) LocalFree(descriptor);
+        }
+    }
+}
+'@
+Add-Type -TypeDefinition $native -ErrorAction Stop
+[FireemuNullDaclFixture]::SetAndVerify($env:FIREEMU_TEST_PATH)
+"#;
+
+        let powershell = super::windows_powershell_path().expect("Windows PowerShell path");
+        let output = Command::new(powershell)
+            .args([
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                SCRIPT,
+            ])
+            .env("FIREEMU_TEST_PATH", path)
+            .output()
+            .expect("Windows PowerShell is available to configure the null DACL fixture");
+        assert!(
+            output.status.success(),
+            "failed to set/verify null DACL: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[cfg(windows)]
+    #[derive(Clone, Copy, Debug)]
+    struct WindowsSnapshotAclCase<'a> {
+        snapshot_dacl: &'a str,
+        parent_dacl: &'a str,
+        ancestor_rights: &'a str,
+        reparse_position: &'a str,
+        checker: &'a str,
+    }
+
+    #[cfg(windows)]
+    fn windows_snapshot_acl_cases() -> Vec<WindowsSnapshotAclCase<'static>> {
+        let mut lines = include_str!("../tests/fixtures/windows_snapshot_acl_cases.tsv").lines();
+        assert_eq!(
+            lines.next(),
+            Some("SnapshotDacl\tParentDacl\tAncestorRights\tReparsePosition\tChecker")
+        );
+        lines
+            .map(|line| {
+                let fields: Vec<_> = line.split('\t').collect();
+                assert_eq!(fields.len(), 5, "malformed PICT row: {line}");
+                WindowsSnapshotAclCase {
+                    snapshot_dacl: fields[0],
+                    parent_dacl: fields[1],
+                    ancestor_rights: fields[2],
+                    reparse_position: fields[3],
+                    checker: fields[4],
+                }
+            })
+            .collect()
+    }
+
+    #[cfg(windows)]
+    struct WindowsSnapshotAclFixture {
+        root: std::path::PathBuf,
+        higher: std::path::PathBuf,
+        parent: std::path::PathBuf,
+        leaf: std::path::PathBuf,
+        junctions: Vec<std::path::PathBuf>,
+    }
+
+    #[cfg(windows)]
+    impl WindowsSnapshotAclFixture {
+        fn new(case: WindowsSnapshotAclCase<'_>, index: usize) -> Self {
+            let root = std::env::temp_dir().join(format!(
+                "fireemu-windows-acl-pict-{}-{index}",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(&root).unwrap();
+            let higher = root.join("higher");
+            let parent = higher.join("parent");
+            let leaf = parent.join("leaf");
+            let mut junctions = Vec::new();
+            match case.reparse_position {
+                "None" => std::fs::create_dir_all(&leaf).unwrap(),
+                "HigherAncestor" => {
+                    let target = root.join("higher-target");
+                    std::fs::create_dir_all(target.join("parent/leaf")).unwrap();
+                    create_windows_junction(&higher, &target);
+                    junctions.push(higher.clone());
+                }
+                "ImmediateParent" => {
+                    std::fs::create_dir_all(&higher).unwrap();
+                    let target = root.join("parent-target");
+                    std::fs::create_dir_all(target.join("leaf")).unwrap();
+                    create_windows_junction(&parent, &target);
+                    junctions.push(parent.clone());
+                }
+                "SnapshotLeaf" => {
+                    std::fs::create_dir_all(&parent).unwrap();
+                    let target = root.join("leaf-target");
+                    std::fs::create_dir_all(&target).unwrap();
+                    create_windows_junction(&leaf, &target);
+                    junctions.push(leaf.clone());
+                }
+                value => panic!("unexpected reparse position: {value}"),
+            }
+            Self {
+                root,
+                higher,
+                parent,
+                leaf,
+                junctions,
+            }
+        }
+
+        fn apply_acl(&self, case: WindowsSnapshotAclCase<'_>) {
+            match case.snapshot_dacl {
+                "Private" => {}
+                "Permissive" => grant_windows_test_ace(&self.leaf, "F"),
+                "Null" => set_windows_null_dacl(&self.leaf),
+                value => panic!("unexpected snapshot DACL: {value}"),
+            }
+            match case.parent_dacl {
+                "Private" => {}
+                "Permissive" => grant_windows_test_ace(&self.parent, "F"),
+                value => panic!("unexpected parent DACL: {value}"),
+            }
+            match case.ancestor_rights {
+                "ReadTraverse" => {}
+                "CreateDirectoryOnly" => grant_windows_test_ace(&self.higher, "(AD)"),
+                "Mutating" => grant_windows_test_ace(&self.higher, "(DC)"),
+                value => panic!("unexpected ancestor rights: {value}"),
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    impl Drop for WindowsSnapshotAclFixture {
+        fn drop(&mut self) {
+            for junction in &self.junctions {
+                let _ = std::fs::remove_dir(junction);
+            }
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    #[cfg(windows)]
+    fn windows_acl_row_refuses(case: WindowsSnapshotAclCase<'_>) -> bool {
+        case.snapshot_dacl != "Private"
+            || case.parent_dacl != "Private"
+            || case.ancestor_rights == "Mutating"
+            || case.reparse_position != "None"
+    }
+
+    #[cfg(windows)]
+    fn windows_acl_script_with_noop_guard(guard: &str) -> String {
+        let script = super::WINDOWS_SNAPSHOT_ACL_CHECK;
+        assert_eq!(
+            script.matches(guard).count(),
+            1,
+            "guard text must be unique"
+        );
+        script.replacen(guard, "", 1)
+    }
+
+    #[cfg(windows)]
+    fn windows_acl_refusal_oracle(result: &Result<(), String>) -> Result<(), &'static str> {
+        if result.is_err() {
+            Ok(())
+        } else {
+            Err("unsafe ACL was accepted")
+        }
+    }
+
+    #[cfg(windows)]
+    fn assert_windows_acl_mutant_detected(
+        guard: &str,
+        unsafe_case: WindowsSnapshotAclCase<'static>,
+        index: usize,
+    ) {
+        let mutant = windows_acl_script_with_noop_guard(guard);
+        let powershell = super::windows_powershell_path().unwrap();
+        let safe_case = WindowsSnapshotAclCase {
+            snapshot_dacl: "Private",
+            parent_dacl: "Private",
+            ancestor_rights: "ReadTraverse",
+            reparse_position: "None",
+            checker: "Available",
+        };
+        let safe = WindowsSnapshotAclFixture::new(safe_case, index + 100);
+        safe.apply_acl(safe_case);
+        let safe_result = super::run_snapshot_acl_checker(
+            &safe.leaf,
+            &powershell,
+            &mutant,
+            Duration::from_secs(5),
+        );
+        assert!(
+            safe_result.is_ok(),
+            "mutant setup must accept a safe fixture"
+        );
+        drop(safe);
+
+        let unsafe_fixture = WindowsSnapshotAclFixture::new(unsafe_case, index + 200);
+        unsafe_fixture.apply_acl(unsafe_case);
+        let baseline = super::run_snapshot_acl_checker(
+            &unsafe_fixture.leaf,
+            &powershell,
+            super::WINDOWS_SNAPSHOT_ACL_CHECK,
+            Duration::from_secs(5),
+        );
+        assert!(windows_acl_refusal_oracle(&baseline).is_ok());
+        let mutated = super::run_snapshot_acl_checker(
+            &unsafe_fixture.leaf,
+            &powershell,
+            &mutant,
+            Duration::from_secs(5),
+        );
+        assert!(
+            mutated.is_ok(),
+            "single guard mutant should admit its unsafe fixture"
+        );
+        assert_eq!(
+            windows_acl_refusal_oracle(&mutated),
+            Err("unsafe ACL was accepted"),
+            "the same refusal oracle must fail for mutant {guard}"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_snapshot_acl_pict_matrix_consumes_all_rows() {
+        let cases = windows_snapshot_acl_cases();
+        assert_eq!(cases.len(), 39, "all generated PICT rows must run");
+        let powershell = super::windows_powershell_path().unwrap();
+        for (index, case) in cases.into_iter().enumerate() {
+            let fixture = WindowsSnapshotAclFixture::new(case, index);
+            fixture.apply_acl(case);
+            let expected_accept = !windows_acl_row_refuses(case);
+            let actual = super::run_snapshot_acl_checker(
+                &fixture.leaf,
+                &powershell,
+                super::WINDOWS_SNAPSHOT_ACL_CHECK,
+                Duration::from_secs(5),
+            );
+            assert_eq!(
+                actual.is_ok(),
+                expected_accept,
+                "ACL policy mismatch for generated row {index}: {case:?}; {actual:?}"
+            );
+            if case.checker == "Unavailable" {
+                let missing = fixture.root.join("missing-powershell.exe");
+                let unavailable = super::run_snapshot_acl_checker(
+                    &fixture.leaf,
+                    &missing,
+                    super::WINDOWS_SNAPSHOT_ACL_CHECK,
+                    Duration::from_secs(1),
+                );
+                assert!(unavailable.is_err(), "unavailable checker must fail closed");
+            } else {
+                assert_eq!(case.checker, "Available");
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_snapshot_acl_missing_checker_refuses_before_copying_secret() {
+        let id = std::process::id();
+        let source = std::env::temp_dir().join(format!("fireemu-acl-missing-source-{id}"));
+        let snapshot_root = std::env::temp_dir().join(format!("fireemu-acl-missing-root-{id}"));
+        let _ = std::fs::remove_dir_all(&source);
+        let _ = std::fs::remove_dir_all(&snapshot_root);
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::create_dir_all(&snapshot_root).unwrap();
+        let secret = b"LOCAL_SECRET=missing-checker";
+        std::fs::write(source.join(".secret.local"), secret).unwrap();
+        let missing = snapshot_root.join("missing-powershell.exe");
+        let mut charged_bytes = 0;
+        let result = super::snapshot_functions_source_with_charge_at_and_acl_check(
+            &source,
+            &[],
+            &mut |_, bytes| {
+                charged_bytes += bytes;
+                Ok(())
+            },
+            &AtomicBool::new(false),
+            &snapshot_root,
+            |path| {
+                super::run_snapshot_acl_checker(
+                    path,
+                    &missing,
+                    super::WINDOWS_SNAPSHOT_ACL_CHECK,
+                    Duration::from_secs(1),
+                )
+            },
+        );
+        assert!(result.unwrap_err().contains("snapshot ACL"));
+        assert_eq!(charged_bytes, secret.len() as u64);
+        assert_eq!(std::fs::read_dir(&snapshot_root).unwrap().count(), 0);
+        std::fs::remove_dir_all(source).unwrap();
+        std::fs::remove_dir_all(snapshot_root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_snapshot_acl_timeout_kills_descendant_process() {
+        use std::process::Command;
+
+        const SCRIPT: &str = r#"
+$childCode = 'Start-Sleep -Seconds 60'
+$encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($childCode))
+$child = Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -WindowStyle Hidden -PassThru `
+    -ArgumentList @('-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', $encoded)
+[IO.File]::WriteAllText($env:FIREEMU_SNAPSHOT_ACL_PATH, [string]$child.Id)
+Start-Sleep -Seconds 60
+"#;
+        let root = std::env::temp_dir().join(format!("fireemu-acl-timeout-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let pid_file = root.join("child.pid");
+        let powershell = super::windows_powershell_path().unwrap();
+        let result =
+            super::run_snapshot_acl_checker(&pid_file, &powershell, SCRIPT, Duration::from_secs(3));
+        assert!(result.unwrap_err().contains("timed out"));
+        let child_pid = std::fs::read_to_string(&pid_file)
+            .expect("PowerShell must record the spawned descendant PID before timeout");
+        let tasklist = std::env::var_os("SystemRoot")
+            .map(std::path::PathBuf::from)
+            .expect("Windows defines SystemRoot")
+            .join(r"System32\tasklist.exe");
+        let output = Command::new(tasklist)
+            .args(["/FO", "CSV", "/NH", "/FI"])
+            .arg(format!("PID eq {}", child_pid.trim()))
+            .output()
+            .expect("tasklist is available on Windows");
+        assert!(output.status.success());
+        let still_running = String::from_utf8_lossy(&output.stdout).lines().any(|line| {
+            line.split(',')
+                .nth(1)
+                .is_some_and(|pid| pid.trim_matches('"') == child_pid.trim())
+        });
+        assert!(
+            !still_running,
+            "JobObject+KillOnDrop left child PID {child_pid} running"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_snapshot_acl_guard_mutants_violate_oracle() {
+        let cases = [
+            (
+                "throw 'untrusted allow ACE'",
+                WindowsSnapshotAclCase {
+                    snapshot_dacl: "Permissive",
+                    parent_dacl: "Private",
+                    ancestor_rights: "ReadTraverse",
+                    reparse_position: "None",
+                    checker: "Available",
+                },
+            ),
+            (
+                "throw 'null DACL'",
+                WindowsSnapshotAclCase {
+                    snapshot_dacl: "Null",
+                    parent_dacl: "Private",
+                    ancestor_rights: "ReadTraverse",
+                    reparse_position: "None",
+                    checker: "Available",
+                },
+            ),
+            (
+                "throw 'untrusted ancestor mutation ACE'",
+                WindowsSnapshotAclCase {
+                    snapshot_dacl: "Private",
+                    parent_dacl: "Private",
+                    ancestor_rights: "Mutating",
+                    reparse_position: "None",
+                    checker: "Available",
+                },
+            ),
+            (
+                "throw 'reparse or non-directory component'",
+                WindowsSnapshotAclCase {
+                    snapshot_dacl: "Private",
+                    parent_dacl: "Private",
+                    ancestor_rights: "ReadTraverse",
+                    reparse_position: "SnapshotLeaf",
+                    checker: "Available",
+                },
+            ),
+        ];
+        for (index, (guard, case)) in cases.into_iter().enumerate() {
+            assert_windows_acl_mutant_detected(guard, case, index);
+        }
+
+        let no_op_case = cases[0].1;
+        let no_op_script = super::WINDOWS_SNAPSHOT_ACL_CHECK;
+        let powershell = super::windows_powershell_path().unwrap();
+        let safe_case = WindowsSnapshotAclCase {
+            snapshot_dacl: "Private",
+            parent_dacl: "Private",
+            ancestor_rights: "ReadTraverse",
+            reparse_position: "None",
+            checker: "Available",
+        };
+        let safe = WindowsSnapshotAclFixture::new(safe_case, 300);
+        safe.apply_acl(safe_case);
+        assert!(super::run_snapshot_acl_checker(
+            &safe.leaf,
+            &powershell,
+            no_op_script,
+            Duration::from_secs(5)
+        )
+        .is_ok());
+        drop(safe);
+        let unsafe_fixture = WindowsSnapshotAclFixture::new(no_op_case, 301);
+        unsafe_fixture.apply_acl(no_op_case);
+        let no_op_result = super::run_snapshot_acl_checker(
+            &unsafe_fixture.leaf,
+            &powershell,
+            no_op_script,
+            Duration::from_secs(5),
+        );
+        assert!(windows_acl_refusal_oracle(&no_op_result).is_ok());
     }
 
     #[cfg(windows)]

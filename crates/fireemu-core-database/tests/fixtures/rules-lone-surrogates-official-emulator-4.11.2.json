@@ -3330,5 +3330,425 @@
   "load": 200,
   "error": null,
   "read": 401
+ },
+ {
+  "expr": "(false ? auth : '\\uD83D')['length'] == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(false ? auth : '\\uD83D').length == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(false ? auth : '\\uD83D')['length'] == 1",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(false ? auth : '\\uD83D').length == 1",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(false ? auth : '\\uD83D')['length'] == 3",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(false ? auth : '\\uD83D').length == 3",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(false ? auth : '\\uD83D')['length'] == 2",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(false ? auth : '\\uD83D').length == 2",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(false ? auth : '\\uD83D')['x'] == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(false ? auth : '\\uD83D')['x'] == 1",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(false ? auth : '\\uD83D')['x'] == 3",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(false ? auth : '\\uD83D')['x'] == 2",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(false ? auth : '\\uD83D')[0] == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(false ? auth : '\\uD83D')[0] == 1",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(false ? auth : '\\uD83D')[0] == 3",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(false ? auth : '\\uD83D')[0] == 2",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(false ? auth : '\\uD83D')['\\uDE00'] == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(false ? auth : '\\uD83D')['\\uDE00'] == 1",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(false ? auth : '\\uD83D')['\\uDE00'] == 3",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(false ? auth : '\\uD83D')['\\uDE00'] == 2",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(false ? auth : 'abc')['length'] == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(false ? auth : 'abc').length == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(false ? auth : 'abc')['length'] == 1",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(false ? auth : 'abc').length == 1",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(false ? auth : 'abc')['length'] == 3",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(false ? auth : 'abc').length == 3",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(false ? auth : 'abc')['length'] == 2",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(false ? auth : 'abc').length == 2",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(false ? auth : 'abc')['x'] == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(false ? auth : 'abc')['x'] == 1",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(false ? auth : 'abc')['x'] == 3",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(false ? auth : 'abc')['x'] == 2",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(false ? auth : 'abc')[0] == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(false ? auth : 'abc')[0] == 1",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(false ? auth : 'abc')[0] == 3",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(false ? auth : 'abc')[0] == 2",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(false ? auth : 'abc')['\\uDE00'] == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(false ? auth : 'abc')['\\uDE00'] == 1",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(false ? auth : 'abc')['\\uDE00'] == 3",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(false ? auth : 'abc')['\\uDE00'] == 2",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(false ? auth : '😀')['length'] == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(false ? auth : '😀').length == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(false ? auth : '😀')['length'] == 1",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(false ? auth : '😀').length == 1",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(false ? auth : '😀')['length'] == 3",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(false ? auth : '😀').length == 3",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(false ? auth : '😀')['length'] == 2",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(false ? auth : '😀').length == 2",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(false ? auth : '😀')['x'] == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(false ? auth : '😀')['x'] == 1",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(false ? auth : '😀')['x'] == 3",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(false ? auth : '😀')['x'] == 2",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(false ? auth : '😀')[0] == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(false ? auth : '😀')[0] == 1",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(false ? auth : '😀')[0] == 3",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(false ? auth : '😀')[0] == 2",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(false ? auth : '😀')['\\uDE00'] == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(false ? auth : '😀')['\\uDE00'] == 1",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(false ? auth : '😀')['\\uDE00'] == 3",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(false ? auth : '😀')['\\uDE00'] == 2",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
  }
 ]

@@ -668,6 +668,11 @@ mod properties {
         ClassComplementDigitOrA,
         NegatedClassComplementWord,
         NegatedClassComplementDigit,
+        PlainClass,
+        NegatedPlainClass,
+        EscapedLetterClass,
+        NegatedEscapedLetterClass,
+        BracketFirstClass,
     }
 
     #[derive(Debug, Clone, Copy)]
@@ -697,6 +702,11 @@ mod properties {
                 Self::ClassComplementDigitOrA => "[a\\D]".to_owned(),
                 Self::NegatedClassComplementWord => "[^\\W]".to_owned(),
                 Self::NegatedClassComplementDigit => "[^\\D]".to_owned(),
+                Self::PlainClass => "[ab]".to_owned(),
+                Self::NegatedPlainClass => "[^ab]".to_owned(),
+                Self::EscapedLetterClass => "[\\ub]".to_owned(),
+                Self::NegatedEscapedLetterClass => "[^\\ub]".to_owned(),
+                Self::BracketFirstClass => "[]a]".to_owned(),
             }
         }
 
@@ -712,6 +722,11 @@ mod properties {
                 Self::ClassComplementWordOrA => !one(&|x| is_word(x) && x != 'a'),
                 // `a` is no digit, so the union with `\D` is `\D`.
                 Self::ClassComplementDigitOrA => !one(&|x| x.is_ascii_digit()),
+                Self::PlainClass => one(&|x| matches!(x, 'a' | 'b')),
+                Self::NegatedPlainClass => one(&|x| !matches!(x, 'a' | 'b')),
+                Self::EscapedLetterClass => one(&|x| matches!(x, 'u' | 'b')),
+                Self::NegatedEscapedLetterClass => one(&|x| !matches!(x, 'u' | 'b')),
+                Self::BracketFirstClass => one(&|x| matches!(x, ']' | 'a')),
             }
         }
     }
@@ -771,6 +786,11 @@ mod properties {
             Just(Atom::ClassComplementDigitOrA),
             Just(Atom::NegatedClassComplementWord),
             Just(Atom::NegatedClassComplementDigit),
+            Just(Atom::PlainClass),
+            Just(Atom::NegatedPlainClass),
+            Just(Atom::EscapedLetterClass),
+            Just(Atom::NegatedEscapedLetterClass),
+            Just(Atom::BracketFirstClass),
         ]
     }
 
@@ -794,7 +814,7 @@ mod properties {
         #[test]
         fn the_emulator_profile_matches_the_language_the_pattern_stands_for(
             atoms in prop::collection::vec((atom(), times()), 1..5),
-            subject in prop::collection::vec(prop::sample::select(vec!['a', 'b', '1', '_', '!', 'é', 'u']), 0..5),
+            subject in prop::collection::vec(prop::sample::select(vec!['a', 'b', '1', '_', '!', 'é', 'u', '[', ']', '^']), 0..5),
         ) {
             let mut text = String::from("^");
             for &(atom, times) in &atoms {

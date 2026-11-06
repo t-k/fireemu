@@ -1005,3 +1005,124 @@ fn equal(l: &Value<'_>, r: &Value<'_>) -> bool {
         _ => false,
     }
 }
+
+#[cfg(test)]
+mod bound_tests {
+    use super::*;
+
+    const MAX: usize = MAX_STRING_UNITS;
+
+    fn units(len: usize) -> Vec<u16> {
+        vec![0x61; len]
+    }
+
+    fn length(value: &Value<'_>) -> Option<usize> {
+        match value {
+            Value::Str(s) => Some(s.len()),
+            Value::Units(u) => Some(u.len()),
+            _ => None,
+        }
+    }
+
+    /// The bound is on the string built: exactly the bound is built, one more is an error, and a
+    /// replacement that shrinks the string is never held up by what it started from.
+    #[test]
+    fn replacing_in_a_str_stops_one_past_the_bound() {
+        let at = "a".repeat(MAX / 2);
+        assert_eq!(java_replace(&at, "a", "bb").map(|s| s.len()), Some(MAX));
+        let past = "a".repeat(MAX / 2 + 1);
+        assert_eq!(java_replace(&past, "a", "bb"), None);
+        // No match: the string is returned whole, up to the bound.
+        let whole = "a".repeat(MAX);
+        assert_eq!(java_replace(&whole, "z", "yy").map(|s| s.len()), Some(MAX));
+        let over = "a".repeat(MAX + 1);
+        assert_eq!(java_replace(&over, "z", "y"), None);
+        // A shrinking replacement of a string made of its target.
+        let shrinking = "aa".repeat(MAX / 2);
+        assert_eq!(
+            java_replace(&shrinking, "aa", "b").map(|s| s.len()),
+            Some(MAX / 2)
+        );
+        // An empty target: `to` before each character and after the last.
+        assert_eq!(
+            java_replace("", "", &"x".repeat(MAX)).map(|s| s.len()),
+            Some(MAX)
+        );
+        assert_eq!(java_replace("", "", &"x".repeat(MAX + 1)), None);
+        // `to` before each of four characters and after the last: 5 x 13421772 + 4 is the bound.
+        let each = MAX / 5;
+        assert_eq!(
+            java_replace("abcd", "", &"x".repeat(each)).map(|s| s.len()),
+            Some(MAX)
+        );
+        assert_eq!(java_replace("abcd", "", &"x".repeat(each + 1)), None);
+    }
+
+    #[test]
+    fn replacing_in_units_stops_one_past_the_bound() {
+        let call = |haystack: &[u16], from: &[u16], to: &[u16]| {
+            units_call(
+                haystack,
+                "replace",
+                &[Value::Units(from.to_vec()), Value::Units(to.to_vec())],
+                false,
+            )
+        };
+        let lone = [0xD83D_u16];
+        let at = call(&units(MAX / 2), &[0x61], &[0x62, 0x62]).unwrap();
+        assert_eq!(length(&at), Some(MAX));
+        assert!(call(&units(MAX / 2 + 1), &[0x61], &[0x62, 0x62]).is_none());
+        // No match.
+        assert_eq!(
+            length(&call(&units(MAX), &lone, &[0x62]).unwrap()),
+            Some(MAX)
+        );
+        assert!(call(&units(MAX + 1), &lone, &[0x62]).is_none());
+        // A match late in a string that fits: the text before it counts.
+        let mut late = units(MAX - 1);
+        late.push(0xD83D);
+        assert_eq!(length(&call(&late, &lone, &[0x62]).unwrap()), Some(MAX));
+        assert!(call(&late, &lone, &[0x62, 0x62]).is_none());
+        // An empty target.
+        assert_eq!(length(&call(&[], &[], &units(MAX)).unwrap()), Some(MAX));
+        assert!(call(&[], &[], &units(MAX + 1)).is_none());
+        assert_eq!(
+            length(&call(&units(4), &[], &units(MAX / 5)).unwrap()),
+            Some(MAX)
+        );
+        assert!(call(&units(4), &[], &units(MAX / 5 + 1)).is_none());
+    }
+
+    #[test]
+    fn adding_strings_stops_one_past_the_bound() {
+        let add = |l: Value<'static>, r: Value<'static>| combine(BinaryOp::Add, &l, &r);
+        let half = |extra: usize| -> Value<'static> { Value::Str("a".repeat(MAX / 2 + extra)) };
+        assert_eq!(add(half(0), half(0)).as_ref().and_then(length), Some(MAX));
+        assert!(add(half(0), half(1)).is_none());
+        assert!(add(half(1), half(0)).is_none());
+        let half_units = |extra: usize| -> Value<'static> { Value::Units(units(MAX / 2 + extra)) };
+        assert_eq!(
+            add(half_units(0), half_units(0)).as_ref().and_then(length),
+            Some(MAX)
+        );
+        assert!(add(half_units(0), half_units(1)).is_none());
+        assert!(add(half_units(1), half_units(0)).is_none());
+        assert!(add(Value::Units(units(MAX)), Value::Num(1.0)).is_none());
+        // A number joins a string on either side: its text counts.
+        let full = |len: usize| -> Value<'static> { Value::Str("a".repeat(len)) };
+        assert_eq!(
+            add(Value::Num(1.0), full(MAX - 1))
+                .as_ref()
+                .and_then(length),
+            Some(MAX)
+        );
+        assert!(add(Value::Num(1.0), full(MAX)).is_none());
+        assert_eq!(
+            add(full(MAX - 1), Value::Num(1.0))
+                .as_ref()
+                .and_then(length),
+            Some(MAX)
+        );
+        assert!(add(full(MAX), Value::Num(1.0)).is_none());
+    }
+}

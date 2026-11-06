@@ -317,6 +317,80 @@ fn complement_classes_and_escaped_letters_are_read_on_the_emulator_profile_only(
     }
 }
 
+/// Pins for two shapes the emulator profile does not follow the official emulator on (Opus delta S3; found by
+/// probing, jar rows in `docs.local/runs/rtdb-lone-surrogate/jar-s3.json`, ours in `fireemu-s3-*.json`). They are
+/// declared as not followed and not claimed in the closure record:
+/// - a token whose claim holds a lone surrogate is not read (the request is judged as without it, so
+///   `auth.token.x == '\uD83D'` is false where the jar reads the claim and allows it);
+/// - a query value that holds one (`startAt="\ud83d"`) is refused with 400 before any rule.
+///
+/// A pair is read as the character. The strict profile refuses a forged token before any rule.
+#[test]
+fn lone_surrogates_in_claims_and_query_values_are_pinned() {
+    let high = token(r#"{"sub":"u1","uid":"u1","iat":1,"exp":9999999999,"x":"\ud83d"}"#);
+    let pair = token(r#"{"sub":"u1","uid":"u1","iat":1,"exp":9999999999,"x":"\ud83d\ude00"}"#);
+    // (token, expression, emulator read, jar read)
+    let claims: [(&String, &str, u16, u16); 8] = [
+        (&high, "auth.token.x == '\\uD83D'", 401, 200),
+        (&high, "auth.token.x.length == 1", 401, 200),
+        (&high, "!(auth.token.x == '\\uD83D')", 200, 401),
+        (&high, "auth.token.x != null", 401, 200),
+        (&high, "auth.token.x == '😀'", 401, 401),
+        (&pair, "auth.token.x == '😀'", 200, 200),
+        (&pair, "auth.token.x.length == 2", 200, 200),
+        (&pair, "auth.token.x == '\\uD83D'", 401, 401),
+    ];
+    // The emulator profile only: the strict profile refuses a forged token before any rule (its own tests).
+    for (token, expression, emulator, _jar) in claims {
+        {
+            let mut database = Database::new(RestOptions::default(), 7);
+            let rules = format!(
+                r#"{{"rules":{{".read":"{}"}}}}"#,
+                expression.replace('\\', "\\\\").replace('"', "\\\"")
+            );
+            load(&mut database, "t", &rules);
+            let got = call(
+                &mut database,
+                "GET",
+                &format!("/x.json?ns=t&auth={token}"),
+                &[],
+                "",
+            );
+            assert_eq!(got.0, emulator, "{expression}");
+        }
+    }
+    for strict in [false, true] {
+        let mut database = Database::new(
+            RestOptions {
+                production_shapes: strict,
+                ..RestOptions::default()
+            },
+            7,
+        );
+        load(
+            &mut database,
+            "t",
+            r#"{"rules":{".read":"query.startAt.length == 1"}}"#,
+        );
+        let lone = call(
+            &mut database,
+            "GET",
+            "/x.json?ns=t&orderBy=%22%24key%22&startAt=%22%5Cud83d%22",
+            &[],
+            "",
+        );
+        assert_eq!(
+            lone,
+            (
+                400,
+                "{\n  \"error\" : \"Constraint index field must be a JSON primitive\"\n}\n"
+                    .to_owned()
+            ),
+            "strict={strict}"
+        );
+    }
+}
+
 /// `query.orderBy` loads and is not null on a plain read, a stream or a listen, and null on a shallow read (the
 /// official emulator's answers, owner 2276; rows in `docs.local/runs/rtdb-lone-surrogate/jar-q1.json`, `jar-q3.json`
 /// and, for a write, the rules-cells corpus). Both profiles.

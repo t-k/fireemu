@@ -22,7 +22,7 @@ use fireemu_core_database::{
 };
 
 use crate::access::{auth_from_claims, Access, WriteOp};
-use crate::json_parse::parse_with_keys;
+use crate::json_parse::{parse_frame, parse_frame_with_keys, parse_replacing, parse_with_keys};
 use crate::json_text::{priority_at, render, wire_json, Style};
 use crate::listen::Listen;
 use crate::namespace::route;
@@ -72,8 +72,14 @@ pub struct Prepared(Ready);
 
 #[derive(Debug)]
 enum Ready {
-    /// A whole message, parsed (or not JSON), and for a merge its members in sent order.
-    Message(Result<Json, crate::json_parse::ParseError>, Vec<String>),
+    /// A whole message, parsed (or not JSON), for a merge its members in sent order, and whether a lone
+    /// surrogate escape in a value was read as `?`. The emulator profile answers as the official emulator
+    /// does; the strict profile treats such a message as not JSON (production has not answered it).
+    Message(
+        Result<Json, crate::json_parse::ParseError>,
+        Vec<String>,
+        bool,
+    ),
     /// The connection must close with this code.
     Close(CloseCode),
 }
@@ -246,13 +252,22 @@ impl Session {
             Err(code) => Some(Prepared(Ready::Close(code))),
             Ok(None) => None,
             Ok(Some(message)) => {
-                let parsed = crate::json_parse::parse(&message);
+                let (parsed, replaced) = match parse_frame(&message) {
+                    Ok((json, replaced)) => (Ok(json), replaced),
+                    Err(err) => (Err(err), false),
+                };
+                // The official emulator reads a path with a lone surrogate as an invalid token, not as `?`.
+                let parsed = if replaced {
+                    with_lone_path(parsed, &message)
+                } else {
+                    parsed
+                };
                 let order = if is_merge(&parsed) {
                     merge_order(&message)
                 } else {
                     Vec::new()
                 };
-                Some(Prepared(Ready::Message(parsed, order)))
+                Some(Prepared(Ready::Message(parsed, order, replaced)))
             }
         }
     }
@@ -270,9 +285,13 @@ impl Session {
                 received.close = Some(code);
                 return received;
             }
-            Ready::Message(parsed, order) => {
+            Ready::Message(parsed, order, replaced) => {
                 self.merge_order = order;
-                parsed
+                if replaced && db.options().production_shapes {
+                    Err(crate::json_parse::ParseError)
+                } else {
+                    parsed
+                }
             }
         };
         let replies = match parsed {
@@ -382,7 +401,17 @@ impl Session {
                 let context = ServerValueContext { now_millis };
                 let answer = self.act(db, action, arguments, context, events);
                 match answer {
-                    Ok(data) => Ok(vec![response(r, "ok", &data)]),
+                    Ok(data) => {
+                        let text = response(r, "ok", &data);
+                        // A claim that holds a lone surrogate is written as the escape of it (the emulator
+                        // profile's claims encoding, see `fireemu_core_database::lone`).
+                        let text = if action == "auth" && db.options().credentials.lone_claims() {
+                            fireemu_core_database::lone::json_text(&text)
+                        } else {
+                            text
+                        };
+                        Ok(vec![text])
+                    }
                     Err(Failure::Status(status, message)) => {
                         Ok(vec![response(r, status, &Json::String(message))])
                     }
@@ -839,6 +868,38 @@ fn stats(arguments: &BTreeMap<String, Json>) -> Answer {
 }
 
 /// Whether a parsed message is a merge (`m`), whose member order is worth reading.
+/// `parsed`, read with a lone surrogate as `?`, with the path of the message (`d.b.p`) read with it as `.`, a
+/// character no path holds: the official emulator answers a path that holds one `Invalid token in path`.
+fn with_lone_path(
+    parsed: Result<Json, crate::json_parse::ParseError>,
+    message: &str,
+) -> Result<Json, crate::json_parse::ParseError> {
+    fn path_of(json: &mut Json) -> Option<&mut Json> {
+        let Json::Object(envelope) = json else {
+            return None;
+        };
+        let Some(Json::Object(data)) = envelope.get_mut("d") else {
+            return None;
+        };
+        let Some(Json::Object(body)) = data.get_mut("b") else {
+            return None;
+        };
+        body.get_mut("p")
+    }
+    let Ok(mut parsed) = parsed else {
+        return parsed;
+    };
+    if let Ok((mut marked, _)) = parse_replacing(message, '.') {
+        if let (Some(path), Some(Json::String(marked))) = (
+            path_of(&mut parsed),
+            path_of(&mut marked).map(|p| p.clone()),
+        ) {
+            *path = Json::String(marked);
+        }
+    }
+    Ok(parsed)
+}
+
 fn is_merge(parsed: &Result<Json, crate::json_parse::ParseError>) -> bool {
     let Ok(Json::Object(envelope)) = parsed else {
         return false;
@@ -852,7 +913,7 @@ fn is_merge(parsed: &Result<Json, crate::json_parse::ParseError>) -> bool {
 /// The members of a merge's data (`d.b.d`), in the order they were sent: the official
 /// emulator pushes a merge's entries in that order.
 fn merge_order(message: &str) -> Vec<String> {
-    let Ok((_, keys)) = parse_with_keys(message) else {
+    let Ok((_, keys, _)) = parse_frame_with_keys(message) else {
         return Vec::new();
     };
     let mut order = Vec::new();
@@ -1080,7 +1141,7 @@ fn authenticate(
         let answer = Json::object([("auth", auth.clone()), ("expires", Json::Null)]);
         return Ok((answer, Access::User(auth)));
     }
-    let Some(Json::Object(claims)) = jwt_claims(cred) else {
+    let Some(Json::Object(claims)) = jwt_claims_for(cred, credentials.lone_claims()) else {
         return Err(unparsable_token());
     };
     let auth = auth_from_claims(&claims).map_err(|name| {
@@ -1100,10 +1161,18 @@ fn unparsable_token() -> Failure {
 /// The claims of a token shaped as a JWT (three base64url parts, the second a JSON
 /// object), unverified.
 pub(crate) fn jwt_claims(token: &str) -> Option<Json> {
-    match jwt_part(token, 1)? {
-        claims @ Json::Object(_) => Some(claims),
-        _ => None,
-    }
+    jwt_claims_for(token, false)
+}
+
+/// [`jwt_claims`], the claims in the emulator profile's encoding of a lone surrogate when `lone`.
+pub(crate) fn jwt_claims_for(token: &str, lone: bool) -> Option<Json> {
+    let claims = if lone {
+        let text = jwt_payload_text(token)?;
+        crate::json_parse::parse_claims(&text).ok()?
+    } else {
+        jwt_part(token, 1)?
+    };
+    matches!(claims, Json::Object(_)).then_some(claims)
 }
 
 /// The JSON of part `index` of a three-part token.
@@ -1115,6 +1184,15 @@ fn jwt_part(token: &str, index: usize) -> Option<Json> {
     let bytes = base64url_decode(parts[index])?;
     let text = String::from_utf8(bytes).ok()?;
     parse_with_keys(&text).ok().map(|(json, _)| json)
+}
+
+/// The text of the claims of a three-part token.
+pub fn jwt_payload_text(token: &str) -> Option<String> {
+    let parts: Vec<&str> = token.split('.').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    String::from_utf8(base64url_decode(parts[1])?).ok()
 }
 
 /// `appcheck`: the official emulator refuses what is not a JWT and unsigned (`alg: none`)

@@ -35,22 +35,83 @@ pub fn parse_with_keys(text: &str) -> Result<(Json, Vec<KeyAt>), ParseError> {
     Ok((value, parser.keys))
 }
 
+/// How a lone surrogate escape (`"\ud83d"` without its pair) in a string is read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Lone {
+    /// The text is refused.
+    Refuse,
+    /// In a string value, the character given (the official emulator stores `?`); a key is still refused.
+    Replace(char),
+    /// In any string, key or value, the character given (a copy of text made only to be checked).
+    ReplaceAll(char),
+    /// A WebSocket frame: `?` in a value, as the official emulator stores it, and `.` in a key, which no key
+    /// holds, so the key is refused as any invalid key is (a merge entry's key is a path there).
+    Frame,
+    /// In any string, key or value, the stand-in of [`fireemu_core_database::lone`], so that the Rules can read
+    /// it back (the claims of a token, which the official emulator holds as Java strings).
+    Encode,
+}
+
 /// [`parse_with_keys`] for a body the emulator profile accepts as the official emulator does: a lone
-/// surrogate escape in a string value (`"a\ud83d"`) is `?`, one for each lone unit, and the last
+/// surrogate escape in a string value (`"a\ud83d"`) is `with`, one for each lone unit, and the last
 /// answer says whether any was. A key holding one is still refused.
-pub fn parse_with_keys_replacing(text: &str) -> Result<(Json, Vec<KeyAt>, bool), ParseError> {
+pub fn parse_with_keys_replacing(
+    text: &str,
+    with: char,
+) -> Result<(Json, Vec<KeyAt>, bool), ParseError> {
     let mut parser = Parser::new(text, true);
-    parser.replace_lone = true;
+    parser.lone = Lone::Replace(with);
     let value = parser.whole()?;
     Ok((value, parser.keys, parser.replaced))
 }
 
-/// [`parse`] with a lone surrogate in a string value read as `?`, as [`parse_with_keys_replacing`] does.
-pub fn parse_replacing(text: &str) -> Result<(Json, bool), ParseError> {
+/// [`parse_with_keys_replacing`] for a WebSocket frame (see [`Lone::Frame`]).
+pub fn parse_frame_with_keys(text: &str) -> Result<(Json, Vec<KeyAt>, bool), ParseError> {
+    let mut parser = Parser::new(text, true);
+    parser.lone = Lone::Frame;
+    let value = parser.whole()?;
+    Ok((value, parser.keys, parser.replaced))
+}
+
+/// [`parse`] with a lone surrogate in a string value read as `with`, as [`parse_with_keys_replacing`] does.
+pub fn parse_replacing(text: &str, with: char) -> Result<(Json, bool), ParseError> {
     let mut parser = Parser::new(text, false);
-    parser.replace_lone = true;
+    parser.lone = Lone::Replace(with);
     let value = parser.whole()?;
     Ok((value, parser.replaced))
+}
+
+/// [`parse_replacing`] that reads a lone surrogate in a key as `with` too.
+pub fn parse_replacing_all(text: &str, with: char) -> Result<(Json, bool), ParseError> {
+    let mut parser = Parser::new(text, false);
+    parser.lone = Lone::ReplaceAll(with);
+    let value = parser.whole()?;
+    Ok((value, parser.replaced))
+}
+
+/// [`parse_replacing`] for a WebSocket frame (see [`Lone::Frame`]).
+pub fn parse_frame(text: &str) -> Result<(Json, bool), ParseError> {
+    let mut parser = Parser::new(text, false);
+    parser.lone = Lone::Frame;
+    let value = parser.whole()?;
+    Ok((value, parser.replaced))
+}
+
+/// [`parse_prefix`] with a lone surrogate in a string value read as `with`.
+pub fn parse_prefix_replacing(text: &str, with: char) -> Result<(Json, usize), ParseError> {
+    let mut parser = Parser::new(text, false);
+    parser.lone = Lone::Replace(with);
+    parser.skip_whitespace();
+    let value = parser.value(0)?;
+    Ok((value, parser.at))
+}
+
+/// [`parse`] for the claims of a token on the emulator profile: a lone surrogate in a string or a key is its
+/// stand-in, and a real character that is a stand-in or the escape character follows the escape character.
+pub fn parse_claims(text: &str) -> Result<Json, ParseError> {
+    let mut parser = Parser::new(text, false);
+    parser.lone = Lone::Encode;
+    parser.whole()
 }
 
 /// Parses one JSON value without recording key positions (the common path).
@@ -72,8 +133,8 @@ struct Parser<'a> {
     at: usize,
     /// Whether to record where each key starts.
     record_keys: bool,
-    /// Whether a lone surrogate escape in a string value is `?` (never in a key).
-    replace_lone: bool,
+    /// How a lone surrogate escape is read.
+    lone: Lone,
     /// Whether one was.
     replaced: bool,
     keys: Vec<KeyAt>,
@@ -88,7 +149,7 @@ impl<'a> Parser<'a> {
             text,
             at: 0,
             record_keys,
-            replace_lone: false,
+            lone: Lone::Refuse,
             replaced: false,
             keys: Vec::new(),
             mark: (0, 1, 1),
@@ -132,7 +193,7 @@ impl<'a> Parser<'a> {
             b'n' => self.expect("null").map(|()| Json::Null),
             b't' => self.expect("true").map(|()| Json::Bool(true)),
             b'f' => self.expect("false").map(|()| Json::Bool(false)),
-            b'"' => self.string(self.replace_lone).map(Json::String),
+            b'"' => self.string(self.lone).map(Json::String),
             b'[' => self.array(depth),
             b'{' => self.object(depth),
             b'-' | b'0'..=b'9' => self.number(),
@@ -177,7 +238,12 @@ impl<'a> Parser<'a> {
                 return Err(ParseError);
             }
             let position = self.record_keys.then(|| self.position());
-            let key = self.string(false)?;
+            let key = self.string(match self.lone {
+                Lone::Encode => Lone::Encode,
+                Lone::ReplaceAll(with) => Lone::ReplaceAll(with),
+                Lone::Frame => Lone::ReplaceAll('.'),
+                _ => Lone::Refuse,
+            })?;
             if let Some((line, column)) = position {
                 self.keys.push(KeyAt {
                     key: key.clone(),
@@ -218,7 +284,7 @@ impl<'a> Parser<'a> {
         (line, column)
     }
 
-    fn string(&mut self, replace_lone: bool) -> Result<String, ParseError> {
+    fn string(&mut self, lone: Lone) -> Result<String, ParseError> {
         self.at += 1;
         let mut out = String::new();
         loop {
@@ -228,25 +294,33 @@ impl<'a> Parser<'a> {
             self.at += c.len_utf8();
             match c {
                 '"' => return Ok(out),
-                '\\' => out.push(self.escape(replace_lone)?),
+                '\\' => {
+                    let (c, stood_in) = self.escape(lone)?;
+                    if stood_in {
+                        out.push(c);
+                    } else {
+                        push(&mut out, c, lone);
+                    }
+                }
                 '\u{0}'..='\u{1f}' => return Err(ParseError),
-                c => out.push(c),
+                c => push(&mut out, c, lone),
             }
         }
     }
 
-    fn escape(&mut self, replace_lone: bool) -> Result<char, ParseError> {
+    /// The character an escape stands for, and whether it is what a lone surrogate was given (not to be protected).
+    fn escape(&mut self, lone: Lone) -> Result<(char, bool), ParseError> {
         let c = self.peek().ok_or(ParseError)?;
         self.at += 1;
         Ok(match c {
-            b'"' => '"',
-            b'\\' => '\\',
-            b'/' => '/',
-            b'b' => '\u{8}',
-            b'f' => '\u{c}',
-            b'n' => '\n',
-            b'r' => '\r',
-            b't' => '\t',
+            b'"' => ('"', false),
+            b'\\' => ('\\', false),
+            b'/' => ('/', false),
+            b'b' => ('\u{8}', false),
+            b'f' => ('\u{c}', false),
+            b'n' => ('\n', false),
+            b'r' => ('\r', false),
+            b't' => ('\t', false),
             b'u' => {
                 let first = self.hex4()?;
                 if (0xD800..0xDC00).contains(&first) {
@@ -257,25 +331,40 @@ impl<'a> Parser<'a> {
                         .ok()
                         .filter(|second| (0xDC00..0xE000).contains(second));
                     let Some(second) = second else {
-                        if replace_lone {
-                            // A high surrogate without its low one is a `?`; what follows is read afresh.
-                            self.at = after_first;
-                            self.replaced = true;
-                            return Ok('?');
-                        }
-                        return Err(ParseError);
+                        // A high surrogate without its low one; what follows is read afresh.
+                        self.at = after_first;
+                        return self.lone_unit(lone, first);
                     };
                     let code = 0x10000 + ((first - 0xD800) << 10) + (second - 0xDC00);
-                    char::from_u32(code).ok_or(ParseError)?
-                } else if (0xDC00..0xE000).contains(&first) && replace_lone {
-                    self.replaced = true;
-                    '?'
+                    (char::from_u32(code).ok_or(ParseError)?, false)
+                } else if (0xDC00..0xE000).contains(&first) {
+                    self.lone_unit(lone, first)?
                 } else {
-                    char::from_u32(first).ok_or(ParseError)?
+                    (char::from_u32(first).ok_or(ParseError)?, false)
                 }
             }
             _ => return Err(ParseError),
         })
+    }
+
+    /// What a lone surrogate `unit` is read as.
+    fn lone_unit(&mut self, lone: Lone, unit: u32) -> Result<(char, bool), ParseError> {
+        match lone {
+            Lone::Refuse => Err(ParseError),
+            Lone::Replace(with) | Lone::ReplaceAll(with) => {
+                self.replaced = true;
+                Ok((with, true))
+            }
+            Lone::Frame => {
+                self.replaced = true;
+                Ok(('?', true))
+            }
+            Lone::Encode => {
+                self.replaced = true;
+                let unit = u16::try_from(unit).map_err(|_| ParseError)?;
+                Ok((fireemu_core_database::lone::stand_in(unit), true))
+            }
+        }
     }
 
     fn hex4(&mut self) -> Result<u32, ParseError> {
@@ -338,4 +427,12 @@ impl<'a> Parser<'a> {
             self.at += 1;
         }
     }
+}
+
+/// Adds `c` to a string being read, after the escape character when the claims encoding must protect it.
+fn push(out: &mut String, c: char, lone: Lone) {
+    if lone == Lone::Encode && fireemu_core_database::lone::is_reserved(c) {
+        out.push(fireemu_core_database::lone::ESCAPE);
+    }
+    out.push(c);
 }

@@ -352,3 +352,50 @@ fn a_built_import_revokes_listeners_using_the_installed_data_and_time() {
         );
     }
 }
+
+/// A lone surrogate escape in a value of an import file is stored as `?` on the emulator profile, as the official
+/// emulator stores it (`PUT /.json`, which is what `--import` sends it; jar-import.json). A key that holds one is
+/// refused. The strict profile refuses the file as before, when it is installed (a prepared file cannot know the
+/// profile).
+#[test]
+fn an_import_with_a_lone_surrogate_in_a_value_is_stored_as_a_question_mark_on_the_emulator_profile_only(
+) {
+    let text = r#"{"t":{"a":"x\ud83d"},"u":"\ude00","v":"ok😀"}"#;
+    let direct = |strict: bool| {
+        let mut db = Database::new(
+            RestOptions {
+                production_shapes: strict,
+                ..RestOptions::default()
+            },
+            1,
+        );
+        let answer = db.import_text("p", text, NOW);
+        (answer, db.export_texts())
+    };
+    let prepared = |strict: bool| {
+        let mut db = Database::new(
+            RestOptions {
+                production_shapes: strict,
+                ..RestOptions::default()
+            },
+            1,
+        );
+        let answer = prepare_import("p", text.to_owned(), &Limits::default())
+            .and_then(|import| db.install_import(import, NOW));
+        (answer, db.export_texts())
+    };
+    let emulator = (
+        Ok(()),
+        vec![(
+            "p".to_owned(),
+            "{\"t\":{\"a\":\"x?\"},\"u\":\"?\",\"v\":\"ok\u{1F600}\"}".to_owned(),
+        )],
+    );
+    assert_eq!(direct(false), emulator);
+    assert_eq!(prepared(false), emulator);
+    let parse = "Invalid data; couldn't parse JSON object, array, or value.";
+    assert_eq!(direct(true), (Err(parse.to_owned()), Vec::new()));
+    assert_eq!(prepared(true), (Err(parse.to_owned()), Vec::new()));
+    // A key that holds one is refused before anything is installed.
+    assert!(prepare_import("p", r#"{"t":{"a\ud83d":1}}"#.to_owned(), &Limits::default()).is_err());
+}

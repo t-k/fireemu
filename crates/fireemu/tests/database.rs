@@ -813,6 +813,86 @@ fn the_inspect_route_needs_the_owner_except_under_the_emulator_profile() {
     }
 }
 
+/// A mock token for `uid` of the test project whose claims also hold `extra` (members of the claims object, as text).
+fn mock_token_with(uid: &str, extra: &str) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let claims = format!(
+        r#"{{"iss":"https://securetoken.google.com/{PROJECT}","aud":"{PROJECT}","iat":{now},"exp":{},"sub":"{uid}",{extra}}}"#,
+        now + 3600
+    );
+    format!(
+        "{}.{}.",
+        segment(r#"{"alg":"none","type":"JWT"}"#).trim_end_matches('.'),
+        segment(&claims).trim_end_matches('.')
+    )
+}
+
+/// A claim that holds a lone surrogate (`"x":"\ud83d"`) is read by the emulator profile as the official emulator
+/// reads it (the daemon's own token verifier checks the claims on a copy and the Rules see the original), so
+/// `auth.token.x == '\uD83D'` holds there; the strict profile does not read such a token (it is refused). A pair and a claim name that
+/// holds one behave alike; a plain claim is unchanged (owner row "RTDB closure lone surrogates in claims and query
+/// values", 2026-11-06; jar rows in rules-lone-claims-query-official-emulator-4.11.2.json).
+#[test]
+fn a_claim_with_a_lone_surrogate_is_read_by_the_emulator_profile_only() {
+    let dir = Scratch::new("database", "lone-claims");
+    let firebase_json = dir.join("firebase.json");
+    std::fs::write(
+        &firebase_json,
+        r#"{"database":[{"instance":"demo-rtdb-default-rtdb","rules":"database.rules.json"}]}"#,
+    )
+    .unwrap();
+    let cases = [
+        // (rule, extra claims, emulator read, strict read)
+        ("auth.token.x == '\\uD83D'", r#""x":"\ud83d""#, 200, 401),
+        ("auth.token.x.length == 1", r#""x":"\ud83d""#, 200, 401),
+        ("!(auth.token.x == '\\uD83D')", r#""x":"\ud83d""#, 401, 401),
+        (
+            "auth.token.x == '\\uD83D'",
+            r#""x":"\ud83d\ude00""#,
+            401,
+            401,
+        ),
+        ("auth.token.x == '😀'", r#""x":"\ud83d\ude00""#, 200, 200),
+        ("auth.token['\\uD83D'] == 1", r#""\ud83d":1"#, 200, 401),
+        ("auth.token.x == 'v'", r#""x":"v""#, 200, 200),
+    ];
+    for (name, config) in [
+        ("emulator", r#"{"schemaVersion":1,"profile":"emulator"}"#),
+        ("strict", r#"{"schemaVersion":1,"profile":"strict"}"#),
+    ] {
+        let path = dir.join(format!("{name}.json"));
+        std::fs::write(&path, config).unwrap();
+        for (rule, extra, emulator, strict) in cases {
+            std::fs::write(
+                dir.join("database.rules.json"),
+                format!(
+                    r#"{{"rules":{{"t":{{".read":"{}"}}}}}}"#,
+                    rule.replace('\\', "\\\\")
+                ),
+            )
+            .unwrap();
+            let daemon = Daemon::start(&[
+                "--firebase-json",
+                firebase_json.to_str().unwrap(),
+                "--config",
+                path.to_str().unwrap(),
+                "--only",
+                "database,auth",
+                "--database-port",
+                "0",
+            ]);
+            let token = mock_token_with("u1", extra);
+            let target = format!("/t.json?ns=demo-rtdb-default-rtdb&auth={token}");
+            let (status, body) = request(daemon.database_port(), "GET", &target, &[], "");
+            let want = if name == "emulator" { emulator } else { strict };
+            assert_eq!(status, want, "{name} {rule} {extra}: {body}");
+        }
+    }
+}
+
 /// The unsigned ID token `@firebase/rules-unit-testing` mints for `uid` of the test project
 /// (the SDK's `mockUserToken` shape).
 fn mock_token(uid: &str) -> String {

@@ -662,7 +662,29 @@ test("the SDK events campaign replays strict with the package SDKs and binds the
     ...EVENTS_OBSERVER.map((name) => `sdk-observer/${name}`),
   ])
     assert.ok(resources.includes(`tools/sdk-smoke-database/${file}`), file);
-  const sdk = Object.keys(runtimeResources("sdk-events"));
+  // The pinned SDK packages are installed under tools/sdk-smoke-database only by the release job and on a
+  // developer machine, not by the conformance workflow: the resources are read from a stand-in directory.
+  const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const stand = mkdtempSync(join(tmpdir(), "rtdb-events-resources-"));
+  let sdk;
+  try {
+    for (const [name, version] of [
+      ["firebase", "12.18.0"],
+      ["firebase-admin", "14.3.0"],
+      ["playwright", "1.62.1"],
+    ]) {
+      mkdirSync(join(stand, "node_modules", name), { recursive: true });
+      writeFileSync(join(stand, "node_modules", name, "package.json"), JSON.stringify({ version }));
+    }
+    for (const name of ["firebase-app.js", "firebase-auth.js", "firebase-database.js"])
+      writeFileSync(join(stand, "node_modules", "firebase", name), name);
+    writeFileSync(join(stand, "package-lock.json"), "{}");
+    sdk = Object.keys(runtimeResources("sdk-events", stand));
+  } finally {
+    rmSync(stand, { recursive: true, force: true });
+  }
   for (const file of [
     "package-lock.json",
     "node_modules/firebase/package.json",

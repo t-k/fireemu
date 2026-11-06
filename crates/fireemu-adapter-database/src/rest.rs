@@ -826,7 +826,11 @@ impl Database {
             None
         } else {
             // A conditional read is refused with a query above and ignores `timeout`.
-            request::query(&params, condition.is_none())?
+            request::query(
+                &params,
+                condition.is_none(),
+                !self.options.production_shapes,
+            )?
         };
         // An event stream whose query only orders loads all the data, and the official
         // emulator follows it as a plain stream: judged without the query, needing no index.
@@ -1810,7 +1814,7 @@ pub fn parse_body(request: &HttpRequest) -> Option<ParsedBody> {
 /// its entries in that order.
 fn parse_ordered(text: &str) -> ParsedBody {
     if !text.trim_start().starts_with('{') {
-        return match parse_replacing(text) {
+        return match parse_replacing(text, '?') {
             Ok((json, replaced)) => ParsedBody {
                 json: Ok(json),
                 replaced_lone_surrogate: replaced,
@@ -1823,7 +1827,7 @@ fn parse_ordered(text: &str) -> ParsedBody {
             },
         };
     }
-    match parse_with_keys_replacing(text) {
+    match parse_with_keys_replacing(text, '?') {
         Ok((json, keys, replaced)) => ParsedBody {
             json: Ok(json),
             replaced_lone_surrogate: replaced,
@@ -1911,7 +1915,18 @@ pub fn prepare_import(
     if text.is_empty() {
         return Err("No data supplied.".to_owned());
     }
-    let json = parse(&text).map_err(|_| PARSE_ERROR.to_owned())?;
+    let Ok(json) = parse(&text) else {
+        // A lone surrogate escape in a value: the emulator profile stores `?` for it, as the official
+        // emulator does, and the strict profile refuses the file. This function knows no profile, so the
+        // Database that installs the file answers by its own `PUT` path (with `import_text`).
+        if matches!(parse_replacing(&text, '?'), Ok((_, true))) {
+            return Ok(PreparedImport {
+                namespace,
+                content: ImportContent::Deferred(text),
+            });
+        }
+        return Err(PARSE_ERROR.to_owned());
+    };
     if has_server_value(&json) {
         drop(json);
         let options = RestOptions {
@@ -2326,7 +2341,7 @@ fn write_refusal(err: &DatabaseError, otherwise: impl FnOnce() -> Refusal) -> Re
 /// document order, that is empty or holds a forbidden character when there is one; the
 /// generic parse error otherwise.
 fn data_refusal(body: &str) -> Refusal {
-    let keys = parse_with_keys_replacing(body)
+    let keys = parse_with_keys_replacing(body, '?')
         .map(|(_, keys, _)| keys)
         .unwrap_or_default();
     let refused = keys.iter().find(|at| {

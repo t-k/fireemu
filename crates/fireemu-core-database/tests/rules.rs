@@ -111,7 +111,7 @@ fn differences(fixture: &str) -> Vec<String> {
 }
 
 /// [`differences`] with the emulator profile's regular-expression dialect on or off.
-fn differences_with(fixture: &str, jar_regex: bool) -> Vec<String> {
+fn differences_with(fixture: &str, jar_dialect: bool) -> Vec<String> {
     let corpus: Vec<serde_json::Value> = serde_json::from_str(fixture).unwrap();
     let tree = seed();
     let auth = auth();
@@ -133,7 +133,7 @@ fn differences_with(fixture: &str, jar_regex: bool) -> Vec<String> {
             })
             .unwrap_or_default();
         let compiled =
-            Rules::compile(&read_rule_at_t(expr)).map(|r| r.with_jar_regex_dialect(jar_regex));
+            Rules::compile(&read_rule_at_t(expr)).map(|r| r.with_jar_dialect(jar_dialect));
         let got = match (&compiled, entry["load"].as_u64().unwrap()) {
             (Err(error), 400) => {
                 let expected = entry["error"].as_str().unwrap().trim_end_matches('\n');
@@ -653,6 +653,19 @@ mod properties {
         Some(rules.can_read(tree.root(), &p("/t"), None, &requester))
     }
 
+    /// `expr` read by user `u1`-less requester whose `auth` is `auth` with the claims encoding (the emulator profile).
+    fn holds_for_claims(expr: &str, auth: &Json, encoded: bool) -> Option<bool> {
+        let rules = Rules::compile(&read_rule_at_t(expr))
+            .ok()?
+            .with_encoded_claims(encoded);
+        let tree = seed();
+        let requester = Requester {
+            auth,
+            now: 1_792_464_733_000,
+        };
+        Some(rules.can_read(tree.root(), &p("/t"), None, &requester))
+    }
+
     /// One atom of a pattern in the official emulator's dialect, with the language it stands for as a predicate on a
     /// run of characters (the automaton's view): `\W` and `\D` are complements of languages of strings.
     #[derive(Debug, Clone, Copy)]
@@ -805,6 +818,45 @@ mod properties {
     }
 
     proptest! {
+        #![proptest_config(ProptestConfig {cases: 400, rng_seed: proptest::test_runner::RngSeed::Fixed(0x2276), ..ProptestConfig::default()})]
+
+        /// A claim written in the emulator profile's encoding reads as the Java string it stands for: its length counts
+        /// units, it equals the literal of the same units (a pair spelled by two escapes is the character), `+` joins,
+        /// and a member or key that holds a lone surrogate is found by an index spelled with it. Without the encoding
+        /// flag (the strict profile) the same document is the plain characters.
+        #[test]
+        fn a_claim_reads_as_the_java_string_it_stands_for(units in unit_text(), other in unit_text()) {
+            let stored = fireemu_core_database::lone::encode(&units);
+            let key = fireemu_core_database::lone::encode(&other);
+            let auth = j(serde_json::json!({"uid": "u1", "x": stored.clone(), "token": {"x": stored, key: 1}}));
+            let spelled = literal(&units);
+            prop_assert_eq!(
+                holds_for_claims(&format!("auth.token.x == {spelled}"), &auth, true),
+                Some(true)
+            );
+            prop_assert_eq!(
+                holds_for_claims(&format!("auth.x.length == {}", units.len()), &auth, true),
+                Some(true)
+            );
+            prop_assert_eq!(
+                holds_for_claims(&format!("auth.token.x + 'a' == {}", literal(&[units.clone(), vec![0x61]].concat())), &auth, true),
+                Some(true)
+            );
+            prop_assert_eq!(
+                holds_for_claims(&format!("auth.token[{}] == 1", literal(&other)), &auth, true),
+                Some(true)
+            );
+            // Another string is not equal.
+            let mut changed = units.clone();
+            changed.push(0xD83D);
+            prop_assert_eq!(
+                holds_for_claims(&format!("auth.token.x == {}", literal(&changed)), &auth, true),
+                Some(false)
+            );
+        }
+    }
+
+    proptest! {
         #![proptest_config(ProptestConfig {cases: 600, rng_seed: proptest::test_runner::RngSeed::Fixed(0x10_5f), ..ProptestConfig::default()})]
 
         /// The emulator profile's `\W`, `\D`, classes holding them and escaped letters match as the language they stand for
@@ -834,7 +886,7 @@ mod properties {
             let auth = auth();
             let requester = Requester { auth: &auth, now: 0 };
             let read = |rules: &Rules| rules.can_read(tree.root(), &p("/t"), None, &requester);
-            let emulator = read(&rules.clone().with_jar_regex_dialect(true));
+            let emulator = read(&rules.clone().with_jar_dialect(true));
             prop_assert_eq!(emulator, oracle(&atoms, &subject), "{}", expr);
             let strict = read(&rules);
             prop_assert!(!strict || emulator, "{}", expr);

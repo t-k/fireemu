@@ -35,15 +35,15 @@ proptest! {
         let text = format!("\"{}\"", spelled(&units));
         let expected = java_text(&units);
         let lone = char::decode_utf16(units.iter().copied()).any(|d| d.is_err());
-        prop_assert_eq!(parse_replacing(&text).unwrap(), (Json::String(expected.clone()), lone));
+        prop_assert_eq!(parse_replacing(&text, '?').unwrap(), (Json::String(expected.clone()), lone));
         // Nested in an object value and an array, and the strict parser refuses exactly the lone ones.
         let object = format!("{{\"k\":[{text}]}}");
-        let (value, _, replaced) = parse_with_keys_replacing(&object).unwrap();
+        let (value, _, replaced) = parse_with_keys_replacing(&object, '?').unwrap();
         prop_assert_eq!(replaced, lone);
         prop_assert_eq!(value, Json::object([("k".to_owned(), Json::Array(vec![Json::String(expected)]))]));
         prop_assert_eq!(parse(&text).is_err(), lone);
         // A key holding the same units is refused when a unit is lone.
         let key = format!("{{\"{}\":1}}", spelled(&units));
-        prop_assert_eq!(parse_with_keys_replacing(&key).is_err(), lone);
+        prop_assert_eq!(parse_with_keys_replacing(&key, '?').is_err(), lone);
     }
 }

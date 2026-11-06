@@ -31,6 +31,7 @@ use crate::json::Json;
 use crate::node::Node;
 use crate::path::Path;
 use crate::query::QueryParams;
+use eval::Dialect;
 
 /// A rule expression as the rules file spells it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -149,7 +150,7 @@ pub struct Rules {
     /// Whether a regular expression is read in the official emulator's dialect where this
     /// engine would otherwise refuse it (`\W`, `\D`, an escaped letter), as the emulator profile
     /// does. The strict profile keeps the refusal: production has not answered these.
-    jar_regex: bool,
+    dialect: Dialect,
 }
 
 /// The stack of the thread that parses and checks rules.
@@ -166,8 +167,16 @@ pub struct Requester<'a> {
 impl Rules {
     /// These rules with the emulator profile's regular-expression dialect switched on or off.
     #[must_use]
-    pub fn with_jar_regex_dialect(mut self, on: bool) -> Self {
-        self.jar_regex = on;
+    pub fn with_jar_dialect(mut self, on: bool) -> Self {
+        self.dialect.regex = on;
+        self
+    }
+
+    /// These rules reading the strings of `auth` as the emulator profile writes them: a lone surrogate in a
+    /// claim is a stand-in of [`crate::lone`] (see [`Dialect::claims`]).
+    #[must_use]
+    pub fn with_encoded_claims(mut self, on: bool) -> Self {
+        self.dialect.claims = on;
         self
     }
 
@@ -216,7 +225,7 @@ impl Rules {
                 .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
                 .map(|root| Self {
                     root,
-                    jar_regex: false,
+                    dialect: Dialect::default(),
                 })
         })
     }
@@ -305,7 +314,7 @@ impl Rules {
                     query,
                     read_kind: kind,
                     wildcards: &wildcards,
-                    jar_regex: self.jar_regex,
+                    dialect: self.dialect,
                 };
                 if run(rule, &scope) {
                     return true;
@@ -368,7 +377,7 @@ impl Rules {
         at: &Path,
         requester: &Requester<'a>,
         wildcards: &'a BTreeMap<String, String>,
-        jar_regex: bool,
+        dialect: Dialect,
     ) -> eval::Scope<'a> {
         eval::Scope {
             auth: requester.auth,
@@ -388,7 +397,7 @@ impl Rules {
             query: None,
             read_kind: ReadKind::Check,
             wildcards,
-            jar_regex,
+            dialect,
         }
     }
 
@@ -405,7 +414,7 @@ impl Rules {
         let mut keys = path.keys().iter();
         while let Some(rule_node) = node {
             if let Some(rule) = &rule_node.write {
-                let scope = Self::scope(before, after, &at, requester, &wildcards, self.jar_regex);
+                let scope = Self::scope(before, after, &at, requester, &wildcards, self.dialect);
                 if run(rule, &scope) {
                     return true;
                 }
@@ -439,7 +448,7 @@ impl Rules {
                 &at,
                 requester,
                 &wildcards,
-                self.jar_regex,
+                self.dialect,
             ) {
                 return false;
             }
@@ -456,7 +465,7 @@ impl Rules {
             &at,
             requester,
             &mut wildcards,
-            self.jar_regex,
+            self.dialect,
         )
     }
 
@@ -467,7 +476,7 @@ impl Rules {
         at: &Path,
         requester: &Requester<'_>,
         wildcards: &BTreeMap<String, String>,
-        jar_regex: bool,
+        dialect: Dialect,
     ) -> bool {
         let Some(rule) = &node.validate else {
             return true;
@@ -477,7 +486,7 @@ impl Rules {
         }
         run(
             rule,
-            &Self::scope(before, after, at, requester, wildcards, jar_regex),
+            &Self::scope(before, after, at, requester, wildcards, dialect),
         )
     }
 
@@ -488,9 +497,9 @@ impl Rules {
         at: &Path,
         requester: &Requester<'_>,
         wildcards: &mut BTreeMap<String, String>,
-        jar_regex: bool,
+        dialect: Dialect,
     ) -> bool {
-        if !Self::validate_here(node, before, after, at, requester, wildcards, jar_regex) {
+        if !Self::validate_here(node, before, after, at, requester, wildcards, dialect) {
             return false;
         }
         let Some(written) = after.and_then(|r| r.descendant(at)) else {
@@ -511,7 +520,7 @@ impl Rules {
                 &at.child(key),
                 requester,
                 &mut bound,
-                jar_regex,
+                dialect,
             ) {
                 return false;
             }

@@ -317,78 +317,85 @@ fn complement_classes_and_escaped_letters_are_read_on_the_emulator_profile_only(
     }
 }
 
-/// Pins for two shapes the emulator profile does not follow the official emulator on (Opus delta S3; found by
-/// probing, jar rows in `docs.local/runs/rtdb-lone-surrogate/jar-s3.json`, ours in `fireemu-s3-*.json`). They are
-/// declared as not followed and not claimed in the closure record:
-/// - a token whose claim holds a lone surrogate is not read (the request is judged as without it, so
-///   `auth.token.x == '\uD83D'` is false where the jar reads the claim and allows it);
-/// - a query value that holds one (`startAt="\ud83d"`) is refused with 400 before any rule.
-///
-/// A pair is read as the character. The strict profile refuses a forged token before any rule.
+/// A token whose claims hold a lone surrogate (`"x":"\ud83d"`, as a claim name too) and a query value that holds one
+/// (`startAt="\ud83d"`) decide as the official emulator does on the emulator profile (owner row "RTDB closure lone
+/// surrogates in claims and query values", 2026-11-06): the claim is the Java string it is (`auth.token.x == '\uD83D'`,
+/// its length is 1) and a query value reads as `?`, as a body value does. 76 jar rows
+/// (`docs.local/runs/rtdb-lone-surrogate/jar-claims.json`, probe-rows.mjs). The strict profile keeps today's answers: it
+/// refuses the forged token, and refuses the query value with 400 `Constraint index field must be a JSON primitive`.
 #[test]
-fn lone_surrogates_in_claims_and_query_values_are_pinned() {
-    let high = token(r#"{"sub":"u1","uid":"u1","iat":1,"exp":9999999999,"x":"\ud83d"}"#);
-    let pair = token(r#"{"sub":"u1","uid":"u1","iat":1,"exp":9999999999,"x":"\ud83d\ude00"}"#);
-    // (token, expression, emulator read, jar read)
-    let claims: [(&String, &str, u16, u16); 8] = [
-        (&high, "auth.token.x == '\\uD83D'", 401, 200),
-        (&high, "auth.token.x.length == 1", 401, 200),
-        (&high, "!(auth.token.x == '\\uD83D')", 200, 401),
-        (&high, "auth.token.x != null", 401, 200),
-        (&high, "auth.token.x == '😀'", 401, 401),
-        (&pair, "auth.token.x == '😀'", 200, 200),
-        (&pair, "auth.token.x.length == 2", 200, 200),
-        (&pair, "auth.token.x == '\\uD83D'", 401, 401),
-    ];
-    // The emulator profile only: the strict profile refuses a forged token before any rule (its own tests).
-    for (token, expression, emulator, _jar) in claims {
-        {
-            let mut database = Database::new(RestOptions::default(), 7);
+fn lone_surrogates_in_claims_and_query_values_decide_as_the_official_emulator() {
+    let rows: Vec<serde_json::Value> = serde_json::from_str(include_str!(
+        "fixtures/rules-lone-claims-query-official-emulator-4.11.2.json"
+    ))
+    .unwrap();
+    let seed = r#"{"a":{"b":1},"c":{"b":2},"x":"v"}"#;
+    let mut failures = Vec::new();
+    for row in &rows {
+        let expression = row["expr"].as_str().unwrap();
+        let claims = row["claims"].as_str();
+        let query = row["query"].as_str().unwrap_or("");
+        let expected = u16::try_from(row["read"].as_u64().unwrap()).unwrap();
+        for strict in [false, true] {
+            let options = RestOptions {
+                production_shapes: strict,
+                credentials: fireemu_adapter_database::rest::Credentials {
+                    strict,
+                    ..Default::default()
+                },
+                ..RestOptions::default()
+            };
+            let mut database = Database::new(options, 7);
+            call(&mut database, "PUT", "/t.json?ns=t", OWNER, seed);
             let rules = format!(
-                r#"{{"rules":{{".read":"{}"}}}}"#,
+                r#"{{"rules":{{"t":{{".read":"{}"}}}}}}"#,
                 expression.replace('\\', "\\\\").replace('"', "\\\"")
             );
             load(&mut database, "t", &rules);
-            let got = call(
-                &mut database,
-                "GET",
-                &format!("/x.json?ns=t&auth={token}"),
-                &[],
-                "",
-            );
-            assert_eq!(got.0, emulator, "{expression}");
+            let mut target = String::from("/t.json?ns=t");
+            if let Some(claims) = claims {
+                target.push_str("&auth=");
+                target.push_str(&token(claims));
+            }
+            if !query.is_empty() {
+                target.push('&');
+                target.push_str(query);
+            }
+            let got = call(&mut database, "GET", &target, &[], "");
+            // A bound with a lone surrogate (not a valid pair) is what the strict profile refuses.
+            let lone_bound = query.contains("%5Cud83d%22") || query.contains("a%5Cude00%22");
+            let want = if !strict {
+                expected
+            } else if claims.is_some_and(|text| {
+                let rest = text.replace("\\ud83d\\ude00", "");
+                rest.contains("\\ud83d") || rest.contains("\\ude00")
+            }) {
+                401
+            } else if lone_bound {
+                400
+            } else {
+                expected
+            };
+            if got.0 != want {
+                failures.push(format!(
+                    "strict={strict} {expression} {claims:?} {query}: {} vs {want}",
+                    got.0
+                ));
+            }
+            if strict && lone_bound {
+                assert!(
+                    got.1
+                        .contains("Constraint index field must be a JSON primitive"),
+                    "{expression} {query}: {got:?}"
+                );
+            }
         }
     }
-    for strict in [false, true] {
-        let mut database = Database::new(
-            RestOptions {
-                production_shapes: strict,
-                ..RestOptions::default()
-            },
-            7,
-        );
-        load(
-            &mut database,
-            "t",
-            r#"{"rules":{".read":"query.startAt.length == 1"}}"#,
-        );
-        let lone = call(
-            &mut database,
-            "GET",
-            "/x.json?ns=t&orderBy=%22%24key%22&startAt=%22%5Cud83d%22",
-            &[],
-            "",
-        );
-        assert_eq!(
-            lone,
-            (
-                400,
-                "{\n  \"error\" : \"Constraint index field must be a JSON primitive\"\n}\n"
-                    .to_owned()
-            ),
-            "strict={strict}"
-        );
-    }
+    assert!(
+        failures.is_empty(),
+        "{} rows differ: {failures:#?}",
+        failures.len()
+    );
 }
 
 /// `query.orderBy` loads and is not null on a plain read, a stream or a listen, and null on a shallow read (the

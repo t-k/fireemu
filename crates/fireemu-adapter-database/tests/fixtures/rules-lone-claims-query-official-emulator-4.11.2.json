@@ -1,0 +1,382 @@
+[
+ {
+  "expr": "auth.token.x == '\\uD83D'",
+  "read": 200,
+  "claims": "{\"sub\":\"u1\",\"uid\":\"u1\",\"iat\":1,\"exp\":9999999999,\"x\":\"\\ud83d\"}"
+ },
+ {
+  "expr": "auth.token.x == auth.token.x",
+  "read": 200,
+  "claims": "{\"sub\":\"u1\",\"uid\":\"u1\",\"iat\":1,\"exp\":9999999999,\"x\":\"\\ud83d\"}"
+ },
+ {
+  "expr": "auth.token.x.length == 1",
+  "read": 200,
+  "claims": "{\"sub\":\"u1\",\"uid\":\"u1\",\"iat\":1,\"exp\":9999999999,\"x\":\"\\ud83d\"}"
+ },
+ {
+  "expr": "auth.token.x + 'a' == '\\uD83Da'",
+  "read": 200,
+  "claims": "{\"sub\":\"u1\",\"uid\":\"u1\",\"iat\":1,\"exp\":9999999999,\"x\":\"\\ud83d\"}"
+ },
+ {
+  "expr": "'a' + auth.token.x == 'a\\uD83D'",
+  "read": 200,
+  "claims": "{\"sub\":\"u1\",\"uid\":\"u1\",\"iat\":1,\"exp\":9999999999,\"x\":\"\\ud83d\"}"
+ },
+ {
+  "expr": "auth.token.x.beginsWith('\\uD83D')",
+  "read": 200,
+  "claims": "{\"sub\":\"u1\",\"uid\":\"u1\",\"iat\":1,\"exp\":9999999999,\"x\":\"\\ud83d\"}"
+ },
+ {
+  "expr": "auth.token.x.replace('\\uD83D','z') == 'z'",
+  "read": 200,
+  "claims": "{\"sub\":\"u1\",\"uid\":\"u1\",\"iat\":1,\"exp\":9999999999,\"x\":\"\\ud83d\"}"
+ },
+ {
+  "expr": "auth.token.x < 'a'",
+  "read": 401,
+  "claims": "{\"sub\":\"u1\",\"uid\":\"u1\",\"iat\":1,\"exp\":9999999999,\"x\":\"\\ud83d\"}"
+ },
+ {
+  "expr": "auth.token.x > 'a'",
+  "read": 200,
+  "claims": "{\"sub\":\"u1\",\"uid\":\"u1\",\"iat\":1,\"exp\":9999999999,\"x\":\"\\ud83d\"}"
+ },
+ {
+  "expr": "auth.x == null",
+  "read": 401,
+  "claims": "{\"sub\":\"u1\",\"uid\":\"u1\",\"iat\":1,\"exp\":9999999999,\"x\":\"\\ud83d\"}"
+ },
+ {
+  "expr": "data.child(auth.token.x).exists()",
+  "read": 401,
+  "claims": "{\"sub\":\"u1\",\"uid\":\"u1\",\"iat\":1,\"exp\":9999999999,\"x\":\"\\ud83d\"}"
+ },
+ {
+  "expr": "!data.child(auth.token.x).exists()",
+  "read": 200,
+  "claims": "{\"sub\":\"u1\",\"uid\":\"u1\",\"iat\":1,\"exp\":9999999999,\"x\":\"\\ud83d\"}"
+ },
+ {
+  "expr": "data.hasChild(auth.token.x)",
+  "read": 401,
+  "claims": "{\"sub\":\"u1\",\"uid\":\"u1\",\"iat\":1,\"exp\":9999999999,\"x\":\"\\ud83d\"}"
+ },
+ {
+  "expr": "auth.token.x.matches(/^.$/)",
+  "read": 200,
+  "claims": "{\"sub\":\"u1\",\"uid\":\"u1\",\"iat\":1,\"exp\":9999999999,\"x\":\"\\ud83d\"}"
+ },
+ {
+  "expr": "auth.token.x == '?'",
+  "read": 401,
+  "claims": "{\"sub\":\"u1\",\"uid\":\"u1\",\"iat\":1,\"exp\":9999999999,\"x\":\"\\ud83d\"}"
+ },
+ {
+  "expr": "auth.token.x.length == 2",
+  "read": 401,
+  "claims": "{\"sub\":\"u1\",\"uid\":\"u1\",\"iat\":1,\"exp\":9999999999,\"x\":\"\\ud83d\"}"
+ },
+ {
+  "expr": "root.child('x').val() == auth.token.x",
+  "read": 401,
+  "claims": "{\"sub\":\"u1\",\"uid\":\"u1\",\"iat\":1,\"exp\":9999999999,\"x\":\"\\ud83d\"}"
+ },
+ {
+  "expr": "auth.token.x.toUpperCase() == '\\uD83D'",
+  "read": 200,
+  "claims": "{\"sub\":\"u1\",\"uid\":\"u1\",\"iat\":1,\"exp\":9999999999,\"x\":\"\\ud83d\"}"
+ },
+ {
+  "expr": "auth.token.x + auth.token.x == '\\uD83D\\uD83D'",
+  "read": 200,
+  "claims": "{\"sub\":\"u1\",\"uid\":\"u1\",\"iat\":1,\"exp\":9999999999,\"x\":\"\\ud83d\"}"
+ },
+ {
+  "expr": "auth.token.x == 'a\\uD83D'",
+  "read": 200,
+  "claims": "{\"sub\":\"u1\",\"uid\":\"u1\",\"iat\":1,\"exp\":9999999999,\"x\":\"a\\ud83d\"}"
+ },
+ {
+  "expr": "auth.token.x.length == 2",
+  "read": 200,
+  "claims": "{\"sub\":\"u1\",\"uid\":\"u1\",\"iat\":1,\"exp\":9999999999,\"x\":\"a\\ud83d\"}"
+ },
+ {
+  "expr": "auth.token.x == '😀'",
+  "read": 200,
+  "claims": "{\"sub\":\"u1\",\"uid\":\"u1\",\"iat\":1,\"exp\":9999999999,\"x\":\"\\ud83d\\ude00\"}"
+ },
+ {
+  "expr": "auth.token.x.length == 2",
+  "read": 200,
+  "claims": "{\"sub\":\"u1\",\"uid\":\"u1\",\"iat\":1,\"exp\":9999999999,\"x\":\"\\ud83d\\ude00\"}"
+ },
+ {
+  "expr": "auth.token.x == '\\uDE00\\uD83D'",
+  "read": 200,
+  "claims": "{\"sub\":\"u1\",\"uid\":\"u1\",\"iat\":1,\"exp\":9999999999,\"x\":\"\\ude00\\ud83d\"}"
+ },
+ {
+  "expr": "auth.token.x.length == 2",
+  "read": 200,
+  "claims": "{\"sub\":\"u1\",\"uid\":\"u1\",\"iat\":1,\"exp\":9999999999,\"x\":\"\\ude00\\ud83d\"}"
+ },
+ {
+  "expr": "auth.token['\\uD83D'] == 1",
+  "read": 200,
+  "claims": "{\"sub\":\"u1\",\"uid\":\"u1\",\"iat\":1,\"exp\":9999999999,\"\\ud83d\":1}"
+ },
+ {
+  "expr": "auth.token['\\uD83D'] != null",
+  "read": 200,
+  "claims": "{\"sub\":\"u1\",\"uid\":\"u1\",\"iat\":1,\"exp\":9999999999,\"\\ud83d\":1}"
+ },
+ {
+  "expr": "auth['\\uD83D'] == null",
+  "read": 401,
+  "claims": "{\"sub\":\"u1\",\"uid\":\"u1\",\"iat\":1,\"exp\":9999999999,\"\\ud83d\":1}"
+ },
+ {
+  "expr": "auth.token.o.y == '\\uD83D'",
+  "read": 200,
+  "claims": "{\"sub\":\"u1\",\"uid\":\"u1\",\"iat\":1,\"exp\":9999999999,\"o\":{\"y\":\"\\ud83d\"},\"arr\":[\"\\ud83d\"]}"
+ },
+ {
+  "expr": "auth.token.arr[0] == '\\uD83D'",
+  "read": 200,
+  "claims": "{\"sub\":\"u1\",\"uid\":\"u1\",\"iat\":1,\"exp\":9999999999,\"o\":{\"y\":\"\\ud83d\"},\"arr\":[\"\\ud83d\"]}"
+ },
+ {
+  "expr": "auth.uid == '\\uD83D'",
+  "read": 200,
+  "claims": "{\"sub\":\"\\ud83d\",\"uid\":\"\\ud83d\",\"iat\":1,\"exp\":9999999999}"
+ },
+ {
+  "expr": "auth.token.sub == '\\uD83D'",
+  "read": 200,
+  "claims": "{\"sub\":\"\\ud83d\",\"iat\":1,\"exp\":9999999999}"
+ },
+ {
+  "expr": "auth != null",
+  "read": 200,
+  "claims": "{\"sub\":\"\\ud83d\",\"iat\":1,\"exp\":9999999999}"
+ },
+ {
+  "expr": "auth.uid == 'u1'",
+  "read": 200,
+  "claims": "{\"sub\":\"u1\",\"uid\":\"u1\",\"iat\":1,\"exp\":9999999999,\"x\":\"\\ud83d\"}"
+ },
+ {
+  "expr": "true",
+  "read": 200,
+  "query": "orderBy=%22%24key%22&startAt=%22%5Cud83d%22"
+ },
+ {
+  "expr": "query.startAt == '?'",
+  "read": 200,
+  "query": "orderBy=%22%24key%22&startAt=%22%5Cud83d%22"
+ },
+ {
+  "expr": "query.startAt.length == 1",
+  "read": 200,
+  "query": "orderBy=%22%24key%22&startAt=%22%5Cud83d%22"
+ },
+ {
+  "expr": "query.startAt == '\\uD83D'",
+  "read": 401,
+  "query": "orderBy=%22%24key%22&startAt=%22%5Cud83d%22"
+ },
+ {
+  "expr": "query.equalTo == '?'",
+  "read": 401,
+  "query": "orderBy=%22%24key%22&startAt=%22%5Cud83d%22"
+ },
+ {
+  "expr": "query.endAt == 'a?'",
+  "read": 401,
+  "query": "orderBy=%22%24key%22&startAt=%22%5Cud83d%22"
+ },
+ {
+  "expr": "query.endAt.length == 2",
+  "read": 401,
+  "query": "orderBy=%22%24key%22&startAt=%22%5Cud83d%22"
+ },
+ {
+  "expr": "true",
+  "read": 200,
+  "query": "orderBy=%22%24key%22&startAt=%22%5Cud83d%5Cude00%22"
+ },
+ {
+  "expr": "query.startAt == '?'",
+  "read": 401,
+  "query": "orderBy=%22%24key%22&startAt=%22%5Cud83d%5Cude00%22"
+ },
+ {
+  "expr": "query.startAt.length == 1",
+  "read": 401,
+  "query": "orderBy=%22%24key%22&startAt=%22%5Cud83d%5Cude00%22"
+ },
+ {
+  "expr": "query.startAt == '\\uD83D'",
+  "read": 401,
+  "query": "orderBy=%22%24key%22&startAt=%22%5Cud83d%5Cude00%22"
+ },
+ {
+  "expr": "query.equalTo == '?'",
+  "read": 401,
+  "query": "orderBy=%22%24key%22&startAt=%22%5Cud83d%5Cude00%22"
+ },
+ {
+  "expr": "query.endAt == 'a?'",
+  "read": 401,
+  "query": "orderBy=%22%24key%22&startAt=%22%5Cud83d%5Cude00%22"
+ },
+ {
+  "expr": "query.endAt.length == 2",
+  "read": 401,
+  "query": "orderBy=%22%24key%22&startAt=%22%5Cud83d%5Cude00%22"
+ },
+ {
+  "expr": "true",
+  "read": 200,
+  "query": "orderBy=%22%24key%22&equalTo=%22%5Cud83d%22"
+ },
+ {
+  "expr": "query.startAt == '?'",
+  "read": 200,
+  "query": "orderBy=%22%24key%22&equalTo=%22%5Cud83d%22"
+ },
+ {
+  "expr": "query.startAt.length == 1",
+  "read": 200,
+  "query": "orderBy=%22%24key%22&equalTo=%22%5Cud83d%22"
+ },
+ {
+  "expr": "query.startAt == '\\uD83D'",
+  "read": 401,
+  "query": "orderBy=%22%24key%22&equalTo=%22%5Cud83d%22"
+ },
+ {
+  "expr": "query.equalTo == '?'",
+  "read": 200,
+  "query": "orderBy=%22%24key%22&equalTo=%22%5Cud83d%22"
+ },
+ {
+  "expr": "query.endAt == 'a?'",
+  "read": 401,
+  "query": "orderBy=%22%24key%22&equalTo=%22%5Cud83d%22"
+ },
+ {
+  "expr": "query.endAt.length == 2",
+  "read": 401,
+  "query": "orderBy=%22%24key%22&equalTo=%22%5Cud83d%22"
+ },
+ {
+  "expr": "true",
+  "read": 200,
+  "query": "orderBy=%22%24key%22&endAt=%22a%5Cude00%22"
+ },
+ {
+  "expr": "query.startAt == '?'",
+  "read": 401,
+  "query": "orderBy=%22%24key%22&endAt=%22a%5Cude00%22"
+ },
+ {
+  "expr": "query.startAt.length == 1",
+  "read": 401,
+  "query": "orderBy=%22%24key%22&endAt=%22a%5Cude00%22"
+ },
+ {
+  "expr": "query.startAt == '\\uD83D'",
+  "read": 401,
+  "query": "orderBy=%22%24key%22&endAt=%22a%5Cude00%22"
+ },
+ {
+  "expr": "query.equalTo == '?'",
+  "read": 401,
+  "query": "orderBy=%22%24key%22&endAt=%22a%5Cude00%22"
+ },
+ {
+  "expr": "query.endAt == 'a?'",
+  "read": 200,
+  "query": "orderBy=%22%24key%22&endAt=%22a%5Cude00%22"
+ },
+ {
+  "expr": "query.endAt.length == 2",
+  "read": 200,
+  "query": "orderBy=%22%24key%22&endAt=%22a%5Cude00%22"
+ },
+ {
+  "expr": "true",
+  "read": 400,
+  "query": "orderBy=%22%24value%22&startAt=%22%5Cud83d%22"
+ },
+ {
+  "expr": "query.startAt == '?'",
+  "read": 400,
+  "query": "orderBy=%22%24value%22&startAt=%22%5Cud83d%22"
+ },
+ {
+  "expr": "query.startAt.length == 1",
+  "read": 400,
+  "query": "orderBy=%22%24value%22&startAt=%22%5Cud83d%22"
+ },
+ {
+  "expr": "query.startAt == '\\uD83D'",
+  "read": 401,
+  "query": "orderBy=%22%24value%22&startAt=%22%5Cud83d%22"
+ },
+ {
+  "expr": "query.equalTo == '?'",
+  "read": 401,
+  "query": "orderBy=%22%24value%22&startAt=%22%5Cud83d%22"
+ },
+ {
+  "expr": "query.endAt == 'a?'",
+  "read": 401,
+  "query": "orderBy=%22%24value%22&startAt=%22%5Cud83d%22"
+ },
+ {
+  "expr": "query.endAt.length == 2",
+  "read": 401,
+  "query": "orderBy=%22%24value%22&startAt=%22%5Cud83d%22"
+ },
+ {
+  "expr": "true",
+  "read": 200,
+  "query": "orderBy=%22%24priority%22&startAt=%22%5Cud83d%22"
+ },
+ {
+  "expr": "query.startAt == '?'",
+  "read": 200,
+  "query": "orderBy=%22%24priority%22&startAt=%22%5Cud83d%22"
+ },
+ {
+  "expr": "query.startAt.length == 1",
+  "read": 200,
+  "query": "orderBy=%22%24priority%22&startAt=%22%5Cud83d%22"
+ },
+ {
+  "expr": "query.startAt == '\\uD83D'",
+  "read": 401,
+  "query": "orderBy=%22%24priority%22&startAt=%22%5Cud83d%22"
+ },
+ {
+  "expr": "query.equalTo == '?'",
+  "read": 401,
+  "query": "orderBy=%22%24priority%22&startAt=%22%5Cud83d%22"
+ },
+ {
+  "expr": "query.endAt == 'a?'",
+  "read": 401,
+  "query": "orderBy=%22%24priority%22&startAt=%22%5Cud83d%22"
+ },
+ {
+  "expr": "query.endAt.length == 2",
+  "read": 401,
+  "query": "orderBy=%22%24priority%22&startAt=%22%5Cud83d%22"
+ }
+]

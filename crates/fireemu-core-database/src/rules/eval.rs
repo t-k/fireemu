@@ -112,7 +112,17 @@ pub struct Scope<'a> {
     /// The `$wildcard` keys of the location.
     pub wildcards: &'a BTreeMap<String, String>,
     /// Whether regular expressions are read in the official emulator's dialect (emulator profile).
-    pub jar_regex: bool,
+    pub dialect: Dialect,
+}
+
+/// How the emulator profile reads what the official emulator reads differently from this engine's default.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Dialect {
+    /// Regular expressions: `\W`, `\D` and escaped letters as the official emulator reads them.
+    pub regex: bool,
+    /// The strings of `auth` are written in the claims encoding of [`crate::lone`], and a lone surrogate in one
+    /// reads as the Java string it is.
+    pub claims: bool,
 }
 
 /// Which version of the tree a snapshot value reads: `root` and `data` read the tree before
@@ -161,13 +171,29 @@ pub fn allows(expr: &Expr, scope: &Scope<'_>, observer: &mut Observer<'_>) -> bo
     matches!(eval(expr, scope, observer), Some(Value::Bool(true)))
 }
 
-fn from_json<'a>(json: &Json) -> Value<'a> {
+/// A JSON value as a Rules value. `claims` reads the strings of `auth` as the emulator profile writes
+/// them (see [`crate::lone`]): a string that holds a lone surrogate is [`Value::Units`].
+fn from_json<'a>(json: &Json, claims: bool) -> Value<'a> {
     match json {
         Json::Null => Value::Null,
         Json::Bool(b) => Value::Bool(*b),
         Json::Number(n) => Value::Num(n.as_f64()),
+        Json::String(s) if claims && crate::lone::is_encoded(s) => {
+            from_units(crate::lone::decode(s))
+        }
         Json::String(s) => Value::Str(s.clone()),
         other => Value::Json(other.clone()),
+    }
+}
+
+/// The key of a member of `auth`: as the emulator profile's claims are written, or `None` for a name that
+/// holds a lone surrogate and the claims cannot hold one (the strict profile).
+fn claim_key(name: Option<&str>, units: Option<&[u16]>, claims: bool) -> Option<String> {
+    match (name, units) {
+        (Some(name), _) if claims => Some(crate::lone::escape(name)),
+        (Some(name), _) => Some(name.to_owned()),
+        (None, Some(units)) if claims => Some(crate::lone::encode(units)),
+        _ => None,
     }
 }
 
@@ -264,16 +290,17 @@ fn eval_inner<'a>(
         ExprKind::Member(object, name) => {
             let object = eval(object, scope, observer)?;
             observer.member_name(expr.diagnostic, name);
-            member(object, Some(name), scope)
+            let key = claim_key(Some(name), None, scope.dialect.claims);
+            member(object, key.as_deref(), scope)
         }
         ExprKind::Index(object, index) => {
             let object = eval(object, scope, observer)?;
             // A key holding a lone surrogate names no member of anything (no stored or claimed
             // name can hold one), so it reads as an absent member, not an error.
             let key = match eval(index, scope, observer)? {
-                Value::Str(s) => Some(s),
-                Value::Num(n) => Some(number_text(n)),
-                Value::Units(_) => None,
+                Value::Str(s) => claim_key(Some(&s), None, scope.dialect.claims),
+                Value::Num(n) => claim_key(Some(&number_text(n)), None, scope.dialect.claims),
+                Value::Units(units) => claim_key(None, Some(&units), scope.dialect.claims),
                 _ => return None,
             };
             member(object, key.as_deref(), scope)
@@ -304,7 +331,7 @@ fn eval_inner<'a>(
             if !callable {
                 observer.suppressed -= 1;
             }
-            call(object, name, &arguments?, scope.jar_regex)
+            call(object, name, &arguments?, scope.dialect.regex)
         }
         ExprKind::Not(operand) => match eval(operand, scope, observer)? {
             Value::Bool(b) => Some(Value::Bool(!b)),
@@ -329,7 +356,7 @@ fn variable<'a>(name: &str, scope: &Scope<'a>) -> Option<Value<'a>> {
         "auth" => Some(match scope.auth {
             Json::Object(_) | Json::Array(_) => Value::Auth(scope.auth.clone()),
             Json::Null => Value::AuthEmpty,
-            other => from_json(other),
+            other => from_json(other, scope.dialect.claims),
         }),
         #[allow(clippy::cast_precision_loss)]
         "now" => Some(Value::Num(scope.now as f64)),
@@ -358,7 +385,9 @@ fn member<'a>(object: Value<'a>, name: Option<&str>, scope: &Scope<'a>) -> Optio
         Value::AuthEmpty => Some(Value::AuthEmpty),
         Value::Json(Json::Object(map)) => Some(
             name.and_then(|name| map.get(name))
-                .map_or(Value::AuthEmpty, from_json),
+                .map_or(Value::AuthEmpty, |json| {
+                    from_json(json, scope.dialect.claims)
+                }),
         ),
         // An array is an object keyed by its indexes, read as `Integer.parseInt` reads them
         // (review r10 M33).
@@ -366,7 +395,9 @@ fn member<'a>(object: Value<'a>, name: Option<&str>, scope: &Scope<'a>) -> Optio
             name.and_then(java_int)
                 .and_then(|index| usize::try_from(index).ok())
                 .and_then(|index| items.get(index))
-                .map_or(Value::AuthEmpty, from_json),
+                .map_or(Value::AuthEmpty, |json| {
+                    from_json(json, scope.dialect.claims)
+                }),
         ),
         Value::Str(s) if name == Some("length") =>
         {
@@ -505,7 +536,7 @@ fn bound_value<'a>(bound: Option<&Bound>) -> Value<'a> {
     match bound.map(|b| &b.value) {
         None => Value::Null,
         Some(Json::Number(crate::number::Number::Int(n))) => Value::Long(*n),
-        Some(value) => from_json(value),
+        Some(value) => from_json(value, false),
     }
 }
 

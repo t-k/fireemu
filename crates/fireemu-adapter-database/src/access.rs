@@ -60,11 +60,26 @@ impl fmt::Debug for Credentials {
 }
 
 impl Credentials {
+    /// Whether a lone surrogate in the claims of a token is read, as the official emulator reads it (as the
+    /// stand-in of [`fireemu_core_database::lone`], which the Rules decode): every credential but the strict
+    /// profile's. The strict profile refuses a token whose claims hold one, as before; production has not
+    /// answered it.
+    pub(crate) fn lone_claims(&self) -> bool {
+        !self.strict
+    }
+
     /// The `auth` of an ID token presented to `namespace`, if it names a user.
     pub(crate) fn user(&self, token: &str, namespace: &str, now: i64) -> Option<Json> {
         let claims = match &self.id_tokens {
-            Some(verify) => crate::json_parse::parse(&verify(token, namespace, now)?).ok()?,
-            None => crate::realtime::jwt_claims(token)?,
+            Some(verify) => {
+                let text = verify(token, namespace, now)?;
+                if self.lone_claims() {
+                    crate::json_parse::parse_claims(&text).ok()?
+                } else {
+                    crate::json_parse::parse(&text).ok()?
+                }
+            }
+            None => crate::realtime::jwt_claims_for(token, self.lone_claims())?,
         };
         let Json::Object(claims) = claims else {
             return None;
@@ -470,8 +485,9 @@ impl Database {
         // The emulator profile reads a regular expression's `\W`, `\D` and escaped letters as the
         // official emulator does; the strict profile keeps them errors (production has not
         // answered them).
-        let rules =
-            rules_file::compile(text)?.with_jar_regex_dialect(!self.options().production_shapes);
+        let rules = rules_file::compile(text)?
+            .with_jar_dialect(!self.options().production_shapes)
+            .with_encoded_claims(self.options().credentials.lone_claims());
         if self
             .loaded_rules(namespace)
             .is_none_or(|loaded| loaded.text != text)

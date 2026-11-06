@@ -185,13 +185,13 @@
   "sdk": "firebase 12.18.0 (@firebase/database 1.1.5), firebase-admin 14.3.0, playwright 1.62.1 (headless Chromium)",
   "binding": {
     "release": "closure-build",
-    "releaseAsset": "unpublished release-profile build of source commit 64cc59b0eed1f0036f9e33bfa589fbd49d7e9c89 (cargo build --release --locked -p fireemu, RUSTC_WRAPPER empty, fresh worktree-local target directory)",
+    "releaseAsset": "unpublished release-profile build of source commit aa61760e1ca7de185e6c2a3e78b4a60dd829fb89 (cargo build --release --locked -p fireemu, RUSTC_WRAPPER empty, fresh worktree-local target directory)",
     "releaseAssetSha256": "ba7605038dc1aeb91c6da9a5aae1ea83eb8a419d6f7470f6972db023444ec018",
-    "sourceCommit": "64cc59b0eed1f0036f9e33bfa589fbd49d7e9c89",
+    "sourceCommit": "aa61760e1ca7de185e6c2a3e78b4a60dd829fb89",
     "tagObject": null,
     "binarySha256": "ba7605038dc1aeb91c6da9a5aae1ea83eb8a419d6f7470f6972db023444ec018",
     "version": "fireemu 0.43.0",
-    "toolCommit": "64cc59b0eed1f0036f9e33bfa589fbd49d7e9c89",
+    "toolCommit": "aa61760e1ca7de185e6c2a3e78b4a60dd829fb89",
     "host": "Darwin arm64",
     "productionRequests": 0
   },

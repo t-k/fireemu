@@ -25,7 +25,7 @@ const SDK_SMALL = "spec/compatibility/closure/evidence/RTDB-sdk-small-comparison
 // --locked -p fireemu, RUSTC_WRAPPER empty, a fresh worktree-local target directory). The Rust sources
 // are unchanged between that commit and the commit that carries these records.
 const V043 = {
-  sourceCommit: "64cc59b0eed1f0036f9e33bfa589fbd49d7e9c89",
+  sourceCommit: "aa61760e1ca7de185e6c2a3e78b4a60dd829fb89",
   binarySha256: "ba7605038dc1aeb91c6da9a5aae1ea83eb8a419d6f7470f6972db023444ec018",
 };
 const SDK_EVENTS = "spec/compatibility/closure/evidence/RTDB-sdk-events-comparison.json";

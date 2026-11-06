@@ -52,7 +52,7 @@ def test_recorded_case_projection_and_post_state_are_bound_to_both_recordings():
         assert row["openTransactions"] == row["unconfirmedTransactionStarts"] == row["unrecovered"] == 0
 
 
-def test_current_recorded_artifact_has_a_successful_build_and_current_rust_inputs():
+def test_recorded_artifact_provenance_matches_its_source_commit_inputs():
     value = evidence()
     artifact = value["artifact"]
     assert re.fullmatch(r"[a-f0-9]{40}", artifact["sourceCommit"])
@@ -64,13 +64,18 @@ def test_current_recorded_artifact_has_a_successful_build_and_current_rust_input
     assert re.fullmatch(r"[a-f0-9]{64}", artifact["artifactSha256"])
     # the debug binary is made from the crates' sources, manifests, lock and toolchain, not from their integration tests: the artifact binds `binary_inputs`
     assert artifact["runtimeInputsScheme"] == BINARY_INPUTS_SCHEME
-    current = binary_inputs(ROOT)
-    assert current == binary_inputs_at_commit(artifact["sourceCommit"], ROOT)
-    assert artifact["runtimeInputsDigest"] == digest(current)
-    assert artifact["runtimeInputCount"] == len(current)
-    # what the build read: no file of an excluded tree (the dependency-info file of the build, checked by the step that made the receipt), and no built user interface
+    recorded_inputs = binary_inputs_at_commit(artifact["sourceCommit"], ROOT)
+    assert artifact["runtimeInputsDigest"] == digest(recorded_inputs)
+    assert artifact["runtimeInputCount"] == len(recorded_inputs)
+    # Build-event assertions remain part of provenance, not the currentness claim.
     assert artifact["dependencyInfoInExcludedTrees"] == [] and artifact["dependencyInfoWorkspaceFiles"] > 100
     assert artifact["uiBundled"] is False
+
+
+def test_recorded_artifact_rust_inputs_are_current():
+    artifact = evidence()["artifact"]
+    current = binary_inputs(ROOT)
+    assert current == binary_inputs_at_commit(artifact["sourceCommit"], ROOT)
 
 
 def test_no_bound_source_can_pull_a_file_of_an_excluded_tree_into_the_binary():

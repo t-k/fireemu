@@ -13530,6 +13530,7 @@ Add-Type -TypeDefinition $native -ErrorAction Stop
     fn assert_windows_acl_singleton_killed(
         label: &str,
         guard: &str,
+        expected_guard: &str,
         unsafe_case: WindowsSnapshotAclCase<'static>,
         index: usize,
     ) {
@@ -13550,7 +13551,7 @@ Add-Type -TypeDefinition $native -ErrorAction Stop
             &format!("{label}: unchanged baseline"),
             &baseline_result,
             baseline_diagnostic.as_deref(),
-            guard,
+            expected_guard,
         );
 
         let (mutated, diagnostic) = run_windows_acl_checker_with_diagnostic(
@@ -13793,6 +13794,7 @@ Start-Sleep -Seconds 60
             (
                 "single/allow-ACE: killed",
                 "throw 'untrusted allow ACE'",
+                "untrusted allow ACE",
                 WindowsSnapshotAclCase {
                     snapshot_dacl: "Permissive",
                     parent_dacl: "Private",
@@ -13804,6 +13806,7 @@ Start-Sleep -Seconds 60
             (
                 "single/ancestor-mutation: killed",
                 "throw 'untrusted ancestor mutation ACE'",
+                "untrusted ancestor mutation ACE",
                 WindowsSnapshotAclCase {
                     snapshot_dacl: "Private",
                     parent_dacl: "Private",
@@ -13815,6 +13818,7 @@ Start-Sleep -Seconds 60
             (
                 "single/reparse: killed",
                 "throw 'reparse or non-directory component'",
+                "reparse or non-directory component",
                 WindowsSnapshotAclCase {
                     snapshot_dacl: "Private",
                     parent_dacl: "Private",
@@ -13824,8 +13828,9 @@ Start-Sleep -Seconds 60
                 },
             ),
         ];
-        for (index, (label, guard, case)) in singleton_kills.into_iter().enumerate() {
-            assert_windows_acl_singleton_killed(label, guard, case, index);
+        for (index, (label, guard, expected_guard, case)) in singleton_kills.into_iter().enumerate()
+        {
+            assert_windows_acl_singleton_killed(label, guard, expected_guard, case, index);
         }
         assert_windows_acl_null_overlap_and_compound(10);
         assert_windows_acl_noop_control(20);

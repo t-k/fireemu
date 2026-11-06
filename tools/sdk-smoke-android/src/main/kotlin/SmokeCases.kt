@@ -39,10 +39,19 @@ class SmokeCases(private val context: android.content.Context, private val emit:
             var cause = error
             while (cause.cause != null) cause = cause.cause!!
             if (selectedCase != null) {
-                val message = cause.message.orEmpty()
-                val known = listOf("MISSING_REFRESH_TOKEN", "INVALID_REFRESH_TOKEN", "TOKEN_EXPIRED", "USER_DISABLED", "USER_NOT_FOUND", "INVALID_API_KEY", "MISSING_GRANT_TYPE", "INVALID_GRANT_TYPE")
-                val code = (cause as? com.google.firebase.auth.FirebaseAuthException)?.errorCode ?: known.firstOrNull { message.contains(it) } ?: "unknown"
-                emit("PRIVATE_DETAIL $id type=${cause.javaClass.simpleName} code=$code html404=${message.contains("<!DOCTYPE html>") && message.contains("404")} jsonConversion=${message.contains("Json conversion failed")}")
+                val known = listOf("MISSING_REFRESH_TOKEN", "INVALID_REFRESH_TOKEN", "TOKEN_EXPIRED", "USER_DISABLED", "USER_NOT_FOUND", "INVALID_API_KEY", "MISSING_GRANT_TYPE", "INVALID_GRANT_TYPE", "EMAIL_EXISTS", "INVALID_PASSWORD", "INVALID_EMAIL", "OPERATION_NOT_ALLOWED", "INTERNAL_ERROR", "NETWORK_REQUEST_FAILED")
+                val seen = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<Throwable, Boolean>())
+                var diagnostic: Throwable? = error
+                var depth = 0
+                while (diagnostic != null && depth < 16 && seen.add(diagnostic)) {
+                    val current = diagnostic
+                    val message = current.message.orEmpty()
+                    val typed = (current as? com.google.firebase.auth.FirebaseAuthException)?.errorCode?.removePrefix("ERROR_")
+                    val code = known.firstOrNull { it == typed || message.contains(it) } ?: "unknown"
+                    emit("PRIVATE_DETAIL $id depth=$depth type=${current.javaClass.simpleName} code=$code html404=${message.contains("<!DOCTYPE html>") && message.contains("404")} jsonConversion=${message.contains("Json conversion failed")}")
+                    diagnostic = current.cause
+                    depth++
+                }
             }
             val classification = when (cause) {
                 is FirebaseFirestoreException -> "firestore_${cause.code.name}"

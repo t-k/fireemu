@@ -2029,10 +2029,10 @@ test("FS-LISTEN-SDK uses its disclosed exclusion as a verified closure", () => {
   assert.ok(reviewed.excluded.some((entry) => entry.kind === "fs-listen-sdk-comparison-v1"));
 });
 
-test("reopened RTDB retains its fourteen disclosed comparisons", () => {
+test("RTDB retains its fourteen disclosed comparisons", () => {
   const closures = committedClosures();
   const rtdb = closures.find((entry) => entry.closure.parent === "RTDB");
-  assert.equal(rtdb.closure.parentStatus, "IMPLEMENTING");
+  assert.equal(rtdb.closure.parentStatus, "COMPAT_VERIFIED");
   const reviewed = planComparisons(closures, readJson);
   assert.deepEqual(reviewed.errors, []);
   const planned = reviewed.comparisons.filter(

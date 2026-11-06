@@ -86,12 +86,26 @@ function checkCondition(id, expected) {
   for (const path of entry.evidence.tests) assert.ok(exists(path.split("#")[0]), path);
 }
 
-test("the refreshed RTDB record keeps the parent open", () => {
+test("the RTDB record is COMPAT_VERIFIED for the recorded scope only, by R12", () => {
   const record = closure();
-  assert.equal(record.parentStatus, "IMPLEMENTING");
-  assert.equal(record.closureReview.decision, "CHANGES_REQUESTED");
-  assert.match(record.closureReview.note, /refreshed/);
-  assert.match(record.closureReview.note, /remains IMPLEMENTING/);
+  assert.equal(record.parentStatus, "COMPAT_VERIFIED");
+  assert.equal(record.closureReview.decision, "APPROVED");
+  assert.equal(record.closureReview.reviewScope, "FULL_PARENT");
+  assert.match(record.closureReview.note, /does not establish compatibility beyond them/);
+  assert.match(record.closureReview.note, /COMPAT_VERIFIED for that scope \(R12\)/);
+  assert.doesNotMatch(record.closureReview.decisionRef, /docs\.local/);
+  assert.doesNotMatch(record.closureReview.promotion, /docs\.local/);
+  const r12 = record.scopeDecisions.find((entry) => entry.id === "R12");
+  assert.ok(r12);
+  assert.equal(r12.amends, "R11");
+  assert.doesNotMatch(r12.decisionRef, /docs\.local/);
+  assert.match(r12.decision, /recorded scope/);
+  assert.ok(
+    record.closureBasis.notClaimedItems.some((i) => i.key === "notClaimed_request_wide_rules_work"),
+  );
+  // Every condition the parent rests on is VERIFIED.
+  for (const condition of record.conditions)
+    assert.equal(condition.status, "VERIFIED", condition.conditionId);
 });
 
 test("R9 amends R2 for the recorded families under the cited owner rows", () => {
@@ -542,9 +556,8 @@ test("scope decision R11 amends R2 for the recorded cases and keeps the parent o
   ))
     assert.ok(r11.decision.includes(id), id);
   assert.match(r11.decision, /The parent remains IMPLEMENTING/);
-  assert.equal(record.parentStatus, "IMPLEMENTING");
-  assert.equal(record.closureReview.decision, "CHANGES_REQUESTED");
-  assert.match(record.closureReview.note, /review of that refresh is pending/);
+  assert.equal(record.parentStatus, "COMPAT_VERIFIED");
+  assert.equal(record.closureReview.decision, "APPROVED");
 });
 
 test("the closure basis lists every item that is not claimed, each with a local behaviour and a reason", () => {

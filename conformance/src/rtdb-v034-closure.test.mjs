@@ -9,7 +9,7 @@ const sha = (path) => createHash("sha256").update(read(path)).digest("hex");
 
 test("recorded RTDB profile comparisons retain their source, binary and cleanup", () => {
   const closure = json("spec/compatibility/closure/RTDB.json");
-  assert.equal(closure.parentStatus, "IMPLEMENTING");
+  assert.equal(closure.parentStatus, "COMPAT_VERIFIED");
   const regression = closure.integratedRegression;
   const cases = [
     [regression.next4EvidencePath, regression.next4EvidenceSha256, 36, false],

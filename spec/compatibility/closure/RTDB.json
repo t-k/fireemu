@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "parent": "RTDB",
-  "parentStatus": "IMPLEMENTING",
+  "parentStatus": "COMPAT_VERIFIED",
   "inventoryStatus": "FROZEN",
   "frozenOn": "2026-10-26",
   "freezeAuthority": "docs.local/instructions/owner-decisions.md (owner 1560: genuine whole current supported RTDB closure; owner 1471 Q8: platform SDKs in a later separate parent); conditions frozen from the RTDB coverage ledger RTDB-CV-01..16 (docs.local/logs/2026-10-24/2026-10-24-002-compat-verified/rtdb-coverage-ledger.md)",
@@ -13,15 +13,17 @@
     "type": "USER_DATABASE"
   },
   "closureReview": {
-    "decision": "CHANGES_REQUESTED",
+    "decision": "APPROVED",
+    "reviewScope": "FULL_PARENT",
     "historicalDecision": "APPROVED",
     "reopenDecisionRef": "docs.local/instructions/owner-decisions.md (owner 1866, 2026-10-28): subset evidence does not establish parent completion; remaining work is required",
-    "decidedOn": "2026-10-27",
+    "decidedOn": "2026-11-06",
     "decider": "project coordinator (delegated by the owner)",
-    "decisionRef": "docs.local/instructions/owner-decisions.md (line 1838, 2026-10-27); docs.local/reviews/2026-10-27-rtdb-closure-residual-review.md (APPROVE of dd90111a2 and 1170d27ce); earlier: docs.local/instructions/owner-decisions.md (line 1790, 2026-10-26 RTDB closure review); docs.local/instructions/owner-decisions.md (lines 1862 and 1863, conditional candidate integration)",
-    "reviewedCommit": "1170d27ce1388ffaed8199e89caccb0b0e391ee7",
-    "submittedFinalArtifactSha256": "f3cb6d1762893ac4dd018b798dfc1dd556fff139e3c53b1d8724727ef7faee8d",
-    "finalArtifactSha256": "f3cb6d1762893ac4dd018b798dfc1dd556fff139e3c53b1d8724727ef7faee8d",
+    "decisionRef": "The project coordinator's decision of 2026-11-06, under the owner's delegation, after the independent review rounds of 2026-11-06 (full-parent, delta and three high-effort rounds, each answered in this record) and the coordinator's own check of the last delta.",
+    "earlierDecisionRef": "docs.local/instructions/owner-decisions.md (line 1838, 2026-10-27); docs.local/reviews/2026-10-27-rtdb-closure-residual-review.md (APPROVE of dd90111a2 and 1170d27ce); earlier: docs.local/instructions/owner-decisions.md (line 1790, 2026-10-26 RTDB closure review); docs.local/instructions/owner-decisions.md (lines 1862 and 1863, conditional candidate integration)",
+    "reviewedCommit": "c8186ab8d3aa68e5a591b4f0dbefbb9fd1dfae07",
+    "submittedFinalArtifactSha256": "28c8708cd9245eef82c4e4f315f7ddf63fade919800c31f5a873235e9e0a46f2",
+    "finalArtifactSha256": "28c8708cd9245eef82c4e4f315f7ddf63fade919800c31f5a873235e9e0a46f2",
     "reviews": [
       {
         "reportPath": "docs.local/reviews/2026-10-26-rtdb-closure-review.md",
@@ -88,9 +90,19 @@
         "reportSha256": "d82f416278d8a7a234912ab41eeed798a91af563238fb37e245e10542bbe2501",
         "reviewedCommit": "2e34b5ae7a83b2a3d7d2a52156cf2021312a6865",
         "outcome": "Codex delta review of 2e34b5ae7: CHANGES REQUESTED (one Must: unbounded intermediate string growth of replace on the new lone-surrogate path; two Shoulds); answered by the string bound of the next head."
+      },
+      {
+        "outcome": "Independent high-effort review of the closure head after the claims and regular-expression answers: CHANGES REQUESTED (signature substitution, claims encoding, evaluation bounds, frame paths, regex rows); answered by the out-of-band claims table and then by the owner's removal of that support (declared difference), the work bound, explicit invalid paths and the regex rewrites."
+      },
+      {
+        "outcome": "Independent high-effort review of the second answer: CHANGES REQUESTED (table remapping, snapshot construction and copies, the dot as a path marker, regex declarations); answered by removing claims and authvar support, charging path builds and copies, U+0000 as the invalid-path character, and the declarations of the remaining regex rows."
+      },
+      {
+        "outcome": "Independent high-effort review of the third answer: authentication rollback, frame paths, regex and binary custody closed; two resource findings remained. The charge for parent, child and member copies is fixed; the request-wide limit is not added and is recorded as not claimed (notClaimed_request_wide_rules_work); the final delta was checked by the coordinator."
       }
     ],
-    "note": "The record was refreshed on 2026-11-03 to the committed evidence, and on 2026-11-06 with the recordings of RTDB-REST-20261104-01, RTDB-RULES-20261104-01, RTDB-TOKENS-20261104-01, RTDB-TRIGGERS-BREADTH-20261105-02 and RTDB-RULES-LOAD-20261105-01 (scope decision R11). The Opus full-parent review and the Opus and Codex delta reviews of 2026-11-06 requested changes; the last round (owner 2270 (2) and 2276) answers them: the Rules string bound, the lone-surrogate paths and keys, query.orderBy, and, on the emulator profile only, the regular-expression dialect and lone surrogates in JSON bodies, query values, WebSocket frames and import files (token claims and the gauth authvar are a declared difference, owner 2291) (owner 2286). The review of that refresh is pending, the decision stays CHANGES_REQUESTED and the parent remains IMPLEMENTING. Over-refusal by the emulator profile was checked on the probed corpora only (see notClaimed_over_refusal_probed_corpora_only)."
+    "note": "The record covers the finite recorded cases and the declared differences it lists; it does not establish compatibility beyond them (see outOfScope, knownGaps and the closureBasis not-claimed list, among them the per-evaluation work bound without a request-wide or wall-clock limit). Every condition is VERIFIED on the closure build of source d0e81b043 (binary 28c8708c), replayed in both profiles; seven of the fourteen comparisons are bound to it and the other seven keep the historical bindings named under integratedRegression. Over-refusal by the emulator profile was checked on the probed corpora only (see notClaimed_over_refusal_probed_corpora_only), with the known exceptions declared. The parent is COMPAT_VERIFIED for that scope (R12).",
+    "promotion": "COMPAT_VERIFIED on 2026-11-06 by the project coordinator under the owner's delegation, after the review rounds of the same day were answered and the last delta was checked; the status covers the recorded scope only."
   },
   "scopeDecisions": [
     {
@@ -170,7 +182,7 @@
     },
     {
       "id": "R9",
-      "decision": "R2 (as amended by R4 to R7) is amended for the families recorded in production from 2026-10-28 to 2026-11-02 and replayed against fireemu in both profiles, for the recorded shapes only: REST POST of a child with a generated key, DELETE, shallow=true, print=silent on PUT and PATCH and writeSizeLimit=small (NEXT4), orderBy with equalTo/endAt/startAfter/endBefore, and the five REST .sv shapes (RTDB/rest-verbs-and-options); Rules cascade, .validate and data/newData/root snapshots, query-based Rules, the recorded Rules-language, method and operator cases and seven Rules identity cells (RTDB/rules-evaluation-finite); the healing re-registration, nested-priority and string-priority onDisconnect shapes, which stay under RTDB/ondisconnect-prioritized-split (v035RecordedPriority); and the web SDK's one-shot get of orderByKey, orderByValue and orderByPriority ranges, push, update, a multi-path update, serverTimestamp and increment over WebSocket and long polling, recorded on 2026-11-02 and replayed on the v0.43.0 release (RTDB/sdk-small-queries-and-writes). Every other shape R2 lists stays unverified as /outOfScope enumerates it; the parent remains IMPLEMENTING.",
+      "decision": "R2 (as amended by R4 to R7) is amended for the families recorded in production from 2026-10-28 to 2026-11-02 and replayed against fireemu in both profiles, for the recorded shapes only: REST POST of a child with a generated key, DELETE, shallow=true, print=silent on PUT and PATCH and writeSizeLimit=small (NEXT4), orderBy with equalTo/endAt/startAfter/endBefore, and the five REST .sv shapes (RTDB/rest-verbs-and-options); Rules cascade, .validate and data/newData/root snapshots, query-based Rules, the recorded Rules-language, method and operator cases and seven Rules identity cells (RTDB/rules-evaluation-finite); the healing re-registration, nested-priority and string-priority onDisconnect shapes, which stay under RTDB/ondisconnect-prioritized-split (v035RecordedPriority); and the web SDK's one-shot get of orderByKey, orderByValue and orderByPriority ranges, push, update, a multi-path update, serverTimestamp and increment over WebSocket and long polling, recorded on 2026-11-02 and replayed on the v0.43.0 release (RTDB/sdk-small-queries-and-writes). Every other shape R2 lists stays unverified as /outOfScope enumerates it; the parent status is decided by R12.",
       "rationale": "These rows have replayed without a mismatch in the v0.34, v0.35 and v0.41 recorded revalidations and, for the small SDK observer, on the v0.43.0 release, but R2, the contract and /outOfScope still called them unverified.",
       "amends": "R2",
       "status": "FROZEN",
@@ -180,7 +192,7 @@
     },
     {
       "id": "R10",
-      "decision": "R2 (as amended by R4 to R7 and R9) is amended for the web SDK listener, query and transaction shapes and the Node Admin SDK shapes recorded in production on 2026-11-04 (run RTDB-EVENTS-20261104-01) and replayed on the v0.43.0 release in both profiles, for the recorded shapes only: key, priority, value-range and equalTo windows with child events and prevName, startAt/endAt with a key on tied values, a parent and child listener fan-out on a multi-path update, transactions on an absent node, an object and an abort, and get of a window and a missing path, over WebSocket and long polling (RTDB/sdk-events-queries-and-transactions); and firebase-admin 14.3.0 over WebSocket under deny-all Rules: set, get, update, push, transactions, remove, a listener window and a denied get (RTDB/admin-sdk-websocket). The Admin SDK authenticated with a user OAuth access token, so an Admin SDK with a service account is not claimed. Inventory items G6 and G13 leave /outOfScope; every other shape stays unverified as /outOfScope enumerates it; the parent remains IMPLEMENTING.",
+      "decision": "R2 (as amended by R4 to R7 and R9) is amended for the web SDK listener, query and transaction shapes and the Node Admin SDK shapes recorded in production on 2026-11-04 (run RTDB-EVENTS-20261104-01) and replayed on the v0.43.0 release in both profiles, for the recorded shapes only: key, priority, value-range and equalTo windows with child events and prevName, startAt/endAt with a key on tied values, a parent and child listener fan-out on a multi-path update, transactions on an absent node, an object and an abort, and get of a window and a missing path, over WebSocket and long polling (RTDB/sdk-events-queries-and-transactions); and firebase-admin 14.3.0 over WebSocket under deny-all Rules: set, get, update, push, transactions, remove, a listener window and a denied get (RTDB/admin-sdk-websocket). The Admin SDK authenticated with a user OAuth access token, so an Admin SDK with a service account is not claimed. Inventory items G6 and G13 leave /outOfScope; every other shape stays unverified as /outOfScope enumerates it; the parent status is decided by R12.",
       "rationale": "The 52 observations of RTDB-EVENTS-20261104-01 match fireemu v0.43.0 in 160 of 160 steps in the strict and the emulator profile; the frozen inventory still named them unobserved.",
       "amends": "R2",
       "status": "FROZEN",
@@ -197,6 +209,16 @@
       "decidedBy": "project coordinator (delegated by the owner)",
       "decidedOn": "2026-11-06",
       "decisionRef": "docs.local/instructions/owner-decisions.md (2217, 2218, 2251, 2231, 2232, 2239, 2240, 2253, 2254, 2262, 2263, 2266, 2267, 2270, 2273, 2276, 2286, 2288, 2291); docs.local/runs/rtdb-closure-4a/inventory.md (G7 to G10)"
+    },
+    {
+      "id": "R12",
+      "decision": "The parent is COMPAT_VERIFIED for the recorded scope this record enumerates: the finite recorded cases of its conditions, replayed on the closure build in both profiles, with the declared differences and the not-claimed list as written. The statements of R7 and R9 to R11 that the parent remains IMPLEMENTING are superseded by this decision. Nothing outside the recorded scope is claimed; the shapes R2 lists as unverified stay unverified as /outOfScope enumerates them, and the Rules work bound is per evaluation (notClaimed_request_wide_rules_work).",
+      "rationale": "Every condition is VERIFIED, the independent review rounds of 2026-11-06 are answered in this record, and the resource-safety findings that remain are recorded as limits or as not claimed.",
+      "amends": "R11",
+      "status": "FROZEN",
+      "decidedBy": "coordinator",
+      "decidedOn": "2026-11-06",
+      "decisionRef": "The project coordinator's decision of 2026-11-06 under the owner's delegation, after the final delta check."
     }
   ],
   "conditions": [
@@ -1531,7 +1553,7 @@
           "productionObserved": false
         },
         "jarOnlyRegexEscapesAndUnits": {
-          "statement": "Emulator profile only (owner 2276): a pattern is read by UTF-16 unit as the official emulator reads it (a character beyond the Basic Multilingual Plane is two class members, and `.` takes one unit, so '\ud83d\ude00' does not match /^[\ud83d\ude00]$/ nor /^.$/ and matches /^..$/; a class range ends at the high surrogate of an astral end); after a backslash CR, CR LF, U+2028 and U+2029 are a line feed, and U+FEFF and U+0085 are themselves (U+00AD, U+200B and the other format characters are dropped with the reader, as before). The strict profile keeps today's refusal. Unobserved in production. These are the 13 corpus rows that were first counted as retained denials (11 with a backslash before a format or line character, 2 with a class range whose end is astral): they are fixed, not declared, so no owner decision (2288 covers the i-flag rows only; 2291 covers claims and the gauth authvar) is cited for them.",
+          "statement": "Emulator profile only (owner 2276): a pattern is read by UTF-16 unit as the official emulator reads it (a character beyond the Basic Multilingual Plane is two class members, and `.` takes one unit, so '😀' does not match /^[😀]$/ nor /^.$/ and matches /^..$/; a class range ends at the high surrogate of an astral end); after a backslash CR, CR LF, U+2028 and U+2029 are a line feed, and U+FEFF and U+0085 are themselves (U+00AD, U+200B and the other format characters are dropped with the reader, as before). The strict profile keeps today's refusal. Unobserved in production. These are the 13 corpus rows that were first counted as retained denials (11 with a backslash before a format or line character, 2 with a class range whose end is astral): they are fixed, not declared, so no owner decision (2288 covers the i-flag rows only; 2291 covers claims and the gauth authvar) is cited for them.",
           "fixture": "crates/fireemu-core-database/tests/fixtures/rules-regex-escapes-and-units-official-emulator-4.11.2.json",
           "fixtureSha256": "4658551ee6094595a6a29f43dd92a9f9d3790154e898243a704c2707ddb228e7",
           "rows": 289,
@@ -2030,7 +2052,7 @@
         }
       ],
       "ownerDecision": "docs.local/instructions/owner-decisions.md (1936)",
-      "scope": "Finite recorded fixtures only; historical SDK and Auth evidence retains its original binding and the parent remains IMPLEMENTING."
+      "scope": "Finite recorded fixtures only; historical SDK and Auth evidence retains its original binding and the parent status is decided by R12."
     },
     "v041PublicReplay": {
       "path": "spec/compatibility/closure/evidence/RTDB-v041-public-replay.json",
@@ -2038,7 +2060,7 @@
       "sourceCommit": "264df6146bed33b85c23bb88b7c2de559f9f5f9f",
       "binarySha256": "0030b466385dd160c0521ff8e985141d1d0adc67a3a8841c97744b0f27ed9315",
       "ownerDecision": "docs.local/instructions/owner-decisions.md (2118)",
-      "scope": "Existing finite public replay only; the parent remains IMPLEMENTING."
+      "scope": "Existing finite public replay only; the parent status is decided by R12."
     },
     "historicalBinding": {
       "statement": "integrationCommit, releaseBinarySha256, buildReceiptPath and buildPath above are the integration build of 2026-10-28 (source 8cda683b8, binary f3cb6d17...). Exactly seven of the fourteen comparisons in `comparisons` are bound to the build under currentBinding (sdk-small, sdk-events, sdk-rest, sdk-rules, sdk-tokens, sdk-rules-load and breadth). The other seven stay historical and were not replayed on that build: RTDB-rest-comparison, RTDB-sdk-ondisconnect-comparison and RTDB-genuine-auth-comparison (the integration build of 2026-10-28, binary f3cb6d17...), RTDB-residual-comparison (binary 7df56bd9..., built from origin/main 00abe06b4), RTDB-s5-comparison (binary a18a612e...), RTDB-functions-trigger-comparison (binary 3385153b..., source 0158be06b) and RTDB-rest-v033-comparison (binary 988a5fce..., source 81dca801d). The v0.34 and v0.35 revalidations and the v0.41 public replay named above are bound to their own releases. Code changed after those builds (the 2026-11 changes of this record) is not covered by these seven comparisons."

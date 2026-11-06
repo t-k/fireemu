@@ -10,6 +10,7 @@ import 'package:firebase_database/firebase_database.dart' as rtdb;
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
+import 'package:fireemu_sdk_smoke_flutter/offline_recovery.dart';
 import 'package:fireemu_sdk_smoke_flutter/config.dart';
 import 'package:fireemu_sdk_smoke_flutter/report.dart';
 
@@ -134,6 +135,7 @@ void main() {
       final smallBytes = Uint8List.fromList([0, 1, 127, 128, 255]);
       final smallObject = storage.ref('public/bytes-é.bin');
       final cleanup = <Future<void> Function()>[];
+      OfflineRecovery? offlineRecovery;
 
       void requireAuth() {
         if (identity == null) throw Prerequisite(authBlock);
@@ -144,6 +146,8 @@ void main() {
         var status = CaseStatus.passed;
         var classification = 'ok';
         try {
+          if (offlineRecovery?.blocks(id) ?? false)
+            throw Prerequisite('prerequisite');
           await body().timeout(const Duration(seconds: 30));
         } on Prerequisite catch (error) {
           status = CaseStatus.blocked;
@@ -293,7 +297,10 @@ void main() {
         await runCase('firestore.offline-resume', () async {
           final ref = firestore.doc('public/offline');
           await ref.set({'value': 0});
-          await firestore.disableNetwork();
+          final recovery = OfflineRecovery(firestore.enableNetwork);
+          offlineRecovery = recovery;
+          cleanup.add(recovery.close);
+          await recovery.start(firestore.disableNetwork);
           final pending = Completer<void>();
           final sub = ref.snapshots(includeMetadataChanges: true).listen((
             event,
@@ -306,15 +313,18 @@ void main() {
           cleanup.add(sub.cancel);
           try {
             final write = ref.update({'value': 1});
-            await pending.future;
-            await firestore.enableNetwork();
-            await write;
+            recovery.track(write);
+            await recovery.wait(pending.future);
+            await recovery.wait(firestore.enableNetwork());
+            await recovery.wait(write);
             expect(
-              (await observer.doc(ref.path).get(server)).data()?['value'],
+              (await recovery.wait(
+                observer.doc(ref.path).get(server),
+              )).data()?['value'],
               1,
             );
           } finally {
-            await firestore.enableNetwork();
+            await recovery.close();
             await sub.cancel();
           }
         });

@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import shlex
+import select
 import signal
 import subprocess
 import sys
@@ -44,34 +45,101 @@ def summarize(records, required):
     return {'passed': all(case['status'] == 'passed' for case in cases), 'cases': cases}
 
 
+def group_members(group):
+    rows = subprocess.run(['ps', '-g', str(group), '-o', 'pid=,pgid=,stat='], capture_output=True, text=True, timeout=5).stdout
+    return [int(pid) for pid, pgid, state in (line.split() for line in rows.splitlines())
+            if int(pgid) == group and not state.startswith('Z')]
+
+
+def owner_identity(process):
+    if process.poll() is not None:
+        raise RuntimeError('Owned process-group sentinel exited before cleanup.')
+    if os.getpgid(process.pid) != process.pid:
+        raise RuntimeError('Owned process-group identity changed.')
+    identity = subprocess.check_output(['ps', '-p', str(process.pid), '-o', 'lstart=,comm=,args='], text=True, timeout=5)
+    if not identity.strip() or str(ROOT / 'scripts/process_owner.py') not in identity:
+        raise RuntimeError('Missing owned process-group identity.')
+    return identity
+
+
+def stop_owned_group(process, identity):
+    def send(signum):
+        if owner_identity(process) != identity:
+            raise RuntimeError('Owned process-group identity changed.')
+        os.killpg(process.pid, signum)
+
+    send(signal.SIGTERM)
+    deadline = time.monotonic() + 2
+    while any(pid != process.pid for pid in group_members(process.pid)):
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(0.02)
+    send(signal.SIGKILL)
+    process.wait(timeout=5)
+    deadline = time.monotonic() + 2
+    while group_members(process.pid):
+        if time.monotonic() >= deadline:
+            raise RuntimeError('Owned process group survived cleanup.')
+        time.sleep(0.02)
+
+
 def execute(command, environment, directory, log, seconds):
-    """Own the process group from launch through deadline and cleanup."""
+    """Retain a live session owner until all of its descendants are stopped."""
     def terminated(signum, frame):
         raise SystemExit(128 + signum)
 
     previous = signal.signal(signal.SIGTERM, terminated)
     process = None
+    identity = None
+    reader, writer = os.pipe()
+    go_reader, go_writer = os.pipe()
     try:
         with log.open('x') as output:
-            process = subprocess.Popen(command, cwd=directory, env=environment, stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
-            try:
-                return process.wait(timeout=seconds)
-            except subprocess.TimeoutExpired:
+            process = subprocess.Popen(
+                [sys.executable, str(ROOT / 'scripts/process_owner.py'), str(writer), str(go_reader), *command],
+                cwd=directory, env=environment, stdout=output, stderr=subprocess.STDOUT,
+                start_new_session=True, pass_fds=(writer, go_reader))
+            os.close(writer)
+            writer = None
+            os.close(go_reader)
+            go_reader = None
+            if not select.select([reader], [], [], 5)[0]:
+                raise RuntimeError('Owned launcher readiness timed out.')
+            if os.read(reader, 64) != ('READY ' + str(process.pid) + '\n').encode():
+                raise RuntimeError('Malformed owned launcher readiness.')
+            identity = owner_identity(process)
+            os.write(go_writer, b'GO\n')
+            os.close(go_writer)
+            go_writer = None
+            if not select.select([reader], [], [], seconds)[0]:
                 return 124
+            result = os.read(reader, 64)
+            if not result:
+                raise RuntimeError('Owned launcher did not report its result.')
+            return int(result)
     finally:
         try:
-            if process is not None and process.poll() is None:
-                try:
-                    if os.getpgid(process.pid) == process.pid:
-                        os.killpg(process.pid, signal.SIGTERM)
-                except ProcessLookupError:
-                    pass
-                try:
-                    process.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    os.killpg(process.pid, signal.SIGKILL)
-                    process.wait(timeout=10)
+            if identity is None and go_writer is not None:
+                os.close(go_writer)
+                go_writer = None
+            if process is not None:
+                if identity is not None:
+                    stop_owned_group(process, identity)
+                else:
+                    # Without GO, the retained direct child cannot have launched work.
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait(timeout=5)
         finally:
+            os.close(reader)
+            if go_writer is not None:
+                os.close(go_writer)
+            if go_reader is not None:
+                os.close(go_reader)
+            if writer is not None:
+                os.close(writer)
             signal.signal(signal.SIGTERM, previous)
 
 

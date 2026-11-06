@@ -173,7 +173,7 @@ impl Rules {
     }
 
     /// These rules reading the strings of `auth` as the emulator profile writes them: a lone surrogate in a
-    /// claim is a stand-in of [`crate::lone`] (see [`Dialect::claims`]).
+    /// claim is a stand-in of [`crate::lone`] (the `claims` dialect).
     #[must_use]
     pub fn with_encoded_claims(mut self, on: bool) -> Self {
         self.dialect.claims = on;

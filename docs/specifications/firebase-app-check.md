@@ -487,7 +487,7 @@ Product mapping is:
 
 These mappings are `boundary-conformance` until the conformance scenarios record and approve the corresponding real-service behavior.
 
-For WebChannel principal admission, the same HTTP 200 terminal-envelope transport preserves the principal status: expired credentials produce `UNAUTHENTICATED`, while a foreign audience produces `PERMISSION_DENIED` under the tested strict and emulator profiles. This status mapping is also inferred from local SDK handling and emulator tests, not observed in production.
+For WebChannel principal admission, the same HTTP 200 terminal-envelope transport preserves the principal status. With the strict profile's verified-token policy, expired credentials produce `UNAUTHENTICATED` and a foreign audience produces `PERMISSION_DENIED`. With the emulator profile's mock-token policy, an unsigned token with a foreign audience produces `UNAUTHENTICATED`, while an expired unsigned token with the correct audience and a subject can be admitted through mock-token fallback. These outcomes are covered by local tests using each profile's token policy, not observed in production.
 
 ## 18. Coverage obligations
 

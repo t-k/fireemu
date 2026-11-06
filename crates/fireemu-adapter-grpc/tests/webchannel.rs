@@ -314,14 +314,20 @@ async fn webchannel_binds_unknown_mock_tokens_to_the_requested_project() {
 }
 
 #[tokio::test]
-async fn refused_opening_principals_are_delivered_as_terminal_stream_errors() {
+#[allow(clippy::too_many_lines)]
+async fn opening_principals_follow_the_profile_token_policy() {
     let start = LogicalInstant::from_unix_seconds(1_788_004_860);
     for strict in [true, false] {
         for refusal in ["expired", "foreign-audience"] {
             for kind in [StreamKind::Listen, StreamKind::Write] {
                 let (hub, _, auth) = hub_and_local_with_profile_and_auth(
                     Some(RULES_ALLOW_ALL),
-                    TokenAcceptance::Verified,
+                    // Match CompatibilityProfile::token_acceptance in the runtime config.
+                    if strict {
+                        TokenAcceptance::Verified
+                    } else {
+                        TokenAcceptance::EmulatorMock
+                    },
                     strict,
                 );
                 let token = {
@@ -370,17 +376,30 @@ async fn refused_opening_principals_are_delivered_as_terminal_stream_errors() {
                     .iter()
                     .find(|(name, _)| *name == "x-http-session-id")
                     .map(|(_, sid)| sid.as_str())
-                    .expect("a refusal must establish a backchannel session");
+                    .expect("an opening must establish a backchannel session");
                 let handshake = chunks(&body);
                 assert_eq!(handshake[0][0][0], 0);
                 assert_eq!(handshake[0][0][1][0], "c");
                 assert_eq!(handshake[0][0][1][1], sid);
 
                 let terminal = read_long_poll_kind(&hub, kind, sid, 0).await;
+                if !strict && refusal == "expired" {
+                    let payloads = response_payloads(&terminal);
+                    assert!(payloads
+                        .iter()
+                        .all(|payload| payload.get("error").is_none()));
+                    match kind {
+                        StreamKind::Listen => assert!(payloads.iter().any(|payload| {
+                            payload["targetChange"]["targetChangeType"] == "ADD"
+                        })),
+                        StreamKind::Write => assert!(payloads[0]["streamId"].is_string()),
+                    }
+                    continue;
+                }
                 assert_eq!(last_array_id(&terminal), 1, "{terminal}");
                 assert_eq!(response_payloads(&terminal).len(), 1);
-                let status = match refusal {
-                    "expired" => "UNAUTHENTICATED",
+                let status = match (strict, refusal) {
+                    (false, _) | (_, "expired") => "UNAUTHENTICATED",
                     _ => "PERMISSION_DENIED",
                 };
                 assert_eq!(
@@ -412,6 +431,81 @@ async fn refused_opening_principals_are_delivered_as_terminal_stream_errors() {
                     "acknowledged refusal must not stay open: {body}"
                 );
             }
+        }
+    }
+}
+
+#[tokio::test]
+async fn abandoned_refused_openings_do_not_exhaust_admitted_capacity() {
+    for strict in [true, false] {
+        for kind in [StreamKind::Listen, StreamKind::Write] {
+            let (hub, gate, _) = app_check_hub(strict);
+            let mut retained = 0;
+            for _ in 0..256 {
+                let (status, headers, body) = full(hub.handle(&ChannelRequest {
+                    kind,
+                    method: "POST".to_owned(),
+                    params: params(&[("database", DB), ("VER", "8"), ("RID", "1")]),
+                    authorization: None,
+                    app_check: Vec::new(),
+                    origin: None,
+                    body: String::new(),
+                }));
+                assert_eq!(status, 200, "strict={strict}, kind={kind:?}: {body}");
+                let sid = &headers
+                    .iter()
+                    .find(|(name, _)| *name == "x-http-session-id")
+                    .unwrap()
+                    .1;
+                let frames = chunks(&body);
+                if frames.len() == 1 {
+                    retained += 1;
+                } else {
+                    assert_eq!(frames.len(), 2);
+                    assert_eq!(frames[1][0][0], 1);
+                    assert_eq!(
+                        response_payloads(&frames[1])[0]["error"]["status"],
+                        "PERMISSION_DENIED"
+                    );
+                    let (status, _, _) = full(hub.handle(&ChannelRequest {
+                        kind,
+                        method: "GET".to_owned(),
+                        params: params(&[("SID", sid), ("RID", "rpc"), ("CI", "1")]),
+                        authorization: None,
+                        app_check: Vec::new(),
+                        origin: None,
+                        body: String::new(),
+                    }));
+                    assert_eq!(status, 400, "overflow refusal must retain no session");
+                }
+            }
+            let first = match kind {
+                StreamKind::Listen => listen_target(2, "open"),
+                StreamKind::Write => json!({"database": DB}).to_string(),
+            };
+            let (status, headers, body) = full(hub.handle(&ChannelRequest {
+                kind,
+                method: "POST".to_owned(),
+                params: params(&[("database", DB), ("VER", "8"), ("RID", "1")]),
+                authorization: None,
+                app_check: vec![app_check_token(&gate, "1:1234567890:web:webchannel-test")],
+                origin: None,
+                body: form(&[("count", "1"), ("ofs", "0"), ("req0___data__", &first)]),
+            }));
+            assert_eq!(status, 200, "valid opening after 256 refusals: {body}");
+            let sid = &headers
+                .iter()
+                .find(|(name, _)| *name == "x-http-session-id")
+                .unwrap()
+                .1;
+            let batch = read_long_poll_kind(&hub, kind, sid, 0).await;
+            assert!(response_payloads(&batch)
+                .iter()
+                .all(|payload| payload.get("error").is_none()));
+            assert!(
+                retained <= 32,
+                "refusal retention must have a small independent bound"
+            );
         }
     }
 }

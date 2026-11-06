@@ -77,6 +77,8 @@ pub const fn max_form_bytes(production_scope: bool) -> usize {
 pub const MAX_FORM_DRAIN_BYTES: usize = 64 * 1024 * 1024;
 /// Maximum concurrent sessions.
 pub const MAX_SESSIONS: usize = 256;
+/// Refused openings have their own small terminal-delivery allowance.
+const MAX_REFUSED_SESSIONS: usize = 32;
 /// Maximum unacknowledged arrays per session before it is closed.
 pub const MAX_QUEUED_ARRAYS: usize = 4096;
 /// Maximum UTF-8 bytes in one numbered outbound array. This is a local memory-safety bound,
@@ -1453,6 +1455,7 @@ fn schedule_terminal_expiry(session: &Arc<Session>, delay: Duration) {
 pub struct Hub {
     state: Arc<RestState>,
     sessions: Arc<SessionRegistry>,
+    refused_sessions: Arc<SessionRegistry>,
     budgets: WebChannelBudgets,
 }
 
@@ -1469,6 +1472,7 @@ fn terminate_registered_sessions(sessions: &SessionRegistry) {
 impl Drop for Hub {
     fn drop(&mut self) {
         terminate_registered_sessions(&self.sessions);
+        terminate_registered_sessions(&self.refused_sessions);
     }
 }
 
@@ -1599,41 +1603,44 @@ impl Hub {
         Self {
             state,
             sessions: Arc::new(Mutex::new(HashMap::new())),
+            refused_sessions: Arc::new(Mutex::new(HashMap::new())),
             budgets: WebChannelBudgets::default(),
         }
     }
 
     /// Closes and forgets sessions that are idle without a live back channel.
     fn purge_idle(&self) {
-        let gone = {
-            let Ok(mut sessions) = self.sessions.lock() else {
-                return;
+        for registry in [&self.sessions, &self.refused_sessions] {
+            let gone = {
+                let Ok(mut sessions) = registry.lock() else {
+                    continue;
+                };
+                let mut gone = Vec::new();
+                sessions.retain(|sid, s| {
+                    let idle = s
+                        .last_seen
+                        .lock()
+                        .is_ok_and(|t| t.elapsed() >= SESSION_IDLE_TTL);
+                    let live = s.backchannel_attached();
+                    let keep = !s.is_terminated()
+                        && if s.is_stream_ended() {
+                            !s.terminal_delivery_expired()
+                        } else {
+                            !idle || live
+                        };
+                    if !keep {
+                        gone.push((sid.clone(), s.clone()));
+                    }
+                    keep
+                });
+                gone
             };
-            let mut gone = Vec::new();
-            sessions.retain(|sid, s| {
-                let idle = s
-                    .last_seen
-                    .lock()
-                    .is_ok_and(|t| t.elapsed() >= SESSION_IDLE_TTL);
-                let live = s.backchannel_attached();
-                let keep = !s.is_terminated()
-                    && if s.is_stream_ended() {
-                        !s.terminal_delivery_expired()
-                    } else {
-                        !idle || live
-                    };
-                if !keep {
-                    gone.push((sid.clone(), s.clone()));
-                }
-                keep
-            });
-            gone
-        };
-        for (_sid, s) in gone {
-            s.trace_event(&TraceEvent::SessionPurged {
-                session: s.trace_id,
-            });
-            s.terminate();
+            for (_sid, s) in gone {
+                s.trace_event(&TraceEvent::SessionPurged {
+                    session: s.trace_id,
+                });
+                s.terminate();
+            }
         }
     }
 
@@ -1644,6 +1651,12 @@ impl Hub {
             .lock()
             .ok()
             .and_then(|m| m.get(sid).cloned())
+            .or_else(|| {
+                self.refused_sessions
+                    .lock()
+                    .ok()
+                    .and_then(|m| m.get(sid).cloned())
+            })
             .filter(|s| !s.is_terminated())
             .ok_or_else(|| unknown_session(strict))?;
         // A session answers only the origin and stream kind that opened it.
@@ -1655,7 +1668,17 @@ impl Hub {
     }
 
     fn remove(&self, sid: &str) {
-        let removed = self.sessions.lock().ok().and_then(|mut m| m.remove(sid));
+        let removed = self
+            .sessions
+            .lock()
+            .ok()
+            .and_then(|mut m| m.remove(sid))
+            .or_else(|| {
+                self.refused_sessions
+                    .lock()
+                    .ok()
+                    .and_then(|mut m| m.remove(sid))
+            });
         if let Some(s) = removed {
             s.terminate();
         }
@@ -1816,9 +1839,9 @@ impl Hub {
         Err(status)
     }
 
-    /// Opens only the `WebChannel` transport for a refused credential and queues the terminal RPC
-    /// envelope before returning the handshake chunk. No stream task is created and no request
-    /// maps are delivered, so the refusal cannot admit work as a side effect.
+    /// Opens only the `WebChannel` transport for a refused credential. The terminal RPC envelope
+    /// uses a bounded refusal registry, or is sent inline when that registry is full. No stream
+    /// task is created and no request maps are delivered, so the refusal cannot admit work.
     fn refused_handshake(&self, req: &ChannelRequest, status: &Status) -> ChannelResponse {
         let strict = self.production_scope();
         let sid = match if strict && req.kind == StreamKind::Listen {
@@ -1832,6 +1855,32 @@ impl Hub {
             Ok(sid) => sid,
             Err(error) => return text_response(500, error),
         };
+        let scalar = if strict && req.kind == StreamKind::Listen {
+            15
+        } else {
+            12
+        };
+        let handshake = json!([[0, ["c", sid, "", 8, scalar, 30_000]]]).to_string();
+        let mut response = ChannelResponse::Full {
+            status: 200,
+            headers: vec![
+                ("x-http-session-id", sid.clone()),
+                ("content-type", "text/plain; charset=utf-8".to_owned()),
+            ],
+            body: chunk(&handshake),
+        };
+        let Ok(mut sessions) = self.refused_sessions.lock() else {
+            return text_response(500, "session registry poisoned".to_owned());
+        };
+        if sessions.len() >= MAX_REFUSED_SESSIONS {
+            // Deliver the terminal envelope inline without retaining a session or expiry task.
+            if let ChannelResponse::Full { body, .. } = &mut response {
+                body.push_str(&chunk(
+                    &json!([[1, [error_response(status).body]]]).to_string(),
+                ));
+            }
+            return response;
+        }
         let (inbound, inbound_rx) = mpsc::channel::<Result<Value, Status>>(1);
         drop(inbound_rx);
         let session = Arc::new(Session {
@@ -1854,18 +1903,11 @@ impl Hub {
             )
             .to_owned(),
             app_check: None,
-            registry: Arc::downgrade(&self.sessions),
+            registry: Arc::downgrade(&self.refused_sessions),
             terminated: AtomicBool::new(false),
         });
-        {
-            let Ok(mut sessions) = self.sessions.lock() else {
-                return text_response(500, "session registry poisoned".to_owned());
-            };
-            if sessions.len() >= MAX_SESSIONS {
-                return text_response(503, "too many channel sessions".to_owned());
-            }
-            sessions.insert(sid.clone(), session.clone());
-        }
+        sessions.insert(sid.clone(), session.clone());
+        drop(sessions);
         session.trace_event(&TraceEvent::SessionOpened {
             session: session.trace_id,
             kind: session.kind,
@@ -1875,20 +1917,7 @@ impl Hub {
             self.remove(&sid);
             return text_response(503, "unable to retain channel error".to_owned());
         }
-        let scalar = if strict && req.kind == StreamKind::Listen {
-            15
-        } else {
-            12
-        };
-        let handshake = json!([[0, ["c", sid, "", 8, scalar, 30_000]]]).to_string();
-        ChannelResponse::Full {
-            status: 200,
-            headers: vec![
-                ("x-http-session-id", session.sid.clone()),
-                ("content-type", "text/plain; charset=utf-8".to_owned()),
-            ],
-            body: chunk(&handshake),
-        }
+        response
     }
 
     #[allow(clippy::too_many_lines)]

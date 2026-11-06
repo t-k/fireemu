@@ -1406,6 +1406,29 @@ const publishMarkerJson = (file, value) => {
 };
 ";
 
+#[cfg(unix)]
+struct ReloadMarkerSignalsGuard(PathBuf);
+
+#[cfg(unix)]
+impl Drop for ReloadMarkerSignalsGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+#[cfg(unix)]
+struct ReloadMarkerProbeChild(std::process::Child);
+
+#[cfg(unix)]
+impl Drop for ReloadMarkerProbeChild {
+    fn drop(&mut self) {
+        if !matches!(self.0.try_wait(), Ok(Some(_))) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+}
+
 /// Runs `command` to completion while reading the daemon's stderr line by line, and writes the
 /// handshake file for each reload outcome the daemon reports for the `default` codebase. The
 /// `reloaded generation` line is printed only after the new generation is published, so a
@@ -1455,6 +1478,7 @@ fn run_with_reload_handshake(mut command: Command, signals: &Path) -> Output {
 #[test]
 fn reload_marker_publication_does_not_expose_partial_json() {
     let signals = reload_signals("partial-marker-publication");
+    let _signals = ReloadMarkerSignalsGuard(signals.clone());
     let target = signals.join("started.json");
     let paused = signals.join("paused");
     let release = signals.join("release");
@@ -1482,13 +1506,15 @@ fs.writeFileSync = (file, value, ...options) => {
         RELOAD_MARKER_JSON_WRITER_JS,
         "publishMarkerJson(target, { marker: 'complete' });",
     );
-    let mut child = Command::new("node")
-        .args(["--eval", &script])
-        .arg(&target)
-        .arg(&paused)
-        .arg(&release)
-        .spawn()
-        .unwrap();
+    let mut child = ReloadMarkerProbeChild(
+        Command::new("node")
+            .args(["--eval", &script])
+            .arg(&target)
+            .arg(&paused)
+            .arg(&release)
+            .spawn()
+            .unwrap(),
+    );
     let mut writer_paused = false;
     for _ in 0..500 {
         if paused.exists() {
@@ -1497,19 +1523,36 @@ fs.writeFileSync = (file, value, ...options) => {
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
-    assert!(
-        writer_paused,
-        "writer did not reach the controlled partial write"
-    );
     let final_path_was_visible_before_completion = target.exists();
-    let temporary = PathBuf::from(format!("{}.tmp-{}", target.display(), child.id()));
+    let temporary = PathBuf::from(format!("{}.tmp-{}", target.display(), child.0.id()));
     let temporary_was_visible_before_completion = temporary.exists();
     let temporary_was_partial =
         std::fs::read_to_string(&temporary).is_ok_and(|contents| contents == "{\"marker\":");
     std::fs::write(&release, "").unwrap();
-    assert!(child.wait().unwrap().success());
-    let complete: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&target).unwrap()).unwrap();
+    let mut exit_status = None;
+    for _ in 0..500 {
+        match child.0.try_wait().unwrap() {
+            Some(status) => {
+                exit_status = Some(status);
+                break;
+            }
+            None => std::thread::sleep(std::time::Duration::from_millis(10)),
+        }
+    }
+    let Some(exit_status) = exit_status else {
+        let _ = child.0.kill();
+        let _ = child.0.wait();
+        panic!("marker writer did not finish after release");
+    };
+    let complete = std::fs::read(&target)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
+    assert!(
+        writer_paused,
+        "writer did not reach the controlled partial write"
+    );
+    assert!(exit_status.success());
+    let complete = complete.expect("marker writer did not publish complete JSON");
     assert_eq!(complete["marker"], "complete");
     assert!(
         !final_path_was_visible_before_completion,
@@ -1517,7 +1560,6 @@ fs.writeFileSync = (file, value, ...options) => {
     );
     assert!(temporary_was_visible_before_completion);
     assert!(temporary_was_partial);
-    std::fs::remove_dir_all(signals).unwrap();
 }
 
 /// Actual HTTP, callable, streaming and queued task handlers retain their selected runner

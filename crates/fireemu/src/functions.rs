@@ -13423,7 +13423,24 @@ Add-Type -TypeDefinition $native -ErrorAction Stop
             1,
             "guard text must be unique"
         );
-        script.replacen(guard, "", 1)
+        let mutant = script.replacen(guard, "", 1);
+        let catch_block = "} catch {\n    $exitCode = 1\n} finally {";
+        assert_eq!(
+            mutant.matches(catch_block).count(),
+            1,
+            "checker catch block must be unique"
+        );
+        let diagnostic_catch =
+            "} catch {\n    $checkerError = $_.ToString()\n    $exitCode = 1\n} finally {";
+        let mutant = mutant.replacen(catch_block, diagnostic_catch, 1);
+        let exit_block = "}\nexit $exitCode\n\"#;";
+        assert_eq!(
+            mutant.matches(exit_block).count(),
+            1,
+            "checker exit block must be unique"
+        );
+        let diagnostic_exit = "}\nif ($null -ne $checkerError) {\n    try { [IO.File]::WriteAllText($env:FIREEMU_SNAPSHOT_ACL_PATH + '.checker-error', $checkerError) } catch {}\n}\nexit $exitCode\n\"#;";
+        mutant.replacen(exit_block, diagnostic_exit, 1)
     }
 
     #[cfg(windows)]
@@ -13479,9 +13496,14 @@ Add-Type -TypeDefinition $native -ErrorAction Stop
             &mutant,
             Duration::from_secs(5),
         );
+        let checker_error = unsafe_fixture.leaf.with_file_name(format!(
+            "{}.checker-error",
+            unsafe_fixture.leaf.file_name().unwrap().to_string_lossy()
+        ));
+        let checker_error = std::fs::read_to_string(checker_error).unwrap_or_default();
         assert!(
             mutated.is_ok(),
-            "single guard mutant should admit its unsafe fixture"
+            "single guard mutant {guard:?} should admit its unsafe fixture; checker error: {checker_error}; result: {mutated:?}"
         );
         assert_eq!(
             windows_acl_refusal_oracle(&mutated),

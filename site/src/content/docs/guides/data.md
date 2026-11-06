@@ -23,6 +23,7 @@ npx fireemu exec --import ./emulator-data --export-on-exit -- npm test
 
 - An empty `--import` directory starts with no data, so the first run needs no separate command. A missing directory is refused, so a mistyped path cannot start an empty suite, unless it is also where `--export-on-exit` writes.
 - A directory that holds files but no `firebase-export-metadata.json` is refused.
+- Realtime Database imports are validated before any product installs data. Under `strict`, a lone surrogate in an imported JSON string value is refused; the `emulator` profile replaces it with `?`, as the official emulator does. Invalid keys are refused in both profiles. See [Realtime Database import](../../products/realtime-database/#export-import-and-snapshots).
 - A failed `--export-on-exit` is printed as an `error:` line, and the run exits 1 when the command succeeded. The official CLI only warns and exits 0; Fireemu differs so that a CI job that depends on the saved data cannot pass without it.
 - The export directory may be a volume mount point, such as a container volume mounted at `/data`. A mount point cannot be replaced by an atomic rename, so the export is staged inside it and moved into place, the old `firebase-export-metadata.json` leaving first and the new one arriving last. That replacement is not atomic: an interrupted export leaves a directory without the manifest, which `--import` refuses instead of loading part of it. Any other directory is still replaced atomically.
 

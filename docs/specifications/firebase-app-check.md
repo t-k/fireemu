@@ -1,6 +1,6 @@
 # Firebase App Check support specification
 
-- Status: proposed (review decisions of 2026-08-30 applied; see section 25)
+- Status: historical design specification with maintained transport notes (review decisions of 2026-08-30 applied; see section 25). For released behavior and configuration, see the [App Check guide](https://t-k.github.io/fireemu/products/app-check/).
 - Specification date: 2026-08-30
 - Target: `fireemu`
 - Initial delivery: baseline App Check for Auth, Cloud Firestore, Cloud Storage for Firebase, and callable Cloud Functions
@@ -8,7 +8,7 @@
 
 ## 1. Decision summary
 
-`fireemu` does not currently model Firebase App Check. It has no App Check configuration, app registry, debug-token exchange, token issuer, verifier, request admission decision, metrics, capability entry, or tests. Some request paths forward `X-Firebase-AppCheck` accidentally, while other paths discard it. Accidental forwarding is not support.
+At the specification date, `fireemu` did not model Firebase App Check. The following baseline describes that historical gap. It has no App Check configuration, app registry, debug-token exchange, token issuer, verifier, request admission decision, metrics, capability entry, or tests. Some request paths forward `X-Firebase-AppCheck` accidentally, while other paths discard it. Accidental forwarding is not support.
 
 The selected design adds a reproducible-under-test local App Check issuer and one transport-neutral verification and enforcement core. Normal daemon instances use cryptographically independent signing material; an explicitly injected test seed makes focused tests deterministic. Client test code exchanges a registered local debug secret for a session-scoped RS256 JWT. Firebase product adapters read `X-Firebase-AppCheck`, resolve the target project, ask the common core for one decision, and apply a product-specific enforcement policy before Security Rules or state mutation. Firebase Authentication and Security Rules remain independent layers; a request may have any combination of valid, missing, or invalid Auth and App Check credentials.
 

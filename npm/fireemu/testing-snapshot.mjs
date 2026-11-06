@@ -15,10 +15,12 @@ function retainCleanupError(error,cleanupError){
   if(error&&typeof error==='object')try{error.cleanupError=cleanupError;}catch{}
 }
 
-async function readRegularFile(path,signal){
+export async function readRegularFile(path,signal,openFile=open){
   const flags=fsConstants.O_RDONLY|(fsConstants.O_NONBLOCK??0);
-  const handle=await checked(signal,()=>open(path,flags));
+  checkSignal(signal);
+  const handle=await openFile(path,flags);
   try{
+    checkSignal(signal);
     const info=await checked(signal,()=>handle.stat());
     if(!info.isFile())throw Error(`configuration input must be a regular file: ${JSON.stringify(path)}`);
     return await checked(signal,()=>handle.readFile({encoding:'utf8',signal}));

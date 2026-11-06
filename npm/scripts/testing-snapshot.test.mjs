@@ -6,11 +6,36 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import test from 'node:test';
-import { snapshotInputs, prepareGeneration } from '../fireemu/testing-snapshot.mjs';
+import { snapshotInputs, prepareGeneration, readRegularFile } from '../fireemu/testing-snapshot.mjs';
 import { createTestWorld } from '../fireemu/testing.mjs';
 
 const exec = promisify(execFile);
 const directoryLink = process.platform === 'win32' ? 'junction' : 'dir';
+
+test('configuration open cancellation closes a handle returned after abort', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'fireemu-world-open-cancel-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const path = join(root, 'config.json');
+  await writeFile(path, '{}');
+  const controller = new AbortController();
+  const reason = Error('cancel during configuration open');
+  let openHandle, releaseOpen, markStarted;
+  const release = new Promise(resolve => { releaseOpen = resolve; });
+  const started = new Promise(resolve => { markStarted = resolve; });
+  const delayedOpen = async (file, flags) => {
+    markStarted();
+    await release;
+    openHandle = await open(file, flags);
+    return openHandle;
+  };
+  const pending = readRegularFile(path, controller.signal, delayedOpen);
+  await started;
+  controller.abort(reason);
+  releaseOpen();
+  await assert.rejects(pending, error => error === reason);
+  assert.ok(openHandle, 'open resolved with an owned file handle');
+  await assert.rejects(openHandle.stat(), { code: 'EBADF' });
+});
 
 for (const mode of ['implicit', 'explicit-without-node-path', 'explicit-empty', 'explicit-global']) {
   test(`test world NODE_PATH requires explicit environment selection: ${mode}`, async t => {

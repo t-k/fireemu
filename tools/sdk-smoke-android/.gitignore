@@ -6,3 +6,6 @@ local.properties
 node_modules/
 *-debug.log
 reports/
+.emulators/
+
+__pycache__/

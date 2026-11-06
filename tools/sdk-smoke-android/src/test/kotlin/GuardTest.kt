@@ -6,6 +6,11 @@ import org.junit.Test
 import java.io.File
 
 class GuardTest {
+    @Test fun deviceAliasRequiresExplicitMode() {
+        assertEquals("10.0.2.2" to 8080, EndpointGuard.validate("10.0.2.2:8080", device = true))
+        assertThrows(IllegalArgumentException::class.java) { EndpointGuard.validate("10.0.2.2:8080") }
+        assertThrows(IllegalArgumentException::class.java) { EndpointGuard.validate("10.0.2.2.example.com:8080", device = true) }
+    }
     @Test fun rejectsPublicHost() {
         assertThrows(IllegalArgumentException::class.java) { EndpointGuard.validate("example.com:8080") }
     }
@@ -21,15 +26,16 @@ class GuardTest {
     @Test fun generatedCombinations() {
         val generated = System.getenv("ANDROID_PICT_CASES")
         val rows = if (generated != null) File(generated).readLines().drop(1).map { it.trim().split('\t') }
-            else listOf("loopback", "public", "deceptive").flatMap { host -> listOf("valid", "zero", "overflow").flatMap { port -> listOf("present", "absent").map { listOf(host, port, it) } } }
+            else listOf("loopback", "public", "deceptive", "alias").flatMap { host -> listOf("valid", "zero", "overflow").flatMap { port -> listOf("present", "absent").flatMap { presence -> listOf("jvm", "device").map { listOf(host, port, presence, it) } } } }
         require(rows.isNotEmpty())
-        for ((host, port, presence) in rows) {
-            val address = when (host) { "loopback" -> "127.0.0.1"; "public" -> "example.com"; "deceptive" -> "127.0.0.1.example.com"; else -> error("unknown host factor") }
+        for ((host, port, presence, mode) in rows) {
+            val address = when (host) { "loopback" -> "127.0.0.1"; "public" -> "example.com"; "deceptive" -> "127.0.0.1.example.com"; "alias" -> "10.0.2.2"; else -> error("unknown host factor") }
             val number = when (port) { "valid" -> "8080"; "zero" -> "0"; "overflow" -> "65536"; else -> error("unknown port factor") }
             require(presence in listOf("present", "absent"))
             val input = if (presence == "absent") null else "$address:$number"
-            if (host == "loopback" && port == "valid" && presence == "present") assertEquals("127.0.0.1" to 8080, EndpointGuard.validate(input))
-            else assertThrows(IllegalArgumentException::class.java) { EndpointGuard.validate(input) }
+            require(mode in listOf("jvm", "device"))
+            if ((host == "loopback" || host == "alias" && mode == "device") && port == "valid" && presence == "present") assertEquals(address to 8080, EndpointGuard.validate(input, device = mode == "device"))
+            else assertThrows(IllegalArgumentException::class.java) { EndpointGuard.validate(input, device = mode == "device") }
         }
         println("guard combinations=${rows.size}")
     }

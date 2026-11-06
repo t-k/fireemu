@@ -1,0 +1,8 @@
+.gradle/
+.gradle-home/
+.kotlin/
+build/
+local.properties
+node_modules/
+*-debug.log
+reports/

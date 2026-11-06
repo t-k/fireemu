@@ -729,6 +729,8 @@ struct DeliveryState {
     next_aid: u64,
     committed_aid: u64,
     acknowledged_aid: u64,
+    /// Invalidates bodies serialized from a prior pending-array set.
+    revision: u64,
     stream_end: Option<StreamEnd>,
     terminal_expiry_cancel: Option<oneshot::Sender<()>>,
     terminal_expiry_tasks: Arc<AtomicUsize>,
@@ -752,6 +754,7 @@ impl DeliveryState {
             next_aid: 0,
             committed_aid: 0,
             acknowledged_aid: 0,
+            revision: 0,
             stream_end: None,
             terminal_expiry_cancel: None,
             terminal_expiry_tasks: Arc::new(AtomicUsize::new(0)),
@@ -784,6 +787,7 @@ struct PendingBatch {
     count: usize,
     framed_bytes: usize,
     body_utf16_units: usize,
+    revision: u64,
 }
 
 struct BudgetedChunk {
@@ -930,6 +934,9 @@ impl Session {
             let Ok(mut delivery) = self.delivery.lock() else {
                 return Err(());
             };
+            if delivery.stream_end.is_some() || self.is_terminated() {
+                return Err(());
+            }
             let aid = delivery.next_aid.checked_add(1).ok_or(())?;
             let text = format!("[{aid},{payload}]");
             let bytes = text.len();
@@ -968,6 +975,125 @@ impl Session {
         });
         self.touch();
         // `notify_one` keeps a permit when no back channel is waiting yet (no lost wakeups).
+        self.notify.notify_one();
+        Ok(aid)
+    }
+
+    /// Atomically replaces not-yet-committed data with one terminal error array. The delivery
+    /// revision makes a body serialized before this transition fail its later commit check.
+    fn refuse_with_error(self: &Arc<Self>, status: &Status) -> Result<u64, ()> {
+        let generated = (|| -> Result<Option<(u64, usize, Option<u64>, usize)>, ()> {
+            let _owner = match self.backchannel_owner.lock() {
+                Ok(owner) => owner,
+                Err(_) => {
+                    self.terminated.store(true, Ordering::SeqCst);
+                    return Err(());
+                }
+            };
+            let mut delivery = match self.delivery.lock() {
+                Ok(delivery) => delivery,
+                Err(_) => {
+                    self.terminated.store(true, Ordering::SeqCst);
+                    return Err(());
+                }
+            };
+            if self.is_terminated() {
+                return Err(());
+            }
+            if delivery.stream_end.is_some() {
+                return Ok(None);
+            }
+            let committed_aid = delivery.committed_aid;
+            delivery.outbound.retain(|(aid, _)| *aid <= committed_aid);
+            delivery
+                .retained_permits
+                .retain(|(aid, _)| *aid <= committed_aid);
+            delivery.retained_bytes = delivery.outbound.iter().map(|(_, text)| text.len()).sum();
+            delivery.next_aid = committed_aid;
+            let Some(revision) = delivery.revision.checked_add(1) else {
+                self.terminated.store(true, Ordering::SeqCst);
+                return Err(());
+            };
+            let Some(aid) = delivery.next_aid.checked_add(1) else {
+                self.terminated.store(true, Ordering::SeqCst);
+                return Err(());
+            };
+            let text = format!("[{aid},{}]", json!([error_response(status).body]));
+            let bytes = text.len();
+            let Some(retained_bytes) = delivery.retained_bytes.checked_add(bytes) else {
+                self.terminated.store(true, Ordering::SeqCst);
+                return Err(());
+            };
+            if bytes > MAX_OUTBOUND_ARRAY_BYTES
+                || retained_bytes > MAX_UNACKNOWLEDGED_BYTES
+                || delivery.outbound.len() >= MAX_QUEUED_ARRAYS
+            {
+                self.terminated.store(true, Ordering::SeqCst);
+                return Err(());
+            }
+            let Ok(permit_count) = u32::try_from(bytes) else {
+                self.terminated.store(true, Ordering::SeqCst);
+                return Err(());
+            };
+            let retained_permit = match delivery
+                .process_retained_budget
+                .clone()
+                .try_acquire_many_owned(permit_count)
+            {
+                Ok(permit) => permit,
+                Err(_) => {
+                    self.terminated.store(true, Ordering::SeqCst);
+                    return Err(());
+                }
+            };
+            delivery.revision = revision;
+            delivery.next_aid = aid;
+            delivery.retained_bytes = retained_bytes;
+            delivery.outbound.push_back((aid, text));
+            delivery.retained_permits.push_back((aid, retained_permit));
+            delivery.stream_end = Some(StreamEnd {
+                ended_at: Instant::now(),
+                terminal_aid: aid,
+            });
+            Ok(Some((
+                aid,
+                bytes,
+                delivery.outbound.front().map(|(id, _)| *id),
+                delivery.outbound.len(),
+            )))
+        })();
+        let (aid, bytes, queued_first, queued_count) = match generated {
+            Ok(Some(generated)) => generated,
+            Ok(None) => {
+                return self
+                    .delivery
+                    .lock()
+                    .map_err(|_| ())?
+                    .stream_end
+                    .map(|ended| ended.terminal_aid)
+                    .ok_or(());
+            }
+            Err(()) => {
+                self.terminate();
+                return Err(());
+            }
+        };
+        self.trace_event(&TraceEvent::ArrayGenerated {
+            session: self.trace_id,
+            aid,
+            bytes,
+            queued_first,
+            queued_last: Some(aid),
+            queued_count,
+        });
+        if let Ok(mut inbound) = self.inbound.lock() {
+            inbound.take();
+        }
+        if let Ok(mut maps) = self.maps.lock() {
+            maps.1.clear();
+        }
+        schedule_terminal_expiry(self, TERMINAL_DELIVERY_TTL);
+        self.notify.notify_waiters();
         self.notify.notify_one();
         Ok(aid)
     }
@@ -1090,6 +1216,7 @@ impl Session {
                 .checked_add(decimal_digits(body_utf16_units))?
                 .checked_add(1)?,
             body_utf16_units,
+            revision: delivery.revision,
         })
     }
 
@@ -1595,7 +1722,7 @@ impl Hub {
         project: &str,
         values: &[String],
         authorization: Option<&str>,
-    ) -> Result<Option<ChannelApp>, ChannelResponse> {
+    ) -> Result<Option<ChannelApp>, Status> {
         let Some(policy) = &self.state.app_check else {
             return Ok(None);
         };
@@ -1610,7 +1737,7 @@ impl Hub {
                 now: self.state.local.now(),
             });
         if let Some(reason) = decision.reason {
-            return Err(error_chunk(&crate::service::app_check_denied(reason)));
+            return Err(crate::service::app_check_denied(reason));
         }
         Ok(match (decision.mode, decision.identity(), epoch) {
             (
@@ -1636,7 +1763,7 @@ impl Hub {
         req: &ChannelRequest,
         session: &Arc<Session>,
         form: &BTreeMap<String, String>,
-    ) -> Result<(), ChannelResponse> {
+    ) -> Result<(), Status> {
         let (Some(policy), Some(bound)) = (&self.state.app_check, session.app_check.as_ref())
         else {
             return Ok(());
@@ -1672,8 +1799,89 @@ impl Hub {
         let reason = decision
             .reason
             .unwrap_or(fireemu_core_app_check::verify::PUBLIC_DENIAL_REASON);
-        self.remove(&session.sid);
-        Err(error_chunk(&crate::service::app_check_denied(reason)))
+        let status = crate::service::app_check_denied(reason);
+        if session.refuse_with_error(&status).is_err() {
+            self.remove(&session.sid);
+            return Err(Status::resource_exhausted(
+                "unable to retain terminal credential refusal",
+            ));
+        }
+        Err(status)
+    }
+
+    /// Opens only the WebChannel transport for a refused credential and queues the terminal RPC
+    /// envelope before returning the handshake chunk. No stream task is created and no request
+    /// maps are delivered, so the refusal cannot admit work as a side effect.
+    fn refused_handshake(&self, req: &ChannelRequest, status: Status) -> ChannelResponse {
+        let strict = self.production_scope();
+        let sid = match if strict && req.kind == StreamKind::Listen {
+            sid_from_entropy(|| {
+                fireemu_adapter_support::entropy::u128_value()
+                    .map(|value| fireemu_core_auth::jwt::base64url_encode(&value.to_be_bytes()))
+            })
+        } else {
+            random_sid()
+        } {
+            Ok(sid) => sid,
+            Err(error) => return text_response(500, error),
+        };
+        let (inbound, inbound_rx) = mpsc::channel::<Result<Value, Status>>(1);
+        drop(inbound_rx);
+        let session = Arc::new(Session {
+            sid: sid.clone(),
+            trace_id: next_trace_session_id(),
+            trace_events: AtomicU64::new(0),
+            kind: req.kind,
+            origin: req.origin.clone(),
+            inbound: Mutex::new(Some(inbound)),
+            delivery: Mutex::new(DeliveryState::with_budgets(&self.budgets)),
+            backchannel_owner: Mutex::new(BackchannelOwner {
+                generation: 0,
+                cancel: None,
+            }),
+            notify: Notify::new(),
+            last_seen: Mutex::new(Instant::now()),
+            maps: Mutex::new((0, BTreeMap::new())),
+            project: crate::service::project_of_resource(
+                req.params.get("database").map_or("", String::as_str),
+            )
+            .to_owned(),
+            app_check: None,
+            registry: Arc::downgrade(&self.sessions),
+            terminated: AtomicBool::new(false),
+        });
+        {
+            let Ok(mut sessions) = self.sessions.lock() else {
+                return text_response(500, "session registry poisoned".to_owned());
+            };
+            if sessions.len() >= MAX_SESSIONS {
+                return text_response(503, "too many channel sessions".to_owned());
+            }
+            sessions.insert(sid.clone(), session.clone());
+        }
+        session.trace_event(&TraceEvent::SessionOpened {
+            session: session.trace_id,
+            kind: session.kind,
+        });
+        trace_request(&session, req);
+        if session.refuse_with_error(&status).is_err() {
+            self.remove(&sid);
+            return text_response(503, "unable to retain channel error".to_owned());
+        }
+        let scalar = if strict && req.kind == StreamKind::Listen {
+            15
+        } else {
+            12
+        };
+        let handshake = json!([[0, ["c", sid, "", 8, scalar, 30_000]]]).to_string();
+        ChannelResponse::Full {
+            status: 200,
+            headers: vec![
+                ("x-http-session-id", session.sid.clone()),
+                ("content-type", "text/plain; charset=utf-8".to_owned()),
+            ],
+            body: chunk(&handshake),
+        }
     }
 
     #[allow(clippy::too_many_lines)]
@@ -1696,14 +1904,14 @@ impl Hub {
         .to_owned();
         let bound = match self.admit_channel(&project, &values, authorization.as_deref()) {
             Ok(bound) => bound,
-            Err(response) => return response,
+            Err(status) => return self.refused_handshake(req, status),
         };
         let principal = match &self.state.rules {
             Some(r) => match r
                 .principal_from_authorization_for_project(authorization.as_deref(), &project)
             {
                 Ok(p) => p,
-                Err(e) => return error_chunk(&e),
+                Err(e) => return self.refused_handshake(req, e),
             },
             None => crate::rules::Principal::Owner,
         };
@@ -1798,8 +2006,12 @@ impl Hub {
             Err(r) => return r,
         };
         let form = parse_form(&req.body);
-        if let Err(response) = self.check_replacement(req, &session, &form) {
-            return response;
+        if let Err(status) = self.check_replacement(req, &session, &form) {
+            if status.code() == tonic::Code::ResourceExhausted {
+                return error_chunk(&status);
+            }
+            let text = json!([0, session.last_aid(), 0]).to_string();
+            return text_response(200, chunk(&text));
         }
         trace_request(&session, req);
         if let Some(aid) = req.params.get("AID").and_then(|a| a.parse::<u64>().ok()) {
@@ -1824,17 +2036,24 @@ impl Hub {
         };
         // The back channel is a GET: its init headers ride in `$httpHeaders`, so a
         // replacement token can arrive here too.
-        if let Err(response) = self.check_replacement(req, &session, &BTreeMap::new()) {
-            return response;
-        }
+        let replacement_refused = match self.check_replacement(req, &session, &BTreeMap::new()) {
+            Ok(()) => false,
+            Err(status) if status.code() == tonic::Code::PermissionDenied => true,
+            Err(status) => return error_chunk(&status),
+        };
         trace_request(&session, req);
-        let acked = req
-            .params
-            .get("AID")
-            .and_then(|a| a.parse::<u64>().ok())
-            .unwrap_or(0);
-        if let Err(e) = session.acknowledge(acked) {
-            return error_chunk(&e);
+        let acked = if replacement_refused {
+            0
+        } else {
+            req.params
+                .get("AID")
+                .and_then(|a| a.parse::<u64>().ok())
+                .unwrap_or(0)
+        };
+        if !replacement_refused {
+            if let Err(e) = session.acknowledge(acked) {
+                return error_chunk(&e);
+            }
         }
         if session.is_terminated() {
             let noop = json!([[session.last_aid(), ["noop"]]]).to_string();
@@ -1925,6 +2144,9 @@ fn commit_backchannel_chunk(
             return BackchannelCommit::BatchChanged;
         }
         if let Some(batch) = batch {
+            if batch.revision != delivery.revision {
+                return BackchannelCommit::BatchChanged;
+            }
             let mut expected_aid = batch.first_aid;
             let mut retained_count = 0usize;
             for (aid, _) in delivery
@@ -3519,6 +3741,71 @@ mod tests {
         assert!(rx.try_recv().is_err());
         let replacement = session.pending_batch_plan_after(0).unwrap();
         assert_eq!((replacement.first_aid, replacement.last_aid), (2, 3));
+    }
+
+    #[tokio::test]
+    async fn a_refused_stream_cannot_commit_a_stale_serialized_success_batch() {
+        let session = Arc::new(test_session(
+            "refused-stale-batch",
+            DeliveryState::default(),
+        ));
+        session.push("[\"successful data\"]").unwrap();
+        let plan = session.pending_batch_plan_after(0).unwrap();
+        let (session_budget, process_budget) = session.replay_copy_budgets().unwrap();
+        let bytes = plan.framed_bytes.try_into().unwrap();
+        let stale = session
+            .serialize_pending_batch(
+                plan,
+                session_budget.acquire_many_owned(bytes).await.unwrap(),
+                process_budget.acquire_many_owned(bytes).await.unwrap(),
+            )
+            .unwrap();
+        let stale_body = bytes::Bytes::copy_from_slice(stale.as_ref());
+        drop(stale);
+
+        session
+            .refuse_with_error(&Status::permission_denied("permission denied"))
+            .unwrap();
+        assert_eq!(
+            session
+                .refuse_with_error(&Status::permission_denied("permission denied"))
+                .unwrap(),
+            1
+        );
+        session.backchannel_owner.lock().unwrap().generation = 1;
+        let (tx, _rx) = mpsc::channel(1);
+        let permit = tx.reserve().await.unwrap();
+
+        assert_eq!(
+            commit_backchannel_chunk(&session, 1, plan.last_aid, Some(plan), permit, stale_body,),
+            BackchannelCommit::BatchChanged
+        );
+    }
+
+    #[tokio::test]
+    async fn pushes_after_stream_refusal_are_rejected() {
+        let session = Arc::new(test_session("refused-push", DeliveryState::default()));
+        session
+            .refuse_with_error(&Status::permission_denied("permission denied"))
+            .unwrap();
+
+        assert!(session.push("[\"late success\"]").is_err());
+    }
+
+    #[tokio::test]
+    async fn refusal_budget_failure_terminates_the_session() {
+        let delivery = DeliveryState {
+            process_retained_budget: Arc::new(Semaphore::new(0)),
+            ..DeliveryState::default()
+        };
+        let session = Arc::new(test_session("refusal-budget-failure", delivery));
+
+        assert!(session
+            .refuse_with_error(&Status::permission_denied("permission denied"))
+            .is_err());
+        assert!(session.is_terminated());
+        assert!(session.inbound.lock().unwrap().is_none());
+        assert!(session.delivery.lock().unwrap().outbound.is_empty());
     }
 
     #[tokio::test]

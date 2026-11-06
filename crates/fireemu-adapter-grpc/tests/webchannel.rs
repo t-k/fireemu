@@ -2,7 +2,7 @@
 //! contiguous array ids, forward-channel acknowledgements and error payloads.
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 use fireemu_adapter_grpc::gateway::Gateway;
 use fireemu_adapter_grpc::local::LocalBackend;
@@ -12,9 +12,13 @@ use fireemu_adapter_grpc::webchannel::{
     ChannelRequest, ChannelResponse, Hub, StreamKind, EMULATOR_UNKNOWN_SESSION_BODY,
     MAX_BUFFERED_MAP_BYTES, STRICT_UNKNOWN_SESSION_BODY,
 };
-use fireemu_core_auth::jwt::{base64url_encode, TokenAcceptance};
+use fireemu_core_app_check::admission::{AppCheckGate, ServiceAdmission};
+use fireemu_core_app_check::crypto::AppCheckSigner;
+use fireemu_core_app_check::registry::{AppCheckRegistry, AppRegistration, ProjectEpoch};
+use fireemu_core_app_check::verify::BaselineMode;
+use fireemu_core_auth::jwt::{base64url_encode, encode_unsigned, TokenAcceptance};
 use fireemu_core_auth::mfa::TotpPolicy;
-use fireemu_core_auth::store::AuthStore;
+use fireemu_core_auth::store::{AuthStore, NewUser};
 use fireemu_core_firestore::field_path::FieldPath;
 use fireemu_core_firestore::index::{
     IndexDefinition, IndexField, IndexFieldMode, IndexQueryScope, IndexSet, IndexValidationPolicy,
@@ -33,6 +37,87 @@ use tokio_stream::StreamExt;
 const DB: &str = "projects/demo-app/databases/(default)";
 const RULES_ALLOW_ALL: &str = "rules_version = '2'; service cloud.firestore { match /databases/{database}/documents { match /{document=**} { allow read, write: if true; } } }";
 
+struct RefusalTestSigner;
+
+impl AppCheckSigner for RefusalTestSigner {
+    fn alg(&self) -> &'static str {
+        "RS256"
+    }
+
+    fn kid(&self) -> &str {
+        "webchannel-refusal-test"
+    }
+
+    fn sign(&self, input: &[u8]) -> Vec<u8> {
+        input.to_vec()
+    }
+
+    fn verify(&self, input: &[u8], signature: &[u8]) -> bool {
+        input == signature
+    }
+
+    fn public_jwk_json(&self) -> String {
+        "{}".to_owned()
+    }
+}
+
+fn enforced_app_check_gate() -> AppCheckGate {
+    let mut registry = AppCheckRegistry::new(3600).unwrap();
+    registry
+        .register_app(AppRegistration {
+            project_id: "demo-app".to_owned(),
+            project_number: "1234567890".to_owned(),
+            app_id: "1:1234567890:web:webchannel-test".to_owned(),
+            enabled: true,
+            debug_token_digests: Vec::new(),
+        })
+        .unwrap();
+    registry
+        .register_app(AppRegistration {
+            project_id: "demo-app".to_owned(),
+            project_number: "1234567890".to_owned(),
+            app_id: "1:1234567890:web:other-test".to_owned(),
+            enabled: true,
+            debug_token_digests: Vec::new(),
+        })
+        .unwrap();
+    registry.set_project_epoch("demo-app", ProjectEpoch::new(7));
+    AppCheckGate::new(Arc::new(RwLock::new(registry)), Arc::new(RefusalTestSigner))
+}
+
+fn app_check_hub(strict: bool) -> (Hub, AppCheckGate) {
+    let gateway = Gateway {
+        enforce_limits: strict,
+        ctx: PlanningContext {
+            edition: FirestoreEdition::Standard,
+            api_mode: FirestoreApiMode::Native,
+            policy: if strict {
+                IndexValidationPolicy::Production
+            } else {
+                IndexValidationPolicy::Emulator
+            },
+        },
+        indexes: IndexSet::default(),
+    };
+    let clock = Arc::new(Mutex::new(VirtualClock::new(
+        LogicalInstant::from_unix_seconds(1_788_004_860),
+    )));
+    let local = Arc::new(LocalBackend::new(gateway.clone(), clock, 7));
+    let gate = enforced_app_check_gate();
+    let policy =
+        Arc::new(ServiceAdmission::new(gate.clone(), "firestore", BaselineMode::Enforced).unwrap());
+    (
+        Hub::new(Arc::new(RestState {
+            local,
+            gateway: Arc::new(gateway),
+            rules: None,
+            app_check: Some(policy),
+            control_token: None,
+        })),
+        gate,
+    )
+}
+
 fn hub(rules: Option<&str>) -> Hub {
     hub_with_acceptance(rules, TokenAcceptance::Verified)
 }
@@ -50,7 +135,16 @@ fn hub_and_local_with_profile(
     acceptance: TokenAcceptance,
     strict: bool,
 ) -> (Hub, Arc<LocalBackend>) {
-    hub_and_local_with_wait(rules, acceptance, strict, std::time::Duration::ZERO)
+    let (hub, local, _) = hub_and_local_with_profile_and_auth(rules, acceptance, strict);
+    (hub, local)
+}
+
+fn hub_and_local_with_profile_and_auth(
+    rules: Option<&str>,
+    acceptance: TokenAcceptance,
+    strict: bool,
+) -> (Hub, Arc<LocalBackend>, Arc<Mutex<AuthStore>>) {
+    hub_and_local_with_wait_and_auth(rules, acceptance, strict, std::time::Duration::ZERO)
 }
 
 fn hub_and_local_with_wait(
@@ -59,6 +153,16 @@ fn hub_and_local_with_wait(
     strict: bool,
     wait: std::time::Duration,
 ) -> (Hub, Arc<LocalBackend>) {
+    let (hub, local, _) = hub_and_local_with_wait_and_auth(rules, acceptance, strict, wait);
+    (hub, local)
+}
+
+fn hub_and_local_with_wait_and_auth(
+    rules: Option<&str>,
+    acceptance: TokenAcceptance,
+    strict: bool,
+    wait: std::time::Duration,
+) -> (Hub, Arc<LocalBackend>, Arc<Mutex<AuthStore>>) {
     let gateway = Gateway {
         enforce_limits: strict,
         ctx: PlanningContext {
@@ -79,16 +183,16 @@ fn hub_and_local_with_wait(
     )));
     let local =
         Arc::new(LocalBackend::new(gateway.clone(), clock.clone(), 7).with_contention_wait(wait));
+    let auth = Arc::new(Mutex::new(AuthStore::new(
+        "demo-app",
+        SplitMix64::new(3),
+        TotpPolicy::default(),
+    )));
     let rules = rules.map(|src| {
-        let auth = Arc::new(Mutex::new(AuthStore::new(
-            "demo-app",
-            SplitMix64::new(3),
-            TotpPolicy::default(),
-        )));
         Arc::new(
             RulesEnforcer::new(
                 Arc::new(RulesetSlot::new(LoadedRules::from_source(src).unwrap())),
-                auth,
+                auth.clone(),
                 clock,
             )
             .with_token_semantics(TokenSemantics::Firestore)
@@ -102,7 +206,7 @@ fn hub_and_local_with_wait(
         app_check: None,
         control_token: None,
     }));
-    (hub, local)
+    (hub, local, auth)
 }
 
 fn mock_user_token(sub: &str, project: &str) -> String {
@@ -149,6 +253,267 @@ async fn webchannel_binds_unknown_mock_tokens_to_the_requested_project() {
         .0,
         401
     );
+}
+
+#[tokio::test]
+async fn refused_opening_principals_are_delivered_as_terminal_stream_errors() {
+    let start = LogicalInstant::from_unix_seconds(1_788_004_860);
+    for strict in [true, false] {
+        for refusal in ["expired", "foreign-audience"] {
+            let (hub, _, auth) = hub_and_local_with_profile_and_auth(
+                Some(RULES_ALLOW_ALL),
+                TokenAcceptance::Verified,
+                strict,
+            );
+            let token = {
+                let mut store = auth.lock().unwrap();
+                let uid = store
+                    .create_user(NewUser::email("webchannel@example.test"), start)
+                    .unwrap();
+                let mut claims = store
+                    .id_token_claims(&uid, None, start)
+                    .expect("test user claims");
+                match refusal {
+                    "expired" => {
+                        claims = store
+                            .id_token_claims(
+                                &uid,
+                                None,
+                                LogicalInstant::from_unix_seconds(1_788_004_860 - 7200),
+                            )
+                            .expect("expired test user claims");
+                    }
+                    "foreign-audience" => claims.aud = "foreign-project".to_owned(),
+                    _ => unreachable!(),
+                }
+                encode_unsigned(&claims)
+            };
+            let database = format!("projects/demo-app/databases/(default)");
+            let response = hub.handle(&ChannelRequest {
+                kind: StreamKind::Listen,
+                method: "POST".to_owned(),
+                params: params(&[("database", &database), ("VER", "8"), ("RID", "1")]),
+                authorization: Some(format!("Bearer {token}")),
+                app_check: Vec::new(),
+                origin: None,
+                body: form(&[
+                    ("count", "1"),
+                    ("ofs", "0"),
+                    ("req0___data__", &listen_target(2, "open")),
+                ]),
+            });
+            let (status, headers, body) = full(response);
+            assert_eq!(
+                status, 200,
+                "{refusal} principal under strict={strict}: {body}"
+            );
+            let sid = headers
+                .iter()
+                .find(|(name, _)| *name == "x-http-session-id")
+                .map(|(_, sid)| sid.as_str())
+                .expect("a refusal must establish a backchannel session");
+            let handshake = chunks(&body);
+            assert_eq!(handshake[0][0][0], 0);
+            assert_eq!(handshake[0][0][1][0], "c");
+            assert_eq!(handshake[0][0][1][1], sid);
+
+            let terminal = read_long_poll(&hub, sid, 0).await;
+            assert_eq!(last_array_id(&terminal), 1, "{terminal}");
+            assert_eq!(response_payloads(&terminal).len(), 1);
+            let status = match (strict, refusal) {
+                (true, "expired") => "UNAUTHENTICATED",
+                (true, _) => "PERMISSION_DENIED",
+                (false, "expired") => "UNAUTHENTICATED",
+                (false, _) => "PERMISSION_DENIED",
+            };
+            assert_eq!(
+                response_payloads(&terminal)[0]["error"]["status"],
+                status,
+                "{refusal} principal under strict={strict}: {terminal}"
+            );
+            let (status, _, body) = full(hub.handle(&ChannelRequest {
+                kind: StreamKind::Listen,
+                method: "POST".to_owned(),
+                params: params(&[("SID", sid), ("RID", "ack"), ("AID", "1")]),
+                authorization: None,
+                app_check: Vec::new(),
+                origin: None,
+                body: form(&[("count", "0"), ("ofs", "1")]),
+            }));
+            assert_eq!(status, 200, "terminal acknowledgement: {body}");
+            let (status, _, body) = full(hub.handle(&ChannelRequest {
+                kind: StreamKind::Listen,
+                method: "GET".to_owned(),
+                params: params(&[("SID", sid), ("RID", "after-ack"), ("CI", "1")]),
+                authorization: None,
+                app_check: Vec::new(),
+                origin: None,
+                body: String::new(),
+            }));
+            assert_eq!(
+                status, 400,
+                "acknowledged refusal must not stay open: {body}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn enforced_missing_app_check_is_delivered_as_a_terminal_stream_error() {
+    for strict in [true, false] {
+        let (hub, _) = app_check_hub(strict);
+        let (status, headers, body) = full(hub.handle(&ChannelRequest {
+            kind: StreamKind::Listen,
+            method: "POST".to_owned(),
+            params: params(&[("database", DB), ("VER", "8"), ("RID", "1")]),
+            authorization: None,
+            app_check: Vec::new(),
+            origin: None,
+            body: form(&[
+                ("count", "1"),
+                ("ofs", "0"),
+                ("req0___data__", &listen_target(2, "open")),
+            ]),
+        }));
+        assert_eq!(status, 200, "strict={strict}: {body}");
+        let sid = headers
+            .iter()
+            .find(|(name, _)| *name == "x-http-session-id")
+            .map(|(_, sid)| sid.as_str())
+            .expect("a refused opening needs a backchannel session");
+        let handshake = chunks(&body);
+        assert_eq!(handshake[0][0][1][0], "c", "strict={strict}");
+        assert_eq!(handshake[0][0][1][1], sid, "strict={strict}");
+
+        let terminal = read_long_poll(&hub, sid, 0).await;
+        assert_eq!(
+            terminal.as_array().unwrap().len(),
+            1,
+            "strict={strict}: {terminal}"
+        );
+        assert_eq!(last_array_id(&terminal), 1, "strict={strict}: {terminal}");
+        assert_eq!(
+            response_payloads(&terminal)[0]["error"]["status"],
+            "PERMISSION_DENIED",
+            "strict={strict}: {terminal}"
+        );
+    }
+}
+
+fn app_check_token(gate: &AppCheckGate, app_id: &str) -> String {
+    let claims = gate
+        .registry()
+        .read()
+        .unwrap()
+        .issue_claims(
+            "demo-app",
+            app_id,
+            LogicalInstant::from_unix_seconds(1_788_004_860),
+        )
+        .unwrap();
+    fireemu_core_app_check::jwt::encode(&claims, gate.signer().as_ref())
+}
+
+#[tokio::test]
+async fn refused_replacement_tokens_deliver_only_the_terminal_error_and_ignore_request_data() {
+    for strict in [true, false] {
+        for replacement in ["invalid", "foreign-app"] {
+            let (hub, gate) = app_check_hub(strict);
+            let valid = app_check_token(&gate, "1:1234567890:web:webchannel-test");
+            let replacement_token = match replacement {
+                "invalid" => "not-a-token".to_owned(),
+                "foreign-app" => app_check_token(&gate, "1:1234567890:web:other-test"),
+                _ => unreachable!(),
+            };
+            let (status, headers, _) = full(hub.handle(&ChannelRequest {
+                kind: StreamKind::Listen,
+                method: "POST".to_owned(),
+                params: params(&[("database", DB), ("VER", "8"), ("RID", "1")]),
+                authorization: None,
+                app_check: vec![valid],
+                origin: None,
+                body: form(&[
+                    ("count", "1"),
+                    ("ofs", "0"),
+                    ("req0___data__", &listen_target(2, "open")),
+                ]),
+            }));
+            assert_eq!(status, 200, "strict={strict}, replacement={replacement}");
+            let sid = headers
+                .iter()
+                .find(|(name, _)| *name == "x-http-session-id")
+                .map(|(_, sid)| sid.clone())
+                .expect("valid opening token must admit a channel");
+
+            let first_aid = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                loop {
+                    let (_, _, body) = full(hub.handle(&ChannelRequest {
+                        kind: StreamKind::Listen,
+                        method: "POST".to_owned(),
+                        params: params(&[("SID", &sid), ("RID", "queued-probe"), ("AID", "0")]),
+                        authorization: None,
+                        app_check: Vec::new(),
+                        origin: None,
+                        body: form(&[("count", "0"), ("ofs", "1")]),
+                    }));
+                    let ack = chunks(&body);
+                    let aid = ack[0][1].as_u64().unwrap();
+                    if aid > 0 {
+                        break aid;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("opening data must queue before the replacement refusal");
+
+            let (status, _, body) = full(hub.handle(&ChannelRequest {
+                kind: StreamKind::Listen,
+                method: "POST".to_owned(),
+                params: params(&[
+                    ("SID", &sid),
+                    ("RID", "replacement"),
+                    ("AID", &first_aid.to_string()),
+                ]),
+                authorization: None,
+                app_check: vec![replacement_token.clone()],
+                origin: None,
+                body: form(&[
+                    ("count", "1"),
+                    ("ofs", "1"),
+                    ("req0___data__", &listen_target(4, "open")),
+                ]),
+            }));
+            assert_eq!(
+                status, 200,
+                "strict={strict}, replacement={replacement}: {body}"
+            );
+
+            let (_, _, repeated) = full(hub.handle(&ChannelRequest {
+                kind: StreamKind::Listen,
+                method: "POST".to_owned(),
+                params: params(&[("SID", &sid), ("RID", "replacement-repeat"), ("AID", "0")]),
+                authorization: None,
+                app_check: vec![replacement_token],
+                origin: None,
+                body: form(&[
+                    ("count", "1"),
+                    ("ofs", "2"),
+                    ("req0___data__", &listen_target(5, "open")),
+                ]),
+            }));
+            assert_eq!(chunks(&repeated)[0][1], 1);
+
+            let terminal = read_long_poll(&hub, &sid, 0).await;
+            assert_eq!(terminal.as_array().unwrap().len(), 1, "{terminal}");
+            assert_eq!(last_array_id(&terminal), 1, "{terminal}");
+            assert_eq!(
+                response_payloads(&terminal)[0]["error"]["status"],
+                "PERMISSION_DENIED",
+                "strict={strict}, replacement={replacement}: {terminal}"
+            );
+        }
+    }
 }
 
 fn form(pairs: &[(&str, &str)]) -> String {

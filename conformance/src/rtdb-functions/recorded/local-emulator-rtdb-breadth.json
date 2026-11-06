@@ -68,21 +68,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["authType", "eventId", "eventType", "params", "resource", "timestamp"]
           }
         }
       },
@@ -209,21 +199,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["authType", "eventId", "eventType", "params", "resource", "timestamp"]
           }
         }
       },
@@ -352,21 +332,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["authType", "eventId", "eventType", "params", "resource", "timestamp"]
           }
         }
       },
@@ -438,21 +408,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["authType", "eventId", "eventType", "params", "resource", "timestamp"]
           }
         }
       },
@@ -579,21 +539,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["authType", "eventId", "eventType", "params", "resource", "timestamp"]
           }
         }
       },
@@ -664,21 +614,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["authType", "eventId", "eventType", "params", "resource", "timestamp"]
           }
         }
       },
@@ -749,21 +689,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["authType", "eventId", "eventType", "params", "resource", "timestamp"]
           }
         }
       },
@@ -834,21 +764,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["authType", "eventId", "eventType", "params", "resource", "timestamp"]
           }
         }
       },
@@ -919,21 +839,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["authType", "eventId", "eventType", "params", "resource", "timestamp"]
           }
         }
       },
@@ -1004,21 +914,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["authType", "eventId", "eventType", "params", "resource", "timestamp"]
           }
         }
       },
@@ -1089,21 +989,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["authType", "eventId", "eventType", "params", "resource", "timestamp"]
           }
         }
       },
@@ -1230,21 +1120,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["authType", "eventId", "eventType", "params", "resource", "timestamp"]
           }
         }
       },
@@ -1489,21 +1369,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["authType", "eventId", "eventType", "params", "resource", "timestamp"]
           }
         }
       },
@@ -1574,21 +1444,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["authType", "eventId", "eventType", "params", "resource", "timestamp"]
           }
         }
       },
@@ -1659,21 +1519,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["authType", "eventId", "eventType", "params", "resource", "timestamp"]
           }
         }
       },
@@ -1747,21 +1597,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["authType", "eventId", "eventType", "params", "resource", "timestamp"]
           }
         }
       },
@@ -1832,21 +1672,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["authType", "eventId", "eventType", "params", "resource", "timestamp"]
           }
         }
       },
@@ -1917,21 +1747,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["authType", "eventId", "eventType", "params", "resource", "timestamp"]
           }
         }
       },
@@ -2176,21 +1996,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["authType", "eventId", "eventType", "params", "resource", "timestamp"]
           }
         }
       },
@@ -2261,21 +2071,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["authType", "eventId", "eventType", "params", "resource", "timestamp"]
           }
         }
       },
@@ -2346,21 +2146,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["authType", "eventId", "eventType", "params", "resource", "timestamp"]
           }
         }
       },
@@ -2434,21 +2224,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["authType", "eventId", "eventType", "params", "resource", "timestamp"]
           }
         }
       },
@@ -2576,21 +2356,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["authType", "eventId", "eventType", "params", "resource", "timestamp"]
           }
         }
       },
@@ -2774,21 +2544,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["authType", "eventId", "eventType", "params", "resource", "timestamp"]
           }
         }
       },
@@ -2859,21 +2619,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["authType", "eventId", "eventType", "params", "resource", "timestamp"]
           }
         }
       },
@@ -2944,21 +2694,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["authType", "eventId", "eventType", "params", "resource", "timestamp"]
           }
         }
       },
@@ -3029,21 +2769,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["authType", "eventId", "eventType", "params", "resource", "timestamp"]
           }
         }
       },
@@ -3114,21 +2844,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["authType", "eventId", "eventType", "params", "resource", "timestamp"]
           }
         }
       },
@@ -3199,21 +2919,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["authType", "eventId", "eventType", "params", "resource", "timestamp"]
           }
         }
       },
@@ -3470,22 +3180,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "auth",
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["auth", "authType", "eventId", "eventType", "params", "resource", "timestamp"]
           }
         }
       },
@@ -3556,22 +3255,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "auth",
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["auth", "authType", "eventId", "eventType", "params", "resource", "timestamp"]
           }
         }
       },
@@ -3645,22 +3333,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "auth",
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["auth", "authType", "eventId", "eventType", "params", "resource", "timestamp"]
           }
         }
       },
@@ -3811,22 +3488,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "auth",
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["auth", "authType", "eventId", "eventType", "params", "resource", "timestamp"]
           }
         }
       },
@@ -3897,22 +3563,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "auth",
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["auth", "authType", "eventId", "eventType", "params", "resource", "timestamp"]
           }
         }
       },
@@ -4057,22 +3712,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "auth",
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["auth", "authType", "eventId", "eventType", "params", "resource", "timestamp"]
           }
         }
       },
@@ -4217,22 +3861,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "auth",
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["auth", "authType", "eventId", "eventType", "params", "resource", "timestamp"]
           }
         }
       },
@@ -4303,22 +3936,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "auth",
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["auth", "authType", "eventId", "eventType", "params", "resource", "timestamp"]
           }
         }
       },
@@ -4389,22 +4011,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "auth",
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["auth", "authType", "eventId", "eventType", "params", "resource", "timestamp"]
           }
         }
       },
@@ -4475,22 +4086,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "auth",
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["auth", "authType", "eventId", "eventType", "params", "resource", "timestamp"]
           }
         }
       },
@@ -4715,22 +4315,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "auth",
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["auth", "authType", "eventId", "eventType", "params", "resource", "timestamp"]
           }
         }
       },
@@ -4804,22 +4393,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "auth",
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["auth", "authType", "eventId", "eventType", "params", "resource", "timestamp"]
           }
         }
       },
@@ -4893,22 +4471,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "auth",
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["auth", "authType", "eventId", "eventType", "params", "resource", "timestamp"]
           }
         }
       },
@@ -4982,22 +4549,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "auth",
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["auth", "authType", "eventId", "eventType", "params", "resource", "timestamp"]
           }
         }
       },
@@ -5219,22 +4775,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "auth",
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["auth", "authType", "eventId", "eventType", "params", "resource", "timestamp"]
           }
         }
       },
@@ -5305,22 +4850,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "auth",
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["auth", "authType", "eventId", "eventType", "params", "resource", "timestamp"]
           }
         }
       },
@@ -5391,22 +4925,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "auth",
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["auth", "authType", "eventId", "eventType", "params", "resource", "timestamp"]
           }
         }
       },
@@ -5477,22 +5000,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "auth",
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["auth", "authType", "eventId", "eventType", "params", "resource", "timestamp"]
           }
         }
       },
@@ -5638,21 +5150,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["authType", "eventId", "eventType", "params", "resource", "timestamp"]
           }
         }
       },
@@ -5781,21 +5283,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["authType", "eventId", "eventType", "params", "resource", "timestamp"]
           }
         }
       },

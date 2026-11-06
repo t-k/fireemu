@@ -124,20 +124,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["eventId", "eventType", "params", "resource", "timestamp"]
           },
           "traceparent": "00-5522ee66eb9c393561b4480c569bd6cc-9a7f58bb7fcb8a58-01"
         }
@@ -209,20 +200,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["eventId", "eventType", "params", "resource", "timestamp"]
           },
           "traceparent": "00-6219a14c99b967c20a985fd7aeca6c1c-5b08c76544b3345d-01"
         }
@@ -352,20 +334,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["eventId", "eventType", "params", "resource", "timestamp"]
           },
           "traceparent": "00-aae1e80824b173f06e89e488027705f7-4607f56354baf8d6-01"
         }
@@ -438,20 +411,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["eventId", "eventType", "params", "resource", "timestamp"]
           },
           "traceparent": "00-2f658ee8c607c5be06e290923d517032-1c3c5d687440d294-01"
         }
@@ -579,20 +543,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["eventId", "eventType", "params", "resource", "timestamp"]
           },
           "traceparent": "00-75dbea231dc87fad4b72ec2da299e751-ea4e9ded02c26bda-01"
         }
@@ -664,20 +619,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["eventId", "eventType", "params", "resource", "timestamp"]
           },
           "traceparent": "00-63327de21e873558baed509312507284-0733a7183781eb98-01"
         }
@@ -749,20 +695,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["eventId", "eventType", "params", "resource", "timestamp"]
           },
           "traceparent": "00-9b16b5e13c674249299351fd91f80eab-cda8a298e3ad720c-01"
         }
@@ -834,20 +771,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["eventId", "eventType", "params", "resource", "timestamp"]
           },
           "traceparent": "00-306dafdbe50343c0b72dea203110dc14-7501bc864defcd72-01"
         }
@@ -919,20 +847,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["eventId", "eventType", "params", "resource", "timestamp"]
           },
           "traceparent": "00-c95233461f1b566273dba685bef4cbea-7a98cdf8f3d42fea-01"
         }
@@ -1004,20 +923,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["eventId", "eventType", "params", "resource", "timestamp"]
           },
           "traceparent": "00-5c10c12e8c80adeb616a3b4ffaecdc5a-92be82112714a9ce-01"
         }
@@ -1089,20 +999,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["eventId", "eventType", "params", "resource", "timestamp"]
           },
           "traceparent": "00-9f6157d5afdff744c0b0b463d52fa25a-014731f26ecde78b-01"
         }
@@ -1230,20 +1131,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["eventId", "eventType", "params", "resource", "timestamp"]
           },
           "traceparent": "00-a3dcbcca0ea3df33341ec04d5818ef2f-fe149df05f68d6b3-01"
         }
@@ -1489,20 +1381,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["eventId", "eventType", "params", "resource", "timestamp"]
           },
           "traceparent": "00-69e972ea260f74f65ac0223541ee4a57-00da9d50875a02ae-01"
         }
@@ -1574,20 +1457,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["eventId", "eventType", "params", "resource", "timestamp"]
           },
           "traceparent": "00-ae4f2dbd10709f4297b98527971ba19d-d37c164dd1c03ef9-01"
         }
@@ -1659,20 +1533,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["eventId", "eventType", "params", "resource", "timestamp"]
           },
           "traceparent": "00-bbae2a4c9b403b81c4843970806cba0f-78e304f92ca5a7b6-01"
         }
@@ -1747,20 +1612,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["eventId", "eventType", "params", "resource", "timestamp"]
           },
           "traceparent": "00-ed0aabef4d45b57fcd6f3b4447647f57-4689a44fa1dc0e06-01"
         }
@@ -1832,20 +1688,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["eventId", "eventType", "params", "resource", "timestamp"]
           },
           "traceparent": "00-bf3ecaff15a9f9633304320b1c787596-535da091e0232a82-01"
         }
@@ -1917,20 +1764,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["eventId", "eventType", "params", "resource", "timestamp"]
           },
           "traceparent": "00-8116fb9bd660fbd40267eaceef4acda1-72526b26c391c997-01"
         }
@@ -2176,20 +2014,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["eventId", "eventType", "params", "resource", "timestamp"]
           },
           "traceparent": "00-785502eee34a69e4ad211769601f3f6f-ca0ba0a7685be93c-01"
         }
@@ -2261,20 +2090,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["eventId", "eventType", "params", "resource", "timestamp"]
           },
           "traceparent": "00-27a658bbf91d317e78b3bf2cb565b19e-84a5659e6598cdaa-01"
         }
@@ -2346,20 +2166,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["eventId", "eventType", "params", "resource", "timestamp"]
           },
           "traceparent": "00-cd2a2dd4c2630a8314b67621b73fd695-c355a47bdfbdc416-01"
         }
@@ -2434,20 +2245,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["eventId", "eventType", "params", "resource", "timestamp"]
           },
           "traceparent": "00-9f6544b344b095c6deefa60a6cd49bd3-bf42e9f22a6d6c11-01"
         }
@@ -2576,20 +2378,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["eventId", "eventType", "params", "resource", "timestamp"]
           },
           "traceparent": "00-0238ad1bf9ecdb8e4285ccd61f5824e5-dcd707ac1f013128-01"
         }
@@ -2774,20 +2567,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["eventId", "eventType", "params", "resource", "timestamp"]
           },
           "traceparent": "00-719afb8368a7fdf729c9e83926a138e6-5091549ec555b07c-01"
         }
@@ -2859,20 +2643,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["eventId", "eventType", "params", "resource", "timestamp"]
           },
           "traceparent": "00-f699894b805e13ed0319635fd9364d2d-c50c918d1839513c-01"
         }
@@ -2944,20 +2719,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["eventId", "eventType", "params", "resource", "timestamp"]
           },
           "traceparent": "00-9c324a81c7f51260ba3e0dcfe2d8c229-6cecad4a786a4221-01"
         }
@@ -3029,20 +2795,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["eventId", "eventType", "params", "resource", "timestamp"]
           },
           "traceparent": "00-248aa77b7a6d3a789b20564c38cb6ae5-418d1596aa41cb52-01"
         }
@@ -3114,20 +2871,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["eventId", "eventType", "params", "resource", "timestamp"]
           },
           "traceparent": "00-4970297356929d8e1840857864f410c6-a364cdd116a4edf9-01"
         }
@@ -3199,20 +2947,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["eventId", "eventType", "params", "resource", "timestamp"]
           },
           "traceparent": "00-f1ad905e9c0b5976145d8ac80f0d9098-2bb8a2fa910ad053-01"
         }
@@ -3470,22 +3209,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "auth",
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["auth", "authType", "eventId", "eventType", "params", "resource", "timestamp"]
           },
           "traceparent": "00-2f1235e625d5b526e35061ec79885c8c-30b2ea99ba0c3226-01"
         }
@@ -3557,22 +3285,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "auth",
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["auth", "authType", "eventId", "eventType", "params", "resource", "timestamp"]
           },
           "traceparent": "00-e5239f9887348af1b1ca506421c5de8a-0c3edc68b5b6d91a-01"
         }
@@ -3724,22 +3441,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "auth",
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["auth", "authType", "eventId", "eventType", "params", "resource", "timestamp"]
           },
           "traceparent": "00-e96552123f9652bcc634971676a28691-999fc79f58e4d789-01"
         }
@@ -3814,22 +3520,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "auth",
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["auth", "authType", "eventId", "eventType", "params", "resource", "timestamp"]
           },
           "traceparent": "00-bdb71283ff5468b88d0326f249a2df9f-a5c13a864e0795a0-01"
         }
@@ -3975,22 +3670,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "auth",
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["auth", "authType", "eventId", "eventType", "params", "resource", "timestamp"]
           },
           "traceparent": "00-68295debdf6f4b5d73f64d476c9fe62f-d4fce159b75aff87-01"
         }
@@ -4062,22 +3746,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "auth",
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["auth", "authType", "eventId", "eventType", "params", "resource", "timestamp"]
           },
           "traceparent": "00-6f7abf5d4a3485606086ca53341a5561-d5aae733f3817439-01"
         }
@@ -4223,22 +3896,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "auth",
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["auth", "authType", "eventId", "eventType", "params", "resource", "timestamp"]
           },
           "traceparent": "00-90cb18af45e95be3eb14fd36bac20ccc-0113c806e3ad7b9e-01"
         }
@@ -4310,22 +3972,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "auth",
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["auth", "authType", "eventId", "eventType", "params", "resource", "timestamp"]
           },
           "traceparent": "00-0c4480f09135ffef150a007bc085a2bf-89e5f3f23c7cc51f-01"
         }
@@ -4397,22 +4048,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "auth",
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["auth", "authType", "eventId", "eventType", "params", "resource", "timestamp"]
           },
           "traceparent": "00-2d3b82e124a64049c9784ff23ac2beb6-5e72dd793aa652d3-01"
         }
@@ -4484,22 +4124,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "auth",
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["auth", "authType", "eventId", "eventType", "params", "resource", "timestamp"]
           },
           "traceparent": "00-8f8b7cb6c9e440d6fe9cae9c8d118957-bf1bb59ee877810d-01"
         }
@@ -4725,22 +4354,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "auth",
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["auth", "authType", "eventId", "eventType", "params", "resource", "timestamp"]
           },
           "traceparent": "00-28402e02c899f468d0fde895a5c0ebfc-2bed9835c9232d96-01"
         }
@@ -4815,22 +4433,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "auth",
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["auth", "authType", "eventId", "eventType", "params", "resource", "timestamp"]
           },
           "traceparent": "00-282d3096a5e13f0a37685ef3f4b1fc09-3cf65cea9a9f7f80-01"
         }
@@ -4905,22 +4512,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "auth",
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["auth", "authType", "eventId", "eventType", "params", "resource", "timestamp"]
           },
           "traceparent": "00-81bffdf6fb96ab092e37de44282a4b67-cf4bd45bba5ba256-01"
         }
@@ -4995,22 +4591,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "auth",
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["auth", "authType", "eventId", "eventType", "params", "resource", "timestamp"]
           },
           "traceparent": "00-55db8a67b0aadb76531235a32f379f74-f379f4e09c0330b4-01"
         }
@@ -5159,22 +4744,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "auth",
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["auth", "authType", "eventId", "eventType", "params", "resource", "timestamp"]
           },
           "traceparent": "00-e05c57c601f1626e11e358a5b9c25eae-bb35e2a54a38b002-01"
         }
@@ -5246,22 +4820,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "auth",
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["auth", "authType", "eventId", "eventType", "params", "resource", "timestamp"]
           },
           "traceparent": "00-9c9d8e0c22bd91f813a56d82e5989644-8f8cb477b95676ff-01"
         }
@@ -5333,22 +4896,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "auth",
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["auth", "authType", "eventId", "eventType", "params", "resource", "timestamp"]
           },
           "traceparent": "00-eef512d614ace10b688aa3108cd8298f-322c120bf0eef481-01"
         }
@@ -5420,22 +4972,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "auth",
-              "authType",
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["auth", "authType", "eventId", "eventType", "params", "resource", "timestamp"]
           },
           "traceparent": "00-f66372b1bbc6b63d65335bfce22becbe-c3cf50c47b9045d3-01"
         }
@@ -5656,20 +5197,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["eventId", "eventType", "params", "resource", "timestamp"]
           },
           "traceparent": "00-c953e3e44f9ac7658aa57748817e3a0b-564cf2dc85b554a6-01"
         }
@@ -5799,20 +5331,11 @@
         "extras": {
           "change": {
             "type": "object",
-            "keys": [
-              "after",
-              "before"
-            ]
+            "keys": ["after", "before"]
           },
           "context": {
             "type": "object",
-            "keys": [
-              "eventId",
-              "eventType",
-              "params",
-              "resource",
-              "timestamp"
-            ]
+            "keys": ["eventId", "eventType", "params", "resource", "timestamp"]
           },
           "traceparent": "00-d38865eb20901e95ef1f097f92e18af6-01906a6422f5f51b-01"
         }

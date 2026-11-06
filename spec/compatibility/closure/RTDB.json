@@ -1652,7 +1652,7 @@
         "fixtureSha256": "3e67cd9f12bd1fedf3fabf66ace0b9f956ce6cdfda4d0bab22a99239d568987f",
         "comparisonTool": "conformance/src/rtdb-functions/breadth-judge.mjs",
         "comparisonPath": "spec/compatibility/closure/evidence/RTDB-breadth-comparison.json",
-        "comparisonSha256": "d48f20a9a6fc788dbb0cdb67c452bee267460fe0c09c5cd793083ce825d52a16",
+        "comparisonSha256": "848ddcbf29f6bc56d496ade448628356de1e14eadaa55a4a91ab8565525d5a32",
         "release": "closure-build",
         "sourceCommit": "d9f5cb906611a358d36a1efea60e0a61bd0bb6cf",
         "binarySha256": "294051dd47fdebbc26b6412ca399f198f867b05c629dd343fa8b7ab81541d7de",
@@ -1888,7 +1888,7 @@
       },
       {
         "path": "spec/compatibility/closure/evidence/RTDB-breadth-comparison.json",
-        "sha256": "d48f20a9a6fc788dbb0cdb67c452bee267460fe0c09c5cd793083ce825d52a16",
+        "sha256": "848ddcbf29f6bc56d496ade448628356de1e14eadaa55a4a91ab8565525d5a32",
         "rows": 69,
         "summary": {
           "strict": {

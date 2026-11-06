@@ -51,12 +51,12 @@
   "localRecordings": {
     "strict": {
       "path": "conformance/src/rtdb-functions/recorded/local-strict-rtdb-breadth.json",
-      "sha256": "d9680e8219bc02fe19170b3dd1a24a198bc428eae6c5dcef4f4b695cf73f1bbc",
+      "sha256": "690ca5120690ed3433bb36081bfc34f7ca7e8e24bc7f813ef470c5a4b1d1c435",
       "frames": 75
     },
     "emulator": {
       "path": "conformance/src/rtdb-functions/recorded/local-emulator-rtdb-breadth.json",
-      "sha256": "a8b7e0cd7c87ea88f9f1ad515f037166146e2b8a236520d74ff8ee071bd6754d",
+      "sha256": "e19a4dc54a2ef0ee76886b4979299913d8ccc289a2a6421e7aaf3258837f1eff",
       "frames": 75
     }
   },

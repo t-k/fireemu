@@ -14,7 +14,7 @@ const sha = (path) => createHash("sha256").update(read(path)).digest("hex");
 
 test("v0.35 RTDB finite replays bind the reviewed source and both profiles", () => {
   const closure = json("spec/compatibility/closure/RTDB.json");
-  assert.equal(closure.parentStatus, "IMPLEMENTING");
+  assert.equal(closure.parentStatus, "COMPAT_VERIFIED");
   const binding = closure.integratedRegression.v035RecordedRevalidation;
   assert.equal(binding.sourceCommit, "8220a36ad88c136592551ebb94f358d6abe4d909");
   assert.equal(

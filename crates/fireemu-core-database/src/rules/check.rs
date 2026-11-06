@@ -185,7 +185,7 @@ impl Checker<'_> {
         match &mut expr.kind {
             ExprKind::Bool(_) => Ok(Types::one(Tok::Bool)),
             ExprKind::Number(_) => Ok(Types::one(Tok::Num)),
-            ExprKind::Str(_) => Ok(Types::one(Tok::Str)),
+            ExprKind::Str(_) | ExprKind::Units(_) => Ok(Types::one(Tok::Str)),
             ExprKind::Null => Ok(Types::one(Tok::Null)),
             ExprKind::Regex(..) => Ok(Types::one(Tok::Regex)),
             ExprKind::Ordering(_) => Ok(Types::one(Tok::OrderBy)),
@@ -309,10 +309,11 @@ impl Checker<'_> {
                 .ok_or_else(|| no_such(at, name));
         }
         if object.has(Tok::Query) {
-            // As the official emulator types them; `orderBy`, `endBefore` and
-            // `isOrderByChild` are not served here, so a rule naming them is refused.
+            // As the official emulator types them; `endBefore` and `isOrderByChild` are not
+            // served here, so a rule naming them is refused. `orderBy` is typed as `orderByChild`
+            // is: an ordering.
             return match name {
-                "orderByChild" => Ok(Types::one(Tok::OrderBy)),
+                "orderByChild" | "orderBy" => Ok(Types::one(Tok::OrderBy)),
                 "orderByKey" | "orderByValue" | "orderByPriority" => Ok(Types::one(Tok::Bool)),
                 "limitToFirst" | "limitToLast" => Ok(Types::one(Tok::Num)),
                 "startAt" | "endAt" | "equalTo" => Ok(Types::of(&DATA_VALUE)),

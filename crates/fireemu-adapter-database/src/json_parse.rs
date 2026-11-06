@@ -35,6 +35,90 @@ pub fn parse_with_keys(text: &str) -> Result<(Json, Vec<KeyAt>), ParseError> {
     Ok((value, parser.keys))
 }
 
+/// How a lone surrogate escape (`"\ud83d"` without its pair) in a string is read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Lone {
+    /// The text is refused.
+    Refuse,
+    /// In a string value, the character given (the official emulator stores `?`); a key is still refused.
+    Replace(char),
+    /// In any string, key or value, the character given (a copy of text made only to be checked).
+    ReplaceAll(char),
+    /// A WebSocket frame: `?` in a value, as the official emulator stores it, and [`INVALID`] in a key and in the
+    /// path of the message (`d.b.p`). No key or path may hold that character (it is a control character, which
+    /// every key and path check refuses), so a path or a key that held a lone surrogate never reads as any valid
+    /// one, `.priority` included. A lone surrogate in the `authvar` of the message (`d.b.authvar`) is refused as the
+    /// whole message was before this reading existed.
+    Frame,
+}
+
+/// What a lone surrogate in a key or in the path of a frame is read as: a control character, which no key and no
+/// path may hold, and which has no meaning of its own (the dot of `.priority` has one).
+pub const INVALID: char = '\u{0}';
+
+/// One step of the location of the value being read: an object member, or an array item.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Step {
+    Key(String),
+    Index,
+}
+
+/// [`parse_with_keys`] for a body the emulator profile accepts as the official emulator does: a lone
+/// surrogate escape in a string value (`"a\ud83d"`) is `with`, one for each lone unit, and the last
+/// answer says whether any was. A key holding one is still refused.
+pub fn parse_with_keys_replacing(
+    text: &str,
+    with: char,
+) -> Result<(Json, Vec<KeyAt>, bool), ParseError> {
+    let mut parser = Parser::new(text, true);
+    parser.lone = Lone::Replace(with);
+    let value = parser.whole()?;
+    Ok((value, parser.keys, parser.replaced))
+}
+
+/// [`parse_with_keys_replacing`] for a WebSocket frame (see [`Lone::Frame`]).
+pub fn parse_frame_with_keys(text: &str) -> Result<(Json, Vec<KeyAt>, bool), ParseError> {
+    let mut parser = Parser::new(text, true);
+    parser.lone = Lone::Frame;
+    parser.track(3);
+    let value = parser.whole()?;
+    Ok((value, parser.keys, parser.replaced))
+}
+
+/// [`parse`] with a lone surrogate in a string value read as `with`, as [`parse_with_keys_replacing`] does.
+pub fn parse_replacing(text: &str, with: char) -> Result<(Json, bool), ParseError> {
+    let mut parser = Parser::new(text, false);
+    parser.lone = Lone::Replace(with);
+    let value = parser.whole()?;
+    Ok((value, parser.replaced))
+}
+
+/// [`parse_replacing`] that reads a lone surrogate in a key as `with` too.
+pub fn parse_replacing_all(text: &str, with: char) -> Result<(Json, bool), ParseError> {
+    let mut parser = Parser::new(text, false);
+    parser.lone = Lone::ReplaceAll(with);
+    let value = parser.whole()?;
+    Ok((value, parser.replaced))
+}
+
+/// [`parse_replacing`] for a WebSocket frame (see [`Lone::Frame`]).
+pub fn parse_frame(text: &str) -> Result<(Json, bool), ParseError> {
+    let mut parser = Parser::new(text, false);
+    parser.lone = Lone::Frame;
+    parser.track(3);
+    let value = parser.whole()?;
+    Ok((value, parser.replaced))
+}
+
+/// [`parse_prefix`] with a lone surrogate in a string value read as `with`.
+pub fn parse_prefix_replacing(text: &str, with: char) -> Result<(Json, usize), ParseError> {
+    let mut parser = Parser::new(text, false);
+    parser.lone = Lone::Replace(with);
+    parser.skip_whitespace();
+    let value = parser.value(0)?;
+    Ok((value, parser.at))
+}
+
 /// Parses one JSON value without recording key positions (the common path).
 pub fn parse(text: &str) -> Result<Json, ParseError> {
     Parser::new(text, false).whole()
@@ -54,6 +138,14 @@ struct Parser<'a> {
     at: usize,
     /// Whether to record where each key starts.
     record_keys: bool,
+    /// How a lone surrogate escape is read.
+    lone: Lone,
+    /// Whether one was.
+    replaced: bool,
+    /// The location of the value being read, as far as `track` keeps it, and the levels deeper than that.
+    path: Vec<Step>,
+    skipped: usize,
+    limit: usize,
     keys: Vec<KeyAt>,
     /// The last position computed: byte index, line and column. Positions are asked for in
     /// increasing order, so each is computed from the previous one in linear total time.
@@ -66,9 +158,52 @@ impl<'a> Parser<'a> {
             text,
             at: 0,
             record_keys,
+            lone: Lone::Refuse,
+            replaced: false,
+            path: Vec::new(),
+            skipped: 0,
+            limit: 0,
             keys: Vec::new(),
             mark: (0, 1, 1),
         }
+    }
+
+    /// Keeps the location of values down to `limit` levels.
+    fn track(&mut self, limit: usize) {
+        self.limit = limit;
+    }
+
+    fn enter(&mut self, step: impl FnOnce() -> Step) {
+        if self.skipped > 0 || self.path.len() >= self.limit {
+            self.skipped += 1;
+        } else {
+            self.path.push(step());
+        }
+    }
+
+    fn leave(&mut self) {
+        if self.skipped > 0 {
+            self.skipped -= 1;
+        } else {
+            self.path.pop();
+        }
+    }
+
+    /// Whether the value being read is the path of a frame (`d.b.p`).
+    fn at_frame_path(&self) -> bool {
+        self.skipped == 0
+            && matches!(
+                self.path.as_slice(),
+                [Step::Key(d), Step::Key(b), Step::Key(p)] if d == "d" && b == "b" && p == "p"
+            )
+    }
+
+    /// Whether the value or key being read is inside `d.b.authvar` of a frame.
+    fn in_authvar(&self) -> bool {
+        matches!(
+            self.path.as_slice(),
+            [Step::Key(d), Step::Key(b), Step::Key(a)] if d == "d" && b == "b" && a == "authvar"
+        )
     }
 
     fn whole(&mut self) -> Result<Json, ParseError> {
@@ -108,7 +243,7 @@ impl<'a> Parser<'a> {
             b'n' => self.expect("null").map(|()| Json::Null),
             b't' => self.expect("true").map(|()| Json::Bool(true)),
             b'f' => self.expect("false").map(|()| Json::Bool(false)),
-            b'"' => self.string().map(Json::String),
+            b'"' => self.string(false).map(Json::String),
             b'[' => self.array(depth),
             b'{' => self.object(depth),
             b'-' | b'0'..=b'9' => self.number(),
@@ -126,7 +261,10 @@ impl<'a> Parser<'a> {
         }
         loop {
             self.skip_whitespace();
-            items.push(self.value(depth + 1)?);
+            self.enter(|| Step::Index);
+            let item = self.value(depth + 1);
+            self.leave();
+            items.push(item?);
             self.skip_whitespace();
             match self.peek() {
                 Some(b',') => self.at += 1,
@@ -153,7 +291,7 @@ impl<'a> Parser<'a> {
                 return Err(ParseError);
             }
             let position = self.record_keys.then(|| self.position());
-            let key = self.string()?;
+            let key = self.string(true)?;
             if let Some((line, column)) = position {
                 self.keys.push(KeyAt {
                     key: key.clone(),
@@ -165,7 +303,10 @@ impl<'a> Parser<'a> {
             self.skip_whitespace();
             self.expect(":")?;
             self.skip_whitespace();
-            let value = self.value(depth + 1)?;
+            self.enter(|| Step::Key(key.clone()));
+            let value = self.value(depth + 1);
+            self.leave();
+            let value = value?;
             // A repeated key keeps its last value.
             map.insert(key, value);
             self.skip_whitespace();
@@ -194,7 +335,17 @@ impl<'a> Parser<'a> {
         (line, column)
     }
 
-    fn string(&mut self) -> Result<String, ParseError> {
+    /// How a lone surrogate is read in a string: in a key or in a value.
+    fn mode(&self, key: bool) -> Lone {
+        match (self.lone, key) {
+            (Lone::Frame, true) => Lone::ReplaceAll(INVALID),
+            (Lone::ReplaceAll(_), _) | (_, false) => self.lone,
+            (_, true) => Lone::Refuse,
+        }
+    }
+
+    fn string(&mut self, key: bool) -> Result<String, ParseError> {
+        let mode = self.mode(key);
         self.at += 1;
         let mut out = String::new();
         loop {
@@ -202,43 +353,76 @@ impl<'a> Parser<'a> {
             let mut chars = rest.chars();
             let c = chars.next().ok_or(ParseError)?;
             self.at += c.len_utf8();
-            match c {
-                '"' => return Ok(out),
-                '\\' => out.push(self.escape()?),
+            let decoded = match c {
+                '"' => {
+                    return Ok(out);
+                }
+                '\\' => self.escape()?,
                 '\u{0}'..='\u{1f}' => return Err(ParseError),
-                c => out.push(c),
+                c => Decoded::Char(c),
+            };
+            match decoded {
+                Decoded::Char(c) => out.push(c),
+                Decoded::Lone if self.lone == Lone::Frame && self.in_authvar() => {
+                    return Err(ParseError)
+                }
+                Decoded::Lone => match mode {
+                    Lone::Refuse => return Err(ParseError),
+                    Lone::Replace(with) | Lone::ReplaceAll(with) => {
+                        self.replaced = true;
+                        out.push(with);
+                    }
+                    Lone::Frame => {
+                        self.replaced = true;
+                        out.push(if !key && self.at_frame_path() {
+                            INVALID
+                        } else {
+                            '?'
+                        });
+                    }
+                },
             }
         }
     }
 
-    fn escape(&mut self) -> Result<char, ParseError> {
+    /// What an escape stands for.
+    fn escape(&mut self) -> Result<Decoded, ParseError> {
         let c = self.peek().ok_or(ParseError)?;
         self.at += 1;
-        Ok(match c {
-            b'"' => '"',
-            b'\\' => '\\',
-            b'/' => '/',
-            b'b' => '\u{8}',
-            b'f' => '\u{c}',
-            b'n' => '\n',
-            b'r' => '\r',
-            b't' => '\t',
+        let simple = |c: char| Ok(Decoded::Char(c));
+        match c {
+            b'"' => simple('"'),
+            b'\\' => simple('\\'),
+            b'/' => simple('/'),
+            b'b' => simple('\u{8}'),
+            b'f' => simple('\u{c}'),
+            b'n' => simple('\n'),
+            b'r' => simple('\r'),
+            b't' => simple('\t'),
             b'u' => {
                 let first = self.hex4()?;
                 if (0xD800..0xDC00).contains(&first) {
-                    self.expect("\\u")?;
-                    let second = self.hex4()?;
-                    if !(0xDC00..0xE000).contains(&second) {
-                        return Err(ParseError);
-                    }
+                    let after_first = self.at;
+                    let second = self
+                        .expect("\\u")
+                        .and_then(|()| self.hex4())
+                        .ok()
+                        .filter(|second| (0xDC00..0xE000).contains(second));
+                    let Some(second) = second else {
+                        // A high surrogate without its low one; what follows is read afresh.
+                        self.at = after_first;
+                        return Ok(Decoded::Lone);
+                    };
                     let code = 0x10000 + ((first - 0xD800) << 10) + (second - 0xDC00);
-                    char::from_u32(code).ok_or(ParseError)?
+                    Ok(Decoded::Char(char::from_u32(code).ok_or(ParseError)?))
+                } else if (0xDC00..0xE000).contains(&first) {
+                    Ok(Decoded::Lone)
                 } else {
-                    char::from_u32(first).ok_or(ParseError)?
+                    Ok(Decoded::Char(char::from_u32(first).ok_or(ParseError)?))
                 }
             }
-            _ => return Err(ParseError),
-        })
+            _ => Err(ParseError),
+        }
     }
 
     fn hex4(&mut self) -> Result<u32, ParseError> {
@@ -301,4 +485,11 @@ impl<'a> Parser<'a> {
             self.at += 1;
         }
     }
+}
+
+/// What a character or an escape of a string stands for.
+enum Decoded {
+    Char(char),
+    /// A surrogate unit with no partner.
+    Lone,
 }

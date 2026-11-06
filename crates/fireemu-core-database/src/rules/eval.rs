@@ -53,16 +53,23 @@ impl<'a> Snapshot<'a> {
         Located::Node(node)
     }
 
-    /// The snapshot `path` below this one: its keys, empty ones dropped.
-    fn child(&self, path: &str) -> Self {
-        let mut at = self.path.clone();
-        for key in path.split('/').filter(|k| !k.is_empty()) {
-            at = at.child(key);
-        }
-        Self {
+    /// The snapshot `path` below this one: its keys, empty ones dropped. The location is built once, so its cost is
+    /// the bytes of the keys of this location (copied) and of `path` (charged before anything is copied), not their
+    /// product; `None` past the evaluation's budget.
+    fn child(&self, path: &str, work: &std::cell::Cell<u64>) -> Option<Self> {
+        charge(work, self.path_cost().saturating_add(path.len()))?;
+        let mut keys: Vec<String> = Vec::with_capacity(self.path.depth() + 1);
+        keys.extend(self.path.keys().iter().cloned());
+        keys.extend(path.split('/').filter(|k| !k.is_empty()).map(str::to_owned));
+        Some(Self {
             root: self.root,
-            path: at,
-        }
+            path: Path::from_keys(keys),
+        })
+    }
+
+    /// What copying this location costs: its keys' bytes, and one unit for each key.
+    fn path_cost(&self) -> usize {
+        self.path.byte_len().saturating_add(self.path.depth())
     }
 
     /// Whether the official emulator takes this location as a path: every key valid (a
@@ -111,6 +118,17 @@ pub struct Scope<'a> {
     pub read_kind: ReadKind,
     /// The `$wildcard` keys of the location.
     pub wildcards: &'a BTreeMap<String, String>,
+    /// How the emulator profile reads what the official emulator reads differently.
+    pub dialect: Dialect,
+    /// The work this evaluation has done so far, in units of text processed (see [`MAX_EVALUATION_WORK`]).
+    pub work: std::cell::Cell<u64>,
+}
+
+/// How the emulator profile reads what the official emulator reads differently from this engine's default.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Dialect {
+    /// Regular expressions: `\W`, `\D` and escaped letters as the official emulator reads them.
+    pub regex: bool,
 }
 
 /// Which version of the tree a snapshot value reads: `root` and `data` read the tree before
@@ -128,6 +146,9 @@ enum Value<'a> {
     Bool(bool),
     Num(f64),
     Str(String),
+    /// A string that holds a lone surrogate, as the UTF-16 units Java holds it (a `String` cannot). A string
+    /// whose units are valid UTF-16 is always a [`Value::Str`], so the two never hold the same string.
+    Units(Vec<u16>),
     /// An object or array inside `auth`: a new value each time it is read.
     Json(Json),
     /// `auth` itself, one object.
@@ -153,10 +174,79 @@ enum Value<'a> {
 
 /// Evaluates a whole rule: true only when it evaluates to `true`.
 pub fn allows(expr: &Expr, scope: &Scope<'_>, observer: &mut Observer<'_>) -> bool {
-    matches!(eval(expr, scope, observer), Some(Value::Bool(true)))
+    let allowed = matches!(eval(expr, scope, observer), Some(Value::Bool(true)));
+    HIGH_WATER.with(|high| high.set(high.get().max(scope.work.get())));
+    allowed
 }
 
-fn from_json<'a>(json: &Json) -> Value<'a> {
+/// The most work one evaluation of one rule may do, in units: every string a rule reads from the data or the claims,
+/// joins, compares, searches, converts or replaces is charged by its length (a search by the lengths of both
+/// strings, itself linear), every copy of the claims or of a nested value by its size, and the building of a location
+/// by its keys. Past it the rule is an error, so it denies, negated or not. The bound is 2^30, chosen on purpose: a
+/// stored string is at most 10 MiB, and reading it with `val()` and searching it with `contains` is two passes of 10
+/// MiB (20 MiB), so a rule can do that about fifty times (thirteen such checks, the case a review named, use a quarter
+/// of the bound and are allowed). The Rules corpora (22k rows) and the rules of the tests use a few dozen units. The
+/// bound stops what the size bound alone does not: a long string compared, searched or joined again and again, each
+/// time below the size bound, and a path or an `auth` copied again and again.
+///
+/// The matcher of a regular expression is bounded on its own: at most 200,000 steps and 32 levels of nesting for each
+/// `matches` call (`fireemu_core_rules::regex`), an error past either. The subject is charged by its length here as
+/// for any string method; the pattern, a literal of the rules document, is not (its size is the document's).
+///
+/// The bound is per evaluation: one request can run many (a write validates each child it writes), and nothing here is
+/// a wall-clock limit. Thirteen searches of a 10 MiB string fit; about fifty-two of them do not.
+pub(crate) const MAX_EVALUATION_WORK: u64 = 1 << 30;
+
+thread_local! {
+    static HIGH_WATER: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// The most work any one rule evaluation has done on this thread since the last
+/// [`reset_evaluation_work_high_water`]. For the tests that show ordinary rules stay far below the bound.
+#[doc(hidden)]
+pub fn evaluation_work_high_water() -> u64 {
+    HIGH_WATER.with(std::cell::Cell::get)
+}
+
+/// Resets [`evaluation_work_high_water`].
+#[doc(hidden)]
+pub fn reset_evaluation_work_high_water() {
+    HIGH_WATER.with(|high| high.set(0));
+}
+
+/// The evaluation's context for the string operations: the regex dialect and the work counter.
+#[derive(Clone, Copy)]
+struct Ctx<'c> {
+    regex: bool,
+    work: &'c std::cell::Cell<u64>,
+}
+
+/// Charges `amount` units of work; `None` (an error) past [`MAX_EVALUATION_WORK`].
+fn charge(work: &std::cell::Cell<u64>, amount: usize) -> Option<()> {
+    let total = work.get().checked_add(u64::try_from(amount).ok()?)?;
+    if total > MAX_EVALUATION_WORK {
+        return None;
+    }
+    work.set(total);
+    Some(())
+}
+
+/// The length of a string value (bytes for a `Str`, units for `Units`), 0 for any other.
+fn text_len(value: &Value<'_>) -> usize {
+    match value {
+        Value::Str(s) => s.len(),
+        Value::Units(u) => u.len(),
+        _ => 0,
+    }
+}
+
+/// A JSON value as a Rules value; a string or a nested value is copied, and that copy is work by its size.
+fn from_json<'a>(json: &Json, work: &std::cell::Cell<u64>) -> Option<Value<'a>> {
+    charge(work, json_cost(json))?;
+    Some(from_json_uncharged(json))
+}
+
+fn from_json_uncharged<'a>(json: &Json) -> Value<'a> {
     match json {
         Json::Null => Value::Null,
         Json::Bool(b) => Value::Bool(*b),
@@ -164,6 +254,28 @@ fn from_json<'a>(json: &Json) -> Value<'a> {
         Json::String(s) => Value::Str(s.clone()),
         other => Value::Json(other.clone()),
     }
+}
+
+/// What copying `json` costs, in units: one for each value and the bytes of each string and name. Counted without
+/// recursion, so a deep document costs no stack.
+fn json_cost(json: &Json) -> usize {
+    let mut cost = 0_usize;
+    let mut pending = vec![json];
+    while let Some(value) = pending.pop() {
+        cost = cost.saturating_add(1);
+        match value {
+            Json::String(s) => cost = cost.saturating_add(s.len()),
+            Json::Array(items) => pending.extend(items),
+            Json::Object(members) => {
+                for (name, member) in members {
+                    cost = cost.saturating_add(name.len());
+                    pending.push(member);
+                }
+            }
+            _ => {}
+        }
+    }
+    cost
 }
 
 fn leaf_value<'a>(leaf: &Leaf) -> Value<'a> {
@@ -230,6 +342,7 @@ fn record_value(observer: &mut Observer<'_>, id: usize, value: &Value<'_>, varia
             .map_or_else(|| Json::string(number_text(*value)), Json::Number),
         Value::Long(value) => Json::int(*value),
         Value::Str(value) => Json::String(value.clone()),
+        Value::Units(units) => Json::String(String::from_utf16_lossy(units)),
         Value::Ordering(keys) => Json::String(keys.join("/")),
         _ => observer.opaque(variable),
     };
@@ -245,6 +358,7 @@ fn eval_inner<'a>(
         ExprKind::Bool(b) => Some(Value::Bool(*b)),
         ExprKind::Number(n) => Some(Value::Num(*n)),
         ExprKind::Str(s) => Some(Value::Str(s.clone())),
+        ExprKind::Units(units) => Some(Value::Units(units.clone())),
         ExprKind::Null => Some(Value::Null),
         ExprKind::Ordering(keys) => Some(Value::Ordering(keys.clone())),
         ExprKind::Regex(pattern) => Some(Value::Regex(pattern.clone())),
@@ -257,16 +371,19 @@ fn eval_inner<'a>(
         ExprKind::Member(object, name) => {
             let object = eval(object, scope, observer)?;
             observer.member_name(expr.diagnostic, name);
-            member(object, name, scope)
+            member(object, Some(name), scope)
         }
         ExprKind::Index(object, index) => {
             let object = eval(object, scope, observer)?;
+            // A key holding a lone surrogate names no member of anything (no stored or claimed
+            // name can hold one), so it reads as an absent member, not an error.
             let key = match eval(index, scope, observer)? {
-                Value::Str(s) => s,
-                Value::Num(n) => number_text(n),
+                Value::Str(s) => Some(s),
+                Value::Num(n) => Some(number_text(n)),
+                Value::Units(_) => None,
                 _ => return None,
             };
-            member(object, &key, scope)
+            member(object, key.as_deref(), scope)
         }
         ExprKind::Call(callee, arguments) => {
             let ExprKind::Member(object, name) = &callee.kind else {
@@ -274,7 +391,10 @@ fn eval_inner<'a>(
             };
             let object = eval(object, scope, observer)?;
             observer.member_name(callee.diagnostic, name);
-            let callable = matches!(object, Value::Snapshot(..) | Value::Str(_));
+            let callable = matches!(
+                object,
+                Value::Snapshot(..) | Value::Str(_) | Value::Units(_)
+            );
             if callable {
                 let method = observer.opaque(None);
                 observer.record(callee.diagnostic, method);
@@ -291,7 +411,15 @@ fn eval_inner<'a>(
             if !callable {
                 observer.suppressed -= 1;
             }
-            call(object, name, &arguments?)
+            call(
+                object,
+                name,
+                &arguments?,
+                Ctx {
+                    regex: scope.dialect.regex,
+                    work: &scope.work,
+                },
+            )
         }
         ExprKind::Not(operand) => match eval(operand, scope, observer)? {
             Value::Bool(b) => Some(Value::Bool(!b)),
@@ -314,9 +442,13 @@ fn eval_inner<'a>(
 fn variable<'a>(name: &str, scope: &Scope<'a>) -> Option<Value<'a>> {
     match name {
         "auth" => Some(match scope.auth {
-            Json::Object(_) | Json::Array(_) => Value::Auth(scope.auth.clone()),
+            Json::Object(_) | Json::Array(_) => {
+                // The claims are copied for each use of `auth`: that is work, by their size.
+                charge(&scope.work, json_cost(scope.auth))?;
+                Value::Auth(scope.auth.clone())
+            }
             Json::Null => Value::AuthEmpty,
-            other => from_json(other),
+            other => from_json(other, &scope.work)?,
         }),
         #[allow(clippy::cast_precision_loss)]
         "now" => Some(Value::Num(scope.now as f64)),
@@ -331,32 +463,50 @@ fn variable<'a>(name: &str, scope: &Scope<'a>) -> Option<Value<'a>> {
     }
 }
 
-/// A member of `object`. Inside `auth` any member of an object or array, `length` included,
+/// A member of `object`; `None` for a name that holds a lone surrogate, which no member bears.
+/// Inside `auth` any member of an object or array, `length` included,
 /// is its value, or the empty object when absent; the empty object's members are itself
 /// (review r8 M23, the r10 ternary matrix). Anything else has only `length` of a string and
 /// the members of `query`.
-fn member<'a>(object: Value<'a>, name: &str, scope: &Scope<'a>) -> Option<Value<'a>> {
+fn member<'a>(object: Value<'a>, name: Option<&str>, scope: &Scope<'a>) -> Option<Value<'a>> {
     let object = match object {
         Value::Auth(json) => Value::Json(json),
         other => other,
     };
     match object {
         Value::AuthEmpty => Some(Value::AuthEmpty),
-        Value::Json(Json::Object(map)) => Some(map.get(name).map_or(Value::AuthEmpty, from_json)),
+        Value::Json(Json::Object(map)) => Some(match name.and_then(|name| map.get(name)) {
+            Some(json) => from_json(json, &scope.work)?,
+            None => Value::AuthEmpty,
+        }),
         // An array is an object keyed by its indexes, read as `Integer.parseInt` reads them
         // (review r10 M33).
         Value::Json(Json::Array(items)) => Some(
-            java_int(name)
+            match name
+                .and_then(java_int)
                 .and_then(|index| usize::try_from(index).ok())
                 .and_then(|index| items.get(index))
-                .map_or(Value::AuthEmpty, from_json),
+            {
+                Some(json) => from_json(json, &scope.work)?,
+                None => Value::AuthEmpty,
+            },
         ),
-        Value::Str(s) if name == "length" =>
-        {
+        Value::Str(s) if name == Some("length") => {
+            charge(&scope.work, s.len())?;
             #[allow(clippy::cast_precision_loss)]
             Some(Value::Num(s.encode_utf16().count() as f64))
         }
-        Value::Query => Some(query_member(scope.query, scope.read_kind, name)),
+        Value::Units(units) if name == Some("length") =>
+        {
+            #[allow(clippy::cast_precision_loss)]
+            Some(Value::Num(units.len() as f64))
+        }
+        Value::Query => query_member(
+            scope.query,
+            scope.read_kind,
+            name.unwrap_or_default(),
+            &scope.work,
+        ),
         _ => None,
     }
 }
@@ -402,6 +552,12 @@ const CASE_DIFFERS: [(char, char); 10] = [
 /// agree when each neighbour of the `Σ` is a [`plain_sigma_neighbour`], and a lowercase with
 /// any other `Σ` is an error (review r11 M41).
 pub(crate) fn java_case(s: &str, lower: bool) -> Option<String> {
+    java_case_within(s, lower, MAX_STRING_UNITS, char::len_utf8)
+}
+
+/// [`java_case`] for a result of at most `room` (counted with `width` per character); the result is measured
+/// before it is allocated, since a character can grow (`ﬃ` is `FFI`), and `None` past `room`.
+fn java_case_within(s: &str, lower: bool, room: usize, width: fn(char) -> usize) -> Option<String> {
     let chars: Vec<char> = s.chars().collect();
     let ambiguous_sigma = |i: usize| {
         chars[i] == '\u{03A3}'
@@ -414,6 +570,18 @@ pub(crate) fn java_case(s: &str, lower: bool) -> Option<String> {
         || (lower && (0..chars.len()).any(ambiguous_sigma))
     {
         return None;
+    }
+    let mut size = 0_usize;
+    for &c in &chars {
+        let mapped: usize = if lower {
+            c.to_lowercase().map(width).sum()
+        } else {
+            c.to_uppercase().map(width).sum()
+        };
+        size = size.checked_add(mapped)?;
+        if size > room {
+            return None;
+        }
     }
     Some(if lower {
         s.to_lowercase()
@@ -438,17 +606,35 @@ fn plain_sigma_neighbour(c: Option<char>) -> bool {
             && (c.to_lowercase().ne(std::iter::once(c)) || c.to_uppercase().ne(std::iter::once(c))))
 }
 
+/// The longest string a Rules operation (`replace`, `+`) may build, in UTF-16 units (bytes for
+/// a [`Value::Str`], which is never fewer). The operation is checked before it allocates, and
+/// past the bound it is an error, so the rule is false negated or not. A chain of ten
+/// `replace('', '0123456789')` would otherwise grow 11 times per step to about 5e10 units
+/// from a rule an anonymous read evaluates. The official emulator's heap decides its own limit:
+/// at 512 MB it answers seven such steps (3.9e7 units) and fails the eighth (4.3e8) with a 500,
+/// negated or not. 2^26 lies between, and is above the largest stored string (10 MiB) grown
+/// threefold by a case change.
+pub(crate) const MAX_STRING_UNITS: usize = 1 << 26;
+
 /// `s.replace(from, to)` as Java gives it: an empty `from` puts `to` before every UTF-16 unit
-/// and at the end (a string with a character beyond the Basic Multilingual Plane would be
-/// split there, which this text cannot hold, so that is an error).
+/// and at the end. The caller sends a string with a character beyond the Basic Multilingual
+/// Plane through [`units_call`], since the replacement splits its pair. `None` past
+/// [`MAX_STRING_UNITS`], before any allocation.
 fn java_replace(s: &str, from: &str, to: &str) -> Option<String> {
     if !from.is_empty() {
+        let found = s.matches(from).count();
+        let grown = found.checked_mul(to.len())?.checked_add(s.len())?;
+        if grown.saturating_sub(found.checked_mul(from.len())?) > MAX_STRING_UNITS {
+            return None;
+        }
         return Some(s.replace(from, to));
     }
-    if s.chars().any(|c| u32::from(c) > 0xFFFF) {
+    debug_assert!(s.chars().all(|c| u32::from(c) <= 0xFFFF));
+    let pieces = s.chars().count().checked_add(1)?;
+    if pieces.checked_mul(to.len())?.checked_add(s.len())? > MAX_STRING_UNITS {
         return None;
     }
-    let mut out = String::with_capacity(s.len() + to.len() * (s.len() + 1));
+    let mut out = String::with_capacity(s.len() + to.len() * pieces);
     for c in s.chars() {
         out.push_str(to);
         out.push(c);
@@ -461,38 +647,74 @@ fn bound_value<'a>(bound: Option<&Bound>) -> Value<'a> {
     match bound.map(|b| &b.value) {
         None => Value::Null,
         Some(Json::Number(crate::number::Number::Int(n))) => Value::Long(*n),
-        Some(value) => from_json(value),
+        Some(value) => from_json_uncharged(value),
+    }
+}
+
+/// `query.orderBy` on a read that does not order by a child: an ordering no path names (`$` is
+/// no key), so it equals only itself. In a write, a validation or a shallow read it is null, as
+/// the official emulator answers (`query.orderBy != null` is false in those).
+fn order_by_marker<'a>(kind: ReadKind) -> Value<'a> {
+    if kind == ReadKind::Check {
+        Value::Null
+    } else {
+        Value::Ordering(vec!["$".to_owned()])
     }
 }
 
 /// A member of `query`. A read without a query is ordered as its [`ReadKind`] says. `startAt` is the start
 /// bound, inclusive or not; `endAt` is an inclusive end bound only; `equalTo` is the start
 /// value when an inclusive end bound has the same value.
-fn query_member<'a>(query: Option<&QueryParams>, kind: ReadKind, name: &str) -> Value<'a> {
+fn query_member<'a>(
+    query: Option<&QueryParams>,
+    kind: ReadKind,
+    name: &str,
+    work: &std::cell::Cell<u64>,
+) -> Option<Value<'a>> {
     let Some(q) = query else {
-        return match name {
+        return Some(match name {
             "orderByKey" => Value::Bool(kind == ReadKind::Get),
             "orderByPriority" => Value::Bool(kind == ReadKind::Stream),
             "orderByValue" => Value::Bool(false),
+            "orderBy" => order_by_marker(kind),
             _ => Value::Null,
-        };
+        });
     };
     let end = q.end.as_ref().filter(|e| e.inclusive);
     let equal = match (&q.start, end) {
         (Some(s), Some(e)) if s.value == e.value => Some(s),
         _ => None,
     };
-    match name {
+    // A member that copies the query's child path or a bound value is work by the size copied, charged first.
+    let ordering = |path: &Path| -> Option<Value<'a>> {
+        charge(work, path.byte_len().saturating_add(path.depth()))?;
+        Some(Value::Ordering(path.keys().to_vec()))
+    };
+    let bound = |bound: Option<&Bound>| -> Option<Value<'a>> {
+        if let Some(bound) = bound {
+            charge(work, json_cost(&bound.value))?;
+        }
+        Some(bound_value(bound))
+    };
+    Some(match name {
         "orderByKey" => Value::Bool(q.order_by == OrderBy::Key),
         "orderByValue" => Value::Bool(q.order_by == OrderBy::Value),
         "orderByPriority" => Value::Bool(q.order_by == OrderBy::Priority),
         "orderByChild" => match &q.order_by {
-            OrderBy::Child(path) => Value::Ordering(path.keys().to_vec()),
+            OrderBy::Child(path) => ordering(path)?,
             _ => Value::Null,
         },
-        "equalTo" => bound_value(equal),
-        "startAt" => bound_value(q.start.as_ref()),
-        "endAt" => bound_value(end),
+        // The same ordering as `orderByChild` when the query orders by a child. Otherwise a
+        // value that is not null and equals nothing but itself (the official emulator answers
+        // `query.orderBy == null` false and `query.orderBy == query.orderBy` true on a read
+        // ordered by key, by value or by priority).
+        "orderBy" => match &q.order_by {
+            OrderBy::Child(path) => ordering(path)?,
+            _ => order_by_marker(kind),
+        },
+        "equalTo" => bound(equal)?,
+        "startAt" => bound(q.start.as_ref())?,
+        "endAt" => bound(end)?,
         "limitToFirst" => match q.limit {
             Some(Limit::First(n)) => Value::Num(f64::from(n)),
             _ => Value::Null,
@@ -502,6 +724,27 @@ fn query_member<'a>(query: Option<&QueryParams>, kind: ReadKind, name: &str) -> 
             _ => Value::Null,
         },
         _ => Value::Null,
+    })
+}
+
+/// A path or key argument as text. A lone surrogate is written `$` and its four hex digits: no
+/// stored key holds a `$`, so a path with one names nothing, as in the official emulator.
+fn path_argument(arguments: &[Value<'_>], i: usize) -> Option<String> {
+    path_text(arguments.get(i)?)
+}
+
+fn path_text(value: &Value<'_>) -> Option<String> {
+    match value {
+        Value::Str(s) => Some(s.clone()),
+        Value::Units(units) => Some(
+            char::decode_utf16(units.iter().copied())
+                .map(|decoded| match decoded {
+                    Ok(c) => c.to_string(),
+                    Err(lone) => format!("${:04X}", lone.unpaired_surrogate()),
+                })
+                .collect(),
+        ),
+        _ => None,
     }
 }
 
@@ -512,25 +755,195 @@ fn string_argument(arguments: &[Value<'_>], i: usize) -> Option<String> {
     }
 }
 
-fn call<'a>(object: Value<'a>, name: &str, arguments: &[Value<'a>]) -> Option<Value<'a>> {
+fn call<'a>(
+    object: Value<'a>,
+    name: &str,
+    arguments: &[Value<'a>],
+    ctx: Ctx<'_>,
+) -> Option<Value<'a>> {
+    // A string method reads its receiver and its arguments: that is its work.
+    if matches!(object, Value::Str(_) | Value::Units(_)) {
+        charge(
+            ctx.work,
+            text_len(&object) + arguments.iter().map(text_len).sum::<usize>(),
+        )?;
+    }
     match object {
-        Value::Snapshot(snapshot, version) => snapshot_call(&snapshot, version, name, arguments),
+        Value::Snapshot(snapshot, version) => {
+            snapshot_call(&snapshot, version, name, arguments, ctx)
+        }
+        Value::Str(s) if arguments.iter().any(|a| matches!(a, Value::Units(_))) => {
+            units_call(&s.encode_utf16().collect::<Vec<_>>(), name, arguments, ctx)
+        }
+        Value::Units(units) => units_call(&units, name, arguments, ctx),
         Value::Str(s) => match name {
             "contains" => Some(Value::Bool(s.contains(&string_argument(arguments, 0)?))),
             "beginsWith" => Some(Value::Bool(s.starts_with(&string_argument(arguments, 0)?))),
             "endsWith" => Some(Value::Bool(s.ends_with(&string_argument(arguments, 0)?))),
-            "replace" => java_replace(
-                &s,
-                &string_argument(arguments, 0)?,
-                &string_argument(arguments, 1)?,
-            )
-            .map(Value::Str),
-            "toLowerCase" => java_case(&s, true).map(Value::Str),
-            "toUpperCase" => java_case(&s, false).map(Value::Str),
+            "replace" => {
+                let (from, to) = (
+                    string_argument(arguments, 0)?,
+                    string_argument(arguments, 1)?,
+                );
+                if from.is_empty() && s.chars().any(|c| c.len_utf16() == 2) {
+                    // Java puts the replacement between the halves of a pair.
+                    return units_call(&s.encode_utf16().collect::<Vec<_>>(), name, arguments, ctx);
+                }
+                let replaced = java_replace(&s, &from, &to)?;
+                charge(ctx.work, replaced.len())?;
+                Some(Value::Str(replaced))
+            }
+            "toLowerCase" | "toUpperCase" => {
+                let converted = java_case(&s, name == "toLowerCase")?;
+                // The converted copy is work by its length (it can be longer than the receiver).
+                charge(ctx.work, converted.len())?;
+                Some(Value::Str(converted))
+            }
             "matches" => match arguments.first()? {
-                Value::Regex(pattern) => pattern.matches(&s).map(Value::Bool),
+                Value::Regex(pattern) => pattern.matches(&s, ctx.regex).map(Value::Bool),
                 _ => None,
             },
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// The UTF-16 units of a string value.
+fn units_of(value: &Value<'_>) -> Option<Vec<u16>> {
+    match value {
+        Value::Str(s) => Some(s.encode_utf16().collect()),
+        Value::Units(units) => Some(units.clone()),
+        _ => None,
+    }
+}
+
+/// A string value from UTF-16 units: a [`Value::Str`] when they are valid UTF-16, so a pair written as two
+/// escapes is the same string as the character.
+fn from_units<'a>(units: Vec<u16>) -> Value<'a> {
+    String::from_utf16(&units).map_or_else(|_| Value::Units(units), Value::Str)
+}
+
+/// The failure function of Knuth, Morris and Pratt for `needle`, so that a search costs the length of the
+/// text plus that of the needle however the two look (the windowed comparison it replaces was quadratic).
+fn failure_table(needle: &[u16]) -> Vec<usize> {
+    let mut table = vec![0; needle.len()];
+    let mut matched = 0;
+    for at in 1..needle.len() {
+        while matched > 0 && needle[at] != needle[matched] {
+            matched = table[matched - 1];
+        }
+        if needle[at] == needle[matched] {
+            matched += 1;
+        }
+        table[at] = matched;
+    }
+    table
+}
+
+/// Where `needle` first starts in `haystack`, as Java's `String.indexOf` reads UTF-16 units; `table` is
+/// [`failure_table`] of `needle`, which is not empty.
+fn search_units(haystack: &[u16], needle: &[u16], table: &[usize]) -> Option<usize> {
+    let mut matched = 0;
+    for (at, unit) in haystack.iter().enumerate() {
+        while matched > 0 && *unit != needle[matched] {
+            matched = table[matched - 1];
+        }
+        if *unit == needle[matched] {
+            matched += 1;
+        }
+        if matched == needle.len() {
+            return Some(at + 1 - matched);
+        }
+    }
+    None
+}
+
+/// Where `needle` starts in `haystack`.
+fn find_units(haystack: &[u16], needle: &[u16]) -> Option<usize> {
+    if needle.is_empty() {
+        return Some(0);
+    }
+    search_units(haystack, needle, &failure_table(needle))
+}
+
+/// The string methods on a string that holds a lone surrogate, or whose argument does, read by UTF-16
+/// unit as Java reads them. A method not listed here is an error, so the rule is false negated or not.
+fn units_call<'a>(
+    units: &[u16],
+    name: &str,
+    arguments: &[Value<'a>],
+    ctx: Ctx<'_>,
+) -> Option<Value<'a>> {
+    let argument = |i: usize| arguments.get(i).and_then(units_of);
+    match name {
+        "contains" => Some(Value::Bool(find_units(units, &argument(0)?).is_some())),
+        "beginsWith" => Some(Value::Bool(units.starts_with(&argument(0)?))),
+        "endsWith" => Some(Value::Bool(units.ends_with(&argument(0)?))),
+        "replace" => {
+            let (from, to) = (argument(0)?, argument(1)?);
+            if from.is_empty() {
+                let pieces = units.len().checked_add(1)?;
+                if pieces.checked_mul(to.len())?.checked_add(units.len())? > MAX_STRING_UNITS {
+                    return None;
+                }
+                // Java puts the replacement before every unit and after the last, even between the halves of a pair.
+                let mut out = to.clone();
+                for unit in units {
+                    out.push(*unit);
+                    out.extend_from_slice(&to);
+                }
+                charge(ctx.work, out.len())?;
+                return Some(from_units(out));
+            }
+            let table = failure_table(&from);
+            let mut out = Vec::with_capacity(units.len());
+            let mut rest = units;
+            while let Some(at) = search_units(rest, &from, &table) {
+                if out.len() + at + to.len() > MAX_STRING_UNITS {
+                    return None;
+                }
+                out.extend_from_slice(&rest[..at]);
+                out.extend_from_slice(&to);
+                rest = &rest[at + from.len()..];
+            }
+            if out.len() + rest.len() > MAX_STRING_UNITS {
+                return None;
+            }
+            out.extend_from_slice(rest);
+            charge(ctx.work, out.len())?;
+            Some(from_units(out))
+        }
+        "toLowerCase" | "toUpperCase" => {
+            let lower = name == "toLowerCase";
+            let mut out: Vec<u16> = Vec::with_capacity(units.len());
+            let mut run = String::new();
+            for decoded in char::decode_utf16(units.iter().copied()) {
+                match decoded {
+                    Ok(c) => run.push(c),
+                    Err(lone) => {
+                        let room = MAX_STRING_UNITS.checked_sub(out.len() + 1)?;
+                        out.extend(
+                            java_case_within(
+                                &std::mem::take(&mut run),
+                                lower,
+                                room,
+                                char::len_utf16,
+                            )?
+                            .encode_utf16(),
+                        );
+                        out.push(lone.unpaired_surrogate());
+                    }
+                }
+            }
+            let room = MAX_STRING_UNITS.checked_sub(out.len())?;
+            out.extend(java_case_within(&run, lower, room, char::len_utf16)?.encode_utf16());
+            // The converted copy is work by its length.
+            charge(ctx.work, out.len())?;
+            Some(from_units(out))
+        }
+        "matches" => match arguments.first()? {
+            Value::Regex(pattern) => pattern.matches_units(units, ctx.regex).map(Value::Bool),
             _ => None,
         },
         _ => None,
@@ -542,34 +955,46 @@ fn snapshot_call<'a>(
     version: Version,
     name: &str,
     arguments: &[Value<'a>],
+    ctx: Ctx<'_>,
 ) -> Option<Value<'a>> {
     let located = snapshot.locate();
     match name {
-        "val" => Some(match &located {
-            Located::Absent => Value::Null,
-            Located::Priority(leaf)
-            | Located::Node(Node {
-                content: Content::Leaf(leaf),
-                ..
-            }) => leaf_value(leaf),
-            Located::Node(_) => Value::Sentinel,
-        }),
+        "val" => {
+            let value = match &located {
+                Located::Absent => Value::Null,
+                Located::Priority(leaf)
+                | Located::Node(Node {
+                    content: Content::Leaf(leaf),
+                    ..
+                }) => leaf_value(leaf),
+                Located::Node(_) => Value::Sentinel,
+            };
+            // The value is copied out of the tree: that is work, by its length.
+            charge(ctx.work, text_len(&value))?;
+            Some(value)
+        }
         "child" => Some(Value::Snapshot(
-            snapshot.child(&string_argument(arguments, 0)?),
+            snapshot.child(&path_argument(arguments, 0)?, ctx.work)?,
             version,
         )),
-        "parent" => snapshot.path.parent().map(|path| {
-            Value::Snapshot(
-                Snapshot {
-                    root: snapshot.root,
-                    path,
-                },
-                version,
-            )
-        }),
+        "parent" => {
+            // The parent is a copy of the location without its last key: charged by the bytes copied.
+            charge(ctx.work, snapshot.path_cost())?;
+            snapshot.path.parent().map(|path| {
+                Value::Snapshot(
+                    Snapshot {
+                        root: snapshot.root,
+                        path,
+                    },
+                    version,
+                )
+            })
+        }
         "exists" => Some(Value::Bool(!matches!(located, Located::Absent))),
         "hasChild" => Some(Value::Bool(!matches!(
-            snapshot.child(&string_argument(arguments, 0)?).locate(),
+            snapshot
+                .child(&path_argument(arguments, 0)?, ctx.work)?
+                .locate(),
             Located::Absent
         ))),
         "hasChildren" => {
@@ -589,8 +1014,8 @@ fn snapshot_call<'a>(
             // name that is no string before that is an error, on any node (review r10 M31,
             // S25, and the r11 hasChildren table). An empty list is true anywhere.
             for key in keys {
-                let Value::Str(key) = key else { return None };
-                if matches!(snapshot.child(key).locate(), Located::Absent) {
+                let key = path_text(key)?;
+                if matches!(snapshot.child(&key, ctx.work)?.locate(), Located::Absent) {
                     return Some(Value::Bool(false));
                 }
             }
@@ -615,7 +1040,10 @@ fn snapshot_call<'a>(
                 Located::Node(Node {
                     priority: Some(Priority::String(s)),
                     ..
-                }) => Value::Str(s.clone()),
+                }) => {
+                    charge(ctx.work, s.len())?;
+                    Value::Str(s.clone())
+                }
                 _ => Value::Null,
             })
         }
@@ -650,7 +1078,7 @@ fn binary<'a>(
 ) -> Option<Value<'a>> {
     let l = eval(left, scope, observer)?;
     let r = eval(right, scope, observer)?;
-    combine(op, &l, &r)
+    combine(op, &l, &r, &scope.work)
 }
 
 /// A chain of `&&`, `||` or `+`, read left to right as the nested operators it stands for:
@@ -684,7 +1112,7 @@ fn chain<'a>(
     let mut value = eval(first, scope, observer)?;
     let prefixes = observer.prefixes(diagnostic, operands.len());
     for (index, operand) in rest.iter().enumerate() {
-        value = combine(op, &value, &eval(operand, scope, observer)?)?;
+        value = combine(op, &value, &eval(operand, scope, observer)?, &scope.work)?;
         if prefixes[index] != diagnostic {
             record_value(observer, prefixes[index], &value, None);
         }
@@ -693,7 +1121,14 @@ fn chain<'a>(
 }
 
 /// `l op r` for an operator that is not `&&` or `||`.
-fn combine<'a>(op: BinaryOp, l: &Value<'a>, r: &Value<'a>) -> Option<Value<'a>> {
+fn combine<'a>(
+    op: BinaryOp,
+    l: &Value<'a>,
+    r: &Value<'a>,
+    work: &std::cell::Cell<u64>,
+) -> Option<Value<'a>> {
+    // Comparing or joining strings reads both of them.
+    charge(work, text_len(l) + text_len(r))?;
     match op {
         BinaryOp::Eq => Some(Value::Bool(equal(l, r))),
         BinaryOp::Ne => Some(Value::Bool(!equal(l, r))),
@@ -705,6 +1140,9 @@ fn combine<'a>(op: BinaryOp, l: &Value<'a>, r: &Value<'a>) -> Option<Value<'a>> 
                     None => return Some(Value::Bool(false)),
                 },
                 (Value::Str(a), Value::Str(b)) => a.encode_utf16().cmp(b.encode_utf16()),
+                (Value::Str(_) | Value::Units(_), Value::Str(_) | Value::Units(_)) => {
+                    units_of(l)?.cmp(&units_of(r)?)
+                }
                 // Any other pair is an error there, so the rule is false negated or not
                 // (review r8 M22).
                 _ => return None,
@@ -718,8 +1156,24 @@ fn combine<'a>(op: BinaryOp, l: &Value<'a>, r: &Value<'a>) -> Option<Value<'a>> 
         }
         BinaryOp::Add => match (l, r) {
             (Value::Num(a), Value::Num(b)) => Some(Value::Num(a + b)),
-            (Value::Str(a), _) => Some(Value::Str(format!("{a}{}", text(r)?))),
-            (_, Value::Str(b)) => Some(Value::Str(format!("{}{b}", text(l)?))),
+            (Value::Units(_), _) | (_, Value::Units(_)) => {
+                let mut units = units_text(l)?;
+                let right = units_text(r)?;
+                if units.len() + right.len() > MAX_STRING_UNITS {
+                    return None;
+                }
+                units.extend(right);
+                Some(from_units(units))
+            }
+            (Value::Str(a), _) => {
+                let right = text(r)?;
+                (a.len() + right.len() <= MAX_STRING_UNITS)
+                    .then(|| Value::Str(format!("{a}{right}")))
+            }
+            (_, Value::Str(b)) => {
+                let left = text(l)?;
+                (left.len() + b.len() <= MAX_STRING_UNITS).then(|| Value::Str(format!("{left}{b}")))
+            }
             _ => None,
         },
         BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem => {
@@ -739,6 +1193,14 @@ fn combine<'a>(op: BinaryOp, l: &Value<'a>, r: &Value<'a>) -> Option<Value<'a>> 
             }))
         }
         BinaryOp::And | BinaryOp::Or => None,
+    }
+}
+
+/// [`text`] as UTF-16 units, for a sum that holds a string with a lone surrogate.
+fn units_text(value: &Value<'_>) -> Option<Vec<u16>> {
+    match value {
+        Value::Num(n) => Some(number_text(*n).encode_utf16().collect()),
+        other => units_of(other),
     }
 }
 
@@ -773,7 +1235,196 @@ fn equal(l: &Value<'_>, r: &Value<'_>) -> bool {
         #[allow(clippy::cast_precision_loss)]
         (Value::Long(a), Value::Num(b)) | (Value::Num(b), Value::Long(a)) => *a as f64 == *b,
         (Value::Str(a), Value::Str(b)) => a == b,
+        (Value::Units(a), Value::Units(b)) => a == b,
         (Value::Ordering(a), Value::Ordering(b)) => a == b,
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod bound_tests {
+    use super::*;
+
+    const MAX: usize = MAX_STRING_UNITS;
+
+    fn units(len: usize) -> Vec<u16> {
+        vec![0x61; len]
+    }
+
+    fn length(value: &Value<'_>) -> Option<usize> {
+        match value {
+            Value::Str(s) => Some(s.len()),
+            Value::Units(u) => Some(u.len()),
+            _ => None,
+        }
+    }
+
+    /// The bound is on the string built: exactly the bound is built, one more is an error, and a
+    /// replacement that shrinks the string is never held up by what it started from.
+    #[test]
+    fn replacing_in_a_str_stops_one_past_the_bound() {
+        let at = "a".repeat(MAX / 2);
+        assert_eq!(java_replace(&at, "a", "bb").map(|s| s.len()), Some(MAX));
+        let past = "a".repeat(MAX / 2 + 1);
+        assert_eq!(java_replace(&past, "a", "bb"), None);
+        // No match: the string is returned whole, up to the bound.
+        let whole = "a".repeat(MAX);
+        assert_eq!(java_replace(&whole, "z", "yy").map(|s| s.len()), Some(MAX));
+        let over = "a".repeat(MAX + 1);
+        assert_eq!(java_replace(&over, "z", "y"), None);
+        // A shrinking replacement of a string made of its target.
+        let shrinking = "aa".repeat(MAX / 2);
+        assert_eq!(
+            java_replace(&shrinking, "aa", "b").map(|s| s.len()),
+            Some(MAX / 2)
+        );
+        // An empty target: `to` before each character and after the last.
+        assert_eq!(
+            java_replace("", "", &"x".repeat(MAX)).map(|s| s.len()),
+            Some(MAX)
+        );
+        assert_eq!(java_replace("", "", &"x".repeat(MAX + 1)), None);
+        // `to` before each of four characters and after the last: 5 x 13421772 + 4 is the bound.
+        let each = MAX / 5;
+        assert_eq!(
+            java_replace("abcd", "", &"x".repeat(each)).map(|s| s.len()),
+            Some(MAX)
+        );
+        assert_eq!(java_replace("abcd", "", &"x".repeat(each + 1)), None);
+    }
+
+    #[test]
+    fn replacing_in_units_stops_one_past_the_bound() {
+        let call = |haystack: &[u16], from: &[u16], to: &[u16]| {
+            units_call(
+                haystack,
+                "replace",
+                &[Value::Units(from.to_vec()), Value::Units(to.to_vec())],
+                Ctx {
+                    regex: false,
+                    work: &std::cell::Cell::new(0),
+                },
+            )
+        };
+        let lone = [0xD83D_u16];
+        let at = call(&units(MAX / 2), &[0x61], &[0x62, 0x62]).unwrap();
+        assert_eq!(length(&at), Some(MAX));
+        assert!(call(&units(MAX / 2 + 1), &[0x61], &[0x62, 0x62]).is_none());
+        // No match.
+        assert_eq!(
+            length(&call(&units(MAX), &lone, &[0x62]).unwrap()),
+            Some(MAX)
+        );
+        assert!(call(&units(MAX + 1), &lone, &[0x62]).is_none());
+        // A match late in a string that fits: the text before it counts.
+        let mut late = units(MAX - 1);
+        late.push(0xD83D);
+        assert_eq!(length(&call(&late, &lone, &[0x62]).unwrap()), Some(MAX));
+        assert!(call(&late, &lone, &[0x62, 0x62]).is_none());
+        // An empty target.
+        assert_eq!(length(&call(&[], &[], &units(MAX)).unwrap()), Some(MAX));
+        assert!(call(&[], &[], &units(MAX + 1)).is_none());
+        assert_eq!(
+            length(&call(&units(4), &[], &units(MAX / 5)).unwrap()),
+            Some(MAX)
+        );
+        assert!(call(&units(4), &[], &units(MAX / 5 + 1)).is_none());
+    }
+
+    #[test]
+    fn adding_strings_stops_one_past_the_bound() {
+        let add = |l: Value<'static>, r: Value<'static>| {
+            combine(BinaryOp::Add, &l, &r, &std::cell::Cell::new(0))
+        };
+        let half = |extra: usize| -> Value<'static> { Value::Str("a".repeat(MAX / 2 + extra)) };
+        assert_eq!(add(half(0), half(0)).as_ref().and_then(length), Some(MAX));
+        assert!(add(half(0), half(1)).is_none());
+        assert!(add(half(1), half(0)).is_none());
+        let half_units = |extra: usize| -> Value<'static> { Value::Units(units(MAX / 2 + extra)) };
+        assert_eq!(
+            add(half_units(0), half_units(0)).as_ref().and_then(length),
+            Some(MAX)
+        );
+        assert!(add(half_units(0), half_units(1)).is_none());
+        assert!(add(half_units(1), half_units(0)).is_none());
+        assert!(add(Value::Units(units(MAX)), Value::Num(1.0)).is_none());
+        // A number joins a string on either side: its text counts.
+        let full = |len: usize| -> Value<'static> { Value::Str("a".repeat(len)) };
+        assert_eq!(
+            add(Value::Num(1.0), full(MAX - 1))
+                .as_ref()
+                .and_then(length),
+            Some(MAX)
+        );
+        assert!(add(Value::Num(1.0), full(MAX)).is_none());
+        assert_eq!(
+            add(full(MAX - 1), Value::Num(1.0))
+                .as_ref()
+                .and_then(length),
+            Some(MAX)
+        );
+        assert!(add(full(MAX), Value::Num(1.0)).is_none());
+    }
+    /// The evaluation work is charged up to the bound and refused past it: exactly the bound is allowed.
+    #[test]
+    fn evaluation_work_is_charged_up_to_the_bound_and_not_past_it() {
+        let bound = usize::try_from(MAX_EVALUATION_WORK).unwrap();
+        let work = std::cell::Cell::new(0);
+        assert!(charge(&work, bound - 3).is_some());
+        assert!(charge(&work, 3).is_some());
+        assert_eq!(work.get(), MAX_EVALUATION_WORK);
+        assert!(charge(&work, 0).is_some());
+        assert!(charge(&work, 1).is_none());
+        assert_eq!(
+            work.get(),
+            MAX_EVALUATION_WORK,
+            "a refused charge adds nothing"
+        );
+    }
+
+    /// A string is charged by its length, whichever form it is held in.
+    #[test]
+    fn a_string_is_charged_by_its_length() {
+        assert_eq!(text_len(&Value::Str("ab\u{1F600}".to_owned())), 6);
+        assert_eq!(text_len(&Value::Units(vec![0x61, 0xD83D, 0x62])), 3);
+        assert_eq!(text_len(&Value::Null), 0);
+    }
+
+    /// A result measured exactly at the room is allowed and one unit more is not.
+    #[test]
+    fn case_conversion_is_measured_against_the_room_exactly() {
+        assert_eq!(
+            java_case_within("abc", true, 3, char::len_utf16).as_deref(),
+            Some("abc")
+        );
+        assert_eq!(java_case_within("abc", true, 2, char::len_utf16), None);
+        // `\u{DF}` grows to two characters in upper case.
+        assert_eq!(
+            java_case_within("\u{DF}", false, 2, char::len_utf16).as_deref(),
+            Some("SS")
+        );
+        assert_eq!(java_case_within("\u{DF}", false, 1, char::len_utf16), None);
+    }
+
+    proptest::proptest! {
+        /// The failure table is the length of the longest proper prefix that is also a suffix, and the search
+        /// finds what a window comparison finds.
+        #[test]
+        fn the_search_is_the_window_search(
+            haystack in proptest::collection::vec(0_u16..3, 0..14),
+            needle in proptest::collection::vec(0_u16..3, 1..6),
+        ) {
+            let table = failure_table(&needle);
+            for (at, entry) in table.iter().enumerate() {
+                let prefix = &needle[..=at];
+                let best = (0..prefix.len())
+                    .rev()
+                    .find(|&k| prefix[..k] == prefix[prefix.len() - k..])
+                    .unwrap_or(0);
+                proptest::prop_assert_eq!(*entry, best);
+            }
+            let naive = haystack.windows(needle.len()).position(|w| w == needle.as_slice());
+            proptest::prop_assert_eq!(find_units(&haystack, &needle), naive);
+        }
     }
 }

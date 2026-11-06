@@ -450,7 +450,16 @@ fn directory_is_empty(dir: &Path) -> bool {
 /// A section of a product fireemu does not serve at all -- SQL Connect -- is a failure,
 /// because ignoring it would start a suite that silently holds less state than the artifact
 /// recorded.
-pub fn prepare(dir: &Path, products: Products, project: &str) -> Result<Prepared, ArtifactError> {
+///
+/// `rtdb_lone_surrogates` says how a Realtime Database file reads a lone surrogate escape in a value: `?` as the
+/// official emulator stores it (the emulator profile), or a refusal before anything is installed (the strict
+/// profile). Other products ignore it.
+pub fn prepare(
+    dir: &Path,
+    products: Products,
+    project: &str,
+    rtdb_lone_surrogates: bool,
+) -> Result<Prepared, ArtifactError> {
     ensure_directory_inside(dir, dir).map_err(|e| ArtifactError::new("import", dir, e))?;
     let manifest_path = dir.join(METADATA_FILE_NAME);
     let text = read_text_inside_limited(dir, &manifest_path, IMPORT_MANIFEST_BYTES_LIMIT)
@@ -506,7 +515,10 @@ pub fn prepare(dir: &Path, products: Products, project: &str) -> Result<Prepared
             }
             Product::Auth => prepared.auth = Some(read_auth_section(dir, section, project)?),
             Product::Storage => prepared.storage = Some(read_storage_section(dir, section)?),
-            Product::Database => prepared.database = Some(read_database_section(dir, section)?),
+            Product::Database => {
+                prepared.database =
+                    Some(read_database_section(dir, section, rtdb_lone_surrogates)?);
+            }
             Product::DataConnect => unreachable!("refused above"),
         }
     }
@@ -2786,8 +2798,9 @@ const IMPORT_DATABASE_BYTES_LIMIT: u64 = 1024 * 1024 * 1024;
 fn read_database_section(
     dir: &Path,
     section: &Section,
+    lone_surrogates: bool,
 ) -> Result<Vec<fireemu_adapter_database::rest::PreparedImport>, ArtifactError> {
-    read_database_section_within(dir, section, IMPORT_DATABASE_BYTES_LIMIT)
+    read_database_section_within(dir, section, IMPORT_DATABASE_BYTES_LIMIT, lone_surrogates)
 }
 
 /// [`read_database_section`] with `limit` bytes for all files together.
@@ -2795,6 +2808,7 @@ fn read_database_section_within(
     dir: &Path,
     section: &Section,
     limit: u64,
+    lone_surrogates: bool,
 ) -> Result<Vec<fireemu_adapter_database::rest::PreparedImport>, ArtifactError> {
     let section_dir = dir.join(&section.path);
     ensure_directory_inside(dir, &section_dir)
@@ -2841,10 +2855,11 @@ fn read_database_section_within(
         .map_err(|e| ArtifactError::new("database", &path, e))?;
         // Checked and built here, so a file the import would refuse stops the start before
         // any section is installed (review RTDB-04 S4), and each file is parsed once.
-        let import = fireemu_adapter_database::rest::prepare_import(
+        let import = fireemu_adapter_database::rest::prepare_import_as(
             &namespace,
             text,
             &fireemu_adapter_database::rest::WRITE_LIMITS,
+            lone_surrogates,
         )
         .map_err(|e| ArtifactError::new("database", &path, e))?;
         namespaces.push(import);
@@ -5387,16 +5402,61 @@ mod tests {
             path: "database_export".to_owned(),
             metadata_file: None,
         };
-        let refused = super::read_database_section(root.path(), &section)
+        let refused = super::read_database_section(root.path(), &section, false)
             .unwrap_err()
             .to_string();
         assert!(refused.contains("database_export/bad.json"), "{refused}");
         assert!(refused.contains("Invalid data"), "{refused}");
         std::fs::remove_file(section_dir.join("bad.json")).unwrap();
         assert_eq!(
-            installed(super::read_database_section(root.path(), &section).unwrap()),
+            installed(super::read_database_section(root.path(), &section, false).unwrap()),
             vec![("good".to_owned(), r#"{"x":1}"#.to_owned())]
         );
+    }
+
+    /// A lone surrogate escape in a value of a database file is `?` on the emulator profile (as `PUT /.json`
+    /// stores it in the official emulator) and a refusal on the strict profile, raised while the import is prepared,
+    /// before any section is installed. A key that holds one is refused on both.
+    #[cfg(unix)]
+    #[test]
+    fn a_lone_surrogate_in_a_database_file_is_read_by_the_profile_before_anything_is_installed() {
+        let root = budget_dir("database-lone-surrogate");
+        let section_dir = root.path().join("database_export");
+        std::fs::create_dir_all(&section_dir).unwrap();
+        std::fs::write(section_dir.join("good.json"), r#"{"x":1}"#).unwrap();
+        std::fs::write(
+            section_dir.join("lone.json"),
+            r#"{"a":"v\ud83d","b":"\ud83d\ude00"}"#,
+        )
+        .unwrap();
+        let section = fireemu_core_export::metadata::Section {
+            version: "4.11.2".to_owned(),
+            path: "database_export".to_owned(),
+            metadata_file: None,
+        };
+        // The strict profile: the whole import is refused while preparing, naming the file.
+        let refused = super::read_database_section(root.path(), &section, false)
+            .unwrap_err()
+            .to_string();
+        assert!(refused.contains("database_export/lone.json"), "{refused}");
+        assert!(refused.contains("couldn't parse JSON"), "{refused}");
+        // The emulator profile stores `?` for the lone surrogate and keeps the valid pair.
+        assert_eq!(
+            installed(super::read_database_section(root.path(), &section, true).unwrap()),
+            vec![
+                ("good".to_owned(), r#"{"x":1}"#.to_owned()),
+                (
+                    "lone".to_owned(),
+                    "{\"a\":\"v?\",\"b\":\"\u{1F600}\"}".to_owned()
+                ),
+            ]
+        );
+        // A key that holds one stays refused on the emulator profile too.
+        std::fs::write(section_dir.join("lone.json"), r#"{"a\ud83d":1}"#).unwrap();
+        let refused = super::read_database_section(root.path(), &section, true)
+            .unwrap_err()
+            .to_string();
+        assert!(refused.contains("database_export/lone.json"), "{refused}");
     }
 
     #[cfg(unix)]
@@ -5413,7 +5473,7 @@ mod tests {
             path: "database_export".to_owned(),
             metadata_file: None,
         };
-        let refused = super::read_database_section(root.path(), &section)
+        let refused = super::read_database_section(root.path(), &section, false)
             .unwrap_err()
             .to_string();
         assert!(refused.contains("database_export/deep.json"), "{refused}");
@@ -5451,7 +5511,7 @@ mod tests {
             path: "database_export".to_owned(),
             metadata_file: None,
         };
-        let read = super::read_database_section_within(root.path(), &section, 14).unwrap();
+        let read = super::read_database_section_within(root.path(), &section, 14, false).unwrap();
         assert_eq!(
             installed(read),
             vec![
@@ -5459,7 +5519,7 @@ mod tests {
                 ("b".to_owned(), r#"{"y":2}"#.to_owned())
             ]
         );
-        let refused = super::read_database_section_within(root.path(), &section, 13)
+        let refused = super::read_database_section_within(root.path(), &section, 13, false)
             .unwrap_err()
             .to_string();
         assert!(
@@ -5783,6 +5843,7 @@ mod tests {
                 database: false,
             },
             "demo-app",
+            false,
         )
         .expect("Auth export is prepared");
         super::apply(prepared, &destination_endpoints).expect("Auth import succeeds");

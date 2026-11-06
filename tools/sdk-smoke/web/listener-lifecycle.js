@@ -1,5 +1,9 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-app.js";
 import {
+  CustomProvider,
+  initializeAppCheck,
+} from "https://www.gstatic.com/firebasejs/12.18.0/firebase-app-check.js";
+import {
   connectAuthEmulator,
   createUserWithEmailAndPassword,
   getAuth,
@@ -17,6 +21,7 @@ import {
   onSnapshot,
   query,
   setDoc,
+  setLogLevel,
   waitForPendingWrites,
   where,
 } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-firestore.js";
@@ -25,6 +30,9 @@ const params = new URLSearchParams(location.search);
 const firestorePort = Number(params.get("fs"));
 const authPort = Number(params.get("auth"));
 const projectId = params.get("project") || "demo-app";
+const appCheckEnabled = params.get("appcheck") === "1";
+const appCheckAppId = "1:1234567890:web:local-test-app";
+const appCheckDebugSecret = "deadbeef-0000-4000-8000-000000000001";
 const resultNode = document.getElementById("result");
 const appNode = document.getElementById("app");
 const diagnostics = window.__listenerLifecycle;
@@ -35,6 +43,7 @@ const deniedOperations = [];
 const cleanupCallbacks = [];
 const cleanupErrors = [];
 const deniedWriteSessionDeltas = {};
+const sdkRefusalLogs = [];
 let subscriptionOrdinal = 0;
 
 const record = (event, fields = {}) => events.push({ event, ...fields });
@@ -50,6 +59,20 @@ const bounded = async (promise, label) => {
   } finally {
     clearTimeout(timer);
   }
+};
+const exchangeLocalDebugToken = async () => {
+  const response = await fetch(
+    `http://127.0.0.1:${authPort}/v1/projects/${projectId}/apps/${encodeURIComponent(appCheckAppId)}:exchangeDebugToken`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ debugToken: appCheckDebugSecret, limitedUse: false }),
+    },
+  );
+  const body = await response.json();
+  if (!response.ok) throw new Error(`local App Check exchange failed: ${response.status}`);
+  const ttlSeconds = Number.parseInt(String(body.ttl).replace(/s$/, ""), 10);
+  return { token: body.token, expireTimeMillis: Date.now() + ttlSeconds * 1000 };
 };
 const deferred = () => {
   let resolve;
@@ -151,7 +174,13 @@ const run = async () => {
     if (!Number.isInteger(firestorePort) || !Number.isInteger(authPort)) {
       throw new Error("The fs and auth query parameters must contain emulator ports");
     }
-    const firebaseApp = initializeApp({ projectId, apiKey: "fake-api-key" });
+    const firebaseApp = initializeApp({ projectId, apiKey: "fake-api-key", appId: appCheckAppId });
+    if (appCheckEnabled) {
+      initializeAppCheck(firebaseApp, {
+        provider: new CustomProvider({ getToken: exchangeLocalDebugToken }),
+        isTokenAutoRefreshEnabled: false,
+      });
+    }
     const auth = getAuth(firebaseApp);
     connectAuthEmulator(auth, `http://127.0.0.1:${authPort}`, { disableWarnings: true });
     await setPersistence(auth, inMemoryPersistence);
@@ -313,6 +342,73 @@ const run = async () => {
     await stopDestinations();
     await stopShellUser();
 
+    if (appCheckEnabled) {
+      setLogLevel("debug");
+      const refusalApp = initializeApp(
+        { projectId, apiKey: "fake-api-key", appId: appCheckAppId },
+        "webchannel-refusal",
+      );
+      initializeAppCheck(refusalApp, {
+        provider: new CustomProvider({
+          getToken: async () => ({
+            token: "invalid-local-app-check-token",
+            expireTimeMillis: Date.now() + 60_000,
+          }),
+        }),
+        isTokenAutoRefreshEnabled: false,
+      });
+      const refusalDb = initializeFirestore(refusalApp, { experimentalForceLongPolling: true });
+      connectFirestoreEmulator(refusalDb, "127.0.0.1", firestorePort);
+      const refusalObserved = deferred();
+      const previousConsole = {
+        debug: console.debug,
+        info: console.info,
+        log: console.log,
+        warn: console.warn,
+        error: console.error,
+      };
+      const captureSdkLog = (method, ...args) => {
+        const values = args.flatMap((value) => [
+          value?.code,
+          value?.message,
+          value?.status,
+          (() => {
+            try {
+              return JSON.stringify(value);
+            } catch {
+              return String(value);
+            }
+          })(),
+        ]);
+        const message = values.filter(Boolean).join(" ");
+        sdkRefusalLogs.push(message);
+        if (/RPC 'Listen' stream .*received error/i.test(message) && /permission-denied|PERMISSION_DENIED/i.test(message)) {
+          refusalObserved.resolve(message);
+        }
+        previousConsole[method].apply(console, args);
+      };
+      for (const method of Object.keys(previousConsole)) {
+        console[method] = (...args) => captureSdkLog(method, ...args);
+      }
+      try {
+        const stopRefusedListener = onSnapshot(
+          doc(refusalDb, "lifecycle-users", "app-check-refusal"),
+          () => record("unexpected-refusal-snapshot"),
+          (error) => record("sdk-refusal-callback", { code: error?.code }),
+        );
+        registerCleanup(() => {
+          stopRefusedListener();
+          Object.assign(console, previousConsole);
+        });
+        const message = await bounded(refusalObserved.promise, "SDK WebChannel permission-denied log");
+        record("sdk-webchannel-refusal-observed", { message });
+        stopRefusedListener();
+        Object.assign(console, previousConsole);
+      } finally {
+        Object.assign(console, previousConsole);
+      }
+    }
+
     summary = {
       passed:
         diagnostics.maximumConnectedForms() === 1 &&
@@ -323,13 +419,25 @@ const run = async () => {
         Object.values(deniedWriteSessionDeltas).every((count) => count === 1) &&
         diagnostics.writeSessionOpeningCount() === 9 &&
         JSON.stringify(firstProjectValues) === JSON.stringify([0]) &&
-        JSON.stringify(replacementProjectValues) === JSON.stringify([0, 1]),
+        JSON.stringify(replacementProjectValues) === JSON.stringify([0, 1]) &&
+        (!appCheckEnabled || sdkRefusalLogs.some((message) =>
+          /RPC 'Listen' stream .*received error/i.test(message) && /permission-denied|PERMISSION_DENIED/i.test(message),
+        )),
       maximumConnectedForms: diagnostics.maximumConnectedForms(),
       maximumConnectedRouteTrees: diagnostics.maximumConnectedRouteTrees(),
       initialHtml: diagnostics.initialHtml,
       callbackAfterUnsubscribe,
       deniedOperations,
       deniedWriteSessionDeltas,
+      appCheckRefusalSmoke: appCheckEnabled
+        ? {
+            sdkErrorLogObserved: sdkRefusalLogs.some((message) =>
+              /RPC 'Listen' stream .*received error/i.test(message) &&
+              /permission-denied|PERMISSION_DENIED/i.test(message),
+            ),
+            logCount: sdkRefusalLogs.length,
+          }
+        : { skipped: true, reason: "pass ?appcheck=1 with the enforced local App Check config" },
       writeSessionOpeningCount: diagnostics.writeSessionOpeningCount(),
       values: {
         shellUser: shellUserValues,

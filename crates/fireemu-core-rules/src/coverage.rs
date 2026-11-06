@@ -93,6 +93,19 @@ pub struct CoverageEntry {
     pub values: Vec<(ExprValue, u64)>,
 }
 
+/// One expression's observed values and values counted but left out of a request trace.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct CoverageTraceEntry {
+    /// Position of the expression.
+    pub span: Span,
+    /// Byte offset just past it.
+    pub end: usize,
+    /// Distinct values with how often each was produced.
+    pub values: Vec<(ExprValue, u64)>,
+    /// Observations counted but not kept because the expression reached its distinct-value cap.
+    pub omitted: u64,
+}
+
 /// Accumulated coverage, keyed by source extent.
 #[derive(Debug, Clone, Default)]
 pub struct Coverage {
@@ -339,6 +352,20 @@ impl Coverage {
         self.entries.values().collect()
     }
 
+    /// The recorded expressions with their omitted counts, for a per-request trace.
+    #[must_use]
+    pub fn trace_entries(&self) -> Vec<CoverageTraceEntry> {
+        self.entries
+            .values()
+            .map(|entry| CoverageTraceEntry {
+                span: entry.span,
+                end: entry.end,
+                values: entry.values.clone(),
+                omitted: self.omitted_at(entry.span, entry.end),
+            })
+            .collect()
+    }
+
     /// How many observations of the expression at `span ..= end` were counted but not kept,
     /// because it already held [`COVERAGE_VALUES_PER_EXPRESSION`] distinct values.
     #[must_use]
@@ -523,7 +550,7 @@ pub struct RequestTrace {
     /// subject, ever reaches this structure.
     pub uid: Option<String>,
     /// Every expression evaluated while deciding, with the values it took.
-    pub expressions: Vec<CoverageEntry>,
+    pub expressions: Vec<CoverageTraceEntry>,
 }
 
 /// Rules diagnostics for one session: coverage accumulated over every request, and the last

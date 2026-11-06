@@ -766,6 +766,15 @@ fn state(strict: bool) -> RestState {
 }
 
 fn state_at(strict: bool, clock_nanos: i128) -> RestState {
+    state_with_clock(
+        strict,
+        Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::from_nanos(
+            clock_nanos,
+        )))),
+    )
+}
+
+fn state_with_clock(strict: bool, clock: Arc<Mutex<VirtualClock>>) -> RestState {
     let gateway = Gateway {
         enforce_limits: strict,
         ctx: PlanningContext {
@@ -779,9 +788,6 @@ fn state_at(strict: bool, clock_nanos: i128) -> RestState {
         },
         indexes: IndexSet::default(),
     };
-    let clock = Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::from_nanos(
-        clock_nanos,
-    ))));
     RestState {
         local: Arc::new(LocalBackend::new(gateway.clone(), clock, 7)),
         gateway: Arc::new(gateway),
@@ -824,6 +830,10 @@ fn fill(value: &Value) -> Value {
     serde_json::from_str(&value.to_string().replace("{docs}", DOCS)).unwrap()
 }
 
+fn fill_at(value: &Value, docs: &str) -> Value {
+    serde_json::from_str(&value.to_string().replace("{docs}", docs)).unwrap()
+}
+
 /// A documents path of any project and database written as `{docs}`.
 fn relative(name: &str) -> String {
     match name.find("/documents") {
@@ -850,6 +860,10 @@ fn timestamp(text: &str) -> String {
 /// A double as its bits (the sign of zero kept, every NaN one value).
 fn double(value: &Value) -> Value {
     let d = match value {
+        // The pinned gRPC recording passed protobuf NaN through JSON.stringify, which writes
+        // that non-finite number as null. The Firestore Value oneof still identifies it as a
+        // double; canonicalize only this field's encoded NaN value.
+        Value::Null => f64::NAN,
         Value::String(text) => match text.as_str() {
             "NaN" => f64::NAN,
             "Infinity" => f64::INFINITY,
@@ -994,6 +1008,10 @@ fn reference_environment_comparison_checks_both_offsets_and_suffix() {
 
 /// A Firestore value or document in a comparable form.
 fn normalize(value: &Value) -> Value {
+    normalize_with_timestamp_symbols(value, false)
+}
+
+fn normalize_with_timestamp_symbols(value: &Value, keep_timestamp_symbols: bool) -> Value {
     match value {
         Value::Object(map) => {
             let mut out = serde_json::Map::new();
@@ -1004,10 +1022,22 @@ fn normalize(value: &Value) -> Value {
                     "referenceValue" | "name" if inner.is_string() => {
                         json!(relative(inner.as_str().unwrap()))
                     }
+                    "timestampValue"
+                        if keep_timestamp_symbols
+                            && inner.as_str().is_some_and(|s| s.starts_with("<t")) =>
+                    {
+                        inner.clone()
+                    }
                     "timestampValue" => json!(timestamp(inner.as_str().unwrap())),
+                    "createTime" | "updateTime"
+                        if keep_timestamp_symbols
+                            && inner.as_str().is_some_and(|s| s.starts_with("<t")) =>
+                    {
+                        inner.clone()
+                    }
                     "createTime" | "updateTime" => json!("<t>"),
                     "message" if inner.is_string() => json!(message(inner.as_str().unwrap())),
-                    _ => normalize(inner),
+                    _ => normalize_with_timestamp_symbols(inner, keep_timestamp_symbols),
                 };
                 out.insert(key.clone(), inner);
             }
@@ -1024,8 +1054,134 @@ fn normalize(value: &Value) -> Value {
             }
             Value::Object(out)
         }
-        Value::Array(items) => Value::Array(items.iter().map(normalize).collect()),
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .map(|item| normalize_with_timestamp_symbols(item, keep_timestamp_symbols))
+                .collect(),
+        ),
         other => other.clone(),
+    }
+}
+
+/// Normalizes run-dependent gRPC instants while retaining their shared equality relationships.
+fn normalize_grpc_recording(value: &Value) -> Value {
+    normalize_grpc_shared_timestamps(value)
+}
+
+fn grpc_recordings_match(actual: &Value, expected: &Value) -> bool {
+    normalize_grpc_recording(actual) == normalize_grpc_recording(expected)
+}
+
+/// Mirrors the shared encounter-order instant symbols used for gRPC fixture comparison.
+fn normalize_grpc_shared_timestamps(value: &Value) -> Value {
+    fn visit(value: &mut Value, symbols: &mut BTreeMap<(i64, u32), String>) {
+        match value {
+            Value::Object(fields) => {
+                for (key, value) in fields {
+                    if matches!(key.as_str(), "executionTime" | "createTime" | "updateTime") {
+                        if let Some(text) = value.as_str() {
+                            if let Ok(time) = chrono::DateTime::parse_from_rfc3339(text) {
+                                let instant = (time.timestamp(), time.timestamp_subsec_nanos());
+                                let next = symbols.len() + 1;
+                                let symbol = symbols
+                                    .entry(instant)
+                                    .or_insert_with(|| format!("<t{next}>"))
+                                    .clone();
+                                *value = json!(symbol);
+                                continue;
+                            }
+                        }
+                    }
+                    visit(value, symbols);
+                }
+            }
+            Value::Array(values) => values.iter_mut().for_each(|value| visit(value, symbols)),
+            _ => {}
+        }
+    }
+
+    let mut normalized = value.clone();
+    visit(&mut normalized, &mut BTreeMap::new());
+    normalize_with_timestamp_symbols(&normalized, true)
+}
+
+fn normalize_grpc_compact_recording(value: &Value) -> Value {
+    normalize_grpc_shared_timestamps(value)
+}
+
+/// Applies the committed compact gRPC framing reduction after full response normalization.
+fn compact_grpc_framing(recording: &Value) -> Value {
+    use sha2::{Digest, Sha256};
+
+    fn encoded(value: &Value) -> Vec<u8> {
+        serde_json::to_vec(value).unwrap()
+    }
+
+    fn digest(value: &Value) -> String {
+        format!("{:x}", Sha256::digest(encoded(value)))
+    }
+
+    assert_eq!(recording["transport"], "grpc");
+    assert_eq!(recording["code"], 0);
+    let messages = recording["messages"].as_array().unwrap();
+    assert!(!messages.is_empty());
+
+    let mut head = recording.as_object().unwrap().clone();
+    head.remove("messages");
+    let mut content = Sha256::new();
+    content.update(b"fireemu-framing-results-v1\0");
+    let mut total_results = 0;
+    let mut profile = Vec::new();
+
+    for message in messages {
+        let results = message["results"].as_array().unwrap();
+        assert!(!results.is_empty());
+        let bytes = encoded(message);
+        assert!(bytes.len() <= 2 * 1024 * 1024);
+        let mut metadata = message.as_object().unwrap().clone();
+        metadata.remove("results");
+        profile.push(json!({
+            "results": results.len(),
+            "jsonBytes": bytes.len(),
+            "metadataDigest": digest(&Value::Object(metadata)),
+        }));
+        for result in results {
+            let encoded_result = encoded(result);
+            content.update(u64::try_from(encoded_result.len()).unwrap().to_be_bytes());
+            content.update(encoded_result);
+            total_results += 1;
+        }
+    }
+
+    json!({
+        "kind": "read",
+        "headDigest": digest(&Value::Object(head)),
+        "results": total_results,
+        "contentDigest": format!("{:x}", content.finalize()),
+        "profile": profile,
+    })
+}
+
+/// The compact fixture hashes use the recorded query project and database path.
+fn restore_compact_document_names(value: &mut Value) {
+    match value {
+        Value::Object(fields) => {
+            for (key, value) in fields {
+                if matches!(key.as_str(), "name" | "referenceValue") {
+                    if let Some(path) = value.as_str().and_then(|text| text.strip_prefix("{docs}"))
+                    {
+                        *value = json!(format!(
+                            "projects/demo-fs-query-index/databases/entpipe1/documents{path}"
+                        ));
+                    }
+                } else {
+                    restore_compact_document_names(value);
+                }
+            }
+        }
+        Value::Array(values) => values.iter_mut().for_each(restore_compact_document_names),
+        _ => {}
     }
 }
 
@@ -4486,4 +4642,605 @@ fn sample_contract_rejects_typed_row_and_framing_near_misses() {
         .unwrap()
         .remove("updateTime");
     assert!(!sample_contract(&rule, &bad, &rows, false, true));
+}
+
+#[test]
+fn grpc_pipeline_recording_replays_complete_response_before_normalization() {
+    use fireemu_adapter_grpc::service::GatewayService;
+    use fireemu_proto_firestore::google::firestore::v1::firestore_server::Firestore;
+
+    let requests = read("fs-ent-pipeline-requests.json");
+    let production = read("fs-ent-pipeline-production.json");
+    let program_id = "fs-ent-pipeline/results/metadata";
+    let program = requests["programs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|program| program["id"] == program_id)
+        .unwrap();
+    let step = program["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|step| step["id"] == "bare")
+        .unwrap();
+    let replay_clock = Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::from_nanos(
+        i128::from(REPLAY_CLOCK_SECONDS) * 1_000_000_000,
+    ))));
+    let state = state_with_clock(true, Arc::clone(&replay_clock));
+    let writes: Vec<_> = program["seed"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|seed| {
+            json!({"update": {
+                "name": format!("{DOCS}/{}", seed[0].as_str().unwrap()),
+                "fields": fill(&seed[1]),
+            }})
+        })
+        .collect();
+    let (status, body) = call(
+        &state,
+        "POST",
+        &format!("{DOCS}:commit"),
+        &json!({"writes": writes}),
+    );
+    assert_eq!(status, 200, "seed batch: {body}");
+    advance_replay_clock(Some(&replay_clock));
+    let request = fireemu_adapter_grpc::rest::pipeline_json::request_from_json(
+        "projects/demo-app/databases/(default)",
+        &fill(&step["body"]),
+    )
+    .unwrap();
+    let service = GatewayService::local((*state.gateway).clone(), Arc::clone(&state.local));
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let actual = runtime.block_on(async {
+        use tokio_stream::StreamExt as _;
+        let mut stream = Firestore::execute_pipeline(&service, tonic::Request::new(request))
+            .await
+            .unwrap()
+            .into_inner();
+        let mut messages = Vec::new();
+        while let Some(response) = stream.next().await {
+            messages.push(fireemu_adapter_grpc::rest::pipeline_json::response_to_json(
+                &response.unwrap(),
+            ));
+        }
+        json!({"transport":"grpc", "code":0, "messages":messages})
+    });
+    let expected = &production["programs"][program_id]["steps"]["bare-grpc"];
+    assert_eq!(
+        normalize_grpc_recording(&actual),
+        normalize_grpc_recording(expected)
+    );
+}
+
+const VERIFIED_GRPC_REQUEST_STEPS: &[(&str, &str)] = &[
+    (
+        "fs-ent-pipeline/o2/select-width#select-64-grpc",
+        "select-64",
+    ),
+    (
+        "fs-ent-pipeline/o2/select-width#select-65-grpc",
+        "select-65",
+    ),
+    ("fs-ent-pipeline/o3/aliases#empty-grpc", "empty"),
+    ("fs-ent-pipeline/o6/sort-kinds-cross#v-asc-grpc", "v-asc"),
+    (
+        "fs-ent-pipeline/o6/sort-kinds-cross#v-desc-limit2-grpc",
+        "v-desc",
+    ),
+    (
+        "fs-ent-pipeline/o6/stage-order-relaxed#where-where-grpc",
+        "where-where",
+    ),
+    (
+        "fs-ent-pipeline/o7/inputs-collection-group#bare-grpc",
+        "bare",
+    ),
+    ("fs-ent-pipeline/o7/inputs-documents#two-grpc", "two"),
+    ("fs-ent-pipeline/o8a/names-main#alone-grpc", "alone-rest"),
+    (
+        "fs-ent-pipeline/o8a/names-main#beside-alias-grpc",
+        "beside-alias-rest",
+    ),
+    (
+        "fs-ent-pipeline/o8a/names-main#second-alias-grpc",
+        "second-alias-rest",
+    ),
+    (
+        "fs-ent-pipeline/o8a/names-main#then-limit-grpc",
+        "then-limit-rest",
+    ),
+    ("fs-ent-pipeline/o8a/nesting-main#array-21-grpc", "array-21"),
+    ("fs-ent-pipeline/o8a/nesting-main#chain-20-grpc", "chain-20"),
+    ("fs-ent-pipeline/o8a/nesting-main#chain-32-grpc", "chain-32"),
+    ("fs-ent-pipeline/o8a/nesting-main#chain-33-grpc", "chain-33"),
+    ("fs-ent-pipeline/o8a/nesting-main#chain-47-grpc", "chain-47"),
+    ("fs-ent-pipeline/o8a/nesting-main#map-21-grpc", "map-21"),
+    ("fs-ent-pipeline/o6/order-writes#bare-grpc", "bare"),
+    ("fs-ent-pipeline/results/order#unsorted-grpc", "unsorted"),
+    (
+        "fs-ent-pipeline/results/metadata#add-fields-grpc",
+        "add-fields",
+    ),
+    (
+        "fs-ent-pipeline/results/metadata#aggregate-grpc",
+        "aggregate",
+    ),
+    ("fs-ent-pipeline/results/metadata#bare-grpc", "bare"),
+    ("fs-ent-pipeline/results/metadata#distinct-grpc", "distinct"),
+    ("fs-ent-pipeline/results/metadata#empty-grpc", "empty"),
+    ("fs-ent-pipeline/results/metadata#limit-grpc", "limit"),
+    (
+        "fs-ent-pipeline/results/metadata#remove-fields-grpc",
+        "remove-fields",
+    ),
+    ("fs-ent-pipeline/results/metadata#select-grpc", "select"),
+    ("fs-ent-pipeline/results/metadata#where-grpc", "where"),
+    ("fs-ent-pipeline/o8a/framing-small#f5-grpc", "f5-rest"),
+    ("fs-ent-pipeline/o8a/framing-small#f50-grpc", "f50-rest"),
+    ("fs-ent-pipeline/o8a/framing-large#l3-grpc", "l3-rest"),
+];
+
+const PICT_REPLAY_STRATA: &[(&str, &str, &str, &str)] = &[
+    ("ordinary_success", "success", "single", "present"),
+    ("ordinary_refusal", "refusal", "empty", "absent"),
+    ("compact_small", "success", "single", "present"),
+    ("compact_large", "success", "multiple", "present"),
+];
+
+fn run_grpc_recording(state: &RestState, row: &str, database: &str, body: &Value) -> Value {
+    use fireemu_adapter_grpc::service::GatewayService;
+    use fireemu_proto_firestore::google::firestore::v1::firestore_server::Firestore;
+
+    let request = fireemu_adapter_grpc::rest::pipeline_json::request_from_json(database, body)
+        .unwrap_or_else(|error| panic!("{row}: invalid committed gRPC request body: {error}"));
+    let service = GatewayService::local((*state.gateway).clone(), Arc::clone(&state.local));
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        use tokio_stream::StreamExt as _;
+        if row == "fs-ent-pipeline/o8a/nesting-main#chain-47-grpc" {
+            use fireemu_adapter_grpc::serve::serve_multiplexed;
+            use fireemu_proto_firestore::google::firestore::v1::{
+                firestore_client::FirestoreClient, firestore_server::FirestoreServer,
+            };
+
+            // This recorded refusal comes from protobuf decoding, before the handler runs.
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let rest = Arc::new(RestState {
+                local: Arc::clone(&state.local),
+                gateway: Arc::clone(&state.gateway),
+                rules: state.rules.clone(),
+                app_check: state.app_check.clone(),
+                control_token: state.control_token.clone(),
+            });
+            let server = tokio::spawn(serve_multiplexed(
+                listener,
+                FirestoreServer::new(service),
+                rest,
+            ));
+            let channel = tonic::transport::Endpoint::from_shared(format!("http://{addr}"))
+                .unwrap()
+                .connect()
+                .await
+                .unwrap();
+            let mut client = FirestoreClient::new(channel);
+            let error = match client.execute_pipeline(request).await {
+                Err(error) => error,
+                Ok(response) => response.into_inner().message().await.unwrap_err(),
+            };
+            server.abort();
+            assert!(server.await.unwrap_err().is_cancelled());
+            assert!(error.details().is_empty(), "{row}: {error:?}");
+            return json!({
+                "transport": "grpc",
+                "code": error.code() as i32,
+                "message": error.message(),
+                "messages": [],
+            });
+        }
+        let response =
+            match Firestore::execute_pipeline(&service, tonic::Request::new(request)).await {
+                Ok(response) => response,
+                Err(error) => {
+                    return json!({
+                        "transport": "grpc",
+                        "code": error.code() as i32,
+                        "message": error.message(),
+                        "messages": [],
+                    });
+                }
+            };
+        let mut stream = response.into_inner();
+        let mut messages = Vec::new();
+        while let Some(item) = stream.next().await {
+            match item {
+                Ok(response) => {
+                    messages.push(fireemu_adapter_grpc::rest::pipeline_json::response_to_json(
+                        &response,
+                    ));
+                }
+                Err(error) => {
+                    return json!({
+                        "transport": "grpc",
+                        "code": error.code() as i32,
+                        "message": error.message(),
+                        "messages": messages,
+                    });
+                }
+            }
+        }
+        json!({"transport":"grpc", "code":0, "messages":messages})
+    })
+}
+
+fn request_step_for_grpc_row<'a>(program: &'a Value, row: &str) -> &'a Value {
+    let request_step = VERIFIED_GRPC_REQUEST_STEPS
+        .iter()
+        .find_map(|(candidate, step)| (*candidate == row).then_some(*step))
+        .unwrap_or_else(|| panic!("no committed request mapping for {row}"));
+    program["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|step| step["id"] == request_step)
+        .unwrap_or_else(|| panic!("{row}: request step {request_step} is missing"))
+}
+
+fn grpc_body_for_request_step(step: &Value, row: &str) -> Value {
+    if let Some(body) = step.get("body") {
+        return fill(body);
+    }
+    let raw_body = step["rawBody"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{row}: committed request body is missing"));
+    if row == "fs-ent-pipeline/o8a/nesting-main#chain-47-grpc" {
+        // Parse the recorded chain in two parts to stay below serde_json's depth limit.
+        let nested = format!(
+            "{}{{\"fieldReferenceValue\":\"i\"}}{}",
+            r#"{"functionValue":{"name":"array","args":["#.repeat(47),
+            "]}}".repeat(47),
+        );
+        let (before, after) = raw_body
+            .split_once(&nested)
+            .unwrap_or_else(|| panic!("{row}: committed array chain changed"));
+        let mut body: Value =
+            serde_json::from_str(&format!("{before}\"replay-chain-placeholder\"{after}")).unwrap();
+        let value = &mut body["structuredPipeline"]["pipeline"]["stages"][1]["args"][0]["mapValue"]
+            ["fields"]["v"];
+        assert_eq!(*value, json!("replay-chain-placeholder"), "{row}");
+        *value = json!({"fieldReferenceValue": "i"});
+        for _ in 0..47 {
+            *value = json!({"functionValue": {"name": "array", "args": [value.take()]}});
+        }
+        return body;
+    }
+    serde_json::from_str(raw_body).unwrap_or_else(|error| {
+        panic!("{row}: committed raw request body is invalid JSON: {error}")
+    })
+}
+
+fn seed_grpc_replay_state(
+    state: &RestState,
+    program: &Value,
+    row: &str,
+    replay_clock: Option<&Arc<Mutex<VirtualClock>>>,
+) {
+    let docs = DOCS;
+    let framing_small = matches!(
+        row,
+        "fs-ent-pipeline/o8a/framing-small#f5-grpc" | "fs-ent-pipeline/o8a/framing-small#f50-grpc"
+    );
+    let seeds: Vec<_> = program["seed"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|seed| {
+            !framing_small
+                || seed[0]
+                    .as_str()
+                    .is_some_and(|name| name.starts_with("f5/") || name.starts_with("f50/"))
+        })
+        .collect();
+    let writes: Vec<_> = seeds
+        .iter()
+        .map(|seed| {
+            json!({"update": {
+                "name": format!("{docs}/{}", seed[0].as_str().unwrap()),
+                "fields": fill_at(&seed[1], docs),
+            }})
+        })
+        .collect();
+    for batch in writes.chunks(500) {
+        let (status, body) = call(
+            state,
+            "POST",
+            &format!("{docs}:commit"),
+            &json!({"writes": batch}),
+        );
+        assert_eq!(status, 200, "{row} seed batch: {body}");
+        advance_replay_clock(replay_clock);
+    }
+
+    replay_committed_setup_steps(state, program, row, docs, replay_clock);
+}
+
+fn replay_committed_setup_steps(
+    state: &RestState,
+    program: &Value,
+    row: &str,
+    docs: &str,
+    replay_clock: Option<&Arc<Mutex<VirtualClock>>>,
+) {
+    let commit_steps: &[&str] = match row {
+        "fs-ent-pipeline/o6/sort-kinds-cross#v-asc-grpc"
+        | "fs-ent-pipeline/o6/sort-kinds-cross#v-desc-limit2-grpc" => &["seed-vector"],
+        "fs-ent-pipeline/o6/order-writes#bare-grpc" => &[
+            "write-1-d10",
+            "write-2-d2",
+            "write-3-d1",
+            "write-4-d1",
+            "write-5-a",
+            "write-6-z",
+            "write-7-b9",
+            "write-8-x-y",
+            "rewrite-d10",
+            "delete-d2",
+            "recreate-d2",
+        ],
+        "fs-ent-pipeline/results/order#unsorted-grpc" => {
+            &["write-c", "write-a", "write-bb", "write-b"]
+        }
+        "fs-ent-pipeline/o8a/framing-large#l3-grpc" => &[
+            "seed-l3-1",
+            "seed-l3-2",
+            "seed-l3-3",
+            "seed-m30-1",
+            "seed-m30-2",
+            "seed-m30-3",
+        ],
+        _ => &[],
+    };
+    for step_id in commit_steps {
+        let step = program["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|step| step["id"] == *step_id)
+            .unwrap_or_else(|| panic!("{row}: seed commit {step_id} is missing"));
+        let (status, body) = call(
+            state,
+            "POST",
+            &format!("{docs}:commit"),
+            &fill_at(&step["body"], docs),
+        );
+        assert_eq!(status, 200, "{row} seed commit {step_id}: {body}");
+        advance_replay_clock(replay_clock);
+    }
+}
+
+fn advance_replay_clock(replay_clock: Option<&Arc<Mutex<VirtualClock>>>) {
+    replay_clock
+        .unwrap()
+        .lock()
+        .unwrap()
+        .advance(fireemu_core_types::time::LogicalDuration::from_nanos(
+            1_000_000_000,
+        ))
+        .unwrap();
+}
+
+fn verified_grpc_rows(closure: &Value, comparison: &Value) -> Vec<(String, String)> {
+    let statuses: BTreeMap<_, _> = comparison["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| {
+            (
+                entry["row"].as_str().unwrap().to_owned(),
+                entry["status"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+    let mut selected = Vec::new();
+    for condition in closure["conditions"].as_array().unwrap() {
+        if condition["status"] != "VERIFIED" {
+            continue;
+        }
+        for recipe in condition["recipeIds"].as_array().unwrap() {
+            let row = recipe.as_str().unwrap();
+            if row.ends_with("-grpc") && statuses.get(row).is_some_and(|status| status == "MATCH") {
+                selected.push((row.to_owned(), "MATCH".to_owned()));
+            }
+        }
+    }
+    selected.sort();
+    selected
+}
+
+#[test]
+fn verified_grpc_selection_rejects_missing_rows_and_status_changes() {
+    let closure = read("../spec/compatibility/closure/FS-PIPELINE.json");
+    let comparison =
+        read("../spec/compatibility/closure/evidence/FS-PIPELINE-current-comparison.json");
+    let selected = verified_grpc_rows(&closure, &comparison);
+    let mut claimed: Vec<_> = closure["conditions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|condition| condition["status"] == "VERIFIED")
+        .flat_map(|condition| condition["recipeIds"].as_array().unwrap())
+        .filter_map(|recipe| {
+            let row = recipe.as_str().unwrap();
+            row.ends_with("-grpc")
+                .then(|| (row.to_owned(), "MATCH".to_owned()))
+        })
+        .collect();
+    claimed.sort();
+    assert_eq!(selected, claimed, "claimed gRPC match set changed");
+
+    let selected_row = &selected[0].0;
+    let remaining = selected[1..].to_vec();
+    let mut missing_row = comparison.clone();
+    missing_row["rows"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|entry| entry["row"] != selected_row.as_str());
+    assert_eq!(verified_grpc_rows(&closure, &missing_row), remaining);
+
+    let mut changed_status = comparison;
+    let pinned = changed_status["rows"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|entry| entry["row"] == selected_row.as_str())
+        .unwrap();
+    pinned["status"] = json!("MISMATCH");
+    assert_eq!(verified_grpc_rows(&closure, &changed_status), remaining);
+}
+
+#[test]
+fn grpc_recording_comparison_keeps_status_and_all_response_metadata() {
+    let recording = json!({
+        "transport": "grpc",
+        "code": 0,
+        "messages": [{
+            "executionTime": "2026-08-29T00:00:00Z",
+            "results": [{
+                "createTime": "2026-08-29T00:00:00Z",
+                "fields": {},
+                "name": "projects/demo-app/databases/(default)/documents/c/d",
+                "updateTime": "2026-08-29T00:00:00Z"
+            }]
+        }]
+    });
+    let mut missing_execution_time = recording.clone();
+    missing_execution_time["messages"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("executionTime");
+    assert!(!grpc_recordings_match(&recording, &missing_execution_time));
+
+    let mut changed_time_relationship = recording.clone();
+    changed_time_relationship["messages"][0]["results"][0]["createTime"] =
+        json!("2026-08-29T00:00:01Z");
+    changed_time_relationship["messages"][0]["results"][0]["updateTime"] =
+        json!("2026-08-29T00:00:01Z");
+    assert!(!grpc_recordings_match(
+        &recording,
+        &changed_time_relationship
+    ));
+
+    let mut added_metadata = recording.clone();
+    added_metadata["messages"][0]["explainMetrics"] = json!({"readOperations": 1});
+    assert!(!grpc_recordings_match(&recording, &added_metadata));
+
+    let mut changed_code = recording.clone();
+    changed_code["code"] = json!(3);
+    assert!(!grpc_recordings_match(&recording, &changed_code));
+
+    let base_compact = compact_grpc_framing(&normalize_grpc_compact_recording(&recording));
+    let changed_compact = compact_grpc_framing(&normalize_grpc_compact_recording(&added_metadata));
+    assert_ne!(base_compact, changed_compact);
+}
+
+#[test]
+fn every_verified_grpc_pipeline_match_replays_the_committed_recording() {
+    let closure = read("../spec/compatibility/closure/FS-PIPELINE.json");
+    let comparison =
+        read("../spec/compatibility/closure/evidence/FS-PIPELINE-current-comparison.json");
+    let requests = read("fs-ent-pipeline-requests.json");
+    let production = read("fs-ent-pipeline-production.json");
+    let selected = verified_grpc_rows(&closure, &comparison);
+    let mut expected_rows: Vec<_> = VERIFIED_GRPC_REQUEST_STEPS
+        .iter()
+        .map(|(row, _)| ((*row).to_owned(), "MATCH".to_owned()))
+        .collect();
+    expected_rows.sort();
+    assert_eq!(selected, expected_rows, "claimed gRPC match set changed");
+    let mut observed_strata = HashSet::new();
+
+    for (row, expected_status) in selected {
+        let (program_id, row_step) = row.split_once('#').unwrap();
+        let request_program = requests["programs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|program| program["id"] == program_id)
+            .unwrap_or_else(|| panic!("{row}: request program is missing"));
+        let request_step = request_step_for_grpc_row(request_program, &row);
+        let expected = &production["programs"][program_id]["steps"][row_step];
+        let replay_clock = Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::from_nanos(
+            i128::from(REPLAY_CLOCK_SECONDS) * 1_000_000_000,
+        ))));
+        let state = state_with_clock(true, Arc::clone(&replay_clock));
+        seed_grpc_replay_state(&state, request_program, &row, Some(&replay_clock));
+        let mut request_body = grpc_body_for_request_step(request_step, &row);
+        if row == "fs-ent-pipeline/o6/sort-kinds-cross#v-desc-limit2-grpc" {
+            request_body["structuredPipeline"]["pipeline"]["stages"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({"name":"limit", "args":[{"integerValue":"2"}]}));
+        }
+        let recording = run_grpc_recording(
+            &state,
+            &row,
+            "projects/demo-app/databases/(default)",
+            &request_body,
+        );
+        assert_eq!(expected_status, "MATCH", "{row}: claim status changed");
+        let is_compact = expected.get("kind").is_some();
+        let code = recording["code"].as_i64().unwrap();
+        let messages = recording["messages"].as_array().unwrap();
+        let row_kind = match (is_compact, code == 0, messages.len()) {
+            (false, true, _) => "ordinary_success",
+            (false, false, _) => "ordinary_refusal",
+            (true, true, 1) => "compact_small",
+            (true, true, _) => "compact_large",
+            _ => panic!("{row}: unexpected replay outcome or framing"),
+        };
+        let outcome = if code == 0 { "success" } else { "refusal" };
+        let framing = match messages.len() {
+            0 => "empty",
+            1 => "single",
+            _ => "multiple",
+        };
+        let execution_time = if messages
+            .iter()
+            .any(|message| message.get("executionTime").is_some())
+        {
+            "present"
+        } else {
+            "absent"
+        };
+        observed_strata.insert((row_kind, outcome, framing, execution_time));
+        if is_compact {
+            let mut actual = normalize_grpc_compact_recording(&recording);
+            restore_compact_document_names(&mut actual);
+            assert_eq!(
+                compact_grpc_framing(&actual),
+                expected.clone(),
+                "{row}: compact gRPC framing differs"
+            );
+        } else {
+            assert!(
+                grpc_recordings_match(&recording, expected),
+                "{row}: normalized gRPC response differs; actual: {recording}; recorded: {expected}"
+            );
+        }
+    }
+    for stratum in PICT_REPLAY_STRATA {
+        assert!(
+            observed_strata.contains(stratum),
+            "missing PICT row {stratum:?}"
+        );
+    }
 }

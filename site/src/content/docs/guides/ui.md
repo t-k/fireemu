@@ -25,6 +25,6 @@ If the default port is busy, `up` starts without the UI; check the startup outpu
 - **Functions:** registered functions, their triggers, invocation results and logs. Run a scheduled function immediately, or advance the clock to its next occurrence.
 - **Realtime Database:** browse the data at a path, replace, patch or delete it as the local administrator, read and replace the instance's Rules, and run an anonymous request to see how the Rules answer it.
 - **Alerts:** publish Firebase alerts to functions that listen for them.
-- **Rules:** every Security Rules decision since the start of the run, with what each expression evaluated to.
+- **Rules:** the newest 100 traced Firestore Security Rules decisions, with bounded expression results. Tracing starts with the UI or the first control-API read; a new ruleset clears the history. See [Security Rules](../security-rules/) for diagnostic limits.
 - **App Check:** registered apps and debug tokens.
 - **Runtime:** the virtual clock. Move it forward, or backwards with **Allow moving backwards**.

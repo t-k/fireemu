@@ -1,0 +1,6 @@
+{
+  "functions": {
+    "source": "fixtures-breadth",
+    "codebase": "rtdb-breadth-oracle"
+  }
+}

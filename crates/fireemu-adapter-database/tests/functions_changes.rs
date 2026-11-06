@@ -634,6 +634,7 @@ impl ChangeSink for RefusalSink {
         _: &Tree,
         scope: &Path,
     ) -> Result<Option<Vec<Path>>, EventAdmissionError> {
+        assert_ne!(self.stage, "panic_capture", "injected capture panic");
         if self.stage == "capture" {
             return Err(EventAdmissionError::Unavailable("capture refused".into()));
         }
@@ -652,6 +653,7 @@ impl ChangeSink for RefusalSink {
         &self,
         change: &CommittedChange,
     ) -> Result<Box<dyn Publication>, EventAdmissionError> {
+        assert_ne!(self.stage, "panic_reserve", "injected reservation panic");
         if self.stage == "reserve" {
             return Err(EventAdmissionError::Unavailable(
                 "reservation refused".into(),
@@ -672,6 +674,47 @@ fn injected_failure() -> fireemu_core_database::DatabaseError {
         fireemu_core_database::ErrorKind::ReadOnlyPath,
         "refused after scoped write",
     )
+}
+
+#[test]
+fn preparation_panics_restore_the_tree_and_pruned_ancestor_priority() {
+    for stage in ["panic_operation", "panic_capture", "panic_reserve"] {
+        let mut tree = Tree::default();
+        let now = ServerValueContext { now_millis: 100 };
+        tree.set(
+            &Path::root(),
+            &Json::object([
+                (
+                    "a",
+                    Json::object([("x", Json::int(1)), (".priority", Json::int(7))]),
+                ),
+                ("b", Json::int(2)),
+            ]),
+            now,
+        )
+        .unwrap();
+        let original = tree.clone();
+        let original_export = exact_export(&tree);
+        let scope = Path::from_keys(["a", "x"]);
+        let sink = RefusalSink {
+            stage,
+            capture: "reference",
+            reserved: Mutex::default(),
+            published: Arc::default(),
+        };
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            changes::prepare_within(&mut tree, &scope, context(), Some(&sink), |tree| {
+                tree.set(&scope, &Json::Null, now)?;
+                assert_ne!(stage, "panic_operation", "injected operation panic");
+                Ok(())
+            })
+        }));
+        assert!(panic.is_err(), "{stage}");
+        assert_eq!(tree, original, "{stage}");
+        assert_eq!(exact_export(&tree), original_export, "{stage}");
+        assert!(sink.reserved.lock().unwrap().is_empty(), "{stage}");
+        assert_eq!(*sink.published.lock().unwrap(), 0, "{stage}");
+    }
 }
 
 const SCOPED_REFUSAL_CASES: &[(&str, &str, &str, &str, &str, &str)] = &[

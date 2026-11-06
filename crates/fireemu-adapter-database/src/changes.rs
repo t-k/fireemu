@@ -2,9 +2,9 @@
 
 use std::fmt;
 
-use fireemu_core_database::DatabaseError;
 /// Database types required by source-event capture implementations.
 pub use fireemu_core_database::{Content, Leaf, Node, NodeView, Path, ScopeView, Tree};
+use fireemu_core_database::{DatabaseError, ScopeSnapshot};
 use fireemu_core_types::admission::EventAdmissionError;
 use serde_json::Value;
 
@@ -137,7 +137,7 @@ impl PreparedChange {
         }
     }
 }
-/// Applies an operation in place, restoring the tree on any returned refusal.
+/// Applies an operation in place, restoring the tree on any returned refusal or unwind.
 pub fn prepare<R>(
     tree: &mut Tree,
     context: ChangeContext,
@@ -149,7 +149,7 @@ pub fn prepare<R>(
 
 /// Applies a scoped operation in place. The operation must change only `scope`,
 /// its descendants, and structural ancestors; priority paths denote their parent.
-/// Every returned operation/capture/reservation error restores exact source data.
+/// Every operation/capture/reservation error or unwind restores exact source data.
 /// The caller retains exclusive source access through preparation and publication.
 pub fn prepare_within<R>(
     tree: &mut Tree,
@@ -158,15 +158,36 @@ pub fn prepare_within<R>(
     sink: Option<&dyn ChangeSink>,
     operation: impl FnOnce(&mut Tree) -> Result<R, DatabaseError>,
 ) -> Result<(R, PreparedChange), ChangeError> {
+    struct Rollback<'a> {
+        tree: &'a mut Tree,
+        snapshot: Option<ScopeSnapshot>,
+    }
+    impl Drop for Rollback<'_> {
+        fn drop(&mut self) {
+            if let Some(snapshot) = self.snapshot.take() {
+                self.tree.restore_scope(snapshot);
+            }
+        }
+    }
+
     let scope = if scope.is_priority() {
         scope.parent().unwrap_or_default()
     } else {
         scope.clone()
     };
     let snapshot = tree.save_scope(&scope);
+    let mut rollback = Rollback {
+        tree,
+        snapshot: Some(snapshot),
+    };
     let result = (|| {
+        let tree = &mut *rollback.tree;
         let result = operation(tree).map_err(ChangeError::Database)?;
-        let before = snapshot.view(tree);
+        let before = rollback
+            .snapshot
+            .as_ref()
+            .expect("armed rollback guard")
+            .view(tree);
         let publication = if same_node(before.get(&scope), tree.get(&scope)) {
             None
         } else if let Some(sink) = sink {
@@ -207,8 +228,8 @@ pub fn prepare_within<R>(
         };
         Ok((result, PreparedChange { publication }))
     })();
-    if result.is_err() {
-        tree.restore_scope(snapshot);
+    if result.is_ok() {
+        rollback.snapshot = None;
     }
     result
 }

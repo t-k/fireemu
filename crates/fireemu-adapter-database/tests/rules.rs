@@ -398,6 +398,50 @@ fn lone_surrogates_in_claims_and_query_values_decide_as_the_official_emulator() 
     );
 }
 
+/// An administrator's `auth_variable_override` is an ordinary document: a valid string that looks like any internal
+/// encoding is only itself (U+10FFFF followed by `a` is three units and is not `a`), in both profiles (coordinator
+/// review of 985528f1c).
+#[test]
+fn an_auth_variable_override_with_reserved_looking_characters_is_ordinary() {
+    for strict in [false, true] {
+        for (rule, read) in [
+            ("auth.x == auth.y", 401),
+            ("auth.y.length == 3", 200),
+            ("auth.y == auth.z", 200),
+            ("auth.x.length == 1", 200),
+        ] {
+            let options = RestOptions {
+                production_shapes: strict,
+                credentials: fireemu_adapter_database::rest::Credentials {
+                    strict,
+                    ..Default::default()
+                },
+                ..RestOptions::default()
+            };
+            let mut database = Database::new(options, 7);
+            load(
+                &mut database,
+                "t",
+                &format!(r#"{{"rules":{{".read":"{rule}"}}}}"#),
+            );
+            let target = "/x.json?ns=t&auth_variable_override=%7B%22x%22%3A%22a%22%2C%22y%22%3A%22%5CuDBFF%5CuDFFFa%22%2C%22z%22%3A%22%5CuDBFF%5CuDFFFa%22%7D";
+            let got = call(
+                &mut database,
+                "GET",
+                target,
+                &[("Authorization", "Bearer admin")],
+                "",
+            );
+            // The strict profile refuses a non-owner bearer token, which these requests carry.
+            assert_eq!(
+                got.0,
+                if strict { 401 } else { read },
+                "strict={strict} {rule}"
+            );
+        }
+    }
+}
+
 /// `query.orderBy` loads and is not null on a plain read, a stream or a listen, and null on a shallow read (the
 /// official emulator's answers, owner 2276; rows in `docs.local/runs/rtdb-lone-surrogate/jar-q1.json`, `jar-q3.json`
 /// and, for a write, the rules-cells corpus). Both profiles.

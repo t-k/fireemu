@@ -118,6 +118,7 @@ fn differences_with(fixture: &str, jar_dialect: bool) -> Vec<String> {
     let requester = Requester {
         auth: &auth,
         now: 1_792_464_733_000,
+        lone: None,
     };
     let mut failures = Vec::new();
     for entry in &corpus {
@@ -236,46 +237,67 @@ fn query_order_by_loads_and_decides_as_the_official_emulator() {
     );
 }
 
-/// Claims are read as written unless the encoding flag is on: without it a claim that holds a stand-in character is
-/// that character (two units), a key that holds one is found by its text, and an index with a lone surrogate is
-/// undefined (the strict profile); with it the stand-in is the lone surrogate.
+/// The claims are an ordinary document (a lone surrogate reads `?`); the table of lone surrogates says where a string
+/// really held one, and only the evaluation reads it. Without a table nothing is decoded, so a valid string that
+/// looks like the evaluator's internal encoding (the characters U+10FFFF and U+10F03D) is only itself; with a table,
+/// such strings stay distinct from the lone surrogates it lists.
 #[test]
-fn claims_are_decoded_only_when_the_encoding_flag_is_on() {
-    let stand_in = fireemu_core_database::lone::stand_in(0xD83D);
+fn claims_are_read_through_the_lone_table_only() {
+    use fireemu_core_database::lone::{LoneClaims, Step};
+    let reserved = "\u{10FFFF}\u{10F03D}a";
     let auth = j(serde_json::json!({
         "uid": "u1",
-        "x": stand_in.to_string(),
-        "token": {"x": stand_in.to_string(), format!("k{stand_in}"): 1, "y": 2},
+        "x": "a",
+        "y": reserved,
+        "l": "?",
+        "token": {"x": "a", "y": reserved, "l": "?", "k?": 1, "y?": 2},
     }));
-    let holds = |expr: &str, encoded: bool| {
-        let rules = Rules::compile(&read_rule_at_t(expr))
-            .unwrap()
-            .with_encoded_claims(encoded);
+    let mut table = LoneClaims::default();
+    table.record_value(&[Step::Key("l".into())], vec![0xD83D]);
+    table.record_value(
+        &[Step::Key("token".into()), Step::Key("l".into())],
+        vec![0xD83D],
+    );
+    table.record_name(
+        &[Step::Key("token".into()), Step::Key("k?".into())],
+        vec![0x6B, 0xD83D],
+    );
+    let holds = |expr: &str, lone: Option<&LoneClaims>| {
+        let rules = Rules::compile(&read_rule_at_t(expr)).unwrap();
         let tree = seed();
         let requester = Requester {
             auth: &auth,
             now: 0,
+            lone,
         };
         rules.can_read(tree.root(), &p("/t"), None, &requester)
     };
-    // The stand-in is a character of two units, or a lone surrogate of one.
-    assert!(holds("auth.x.length == 2", false));
-    assert!(!holds("auth.x.length == 1", false));
-    assert!(holds("auth.x.length == 1", true));
-    assert!(!holds("auth.x.length == 2", true));
-    assert!(holds("auth.token.x == '\\uD83D'", true));
-    assert!(!holds("auth.token.x == '\\uD83D'", false));
-    // A key that holds the stand-in is found by the text without the flag; an index with the surrogate finds it with.
-    let key = format!("auth.token['k{stand_in}'] == 1");
-    assert!(holds(&key, false));
+    // No table: every string is what it is, and an index with a lone surrogate names nothing.
+    assert!(holds("auth.l == '?'", None));
+    assert!(!holds("auth.l == '\\uD83D'", None));
     assert!(
-        !holds(&key, true),
-        "the flag reads the key as the escaped text"
+        holds("auth.y.length == 5", None),
+        "U+10FFFF and U+10F03D are two characters of two units and a"
     );
-    assert!(holds("auth.token['k\\uD83D'] == 1", true));
-    assert!(!holds("auth.token['k\\uD83D'] == 1", false));
-    assert!(holds("auth.token['\\uD83D'] == null", false));
-    assert!(holds("auth.token['y'] == 2", true) && holds("auth.token['y'] == 2", false));
+    assert!(!holds("auth.x == auth.y", None));
+    assert!(holds("auth.token['k?'] == 1", None));
+    assert!(holds("auth.token['k\\uD83D'] == null", None));
+    // With a table the listed strings and names are lone surrogates, and the others are still themselves.
+    assert!(holds("auth.l == '\\uD83D'", Some(&table)));
+    assert!(holds("auth.token.l.length == 1", Some(&table)));
+    assert!(!holds("auth.l == '?'", Some(&table)));
+    assert!(holds("auth.token['k\\uD83D'] == 1", Some(&table)));
+    assert!(!holds("auth.token['k?'] == 1", Some(&table)));
+    assert!(holds("auth.token['y?'] == 2", Some(&table)));
+    assert!(
+        holds("auth.y.length == 5", Some(&table)),
+        "a valid string that looks like the encoding is only itself"
+    );
+    assert!(!holds("auth.x == auth.y", Some(&table)));
+    assert!(holds("auth.y == '\u{10FFFF}\u{10F03D}a'", Some(&table)));
+    assert!(holds("auth.token.y == auth.y", Some(&table)));
+    // An empty table is no table.
+    assert!(holds("auth.l == '?'", Some(&LoneClaims::default())));
 }
 
 /// The emulator profile reads `\W` and `\D` as the complement of a language of strings, and an escaped
@@ -306,9 +328,10 @@ fn the_emulator_profile_reads_complement_classes_and_escaped_letters_as_the_offi
 
 /// The 14k-row differential corpus of the regular-expression dialect, run with the emulator profile's dialect on:
 /// no row moves the wrong way (an allow where the official emulator denies, or a load that differs), and of the 323
-/// rows fireemu denied where the official emulator allows, 72 (those whose only difference was `\W`, `\D` or
-/// an escaped letter) now decide as it does. The 251 others use another construct of the dialect (an empty
-/// alternative, a literal operator, a case fold of non-ASCII text) and stay errors, hence denied.
+/// rows fireemu denied where the official emulator allows, 239 now decide as it does. The 84 others stay errors,
+/// hence denied: 71 use the `i` flag with non-ASCII text (a case-folding table), 11 put a backslash before a format
+/// or line character (the official emulator reads each such character differently), and 2 use an astral class
+/// endpoint (UTF-16 unit semantics).
 #[test]
 fn the_emulator_profile_moves_no_corpus_row_the_wrong_way() {
     let corpus: Vec<serde_json::Value> = serde_json::from_str(include_str!(
@@ -330,7 +353,7 @@ fn the_emulator_profile_moves_no_corpus_row_the_wrong_way() {
         .collect();
     assert!(wrong_way.is_empty(), "{wrong_way:#?}");
     assert_eq!(denied, 323);
-    assert_eq!(failures.len(), 251, "{failures:#?}");
+    assert_eq!(failures.len(), 84, "{failures:#?}");
 }
 
 #[test]
@@ -427,6 +450,7 @@ fn reads_cascade_and_wildcards_bind() {
     let requester = Requester {
         auth: &auth,
         now: 0,
+        lone: None,
     };
     let tree = tree_with(serde_json::json!({"users": {"u1": 1, "u2": 2}}));
     let read = |path: &str| rules.can_read(tree.root(), &p(path), None, &requester);
@@ -468,6 +492,7 @@ fn writes_cascade_and_validate_every_node_left_non_null() {
     let requester = Requester {
         auth: &auth,
         now: 0,
+        lone: None,
     };
     let mut tree = tree_with(serde_json::json!({}));
     let mut write = |method: &str, path: &str, body: serde_json::Value| -> bool {
@@ -636,6 +661,7 @@ fn every_recorded_write_and_expression_error_matches_the_official_emulator() {
         let requester = Requester {
             auth: &auth,
             now: 1_792_464_733_000,
+            lone: None,
         };
         let allowed = rules.can_write(before.root(), after.root(), &written, &requester);
         let expected = entry["status"] == 200;
@@ -691,19 +717,23 @@ mod properties {
         let requester = Requester {
             auth: &auth,
             now: 1_792_464_733_000,
+            lone: None,
         };
         Some(rules.can_read(tree.root(), &p("/t"), None, &requester))
     }
 
-    /// `expr` read by user `u1`-less requester whose `auth` is `auth` with the claims encoding (the emulator profile).
-    fn holds_for_claims(expr: &str, auth: &Json, encoded: bool) -> Option<bool> {
-        let rules = Rules::compile(&read_rule_at_t(expr))
-            .ok()?
-            .with_encoded_claims(encoded);
+    /// `expr` read by a requester whose `auth` is `auth`, with the table of its lone surrogates.
+    fn holds_for_claims(
+        expr: &str,
+        auth: &Json,
+        lone: Option<&fireemu_core_database::lone::LoneClaims>,
+    ) -> Option<bool> {
+        let rules = Rules::compile(&read_rule_at_t(expr)).ok()?;
         let tree = seed();
         let requester = Requester {
             auth,
             now: 1_792_464_733_000,
+            lone,
         };
         Some(rules.can_read(tree.root(), &p("/t"), None, &requester))
     }
@@ -862,37 +892,43 @@ mod properties {
     proptest! {
         #![proptest_config(ProptestConfig {cases: 400, rng_seed: proptest::test_runner::RngSeed::Fixed(0x2276), ..ProptestConfig::default()})]
 
-        /// A claim written in the emulator profile's encoding reads as the Java string it stands for: its length counts
-        /// units, it equals the literal of the same units (a pair spelled by two escapes is the character), `+` joins,
-        /// and a member or key that holds a lone surrogate is found by an index spelled with it. Without the encoding
-        /// flag (the strict profile) the same document is the plain characters.
+        /// A claim the table lists reads as the Java string it stands for: its length counts units, it equals the literal
+        /// of the same units (a pair spelled by two escapes is the character), `+` joins, and a member whose name holds a
+        /// lone surrogate is found by an index spelled with it. The document itself reads `?` there.
         #[test]
         fn a_claim_reads_as_the_java_string_it_stands_for(units in unit_text(), other in unit_text()) {
-            let stored = fireemu_core_database::lone::encode(&units);
-            let key = fireemu_core_database::lone::encode(&other);
-            let auth = j(serde_json::json!({"uid": "u1", "x": stored.clone(), "token": {"x": stored, key: 1}}));
-            let spelled = literal(&units);
+            use fireemu_core_database::lone::{LoneClaims, Step};
+            let ordinary = |units: &[u16]| -> String {
+                char::decode_utf16(units.iter().copied()).map(|d| d.unwrap_or('?')).collect()
+            };
+            let (stored, key) = (ordinary(&units), ordinary(&other));
+            let auth = j(serde_json::json!({"uid": "u1", "x": stored.clone(), "token": {"x": stored, key.clone(): 1}}));
+            let mut table = LoneClaims::default();
+            table.record_value(&[Step::Key("x".into())], units.clone());
+            table.record_value(&[Step::Key("token".into()), Step::Key("x".into())], units.clone());
+            table.record_name(&[Step::Key("token".into()), Step::Key(key)], other.clone());
+            let lone = Some(&table);
             prop_assert_eq!(
-                holds_for_claims(&format!("auth.token.x == {spelled}"), &auth, true),
+                holds_for_claims(&format!("auth.token.x == {}", literal(&units)), &auth, lone),
                 Some(true)
             );
             prop_assert_eq!(
-                holds_for_claims(&format!("auth.x.length == {}", units.len()), &auth, true),
+                holds_for_claims(&format!("auth.x.length == {}", units.len()), &auth, lone),
                 Some(true)
             );
             prop_assert_eq!(
-                holds_for_claims(&format!("auth.token.x + 'a' == {}", literal(&[units.clone(), vec![0x61]].concat())), &auth, true),
+                holds_for_claims(&format!("auth.token.x + 'a' == {}", literal(&[units.clone(), vec![0x61]].concat())), &auth, lone),
                 Some(true)
             );
             prop_assert_eq!(
-                holds_for_claims(&format!("auth.token[{}] == 1", literal(&other)), &auth, true),
+                holds_for_claims(&format!("auth.token[{}] == 1", literal(&other)), &auth, lone),
                 Some(true)
             );
             // Another string is not equal.
             let mut changed = units.clone();
             changed.push(0xD83D);
             prop_assert_eq!(
-                holds_for_claims(&format!("auth.token.x == {}", literal(&changed)), &auth, true),
+                holds_for_claims(&format!("auth.token.x == {}", literal(&changed)), &auth, lone),
                 Some(false)
             );
         }
@@ -926,7 +962,7 @@ mod properties {
             let rules = Rules::compile(&read_rule_at_t(&expr)).unwrap();
             let tree = seed();
             let auth = auth();
-            let requester = Requester { auth: &auth, now: 0 };
+            let requester = Requester { auth: &auth, now: 0, lone: None };
             let read = |rules: &Rules| rules.can_read(tree.root(), &p("/t"), None, &requester);
             let emulator = read(&rules.clone().with_jar_dialect(true));
             prop_assert_eq!(emulator, oracle(&atoms, &subject), "{}", expr);
@@ -1038,7 +1074,7 @@ mod properties {
                 let before = seed();
                 let after = tree_with(serde_json::json!({"t":"changed"}));
                 let auth = if authenticated {auth()} else {Json::Null};
-                let requester = Requester {auth:&auth,now:123};
+                let requester = Requester {auth:&auth,now:123, lone: None };
                 rules.set_coverage_enabled(false);
                 let read = rules.can_read(before.root(), &p("t"), None, &requester);
                 let write = rules.can_write(before.root(), after.root(), &[p("t")], &requester);
@@ -1071,7 +1107,7 @@ mod properties {
         fn any_expression_loads_or_is_refused_and_never_panics(text in expression()) {
             let tree = seed();
             let auth = auth();
-            let requester = Requester { auth: &auth, now: 1 };
+            let requester = Requester { auth: &auth, now: 1, lone: None };
             for kind in [".read", ".write", ".validate"] {
                 let mut k = RuleSpec::default();
                 let rule = Some(expr(&text));
@@ -1120,7 +1156,7 @@ mod properties {
             let rules = Rules::compile(&root).unwrap();
             let path = Path::from_keys(keys[..grants.len()].iter().copied());
             let auth = Json::Null;
-            let requester = Requester { auth: &auth, now: 0 };
+            let requester = Requester { auth: &auth, now: 0, lone: None };
             let expected = grants.contains(&Some(true));
             prop_assert_eq!(rules.can_read(None, &path, None, &requester), expected);
         }
@@ -1142,7 +1178,7 @@ mod properties {
             let pattern = parts.concat();
             let tree = seed();
             let auth = auth();
-            let requester = Requester { auth: &auth, now: 0 };
+            let requester = Requester { auth: &auth, now: 0, lone: None };
             let decide = |text: String| {
                 Rules::compile(&read_rule_at_t(&text))
                     .ok()
@@ -1195,7 +1231,7 @@ mod properties {
             let node = Path::from_keys(keys[..depth].iter().copied());
             let written = if priority { node.child(".priority") } else { node.clone() };
             let auth = Json::Null;
-            let requester = Requester { auth: &auth, now: 0 };
+            let requester = Requester { auth: &auth, now: 0, lone: None };
             // The levels the walk to `node` visits: keys[0..depth] exactly while they exist.
             let expected = (0..depth.min(grants.len())).any(|i| grants[i].0 == Some(true));
             prop_assert_eq!(
@@ -1298,6 +1334,7 @@ fn every_level_counts_and_a_rule_at_the_bound_is_evaluated_on_a_worker_stack() {
             let requester = Requester {
                 auth: &auth,
                 now: 0,
+                lone: None,
             };
             let _ = rules.can_read(root.as_ref(), &p("/t"), None, &requester);
         });
@@ -1362,6 +1399,7 @@ fn shallow_pieces_composed_deep_are_refused_at_load() {
             let requester = Requester {
                 auth: &auth,
                 now: 0,
+                lone: None,
             };
             let _ = rules.can_read(root.as_ref(), &p("/t"), None, &requester);
         });
@@ -1427,6 +1465,7 @@ fn chains_of_one_associative_operator_have_no_depth() {
             let requester = Requester {
                 auth: &auth,
                 now: 0,
+                lone: None,
             };
             rules.can_read(root.as_ref(), &p("/t"), None, &requester)
         });
@@ -1438,6 +1477,7 @@ fn chains_of_one_associative_operator_have_no_depth() {
     let requester = Requester {
         auth: &auth,
         now: 0,
+        lone: None,
     };
     assert!(rules.can_read(tree.root(), &p("/t"), None, &requester));
 }
@@ -1460,6 +1500,7 @@ fn coverage_observation_can_be_disabled_without_changing_authorization() {
         let requester = Requester {
             auth: &auth,
             now: 123,
+            lone: None,
         };
         let expected = rules.can_read(tree.root(), &p("t"), None, &requester);
         let empty = rules.coverage_report();
@@ -1551,7 +1592,11 @@ fn coverage_histograms_stay_bounded_over_many_evaluations() {
     let tree = seed();
     let auth = auth();
     for now in 1..=EVALUATIONS {
-        let requester = Requester { auth: &auth, now };
+        let requester = Requester {
+            auth: &auth,
+            now,
+            lone: None,
+        };
         assert!(rules.can_read(tree.root(), &p("t"), None, &requester));
     }
     let report = rules.coverage_report();
@@ -1625,6 +1670,7 @@ fn auth_root_identity_matches_the_recorded_read() {
     let requester = Requester {
         auth: &auth,
         now: 1_792_464_733_000,
+        lone: None,
     };
     let rules = Rules::compile(&read_rule_at_t(
         "auth != null && auth.uid == 'synthetic-user' && auth == auth",
@@ -1644,14 +1690,14 @@ proptest::proptest! {
     ) {
         let tree = seed();
         let auth = j(serde_json::json!({"uid": uid, "score": score, "enabled": enabled}));
-        let requester = Requester { auth: &auth, now: 0 };
+        let requester = Requester { auth: &auth, now: 0, lone: None };
         let guard = Rules::compile(&read_rule_at_t("auth != null && auth == auth")).unwrap();
         let negated = Rules::compile(&read_rule_at_t("auth != null && !(auth == auth)")).unwrap();
         proptest::prop_assert!(guard.can_read(tree.root(), &p("/t"), None, &requester));
         proptest::prop_assert!(!negated.can_read(tree.root(), &p("/t"), None, &requester));
 
         let anonymous = Json::Null;
-        let requester = Requester { auth: &anonymous, now: 0 };
+        let requester = Requester { auth: &anonymous, now: 0, lone: None };
         let null_control = Rules::compile(&read_rule_at_t("auth == null && auth == auth")).unwrap();
         proptest::prop_assert!(null_control.can_read(tree.root(), &p("/t"), None, &requester));
         proptest::prop_assert!(!guard.can_read(tree.root(), &p("/t"), None, &requester));
@@ -1732,7 +1778,7 @@ proptest::proptest! {
         let mut after = before.clone();
         after.set(&p("/t/o/k"), &j(serde_json::json!("w")), support::NOW).unwrap();
         let auth = if signed_in { auth() } else { Json::Null };
-        let requester = Requester { auth: &auth, now: 0 };
+        let requester = Requester { auth: &auth, now: 0, lone: None };
         let expected = match (left.identity(), right.identity()) {
             (Some(l), Some(r)) => Some(l == r),
             _ => None,
@@ -1764,6 +1810,7 @@ fn query_equals_itself_through_a_ternary() {
     let requester = Requester {
         auth: &auth,
         now: 0,
+        lone: None,
     };
     for (text, allowed) in [
         ("(true ? query : 'a') == (true ? query : 'a')", true),
@@ -1814,6 +1861,7 @@ fn reads(expr: &str) -> bool {
     let requester = Requester {
         auth: &auth,
         now: 123,
+        lone: None,
     };
     rules.can_read(tree.root(), &p("t"), None, &requester)
 }
@@ -1881,6 +1929,7 @@ fn the_coverage_report_shows_a_lone_surrogate_literal_with_the_replacement_chara
     let requester = Requester {
         auth: &auth,
         now: 123,
+        lone: None,
     };
     assert!(rules.can_read(tree.root(), &p("t"), None, &requester));
     let report = format!("{:?}", rules.coverage_report());
@@ -1891,4 +1940,238 @@ fn the_coverage_report_shows_a_lone_surrogate_literal_with_the_replacement_chara
         )),
         "{report}"
     );
+}
+
+/// Reads `/t` with the data `tree` and `expr` as the rule.
+fn reads_in(tree: &fireemu_core_database::Tree, expr: &str) -> bool {
+    let rules = Rules::compile(&read_rule_at_t(expr)).unwrap();
+    let auth = auth();
+    let requester = Requester {
+        auth: &auth,
+        now: 123,
+        lone: None,
+    };
+    rules.can_read(tree.root(), &p("t"), None, &requester)
+}
+
+/// Case conversion is measured before it allocates, in both string paths: a string just under the size bound that
+/// grows past it when converted (`ﬃ` is `FFI`, `ΐ` is three characters, six bytes for two) is an error, negated or
+/// not (Astra review of 985528f1c).
+#[test]
+fn case_conversion_past_the_size_bound_is_an_error_before_it_allocates() {
+    // The units path: 2^25 - 1 units of `ﬃ`, which become 3 units each.
+    let doubled = |start: &str, to: &str, n: usize| {
+        format!("{start}{}", format!(".replace('', '{to}')").repeat(n))
+    };
+    let units = doubled("'\\uD83D'", "\\uFB03", 24);
+    assert!(reads(&format!("{units}.length == 33554431")));
+    for expr in [
+        format!("{units}.toUpperCase().length > 67108864"),
+        format!("!({units}.toUpperCase().length > 67108864)"),
+    ] {
+        assert!(!reads(&expr), "units path");
+    }
+    // The Str path: 2^24 - 1 characters of `ΐ`, 2 bytes each, become 6 bytes each.
+    let text = doubled("'\u{390}'", "\u{390}", 23);
+    assert!(reads(&format!("{text}.length == 16777215")));
+    for expr in [
+        format!("{text}.toUpperCase().length > 0"),
+        format!("!({text}.toUpperCase().length > 0)"),
+    ] {
+        assert!(!reads(&expr), "str path");
+    }
+    // Within the bound the same conversion answers.
+    assert!(reads(&format!(
+        "{}.toUpperCase().length == 7",
+        doubled("'\\uD83D'", "\\uFB03", 1)
+    )));
+}
+
+/// Evaluation work is bounded, not only the size of one result: a long stored string joined again and again, each
+/// time below the size bound, stops; a search is linear, so a long string and a long needle that almost matches
+/// answer at once (Astra review of 985528f1c).
+#[test]
+fn repeated_work_on_long_strings_stops_and_a_search_is_linear() {
+    let long = "a".repeat(8 * 1024 * 1024);
+    let tree = tree_with(serde_json::json!({"t": {"h": long}}));
+    // Eight MiB read a few times is ordinary; read a hundred times it is past the bound.
+    let join = |times: usize| {
+        format!(
+            "(root.child('t').child('h').val(){}).length > 0",
+            " + ''".repeat(times)
+        )
+    };
+    assert!(reads_in(&tree, &join(10)));
+    for times in [100, 1000] {
+        assert!(!reads_in(&tree, &join(times)), "{times}");
+        assert!(
+            !reads_in(&tree, &format!("!({})", join(times))),
+            "{times} negated"
+        );
+    }
+    // The quadratic search of the review: 1 MiB of `a` and an almost matching needle of 512 KiB.
+    let haystack = "a".repeat(1024 * 1024);
+    let needle = format!("{}b", "a".repeat(512 * 1024));
+    let tree = tree_with(serde_json::json!({"t": {"h": haystack, "n": needle}}));
+    let started = std::time::Instant::now();
+    let found = reads_in(
+        &tree,
+        "(root.child('t').child('h').val() + '\\uD83D').contains(root.child('t').child('n').val())",
+    );
+    assert!(!found);
+    assert!(
+        reads_in(
+            &tree,
+            "!((root.child('t').child('h').val() + '\\uD83D').contains(root.child('t').child('n').val()))"
+        ),
+        "the search answers false, not an error"
+    );
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(30),
+        "{:?}",
+        started.elapsed()
+    );
+}
+
+/// The ordinary rules of the Rules corpora use a tiny fraction of the evaluation work bound (2^28): the most any
+/// one evaluation does stays under 2^18, a thousandth of it.
+#[test]
+fn ordinary_rules_stay_far_below_the_evaluation_work_bound() {
+    fireemu_core_database::rules::reset_evaluation_work_high_water();
+    for fixture in [
+        include_str!("fixtures/rules-expressions-official-emulator-4.11.2.json"),
+        include_str!("fixtures/rules-expressions-2-official-emulator-4.11.2.json"),
+        include_str!("fixtures/rules-expressions-3-official-emulator-4.11.2.json"),
+        include_str!("fixtures/rules-lone-surrogates-official-emulator-4.11.2.json"),
+        include_str!("fixtures/rules-query-orderby-official-emulator-4.11.2.json"),
+        include_str!("fixtures/rules-regex-dialect-official-emulator-4.11.2.json"),
+    ] {
+        let _ = differences_with(fixture, true);
+    }
+    let high = fireemu_core_database::rules::evaluation_work_high_water();
+    assert!(high < 1 << 18, "the most work one evaluation did: {high}");
+    assert!(high > 0);
+}
+
+/// The high-water mark follows the most work one evaluation did, keeps it across smaller ones, and starts again
+/// from zero when it is reset.
+#[test]
+fn the_high_water_mark_follows_the_most_work_one_evaluation_did() {
+    use fireemu_core_database::rules::{
+        evaluation_work_high_water, reset_evaluation_work_high_water,
+    };
+    reset_evaluation_work_high_water();
+    assert_eq!(evaluation_work_high_water(), 0);
+    assert!(reads("data.child('s').val().contains('ell')"));
+    let large = evaluation_work_high_water();
+    assert!(large >= 5, "{large}");
+    assert!(reads("data.child('n').val() == 5"));
+    assert_eq!(
+        evaluation_work_high_water(),
+        large,
+        "a smaller one keeps the mark"
+    );
+    reset_evaluation_work_high_water();
+    assert_eq!(evaluation_work_high_water(), 0);
+    assert!(reads("data.child('s').val().length == 5"));
+    let small = evaluation_work_high_water();
+    assert!(small > 0 && small < large + 100, "{small}");
+}
+
+/// A write rule reads the lone surrogates of the claims through the table, as a read rule does.
+#[test]
+fn a_write_and_validate_rule_reads_the_lone_claims_too() {
+    use fireemu_core_database::lone::{LoneClaims, Step};
+    let mut leaf = RuleSpec::default();
+    leaf.validate = Some(expr("auth.l.length == 1 && auth.l == '\\uD83D'"));
+    let mut root = RuleSpec::default();
+    root.write = Some(expr("auth.l == '\\uD83D'"));
+    root.children.insert("leaf".to_owned(), leaf);
+    let rules = Rules::compile(&root).unwrap();
+    let auth = j(serde_json::json!({"l": "?"}));
+    let mut table = LoneClaims::default();
+    table.record_value(&[Step::Key("l".into())], vec![0xD83D]);
+    let before = tree_with(serde_json::json!({}));
+    let mut after = before.clone();
+    after
+        .set(&p("/leaf"), &j(serde_json::json!(1)), support::NOW)
+        .unwrap();
+    let written = vec![p("/leaf")];
+    let with = |lone: Option<&LoneClaims>| {
+        let requester = Requester {
+            auth: &auth,
+            now: 0,
+            lone,
+        };
+        rules.can_write(before.root(), after.root(), &written, &requester)
+    };
+    assert!(with(Some(&table)));
+    assert!(!with(None), "without the table the claim is `?`");
+}
+
+/// The emulator profile's class grammar at the edges of the Basic Multilingual Plane: an end at U+FFFF is a
+/// character like another, a class that holds nothing matches nothing and its negation any one character, and a
+/// range with an end beyond the plane (which the official emulator reads by UTF-16 unit) is left to the engine's
+/// default reading, so the emulator profile decides it as the strict one does.
+#[test]
+fn the_class_grammar_of_the_emulator_profile_at_the_edges_of_the_basic_plane() {
+    let decide = |expr: &str, jar_dialect: bool| {
+        Rules::compile(&read_rule_at_t(expr))
+            .unwrap()
+            .with_jar_dialect(jar_dialect)
+            .can_read(
+                seed().root(),
+                &p("t"),
+                None,
+                &Requester {
+                    auth: &auth(),
+                    now: 123,
+                    lone: None,
+                },
+            )
+    };
+    let jar = |expr: &str| decide(expr, true);
+    assert!(jar("'b'.matches(/^[a-\u{FFFF}]$/)"));
+    assert!(jar("'\u{FFFF}'.matches(/^[a-\u{FFFF}]$/)"));
+    assert!(jar("'\u{FFFF}'.matches(/^[\u{FFFF}-\u{FFFF}]$/)"));
+    assert!(jar("'\u{FFFF}'.matches(/^[\u{FFFF}-]$/)"));
+    assert!(jar("'-'.matches(/^[\u{FFFF}-]$/)"));
+    // A single character beyond the plane is a member (matched by character; the official emulator holds its two
+    // units, which a subject without such a character cannot tell).
+    assert!(jar("'a'.matches(/^[a\u{1F600}]$/)"));
+    assert!(jar("!('b'.matches(/^[\u{1F600}]$/))"));
+    // A `\W` in the pattern is read only by the emulator profile's own grammar, so these show which patterns that
+    // grammar reads (the others are left to the default reading, where `\W` is an error, false negated or not).
+    assert!(jar("'b!'.matches(/^[a-\u{FFFF}]\\W$/)"));
+    assert!(jar("'\u{FFFF}!'.matches(/^[\u{FFFF}-\u{FFFF}]\\W$/)"));
+    assert!(jar("'-!'.matches(/^[\u{FFFF}-]\\W$/)"));
+    for pattern in [
+        "^[a-\u{1F600}]\\W$",
+        "^[\u{1F600}-a]\\W$",
+        "^[\u{1F600}-\u{1F601}]\\W$",
+        "^[\u{1F600}-]\\W$",
+    ] {
+        for expr in [
+            format!("'b!'.matches(/{pattern}/)"),
+            format!("!('b!'.matches(/{pattern}/))"),
+        ] {
+            assert!(!jar(&expr), "{expr}");
+        }
+    }
+    assert!(jar("'zx'.matches(/^[^b-a]x$/)"));
+    assert!(!jar("'x'.matches(/^[b-a]x$/)"));
+    for pattern in [
+        "^[a-\u{1F600}]$",
+        "^[\u{1F600}-a]$",
+        "^[\u{1F600}-\u{1F601}]$",
+        "^[\u{1F600}-]$",
+    ] {
+        for expr in [
+            format!("'b'.matches(/{pattern}/)"),
+            format!("!('b'.matches(/{pattern}/))"),
+            format!("'\u{1F600}'.matches(/{pattern}/)"),
+        ] {
+            assert_eq!(jar(&expr), decide(&expr, false), "{expr}");
+        }
+    }
 }

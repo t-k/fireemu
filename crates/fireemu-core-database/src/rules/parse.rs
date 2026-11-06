@@ -962,6 +962,25 @@ fn check_groups_and_counts(pattern: &str) -> Result<(), String> {
 /// grammar reads as a literal character: `(a|))` is a group of `a` or `)`, and `(|a)` a group
 /// of `|a`. The scan keeps its own stack, so nesting costs no recursion.
 pub(crate) fn regex_shape(pattern: &str) -> Result<bool, String> {
+    scan_shape(pattern, &mut Vec::new())
+}
+
+/// The characters of `pattern` (by index) that the official emulator's grammar reads as a literal operator, or
+/// the grammar's error. See [`regex_shape`].
+pub(crate) fn literal_operator_positions(pattern: &str) -> Result<Vec<usize>, String> {
+    let mut marks = Vec::new();
+    scan_shape(pattern, &mut marks)?;
+    // The scan reads the pattern without a leading `^` and with `.*` before a pattern that has none.
+    let shift = usize::from(pattern.starts_with('^'));
+    let lead = if pattern.starts_with('^') { 0 } else { 2 };
+    Ok(marks
+        .into_iter()
+        .filter(|mark| *mark >= lead)
+        .map(|mark| mark - lead + shift)
+        .collect())
+}
+
+fn scan_shape(pattern: &str, marks: &mut Vec<usize>) -> Result<bool, String> {
     let (start, body) = match pattern.strip_prefix('^') {
         Some(body) => ("", body),
         None => (".*", pattern),
@@ -1026,6 +1045,7 @@ pub(crate) fn regex_shape(pattern: &str) -> Result<bool, String> {
             Some(c) => {
                 if alternative_start && matches!(c, '|' | ')' | '*' | '+' | '?' | '{') {
                     literal_operator = true;
+                    marks.push(i);
                 }
                 i += 1;
             }

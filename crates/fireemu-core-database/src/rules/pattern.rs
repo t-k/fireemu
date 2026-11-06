@@ -53,12 +53,14 @@ impl Pattern {
         let search = (!other_dialect && !escapes_a_letter(&text))
             .then(|| compile(&text))
             .flatten();
-        let jar_search = if other_dialect {
+        // The emulator profile reads the constructs of `jar_source` as the official emulator does, for a pattern
+        // its grammar accepts (a POSIX class is not read).
+        let jar_search = if super::parse::regex_shape(&text).is_err() || text.contains("[[:") {
             None
-        } else if escapes_a_letter(&text) {
-            jar_source(&text).and_then(|source| compile(&source))
-        } else {
+        } else if search.is_some() {
             search.clone()
+        } else {
+            jar_source(&text).and_then(|source| compile(&source))
         };
         Self {
             text,
@@ -116,22 +118,32 @@ fn view_of_units(units: impl Iterator<Item = u16>) -> String {
         .collect()
 }
 
-/// The pattern as the official emulator's grammar reads `\W`, `\D` and an escaped letter or digit,
-/// written for this engine; `None` for what is not read so.
+/// The pattern as the official emulator's grammar reads the constructs this engine reads otherwise, written for
+/// this engine; `None` for what is not read so.
 ///
-/// The official emulator compiles to an automaton and reads `\W` and `\D` as the complement of a
-/// language of strings, not of a set of characters: `\W` is every string except one word
-/// character, so `'ab'` and `''` both match `/^\W$/` there and `'a'` does not (recorded rows,
-/// `docs.local/runs/rtdb-lone-surrogate/jar-w1.json`). That language is the empty string, a
-/// character that is no word character, or any run of two or more characters, which this
-/// engine can say as a group. A class that holds `\W` or `\D` is the union of its members as
-/// languages, so it is the same group around the class (its single characters being the class
-/// read as usual); a negated class is single characters either way and is left as it is. Any
-/// other escaped letter or digit is that character itself (`\u0041` is `u0041`, `\b` is `b`).
+/// - `\W` and `\D` are the complement of a language of strings, not of a set of characters: `\W` is every string
+///   except one word character, so `'ab'` and `''` both match `/^\W$/` there and `'a'` does not (recorded rows,
+///   `docs.local/runs/rtdb-lone-surrogate/jar-w1.json`). That language is the empty string, a character that is
+///   no word character, or any run of two or more characters, which this engine can say as a group. A class that
+///   holds `\W` or `\D` is the union of its members as languages, so it is the same group around the class (its
+///   single characters being the class read as usual); a negated class is single characters either way.
+/// - Any other escaped letter or digit is that character itself (`\u0041` is `u0041`, `\b` is `b`).
+/// - An alternative that starts with `|`, `)`, `*`, `+`, `?` or `{` (after the start, a `(` or a `|`) starts with
+///   that character as a literal: `(a|))` is a group of `a` or `)`, `(|a)` one of `|a`, and `(?:a)` a group of
+///   `?:a`.
+/// - A class member is `\d`, `\w`, `\W` or `\D`, or a character that one backslash escapes and a second backslash
+///   escapes again (`[\\a]` holds `a` and no backslash), or two such characters with a `-` between: a range whose
+///   end is before its start holds nothing, and a `-` before the `]` is a character.
+///
 /// An escape that is not a letter or digit is kept.
 fn jar_source(text: &str) -> Option<String> {
     // The language of a complement: the empty string, one character of the class, or two or more.
     const ANY_TWO_OR_MORE: &str = "..+";
+    let literal_operators: std::collections::BTreeSet<usize> =
+        super::parse::literal_operator_positions(text)
+            .ok()?
+            .into_iter()
+            .collect();
     let chars: Vec<char> = text.chars().collect();
     let mut out = String::with_capacity(text.len() + 16);
     let mut i = 0;
@@ -147,6 +159,7 @@ fn jar_source(text: &str) -> Option<String> {
                         out.push(escaped);
                         out.push(')');
                     }
+                    's' | 'S' => return None,
                     'd' | 'w' => {
                         out.push('\\');
                         out.push(escaped);
@@ -160,39 +173,7 @@ fn jar_source(text: &str) -> Option<String> {
                 i += 2;
             }
             '[' => {
-                let negated = chars.get(i + 1) == Some(&'^');
-                let mut class = String::from("[");
-                let mut at = i + 1;
-                if negated {
-                    class.push('^');
-                    at += 1;
-                }
-                let mut first = true;
-                let mut complemented = false;
-                loop {
-                    let c = *chars.get(at)?;
-                    if c == ']' && !first {
-                        break;
-                    }
-                    first = false;
-                    if c == '\\' {
-                        let escaped = *chars.get(at + 1)?;
-                        complemented |= matches!(escaped, 'W' | 'D');
-                        if escaped.is_ascii_alphanumeric()
-                            && !matches!(escaped, 'd' | 'w' | 'W' | 'D')
-                        {
-                            class.push(escaped);
-                        } else {
-                            class.push('\\');
-                            class.push(escaped);
-                        }
-                        at += 2;
-                    } else {
-                        class.push(c);
-                        at += 1;
-                    }
-                }
-                class.push(']');
+                let (class, complemented, negated, next) = jar_class(&chars, i)?;
                 if complemented && !negated {
                     out.push_str("(?:|");
                     out.push_str(ANY_TWO_OR_MORE);
@@ -202,7 +183,12 @@ fn jar_source(text: &str) -> Option<String> {
                 } else {
                     out.push_str(&class);
                 }
-                i = at + 1;
+                i = next;
+            }
+            c if literal_operators.contains(&i) => {
+                out.push('\\');
+                out.push(c);
+                i += 1;
             }
             c => {
                 out.push(c);
@@ -211,6 +197,100 @@ fn jar_source(text: &str) -> Option<String> {
         }
     }
     Some(out)
+}
+
+/// One character of a class as the official emulator reads it. The first character of a member is read after
+/// one optional backslash (a member that names no class) and then one more (so `\\a` is `a`); the end of a range is
+/// read after one. The character and the index after it.
+fn jar_class_char(chars: &[char], mut at: usize, member_start: bool) -> Option<(char, usize)> {
+    if member_start && chars.get(at) == Some(&'\\') {
+        at += 1;
+    }
+    if chars.get(at) == Some(&'\\') {
+        at += 1;
+    }
+    Some((*chars.get(at)?, at + 1))
+}
+
+/// Writes `c` as a class member this engine reads as that character.
+fn push_member_char(class: &mut String, c: char) {
+    if c.is_ascii() && !c.is_ascii_alphanumeric() {
+        class.push('\\');
+    }
+    class.push(c);
+}
+
+/// The class at `chars[start]` (`[`), written for this engine: the class text, whether it holds `\W` or `\D`,
+/// whether it is negated, and the index after its `]`; `None` for what is not read so (a range with an end beyond
+/// the Basic Multilingual Plane, which the official emulator reads as two units, and `\s`).
+fn jar_class(chars: &[char], start: usize) -> Option<(String, bool, bool, usize)> {
+    let mut at = start + 1;
+    let negated = chars.get(at) == Some(&'^');
+    if negated {
+        at += 1;
+    }
+    let mut members = String::new();
+    let mut complemented = false;
+    let mut first = true;
+    loop {
+        let c = *chars.get(at)?;
+        if c == ']' && !first {
+            break;
+        }
+        first = false;
+        if c == '\\' && matches!(chars.get(at + 1), Some('d' | 'w' | 'D' | 'W' | 's' | 'S')) {
+            let letter = chars[at + 1];
+            if matches!(letter, 's' | 'S') {
+                return None;
+            }
+            complemented |= matches!(letter, 'W' | 'D');
+            members.push('\\');
+            members.push(letter);
+            at += 2;
+            continue;
+        }
+        let (low, next) = jar_class_char(chars, at, true)?;
+        at = next;
+        if chars.get(at) == Some(&'-') {
+            at += 1;
+            if chars.get(at) == Some(&']') {
+                // `-` before the end is a character.
+                if u32::from(low) > 0xFFFF {
+                    return None;
+                }
+                push_member_char(&mut members, low);
+                members.push_str("\\-");
+                continue;
+            }
+            let (high, next) = jar_class_char(chars, at, false)?;
+            at = next;
+            if u32::from(low) > 0xFFFF || u32::from(high) > 0xFFFF {
+                return None;
+            }
+            // A range whose end is before its start holds nothing.
+            if low <= high {
+                push_member_char(&mut members, low);
+                members.push('-');
+                push_member_char(&mut members, high);
+            }
+        } else {
+            // A single character beyond the Basic Multilingual Plane stays one member (as before this reading:
+            // the official emulator holds its two units, which a subject without lone surrogates cannot tell).
+            push_member_char(&mut members, low);
+        }
+    }
+    if members.is_empty() {
+        // Nothing to hold: the union of a digit and a non-digit is every character, so its complement is none.
+        members.push_str("\\d\\D");
+        return Some((
+            format!("[{}{members}]", if negated { "" } else { "^" }),
+            false,
+            false,
+            at + 1,
+        ));
+    }
+    let class = format!("[{}{members}]", if negated { "^" } else { "" });
+    Some((class, complemented, negated, at + 1))
 }
 
 /// Whether an escape names a letter or digit other than the classes `\d` and `\w`, which

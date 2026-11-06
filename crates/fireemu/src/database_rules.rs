@@ -109,10 +109,11 @@ pub(crate) fn credentials(cfg: &RuntimeConfig, registry: &Arc<AuthRegistry>) -> 
     Credentials {
         strict,
         id_tokens: Some(Arc::new(move |token: &str, instance: &str, now: i64| {
-            // The emulator profile reads a lone surrogate in the claims as the official emulator does. The
-            // claims are checked on a copy of the token whose claims read it as `?` (the shared token decoder
-            // refuses one), and the claims text the Rules see is the original. A signed token whose claims
-            // were altered fails its signature, so only an unsigned or an unverifiable forged token passes.
+            // The emulator profile reads a lone surrogate in the claims of an unsigned token as the official
+            // emulator does. The shared token decoder refuses one, so the claims are checked on a copy of the token
+            // that reads it as `?` and the claims text the Rules see is the original. Only a token with no
+            // signature is copied: there is nothing to forge in it, and a token that carries a signature is
+            // verified exactly as it was sent, so a signed payload can never be swapped for another.
             if !strict {
                 if let Some((checked, original)) = lone_claims_copy(token) {
                     return verify(&checked, instance, now).map(|_| original);
@@ -123,17 +124,20 @@ pub(crate) fn credentials(cfg: &RuntimeConfig, registry: &Arc<AuthRegistry>) -> 
     }
 }
 
-/// A token whose claims hold a lone surrogate escape, as a copy with each read as `?` and the original claims
-/// text; `None` for any other token.
+/// An unsigned token whose claims hold a lone surrogate escape, as a copy with each read as `?`, and the original claims
+/// text; `None` for any other token, a token that carries a signature included (it is never copied).
 fn lone_claims_copy(token: &str) -> Option<(String, String)> {
+    let mut parts = token.split('.');
+    let (header, _, signature) = (parts.next()?, parts.next()?, parts.next()?);
+    if !signature.is_empty() || parts.next().is_some() {
+        return None;
+    }
     let text = fireemu_adapter_database::realtime::jwt_payload_text(token)?;
     let (claims, replaced) =
         fireemu_adapter_database::json_parse::parse_replacing_all(&text, '?').ok()?;
     if !replaced {
         return None;
     }
-    let mut parts = token.split('.');
-    let (header, _, signature) = (parts.next()?, parts.next()?, parts.next()?);
     let payload = fireemu_core_auth::jwt::base64url_encode(
         fireemu_adapter_database::json_text::render(
             &claims,
@@ -141,7 +145,46 @@ fn lone_claims_copy(token: &str) -> Option<(String, String)> {
         )
         .as_bytes(),
     );
-    Some((format!("{header}.{payload}.{signature}"), text))
+    Some((format!("{header}.{payload}."), text))
+}
+
+#[cfg(test)]
+mod lone_claims_copy_tests {
+    use super::lone_claims_copy;
+    use fireemu_core_auth::jwt::{base64url_decode, base64url_encode};
+
+    fn token(claims: &str, signature: &str) -> String {
+        format!(
+            "{}.{}.{signature}",
+            base64url_encode(br#"{"alg":"none","typ":"JWT"}"#),
+            base64url_encode(claims.as_bytes())
+        )
+    }
+
+    /// The copy exists for an unsigned token alone: a signed token's payload is never replaced, so a signature
+    /// cannot be made to cover claims it did not sign (a signed payload that holds `?` swapped for a lone surrogate
+    /// would normalise to the signed text).
+    #[test]
+    fn only_a_token_without_a_signature_is_copied() {
+        let lone = r#"{"sub":"u1","x":"\ud83d"}"#;
+        let (checked, original) =
+            lone_claims_copy(&token(lone, "")).expect("an unsigned token is copied");
+        assert_eq!(original, lone);
+        let payload = checked.split('.').nth(1).unwrap();
+        let text = String::from_utf8(base64url_decode(payload).unwrap()).unwrap();
+        assert_eq!(text, r#"{"sub":"u1","x":"?"}"#);
+        assert!(checked.ends_with('.'), "{checked}");
+        // A signature, however it looks, means no copy.
+        for signature in ["c2ln", "AAAA"] {
+            assert!(
+                lone_claims_copy(&token(lone, signature)).is_none(),
+                "{signature}"
+            );
+        }
+        // Nor a token whose claims hold no lone surrogate, or one that has more than three parts.
+        assert!(lone_claims_copy(&token(r#"{"sub":"u1","x":"?"}"#, "")).is_none());
+        assert!(lone_claims_copy(&format!("{}.x", token(lone, ""))).is_none());
+    }
 }
 
 /// The claims of an `RS256` or `HS256` token the emulator profile cannot verify, read as the

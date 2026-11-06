@@ -1,12 +1,13 @@
-//! Text that can hold a lone surrogate, inside a Rust `String`.
+//! Text that can hold a lone surrogate, where a Rust `String` cannot.
 //!
 //! The Realtime Database emulator profile reads the claims of an ID token as the official emulator does, and
-//! Java strings hold a lone surrogate (`"\ud83d"` in a claim) where a Rust `String` cannot. The claims the
-//! adapter hands to the Rules as `auth` are therefore written in this encoding when the emulator profile reads
-//! them: a lone surrogate unit is one of 2048 stand-in characters at the top of plane 16, and a real character
-//! that is a stand-in or the escape character itself follows the escape character. The Rules decode a string
-//! of `auth` back to UTF-16 units. The encoding exists only between the claims parser and the Rules
-//! evaluator, and only on the emulator profile; no other component reads it.
+//! Java strings hold a lone surrogate (`"\ud83d"` in a claim) where a Rust `String` cannot. The claims are an
+//! ordinary document (a lone surrogate reads `?`), and a [`LoneClaims`] table says where the strings really held
+//! one. For one Rules evaluation, or to write the answer of an `auth` frame, the document is turned into a view in
+//! the encoding of this module: a lone surrogate unit is one of 2048 stand-in characters at the top of plane 16,
+//! and every real character that is a stand-in or the escape character follows the escape character, in every
+//! string of the view, so nothing collides. The view is built for the use and dropped; it is never stored, never
+//! reaches an event or a log, and no other component reads the encoding.
 
 /// The escape character: it precedes a real character that is a stand-in or itself.
 pub const ESCAPE: char = '\u{10FFFF}';
@@ -112,6 +113,142 @@ pub fn json_text(text: &str) -> String {
     out
 }
 
+use std::collections::BTreeMap;
+
+use crate::json::Json;
+
+/// One step of the location of a value inside a document.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Step {
+    /// A member of an object, by its ordinary name.
+    Key(String),
+    /// An item of an array.
+    Index(usize),
+}
+
+/// The strings of a document that hold a lone surrogate, which a Rust `String` cannot hold.
+///
+/// The claims of a token are an ordinary document in which each lone surrogate is `?` (what every other
+/// component sees: events, logs). This table says, by location, which strings and which member names were
+/// really UTF-16 text with a lone surrogate; only the Rules binding reads it, and turns those strings into Java
+/// strings. It is empty for every document that holds none, and exists only on the emulator profile.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LoneClaims {
+    values: BTreeMap<Vec<Step>, Vec<u16>>,
+    names: BTreeMap<Vec<Step>, Vec<u16>>,
+}
+
+impl LoneClaims {
+    /// Whether no string holds a lone surrogate.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.values.is_empty() && self.names.is_empty()
+    }
+
+    /// Records that the string at `path` is `units`.
+    pub fn record_value(&mut self, path: &[Step], units: Vec<u16>) {
+        self.values.insert(path.to_vec(), units);
+    }
+
+    /// Records that the member whose ordinary location is `path` (its last step the ordinary name) is named `units`.
+    pub fn record_name(&mut self, path: &[Step], units: Vec<u16>) {
+        self.names.insert(path.to_vec(), units);
+    }
+
+    /// The entries at or below `from`, with `from` replaced by `to` (a sub-document moved elsewhere).
+    #[must_use]
+    pub fn moved(&self, from: &[Step], to: &[Step]) -> Self {
+        let carry = |map: &BTreeMap<Vec<Step>, Vec<u16>>| {
+            map.iter()
+                .filter_map(|(path, units)| {
+                    path.strip_prefix(from).map(|rest| {
+                        (
+                            to.iter().cloned().chain(rest.iter().cloned()).collect(),
+                            units.clone(),
+                        )
+                    })
+                })
+                .collect()
+        };
+        Self {
+            values: carry(&self.values),
+            names: carry(&self.names),
+        }
+    }
+
+    /// The table with every location moved below `prefix`.
+    #[must_use]
+    pub fn below(&self, prefix: &[Step]) -> Self {
+        let lift = |map: &BTreeMap<Vec<Step>, Vec<u16>>| {
+            map.iter()
+                .map(|(path, units)| {
+                    (
+                        prefix.iter().cloned().chain(path.iter().cloned()).collect(),
+                        units.clone(),
+                    )
+                })
+                .collect()
+        };
+        Self {
+            values: lift(&self.values),
+            names: lift(&self.names),
+        }
+    }
+
+    /// The table with the locations of `other` added.
+    pub fn merge(&mut self, other: Self) {
+        self.values.extend(other.values);
+        self.names.extend(other.names);
+    }
+
+    /// `json` with each of its strings and member names written in the encoding of this module: a string or name
+    /// this table lists as holding a lone surrogate by [`encode`], any other by [`escape`], so that a real
+    /// character the encoding reserves stays what it is. The Rules evaluator decodes it. It is built for one
+    /// evaluation and never stored or shown.
+    #[must_use]
+    pub fn encoded_view(&self, json: &Json) -> Json {
+        self.view(json, &mut Vec::new())
+    }
+
+    fn view(&self, json: &Json, path: &mut Vec<Step>) -> Json {
+        match json {
+            Json::String(text) => Json::String(
+                self.values
+                    .get(path.as_slice())
+                    .map_or_else(|| escape(text), |units| encode(units)),
+            ),
+            Json::Object(members) => Json::Object(
+                members
+                    .iter()
+                    .map(|(name, value)| {
+                        path.push(Step::Key(name.clone()));
+                        let key = self
+                            .names
+                            .get(path.as_slice())
+                            .map_or_else(|| escape(name), |units| encode(units));
+                        let value = self.view(value, path);
+                        path.pop();
+                        (key, value)
+                    })
+                    .collect(),
+            ),
+            Json::Array(items) => Json::Array(
+                items
+                    .iter()
+                    .enumerate()
+                    .map(|(index, value)| {
+                        path.push(Step::Index(index));
+                        let value = self.view(value, path);
+                        path.pop();
+                        value
+                    })
+                    .collect(),
+            ),
+            other => other.clone(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -162,5 +299,52 @@ mod tests {
         let protected = stand_in(0xD83D).to_string();
         assert_eq!(json_text(&escape(&protected)), protected);
         assert_eq!(json_text("\u{10F800}x\u{10FFFD}"), "\u{10F800}x\u{10FFFD}");
+    }
+    fn key(name: &str) -> Step {
+        Step::Key(name.to_owned())
+    }
+
+    #[test]
+    fn a_table_is_empty_only_without_values_and_without_names() {
+        let mut table = LoneClaims::default();
+        assert!(table.is_empty());
+        table.record_value(&[key("a")], vec![0xD800]);
+        assert!(!table.is_empty());
+        let mut names = LoneClaims::default();
+        names.record_name(&[key("a")], vec![0xD800]);
+        assert!(!names.is_empty());
+    }
+
+    #[test]
+    fn a_table_moves_its_locations_below_a_prefix_and_between_places() {
+        let mut table = LoneClaims::default();
+        table.record_value(&[key("a"), Step::Index(1)], vec![0xD800]);
+        table.record_name(&[key("a"), key("n")], vec![0x61, 0xDC00]);
+        table.record_value(&[key("b")], vec![0xD83D]);
+        let below = table.below(&[key("t")]);
+        let mut want = LoneClaims::default();
+        want.record_value(&[key("t"), key("a"), Step::Index(1)], vec![0xD800]);
+        want.record_name(&[key("t"), key("a"), key("n")], vec![0x61, 0xDC00]);
+        want.record_value(&[key("t"), key("b")], vec![0xD83D]);
+        assert_eq!(below, want);
+        let moved = table.moved(&[key("a")], &[key("x"), key("y")]);
+        let mut want = LoneClaims::default();
+        want.record_value(&[key("x"), key("y"), Step::Index(1)], vec![0xD800]);
+        want.record_name(&[key("x"), key("y"), key("n")], vec![0x61, 0xDC00]);
+        assert_eq!(moved, want, "only what is at or below the source moves");
+        assert!(table.moved(&[key("zzz")], &[key("x")]).is_empty());
+    }
+
+    #[test]
+    fn merging_adds_the_locations_of_the_other_table() {
+        let mut one = LoneClaims::default();
+        one.record_value(&[key("a")], vec![0xD800]);
+        let mut other = LoneClaims::default();
+        other.record_name(&[key("b")], vec![0xDC00]);
+        one.merge(other);
+        let mut want = LoneClaims::default();
+        want.record_value(&[key("a")], vec![0xD800]);
+        want.record_name(&[key("b")], vec![0xDC00]);
+        assert_eq!(one, want);
     }
 }

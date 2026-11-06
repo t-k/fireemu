@@ -32,6 +32,7 @@ use crate::node::Node;
 use crate::path::Path;
 use crate::query::QueryParams;
 use eval::Dialect;
+pub use eval::{evaluation_work_high_water, reset_evaluation_work_high_water};
 
 /// A rule expression as the rules file spells it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -162,6 +163,34 @@ pub struct Requester<'a> {
     pub auth: &'a Json,
     /// `now`, in milliseconds.
     pub now: i64,
+    /// Which strings of `auth` really hold a lone surrogate (the emulator profile), if any; `auth` itself reads `?`
+    /// there. Only the evaluation reads it.
+    pub lone: Option<&'a crate::lone::LoneClaims>,
+}
+
+impl<'a> Requester<'a> {
+    /// `auth` in the encoding the evaluator decodes, when some string holds a lone surrogate.
+    fn encoded(&self) -> Option<Json> {
+        self.lone
+            .filter(|lone| !lone.is_empty())
+            .map(|lone| lone.encoded_view(self.auth))
+    }
+
+    /// This requester reading `encoded` instead of `auth`, if there is one.
+    fn viewing(&self, encoded: Option<&'a Json>) -> Requester<'a> {
+        match encoded {
+            Some(json) => Requester {
+                auth: json,
+                now: self.now,
+                lone: self.lone,
+            },
+            None => Requester {
+                auth: self.auth,
+                now: self.now,
+                lone: None,
+            },
+        }
+    }
 }
 
 impl Rules {
@@ -169,14 +198,6 @@ impl Rules {
     #[must_use]
     pub fn with_jar_dialect(mut self, on: bool) -> Self {
         self.dialect.regex = on;
-        self
-    }
-
-    /// These rules reading the strings of `auth` as the emulator profile writes them: a lone surrogate in a
-    /// claim is a stand-in of [`crate::lone`] (the `claims` dialect).
-    #[must_use]
-    pub fn with_encoded_claims(mut self, on: bool) -> Self {
-        self.dialect.claims = on;
         self
     }
 
@@ -293,6 +314,8 @@ impl Rules {
         kind: ReadKind,
         requester: &Requester<'_>,
     ) -> bool {
+        let encoded = requester.encoded();
+        let requester = &requester.viewing(encoded.as_ref());
         let mut wildcards = BTreeMap::new();
         let mut node = Some(&self.root);
         let mut at = Path::root();
@@ -314,7 +337,11 @@ impl Rules {
                     query,
                     read_kind: kind,
                     wildcards: &wildcards,
-                    dialect: self.dialect,
+                    dialect: Dialect {
+                        claims: requester.lone.is_some(),
+                        ..self.dialect
+                    },
+                    work: std::cell::Cell::new(0),
                 };
                 if run(rule, &scope) {
                     return true;
@@ -338,6 +365,8 @@ impl Rules {
         written: &[Path],
         requester: &Requester<'_>,
     ) -> bool {
+        let encoded = requester.encoded();
+        let requester = &requester.viewing(encoded.as_ref());
         // A priority belongs to its node: a write of `<path>/.priority` is judged as a write
         // of `<path>`, never through a `$wildcard` below it (review M3).
         let written: Vec<Path> = written
@@ -397,7 +426,11 @@ impl Rules {
             query: None,
             read_kind: ReadKind::Check,
             wildcards,
-            dialect,
+            dialect: Dialect {
+                claims: requester.lone.is_some(),
+                ..dialect
+            },
+            work: std::cell::Cell::new(0),
         }
     }
 

@@ -332,3 +332,71 @@ fn the_authvar_of_a_gauth_frame_keeps_a_lone_surrogate_on_the_emulator_profile()
         "{strict_lone}"
     );
 }
+
+/// The `authvar` member is found in the parsed frame, so spelling it with an escape (`"authvar"`) changes
+/// nothing; and valid strings that look like any internal encoding stay themselves: U+10FFFF followed by `a` is
+/// not `a`, and shows as the character in the answer (coordinator review of 985528f1c).
+#[test]
+fn an_authvar_spelled_with_an_escape_is_the_authvar_and_valid_strings_stay_distinct() {
+    let rules = r#"{"rules":{"t":{".read":"auth.x == auth.y"}}}"#;
+    let listen = r#"{"t":"d","d":{"r":2,"a":"q","b":{"p":"/t","h":""}}}"#;
+    for member in ["authvar", r"authvar"] {
+        let frame = format!(
+            r#"{{"t":"d","d":{{"r":1,"a":"gauth","b":{{"cred":"owner","{member}":{{"uid":"u1","x":"a","y":"􏿿a"}}}}}}}}"#
+        );
+        let mut db = database(false);
+        rest(&mut db, "PUT", "/t.json?ns=c", r#"{"a":1}"#);
+        rest(&mut db, "PUT", "/.settings/rules.json?ns=c", rules);
+        let got = replies(&mut db, &[&frame, listen]).join("\n");
+        assert!(
+            got.contains(&format!("\"y\":\"{}a\"", '\u{10FFFF}')),
+            "{member}: {got}"
+        );
+        assert!(got.contains("permission_denied"), "{member}: {got}");
+        // The same strings are equal when they are.
+        let same = frame.replace(r#""x":"a""#, r#""x":"􏿿a""#);
+        let mut db = database(false);
+        rest(&mut db, "PUT", "/t.json?ns=c", r#"{"a":1}"#);
+        rest(&mut db, "PUT", "/.settings/rules.json?ns=c", rules);
+        let got = replies(&mut db, &[&same, listen]).join("\n");
+        assert!(got.contains(r#""r":2,"b":{"s":"ok""#), "{member}: {got}");
+    }
+    // A lone surrogate in an escaped `authvar` is read as in a plain one.
+    let lone = r#"{"t":"d","d":{"r":1,"a":"gauth","b":{"cred":"owner","authvar":{"uid":"u1","x":"\ud83d","y":"\ud83d"}}}}"#;
+    let mut db = database(false);
+    rest(&mut db, "PUT", "/t.json?ns=c", r#"{"a":1}"#);
+    rest(&mut db, "PUT", "/.settings/rules.json?ns=c", rules);
+    let got = replies(&mut db, &[lone, listen]).join("\n");
+    assert!(got.contains(r#""x":"\uD83D""#), "{got}");
+    assert!(got.contains(r#""r":2,"b":{"s":"ok""#), "{got}");
+}
+
+/// A frame whose path holds a lone surrogate writes nothing, whatever else the frame holds: the path is made invalid
+/// while the frame is read (not by a second reading that can fail), so an unrelated member that the reader refuses
+/// cannot leave `/bad?` as the path (coordinator review of 985528f1c).
+#[test]
+fn a_frame_with_a_lone_surrogate_in_its_path_writes_nothing() {
+    let frames = [
+        r#"{"t":"d","d":{"r":1,"a":"p","b":{"p":"/bad\ud83d","d":1,"unused":{"\ud83d":0}}}}"#,
+        r#"{"t":"d","d":{"r":1,"a":"p","b":{"p":"/bad\ud83d","d":1}}}"#,
+        r#"{"t":"d","d":{"r":1,"a":"m","b":{"p":"/bad\ude00","d":{"k":1},"unused":{"\ud83d":0}}}}"#,
+        r#"{"t":"d","d":{"r":1,"a":"q","b":{"p":"/bad\ud83d","h":"","unused":{"\ud83d":0}}}}"#,
+    ];
+    for frame in frames {
+        let mut db = database(false);
+        let got = replies(&mut db, &[frame]).join("\n");
+        assert!(
+            got.contains(r#""s":"invalid_parameters","d":"Invalid token in path""#),
+            "{frame}: {got}"
+        );
+        assert_eq!(rest(&mut db, "GET", "/.json?ns=c", "").1, "null", "{frame}");
+        // The strict profile refuses the frame as before.
+        let mut strict = database(true);
+        let got = replies(&mut strict, &[frame]).join("\n");
+        assert!(
+            got.contains(r#""t":"c","d":{"t":"e""#),
+            "strict {frame}: {got}"
+        );
+        assert_eq!(rest(&mut strict, "GET", "/.json?ns=c", "").1, "null");
+    }
+}

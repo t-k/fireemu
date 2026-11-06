@@ -110,13 +110,7 @@ suite) needs, and what leaves the other smokes working without attaching a token
   reaches an unsubscribed listener or more than one setting form is connected. Serve `web/` from
   a `fireemu exec --firebase-json tools/sdk-smoke/listener-lifecycle.firebase.json` child and open
   `listener-lifecycle.html?fs=<firestore port>&auth=<auth port>&project=demo-app`. The same file and
-  rules run unchanged with the official Local Emulator Suite for differential checks. For the
-  credential-refusal probe, start Firestore and Auth with
-  `--config tools/sdk-smoke/fireemu.appcheck.json` as well as the listener lifecycle Firebase
-  configuration, then append `&appcheck=1`. The main app supplies a registered local debug token;
-  a second SDK app supplies an invalid App Check token. The probe waits for the pinned SDK's
-  `Listen` stream error log with `permission-denied`; it makes no claim about listener callbacks
-  or write-promise settlement.
+  rules run unchanged with the official Local Emulator Suite for differential checks. For the credential-refusal probe, start Firestore and Auth with `--config tools/sdk-smoke/fireemu.appcheck.json` as well as the listener lifecycle Firebase configuration, then append `&appcheck=1`. The main app supplies a registered local debug token; a second SDK app supplies an invalid App Check token. The probe waits for the pinned SDK's `Listen` stream error log with `permission-denied`; it makes no claim about listener callbacks or write-promise settlement.
 - `web/index.html`: the browser build of the web SDK (WebChannel transport). Serve the
   directory (`python3 -m http.server 8765 --bind 127.0.0.1` in `web/`) from a `fireemu exec`
   child and open `http://127.0.0.1:8765/index.html?fs=<firestore port>&auth=<http port>&token=<FIREEMU_CONTROL_TOKEN>`; the page prints its checks as JSON. The variable is scoped to the child and is not printed by the daemon. `FIREEMU_TRACE_WEBCHANNEL=1` on the daemon traces the channel protocol.

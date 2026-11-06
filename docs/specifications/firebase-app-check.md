@@ -349,7 +349,7 @@ All Firebase client surfaces are covered:
 
 Unary requests classify `x-firebase-appcheck` metadata once. gRPC streams classify the opening metadata once and retain the resulting app identity and policy snapshot for that stream. Token expiry or policy changes do not retroactively terminate an admitted stream; reconnecting creates a new admission.
 
-WebChannel classifies the opening request and binds the channel to the admitted app ID and epoch. Later envelopes may omit the header and reuse the channel admission. A presented replacement token must be valid for the same app and current channel epoch. A different app ID or invalid replacement closes the channel with the selected error.
+WebChannel classifies the opening request and binds the channel to the admitted app ID and epoch. Later envelopes may omit the header and reuse the channel admission. A presented replacement token must be valid for the same app and current channel epoch. A different app ID or invalid replacement terminates the channel with a numbered Google JSON error envelope; this transport shape is inferred from SDK handling and has not been observed in production.
 
 App Check denial maps to gRPC `PERMISSION_DENIED` and Firestore REST HTTP 403 with stable `fireemu-code` metadata. The external message remains compatible with the SDK's permission-denied handling. Exact production wording remains a conformance fixture rather than a hard-coded claim.
 
@@ -476,7 +476,8 @@ Product mapping is:
 | Surface | Missing or invalid under enforcement |
 |---|---|
 | Firestore gRPC and streams | `PERMISSION_DENIED` with `fireemu-code` metadata |
-| Firestore REST and WebChannel | HTTP 403 Google JSON `PERMISSION_DENIED` |
+| Firestore REST | HTTP 403 Google JSON `PERMISSION_DENIED` |
+| Firestore WebChannel | HTTP 200 handshake, then a numbered Google JSON `PERMISSION_DENIED` envelope and terminal stream; inferred from SDK handling, not observed in production |
 | Firebase Storage dialect | HTTP 403 Firebase Storage JSON error |
 | Firebase Auth client route | HTTP 403 Google JSON `PERMISSION_DENIED` |
 | Callable Functions | HTTP 401 callable `UNAUTHENTICATED` JSON envelope; exact v2 streaming requests receive HTTP 200 with one `UNAUTHENTICATED` SSE error record |
@@ -485,6 +486,8 @@ Product mapping is:
 | Unsupported limited-use exchange | HTTP 501 `UNIMPLEMENTED` |
 
 These mappings are `boundary-conformance` until the conformance scenarios record and approve the corresponding real-service behavior.
+
+For WebChannel principal admission, the same HTTP 200 terminal-envelope transport preserves the principal status. With the strict profile's verified-token policy, expired credentials produce `UNAUTHENTICATED` and a foreign audience produces `PERMISSION_DENIED`. With the emulator profile's mock-token policy, an unsigned token with a foreign audience produces `UNAUTHENTICATED`, while an expired unsigned token with the correct audience and a subject can be admitted through mock-token fallback. These outcomes are covered by local tests using each profile's token policy, not observed in production.
 
 ## 18. Coverage obligations
 

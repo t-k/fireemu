@@ -719,6 +719,7 @@ struct Session {
 struct StreamEnd {
     ended_at: Instant,
     terminal_aid: u64,
+    refused: bool,
 }
 
 #[derive(Debug)]
@@ -986,7 +987,7 @@ impl Session {
         Ok(aid)
     }
 
-    /// Atomically replaces not-yet-committed data with one terminal error array. The delivery
+    /// Atomically replaces all application data with one terminal error array. The delivery
     /// revision makes a body serialized before this transition fail its later commit check.
     #[allow(clippy::too_many_lines)]
     fn refuse_with_error(self: &Arc<Self>, status: &Status) -> Result<u64, ()> {
@@ -1002,15 +1003,13 @@ impl Session {
             if self.is_terminated() {
                 return Err(());
             }
-            if delivery.stream_end.is_some() {
+            if delivery.stream_end.is_some_and(|ended| ended.refused) {
                 return Ok(None);
             }
             let committed_aid = delivery.committed_aid;
-            delivery.outbound.retain(|(aid, _)| *aid <= committed_aid);
-            delivery
-                .retained_permits
-                .retain(|(aid, _)| *aid <= committed_aid);
-            delivery.retained_bytes = delivery.outbound.iter().map(|(_, text)| text.len()).sum();
+            delivery.outbound.clear();
+            delivery.retained_permits.clear();
+            delivery.retained_bytes = 0;
             delivery.next_aid = committed_aid;
             let Some(revision) = delivery.revision.checked_add(1) else {
                 self.terminated.store(true, Ordering::SeqCst);
@@ -1051,8 +1050,11 @@ impl Session {
             delivery.outbound.push_back((aid, text));
             delivery.retained_permits.push_back((aid, retained_permit));
             delivery.stream_end = Some(StreamEnd {
-                ended_at: Instant::now(),
+                ended_at: delivery
+                    .stream_end
+                    .map_or_else(Instant::now, |ended| ended.ended_at),
                 terminal_aid: aid,
+                refused: true,
             });
             Ok(Some(GeneratedTerminalArray {
                 aid,
@@ -1339,6 +1341,7 @@ impl Session {
             delivery.stream_end.get_or_insert(StreamEnd {
                 ended_at: Instant::now(),
                 terminal_aid,
+                refused: false,
             });
             let acknowledged = delivery
                 .stream_end
@@ -2685,6 +2688,7 @@ mod tests {
                 stream_end: Some(StreamEnd {
                     ended_at,
                     terminal_aid: 1,
+                    refused: false,
                 }),
                 ..DeliveryState::default()
             }),
@@ -3787,6 +3791,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn refusal_discards_success_payloads_from_an_ended_stream() {
+        for committed in [false, true] {
+            let session = Arc::new(test_session("ended-refusal", DeliveryState::default()));
+            session.push("[\"successful data\"]").unwrap();
+            if committed {
+                session.delivery.lock().unwrap().committed_aid = 1;
+            }
+            session.end_stream();
+            let ended_at = session
+                .delivery
+                .lock()
+                .unwrap()
+                .stream_end
+                .unwrap()
+                .ended_at;
+            let error = Status::permission_denied("permission denied");
+            let aid = session.refuse_with_error(&error).unwrap();
+            let terminal = session.pending_chunk_after(0).unwrap().2;
+            assert!(!terminal.contains("successful data"), "{terminal}");
+            assert!(terminal.contains("PERMISSION_DENIED"), "{terminal}");
+            assert_eq!(aid, if committed { 2 } else { 1 });
+            assert_eq!(
+                session
+                    .delivery
+                    .lock()
+                    .unwrap()
+                    .stream_end
+                    .unwrap()
+                    .ended_at,
+                ended_at
+            );
+            assert_eq!(session.refuse_with_error(&error).unwrap(), aid);
+            assert_eq!(session.pending_chunk_after(0).unwrap().2, terminal);
+        }
+    }
+
+    #[tokio::test]
     async fn pushes_after_stream_refusal_are_rejected() {
         let session = Arc::new(test_session("refused-push", DeliveryState::default()));
         session
@@ -3866,6 +3907,7 @@ mod tests {
                         .checked_sub(TERMINAL_DELIVERY_TTL)
                         .expect("test instant must support the terminal TTL"),
                     terminal_aid: 2,
+                    refused: false,
                 }),
                 ..DeliveryState::default()
             }),
@@ -4087,6 +4129,7 @@ mod tests {
                 stream_end: Some(StreamEnd {
                     ended_at: Instant::now(),
                     terminal_aid: 1,
+                    refused: false,
                 }),
                 ..DeliveryState::default()
             }),

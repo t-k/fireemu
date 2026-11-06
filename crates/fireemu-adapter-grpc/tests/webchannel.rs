@@ -85,7 +85,7 @@ fn enforced_app_check_gate() -> AppCheckGate {
     AppCheckGate::new(Arc::new(RwLock::new(registry)), Arc::new(RefusalTestSigner))
 }
 
-fn app_check_hub(strict: bool) -> (Hub, AppCheckGate) {
+fn app_check_hub(strict: bool) -> (Hub, AppCheckGate, Arc<LocalBackend>) {
     let gateway = Gateway {
         enforce_limits: strict,
         ctx: PlanningContext {
@@ -108,13 +108,14 @@ fn app_check_hub(strict: bool) -> (Hub, AppCheckGate) {
         Arc::new(ServiceAdmission::new(gate.clone(), "firestore", BaselineMode::Enforced).unwrap());
     (
         Hub::new(Arc::new(RestState {
-            local,
+            local: local.clone(),
             gateway: Arc::new(gateway),
             rules: None,
             app_check: Some(policy),
             control_token: None,
         })),
         gate,
+        local,
     )
 }
 
@@ -419,7 +420,7 @@ async fn refused_opening_principals_are_delivered_as_terminal_stream_errors() {
 async fn enforced_missing_app_check_is_delivered_as_a_terminal_stream_error() {
     for strict in [true, false] {
         for kind in [StreamKind::Listen, StreamKind::Write] {
-            let (hub, _) = app_check_hub(strict);
+            let (hub, _, _) = app_check_hub(strict);
             let first = match kind {
                 StreamKind::Listen => listen_target(2, "open"),
                 StreamKind::Write => json!({"database": DB}).to_string(),
@@ -477,7 +478,7 @@ fn app_check_token(gate: &AppCheckGate, app_id: &str) -> String {
 async fn refused_replacement_tokens_deliver_only_the_terminal_error_and_ignore_request_data() {
     for strict in [true, false] {
         for replacement in ["invalid", "foreign-app"] {
-            let (hub, gate) = app_check_hub(strict);
+            let (hub, gate, _) = app_check_hub(strict);
             let valid = app_check_token(&gate, "1:1234567890:web:webchannel-test");
             let replacement_token = match replacement {
                 "invalid" => "not-a-token".to_owned(),
@@ -577,9 +578,221 @@ async fn refused_replacement_tokens_deliver_only_the_terminal_error_and_ignore_r
 
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
+async fn refused_backchannel_replacements_discard_committed_documents() {
+    for strict in [true, false] {
+        for replacement in ["invalid", "foreign-app"] {
+            let (hub, gate, local) = app_check_hub(strict);
+            commit(&local, vec![set_write("open/retained", 7)]);
+            let valid = app_check_token(&gate, "1:1234567890:web:webchannel-test");
+            let replacement_token = if replacement == "invalid" {
+                "not-a-token".to_owned()
+            } else {
+                app_check_token(&gate, "1:1234567890:web:other-test")
+            };
+            let (status, headers, _) = full(hub.handle(&ChannelRequest {
+                kind: StreamKind::Listen,
+                method: "POST".to_owned(),
+                params: params(&[("database", DB), ("VER", "8"), ("RID", "1")]),
+                authorization: None,
+                app_check: vec![valid.clone()],
+                origin: None,
+                body: form(&[
+                    ("count", "1"),
+                    ("ofs", "0"),
+                    ("req0___data__", &listen_target(2, "open")),
+                ]),
+            }));
+            assert_eq!(status, 200);
+            let sid = &headers
+                .iter()
+                .find(|(name, _)| *name == "x-http-session-id")
+                .unwrap()
+                .1;
+            let mut committed = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+                loop {
+                    let batch = read_long_poll(&hub, sid, 0).await;
+                    if response_payloads(&batch)
+                        .iter()
+                        .any(|p| p.get("documentChange").is_some())
+                    {
+                        break batch;
+                    }
+                }
+            })
+            .await
+            .expect("the listener must deliver an existing document");
+            assert!(committed.to_string().contains("open/retained"));
+
+            // A valid replacement must replay the same unacknowledged document arrays.
+            for token in [&valid, &valid, &replacement_token, &replacement_token] {
+                let response = hub.handle(&ChannelRequest {
+                    kind: StreamKind::Listen,
+                    method: "GET".to_owned(),
+                    params: params(&[
+                        ("SID", sid),
+                        ("RID", "replacement"),
+                        ("AID", "0"),
+                        ("CI", "1"),
+                        ("TO", "1000"),
+                    ]),
+                    authorization: None,
+                    app_check: vec![token.clone()],
+                    origin: None,
+                    body: String::new(),
+                });
+                let ChannelResponse::Stream { mut body, .. } = response else {
+                    panic!("replacement must return a backchannel");
+                };
+                let bytes = tokio::time::timeout(std::time::Duration::from_secs(2), body.next())
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .unwrap();
+                assert!(body.next().await.is_none());
+                let batch = chunks(std::str::from_utf8(&bytes).unwrap()).remove(0);
+                if token == &valid {
+                    assert_eq!(
+                        &batch.as_array().unwrap()[..committed.as_array().unwrap().len()],
+                        committed.as_array().unwrap(),
+                        "valid replacement must retain replay"
+                    );
+                    committed = batch;
+                } else {
+                    assert!(response_payloads(&batch).iter().all(|p| p.get("documentChange").is_none()), "refused GET leaked a document: strict={strict}, replacement={replacement}: {batch}");
+                    assert_eq!(batch.as_array().unwrap().len(), 1, "{batch}");
+                    assert_eq!(
+                        response_payloads(&batch)[0]["error"]["status"],
+                        "PERMISSION_DENIED"
+                    );
+                    assert_eq!(last_array_id(&batch), last_array_id(&committed) + 1);
+                }
+            }
+        }
+    }
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn refused_write_requests_do_not_mutate_documents() {
+    for strict in [true, false] {
+        for replacement in ["invalid", "foreign-app"] {
+            let (hub, gate, local) = app_check_hub(strict);
+            let valid = app_check_token(&gate, "1:1234567890:web:webchannel-test");
+            let refused = if replacement == "invalid" {
+                "not-a-token".to_owned()
+            } else {
+                app_check_token(&gate, "1:1234567890:web:other-test")
+            };
+            // Exercise refused openings, refused replacements, and an admitted mutation control.
+            for mode in ["opening-refused", "replacement-refused", "valid"] {
+                commit(&local, vec![set_write("open/unchanged", 7)]);
+                let opening_refused = mode == "opening-refused";
+                let mutation = json!({"writes": [{"update": {
+                    "name": format!("{DB}/documents/open/unchanged"),
+                    "fields": {"revision": {"integerValue": "99"}}
+                }}]});
+                let first = json!({"database": DB}).to_string();
+                let (status, headers, _) = full(hub.handle(&ChannelRequest {
+                    kind: StreamKind::Write,
+                    method: "POST".to_owned(),
+                    params: params(&[("database", DB), ("VER", "8"), ("RID", "1")]),
+                    authorization: None,
+                    app_check: vec![if opening_refused {
+                        "not-a-token".to_owned()
+                    } else {
+                        valid.clone()
+                    }],
+                    origin: None,
+                    body: if opening_refused {
+                        form(&[
+                            ("count", "2"),
+                            ("ofs", "0"),
+                            ("req0___data__", &first),
+                            ("req1___data__", &mutation.to_string()),
+                        ])
+                    } else {
+                        form(&[("count", "1"), ("ofs", "0"), ("req0___data__", &first)])
+                    },
+                }));
+                assert_eq!(status, 200);
+                let sid = &headers
+                    .iter()
+                    .find(|(name, _)| *name == "x-http-session-id")
+                    .unwrap()
+                    .1;
+                let handshake = read_long_poll_kind(&hub, StreamKind::Write, sid, 0).await;
+                let mut mutation = mutation.clone();
+                if !opening_refused {
+                    mutation["streamToken"] =
+                        response_payloads(&handshake)[0]["streamToken"].clone();
+                    assert!(mutation["streamToken"].is_string());
+                }
+                let (status, _, _) = full(hub.handle(&ChannelRequest {
+                    kind: StreamKind::Write,
+                    method: "POST".to_owned(),
+                    params: params(&[("SID", sid), ("RID", "refused-write"), ("AID", "0")]),
+                    authorization: None,
+                    app_check: vec![if mode == "valid" {
+                        valid.clone()
+                    } else {
+                        refused.clone()
+                    }],
+                    origin: None,
+                    body: form(&[
+                        ("count", "1"),
+                        ("ofs", if opening_refused { "2" } else { "1" }),
+                        ("req0___data__", &mutation.to_string()),
+                    ]),
+                }));
+                assert_eq!(status, 200);
+                let terminal = read_long_poll_kind(
+                    &hub,
+                    StreamKind::Write,
+                    sid,
+                    if mode == "valid" {
+                        last_array_id(&handshake)
+                    } else {
+                        0
+                    },
+                )
+                .await;
+                if mode == "valid" {
+                    assert!(
+                        response_payloads(&terminal)
+                            .iter()
+                            .any(|p| p["writeResults"]
+                                .as_array()
+                                .is_some_and(|results| !results.is_empty())),
+                        "{terminal}"
+                    );
+                } else {
+                    assert_eq!(terminal.as_array().unwrap().len(), 1, "{terminal}");
+                    assert_eq!(
+                        response_payloads(&terminal)[0]["error"]["status"],
+                        "PERMISSION_DENIED"
+                    );
+                }
+                tokio::task::yield_now().await;
+                let document = local
+                    .get_document(
+                        &pb::GetDocumentRequest {
+                            name: format!("{DB}/documents/open/unchanged"),
+                            ..Default::default()
+                        },
+                        &fireemu_adapter_grpc::rules::allow_all_reads,
+                    )
+                    .unwrap();
+                assert_eq!(document.fields["revision"].value_type, Some(pb::value::ValueType::IntegerValue(if mode == "valid" { 99 } else { 7 })), "unexpected backend mutation: strict={strict}, replacement={replacement}, mode={mode}");
+            }
+        }
+    }
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn a_refused_backchannel_replacement_ignores_ack_and_replays_the_terminal_error() {
     for strict in [true, false] {
-        let (hub, gate) = app_check_hub(strict);
+        let (hub, gate, _) = app_check_hub(strict);
         let valid = app_check_token(&gate, "1:1234567890:web:webchannel-test");
         let (status, headers, _) = full(hub.handle(&ChannelRequest {
             kind: StreamKind::Listen,

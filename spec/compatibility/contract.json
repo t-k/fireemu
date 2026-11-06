@@ -1692,7 +1692,7 @@
       ],
       "notes": [],
       "gaps": [
-        "Remote Config triggers",
+        "Remote Config template storage and publishing service are not implemented. Capability-protected local injection runs v1/v2 Remote Config handlers with caller-supplied metadata in both profiles; production envelope, metadata, retry and ordering parity remain unobserved.",
         "Python and Dart codebases",
         "hot reload of a codebase's source",
         "protobuf CloudEvents payloads"
@@ -1775,7 +1775,8 @@
               "crates/fireemu-adapter-functions/tests/runtime.rs",
               "crates/fireemu-core-events/tests/state_machine.rs",
               "crates/fireemu-core-events/tests/outbox.rs",
-              "crates/fireemu-adapter-functions/src/task_scheduler.rs"
+              "crates/fireemu-adapter-functions/src/task_scheduler.rs",
+              "crates/fireemu/tests/functions_remote_config.rs"
             ],
             "conformance": []
           },

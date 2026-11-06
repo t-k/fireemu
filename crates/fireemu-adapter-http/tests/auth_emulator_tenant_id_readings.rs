@@ -109,6 +109,90 @@ fn claims(id_token: &str) -> Value {
     serde_json::from_str(&decode_unsigned(id_token).unwrap().payload_json).unwrap()
 }
 
+fn project_token(project: &str, user: &str, tenant: &str) -> String {
+    use fireemu_core_auth::jwt::base64url_encode;
+
+    format!(
+        "{}.{}.{}",
+        base64url_encode(br#"{"alg":"none","typ":"JWT"}"#),
+        base64url_encode(
+            json!({
+                "aud": project,
+                "iss": format!("https://securetoken.google.com/{project}"),
+                "sub": user,
+                "user_id": user,
+                "iat": 1_788_004_860,
+                "exp": 1_788_008_400,
+                "auth_time": 1_788_004_860,
+                "firebase": {"sign_in_provider": "password", "identities": {}, "tenant": tenant}
+            })
+            .to_string()
+            .as_bytes()
+        ),
+        ""
+    )
+}
+
+const ADMIN_MATRIX_ROUTES: [&str; 9] = [
+    "AdminCreate",
+    "AdminLookup",
+    "AdminUpdate",
+    "AdminDelete",
+    "AdminBatchCreate",
+    "AdminBatchDelete",
+    "AdminQuery",
+    "AdminSendOobCode",
+    "AdminCreateSessionCookie",
+];
+
+fn matrix_body_name(case: &str, path_tenant: &str) -> Option<String> {
+    match case {
+        "Missing" | "Null" | "Empty" => None,
+        "Match" => Some(path_tenant.to_owned()),
+        "Mismatch" => Some("matrix-other".to_owned()),
+        unexpected => panic!("unexpected body tenant case: {unexpected}"),
+    }
+}
+
+fn matrix_store(
+    state: &AuthState,
+    registry: &AuthRegistry,
+    tenant: Option<&str>,
+) -> Arc<Mutex<AuthStore>> {
+    tenant
+        .and_then(|tenant| registry.tenant_store("demo-app", tenant))
+        .unwrap_or_else(|| state.store.clone())
+}
+
+fn matrix_scope_name(tenant: Option<&str>) -> &'static str {
+    match tenant {
+        None => "project",
+        Some("matrix-path") => "path",
+        Some("matrix-body") => "body",
+        Some("matrix-other") => "other",
+        Some(_) => "other",
+    }
+}
+
+fn seed_matrix_store(state: &AuthState, tenant: Option<&str>, name: &str) {
+    let path = match tenant {
+        Some(tenant) => format!("{V1}/projects/demo-app/tenants/{tenant}/accounts"),
+        None => format!("{V1}/projects/demo-app/accounts"),
+    };
+    let (status, response) = admin(
+        state,
+        "POST",
+        &path,
+        &json!({
+            "localId": format!("matrix-{name}-seed"),
+            "email": format!("matrix-{name}@example.com"),
+            "password": "hunter22",
+            "displayName": name,
+        }),
+    );
+    assert_eq!(status, 200, "seed {name}: {response}");
+}
+
 fn client(state: &AuthState, route: &str, body: &Value) -> (u16, Value) {
     let r = handle(state, "POST", &format!("{route}?key={KEY}"), body);
     (r.status, r.body)
@@ -261,6 +345,498 @@ fn the_strict_profile_reads_an_empty_body_tenant_as_before() {
         "{refused}"
     );
     assert!(registry.tenants("demo-app").is_empty());
+}
+
+#[test]
+fn body_tenant_profile_route_path_and_value_matrix_preserves_tenant_isolation() {
+    let mut rows = include_str!("fixtures/auth_empty_body_tenant.tsv").lines();
+    assert_eq!(rows.next(), Some("Profile\tRoute\tPathTenant\tBodyTenant"));
+
+    for (case_index, row) in rows.enumerate() {
+        let mut columns = row.split('\t');
+        let profile = columns.next().unwrap();
+        let route = columns.next().unwrap();
+        let path_tenant_case = columns.next().unwrap();
+        let body_tenant = columns.next().unwrap();
+        assert!(columns.next().is_none(), "unexpected PICT row: {row}");
+
+        let (profile, state, registry) = profiles()
+            .into_iter()
+            .find(|(candidate, _, _)| candidate.eq_ignore_ascii_case(profile))
+            .unwrap();
+        assert!(
+            ADMIN_MATRIX_ROUTES.contains(&route),
+            "unknown route: {route}"
+        );
+        let path_tenant = (path_tenant_case == "Tenant").then_some("matrix-path");
+        for tenant in ["matrix-path", "matrix-body", "matrix-other"] {
+            registry.ensure_tenant("demo-app", tenant).unwrap();
+        }
+        let body_name = matrix_body_name(body_tenant, "matrix-path");
+        for (tenant, name) in [
+            (None, "project"),
+            (Some("matrix-path"), "path"),
+            (Some("matrix-body"), "body"),
+            (Some("matrix-other"), "other"),
+        ] {
+            seed_matrix_store(&state, tenant, name);
+        }
+
+        let mut body = json!({"tenantId": body_name, "returnSecureToken": true});
+        match body_tenant {
+            "Missing" => {}
+            "Null" => body["tenantId"] = Value::Null,
+            "Empty" => body["tenantId"] = json!(""),
+            "Match" | "Mismatch" => {}
+            unexpected => panic!("unexpected body tenant case: {unexpected}"),
+        }
+        let suffix = match route {
+            "AdminCreate" => "/accounts",
+            "AdminLookup" => "/accounts:lookup",
+            "AdminUpdate" => "/accounts:update",
+            "AdminDelete" => "/accounts:delete",
+            "AdminBatchCreate" => "/accounts:batchCreate",
+            "AdminBatchDelete" => "/accounts:batchDelete",
+            "AdminQuery" => "/accounts:query",
+            "AdminSendOobCode" => "/accounts:sendOobCode",
+            "AdminCreateSessionCookie" => ":createSessionCookie",
+            _ => unreachable!(),
+        };
+        let path = format!(
+            "{V1}/projects/demo-app{}{}",
+            path_tenant
+                .map(|tenant| format!("/tenants/{tenant}"))
+                .unwrap_or_default(),
+            suffix
+        );
+
+        let strict_named_body_is_unscoped = profile == "strict"
+            && path_tenant.is_none()
+            && body_name.is_some()
+            && matches!(
+                route,
+                "AdminUpdate"
+                    | "AdminDelete"
+                    | "AdminBatchCreate"
+                    | "AdminBatchDelete"
+                    | "AdminSendOobCode"
+            );
+        let path_body_mismatch = path_tenant.is_some()
+            && body_name
+                .as_deref()
+                .is_some_and(|tenant| tenant != path_tenant.unwrap())
+            && !(profile == "strict" && route == "AdminCreate");
+        let strict_query_empty_unknown = profile == "strict"
+            && route == "AdminQuery"
+            && body_tenant == "Empty"
+            && path_tenant.is_none();
+        let strict_query_empty_path_mismatch = profile == "strict"
+            && route == "AdminQuery"
+            && body_tenant == "Empty"
+            && path_tenant.is_some();
+        let refused = path_body_mismatch
+            || strict_named_body_is_unscoped
+            || strict_query_empty_unknown
+            || strict_query_empty_path_mismatch;
+
+        let selected_tenant = if path_body_mismatch {
+            None
+        } else if path_tenant.is_some() {
+            path_tenant
+        } else if profile == "strict" && route == "AdminCreate" {
+            None
+        } else if route == "AdminCreateSessionCookie" {
+            // Cookie creation follows the supplied ID token in strict mode and emulator body
+            // selection otherwise. Mint the token for the independently predicted target below.
+            body_name.as_deref()
+        } else if body_tenant == "Empty" || body_name.is_none() {
+            None
+        } else if profile == "emulator" || matches!(route, "AdminLookup" | "AdminQuery") {
+            body_name.as_deref()
+        } else {
+            None
+        };
+        let selected_name = matrix_scope_name(selected_tenant);
+        let selected_email = format!("matrix-{selected_name}@example.com");
+        if route == "AdminCreateSessionCookie" {
+            let (status, signed_in) = client(
+                &state,
+                &format!("{V1}/accounts:signInWithPassword"),
+                &json!({
+                    "email": selected_email,
+                    "password": "hunter22",
+                    "tenantId": selected_tenant.unwrap_or(""),
+                    "returnSecureToken": true,
+                }),
+            );
+            assert_eq!(status, 200, "{row}: {signed_in}");
+            body["idToken"] = signed_in["idToken"].clone();
+        }
+
+        let new_email = format!("matrix-new-{case_index}@example.com");
+        let (method, mut operation) = match route {
+            "AdminCreate" => ("POST", json!({"email": new_email, "password": "hunter22"})),
+            "AdminLookup" => ("POST", json!({"email": [selected_email]})),
+            "AdminUpdate" => (
+                "POST",
+                json!({"localId": format!("matrix-{selected_name}-seed"), "displayName": "updated"}),
+            ),
+            "AdminDelete" => (
+                "POST",
+                json!({"localId": format!("matrix-{selected_name}-seed")}),
+            ),
+            "AdminBatchCreate" => (
+                "POST",
+                json!({"users": [{"localId": format!("matrix-new-{case_index}"), "email": new_email, "password": "hunter22"}]}),
+            ),
+            "AdminBatchDelete" => (
+                "POST",
+                json!({"localIds": [format!("matrix-{selected_name}-seed")], "force": true}),
+            ),
+            "AdminQuery" => ("POST", json!({"returnUserInfo": true})),
+            "AdminSendOobCode" => (
+                "POST",
+                json!({"requestType": "PASSWORD_RESET", "email": selected_email, "returnOobLink": true}),
+            ),
+            "AdminCreateSessionCookie" => ("POST", json!({"validDuration": "3600"})),
+            _ => unreachable!(),
+        };
+        match body_tenant {
+            "Missing" => {
+                operation.as_object_mut().unwrap().remove("tenantId");
+            }
+            "Null" => operation["tenantId"] = Value::Null,
+            "Empty" => operation["tenantId"] = json!(""),
+            "Match" | "Mismatch" => operation["tenantId"] = json!(body_name.as_deref().unwrap()),
+            _ => unreachable!(),
+        }
+        if route == "AdminCreateSessionCookie" {
+            operation["idToken"] = body["idToken"].clone();
+        }
+        let (status, response) = admin(&state, method, &path, &operation);
+        if refused {
+            assert_eq!(
+                status,
+                if strict_query_empty_unknown { 404 } else { 400 },
+                "{row}: {response}"
+            );
+            assert_eq!(
+                response["error"]["message"],
+                if strict_query_empty_unknown {
+                    "TENANT_NOT_FOUND"
+                } else {
+                    "TENANT_ID_MISMATCH"
+                },
+                "{row}: {response}"
+            );
+            continue;
+        }
+        assert_eq!(status, 200, "{row}: {response}");
+        let selected_store = matrix_store(&state, &registry, selected_tenant);
+        let selected_name = matrix_scope_name(selected_tenant);
+        match route {
+            "AdminCreate" | "AdminBatchCreate" => {
+                assert!(
+                    selected_store
+                        .lock()
+                        .unwrap()
+                        .user_by_email(&new_email)
+                        .is_some(),
+                    "{row}: {response}"
+                );
+            }
+            "AdminLookup" => assert_eq!(
+                response["users"][0]["displayName"], selected_name,
+                "{row}: {response}"
+            ),
+            "AdminUpdate" => assert_eq!(
+                selected_store
+                    .lock()
+                    .unwrap()
+                    .user_by_id(&format!("matrix-{selected_name}-seed"))
+                    .unwrap()
+                    .display_name
+                    .as_deref(),
+                Some("updated"),
+                "{row}"
+            ),
+            "AdminDelete" | "AdminBatchDelete" => assert!(
+                selected_store
+                    .lock()
+                    .unwrap()
+                    .user_by_id(&format!("matrix-{selected_name}-seed"))
+                    .is_none(),
+                "{row}"
+            ),
+            "AdminQuery" => assert_eq!(
+                response["userInfo"][0]["displayName"], selected_name,
+                "{row}: {response}"
+            ),
+            "AdminSendOobCode" => {
+                assert_eq!(response["email"], selected_email, "{row}: {response}")
+            }
+            "AdminCreateSessionCookie" => assert!(
+                response["sessionCookie"].as_str().is_some(),
+                "{row}: {response}"
+            ),
+            _ => unreachable!(),
+        }
+        for foreign in [
+            None,
+            Some("matrix-path"),
+            Some("matrix-body"),
+            Some("matrix-other"),
+        ]
+        .into_iter()
+        .filter(|tenant| *tenant != selected_tenant)
+        {
+            let store = matrix_store(&state, &registry, foreign);
+            let guard = store.lock().unwrap();
+            assert_eq!(
+                guard.user_by_email(&new_email).is_some(),
+                false,
+                "{row}: new user leaked to {foreign:?}"
+            );
+            let foreign_name = matrix_scope_name(foreign);
+            let seeded = guard.user_by_id(&format!("matrix-{foreign_name}-seed"));
+            if matches!(route, "AdminUpdate") {
+                assert_ne!(
+                    seeded.unwrap().display_name.as_deref(),
+                    Some("updated"),
+                    "{row}: update leaked to {foreign:?}"
+                );
+            } else if matches!(route, "AdminDelete" | "AdminBatchDelete") {
+                assert!(seeded.is_some(), "{row}: delete leaked to {foreign:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn empty_body_tenant_is_absent_for_each_emulator_admin_account_handler() {
+    let rows: [(&str, &str, Value); 9] = [
+        (
+            "Create",
+            "/accounts",
+            account("admin-create-empty@example.com"),
+        ),
+        (
+            "Lookup",
+            "/accounts:lookup",
+            json!({"localId": ["missing-user"]}),
+        ),
+        (
+            "Update",
+            "/accounts:update",
+            json!({"localId": "missing-user", "displayName": "changed"}),
+        ),
+        (
+            "Delete",
+            "/accounts:delete",
+            json!({"localId": "missing-user"}),
+        ),
+        (
+            "BatchCreate",
+            "/accounts:batchCreate",
+            json!({"users": [{"localId": "batch-user", "email": "batch@example.com"}]}),
+        ),
+        (
+            "BatchDelete",
+            "/accounts:batchDelete",
+            json!({"localIds": ["missing-user"], "force": true}),
+        ),
+        ("Query", "/accounts:query", json!({"returnUserInfo": false})),
+        (
+            "SendOobCode",
+            "/accounts:sendOobCode",
+            json!({"requestType": "PASSWORD_RESET", "email": "missing@example.com", "returnOobLink": true}),
+        ),
+        (
+            "CreateSessionCookie",
+            ":createSessionCookie",
+            json!({"idToken": project_token("demo-app", "project-user", ""), "validDuration": "3600"}),
+        ),
+    ];
+
+    for (case, suffix, original) in rows {
+        let run = |tenant_value: Option<Value>| {
+            let (state, _registry) = emulator();
+            let mut body = original.clone();
+            if let Some(value) = tenant_value {
+                body["tenantId"] = value;
+            }
+            let (status, response) = admin(
+                &state,
+                "POST",
+                &format!("{V1}/projects/demo-app{suffix}"),
+                &body,
+            );
+            let project_users = state.store.lock().unwrap().user_count();
+            (
+                status,
+                response["error"]["message"].clone(),
+                tenant_names(&state, "demo-app"),
+                project_users,
+            )
+        };
+
+        let baseline = run(None);
+        assert!(
+            baseline.2.is_empty(),
+            "{case}: baseline unexpectedly made a tenant"
+        );
+        for tenant_value in [Some(Value::Null), Some(json!(""))] {
+            let observed = run(tenant_value);
+            assert_eq!(
+                (observed.0, &observed.1, &observed.2, observed.3),
+                (baseline.0, &baseline.1, &baseline.2, baseline.3),
+                "{case}: empty/null body tenant changed the project-path request"
+            );
+            assert!(observed.2.is_empty(), "{case}: body selector made a tenant");
+        }
+    }
+}
+
+#[test]
+fn strict_admin_query_keeps_its_route_specific_body_validation() {
+    let (_, state, registry) = profiles()
+        .into_iter()
+        .find(|(profile, ..)| *profile == "strict")
+        .unwrap();
+    registry.ensure_tenant("demo-app", "query-tenant").unwrap();
+    let query = |body: Value| {
+        admin(
+            &state,
+            "POST",
+            &format!("{V1}/projects/demo-app/accounts:query"),
+            &body,
+        )
+    };
+
+    for body in [
+        json!({"returnUserInfo": false}),
+        json!({"returnUserInfo": false, "tenantId": null}),
+    ] {
+        let (status, response) = query(body);
+        assert_eq!(status, 200, "{response}");
+    }
+    let (status, empty) = query(json!({"returnUserInfo": false, "tenantId": ""}));
+    assert_eq!(status, 404, "{empty}");
+    assert_eq!(empty["error"]["message"], "TENANT_NOT_FOUND", "{empty}");
+    let (status, selected) = query(json!({"returnUserInfo": false, "tenantId": "query-tenant"}));
+    assert_eq!(status, 200, "{selected}");
+    let (status, malformed) = query(json!({"returnUserInfo": false, "tenantId": 7}));
+    assert_eq!(status, 400, "{malformed}");
+    assert_eq!(
+        malformed["error"]["message"],
+        "INVALID_ARGUMENT : tenantId must be a string"
+    );
+}
+
+#[test]
+fn strict_project_path_lookup_uses_a_nonempty_body_tenant_but_not_an_empty_one() {
+    let (_, state, registry) = profiles()
+        .into_iter()
+        .find(|(profile, ..)| *profile == "strict")
+        .unwrap();
+    registry.ensure_tenant("demo-app", "lookup-tenant").unwrap();
+    let (status, project_user) = admin(
+        &state,
+        "POST",
+        &format!("{V1}/projects/demo-app/accounts"),
+        &account("project-lookup@example.com"),
+    );
+    assert_eq!(status, 200, "{project_user}");
+    let (status, tenant_user) = admin(
+        &state,
+        "POST",
+        &format!("{V1}/projects/demo-app/tenants/lookup-tenant/accounts"),
+        &account("tenant-lookup@example.com"),
+    );
+    assert_eq!(status, 200, "{tenant_user}");
+
+    let lookup = |email: &str, tenant: Option<Value>| {
+        let mut body = json!({"email": [email]});
+        if let Some(tenant) = tenant {
+            body["tenantId"] = tenant;
+        }
+        admin(
+            &state,
+            "POST",
+            &format!("{V1}/projects/demo-app/accounts:lookup"),
+            &body,
+        )
+    };
+    for tenant in [None, Some(Value::Null), Some(json!(""))] {
+        let (status, found) = lookup("project-lookup@example.com", tenant);
+        assert_eq!(status, 200, "{found}");
+        assert_eq!(
+            found["users"][0]["email"], "project-lookup@example.com",
+            "{found}"
+        );
+    }
+    let (status, found) = lookup("tenant-lookup@example.com", Some(json!("lookup-tenant")));
+    assert_eq!(status, 200, "{found}");
+    assert_eq!(
+        found["users"][0]["email"], "tenant-lookup@example.com",
+        "{found}"
+    );
+    assert!(state
+        .store
+        .lock()
+        .unwrap()
+        .user_by_email("tenant-lookup@example.com")
+        .is_none());
+    assert!(registry
+        .tenant_store("demo-app", "lookup-tenant")
+        .unwrap()
+        .lock()
+        .unwrap()
+        .user_by_email("project-lookup@example.com")
+        .is_none());
+}
+
+#[test]
+fn strict_project_path_session_cookie_keeps_the_token_tenant_with_an_empty_body_tenant() {
+    let (_, state, _) = profiles()
+        .into_iter()
+        .find(|(profile, ..)| *profile == "strict")
+        .unwrap();
+    let (status, created_tenant) = admin(
+        &state,
+        "POST",
+        &format!("{V2}/projects/demo-app/tenants"),
+        &json!({"displayName": "cookie-empty", "allowPasswordSignup": true}),
+    );
+    assert_eq!(status, 200, "{created_tenant}");
+    let tenant = created_tenant["name"]
+        .as_str()
+        .unwrap()
+        .rsplit('/')
+        .next()
+        .unwrap();
+    let (status, created_user) = admin(
+        &state,
+        "POST",
+        &format!("{V1}/projects/demo-app/tenants/{tenant}/accounts"),
+        &json!({"email": "cookie-empty@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 200, "{created_user}");
+    let (status, signed_in) = client(
+        &state,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"tenantId": tenant, "email": "cookie-empty@example.com", "password": "hunter22", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{signed_in}");
+
+    let (status, cookie) = admin(
+        &state,
+        "POST",
+        &format!("{V1}/projects/demo-app:createSessionCookie"),
+        &json!({"idToken": signed_in["idToken"], "validDuration": "3600", "tenantId": ""}),
+    );
+    assert_eq!(status, 200, "{cookie}");
+    assert!(cookie["sessionCookie"].as_str().is_some(), "{cookie}");
 }
 
 #[test]

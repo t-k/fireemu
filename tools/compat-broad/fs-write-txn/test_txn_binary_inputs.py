@@ -69,6 +69,23 @@ def test_compiled_product_path_is_bound_even_when_other_sources_are_excluded(tmp
     assert "crates/fireemu/src/unit_tests.rs" not in inputs
 
 
+def test_all_dep_info_rules_bind_later_compiled_sources(tmp_path):
+    root = workspace(tmp_path)
+    product = root / "crates/fireemu/src/product.rs"
+    product.write_text("pub fn product() {}\n")
+    dep_info = (
+        "target/debug/fireemu: crates/fireemu/src/main.rs\n"
+        "target/debug/libproduct.rlib: crates/fireemu/src/product.rs\n"
+        "crates/fireemu/src/product.rs:\n"
+        "# env-dep:FEATURE=1\n"
+    )
+    before = txn_binary_inputs(root, dep_info)
+    assert "crates/fireemu/src/product.rs" in before
+    product.write_text("pub fn product_changed() {}\n")
+    after = txn_binary_inputs(root, dep_info)
+    assert after["crates/fireemu/src/product.rs"] != before["crates/fireemu/src/product.rs"]
+
+
 def test_dep_info_includes_compiled_test_tree_file_and_escaped_space_path(tmp_path):
     root = workspace(tmp_path)
     compiled = root / "crates/fireemu/tests/fixture data.rs"
@@ -111,7 +128,7 @@ def test_missing_lock_is_rejected(tmp_path):
         txn_binary_inputs(root, "target/debug/fireemu: crates/fireemu/src/main.rs\n")
 
 
-@pytest.mark.parametrize("dep_info", ["", "target/debug/fireemu", "target/debug/fireemu: ", "bad\\"])
+@pytest.mark.parametrize("dep_info", ["", "target/debug/fireemu", "target/debug/fireemu: ", "bad\\", "target: input\nmalformed"])
 def test_malformed_or_empty_dep_info_fails_closed(tmp_path, dep_info):
     with pytest.raises(ValueError):
         txn_binary_inputs(workspace(tmp_path), dep_info)
@@ -188,6 +205,11 @@ def test_workspace_inputs_are_bound_to_manifest_and_exclude_dev_only_path_edges(
             f'[package]\nname="{package}"\nversion="0.1.0"\nedition="2021"\n'
         )
         (package_root / "src/lib.rs").write_text("pub fn value() {}\n")
+    (root / "crates/normal/build.rs").write_text("fn main() { let _ = include_str!(\"build-input.txt\"); }\n")
+    (root / "crates/normal/build-input.txt").write_text("optional build input\n")
+    optional_test_input = root / "crates/normal/tests/build-test-input.txt"
+    optional_test_input.parent.mkdir()
+    optional_test_input.write_text("retained conservatively\n")
     (root / "crates/fireemu/Cargo.toml").write_text(
         '[package]\nname="fireemu"\nversion="0.1.0"\nedition="2021"\n'
         '[dependencies.alias]\npackage="normal"\npath="../normal"\noptional=true\n'
@@ -197,16 +219,31 @@ def test_workspace_inputs_are_bound_to_manifest_and_exclude_dev_only_path_edges(
         '[workspace]\nmembers=["crates/fireemu", "crates/unlinked", "crates/normal", "crates/devonly"]\nresolver="2"\n'
     )
     subprocess.run(["cargo", "generate-lockfile", "--offline"], cwd=root, check=True, capture_output=True)
-    inputs = txn_binary_inputs(root, "target/debug/fireemu: crates/fireemu/src/main.rs crates/normal/src/lib.rs\n")
+    inputs = txn_binary_inputs(root, "target/debug/fireemu: crates/fireemu/src/main.rs\n")
     assert "crates/normal/Cargo.toml" in inputs
     assert "crates/normal/src/lib.rs" in inputs
+    assert "crates/normal/build.rs" in inputs
+    assert "crates/normal/build-input.txt" in inputs
+    assert "crates/normal/tests/build-test-input.txt" in inputs
     assert "crates/devonly/Cargo.toml" not in inputs
 
 
 def test_real_cargo_dep_info_omits_a_source_reachable_only_under_cfg_test(tmp_path):
     root = workspace(tmp_path)
+    normal = root / "crates/normal"
+    (normal / "src").mkdir(parents=True)
+    (normal / "Cargo.toml").write_text('[package]\nname="normal"\nversion="0.1.0"\nedition="2021"\n')
+    (normal / "src/lib.rs").write_text("pub fn value() {}\n")
+    (root / "crates/fireemu/Cargo.toml").write_text(
+        '[package]\nname="fireemu"\nversion="0.1.0"\nedition="2021"\n'
+        '[dependencies]\nnormal={path="../normal"}\n'
+    )
+    (root / "Cargo.toml").write_text(
+        '[workspace]\nmembers=["crates/fireemu", "crates/unlinked", "crates/normal"]\nresolver="2"\n'
+    )
+    subprocess.run(["cargo", "generate-lockfile", "--offline"], cwd=root, check=True, capture_output=True)
     (root / "crates/fireemu/src/main.rs").write_text(
-        '#[cfg(test)]\nmod unit_tests;\nfn main() {}\n'
+        '#[cfg(test)]\nmod unit_tests;\nfn main() { normal::value(); }\n'
     )
     (root / "crates/fireemu/src/unit_tests.rs").write_text("#[test] fn test_only() {}\n")
     env = os.environ.copy()
@@ -215,11 +252,18 @@ def test_real_cargo_dep_info_omits_a_source_reachable_only_under_cfg_test(tmp_pa
         ["cargo", "build", "--offline", "--locked", "--bin", "fireemu", "--manifest-path", str(root / "Cargo.toml")],
         cwd=root, env=env, check=True, capture_output=True, text=True,
     )
-    depfiles = list((root / "target/debug/deps").glob("fireemu-*.d"))
-    assert len(depfiles) == 1
-    inputs = txn_binary_inputs(root, depfiles[0].read_text())
+    depfiles = list((root / "target/debug/deps").glob("*.d"))
+    assert any(path.name.startswith("fireemu-") for path in depfiles)
+    assert any(path.name.startswith("normal-") for path in depfiles)
+    dep_info = "\n".join(path.read_text() for path in depfiles)
+    inputs = txn_binary_inputs(root, dep_info)
     assert "crates/fireemu/src/main.rs" in inputs
     assert "crates/fireemu/src/unit_tests.rs" not in inputs
+    assert "crates/normal/src/lib.rs" in inputs
+    source = root / "crates/normal/src/lib.rs"
+    source.write_text("pub fn value_changed() {}\n")
+    after = txn_binary_inputs(root, dep_info)
+    assert after["crates/normal/src/lib.rs"] != inputs["crates/normal/src/lib.rs"]
 
 
 def test_metadata_requires_offline_locked_no_deps_workspace(tmp_path):

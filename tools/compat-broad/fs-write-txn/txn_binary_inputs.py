@@ -13,29 +13,40 @@ _TEST_TREES = {"tests", "benches", "examples", "proptest-regressions"}
 def _make_dependencies(text):
     if not isinstance(text, str) or not text.strip() or "\0" in text:
         raise ValueError("dep-info is empty or malformed")
-    first_rule = re.sub(r"\\\r?\n", " ", text).splitlines()[0]
-    token, dependencies, escaped, colon = [], [], False, False
-    for char in first_rule:
-        if char == ":" and not escaped:
-            if colon:
-                raise ValueError("dep-info has multiple rules on its first line")
-            colon = True
-            token.clear()
-        elif char.isspace() and not escaped:
-            if colon and token:
-                dependencies.append("".join(token))
-                token.clear()
-        elif char == "\\" and not escaped:
-            escaped = True
-        else:
-            token.append(char)
-            escaped = False
-    if escaped:
-        raise ValueError("dep-info ends with an escape")
-    if colon and token:
-        dependencies.append("".join(token))
-    if not colon or not dependencies:
-        raise ValueError("dep-info has no target or dependencies")
+    logical_lines = re.sub(r"\\\r?\n", " ", text).splitlines()
+    dependencies = []
+    for line in logical_lines:
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        escaped = False
+        colon = None
+        for index, char in enumerate(line):
+            if char == ":" and not escaped:
+                colon = index
+                break
+            if char == "\\" and not escaped:
+                escaped = True
+            else:
+                escaped = False
+        if colon is None or not line[:colon].strip():
+            raise ValueError("dep-info contains a malformed rule")
+        token, escaped = [], False
+        for char in line[colon + 1:]:
+            if char.isspace() and not escaped:
+                if token:
+                    dependencies.append("".join(token))
+                    token.clear()
+            elif char == "\\" and not escaped:
+                escaped = True
+            else:
+                token.append(char)
+                escaped = False
+        if escaped:
+            raise ValueError("dep-info ends with an escape")
+        if token:
+            dependencies.append("".join(token))
+    if not dependencies:
+        raise ValueError("dep-info has no dependencies")
     return dependencies
 
 
@@ -49,7 +60,10 @@ def _is_test_tree(path):
 
 
 def txn_binary_inputs(root, dep_info):
-    """Return candidate path-to-SHA256 inputs; callers must supply fresh complete dep-info from a clean build, which this text-only API cannot prove and the current artifact does not accept."""
+    """Return candidate SHA256 inputs; fresh complete clean-build dep-info cannot be proven here or accepted by the current artifact.
+
+    Cargo metadata does not resolve selected features or target predicates, so every declared local normal/build edge is included, even when optional or target-inactive; packages with build scripts or proc macros bind their full inventoried package contents.
+    """
     root = Path(root).resolve(strict=True)
     for required in (root / "Cargo.toml", root / "Cargo.lock"):
         if not required.is_file() or required.is_symlink():

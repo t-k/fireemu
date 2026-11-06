@@ -477,7 +477,7 @@ Product mapping is:
 |---|---|
 | Firestore gRPC and streams | `PERMISSION_DENIED` with `fireemu-code` metadata |
 | Firestore REST | HTTP 403 Google JSON `PERMISSION_DENIED` |
-| Firestore WebChannel | HTTP 200 handshake, then a numbered Google JSON error envelope (`UNAUTHENTICATED` or `PERMISSION_DENIED`) and terminal stream; inferred from SDK handling, not observed in production |
+| Firestore WebChannel | HTTP 200 handshake, then a numbered Google JSON `PERMISSION_DENIED` envelope and terminal stream; inferred from SDK handling, not observed in production |
 | Firebase Storage dialect | HTTP 403 Firebase Storage JSON error |
 | Firebase Auth client route | HTTP 403 Google JSON `PERMISSION_DENIED` |
 | Callable Functions | HTTP 401 callable `UNAUTHENTICATED` JSON envelope; exact v2 streaming requests receive HTTP 200 with one `UNAUTHENTICATED` SSE error record |
@@ -486,6 +486,8 @@ Product mapping is:
 | Unsupported limited-use exchange | HTTP 501 `UNIMPLEMENTED` |
 
 These mappings are `boundary-conformance` until the conformance scenarios record and approve the corresponding real-service behavior.
+
+For WebChannel principal admission, the same HTTP 200 terminal-envelope transport preserves the principal status: expired credentials produce `UNAUTHENTICATED`, while a foreign audience produces `PERMISSION_DENIED` under the tested strict and emulator profiles. This status mapping is also inferred from local SDK handling and emulator tests, not observed in production.
 
 ## 18. Coverage obligations
 

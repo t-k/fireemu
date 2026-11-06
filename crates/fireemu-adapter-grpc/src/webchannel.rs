@@ -790,6 +790,13 @@ struct PendingBatch {
     revision: u64,
 }
 
+struct GeneratedTerminalArray {
+    aid: u64,
+    bytes: usize,
+    queued_first: Option<u64>,
+    queued_count: usize,
+}
+
 struct BudgetedChunk {
     bytes: Vec<u8>,
     _session_permit: OwnedSemaphorePermit,
@@ -981,21 +988,16 @@ impl Session {
 
     /// Atomically replaces not-yet-committed data with one terminal error array. The delivery
     /// revision makes a body serialized before this transition fail its later commit check.
+    #[allow(clippy::too_many_lines)]
     fn refuse_with_error(self: &Arc<Self>, status: &Status) -> Result<u64, ()> {
-        let generated = (|| -> Result<Option<(u64, usize, Option<u64>, usize)>, ()> {
-            let _owner = match self.backchannel_owner.lock() {
-                Ok(owner) => owner,
-                Err(_) => {
-                    self.terminated.store(true, Ordering::SeqCst);
-                    return Err(());
-                }
+        let generated = (|| -> Result<Option<GeneratedTerminalArray>, ()> {
+            let Ok(_owner) = self.backchannel_owner.lock() else {
+                self.terminated.store(true, Ordering::SeqCst);
+                return Err(());
             };
-            let mut delivery = match self.delivery.lock() {
-                Ok(delivery) => delivery,
-                Err(_) => {
-                    self.terminated.store(true, Ordering::SeqCst);
-                    return Err(());
-                }
+            let Ok(mut delivery) = self.delivery.lock() else {
+                self.terminated.store(true, Ordering::SeqCst);
+                return Err(());
             };
             if self.is_terminated() {
                 return Err(());
@@ -1035,16 +1037,13 @@ impl Session {
                 self.terminated.store(true, Ordering::SeqCst);
                 return Err(());
             };
-            let retained_permit = match delivery
+            let Ok(retained_permit) = delivery
                 .process_retained_budget
                 .clone()
                 .try_acquire_many_owned(permit_count)
-            {
-                Ok(permit) => permit,
-                Err(_) => {
-                    self.terminated.store(true, Ordering::SeqCst);
-                    return Err(());
-                }
+            else {
+                self.terminated.store(true, Ordering::SeqCst);
+                return Err(());
             };
             delivery.revision = revision;
             delivery.next_aid = aid;
@@ -1055,14 +1054,19 @@ impl Session {
                 ended_at: Instant::now(),
                 terminal_aid: aid,
             });
-            Ok(Some((
+            Ok(Some(GeneratedTerminalArray {
                 aid,
                 bytes,
-                delivery.outbound.front().map(|(id, _)| *id),
-                delivery.outbound.len(),
-            )))
+                queued_first: delivery.outbound.front().map(|(id, _)| *id),
+                queued_count: delivery.outbound.len(),
+            }))
         })();
-        let (aid, bytes, queued_first, queued_count) = match generated {
+        let GeneratedTerminalArray {
+            aid,
+            bytes,
+            queued_first,
+            queued_count,
+        } = match generated {
             Ok(Some(generated)) => generated,
             Ok(None) => {
                 return self
@@ -1809,10 +1813,10 @@ impl Hub {
         Err(status)
     }
 
-    /// Opens only the WebChannel transport for a refused credential and queues the terminal RPC
+    /// Opens only the `WebChannel` transport for a refused credential and queues the terminal RPC
     /// envelope before returning the handshake chunk. No stream task is created and no request
     /// maps are delivered, so the refusal cannot admit work as a side effect.
-    fn refused_handshake(&self, req: &ChannelRequest, status: Status) -> ChannelResponse {
+    fn refused_handshake(&self, req: &ChannelRequest, status: &Status) -> ChannelResponse {
         let strict = self.production_scope();
         let sid = match if strict && req.kind == StreamKind::Listen {
             sid_from_entropy(|| {
@@ -1864,7 +1868,7 @@ impl Hub {
             kind: session.kind,
         });
         trace_request(&session, req);
-        if session.refuse_with_error(&status).is_err() {
+        if session.refuse_with_error(status).is_err() {
             self.remove(&sid);
             return text_response(503, "unable to retain channel error".to_owned());
         }
@@ -1904,14 +1908,14 @@ impl Hub {
         .to_owned();
         let bound = match self.admit_channel(&project, &values, authorization.as_deref()) {
             Ok(bound) => bound,
-            Err(status) => return self.refused_handshake(req, status),
+            Err(status) => return self.refused_handshake(req, &status),
         };
         let principal = match &self.state.rules {
             Some(r) => match r
                 .principal_from_authorization_for_project(authorization.as_deref(), &project)
             {
                 Ok(p) => p,
-                Err(e) => return self.refused_handshake(req, e),
+                Err(e) => return self.refused_handshake(req, &e),
             },
             None => crate::rules::Principal::Owner,
         };

@@ -44,7 +44,7 @@ impl AppCheckSigner for RefusalTestSigner {
         "RS256"
     }
 
-    fn kid(&self) -> &str {
+    fn kid(&self) -> &'static str {
         "webchannel-refusal-test"
     }
 
@@ -218,8 +218,17 @@ fn mock_user_token(sub: &str, project: &str) -> String {
 }
 
 fn auth_handshake(hub: &Hub, project: &str, token: &str) -> (u16, String) {
+    let (status, _, body) = auth_handshake_response(hub, project, token);
+    (status, body)
+}
+
+fn auth_handshake_response(
+    hub: &Hub,
+    project: &str,
+    token: &str,
+) -> (u16, Vec<(&'static str, String)>, String) {
     let database = format!("projects/{project}/databases/(default)");
-    let (status, _, body) = full(hub.handle(&ChannelRequest {
+    full(hub.handle(&ChannelRequest {
         kind: StreamKind::Listen,
         method: "POST".to_owned(),
         params: params(&[("database", &database), ("VER", "8"), ("RID", "1")]),
@@ -227,8 +236,7 @@ fn auth_handshake(hub: &Hub, project: &str, token: &str) -> (u16, String) {
         app_check: Vec::new(),
         origin: None,
         body: String::new(),
-    }));
-    (status, body)
+    }))
 }
 
 #[tokio::test]
@@ -236,22 +244,71 @@ async fn webchannel_binds_unknown_mock_tokens_to_the_requested_project() {
     let token = mock_user_token("alice", "demo-app-w0");
     let firebase = hub_with_acceptance(Some(RULES_ALLOW_ALL), TokenAcceptance::EmulatorMock);
     assert_eq!(auth_handshake(&firebase, "demo-app-w0", &token).0, 200);
-    assert_eq!(auth_handshake(&firebase, "demo-app", &token).0, 401);
+    let (status, headers, body) = auth_handshake_response(&firebase, "demo-app", &token);
+    assert_eq!(status, 200, "{body}");
+    let sid = headers
+        .iter()
+        .find(|(name, _)| *name == "x-http-session-id")
+        .map(|(_, sid)| sid.as_str())
+        .expect("denied handshake needs a terminal stream session");
+    let terminal = read_long_poll(&firebase, sid, 0).await;
+    assert_eq!(
+        response_payloads(&terminal)[0]["error"]["status"],
+        "UNAUTHENTICATED"
+    );
+    let (ack_status, _, ack) = full(firebase.handle(&ChannelRequest {
+        kind: StreamKind::Listen,
+        method: "POST".to_owned(),
+        params: params(&[("SID", sid), ("RID", "ack"), ("AID", "1")]),
+        authorization: None,
+        app_check: Vec::new(),
+        origin: None,
+        body: form(&[("count", "0"), ("ofs", "1")]),
+    }));
+    assert_eq!(ack_status, 200, "{ack}");
 
     // The strict profile refuses a token it cannot verify in production's words.
     let strict = hub_with_acceptance(Some(RULES_ALLOW_ALL), TokenAcceptance::Verified);
-    assert_eq!(auth_handshake(&strict, "demo-app-w0", &token).0, 403);
+    let (status, headers, body) = auth_handshake_response(&strict, "demo-app-w0", &token);
+    assert_eq!(status, 200, "{body}");
+    let sid = headers
+        .iter()
+        .find(|(name, _)| *name == "x-http-session-id")
+        .map(|(_, sid)| sid.as_str())
+        .expect("strict denial needs a terminal session");
+    let terminal = read_long_poll(&strict, sid, 0).await;
+    assert_eq!(
+        response_payloads(&terminal)[0]["error"]["status"],
+        "PERMISSION_DENIED"
+    );
+    let (ack_status, _, ack) = full(strict.handle(&ChannelRequest {
+        kind: StreamKind::Listen,
+        method: "POST".to_owned(),
+        params: params(&[("SID", sid), ("RID", "ack"), ("AID", "1")]),
+        authorization: None,
+        app_check: Vec::new(),
+        origin: None,
+        body: form(&[("count", "0"), ("ofs", "1")]),
+    }));
+    assert_eq!(ack_status, 200, "{ack}");
 
     let header = base64url_encode(br#"{"alg":"RS256","typ":"JWT","kid":"nope"}"#);
     let payload = base64url_encode(br#"{"aud":"demo-app-w0","exp":3600,"iat":0,"sub":"alice"}"#);
+    let (status, headers, body) = auth_handshake_response(
+        &firebase,
+        "demo-app-w0",
+        &format!("{header}.{payload}.AAAA"),
+    );
+    assert_eq!(status, 200, "{body}");
+    let sid = headers
+        .iter()
+        .find(|(name, _)| *name == "x-http-session-id")
+        .map(|(_, sid)| sid.as_str())
+        .expect("denied handshake needs a terminal session");
+    let terminal = read_long_poll(&firebase, sid, 0).await;
     assert_eq!(
-        auth_handshake(
-            &firebase,
-            "demo-app-w0",
-            &format!("{header}.{payload}.AAAA")
-        )
-        .0,
-        401
+        response_payloads(&terminal)[0]["error"]["status"],
+        "UNAUTHENTICATED"
     );
 }
 
@@ -260,100 +317,100 @@ async fn refused_opening_principals_are_delivered_as_terminal_stream_errors() {
     let start = LogicalInstant::from_unix_seconds(1_788_004_860);
     for strict in [true, false] {
         for refusal in ["expired", "foreign-audience"] {
-            let (hub, _, auth) = hub_and_local_with_profile_and_auth(
-                Some(RULES_ALLOW_ALL),
-                TokenAcceptance::Verified,
-                strict,
-            );
-            let token = {
-                let mut store = auth.lock().unwrap();
-                let uid = store
-                    .create_user(NewUser::email("webchannel@example.test"), start)
-                    .unwrap();
-                let mut claims = store
-                    .id_token_claims(&uid, None, start)
-                    .expect("test user claims");
-                match refusal {
-                    "expired" => {
-                        claims = store
-                            .id_token_claims(
-                                &uid,
-                                None,
-                                LogicalInstant::from_unix_seconds(1_788_004_860 - 7200),
-                            )
-                            .expect("expired test user claims");
+            for kind in [StreamKind::Listen, StreamKind::Write] {
+                let (hub, _, auth) = hub_and_local_with_profile_and_auth(
+                    Some(RULES_ALLOW_ALL),
+                    TokenAcceptance::Verified,
+                    strict,
+                );
+                let token = {
+                    let mut store = auth.lock().unwrap();
+                    let uid = store
+                        .create_user(NewUser::email("webchannel@example.test"), start)
+                        .unwrap();
+                    let mut claims = store
+                        .id_token_claims(&uid, None, start)
+                        .expect("test user claims");
+                    match refusal {
+                        "expired" => {
+                            claims = store
+                                .id_token_claims(
+                                    &uid,
+                                    None,
+                                    LogicalInstant::from_unix_seconds(1_788_004_860 - 7200),
+                                )
+                                .expect("expired test user claims");
+                        }
+                        "foreign-audience" => claims.aud = "foreign-project".to_owned(),
+                        _ => unreachable!(),
                     }
-                    "foreign-audience" => claims.aud = "foreign-project".to_owned(),
-                    _ => unreachable!(),
-                }
-                encode_unsigned(&claims)
-            };
-            let database = format!("projects/demo-app/databases/(default)");
-            let response = hub.handle(&ChannelRequest {
-                kind: StreamKind::Listen,
-                method: "POST".to_owned(),
-                params: params(&[("database", &database), ("VER", "8"), ("RID", "1")]),
-                authorization: Some(format!("Bearer {token}")),
-                app_check: Vec::new(),
-                origin: None,
-                body: form(&[
-                    ("count", "1"),
-                    ("ofs", "0"),
-                    ("req0___data__", &listen_target(2, "open")),
-                ]),
-            });
-            let (status, headers, body) = full(response);
-            assert_eq!(
-                status, 200,
-                "{refusal} principal under strict={strict}: {body}"
-            );
-            let sid = headers
-                .iter()
-                .find(|(name, _)| *name == "x-http-session-id")
-                .map(|(_, sid)| sid.as_str())
-                .expect("a refusal must establish a backchannel session");
-            let handshake = chunks(&body);
-            assert_eq!(handshake[0][0][0], 0);
-            assert_eq!(handshake[0][0][1][0], "c");
-            assert_eq!(handshake[0][0][1][1], sid);
+                    encode_unsigned(&claims)
+                };
+                let database = "projects/demo-app/databases/(default)".to_owned();
+                let first = match kind {
+                    StreamKind::Listen => listen_target(2, "open"),
+                    StreamKind::Write => json!({"database": database}).to_string(),
+                };
+                let response = hub.handle(&ChannelRequest {
+                    kind,
+                    method: "POST".to_owned(),
+                    params: params(&[("database", &database), ("VER", "8"), ("RID", "1")]),
+                    authorization: Some(format!("Bearer {token}")),
+                    app_check: Vec::new(),
+                    origin: None,
+                    body: form(&[("count", "1"), ("ofs", "0"), ("req0___data__", &first)]),
+                });
+                let (status, headers, body) = full(response);
+                assert_eq!(
+                    status, 200,
+                    "{refusal} principal under strict={strict}, kind={kind:?}: {body}"
+                );
+                let sid = headers
+                    .iter()
+                    .find(|(name, _)| *name == "x-http-session-id")
+                    .map(|(_, sid)| sid.as_str())
+                    .expect("a refusal must establish a backchannel session");
+                let handshake = chunks(&body);
+                assert_eq!(handshake[0][0][0], 0);
+                assert_eq!(handshake[0][0][1][0], "c");
+                assert_eq!(handshake[0][0][1][1], sid);
 
-            let terminal = read_long_poll(&hub, sid, 0).await;
-            assert_eq!(last_array_id(&terminal), 1, "{terminal}");
-            assert_eq!(response_payloads(&terminal).len(), 1);
-            let status = match (strict, refusal) {
-                (true, "expired") => "UNAUTHENTICATED",
-                (true, _) => "PERMISSION_DENIED",
-                (false, "expired") => "UNAUTHENTICATED",
-                (false, _) => "PERMISSION_DENIED",
-            };
-            assert_eq!(
-                response_payloads(&terminal)[0]["error"]["status"],
-                status,
-                "{refusal} principal under strict={strict}: {terminal}"
-            );
-            let (status, _, body) = full(hub.handle(&ChannelRequest {
-                kind: StreamKind::Listen,
-                method: "POST".to_owned(),
-                params: params(&[("SID", sid), ("RID", "ack"), ("AID", "1")]),
-                authorization: None,
-                app_check: Vec::new(),
-                origin: None,
-                body: form(&[("count", "0"), ("ofs", "1")]),
-            }));
-            assert_eq!(status, 200, "terminal acknowledgement: {body}");
-            let (status, _, body) = full(hub.handle(&ChannelRequest {
-                kind: StreamKind::Listen,
-                method: "GET".to_owned(),
-                params: params(&[("SID", sid), ("RID", "after-ack"), ("CI", "1")]),
-                authorization: None,
-                app_check: Vec::new(),
-                origin: None,
-                body: String::new(),
-            }));
-            assert_eq!(
-                status, 400,
-                "acknowledged refusal must not stay open: {body}"
-            );
+                let terminal = read_long_poll_kind(&hub, kind, sid, 0).await;
+                assert_eq!(last_array_id(&terminal), 1, "{terminal}");
+                assert_eq!(response_payloads(&terminal).len(), 1);
+                let status = match refusal {
+                    "expired" => "UNAUTHENTICATED",
+                    _ => "PERMISSION_DENIED",
+                };
+                assert_eq!(
+                    response_payloads(&terminal)[0]["error"]["status"],
+                    status,
+                    "{refusal} principal under strict={strict}, kind={kind:?}: {terminal}"
+                );
+                let (status, _, body) = full(hub.handle(&ChannelRequest {
+                    kind,
+                    method: "POST".to_owned(),
+                    params: params(&[("SID", sid), ("RID", "ack"), ("AID", "1")]),
+                    authorization: None,
+                    app_check: Vec::new(),
+                    origin: None,
+                    body: form(&[("count", "0"), ("ofs", "1")]),
+                }));
+                assert_eq!(status, 200, "terminal acknowledgement: {body}");
+                let (status, _, body) = full(hub.handle(&ChannelRequest {
+                    kind,
+                    method: "GET".to_owned(),
+                    params: params(&[("SID", sid), ("RID", "after-ack"), ("CI", "1")]),
+                    authorization: None,
+                    app_check: Vec::new(),
+                    origin: None,
+                    body: String::new(),
+                }));
+                assert_eq!(
+                    status, 400,
+                    "acknowledged refusal must not stay open: {body}"
+                );
+            }
         }
     }
 }
@@ -361,42 +418,44 @@ async fn refused_opening_principals_are_delivered_as_terminal_stream_errors() {
 #[tokio::test]
 async fn enforced_missing_app_check_is_delivered_as_a_terminal_stream_error() {
     for strict in [true, false] {
-        let (hub, _) = app_check_hub(strict);
-        let (status, headers, body) = full(hub.handle(&ChannelRequest {
-            kind: StreamKind::Listen,
-            method: "POST".to_owned(),
-            params: params(&[("database", DB), ("VER", "8"), ("RID", "1")]),
-            authorization: None,
-            app_check: Vec::new(),
-            origin: None,
-            body: form(&[
-                ("count", "1"),
-                ("ofs", "0"),
-                ("req0___data__", &listen_target(2, "open")),
-            ]),
-        }));
-        assert_eq!(status, 200, "strict={strict}: {body}");
-        let sid = headers
-            .iter()
-            .find(|(name, _)| *name == "x-http-session-id")
-            .map(|(_, sid)| sid.as_str())
-            .expect("a refused opening needs a backchannel session");
-        let handshake = chunks(&body);
-        assert_eq!(handshake[0][0][1][0], "c", "strict={strict}");
-        assert_eq!(handshake[0][0][1][1], sid, "strict={strict}");
+        for kind in [StreamKind::Listen, StreamKind::Write] {
+            let (hub, _) = app_check_hub(strict);
+            let first = match kind {
+                StreamKind::Listen => listen_target(2, "open"),
+                StreamKind::Write => json!({"database": DB}).to_string(),
+            };
+            let (status, headers, body) = full(hub.handle(&ChannelRequest {
+                kind,
+                method: "POST".to_owned(),
+                params: params(&[("database", DB), ("VER", "8"), ("RID", "1")]),
+                authorization: None,
+                app_check: Vec::new(),
+                origin: None,
+                body: form(&[("count", "1"), ("ofs", "0"), ("req0___data__", &first)]),
+            }));
+            assert_eq!(status, 200, "strict={strict}: {body}");
+            let sid = headers
+                .iter()
+                .find(|(name, _)| *name == "x-http-session-id")
+                .map(|(_, sid)| sid.as_str())
+                .expect("a refused opening needs a backchannel session");
+            let handshake = chunks(&body);
+            assert_eq!(handshake[0][0][1][0], "c", "strict={strict}");
+            assert_eq!(handshake[0][0][1][1], sid, "strict={strict}");
 
-        let terminal = read_long_poll(&hub, sid, 0).await;
-        assert_eq!(
-            terminal.as_array().unwrap().len(),
-            1,
-            "strict={strict}: {terminal}"
-        );
-        assert_eq!(last_array_id(&terminal), 1, "strict={strict}: {terminal}");
-        assert_eq!(
-            response_payloads(&terminal)[0]["error"]["status"],
-            "PERMISSION_DENIED",
-            "strict={strict}: {terminal}"
-        );
+            let terminal = read_long_poll_kind(&hub, kind, sid, 0).await;
+            assert_eq!(
+                terminal.as_array().unwrap().len(),
+                1,
+                "strict={strict}: {terminal}"
+            );
+            assert_eq!(last_array_id(&terminal), 1, "strict={strict}: {terminal}");
+            assert_eq!(
+                response_payloads(&terminal)[0]["error"]["status"],
+                "PERMISSION_DENIED",
+                "strict={strict}: {terminal}"
+            );
+        }
     }
 }
 
@@ -513,6 +572,115 @@ async fn refused_replacement_tokens_deliver_only_the_terminal_error_and_ignore_r
                 "strict={strict}, replacement={replacement}: {terminal}"
             );
         }
+    }
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn a_refused_backchannel_replacement_ignores_ack_and_replays_the_terminal_error() {
+    for strict in [true, false] {
+        let (hub, gate) = app_check_hub(strict);
+        let valid = app_check_token(&gate, "1:1234567890:web:webchannel-test");
+        let (status, headers, _) = full(hub.handle(&ChannelRequest {
+            kind: StreamKind::Listen,
+            method: "POST".to_owned(),
+            params: params(&[("database", DB), ("VER", "8"), ("RID", "1")]),
+            authorization: None,
+            app_check: vec![valid],
+            origin: None,
+            body: form(&[
+                ("count", "1"),
+                ("ofs", "0"),
+                ("req0___data__", &listen_target(2, "open")),
+            ]),
+        }));
+        assert_eq!(status, 200, "strict={strict}");
+        let sid = headers
+            .iter()
+            .find(|(name, _)| *name == "x-http-session-id")
+            .map(|(_, sid)| sid.clone())
+            .expect("valid opening token must admit a channel");
+
+        let queued_aid = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                let (_, _, body) = full(hub.handle(&ChannelRequest {
+                    kind: StreamKind::Listen,
+                    method: "POST".to_owned(),
+                    params: params(&[("SID", &sid), ("RID", "queued-probe"), ("AID", "0")]),
+                    authorization: None,
+                    app_check: Vec::new(),
+                    origin: None,
+                    body: form(&[("count", "0"), ("ofs", "1")]),
+                }));
+                let aid = chunks(&body)[0][1].as_u64().unwrap();
+                if aid > 0 {
+                    break aid;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("successful output must queue before refusal");
+
+        let response = hub.handle(&ChannelRequest {
+            kind: StreamKind::Listen,
+            method: "GET".to_owned(),
+            params: params(&[
+                ("SID", &sid),
+                ("RID", "refused-backchannel"),
+                ("AID", &queued_aid.to_string()),
+                ("CI", "1"),
+                ("TO", "1000"),
+                ("TYPE", "xmlhttp"),
+            ]),
+            authorization: None,
+            app_check: vec!["invalid-replacement-token".to_owned()],
+            origin: None,
+            body: String::new(),
+        });
+        let ChannelResponse::Stream { mut body, .. } = response else {
+            panic!("a refused replacement must retain a terminal backchannel");
+        };
+        let bytes = tokio::time::timeout(std::time::Duration::from_secs(2), body.next())
+            .await
+            .expect("terminal backchannel timed out")
+            .expect("terminal backchannel must contain one batch")
+            .expect("terminal backchannel bytes are valid");
+        assert!(body.next().await.is_none());
+        let text = std::str::from_utf8(&bytes).unwrap();
+        let terminal = chunks(text).into_iter().next().unwrap();
+        assert_eq!(terminal.as_array().unwrap().len(), 1, "{terminal}");
+        assert_eq!(last_array_id(&terminal), 1, "the refused ACK was ignored");
+        assert_eq!(
+            response_payloads(&terminal)[0]["error"]["status"],
+            "PERMISSION_DENIED",
+            "strict={strict}: {terminal}"
+        );
+        assert_eq!(read_long_poll(&hub, &sid, 0).await, terminal);
+
+        let (status, _, body) = full(hub.handle(&ChannelRequest {
+            kind: StreamKind::Listen,
+            method: "POST".to_owned(),
+            params: params(&[("SID", &sid), ("RID", "ack-terminal"), ("AID", "1")]),
+            authorization: None,
+            app_check: Vec::new(),
+            origin: None,
+            body: form(&[("count", "0"), ("ofs", "1")]),
+        }));
+        assert_eq!(status, 200, "terminal ACK failed: {body}");
+        let (status, _, body) = full(hub.handle(&ChannelRequest {
+            kind: StreamKind::Listen,
+            method: "GET".to_owned(),
+            params: params(&[("SID", &sid), ("RID", "after-ack"), ("CI", "1")]),
+            authorization: None,
+            app_check: Vec::new(),
+            origin: None,
+            body: String::new(),
+        }));
+        assert_eq!(
+            status, 400,
+            "acknowledged terminal session must be removed: {body}"
+        );
     }
 }
 
@@ -1842,6 +2010,17 @@ async fn an_unknown_session_is_answered_by_profile() {
     }
     assert!(STRICT_UNKNOWN_SESSION_BODY.starts_with("<!DOCTYPE html>"));
     assert_eq!(STRICT_UNKNOWN_SESSION_BODY.chars().count(), 400);
+}
+
+#[tokio::test]
+async fn a_malformed_forward_map_remains_an_http_transport_error() {
+    let hub = hub(None);
+    let sid = open_listen_session(&hub, &listen_target(2, "transport-error"));
+    let (status, body) = forward_maps(&hub, &sid, "malformed-map", 1, "not-json");
+    assert_eq!(
+        status, 400,
+        "malformed WebChannel map remains an HTTP error: {body}"
+    );
 }
 
 /// Production closed held native gRPC streams an hour after they opened (AUTH-FS-CROSS stage 2);

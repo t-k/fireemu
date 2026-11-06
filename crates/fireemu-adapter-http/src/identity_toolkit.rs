@@ -17056,7 +17056,11 @@ mod body_tenant_selector_tests {
             &owner_headers,
             &json!({"multiTenant": {"allowTenants": true}}),
         );
-        assert_eq!(configured.status, 200, "{}", configured.body);
+        assert_eq!(
+            configured.status, 200,
+            "tenant config setup: status={}",
+            configured.status
+        );
         for tenant in ["matrix-body", "matrix-other"] {
             registry.ensure_tenant("demo-app", tenant).unwrap();
         }

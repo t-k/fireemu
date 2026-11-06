@@ -3181,6 +3181,74 @@ impl FunctionsRuntime {
         reservation
     }
 
+    /// Injects caller-supplied Remote Config version metadata through ordinary background
+    /// delivery. This local control does not store or publish a Remote Config template.
+    pub fn publish_remote_config(
+        self: &Arc<Self>,
+        body: &Value,
+    ) -> Result<usize, SourceEventAdmissionError> {
+        let (first, second) = crate::events::remote_config_events(&self.config.project, body)
+            .map_err(|_| SourceEventAdmissionError::InvalidEvent)?;
+        let time = self.now();
+        let subject = format!("projects/{}", self.config.project);
+        let mut drafts = Vec::new();
+        let deliver = self.background_triggers_enabled();
+        for spec in self
+            .manifest
+            .functions
+            .iter()
+            .filter(|spec| matches!(spec.trigger, Trigger::RemoteConfig))
+        {
+            let (event_type, payload) = match spec.generation {
+                fireemu_core_functions::manifest::FunctionGeneration::First => {
+                    ("google.firebase.remoteconfig.update", first.as_ref())
+                }
+                fireemu_core_functions::manifest::FunctionGeneration::Second => (
+                    "google.firebase.remoteconfig.remoteConfig.v1.updated",
+                    second.as_ref(),
+                ),
+            };
+            let payload = payload.ok_or(SourceEventAdmissionError::InvalidEvent)?;
+            if !deliver {
+                continue;
+            }
+            let payload = Arc::new(payload.clone());
+            let retained_bytes =
+                Self::retained_event_bytes(&spec.name, event_type, &subject, &payload)
+                    .ok_or(SourceEventAdmissionError::Capacity)?;
+            let copies = self.delivery_copies(&spec.name, event_type);
+            for _ in 0..copies {
+                drafts.push(DeliveryDraft {
+                    function: spec.name.clone(),
+                    event_type: event_type.to_owned(),
+                    subject: subject.clone(),
+                    time,
+                    payload: Arc::clone(&payload),
+                    raw_data: None,
+                    retained_bytes,
+                    parent: None,
+                });
+            }
+        }
+        let count = drafts.len();
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| SourceEventAdmissionError::Unavailable)?;
+        let reservation = self.reserve_drafts(EventSource::Manual, drafts, &mut inner);
+        drop(inner);
+        match reservation {
+            Ok(reservation) => {
+                reservation.publish();
+                Ok(count)
+            }
+            Err(error) => {
+                self.note_admission_refusal(error);
+                Err(error)
+            }
+        }
+    }
+
     /// Publishes messages on `topic`: one event per message and subscribed function.
     /// Returns the message IDs (assigned even when nothing is subscribed, as Pub/Sub does).
     pub fn publish(&self, topic: &str, messages: &[Value]) -> Vec<String> {
@@ -6383,11 +6451,13 @@ impl FunctionsRuntime {
             Trigger::PubSub { .. } => "pubsub",
             Trigger::Auth { .. } => "auth",
             Trigger::BlockingAuth { .. } => "blockingAuth",
+            Trigger::RemoteConfig => "remoteConfig",
             Trigger::Eventarc { .. } => "eventarc",
             Trigger::TaskQueue { .. } => "tasks",
         };
         let mut event = event.clone();
         if self.profile == FunctionsHttpProfile::Strict
+            && !matches!(spec.trigger, Trigger::RemoteConfig)
             && spec.generation == fireemu_core_functions::manifest::FunctionGeneration::Second
         {
             // FE v5/v7 retry frames use fresh trace and parent ids for every delivery.
@@ -6817,6 +6887,92 @@ mod task_completion_tests {
             Arc::new(runner),
             Some(spec),
         )
+    }
+
+    #[tokio::test]
+    async fn remote_config_atomic_capacity_disabled_shutdown_and_metadata() {
+        use fireemu_core_functions::manifest::FunctionGeneration;
+        let base = runtime().await;
+        let mut manifest = base.manifest.clone();
+        let mut template = manifest.get("echo").unwrap().clone();
+        template.trigger = Trigger::RemoteConfig;
+        manifest.functions = [FunctionGeneration::First, FunctionGeneration::Second]
+            .into_iter()
+            .map(|generation| {
+                let mut spec = template.clone();
+                spec.generation = generation;
+                spec.name = format!("config{generation:?}");
+                spec
+            })
+            .collect();
+        let runtime = FunctionsRuntime::with_codebases(
+            vec![super::CodebaseSpec {
+                name: "default".into(),
+                manifest,
+                runner: base.runner(),
+                spawn: None,
+                cleanup_dir: None,
+            }],
+            base.config.clone(),
+            base.clock.clone(),
+            super::FunctionsHttpProfile::Strict,
+        )
+        .unwrap();
+        let body = json!({
+            "data": {"versionNumber": 7, "updateTime": "2026-01-02T03:04:05Z"},
+            "v1Context": {"eventId": "one", "timestamp": "2026-01-02T03:04:06Z", "eventType": "google.firebase.remoteconfig.update", "resource": {"service": "firebaseremoteconfig.googleapis.com", "name": "projects/demo-app"}},
+            "v2Context": {"specversion": "1.0", "id": "two", "time": "2026-01-02T03:04:07Z", "type": "google.firebase.remoteconfig.remoteConfig.v1.updated", "source": "//firebaseremoteconfig.googleapis.com/projects/demo-app"}
+        });
+        let mut missing = body.clone();
+        missing.as_object_mut().unwrap().remove("v1Context");
+        assert_eq!(
+            runtime.publish_remote_config(&missing),
+            Err(SourceEventAdmissionError::InvalidEvent)
+        );
+        assert!(runtime.inner.lock().unwrap().payloads.is_empty());
+        runtime.set_background_triggers(false);
+        assert_eq!(runtime.publish_remote_config(&body), Ok(0));
+        assert!(runtime.inner.lock().unwrap().payloads.is_empty());
+        runtime.set_background_triggers(true);
+        runtime.inner.lock().unwrap().reserved_event_records = super::MAX_ACTIVE_EVENT_RECORDS - 1;
+        assert_eq!(
+            runtime.publish_remote_config(&body),
+            Err(SourceEventAdmissionError::Capacity)
+        );
+        assert!(runtime.inner.lock().unwrap().payloads.is_empty());
+        runtime.inner.lock().unwrap().reserved_event_records = super::MAX_ACTIVE_EVENT_RECORDS - 2;
+        assert_eq!(runtime.publish_remote_config(&body), Ok(2));
+        {
+            let inner = runtime.inner.lock().unwrap();
+            assert_eq!(inner.payloads.len(), 2);
+            for (id, queued) in &inner.payloads {
+                let spec = runtime.manifest.get(&queued.function).unwrap();
+                let frame = runtime
+                    .invoke_request_at(
+                        *id,
+                        spec,
+                        2,
+                        inner.epoch,
+                        &queued.payload,
+                        runtime.now(),
+                        None,
+                        runtime.now(),
+                    )
+                    .unwrap();
+                let frame: serde_json::Value = serde_json::from_str(frame.get()).unwrap();
+                assert_eq!(frame["event"], *queued.payload);
+                assert!(frame["event"].get("traceparent").is_none());
+                assert_eq!(frame["event"]["data"], body["data"]);
+            }
+        }
+        runtime.inner.lock().unwrap().reserved_event_records = 0;
+        runtime.begin_shutdown();
+        assert_eq!(
+            runtime.publish_remote_config(&body),
+            Err(SourceEventAdmissionError::Unavailable)
+        );
+        runtime.shutdown().await;
+        base.shutdown().await;
     }
 
     /// Records, at each source-event payload encoding on this thread, whether the runtime

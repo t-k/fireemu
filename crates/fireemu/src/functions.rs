@@ -6485,6 +6485,21 @@ fn run_schedule_error(
 pub struct Hook(pub Arc<FunctionsRuntime>);
 
 impl FunctionsHook for Hook {
+    fn publish_remote_config(
+        &self,
+        body: &serde_json::Value,
+    ) -> Result<usize, fireemu_adapter_http::control::PublishEventError> {
+        use fireemu_adapter_functions::runtime::SourceEventAdmissionError;
+        use fireemu_adapter_http::control::PublishEventError;
+        self.0
+            .publish_remote_config(body)
+            .map_err(|error| match error {
+                SourceEventAdmissionError::InvalidEvent => PublishEventError::Invalid,
+                SourceEventAdmissionError::Capacity => PublishEventError::Capacity,
+                SourceEventAdmissionError::Unavailable => PublishEventError::Unavailable,
+            })
+    }
+
     fn validate_clock_target(
         &self,
         instant: fireemu_core_types::time::LogicalInstant,

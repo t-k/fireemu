@@ -319,6 +319,7 @@ fn storage(state: &UiState, path: &str, req: &UiRequest) -> UiResponse {
 #[must_use]
 pub fn trigger_json(trigger: &Trigger) -> Value {
     match trigger {
+        Trigger::RemoteConfig => json!({"kind": "remoteConfig"}),
         Trigger::Database {
             event,
             instance,

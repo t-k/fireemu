@@ -202,7 +202,7 @@ The eight recorded patterns refused by the official emulator's determinization r
 
 ### Other differences
 
-- A lone escaped surrogate in a string literal (`'\uD83D'`) is refused when the rules load; the official emulator loads it.
+- A lone escaped surrogate in a string literal (`'\uD83D'`) loads and is judged by UTF-16 units, as the official emulator does (`.length`, `+`, `==`, the orderings and the string methods; the coverage report shows it as U+FFFD). Production has not answered these shapes, so both profiles follow the official emulator. `child()`, `hasChild` and an index with such a string are errors here.
 - A `\u` escape in a name (`\u0061uth.uid`, `auth.\u0075id`) is refused when the rules load; the official emulator reads it as the letter.
 - Where the official emulator answers a request with an internal error (500), Fireemu denies it: for example a string method on a value that turns out to be a snapshot (`(c ? root : 'a').length`), and `getPriority()` at a location the official emulator cannot read as a path (a key with `.`, `#`, `$`, `[`, `]` or a control character, a reserved name such as `.value` or `.info`, `.priority` before the end, or a path beyond 32 levels or 768 bytes).
 - A method read without a call (`auth.uid.contains != null`, `data.child`) is an error here; the official emulator reads it as a function. A call whose callee is a ternary (`(c ? data.child : data.parent)('a')`) is refused when the rules load; the official emulator loads it.

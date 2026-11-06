@@ -621,3 +621,34 @@ test("the older conditions point at the recordings that went past their scope st
   assert.match(huge, /request line/);
   assert.doesNotMatch(huge, /because its request line exceeds 4 KB and production/);
 });
+
+test("the forged-token refusals outside the recorded shape are declared with the owner decision, and the lone-surrogate rows are marked unobserved in production", () => {
+  const known = closure().knownDifferences.invalidCredentialsEmulatorProfile;
+  assert.doesNotMatch(known.statement, /never refuses what the jar admits/);
+  assert.match(known.statement, /intentional declared difference/);
+  assert.match(known.decisionRef, /713/);
+  assert.match(known.decisionRef, /2270/);
+  const shapes = known.refusalsOutsideTheRecordedShape;
+  assert.equal(shapes.length, 6);
+  for (const shape of shapes) {
+    for (const side of ["jar", "emulator", "strict", "production"]) assert.ok(shape[side], side);
+    assert.equal(shape.strict, "refused");
+  }
+  // Where the emulator profile refuses what the jar admits, the shape is outside the recorded one.
+  const refusing = shapes.filter((s) => s.jar === "admitted" && s.emulator === "refused");
+  assert.equal(refusing.length, 4);
+  assert.ok(shapes[0].jar === "admitted" && shapes[0].emulator === "admitted");
+  const rules = condition("RTDB/rules-document-load-diagnostics").evidence.jarOnlyRows;
+  assert.equal(rules.productionObserved, false);
+  assert.equal(sha(rules.fixture), rules.fixtureSha256);
+  assert.equal(json(rules.fixture).length, rules.rows);
+  assert.ok(rules.rows >= 250);
+  assert.match(rules.statement, /unobserved in production/);
+  assert.match(rules.statement, /strict profile follows the jar/);
+  for (const file of rules.tests) assert.ok(exists(file), file);
+  assert.ok(
+    closure().closureBasis.notClaimedItems.some(
+      (i) => i.key === "notClaimed_rules_lone_surrogate_strings",
+    ),
+  );
+});

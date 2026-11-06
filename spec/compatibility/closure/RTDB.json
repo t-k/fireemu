@@ -1428,7 +1428,8 @@
       "source": "spec/compatibility/contract.json#database",
       "cases": [
         "7 Rules documents in two rounds (r1-rules-load, r2-rules-load) PUT to /.settings/rules.json: a duplicate key, a duplicate .read, a duplicate .indexOn, an .indexOn of a.b, of $x and of the empty string, and an .indexOn of a//b",
-        "the status, the body text with its line and column, and the recorded headers of the 3 + 2 refusals and of the 2 accepted documents (the empty .indexOn and a//b are accepted)"
+        "the status, the body text with its line and column, and the recorded headers of the 3 + 2 refusals and of the 2 accepted documents (the empty .indexOn and a//b are accepted)",
+        "a Rules string that holds a lone surrogate loads and is judged by UTF-16 units in both profiles as the official emulator judges it (259 probed rows); unobserved in production, so strict follows the jar"
       ],
       "status": "VERIFIED",
       "evidence": {
@@ -1485,6 +1486,18 @@
             "path": "tools/sdk-smoke-database/fixtures/closure-sdk-rules-load-emulator.json",
             "sha256": "121ba9a84803ac7839e71c6cb021cc852e8b83b19f25803342640152c55a8463"
           }
+        },
+        "jarOnlyRows": {
+          "statement": "Rules strings that hold a lone surrogate (an escape such as '\\uD83D') load and evaluate by UTF-16 units in both profiles, as the official emulator does (owner 2270 (2)): length, +, ==, !=, <, >, <=, >=, contains, beginsWith, endsWith, replace, toLowerCase, toUpperCase and matches. Production has not answered these shapes, so they are unobserved in production and the strict profile follows the jar; child(), hasChild, an index and the empty-target replace of a string with a character outside the Basic Multilingual Plane stay errors.",
+          "fixture": "crates/fireemu-core-database/tests/fixtures/rules-lone-surrogates-official-emulator-4.11.2.json",
+          "fixtureSha256": "3a82c9dae5e0f17148236b96a3132709591357b6aa4b487b4da6070050d02c7f",
+          "rows": 259,
+          "tests": [
+            "crates/fireemu-core-database/tests/rules.rs",
+            "crates/fireemu-adapter-database/tests/rules.rs",
+            "crates/fireemu-adapter-database/tests/rules_cells.rs"
+          ],
+          "productionObserved": false
         }
       }
     },
@@ -1994,11 +2007,57 @@
       "evidence": "spec/compatibility/closure/evidence/RTDB-sdk-rest-comparison.json"
     },
     "invalidCredentialsEmulatorProfile": {
-      "statement": "The emulator profile follows the official emulator for invalid credentials, which production refuses: an alg:none token, an RS256 or HS256-shaped token with a signature fireemu cannot verify (read for its claims when the project, a tenant it names and a future expiry fit, and no session signer is installed), any non-empty Bearer token and any access_token are accepted (13 of the 27 cases; 11 when rs256 and hs256 under auth= are not counted). The huge token (about 4.8 KB, otherwise the same shape as the RS256 one) is accepted as well. The jar answers 400 to it because the request line exceeds a limit of about 4 KB (a token of 4054 characters passes, 4064 does not); that is a transport limit, not a decision about the credential: the same token passes as a Bearer and over WebSocket. Production answers 401, a refusal that belongs to the strict profile. fireemu has no request-line limit, and a size cap on the token would add a refusal the jar does not make, so none is applied. The strict profile answers all 27 cases as production, and the emulator profile never refuses what the jar admits.",
+      "statement": "The emulator profile follows the official emulator for invalid credentials, which production refuses: an alg:none token, any non-empty Bearer token and any access_token are accepted (11 of the 27 cases), and so is an RS256 or HS256-shaped token with a signature fireemu cannot verify in the recorded shape (own project as aud, a tenant that exists if it names one, exp in the future, a non-empty signature; unsigned tokens admitted and no session signer installed). The emulator profile refuses forged signed tokens outside that shape, which the official emulator admits and production refuses (listed in refusalsOutsideTheRecordedShape): this extends to RTDB the exception of owner decision 713 (Firestore and Storage), as an intentional declared difference (owner 2270 (1)). The huge token (about 4.8 KB, otherwise the same shape as the RS256 one) is accepted as well. The jar answers 400 to it because the request line exceeds a limit of about 4 KB (a token of 4054 characters passes, 4064 does not); that is a transport limit, not a decision about the credential: the same token passes as a Bearer and over WebSocket. Production answers 401, a refusal that belongs to the strict profile. fireemu has no request-line limit, and a size cap on the token would add a refusal the jar does not make, so none is applied. The strict profile answers all 27 cases as production.",
       "rows": [
         "tokens r1/r2 auth-none-other, auth-none-own, auth-rs256, auth-hs256, auth-huge, bearer-random, bearer-none-own, bearer-rs256, bearer-null, bearer-random-pub, at-empty, at-random, at-rs256, at-random-pub"
       ],
-      "evidence": "spec/compatibility/closure/evidence/RTDB-sdk-tokens-comparison.json"
+      "evidence": "spec/compatibility/closure/evidence/RTDB-sdk-tokens-comparison.json",
+      "decisionRef": "docs.local/instructions/owner-decisions.md (713, extended to RTDB by 2270 (1))",
+      "refusalsOutsideTheRecordedShape": [
+        {
+          "shape": "RS256 or HS256, own aud, future exp, non-empty signature (recorded: auth-rs256, auth-hs256)",
+          "jar": "admitted",
+          "emulator": "admitted",
+          "strict": "refused",
+          "production": "refused (recorded)"
+        },
+        {
+          "shape": "the same shape, expired",
+          "jar": "admitted",
+          "emulator": "refused",
+          "strict": "refused",
+          "production": "not recorded"
+        },
+        {
+          "shape": "RS256 with another aud, no aud or no exp",
+          "jar": "admitted",
+          "emulator": "refused",
+          "strict": "refused",
+          "production": "not recorded"
+        },
+        {
+          "shape": "ES256, RS512, PS256, HS512 or an unknown alg",
+          "jar": "admitted",
+          "emulator": "refused",
+          "strict": "refused",
+          "production": "not recorded"
+        },
+        {
+          "shape": "RS256 with an empty signature",
+          "jar": "admitted",
+          "emulator": "refused",
+          "strict": "refused",
+          "production": "not recorded"
+        },
+        {
+          "shape": "RS256 without sub or without iat",
+          "jar": "refused",
+          "emulator": "refused",
+          "strict": "refused",
+          "production": "not recorded"
+        }
+      ],
+      "refusalsEvidence": "WebSocket auth agrees for the shapes tried (expired, other aud, ES256: jar ok, emulator invalid_token). The emulator and strict answers are pinned by crates/fireemu/tests/database.rs (credentials_follow_the_profile_and_bind_tokens_to_the_instance_project); the jar answers are the probe of docs.local/reviews/2026-11-06-rtdb-closure-review.md (jar 4.11.2, closure binary 44c3c889)."
     }
   },
   "knownGaps": {
@@ -2080,7 +2139,7 @@
         "item": "the jar-probe leftovers of Rules loading: new auth and function literals, E4X operators, control characters and surrogates in error texts, statement keywords, auth(1)",
         "key": "notClaimed_rules_load_jar_leftovers",
         "localBehaviour": "own-implementation",
-        "detail": "both profiles refuse the document the jar refuses, with another text or place (rtdb-rules-load-leftovers items 1 to 4, 6 and 7); production recorded none of them."
+        "detail": "both profiles refuse the document the jar refuses, with another text or place (rtdb-rules-load-leftovers items 1 to 4, 6 and 7); production recorded none of them. The lone-escaped-surrogate rows of that issue (item 5) are fixed."
       },
       {
         "item": "a rejected WebSocket auth falling back to anonymous, and the WebSocket auth and gauth texts for a rejected credential",
@@ -2135,6 +2194,12 @@
         "key": "notClaimed_mobile_sdks_and_scale",
         "localBehaviour": "out-of-scope-by-decision",
         "detail": "owner 1471 Q8 (a later separate parent) and the scope decision that the emulator is not a capacity model."
+      },
+      {
+        "item": "Rules strings that hold a lone surrogate, in production",
+        "key": "notClaimed_rules_lone_surrogate_strings",
+        "localBehaviour": "follows-official-emulator",
+        "detail": "both profiles load and evaluate them by UTF-16 units as the jar does (owner 2270 (2)); production has not been asked and the production budget has no room for it, so strict follows the jar and the condition says so."
       }
     ]
   }

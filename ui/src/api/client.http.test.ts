@@ -209,23 +209,69 @@ describe("subscribe", () => {
   });
 
   it("stays silent after the subscriber aborts", async () => {
+    let responseFinished!: (finished: boolean) => void;
+    const peerClosed = new Promise<boolean>((resolve) => {
+      responseFinished = resolve;
+    });
     server.script.set("GET /ui/api/slow", {
       headers: { "content-type": "text/event-stream" },
       chunks: ["data: a\n\n", "data: b\n\n", "data: c\n\n"],
+      onResponseClosed: responseFinished,
     });
     const events: string[] = [];
     let closed = 0;
-    const stop = subscribe(
-      "slow",
-      (e) => {
-        events.push(e.data);
-        if (e.data === "a") stop();
-      },
-      () => {
-        closed += 1;
-      },
-    );
-    await new Promise((r) => setTimeout(r, 80));
+    let stop = () => {};
+    const firstEvent = new Promise<void>((resolve) => {
+      stop = subscribe(
+        "slow",
+        (e) => {
+          events.push(e.data);
+          if (e.data === "a") {
+            stop();
+            resolve();
+          }
+        },
+        () => {
+          closed += 1;
+        },
+      );
+    });
+    await firstEvent;
+    expect(await peerClosed).toBe(false);
+    expect(events).toEqual(["a"]);
+    expect(closed).toBe(0);
+  });
+
+  it("stops the current parsed batch when its subscriber aborts", async () => {
+    let responseFinished!: (finished: boolean) => void;
+    const peerClosed = new Promise<boolean>((resolve) => {
+      responseFinished = resolve;
+    });
+    server.script.set("GET /ui/api/same-chunk", {
+      headers: { "content-type": "text/event-stream" },
+      chunks: ["data: a\n\ndata: b\n\ndata: c\n\n"],
+      onResponseClosed: responseFinished,
+    });
+    const events: string[] = [];
+    let closed = 0;
+    let stop = () => {};
+    const firstEvent = new Promise<void>((resolve) => {
+      stop = subscribe(
+        "same-chunk",
+        (e) => {
+          events.push(e.data);
+          if (e.data === "a") {
+            stop();
+            resolve();
+          }
+        },
+        () => {
+          closed += 1;
+        },
+      );
+    });
+    await firstEvent;
+    expect(await peerClosed).toBe(false);
     expect(events).toEqual(["a"]);
     expect(closed).toBe(0);
   });

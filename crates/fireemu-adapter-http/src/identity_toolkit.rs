@@ -17056,11 +17056,7 @@ mod body_tenant_selector_tests {
             &owner_headers,
             &json!({"multiTenant": {"allowTenants": true}}),
         );
-        assert_eq!(
-            configured.status, 200,
-            "tenant config setup: status={}",
-            configured.status
-        );
+        assert!(configured.status == 200, "tenant config setup failed");
         for tenant in ["matrix-body", "matrix-other"] {
             registry.ensure_tenant("demo-app", tenant).unwrap();
         }
@@ -17246,8 +17242,11 @@ mod body_tenant_selector_tests {
             let observed = selector_pipeline(state, route, resolution, query, &headers, at, &body);
             match (expected, observed) {
                 (Err((status, message)), Err(error)) => {
-                    assert_eq!(error.status, status, "{row}: {}", error.body);
-                    assert_eq!(error.body["error"]["message"], message, "{row}");
+                    assert!(error.status == status, "{row}: selector status mismatch");
+                    assert!(
+                        error.body["error"]["message"] == message,
+                        "{row}: selector error class mismatch"
+                    );
                 }
                 (Ok(tenant), Ok(selected)) => {
                     let expected_store = match tenant {
@@ -17258,13 +17257,7 @@ mod body_tenant_selector_tests {
                     };
                     assert!(Arc::ptr_eq(&selected, &expected_store), "{row}");
                 }
-                (expected, observed) => panic!(
-                    "selector result mismatch for {row}: expected {expected:?}, observed {}",
-                    observed.map_or_else(
-                        |error| format!("error {} {}", error.status, error.body),
-                        |_| "a selected store".to_owned()
-                    )
-                ),
+                (_, _) => panic!("selector result mismatch for {row}"),
             }
         }
         assert_eq!(row_count, 576, "PICT fixture was empty or truncated");

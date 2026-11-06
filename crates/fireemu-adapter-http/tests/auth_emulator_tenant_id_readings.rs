@@ -189,7 +189,7 @@ fn seed_matrix_store(state: &AuthState, tenant: Option<&str>, name: &str) {
             "displayName": name,
         }),
     );
-    assert_eq!(status, 200, "seed {name}: status={status}");
+    assert!(status == 200, "seed fixture setup failed");
 }
 
 fn client(state: &AuthState, route: &str, body: &Value) -> (u16, Value) {
@@ -468,7 +468,7 @@ fn body_tenant_profile_route_path_and_value_matrix_preserves_tenant_isolation() 
                     "returnSecureToken": true,
                 }),
             );
-            assert_eq!(status, 200, "{row} SignInWithPassword: status={status}");
+            assert!(status == 200, "{row} SignInWithPassword: unexpected status");
             body["idToken"] = signed_in["idToken"].clone();
         }
 
@@ -514,23 +514,22 @@ fn body_tenant_profile_route_path_and_value_matrix_preserves_tenant_isolation() 
         }
         let (status, response) = admin(&state, method, &path, &operation);
         if refused {
-            assert_eq!(
-                status,
-                if strict_query_empty_unknown { 404 } else { 400 },
-                "{row} {route}: status={status}, unexpected refusal"
+            assert!(
+                status == if strict_query_empty_unknown { 404 } else { 400 },
+                "{row} {route}: unexpected refusal status"
             );
-            assert_eq!(
-                response["error"]["message"],
-                if strict_query_empty_unknown {
-                    "TENANT_NOT_FOUND"
-                } else {
-                    "TENANT_ID_MISMATCH"
-                },
+            assert!(
+                response["error"]["message"]
+                    == if strict_query_empty_unknown {
+                        "TENANT_NOT_FOUND"
+                    } else {
+                        "TENANT_ID_MISMATCH"
+                    },
                 "{row} {route}: unexpected tenant error class"
             );
             continue;
         }
-        assert_eq!(status, 200, "{row} {route}: status={status}");
+        assert!(status == 200, "{row} {route}: unexpected success status");
         let selected_store = matrix_store(&state, &registry, selected_tenant);
         let selected_name = matrix_scope_name(selected_tenant);
         match route {
@@ -544,19 +543,19 @@ fn body_tenant_profile_route_path_and_value_matrix_preserves_tenant_isolation() 
                     "{row} {route}: selected store is missing the created user"
                 );
             }
-            "AdminLookup" => assert_eq!(
-                response["users"][0]["displayName"], selected_name,
+            "AdminLookup" => assert!(
+                response["users"][0]["displayName"] == selected_name,
                 "{row} {route}: selected response has the wrong user"
             ),
-            "AdminUpdate" => assert_eq!(
+            "AdminUpdate" => assert!(
                 selected_store
                     .lock()
                     .unwrap()
                     .user_by_id(&format!("matrix-{selected_name}-seed"))
                     .unwrap()
                     .display_name
-                    .as_deref(),
-                Some("updated"),
+                    .as_deref()
+                    == Some("updated"),
                 "{row}"
             ),
             "AdminDelete" | "AdminBatchDelete" => assert!(
@@ -567,13 +566,13 @@ fn body_tenant_profile_route_path_and_value_matrix_preserves_tenant_isolation() 
                     .is_none(),
                 "{row}"
             ),
-            "AdminQuery" => assert_eq!(
-                response["userInfo"][0]["displayName"], selected_name,
+            "AdminQuery" => assert!(
+                response["userInfo"][0]["displayName"] == selected_name,
                 "{row} {route}: selected query response has the wrong user"
             ),
             "AdminSendOobCode" => {
-                assert_eq!(
-                    response["email"], selected_email,
+                assert!(
+                    response["email"] == selected_email,
                     "{row} {route}: response email mismatch"
                 );
             }
@@ -634,21 +633,24 @@ fn strict_admin_query_keeps_its_route_specific_body_validation() {
         json!({"returnUserInfo": false, "tenantId": null}),
     ] {
         let (status, _) = query(body);
-        assert_eq!(status, 200, "AdminQuery missing/null: status={status}");
+        assert!(status == 200, "AdminQuery missing/null: unexpected status");
     }
     let (status, empty) = query(json!({"returnUserInfo": false, "tenantId": ""}));
-    assert_eq!(status, 404, "AdminQuery empty tenant: status={status}");
-    assert_eq!(
-        empty["error"]["message"], "TENANT_NOT_FOUND",
+    assert!(status == 404, "AdminQuery empty tenant: unexpected status");
+    assert!(
+        empty["error"]["message"] == "TENANT_NOT_FOUND",
         "AdminQuery empty tenant: error class mismatch"
     );
     let (status, _) = query(json!({"returnUserInfo": false, "tenantId": "query-tenant"}));
-    assert_eq!(status, 200, "AdminQuery named tenant: status={status}");
+    assert!(status == 200, "AdminQuery named tenant: unexpected status");
     let (status, malformed) = query(json!({"returnUserInfo": false, "tenantId": 7}));
-    assert_eq!(status, 400, "AdminQuery malformed tenant: status={status}");
-    assert_eq!(
-        malformed["error"]["message"],
-        "INVALID_ARGUMENT : tenantId must be a string"
+    assert!(
+        status == 400,
+        "AdminQuery malformed tenant: unexpected status"
+    );
+    assert!(
+        malformed["error"]["message"] == "INVALID_ARGUMENT : tenantId must be a string",
+        "AdminQuery malformed tenant: error class mismatch"
     );
 }
 
@@ -665,14 +667,20 @@ fn strict_project_path_lookup_uses_a_nonempty_body_tenant_but_not_an_empty_one()
         &format!("{V1}/projects/demo-app/accounts"),
         &account("project-lookup@example.com"),
     );
-    assert_eq!(status, 200, "strict project AdminCreate: status={status}");
+    assert!(
+        status == 200,
+        "strict project AdminCreate: unexpected status"
+    );
     let (status, _) = admin(
         &state,
         "POST",
         &format!("{V1}/projects/demo-app/tenants/lookup-tenant/accounts"),
         &account("tenant-lookup@example.com"),
     );
-    assert_eq!(status, 200, "strict tenant AdminCreate: status={status}");
+    assert!(
+        status == 200,
+        "strict tenant AdminCreate: unexpected status"
+    );
 
     let lookup = |email: &str, tenant: Option<Value>| {
         let mut body = json!({"email": [email]});
@@ -688,19 +696,22 @@ fn strict_project_path_lookup_uses_a_nonempty_body_tenant_but_not_an_empty_one()
     };
     for tenant in [None, Some(Value::Null), Some(json!(""))] {
         let (status, found) = lookup("project-lookup@example.com", tenant);
-        assert_eq!(status, 200, "strict project AdminLookup: status={status}");
-        assert_eq!(
-            found["users"][0]["email"], "project-lookup@example.com",
+        assert!(
+            status == 200,
+            "strict project AdminLookup: unexpected status"
+        );
+        assert!(
+            found["users"][0]["email"] == "project-lookup@example.com",
             "strict project AdminLookup: email mismatch"
         );
     }
     let (status, found) = lookup("tenant-lookup@example.com", Some(json!("lookup-tenant")));
-    assert_eq!(
-        status, 200,
-        "strict body-scoped AdminLookup: status={status}"
+    assert!(
+        status == 200,
+        "strict body-scoped AdminLookup: unexpected status"
     );
-    assert_eq!(
-        found["users"][0]["email"], "tenant-lookup@example.com",
+    assert!(
+        found["users"][0]["email"] == "tenant-lookup@example.com",
         "strict body-scoped AdminLookup: email mismatch"
     );
     assert!(state
@@ -730,7 +741,7 @@ fn strict_project_path_session_cookie_keeps_the_token_tenant_with_an_empty_body_
         &format!("{V2}/projects/demo-app/tenants"),
         &json!({"displayName": "cookie-empty", "allowPasswordSignup": true}),
     );
-    assert_eq!(status, 200, "strict tenant creation: status={status}");
+    assert!(status == 200, "strict tenant creation: unexpected status");
     let tenant = created_tenant["name"]
         .as_str()
         .unwrap()
@@ -743,15 +754,18 @@ fn strict_project_path_session_cookie_keeps_the_token_tenant_with_an_empty_body_
         &format!("{V1}/projects/demo-app/tenants/{tenant}/accounts"),
         &json!({"email": "cookie-empty@example.com", "password": "hunter22"}),
     );
-    assert_eq!(status, 200, "strict tenant AdminCreate: status={status}");
+    assert!(
+        status == 200,
+        "strict tenant AdminCreate: unexpected status"
+    );
     let (status, signed_in) = client(
         &state,
         &format!("{V1}/accounts:signInWithPassword"),
         &json!({"tenantId": tenant, "email": "cookie-empty@example.com", "password": "hunter22", "returnSecureToken": true}),
     );
-    assert_eq!(
-        status, 200,
-        "strict tenant SignInWithPassword: status={status}"
+    assert!(
+        status == 200,
+        "strict tenant SignInWithPassword: unexpected status"
     );
 
     let (status, cookie) = admin(
@@ -760,7 +774,10 @@ fn strict_project_path_session_cookie_keeps_the_token_tenant_with_an_empty_body_
         &format!("{V1}/projects/demo-app:createSessionCookie"),
         &json!({"idToken": signed_in["idToken"], "validDuration": "3600", "tenantId": ""}),
     );
-    assert_eq!(status, 200, "strict token-scoped cookie: status={status}");
+    assert!(
+        status == 200,
+        "strict token-scoped cookie: unexpected status"
+    );
     assert!(
         cookie["sessionCookie"].as_str().is_some(),
         "strict token-scoped cookie: session cookie is missing"

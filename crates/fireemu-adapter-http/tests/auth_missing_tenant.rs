@@ -575,9 +575,9 @@ fn an_empty_body_tenant_leaves_the_path_tenant_as_the_target() {
         &format!("{V1}/projects/demo-app/tenants/t-empty/accounts"),
         &json!({"tenantId": "", "email": "a@example.com", "password": "hunter22"}),
     );
-    assert_eq!(
-        status, 200,
-        "empty body tenant with path tenant: status={status}"
+    assert!(
+        status == 200,
+        "empty body tenant with path tenant: unexpected status"
     );
     assert!(registry.tenant_store("demo-app", "t-empty").is_some());
     assert!(registry

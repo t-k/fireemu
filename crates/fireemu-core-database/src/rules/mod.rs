@@ -163,34 +163,6 @@ pub struct Requester<'a> {
     pub auth: &'a Json,
     /// `now`, in milliseconds.
     pub now: i64,
-    /// Which strings of `auth` really hold a lone surrogate (the emulator profile), if any; `auth` itself reads `?`
-    /// there. Only the evaluation reads it.
-    pub lone: Option<&'a crate::lone::LoneClaims>,
-}
-
-impl<'a> Requester<'a> {
-    /// `auth` in the encoding the evaluator decodes, when some string holds a lone surrogate.
-    fn encoded(&self) -> Option<Json> {
-        self.lone
-            .filter(|lone| !lone.is_empty())
-            .map(|lone| lone.encoded_view(self.auth))
-    }
-
-    /// This requester reading `encoded` instead of `auth`, if there is one.
-    fn viewing(&self, encoded: Option<&'a Json>) -> Requester<'a> {
-        match encoded {
-            Some(json) => Requester {
-                auth: json,
-                now: self.now,
-                lone: self.lone,
-            },
-            None => Requester {
-                auth: self.auth,
-                now: self.now,
-                lone: None,
-            },
-        }
-    }
 }
 
 impl Rules {
@@ -314,8 +286,6 @@ impl Rules {
         kind: ReadKind,
         requester: &Requester<'_>,
     ) -> bool {
-        let encoded = requester.encoded();
-        let requester = &requester.viewing(encoded.as_ref());
         let mut wildcards = BTreeMap::new();
         let mut node = Some(&self.root);
         let mut at = Path::root();
@@ -337,10 +307,7 @@ impl Rules {
                     query,
                     read_kind: kind,
                     wildcards: &wildcards,
-                    dialect: Dialect {
-                        claims: requester.lone.is_some(),
-                        ..self.dialect
-                    },
+                    dialect: self.dialect,
                     work: std::cell::Cell::new(0),
                 };
                 if run(rule, &scope) {
@@ -365,8 +332,6 @@ impl Rules {
         written: &[Path],
         requester: &Requester<'_>,
     ) -> bool {
-        let encoded = requester.encoded();
-        let requester = &requester.viewing(encoded.as_ref());
         // A priority belongs to its node: a write of `<path>/.priority` is judged as a write
         // of `<path>`, never through a `$wildcard` below it (review M3).
         let written: Vec<Path> = written
@@ -426,10 +391,7 @@ impl Rules {
             query: None,
             read_kind: ReadKind::Check,
             wildcards,
-            dialect: Dialect {
-                claims: requester.lone.is_some(),
-                ..dialect
-            },
+            dialect,
             work: std::cell::Cell::new(0),
         }
     }

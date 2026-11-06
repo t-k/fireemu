@@ -40,150 +40,74 @@ pub(crate) fn credentials(cfg: &RuntimeConfig, registry: &Arc<AuthRegistry>) -> 
     let daemon_project = cfg.auth_project.clone();
     let strict = cfg.token_acceptance == TokenAcceptance::Verified;
     let any_mock_audience = !strict && cfg.auth_allow_unsigned_id_tokens;
-    let verify = move |token: &str, instance: &str, now: i64| -> Option<String> {
-        let default = registry.default_store();
-        let (tenant, audience) = {
-            let store = default.lock().ok()?;
-            let decoded = decode_token(token, store.signer()).ok();
-            let claim = |path: &[&str]| {
-                let mut value = decoded.as_ref()?.payload.get(path[0])?;
-                for key in &path[1..] {
-                    value = value.get(key)?;
-                }
-                value.as_str().map(str::to_owned)
-            };
-            (claim(&["firebase", "tenant"]), claim(&["aud"]))
-        };
-        let unsigned_mock = any_mock_audience && is_unsigned_token(token);
-        if unsigned_mock && audience.is_none() {
-            // The official emulator reads an unsigned token's claims unverified: one that
-            // names a subject is that user even without `aud` (review r6 S16b). The emulator
-            // profile does the same; a session signer refuses unsigned tokens altogether.
-            let store = default.lock().ok()?;
-            if store.signer().is_some() {
-                return None;
-            }
-            let decoded = decode_token(token, None).ok()?;
-            decoded.sub()?;
-            return Some(decoded.payload_json);
-        }
-        let project = match &audience {
-            Some(audience) if unsigned_mock => audience,
-            _ => project_of_instance(instance, &daemon_project),
-        };
-        let store = match tenant {
-            Some(tenant) => registry.tenant_store(project, &tenant)?,
-            None => registry.store_for(project).unwrap_or(default),
-        };
-        let store = store.lock().ok()?;
-        let verified = verify_rules_token_for_project(
-            token,
-            &store,
-            LogicalInstant::from_nanos(i128::from(now) * 1_000_000),
-            policy,
-            project,
-        );
-        let no_signer = store.signer().is_none();
-        drop(store);
-        let decoded = match verified {
-            Ok(decoded) => decoded,
-            // The official emulator reads the claims of a signed token it cannot verify
-            // (G10 rows auth-rs256 and auth-hs256: jar 200). The emulator profile does the
-            // same when it admits unsigned tokens and issues none of its own signatures;
-            // see `unverified_signed_claims`.
-            Err(JwtError::UnsupportedAlgorithm(alg)) if any_mock_audience && no_signer => {
-                let (claims, tenant) = unverified_signed_claims(token, &alg, project, now)?;
-                // The token is routed as an unsigned one is: a tenant it names must exist
-                // (a missing or deleted tenant leaves it nobody).
-                if let Some(tenant) = tenant {
-                    registry.tenant_store(project, &tenant)?;
-                }
-                return Some(claims);
-            }
-            Err(_) => return None,
-        };
-        // A token of another project is never a user here, whichever store verified it.
-        let audience = decoded.payload.get("aud")?.as_str()?;
-        (audience == project).then_some(decoded.payload_json)
-    };
     Credentials {
         strict,
         id_tokens: Some(Arc::new(move |token: &str, instance: &str, now: i64| {
-            // The emulator profile reads a lone surrogate in the claims of an unsigned token as the official
-            // emulator does. The shared token decoder refuses one, so the claims are checked on a copy of the token
-            // that reads it as `?` and the claims text the Rules see is the original. Only a token with no
-            // signature is copied: there is nothing to forge in it, and a token that carries a signature is
-            // verified exactly as it was sent, so a signed payload can never be swapped for another.
-            if !strict {
-                if let Some((checked, original)) = lone_claims_copy(token) {
-                    return verify(&checked, instance, now).map(|_| original);
+            let default = registry.default_store();
+            let (tenant, audience) = {
+                let store = default.lock().ok()?;
+                let decoded = decode_token(token, store.signer()).ok();
+                let claim = |path: &[&str]| {
+                    let mut value = decoded.as_ref()?.payload.get(path[0])?;
+                    for key in &path[1..] {
+                        value = value.get(key)?;
+                    }
+                    value.as_str().map(str::to_owned)
+                };
+                (claim(&["firebase", "tenant"]), claim(&["aud"]))
+            };
+            let unsigned_mock = any_mock_audience && is_unsigned_token(token);
+            if unsigned_mock && audience.is_none() {
+                // The official emulator reads an unsigned token's claims unverified: one that
+                // names a subject is that user even without `aud` (review r6 S16b). The emulator
+                // profile does the same; a session signer refuses unsigned tokens altogether.
+                let store = default.lock().ok()?;
+                if store.signer().is_some() {
+                    return None;
                 }
+                let decoded = decode_token(token, None).ok()?;
+                decoded.sub()?;
+                return Some(decoded.payload_json);
             }
-            verify(token, instance, now)
-        })),
-    }
-}
-
-/// An unsigned token whose claims hold a lone surrogate escape, as a copy with each read as `?`, and the original claims
-/// text; `None` for any other token, a token that carries a signature included (it is never copied).
-fn lone_claims_copy(token: &str) -> Option<(String, String)> {
-    let mut parts = token.split('.');
-    let (header, _, signature) = (parts.next()?, parts.next()?, parts.next()?);
-    if !signature.is_empty() || parts.next().is_some() {
-        return None;
-    }
-    let text = fireemu_adapter_database::realtime::jwt_payload_text(token)?;
-    let (claims, replaced) =
-        fireemu_adapter_database::json_parse::parse_replacing_all(&text, '?').ok()?;
-    if !replaced {
-        return None;
-    }
-    let payload = fireemu_core_auth::jwt::base64url_encode(
-        fireemu_adapter_database::json_text::render(
-            &claims,
-            fireemu_adapter_database::json_text::Style::Compact,
-        )
-        .as_bytes(),
-    );
-    Some((format!("{header}.{payload}."), text))
-}
-
-#[cfg(test)]
-mod lone_claims_copy_tests {
-    use super::lone_claims_copy;
-    use fireemu_core_auth::jwt::{base64url_decode, base64url_encode};
-
-    fn token(claims: &str, signature: &str) -> String {
-        format!(
-            "{}.{}.{signature}",
-            base64url_encode(br#"{"alg":"none","typ":"JWT"}"#),
-            base64url_encode(claims.as_bytes())
-        )
-    }
-
-    /// The copy exists for an unsigned token alone: a signed token's payload is never replaced, so a signature
-    /// cannot be made to cover claims it did not sign (a signed payload that holds `?` swapped for a lone surrogate
-    /// would normalise to the signed text).
-    #[test]
-    fn only_a_token_without_a_signature_is_copied() {
-        let lone = r#"{"sub":"u1","x":"\ud83d"}"#;
-        let (checked, original) =
-            lone_claims_copy(&token(lone, "")).expect("an unsigned token is copied");
-        assert_eq!(original, lone);
-        let payload = checked.split('.').nth(1).unwrap();
-        let text = String::from_utf8(base64url_decode(payload).unwrap()).unwrap();
-        assert_eq!(text, r#"{"sub":"u1","x":"?"}"#);
-        assert!(checked.ends_with('.'), "{checked}");
-        // A signature, however it looks, means no copy.
-        for signature in ["c2ln", "AAAA"] {
-            assert!(
-                lone_claims_copy(&token(lone, signature)).is_none(),
-                "{signature}"
+            let project = match &audience {
+                Some(audience) if unsigned_mock => audience,
+                _ => project_of_instance(instance, &daemon_project),
+            };
+            let store = match tenant {
+                Some(tenant) => registry.tenant_store(project, &tenant)?,
+                None => registry.store_for(project).unwrap_or(default),
+            };
+            let store = store.lock().ok()?;
+            let verified = verify_rules_token_for_project(
+                token,
+                &store,
+                LogicalInstant::from_nanos(i128::from(now) * 1_000_000),
+                policy,
+                project,
             );
-        }
-        // Nor a token whose claims hold no lone surrogate, or one that has more than three parts.
-        assert!(lone_claims_copy(&token(r#"{"sub":"u1","x":"?"}"#, "")).is_none());
-        assert!(lone_claims_copy(&format!("{}.x", token(lone, ""))).is_none());
+            let no_signer = store.signer().is_none();
+            drop(store);
+            let decoded = match verified {
+                Ok(decoded) => decoded,
+                // The official emulator reads the claims of a signed token it cannot verify
+                // (G10 rows auth-rs256 and auth-hs256: jar 200). The emulator profile does the
+                // same when it admits unsigned tokens and issues none of its own signatures;
+                // see `unverified_signed_claims`.
+                Err(JwtError::UnsupportedAlgorithm(alg)) if any_mock_audience && no_signer => {
+                    let (claims, tenant) = unverified_signed_claims(token, &alg, project, now)?;
+                    // The token is routed as an unsigned one is: a tenant it names must exist
+                    // (a missing or deleted tenant leaves it nobody).
+                    if let Some(tenant) = tenant {
+                        registry.tenant_store(project, &tenant)?;
+                    }
+                    return Some(claims);
+                }
+                Err(_) => return None,
+            };
+            // A token of another project is never a user here, whichever store verified it.
+            let audience = decoded.payload.get("aud")?.as_str()?;
+            (audience == project).then_some(decoded.payload_json)
+        })),
     }
 }
 

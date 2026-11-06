@@ -317,23 +317,22 @@ fn complement_classes_and_escaped_letters_are_read_on_the_emulator_profile_only(
     }
 }
 
-/// A token whose claims hold a lone surrogate (`"x":"\ud83d"`, as a claim name too) and a query value that holds one
-/// (`startAt="\ud83d"`) decide as the official emulator does on the emulator profile (owner row "RTDB closure lone
-/// surrogates in claims and query values", 2026-11-06): the claim is the Java string it is (`auth.token.x == '\uD83D'`,
-/// its length is 1) and a query value reads as `?`, as a body value does. 76 jar rows
-/// (`docs.local/runs/rtdb-lone-surrogate/jar-claims.json`, probe-rows.mjs). The strict profile keeps today's answers: it
-/// refuses the forged token, and refuses the query value with 400 `Constraint index field must be a JSON primitive`.
+/// A query value that holds a lone surrogate (`startAt="\ud83d"`) decides as the official emulator does on the
+/// emulator profile (owner row "RTDB closure lone surrogates in claims and query values", 2026-11-06, kept by line
+/// 2291): it reads as `?`, as a body value does. 42 jar rows (`docs.local/runs/rtdb-lone-surrogate/jar-claims.json`,
+/// probe-rows.mjs). The strict profile keeps today's answers: it refuses the query value with 400 `Constraint index
+/// field must be a JSON primitive`.
 #[test]
-fn lone_surrogates_in_claims_and_query_values_decide_as_the_official_emulator() {
+fn lone_surrogates_in_query_values_decide_as_the_official_emulator() {
     let rows: Vec<serde_json::Value> = serde_json::from_str(include_str!(
-        "fixtures/rules-lone-claims-query-official-emulator-4.11.2.json"
+        "fixtures/rules-lone-query-values-official-emulator-4.11.2.json"
     ))
     .unwrap();
     let seed = r#"{"a":{"b":1},"c":{"b":2},"x":"v"}"#;
     let mut failures = Vec::new();
+    assert_eq!(rows.len(), 42);
     for row in &rows {
         let expression = row["expr"].as_str().unwrap();
-        let claims = row["claims"].as_str();
         let query = row["query"].as_str().unwrap_or("");
         let expected = u16::try_from(row["read"].as_u64().unwrap()).unwrap();
         for strict in [false, true] {
@@ -352,25 +351,12 @@ fn lone_surrogates_in_claims_and_query_values_decide_as_the_official_emulator() 
                 expression.replace('\\', "\\\\").replace('"', "\\\"")
             );
             load(&mut database, "t", &rules);
-            let mut target = String::from("/t.json?ns=t");
-            if let Some(claims) = claims {
-                target.push_str("&auth=");
-                target.push_str(&token(claims));
-            }
-            if !query.is_empty() {
-                target.push('&');
-                target.push_str(query);
-            }
+            let target = format!("/t.json?ns=t&{query}");
             let got = call(&mut database, "GET", &target, &[], "");
             // A bound with a lone surrogate (not a valid pair) is what the strict profile refuses.
             let lone_bound = query.contains("%5Cud83d%22") || query.contains("a%5Cude00%22");
             let want = if !strict {
                 expected
-            } else if claims.is_some_and(|text| {
-                let rest = text.replace("\\ud83d\\ude00", "");
-                rest.contains("\\ud83d") || rest.contains("\\ude00")
-            }) {
-                401
             } else if lone_bound {
                 400
             } else {
@@ -378,7 +364,7 @@ fn lone_surrogates_in_claims_and_query_values_decide_as_the_official_emulator() 
             };
             if got.0 != want {
                 failures.push(format!(
-                    "strict={strict} {expression} {claims:?} {query}: {} vs {want}",
+                    "strict={strict} {expression} {query}: {} vs {want}",
                     got.0
                 ));
             }
@@ -396,6 +382,70 @@ fn lone_surrogates_in_claims_and_query_values_decide_as_the_official_emulator() 
         "{} rows differ: {failures:#?}",
         failures.len()
     );
+}
+
+/// A token whose claims hold a lone surrogate is not read, on either profile, as before 2286 (owner ledger line 2291:
+/// a declared difference; the official emulator keeps the surrogate in the claims and decides the 34 rows of
+/// `rules-lone-claims-official-emulator-4.11.2.json` by it). The strict profile refuses the token (401); the emulator
+/// profile judges the request as an anonymous one, whatever the rule says of `auth`.
+#[test]
+fn a_token_whose_claims_hold_a_lone_surrogate_is_not_read() {
+    let rows: Vec<serde_json::Value> = serde_json::from_str(include_str!(
+        "fixtures/rules-lone-claims-official-emulator-4.11.2.json"
+    ))
+    .unwrap();
+    assert_eq!(rows.len(), 34);
+    let mut lone = 0;
+    let seed = r#"{"a":{"b":1},"c":{"b":2},"x":"v"}"#;
+    for row in &rows {
+        let expression = row["expr"].as_str().unwrap();
+        let claims = row["claims"].as_str().unwrap();
+        let rules = format!(
+            r#"{{"rules":{{"t":{{".read":"{}"}}}}}}"#,
+            expression.replace('\\', "\\\\").replace('"', "\\\"")
+        );
+        let answer = |strict: bool, auth: Option<&str>| {
+            let options = RestOptions {
+                production_shapes: strict,
+                credentials: fireemu_adapter_database::rest::Credentials {
+                    strict,
+                    ..Default::default()
+                },
+                ..RestOptions::default()
+            };
+            let mut database = Database::new(options, 7);
+            call(&mut database, "PUT", "/t.json?ns=t", OWNER, seed);
+            load(&mut database, "t", &rules);
+            let mut target = String::from("/t.json?ns=t");
+            if let Some(auth) = auth {
+                target.push_str("&auth=");
+                target.push_str(auth);
+            }
+            call(&mut database, "GET", &target, &[], "").0
+        };
+        let with_token = token(claims);
+        let rest = claims.replace("\\ud83d\\ude00", "");
+        if rest.contains("\\ud83d") || rest.contains("\\ude00") {
+            lone += 1;
+            assert_eq!(answer(true, Some(&with_token)), 401, "strict {expression}");
+            assert_eq!(
+                answer(false, Some(&with_token)),
+                answer(false, None),
+                "emulator {expression}"
+            );
+        } else {
+            // A pair and a plain claim are read as always, and decide as the jar does.
+            let expected = u16::try_from(row["read"].as_u64().unwrap()).unwrap();
+            for strict in [false, true] {
+                assert_eq!(
+                    answer(strict, Some(&with_token)),
+                    expected,
+                    "strict={strict} {expression}"
+                );
+            }
+        }
+    }
+    assert!(lone > 20, "{lone}");
 }
 
 /// An administrator's `auth_variable_override` is an ordinary document: a valid string that looks like any internal

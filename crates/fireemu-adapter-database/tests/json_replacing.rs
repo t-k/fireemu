@@ -2,7 +2,7 @@
 //! unit, a high surrogate followed by an escaped low one a single character. Keys are never read so.
 
 use fireemu_adapter_database::json_parse::{
-    parse, parse_claims, parse_frame, parse_replacing, parse_with_keys_replacing,
+    parse, parse_frame, parse_replacing, parse_with_keys_replacing,
 };
 use fireemu_core_database::Json;
 use proptest::prelude::*;
@@ -68,59 +68,8 @@ fn every_json_escape_reads_as_the_character_it_names() {
         let want = Json::String(format!("x{expected}y"));
         assert_eq!(parse(&text).unwrap(), want, "{escape}");
         assert_eq!(parse_replacing(&text, '?').unwrap().0, want, "{escape}");
-        assert_eq!(parse_claims(&text).unwrap().0, want, "{escape}");
         assert_eq!(parse_frame(&text).unwrap().0, want, "{escape}");
         assert!(parse(&format!("\"x\\{}y\"", 'q')).is_err());
-    }
-}
-
-/// The claims read as an ordinary document: a lone surrogate is `?` there, in a value and in a name, and the table says
-/// which strings really held one, by location; a real character is itself, whatever it looks like.
-#[test]
-fn claims_are_an_ordinary_document_and_a_table_of_their_lone_surrogates() {
-    use fireemu_core_database::lone::Step;
-    let text = "{\"k\\ud83d\":\"v\\ud83d\\ude00\\ud83d\",\"o\":{\"a\":[\"x\",\"\\ude00y\"]},\"real\":\"\u{10FFFF}\u{10F03D}\"}";
-    let (json, table) = parse_claims(text).unwrap();
-    assert_eq!(
-        json,
-        parse(
-            "{\"k?\":\"v\u{1F600}?\",\"o\":{\"a\":[\"x\",\"?y\"]},\"real\":\"\u{10FFFF}\u{10F03D}\"}"
-        )
-        .unwrap()
-    );
-    let mut expected = fireemu_core_database::lone::LoneClaims::default();
-    expected.record_name(&[Step::Key("k?".into())], vec![0x6B, 0xD83D]);
-    expected.record_value(
-        &[Step::Key("k?".into())],
-        vec![0x76, 0xD83D, 0xDE00, 0xD83D],
-    );
-    expected.record_value(
-        &[Step::Key("o".into()), Step::Key("a".into()), Step::Index(1)],
-        vec![0xDE00, 0x79],
-    );
-    assert_eq!(table, expected);
-    // A document without a lone surrogate has an empty table, however its characters look.
-    let (_, empty) = parse_claims("{\"real\":\"\u{10FFFF}\u{10F03D}\"}").unwrap();
-    assert!(empty.is_empty());
-}
-
-proptest! {
-    #![proptest_config(ProptestConfig {cases: 300, rng_seed: proptest::test_runner::RngSeed::Fixed(0x2277), ..ProptestConfig::default()})]
-
-    /// A claim string reads `?` for each lone unit and the table keeps its units exactly, for any units.
-    #[test]
-    fn the_table_keeps_the_units_of_a_claim(units in prop::collection::vec(unit(), 0..8)) {
-        use fireemu_core_database::lone::Step;
-        let text = format!("{{\"x\":\"{}\"}}", spelled(&units));
-        let (json, table) = parse_claims(&text).unwrap();
-        let ordinary: String = char::decode_utf16(units.iter().copied()).map(|d| d.unwrap_or('?')).collect();
-        prop_assert_eq!(json, Json::object([("x", Json::String(ordinary))]));
-        let lone = char::decode_utf16(units.iter().copied()).any(|d| d.is_err());
-        let mut expected = fireemu_core_database::lone::LoneClaims::default();
-        if lone {
-            expected.record_value(&[Step::Key("x".into())], units.clone());
-        }
-        prop_assert_eq!(table, expected);
     }
 }
 
@@ -129,13 +78,13 @@ proptest! {
 #[test]
 fn a_frame_path_is_found_after_values_nested_deeper_than_the_tracked_levels() {
     let text = r#"{"t":"d","d":{"x":{"y":{"z":{"w":[1,{"v":"\ud83d"}]}}},"b":{"q":{"r":{"s":[[{"t":1}]]}},"p":"/a\ud83d","d":"v\ud83d"}}}"#;
-    let want = r#"{"t":"d","d":{"x":{"y":{"z":{"w":[1,{"v":"?"}]}}},"b":{"q":{"r":{"s":[[{"t":1}]]}},"p":"/a.","d":"v?"}}}"#;
+    let want = r#"{"t":"d","d":{"x":{"y":{"z":{"w":[1,{"v":"?"}]}}},"b":{"q":{"r":{"s":[[{"t":1}]]}},"p":"/a\u0000","d":"v?"}}}"#;
     let (value, replaced) = parse_frame(text).unwrap();
     assert!(replaced);
     assert_eq!(value, parse(want).unwrap());
     // The same frame with the path first reads the same way.
     let first = r#"{"t":"d","d":{"b":{"p":"/a\ud83d","q":{"r":{"s":[[{"t":1}]]}}},"x":{"y":{"z":{"w":[1,{"v":"\ud83d"}]}}}}}"#;
-    let want_first = r#"{"t":"d","d":{"b":{"p":"/a.","q":{"r":{"s":[[{"t":1}]]}}},"x":{"y":{"z":{"w":[1,{"v":"?"}]}}}}}"#;
+    let want_first = r#"{"t":"d","d":{"b":{"p":"/a\u0000","q":{"r":{"s":[[{"t":1}]]}}},"x":{"y":{"z":{"w":[1,{"v":"?"}]}}}}}"#;
     assert_eq!(parse_frame(first).unwrap().0, parse(want_first).unwrap());
 }
 
@@ -153,4 +102,31 @@ fn the_nesting_bound_holds_for_arrays_and_objects() {
         assert!(read(&objects(512)).is_ok());
         assert!(read(&objects(513)).is_err());
     }
+}
+
+/// A lone surrogate in the path of a frame or in a key is the character no key and no path may hold, never the dot of
+/// `.priority`; one inside the `authvar` of the frame refuses the whole message, as before the frame was read so.
+#[test]
+fn a_lone_surrogate_in_a_path_or_key_is_never_a_valid_one_and_authvar_refuses_it() {
+    use fireemu_adapter_database::json_parse::INVALID;
+    let (value, replaced) =
+        parse_frame(r#"{"d":{"b":{"p":"/t/\ud83dpriority","d":{"\ud83dpriority":7}}}}"#).unwrap();
+    assert!(replaced);
+    assert_eq!(INVALID, '\u{0}');
+    let want = r#"{"d":{"b":{"p":"/t/\u0000priority","d":{"\u0000priority":7}}}}"#;
+    assert_eq!(value, parse(want).unwrap());
+    for text in [
+        r#"{"d":{"b":{"authvar":{"uid":"\ud83d"}}}}"#,
+        r#"{"d":{"b":{"authvar":{"k\ud83d":1}}}}"#,
+        r#"{"d":{"b":{"authvar":{"a":{"b":[{"c":"\ude00"}]}}}}}"#,
+    ] {
+        assert!(parse_frame(text).is_err(), "{text}");
+    }
+    // A lone surrogate elsewhere in the same frame is a value read as `?`.
+    assert_eq!(
+        parse_frame(r#"{"d":{"b":{"authvar":{"uid":"u"},"d":"\ud83d"}}}"#)
+            .unwrap()
+            .0,
+        parse(r#"{"d":{"b":{"authvar":{"uid":"u"},"d":"?"}}}"#).unwrap()
+    );
 }

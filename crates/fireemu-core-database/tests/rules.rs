@@ -118,7 +118,6 @@ fn differences_with(fixture: &str, jar_dialect: bool) -> Vec<String> {
     let requester = Requester {
         auth: &auth,
         now: 1_792_464_733_000,
-        lone: None,
     };
     let mut failures = Vec::new();
     for entry in &corpus {
@@ -235,69 +234,6 @@ fn query_order_by_loads_and_decides_as_the_official_emulator() {
         "{} rows differ: {failures:#?}",
         failures.len()
     );
-}
-
-/// The claims are an ordinary document (a lone surrogate reads `?`); the table of lone surrogates says where a string
-/// really held one, and only the evaluation reads it. Without a table nothing is decoded, so a valid string that
-/// looks like the evaluator's internal encoding (the characters U+10FFFF and U+10F03D) is only itself; with a table,
-/// such strings stay distinct from the lone surrogates it lists.
-#[test]
-fn claims_are_read_through_the_lone_table_only() {
-    use fireemu_core_database::lone::{LoneClaims, Step};
-    let reserved = "\u{10FFFF}\u{10F03D}a";
-    let auth = j(serde_json::json!({
-        "uid": "u1",
-        "x": "a",
-        "y": reserved,
-        "l": "?",
-        "token": {"x": "a", "y": reserved, "l": "?", "k?": 1, "y?": 2},
-    }));
-    let mut table = LoneClaims::default();
-    table.record_value(&[Step::Key("l".into())], vec![0xD83D]);
-    table.record_value(
-        &[Step::Key("token".into()), Step::Key("l".into())],
-        vec![0xD83D],
-    );
-    table.record_name(
-        &[Step::Key("token".into()), Step::Key("k?".into())],
-        vec![0x6B, 0xD83D],
-    );
-    let holds = |expr: &str, lone: Option<&LoneClaims>| {
-        let rules = Rules::compile(&read_rule_at_t(expr)).unwrap();
-        let tree = seed();
-        let requester = Requester {
-            auth: &auth,
-            now: 0,
-            lone,
-        };
-        rules.can_read(tree.root(), &p("/t"), None, &requester)
-    };
-    // No table: every string is what it is, and an index with a lone surrogate names nothing.
-    assert!(holds("auth.l == '?'", None));
-    assert!(!holds("auth.l == '\\uD83D'", None));
-    assert!(
-        holds("auth.y.length == 5", None),
-        "U+10FFFF and U+10F03D are two characters of two units and a"
-    );
-    assert!(!holds("auth.x == auth.y", None));
-    assert!(holds("auth.token['k?'] == 1", None));
-    assert!(holds("auth.token['k\\uD83D'] == null", None));
-    // With a table the listed strings and names are lone surrogates, and the others are still themselves.
-    assert!(holds("auth.l == '\\uD83D'", Some(&table)));
-    assert!(holds("auth.token.l.length == 1", Some(&table)));
-    assert!(!holds("auth.l == '?'", Some(&table)));
-    assert!(holds("auth.token['k\\uD83D'] == 1", Some(&table)));
-    assert!(!holds("auth.token['k?'] == 1", Some(&table)));
-    assert!(holds("auth.token['y?'] == 2", Some(&table)));
-    assert!(
-        holds("auth.y.length == 5", Some(&table)),
-        "a valid string that looks like the encoding is only itself"
-    );
-    assert!(!holds("auth.x == auth.y", Some(&table)));
-    assert!(holds("auth.y == '\u{10FFFF}\u{10F03D}a'", Some(&table)));
-    assert!(holds("auth.token.y == auth.y", Some(&table)));
-    // An empty table is no table.
-    assert!(holds("auth.l == '?'", Some(&LoneClaims::default())));
 }
 
 /// The emulator profile reads `\W` and `\D` as the complement of a language of strings, and an escaped
@@ -449,7 +385,6 @@ fn reads_cascade_and_wildcards_bind() {
     let requester = Requester {
         auth: &auth,
         now: 0,
-        lone: None,
     };
     let tree = tree_with(serde_json::json!({"users": {"u1": 1, "u2": 2}}));
     let read = |path: &str| rules.can_read(tree.root(), &p(path), None, &requester);
@@ -491,7 +426,6 @@ fn writes_cascade_and_validate_every_node_left_non_null() {
     let requester = Requester {
         auth: &auth,
         now: 0,
-        lone: None,
     };
     let mut tree = tree_with(serde_json::json!({}));
     let mut write = |method: &str, path: &str, body: serde_json::Value| -> bool {
@@ -660,7 +594,6 @@ fn every_recorded_write_and_expression_error_matches_the_official_emulator() {
         let requester = Requester {
             auth: &auth,
             now: 1_792_464_733_000,
-            lone: None,
         };
         let allowed = rules.can_write(before.root(), after.root(), &written, &requester);
         let expected = entry["status"] == 200;
@@ -716,23 +649,6 @@ mod properties {
         let requester = Requester {
             auth: &auth,
             now: 1_792_464_733_000,
-            lone: None,
-        };
-        Some(rules.can_read(tree.root(), &p("/t"), None, &requester))
-    }
-
-    /// `expr` read by a requester whose `auth` is `auth`, with the table of its lone surrogates.
-    fn holds_for_claims(
-        expr: &str,
-        auth: &Json,
-        lone: Option<&fireemu_core_database::lone::LoneClaims>,
-    ) -> Option<bool> {
-        let rules = Rules::compile(&read_rule_at_t(expr)).ok()?;
-        let tree = seed();
-        let requester = Requester {
-            auth,
-            now: 1_792_464_733_000,
-            lone,
         };
         Some(rules.can_read(tree.root(), &p("/t"), None, &requester))
     }
@@ -889,51 +805,6 @@ mod properties {
     }
 
     proptest! {
-        #![proptest_config(ProptestConfig {cases: 400, rng_seed: proptest::test_runner::RngSeed::Fixed(0x2276), ..ProptestConfig::default()})]
-
-        /// A claim the table lists reads as the Java string it stands for: its length counts units, it equals the literal
-        /// of the same units (a pair spelled by two escapes is the character), `+` joins, and a member whose name holds a
-        /// lone surrogate is found by an index spelled with it. The document itself reads `?` there.
-        #[test]
-        fn a_claim_reads_as_the_java_string_it_stands_for(units in unit_text(), other in unit_text()) {
-            use fireemu_core_database::lone::{LoneClaims, Step};
-            let ordinary = |units: &[u16]| -> String {
-                char::decode_utf16(units.iter().copied()).map(|d| d.unwrap_or('?')).collect()
-            };
-            let (stored, key) = (ordinary(&units), ordinary(&other));
-            let auth = j(serde_json::json!({"uid": "u1", "x": stored.clone(), "token": {"x": stored, key.clone(): 1}}));
-            let mut table = LoneClaims::default();
-            table.record_value(&[Step::Key("x".into())], units.clone());
-            table.record_value(&[Step::Key("token".into()), Step::Key("x".into())], units.clone());
-            table.record_name(&[Step::Key("token".into()), Step::Key(key)], other.clone());
-            let lone = Some(&table);
-            prop_assert_eq!(
-                holds_for_claims(&format!("auth.token.x == {}", literal(&units)), &auth, lone),
-                Some(true)
-            );
-            prop_assert_eq!(
-                holds_for_claims(&format!("auth.x.length == {}", units.len()), &auth, lone),
-                Some(true)
-            );
-            prop_assert_eq!(
-                holds_for_claims(&format!("auth.token.x + 'a' == {}", literal(&[units.clone(), vec![0x61]].concat())), &auth, lone),
-                Some(true)
-            );
-            prop_assert_eq!(
-                holds_for_claims(&format!("auth.token[{}] == 1", literal(&other)), &auth, lone),
-                Some(true)
-            );
-            // Another string is not equal.
-            let mut changed = units.clone();
-            changed.push(0xD83D);
-            prop_assert_eq!(
-                holds_for_claims(&format!("auth.token.x == {}", literal(&changed)), &auth, lone),
-                Some(false)
-            );
-        }
-    }
-
-    proptest! {
         #![proptest_config(ProptestConfig {cases: 600, rng_seed: proptest::test_runner::RngSeed::Fixed(0x10_5f), ..ProptestConfig::default()})]
 
         /// The emulator profile's `\W`, `\D`, classes holding them and escaped letters match as the language they stand for
@@ -961,7 +832,7 @@ mod properties {
             let rules = Rules::compile(&read_rule_at_t(&expr)).unwrap();
             let tree = seed();
             let auth = auth();
-            let requester = Requester { auth: &auth, now: 0, lone: None };
+            let requester = Requester { auth: &auth, now: 0 };
             let read = |rules: &Rules| rules.can_read(tree.root(), &p("/t"), None, &requester);
             let emulator = read(&rules.clone().with_jar_dialect(true));
             prop_assert_eq!(emulator, oracle(&atoms, &subject), "{}", expr);
@@ -1073,7 +944,7 @@ mod properties {
                 let before = seed();
                 let after = tree_with(serde_json::json!({"t":"changed"}));
                 let auth = if authenticated {auth()} else {Json::Null};
-                let requester = Requester {auth:&auth,now:123, lone: None };
+                let requester = Requester {auth:&auth,now:123 };
                 rules.set_coverage_enabled(false);
                 let read = rules.can_read(before.root(), &p("t"), None, &requester);
                 let write = rules.can_write(before.root(), after.root(), &[p("t")], &requester);
@@ -1106,7 +977,7 @@ mod properties {
         fn any_expression_loads_or_is_refused_and_never_panics(text in expression()) {
             let tree = seed();
             let auth = auth();
-            let requester = Requester { auth: &auth, now: 1, lone: None };
+            let requester = Requester { auth: &auth, now: 1 };
             for kind in [".read", ".write", ".validate"] {
                 let mut k = RuleSpec::default();
                 let rule = Some(expr(&text));
@@ -1155,7 +1026,7 @@ mod properties {
             let rules = Rules::compile(&root).unwrap();
             let path = Path::from_keys(keys[..grants.len()].iter().copied());
             let auth = Json::Null;
-            let requester = Requester { auth: &auth, now: 0, lone: None };
+            let requester = Requester { auth: &auth, now: 0 };
             let expected = grants.contains(&Some(true));
             prop_assert_eq!(rules.can_read(None, &path, None, &requester), expected);
         }
@@ -1177,7 +1048,7 @@ mod properties {
             let pattern = parts.concat();
             let tree = seed();
             let auth = auth();
-            let requester = Requester { auth: &auth, now: 0, lone: None };
+            let requester = Requester { auth: &auth, now: 0 };
             let decide = |text: String| {
                 Rules::compile(&read_rule_at_t(&text))
                     .ok()
@@ -1230,7 +1101,7 @@ mod properties {
             let node = Path::from_keys(keys[..depth].iter().copied());
             let written = if priority { node.child(".priority") } else { node.clone() };
             let auth = Json::Null;
-            let requester = Requester { auth: &auth, now: 0, lone: None };
+            let requester = Requester { auth: &auth, now: 0 };
             // The levels the walk to `node` visits: keys[0..depth] exactly while they exist.
             let expected = (0..depth.min(grants.len())).any(|i| grants[i].0 == Some(true));
             prop_assert_eq!(
@@ -1333,7 +1204,6 @@ fn every_level_counts_and_a_rule_at_the_bound_is_evaluated_on_a_worker_stack() {
             let requester = Requester {
                 auth: &auth,
                 now: 0,
-                lone: None,
             };
             let _ = rules.can_read(root.as_ref(), &p("/t"), None, &requester);
         });
@@ -1398,7 +1268,6 @@ fn shallow_pieces_composed_deep_are_refused_at_load() {
             let requester = Requester {
                 auth: &auth,
                 now: 0,
-                lone: None,
             };
             let _ = rules.can_read(root.as_ref(), &p("/t"), None, &requester);
         });
@@ -1464,7 +1333,6 @@ fn chains_of_one_associative_operator_have_no_depth() {
             let requester = Requester {
                 auth: &auth,
                 now: 0,
-                lone: None,
             };
             rules.can_read(root.as_ref(), &p("/t"), None, &requester)
         });
@@ -1476,7 +1344,6 @@ fn chains_of_one_associative_operator_have_no_depth() {
     let requester = Requester {
         auth: &auth,
         now: 0,
-        lone: None,
     };
     assert!(rules.can_read(tree.root(), &p("/t"), None, &requester));
 }
@@ -1499,7 +1366,6 @@ fn coverage_observation_can_be_disabled_without_changing_authorization() {
         let requester = Requester {
             auth: &auth,
             now: 123,
-            lone: None,
         };
         let expected = rules.can_read(tree.root(), &p("t"), None, &requester);
         let empty = rules.coverage_report();
@@ -1591,11 +1457,7 @@ fn coverage_histograms_stay_bounded_over_many_evaluations() {
     let tree = seed();
     let auth = auth();
     for now in 1..=EVALUATIONS {
-        let requester = Requester {
-            auth: &auth,
-            now,
-            lone: None,
-        };
+        let requester = Requester { auth: &auth, now };
         assert!(rules.can_read(tree.root(), &p("t"), None, &requester));
     }
     let report = rules.coverage_report();
@@ -1669,7 +1531,6 @@ fn auth_root_identity_matches_the_recorded_read() {
     let requester = Requester {
         auth: &auth,
         now: 1_792_464_733_000,
-        lone: None,
     };
     let rules = Rules::compile(&read_rule_at_t(
         "auth != null && auth.uid == 'synthetic-user' && auth == auth",
@@ -1689,14 +1550,14 @@ proptest::proptest! {
     ) {
         let tree = seed();
         let auth = j(serde_json::json!({"uid": uid, "score": score, "enabled": enabled}));
-        let requester = Requester { auth: &auth, now: 0, lone: None };
+        let requester = Requester { auth: &auth, now: 0 };
         let guard = Rules::compile(&read_rule_at_t("auth != null && auth == auth")).unwrap();
         let negated = Rules::compile(&read_rule_at_t("auth != null && !(auth == auth)")).unwrap();
         proptest::prop_assert!(guard.can_read(tree.root(), &p("/t"), None, &requester));
         proptest::prop_assert!(!negated.can_read(tree.root(), &p("/t"), None, &requester));
 
         let anonymous = Json::Null;
-        let requester = Requester { auth: &anonymous, now: 0, lone: None };
+        let requester = Requester { auth: &anonymous, now: 0 };
         let null_control = Rules::compile(&read_rule_at_t("auth == null && auth == auth")).unwrap();
         proptest::prop_assert!(null_control.can_read(tree.root(), &p("/t"), None, &requester));
         proptest::prop_assert!(!guard.can_read(tree.root(), &p("/t"), None, &requester));
@@ -1777,7 +1638,7 @@ proptest::proptest! {
         let mut after = before.clone();
         after.set(&p("/t/o/k"), &j(serde_json::json!("w")), support::NOW).unwrap();
         let auth = if signed_in { auth() } else { Json::Null };
-        let requester = Requester { auth: &auth, now: 0, lone: None };
+        let requester = Requester { auth: &auth, now: 0 };
         let expected = match (left.identity(), right.identity()) {
             (Some(l), Some(r)) => Some(l == r),
             _ => None,
@@ -1809,7 +1670,6 @@ fn query_equals_itself_through_a_ternary() {
     let requester = Requester {
         auth: &auth,
         now: 0,
-        lone: None,
     };
     for (text, allowed) in [
         ("(true ? query : 'a') == (true ? query : 'a')", true),
@@ -1860,7 +1720,6 @@ fn reads(expr: &str) -> bool {
     let requester = Requester {
         auth: &auth,
         now: 123,
-        lone: None,
     };
     rules.can_read(tree.root(), &p("t"), None, &requester)
 }
@@ -1928,7 +1787,6 @@ fn the_coverage_report_shows_a_lone_surrogate_literal_with_the_replacement_chara
     let requester = Requester {
         auth: &auth,
         now: 123,
-        lone: None,
     };
     assert!(rules.can_read(tree.root(), &p("t"), None, &requester));
     let report = format!("{:?}", rules.coverage_report());
@@ -1948,7 +1806,6 @@ fn reads_in(tree: &fireemu_core_database::Tree, expr: &str) -> bool {
     let requester = Requester {
         auth: &auth,
         now: 123,
-        lone: None,
     };
     rules.can_read(tree.root(), &p("t"), None, &requester)
 }
@@ -1993,7 +1850,7 @@ fn case_conversion_past_the_size_bound_is_an_error_before_it_allocates() {
 fn repeated_work_on_long_strings_stops_and_a_search_is_linear() {
     let long = "a".repeat(8 * 1024 * 1024);
     let tree = tree_with(serde_json::json!({"t": {"h": long}}));
-    // Eight MiB read a few times is ordinary; read a hundred times it is past the bound.
+    // Eight MiB read a few times is ordinary; read two hundred times it is past the bound (2^30).
     let join = |times: usize| {
         format!(
             "(root.child('t').child('h').val(){}).length > 0",
@@ -2001,7 +1858,7 @@ fn repeated_work_on_long_strings_stops_and_a_search_is_linear() {
         )
     };
     assert!(reads_in(&tree, &join(10)));
-    for times in [100, 1000] {
+    for times in [200, 1000] {
         assert!(!reads_in(&tree, &join(times)), "{times}");
         assert!(
             !reads_in(&tree, &format!("!({})", join(times))),
@@ -2032,7 +1889,100 @@ fn repeated_work_on_long_strings_stops_and_a_search_is_linear() {
     );
 }
 
-/// The ordinary rules of the Rules corpora use a tiny fraction of the evaluation work bound (2^28): the most any
+/// The bound is sized on purpose: a maximum-size stored string (10 MiB) is read and searched thirteen times by an
+/// honest rule without being denied (the case Astra's review of 2258af58e named), and is denied, negated or not, when
+/// a rule does it a hundred and twenty times.
+#[test]
+fn honest_large_rules_are_not_denied_and_runaway_ones_are() {
+    let tree = tree_with(serde_json::json!({"t": {"h": "a".repeat(10 * 1024 * 1024)}}));
+    let search = "root.child('t').child('h').val().contains('a')";
+    let rule = |times: usize| vec![search; times].join(" && ");
+    assert!(reads_in(&tree, &rule(13)));
+    assert!(reads_in(&tree, &rule(40)));
+    for times in [120, 400] {
+        assert!(!reads_in(&tree, &rule(times)), "{times}");
+        assert!(
+            !reads_in(&tree, &format!("!({})", rule(times))),
+            "{times} negated"
+        );
+    }
+}
+
+/// Building a location from a long path string costs its keys once, charged: Astra's quadratic example (a 50,000-key
+/// path read from the data, through `child`, `hasChild` and `hasChildren`) finishes at once, and a rule that does it
+/// again and again stops at the evaluation bound.
+#[test]
+fn a_location_built_from_a_long_path_is_neither_quadratic_nor_free() {
+    let long = "a/".repeat(50_000);
+    let tree = tree_with(serde_json::json!({"t": {"p": long}}));
+    let started = std::time::Instant::now();
+    assert!(reads_in(
+        &tree,
+        "!root.child(root.child('t').child('p').val()).exists()"
+    ));
+    assert!(reads_in(
+        &tree,
+        "!root.hasChild(root.child('t').child('p').val())"
+    ));
+    assert!(reads_in(
+        &tree,
+        "!root.child(root.child('t').child('p').val()).hasChildren()"
+    ));
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(10),
+        "{:?}",
+        started.elapsed()
+    );
+    // Each use copies the 100,000-byte string and builds 50,000 keys: ten thousand of them pass the bound.
+    let once = "!root.hasChild(root.child('t').child('p').val())";
+    let many = vec![once; 12_000].join(" && ");
+    assert!(!reads_in(&tree, &many));
+    assert!(!reads_in(&tree, &format!("!({many})")));
+}
+
+/// Copying the claims is work by their size: a rule that uses a large `auth` many times stops at the bound, whether
+/// or not it is negated, while a few uses are allowed.
+#[test]
+fn copies_of_the_claims_are_charged() {
+    let big = j(serde_json::json!({"uid": "u1", "token": {"blob": "x".repeat(1024 * 1024)}}));
+    let tree = tree_with(serde_json::json!({"t": {"s": 1}}));
+    let reads = |expr: &str| {
+        Rules::compile(&read_rule_at_t(expr)).unwrap().can_read(
+            tree.root(),
+            &p("t"),
+            None,
+            &Requester { auth: &big, now: 0 },
+        )
+    };
+    let rule = |times: usize| vec!["auth != null"; times].join(" && ");
+    assert!(reads(&rule(10)));
+    assert!(reads(&rule(500)));
+    assert!(!reads(&rule(2000)));
+    assert!(!reads(&format!("!({})", rule(2000))));
+    // The items of an array are copied with it.
+    let listed =
+        j(serde_json::json!({"uid": "u1", "token": {"list": ["x".repeat(1024 * 1024), 1]}}));
+    let reads_listed = |expr: &str| {
+        Rules::compile(&read_rule_at_t(expr)).unwrap().can_read(
+            tree.root(),
+            &p("t"),
+            None,
+            &Requester {
+                auth: &listed,
+                now: 0,
+            },
+        )
+    };
+    let list = |times: usize| vec!["auth.token.list != null"; times].join(" && ");
+    assert!(reads_listed(&list(10)));
+    assert!(!reads_listed(&list(2000)));
+    // A nested value read from the claims is copied too.
+    let nested = |times: usize| vec!["auth.token != null"; times].join(" && ");
+    assert!(reads(&nested(10)));
+    assert!(!reads(&nested(2000)));
+}
+
+/// The ordinary rules of the Rules corpora use a tiny fraction of the evaluation work bound (2^30): the most any
 /// one evaluation does stays under 2^18, a thousandth of it.
 #[test]
 fn ordinary_rules_stay_far_below_the_evaluation_work_bound() {
@@ -2077,37 +2027,6 @@ fn the_high_water_mark_follows_the_most_work_one_evaluation_did() {
     assert!(small > 0 && small < large + 100, "{small}");
 }
 
-/// A write rule reads the lone surrogates of the claims through the table, as a read rule does.
-#[test]
-fn a_write_and_validate_rule_reads_the_lone_claims_too() {
-    use fireemu_core_database::lone::{LoneClaims, Step};
-    let mut leaf = RuleSpec::default();
-    leaf.validate = Some(expr("auth.l.length == 1 && auth.l == '\\uD83D'"));
-    let mut root = RuleSpec::default();
-    root.write = Some(expr("auth.l == '\\uD83D'"));
-    root.children.insert("leaf".to_owned(), leaf);
-    let rules = Rules::compile(&root).unwrap();
-    let auth = j(serde_json::json!({"l": "?"}));
-    let mut table = LoneClaims::default();
-    table.record_value(&[Step::Key("l".into())], vec![0xD83D]);
-    let before = tree_with(serde_json::json!({}));
-    let mut after = before.clone();
-    after
-        .set(&p("/leaf"), &j(serde_json::json!(1)), support::NOW)
-        .unwrap();
-    let written = vec![p("/leaf")];
-    let with = |lone: Option<&LoneClaims>| {
-        let requester = Requester {
-            auth: &auth,
-            now: 0,
-            lone,
-        };
-        rules.can_write(before.root(), after.root(), &written, &requester)
-    };
-    assert!(with(Some(&table)));
-    assert!(!with(None), "without the table the claim is `?`");
-}
-
 /// The emulator profile reads a pattern by UTF-16 unit and a backslash before a line terminator or a character beyond
 /// ASCII as the official emulator does: 289 rows of the jar (a character beyond the Basic Multilingual Plane is two
 /// class members and two units for `.`; after a backslash CR, CR LF, U+2028 and U+2029 are a line feed, and U+FEFF and
@@ -2140,7 +2059,6 @@ fn the_class_grammar_of_the_emulator_profile_at_the_edges_of_the_basic_plane() {
                 &Requester {
                     auth: &auth(),
                     now: 123,
-                    lone: None,
                 },
             )
     };

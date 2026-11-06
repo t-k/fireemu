@@ -3,7 +3,7 @@
 //! and query values", 2026-11-06). On the emulator profile a value stores `?` (a valid pair stays), a path that holds
 //! one is `Invalid token in path`, a data key that holds one is refused as any invalid key is (the connection error;
 //! for a merge entry `Invalid token in path`, as for any invalid key), a listen's bound reads `?`, and the claims of an `auth`
-//! credential keep the surrogate. The strict profile refuses every such frame as before (production has not answered
+//! credential and the `authvar` of a `gauth` frame are not read with one (owner ledger line 2291). The strict profile refuses every such frame as before (production has not answered
 //! them).
 
 use fireemu_adapter_database::realtime::{Opened, Session};
@@ -150,8 +150,11 @@ fn a_listen_bound_with_a_lone_surrogate_reads_as_a_question_mark() {
     }
 }
 
+/// The claims of an `auth` credential are not read when they hold a lone surrogate, on either profile (owner ledger
+/// line 2291: the claims and the `authvar` return to the behaviour before 2286, a declared difference; the official
+/// emulator keeps the surrogate in the claims): the credential is not a token, and a rule that needs the claim denies.
 #[test]
-fn the_claims_of_an_auth_credential_keep_a_lone_surrogate() {
+fn a_credential_whose_claims_hold_a_lone_surrogate_is_not_a_token() {
     let b64 = |text: &str| {
         const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
         let mut out = String::new();
@@ -183,34 +186,11 @@ fn the_claims_of_an_auth_credential_keep_a_lone_surrogate() {
             r#"{"rules":{"t":{".read":"auth.token.x == '\\uD83D'"}}}"#,
         );
         let got = replies(&mut db, &[&auth, listen]).join("\n");
-        if strict {
-            assert!(got.contains("Could not parse auth token"), "{got}");
-            assert!(got.contains("permission_denied"), "{got}");
-        } else {
-            // The credential's answer shows the claim as the escape, in `token` and as a member of `auth`.
-            assert_eq!(got.matches(r#""x":"\uD83D""#).count(), 2, "{got}");
-            assert!(
-                got.contains(r#""s":"ok""#) && !got.contains("permission_denied"),
-                "{got}"
-            );
-        }
-    }
-}
-
-/// Only the answer to an `auth` frame shows the claims encoding as escapes: a reply to any other frame keeps a
-/// real character that the encoding reserves, whatever the profile.
-#[test]
-fn a_reply_other_than_the_credential_answer_keeps_a_reserved_character() {
-    let stored = "a\u{10F03D}b\u{10FFFF}c";
-    for strict in [false, true] {
-        let mut db = database(strict);
-        rest(&mut db, "PUT", "/t.json?ns=c", &format!("\"{stored}\""));
-        let got = replies(
-            &mut db,
-            &[r#"{"t":"d","d":{"r":1,"a":"g","b":{"p":"/t"}}}"#],
-        )
-        .join("\n");
-        assert!(got.contains(stored), "strict={strict}: {got}");
+        assert!(
+            got.contains("Could not parse auth token"),
+            "strict={strict}: {got}"
+        );
+        assert!(got.contains("permission_denied"), "strict={strict}: {got}");
     }
 }
 
@@ -261,14 +241,28 @@ fn a_merge_entry_with_an_invalid_key_is_answered_as_the_official_emulator_answer
             );
         }
     }
-    // The depth counts the path below `/t`: 31 segments make 32 levels, which is the limit.
-    for (segments, accepted) in [(31, true), (32, false)] {
+    // The depth boundary of the official emulator, recorded (jar-ws5.json: a merge below `/t` with 30, 31, 32 and 33
+    // segments): 31 segments make 32 levels, which is the limit, and 32 are refused.
+    let depth: Vec<serde_json::Value> = serde_json::from_str(include_str!(
+        "fixtures/ws-merge-depth-official-emulator-4.11.2.json"
+    ))
+    .unwrap();
+    assert_eq!(depth.len(), 4);
+    for row in &depth {
+        let segments = usize::try_from(row["segments"].as_u64().unwrap()).unwrap();
         let key = vec!["a"; segments].join("/");
         let frame =
             format!(r#"{{"t":"d","d":{{"r":1,"a":"m","b":{{"p":"/t","d":{{"{key}":1}}}}}}}}"#);
         let mut emulator = database(false);
         let got = replies(&mut emulator, &[&frame]).join("");
-        assert_eq!(got.contains(r#""s":"ok""#), accepted, "{segments}: {got}");
+        let status = row["status"].as_str().unwrap();
+        assert!(
+            got.contains(&format!(r#""s":"{status}""#)),
+            "{segments}: {got}"
+        );
+        if let Some(message) = row["message"].as_str() {
+            assert!(got.contains(message), "{segments}: {got}");
+        }
     }
     // A valid key and a `//` key are unchanged.
     for key in ["a/b", "a//b"] {
@@ -285,90 +279,53 @@ fn a_merge_entry_with_an_invalid_key_is_answered_as_the_official_emulator_answer
     }
 }
 
-/// The `authvar` of a `gauth` frame: the emulator profile keeps a lone surrogate in it, as the official emulator does,
-/// and answers with the object (the strict profile answers null, and refuses a lone surrogate as before). Jar rows:
-/// jar-ws3.json and jar-ws4.json.
+/// The `authvar` of a `gauth` frame is read as before 2286 (owner ledger line 2291, a declared difference: the
+/// official emulator keeps a lone surrogate in it and echoes the object): the answer is null, and a frame whose
+/// `authvar` holds a lone surrogate, in a value or a name, is refused as a whole, on either profile. The member is
+/// found in the parsed frame, so spelling `authvar` or its enclosing `b` with an escape changes nothing.
 #[test]
-fn the_authvar_of_a_gauth_frame_keeps_a_lone_surrogate_on_the_emulator_profile() {
-    let rules = r#"{"rules":{"t":{".read":"auth.x == '\\uD83D'"}}}"#;
-    let gauth = |authvar: &str| {
-        format!(
-            r#"{{"t":"d","d":{{"r":1,"a":"gauth","b":{{"cred":"owner","authvar":{authvar}}}}}}}"#
-        )
-    };
+fn the_authvar_of_a_gauth_frame_is_read_as_before_and_refuses_a_lone_surrogate() {
+    let rules = r#"{"rules":{"t":{".read":"auth.x == 'a'"}}}"#;
     let listen = r#"{"t":"d","d":{"r":2,"a":"q","b":{"p":"/t","h":""}}}"#;
-    let run = |strict: bool, authvar: &str| {
+    let run = |strict: bool, frame: &str| {
         let mut db = database(strict);
         rest(&mut db, "PUT", "/t.json?ns=c", r#"{"a":1}"#);
         rest(&mut db, "PUT", "/.settings/rules.json?ns=c", rules);
-        replies(&mut db, &[&gauth(authvar), listen]).join("\n")
+        replies(&mut db, &[frame, listen]).join("\n")
     };
-    // The object is echoed (its members in the order of the map), and the rule sees the surrogate.
-    let lone = run(false, r#"{"uid":"u1","x":"\ud83d"}"#);
-    assert!(
-        lone.contains(r#""x":"\uD83D""#) && lone.contains(r#""uid":"u1""#),
-        "{lone}"
-    );
-    assert!(lone.contains(r#""r":2,"b":{"s":"ok""#), "{lone}");
-    let pair = run(false, r#"{"uid":"u1","x":"😀"}"#);
-    assert!(pair.contains(r#""x":"😀""#), "{pair}");
-    assert!(pair.contains("permission_denied"), "{pair}");
-    let key = run(false, r#"{"uid":"u1","\ud83d":1}"#);
-    assert!(key.contains(r#""\uD83D":1"#), "{key}");
-    let plain = run(false, r#"{"uid":"u1","n":1,"o":{"p":[1,"a"]}}"#);
-    assert!(
-        plain.contains(r#""auth":{"n":1,"o":{"p":[1,"a"]},"uid":"u1"}"#),
-        "{plain}"
-    );
-    // A reserved character stays itself.
-    let reserved = run(false, "{\"uid\":\"u1\",\"x\":\"\u{10F03D}\"}");
-    assert!(reserved.contains("\u{10F03D}"), "{reserved}");
-    // Strict: a null echo; the surrogate is refused as before.
-    let strict_plain = run(true, r#"{"uid":"u1","n":1}"#);
-    assert!(strict_plain.contains(r#""auth":null"#), "{strict_plain}");
-    let strict_lone = run(true, r#"{"uid":"u1","x":"\ud83d"}"#);
-    assert!(
-        strict_lone.contains(r#""t":"c","d":{"t":"e""#),
-        "{strict_lone}"
-    );
-}
-
-/// The `authvar` member is found in the parsed frame, so spelling it with an escape (`"authvar"`) changes
-/// nothing; and valid strings that look like any internal encoding stay themselves: U+10FFFF followed by `a` is
-/// not `a`, and shows as the character in the answer (coordinator review of 985528f1c).
-#[test]
-fn an_authvar_spelled_with_an_escape_is_the_authvar_and_valid_strings_stay_distinct() {
-    let rules = r#"{"rules":{"t":{".read":"auth.x == auth.y"}}}"#;
-    let listen = r#"{"t":"d","d":{"r":2,"a":"q","b":{"p":"/t","h":""}}}"#;
-    for member in ["authvar", r"authvar"] {
-        let frame = format!(
-            r#"{{"t":"d","d":{{"r":1,"a":"gauth","b":{{"cred":"owner","{member}":{{"uid":"u1","x":"a","y":"􏿿a"}}}}}}}}"#
-        );
-        let mut db = database(false);
-        rest(&mut db, "PUT", "/t.json?ns=c", r#"{"a":1}"#);
-        rest(&mut db, "PUT", "/.settings/rules.json?ns=c", rules);
-        let got = replies(&mut db, &[&frame, listen]).join("\n");
+    for strict in [false, true] {
+        let plain = r#"{"t":"d","d":{"r":1,"a":"gauth","b":{"cred":"owner","authvar":{"uid":"u1","x":"a"}}}}"#;
+        let got = run(strict, plain);
+        assert!(got.contains(r#""auth":null"#), "strict={strict}: {got}");
         assert!(
-            got.contains(&format!("\"y\":\"{}a\"", '\u{10FFFF}')),
-            "{member}: {got}"
+            got.contains(r#""r":2,"b":{"s":"ok""#),
+            "strict={strict}: {got}"
         );
-        assert!(got.contains("permission_denied"), "{member}: {got}");
-        // The same strings are equal when they are.
-        let same = frame.replace(r#""x":"a""#, r#""x":"􏿿a""#);
-        let mut db = database(false);
-        rest(&mut db, "PUT", "/t.json?ns=c", r#"{"a":1}"#);
-        rest(&mut db, "PUT", "/.settings/rules.json?ns=c", rules);
-        let got = replies(&mut db, &[&same, listen]).join("\n");
-        assert!(got.contains(r#""r":2,"b":{"s":"ok""#), "{member}: {got}");
+        for (b, member) in [("b", "authvar"), (r"\u0062", r"auth\u0076ar")] {
+            for lone in [
+                r#"{"uid":"u1","x":"\ud83d"}"#,
+                r#"{"uid":"u1","\ud83d":1}"#,
+                r#"{"uid":"u1","o":{"p":["\ude00"]}}"#,
+            ] {
+                let frame = format!(
+                    r#"{{"t":"d","d":{{"r":1,"a":"gauth","{b}":{{"cred":"owner","{member}":{lone}}}}}}}"#
+                );
+                let got = run(strict, &frame);
+                assert!(
+                    got.contains(r#""t":"c","d":{"t":"e""#),
+                    "strict={strict} {frame}: {got}"
+                );
+            }
+        }
+        // A lone surrogate outside the authvar is a value read as `?` on the emulator profile, and refused on strict.
+        let outside = r#"{"t":"d","d":{"r":1,"a":"gauth","b":{"cred":"owner","authvar":{"uid":"u1","x":"a"},"note":"\ud83d"}}}"#;
+        let got = run(strict, outside);
+        assert_eq!(
+            got.contains(r#""t":"c","d":{"t":"e""#),
+            strict,
+            "strict={strict}: {got}"
+        );
     }
-    // A lone surrogate in an escaped `authvar` is read as in a plain one.
-    let lone = r#"{"t":"d","d":{"r":1,"a":"gauth","b":{"cred":"owner","authvar":{"uid":"u1","x":"\ud83d","y":"\ud83d"}}}}"#;
-    let mut db = database(false);
-    rest(&mut db, "PUT", "/t.json?ns=c", r#"{"a":1}"#);
-    rest(&mut db, "PUT", "/.settings/rules.json?ns=c", rules);
-    let got = replies(&mut db, &[lone, listen]).join("\n");
-    assert!(got.contains(r#""x":"\uD83D""#), "{got}");
-    assert!(got.contains(r#""r":2,"b":{"s":"ok""#), "{got}");
 }
 
 /// A frame whose path holds a lone surrogate writes nothing, whatever else the frame holds: the path is made invalid
@@ -399,4 +356,57 @@ fn a_frame_with_a_lone_surrogate_in_its_path_writes_nothing() {
         );
         assert_eq!(rest(&mut strict, "GET", "/.json?ns=c", "").1, "null");
     }
+}
+
+/// A lone surrogate in a path or a key is never `.priority` (nor any other valid path): the frames of Astra's review
+/// of 2258af58e write nothing, register nothing and cancel nothing on the emulator profile, over put, merge and the
+/// three on-disconnect routes (`o`, `om`, `oc`). The disconnect writes run when the session closes, so a registration
+/// that wrongly succeeded would show in `/t` afterwards.
+#[test]
+fn a_lone_surrogate_in_a_path_never_becomes_a_priority_path() {
+    let invalid = r#""s":"invalid_parameters","d":"Invalid token in path""#;
+    let frames = [
+        r#"{"t":"d","d":{"r":1,"a":"p","b":{"p":"/t/\ud83dpriority","d":7}}}"#,
+        r#"{"t":"d","d":{"r":1,"a":"m","b":{"p":"/t","d":{"\ud83dpriority":7}}}}"#,
+        r#"{"t":"d","d":{"r":1,"a":"o","b":{"p":"/t/\ud83dpriority","d":7}}}"#,
+        r#"{"t":"d","d":{"r":1,"a":"om","b":{"p":"/t","d":{"\ud83dpriority":7}}}}"#,
+        r#"{"t":"d","d":{"r":1,"a":"om","b":{"p":"/t/\ude00priority","d":{"k":7}}}}"#,
+    ];
+    for frame in frames {
+        let mut db = database(false);
+        rest(&mut db, "PUT", "/t.json?ns=c", "1");
+        let got = replies(&mut db, &[frame]).join("\n");
+        // The disconnect merge refuses a bad key with the connection error, as it did (the official emulator's answer
+        // to it is not recorded); every other route answers the invalid token.
+        let refused = if frame.contains(r#""a":"om""#) {
+            got.contains(invalid) || got.contains(r#""t":"c","d":{"t":"e""#)
+        } else {
+            got.contains(invalid)
+        };
+        assert!(refused, "{frame}: {got}");
+        // Nothing was written, and no disconnect write ran when the session closed.
+        assert_eq!(
+            rest(&mut db, "GET", "/t.json?ns=c&format=export", "").1,
+            "1",
+            "{frame}"
+        );
+    }
+    // `oc` cancels registrations by path: a path with a lone surrogate cancels nothing, and the valid registration
+    // made for `/t/.priority` stays and runs.
+    let mut db = database(false);
+    rest(&mut db, "PUT", "/t.json?ns=c", "1");
+    let got = replies(
+        &mut db,
+        &[
+            r#"{"t":"d","d":{"r":1,"a":"o","b":{"p":"/t/.priority","d":7}}}"#,
+            r#"{"t":"d","d":{"r":2,"a":"oc","b":{"p":"/t/\ud83dpriority"}}}"#,
+        ],
+    )
+    .join("\n");
+    assert!(got.contains(invalid), "{got}");
+    assert_eq!(
+        rest(&mut db, "GET", "/t.json?ns=c&format=export", "").1,
+        r#"{".value":1,".priority":7.0}"#,
+        "the registration for /t/.priority was not cancelled and ran on close"
+    );
 }

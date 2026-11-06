@@ -21,7 +21,7 @@ use fireemu_core_database::{
     Bound, BoundKey, ErrorKind, Json, Limit, Node, OrderBy, Path, QueryParams, ServerValueContext,
 };
 
-use crate::access::{auth_from_claims_with, Access, WriteOp};
+use crate::access::{auth_from_claims, Access, WriteOp};
 use crate::json_parse::{parse_frame, parse_frame_with_keys, parse_with_keys};
 use crate::json_text::{priority_at, render, wire_json, Style};
 use crate::listen::Listen;
@@ -29,7 +29,6 @@ use crate::namespace::route;
 use crate::request::{self, Refusal};
 use crate::rest::{Change, Database, Patched, SseEvent};
 use crate::websocket::CloseCode;
-use fireemu_core_database::lone::LoneClaims;
 
 /// The protocol version this server speaks.
 pub const PROTOCOL_VERSION: &str = "5";
@@ -63,10 +62,6 @@ pub struct Session {
     limit: usize,
     /// The members of the merge being answered, in the order they were sent.
     merge_order: Vec<String>,
-    /// Whether the answer being built shows claims in the encoded view (see `lone_echo` use in `dispatch`).
-    lone_echo: bool,
-    /// Where the `authvar` of the frame being answered holds a lone surrogate.
-    authvar_lone: LoneClaims,
     /// Whether answers are split into WebSocket frames (not over long polling).
     split: bool,
     /// The host the client connected to, named in a reset.
@@ -86,7 +81,6 @@ enum Ready {
         Result<Json, crate::json_parse::ParseError>,
         Vec<String>,
         bool,
-        Option<(Json, LoneClaims)>,
     ),
     /// The connection must close with this code.
     Close(CloseCode),
@@ -151,8 +145,6 @@ impl Database {
             pending: None,
             limit: self.options().realtime_message_bytes,
             merge_order: Vec::new(),
-            lone_echo: false,
-            authvar_lone: LoneClaims::default(),
             split: true,
             host: host.unwrap_or_default().to_owned(),
         };
@@ -264,7 +256,7 @@ impl Session {
             Ok(Some(message)) => {
                 // A lone surrogate is `?` in a value, as the official emulator stores it, and `.` in a key and in
                 // the path of the message, which the official emulator answers as an invalid token.
-                let (mut parsed, replaced) = match parse_frame(&message) {
+                let (parsed, replaced) = match parse_frame(&message) {
                     Ok((json, replaced)) => (Ok(json), replaced),
                     Err(err) => (Err(err), false),
                 };
@@ -273,15 +265,7 @@ impl Session {
                 } else {
                     Vec::new()
                 };
-                // The `authvar` of a `gauth` frame keeps a lone surrogate as the official emulator keeps it
-                // (a table beside the ordinary object). Whether the frame has one comes from the parsed frame.
-                let authvar = parsed
-                    .as_mut()
-                    .ok()
-                    .and_then(|json| authvar_slot(json).map(|slot| matches!(slot, Json::Object(_))))
-                    .filter(|is_object| *is_object)
-                    .and_then(|_| collected_authvar(&message));
-                Some(Prepared(Ready::Message(parsed, order, replaced, authvar)))
+                Some(Prepared(Ready::Message(parsed, order, replaced)))
             }
         }
     }
@@ -299,21 +283,10 @@ impl Session {
                 received.close = Some(code);
                 return received;
             }
-            Ready::Message(parsed, order, replaced, authvar) => {
+            Ready::Message(parsed, order, replaced) => {
                 self.merge_order = order;
-                self.authvar_lone = LoneClaims::default();
                 if replaced && db.options().production_shapes {
                     Err(crate::json_parse::ParseError)
-                } else if let (Ok(mut parsed), Some((authvar, table)), true) = (
-                    parsed.clone(),
-                    authvar,
-                    db.options().credentials.lone_claims(),
-                ) {
-                    if let Some(slot) = authvar_slot(&mut parsed) {
-                        *slot = authvar;
-                    }
-                    self.authvar_lone = table;
-                    Ok(parsed)
                 } else {
                     parsed
                 }
@@ -426,17 +399,7 @@ impl Session {
                 let context = ServerValueContext { now_millis };
                 let answer = self.act(db, action, arguments, context, events);
                 match answer {
-                    Ok(data) => {
-                        let text = response(r, "ok", &data);
-                        // An answer that shows claims with a lone surrogate was built from their encoded view, which
-                        // is written back as the escapes (`fireemu_core_database::lone`).
-                        let text = if std::mem::take(&mut self.lone_echo) {
-                            fireemu_core_database::lone::json_text(&text)
-                        } else {
-                            text
-                        };
-                        Ok(vec![text])
-                    }
+                    Ok(data) => Ok(vec![response(r, "ok", &data)]),
                     Err(Failure::Status(status, message)) => {
                         Ok(vec![response(r, status, &Json::String(message))])
                     }
@@ -472,8 +435,7 @@ impl Session {
                 None => Json::Null,
             }),
             "auth" => match authenticate(arguments, db, &self.namespace, context.now_millis) {
-                Ok((answer, access, encoded)) => {
-                    self.lone_echo = encoded;
+                Ok((answer, access)) => {
                     self.become_(db, access, context.now_millis);
                     Ok(answer)
                 }
@@ -511,28 +473,13 @@ impl Session {
                 let access = match arguments.get("authvar") {
                     None => access,
                     Some(Json::Null) => Access::AdminAsAnonymous,
-                    Some(auth @ Json::Object(_)) => {
-                        Access::AdminAsUser(auth.clone(), self.authvar_lone.clone())
-                    }
+                    Some(auth @ Json::Object(_)) => Access::AdminAsUser(auth.clone()),
                     Some(_) => return Err(Failure::Malformed),
-                };
-                // The emulator profile answers with the `authvar` object it was given, as the official emulator
-                // does (a lone surrogate in it written as the escape); the strict profile answers null.
-                let echo = match (
-                    arguments.get("authvar"),
-                    db.options().credentials.lone_claims(),
-                ) {
-                    (Some(auth @ Json::Object(_)), true) if !self.authvar_lone.is_empty() => {
-                        self.lone_echo = true;
-                        self.authvar_lone.encoded_view(auth)
-                    }
-                    (Some(auth @ Json::Object(_)), true) => auth.clone(),
-                    _ => Json::Null,
                 };
                 self.become_(db, access, context.now_millis);
                 let expires = context.now_millis / 1000 + 3600;
                 Ok(Json::object([
-                    ("auth", echo),
+                    ("auth", Json::Null),
                     ("expires", Json::int(expires)),
                 ]))
             }
@@ -929,35 +876,6 @@ fn stats(arguments: &BTreeMap<String, Json>) -> Answer {
     }
 }
 
-/// The member `d.b.authvar` of a frame, if the parsed frame has one (found in the parsed structure, so a member
-/// spelled with escapes is found too).
-fn authvar_slot(json: &mut Json) -> Option<&mut Json> {
-    let Json::Object(envelope) = json else {
-        return None;
-    };
-    let Some(Json::Object(data)) = envelope.get_mut("d") else {
-        return None;
-    };
-    let Some(Json::Object(body)) = data.get_mut("b") else {
-        return None;
-    };
-    body.get_mut("authvar")
-}
-
-/// The `authvar` object of a frame read in the claims way (a lone surrogate reads `?`, a table says where it
-/// was), if the frame has one that is an object.
-fn collected_authvar(message: &str) -> Option<(Json, LoneClaims)> {
-    use fireemu_core_database::lone::Step;
-    let (mut json, table) = crate::json_parse::parse_claims(message).ok()?;
-    let slot = authvar_slot(&mut json)?;
-    let at = [
-        Step::Key("d".to_owned()),
-        Step::Key("b".to_owned()),
-        Step::Key("authvar".to_owned()),
-    ];
-    matches!(slot, Json::Object(_)).then(|| (slot.clone(), table.moved(&at, &[])))
-}
-
 /// Whether a parsed message is a merge (`m`), whose member order is worth reading.
 fn is_merge(parsed: &Result<Json, crate::json_parse::ParseError>) -> bool {
     let Ok(Json::Object(envelope)) = parsed else {
@@ -1186,7 +1104,7 @@ fn authenticate(
     db: &Database,
     namespace: &str,
     now: i64,
-) -> Result<(Json, Access, bool), Failure> {
+) -> Result<(Json, Access), Failure> {
     let Some(Json::String(cred)) = arguments.get("cred") else {
         return Err(unparsable_token());
     };
@@ -1194,37 +1112,23 @@ fn authenticate(
     // A verifier decides alone; without one the claims are read as the official emulator
     // reads them, and a missing claim is named.
     if credentials.id_tokens.is_some() {
-        let (auth, lone) = credentials
+        let auth = credentials
             .user(cred, namespace, now)
             .ok_or_else(unparsable_token)?;
-        return Ok(answered(auth, lone));
+        let answer = Json::object([("auth", auth.clone()), ("expires", Json::Null)]);
+        return Ok((answer, Access::User(auth)));
     }
-    let Some((Json::Object(claims), lone)) = jwt_claims_for(cred, credentials.lone_claims()) else {
+    let Some(Json::Object(claims)) = jwt_claims(cred) else {
         return Err(unparsable_token());
     };
-    let (auth, lone) = auth_from_claims_with(&claims, &lone).map_err(|name| {
+    let auth = auth_from_claims(&claims).map_err(|name| {
         Failure::Status(
             "invalid_token",
             format!("Missing claim '{name}' in auth token."),
         )
     })?;
-    Ok(answered(auth, lone))
-}
-
-/// The answer to an `auth` frame, the access it gives, and whether the answer shows the encoded view of the claims
-/// (they hold a lone surrogate, which the answer writes as its escape).
-fn answered(auth: Json, lone: LoneClaims) -> (Json, Access, bool) {
-    let encoded = !lone.is_empty();
-    let shown = if encoded {
-        lone.encoded_view(&auth)
-    } else {
-        auth.clone()
-    };
-    (
-        Json::object([("auth", shown), ("expires", Json::Null)]),
-        Access::User(auth, lone),
-        encoded,
-    )
+    let answer = Json::object([("auth", auth.clone()), ("expires", Json::Null)]);
+    Ok((answer, Access::User(auth)))
 }
 
 fn unparsable_token() -> Failure {
@@ -1234,18 +1138,10 @@ fn unparsable_token() -> Failure {
 /// The claims of a token shaped as a JWT (three base64url parts, the second a JSON
 /// object), unverified.
 pub(crate) fn jwt_claims(token: &str) -> Option<Json> {
-    jwt_claims_for(token, false).map(|(claims, _)| claims)
-}
-
-/// [`jwt_claims`], with the table of the claims' lone surrogates when `lone` (the emulator profile reads them).
-pub(crate) fn jwt_claims_for(token: &str, lone: bool) -> Option<(Json, LoneClaims)> {
-    let (claims, table) = if lone {
-        let text = jwt_payload_text(token)?;
-        crate::json_parse::parse_claims(&text).ok()?
-    } else {
-        (jwt_part(token, 1)?, LoneClaims::default())
-    };
-    matches!(claims, Json::Object(_)).then_some((claims, table))
+    match jwt_part(token, 1)? {
+        claims @ Json::Object(_) => Some(claims),
+        _ => None,
+    }
 }
 
 /// The JSON of part `index` of a three-part token.
@@ -1257,15 +1153,6 @@ fn jwt_part(token: &str, index: usize) -> Option<Json> {
     let bytes = base64url_decode(parts[index])?;
     let text = String::from_utf8(bytes).ok()?;
     parse_with_keys(&text).ok().map(|(json, _)| json)
-}
-
-/// The text of the claims of a three-part token.
-pub fn jwt_payload_text(token: &str) -> Option<String> {
-    let parts: Vec<&str> = token.split('.').collect();
-    if parts.len() != 3 {
-        return None;
-    }
-    String::from_utf8(base64url_decode(parts[1])?).ok()
 }
 
 /// `appcheck`: the official emulator refuses what is not a JWT and unsigned (`alg: none`)

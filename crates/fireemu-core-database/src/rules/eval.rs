@@ -53,16 +53,17 @@ impl<'a> Snapshot<'a> {
         Located::Node(node)
     }
 
-    /// The snapshot `path` below this one: its keys, empty ones dropped.
-    fn child(&self, path: &str) -> Self {
-        let mut at = self.path.clone();
-        for key in path.split('/').filter(|k| !k.is_empty()) {
-            at = at.child(key);
-        }
-        Self {
+    /// The snapshot `path` below this one: its keys, empty ones dropped. The location is built once, so its cost is
+    /// the keys of this location and of `path` (charged), not their product; `None` past the evaluation's budget.
+    fn child(&self, path: &str, work: &std::cell::Cell<u64>) -> Option<Self> {
+        charge(work, self.path.depth().saturating_add(path.len()))?;
+        let mut keys: Vec<String> = Vec::with_capacity(self.path.depth() + 1);
+        keys.extend(self.path.keys().iter().cloned());
+        keys.extend(path.split('/').filter(|k| !k.is_empty()).map(str::to_owned));
+        Some(Self {
             root: self.root,
-            path: at,
-        }
+            path: Path::from_keys(keys),
+        })
     }
 
     /// Whether the official emulator takes this location as a path: every key valid (a
@@ -122,9 +123,6 @@ pub struct Scope<'a> {
 pub struct Dialect {
     /// Regular expressions: `\W`, `\D` and escaped letters as the official emulator reads them.
     pub regex: bool,
-    /// The strings of `auth` are written in the claims encoding of [`crate::lone`], and a lone surrogate in one
-    /// reads as the Java string it is.
-    pub claims: bool,
 }
 
 /// Which version of the tree a snapshot value reads: `root` and `data` read the tree before
@@ -175,14 +173,20 @@ pub fn allows(expr: &Expr, scope: &Scope<'_>, observer: &mut Observer<'_>) -> bo
     allowed
 }
 
-/// The most text one evaluation of one rule may process, in UTF-16 units or bytes: every string a rule reads from
-/// the data or the claims, joins, compares, searches, converts or replaces is charged by its length, a search
-/// by the lengths of both strings (the search itself is linear). Past it the rule is an error, so it denies,
-/// negated or not. The bound is 2^28: a stored string is at most 10 MiB, so a rule can read it about twenty-five
-/// times; the Rules corpora (22k rows) and the rules of the tests use under a thousandth of it (see
-/// [`evaluation_work_high_water`]). It stops what the size bound alone does not: a long string compared,
-/// searched or joined again and again, each time below the size bound.
-pub(crate) const MAX_EVALUATION_WORK: u64 = 1 << 28;
+/// The most work one evaluation of one rule may do, in units: every string a rule reads from the data or the claims,
+/// joins, compares, searches, converts or replaces is charged by its length (a search by the lengths of both
+/// strings, itself linear), every copy of the claims or of a nested value by its size, and the building of a location
+/// by its keys. Past it the rule is an error, so it denies, negated or not. The bound is 2^30, chosen on purpose: a
+/// stored string is at most 10 MiB, and reading it with `val()` and searching it with `contains` is two passes of 10
+/// MiB (20 MiB), so a rule can do that about fifty times (thirteen such checks, the case a review named, use a quarter
+/// of the bound and are allowed). The Rules corpora (22k rows) and the rules of the tests use a few dozen units. The
+/// bound stops what the size bound alone does not: a long string compared, searched or joined again and again, each
+/// time below the size bound, and a path or an `auth` copied again and again.
+///
+/// The matcher of a regular expression is bounded on its own: at most 200,000 steps and 32 levels of nesting for each
+/// `matches` call (`fireemu_core_rules::regex`), an error past either, and the subject and the pattern are charged
+/// by their length here as for any string method.
+pub(crate) const MAX_EVALUATION_WORK: u64 = 1 << 30;
 
 thread_local! {
     static HIGH_WATER: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
@@ -227,36 +231,42 @@ fn text_len(value: &Value<'_>) -> usize {
     }
 }
 
-/// A JSON value as a Rules value. `claims` reads the strings of `auth` as the emulator profile writes
-/// them (see [`crate::lone`]): a string that holds a lone surrogate is [`Value::Units`].
-fn from_json<'a>(json: &Json, claims: bool, work: &std::cell::Cell<u64>) -> Option<Value<'a>> {
-    let value = from_json_uncharged(json, claims);
-    charge(work, text_len(&value))?;
-    Some(value)
+/// A JSON value as a Rules value; a string or a nested value is copied, and that copy is work by its size.
+fn from_json<'a>(json: &Json, work: &std::cell::Cell<u64>) -> Option<Value<'a>> {
+    charge(work, json_cost(json))?;
+    Some(from_json_uncharged(json))
 }
 
-fn from_json_uncharged<'a>(json: &Json, claims: bool) -> Value<'a> {
+fn from_json_uncharged<'a>(json: &Json) -> Value<'a> {
     match json {
         Json::Null => Value::Null,
         Json::Bool(b) => Value::Bool(*b),
         Json::Number(n) => Value::Num(n.as_f64()),
-        Json::String(s) if claims && crate::lone::is_encoded(s) => {
-            from_units(crate::lone::decode(s))
-        }
         Json::String(s) => Value::Str(s.clone()),
         other => Value::Json(other.clone()),
     }
 }
 
-/// The key of a member of `auth`: as the emulator profile's claims are written, or `None` for a name that
-/// holds a lone surrogate and the claims cannot hold one (the strict profile).
-fn claim_key(name: Option<&str>, units: Option<&[u16]>, claims: bool) -> Option<String> {
-    match (name, units) {
-        (Some(name), _) if claims => Some(crate::lone::escape(name)),
-        (Some(name), _) => Some(name.to_owned()),
-        (None, Some(units)) if claims => Some(crate::lone::encode(units)),
-        _ => None,
+/// What copying `json` costs, in units: one for each value and the bytes of each string and name. Counted without
+/// recursion, so a deep document costs no stack.
+fn json_cost(json: &Json) -> usize {
+    let mut cost = 0_usize;
+    let mut pending = vec![json];
+    while let Some(value) = pending.pop() {
+        cost = cost.saturating_add(1);
+        match value {
+            Json::String(s) => cost = cost.saturating_add(s.len()),
+            Json::Array(items) => pending.extend(items),
+            Json::Object(members) => {
+                for (name, member) in members {
+                    cost = cost.saturating_add(name.len());
+                    pending.push(member);
+                }
+            }
+            _ => {}
+        }
     }
+    cost
 }
 
 fn leaf_value<'a>(leaf: &Leaf) -> Value<'a> {
@@ -352,17 +362,16 @@ fn eval_inner<'a>(
         ExprKind::Member(object, name) => {
             let object = eval(object, scope, observer)?;
             observer.member_name(expr.diagnostic, name);
-            let key = claim_key(Some(name), None, scope.dialect.claims);
-            member(object, key.as_deref(), scope)
+            member(object, Some(name), scope)
         }
         ExprKind::Index(object, index) => {
             let object = eval(object, scope, observer)?;
             // A key holding a lone surrogate names no member of anything (no stored or claimed
             // name can hold one), so it reads as an absent member, not an error.
             let key = match eval(index, scope, observer)? {
-                Value::Str(s) => claim_key(Some(&s), None, scope.dialect.claims),
-                Value::Num(n) => claim_key(Some(&number_text(n)), None, scope.dialect.claims),
-                Value::Units(units) => claim_key(None, Some(&units), scope.dialect.claims),
+                Value::Str(s) => Some(s),
+                Value::Num(n) => Some(number_text(n)),
+                Value::Units(_) => None,
                 _ => return None,
             };
             member(object, key.as_deref(), scope)
@@ -424,9 +433,13 @@ fn eval_inner<'a>(
 fn variable<'a>(name: &str, scope: &Scope<'a>) -> Option<Value<'a>> {
     match name {
         "auth" => Some(match scope.auth {
-            Json::Object(_) | Json::Array(_) => Value::Auth(scope.auth.clone()),
+            Json::Object(_) | Json::Array(_) => {
+                // The claims are copied for each use of `auth`: that is work, by their size.
+                charge(&scope.work, json_cost(scope.auth))?;
+                Value::Auth(scope.auth.clone())
+            }
             Json::Null => Value::AuthEmpty,
-            other => from_json(other, scope.dialect.claims, &scope.work)?,
+            other => from_json(other, &scope.work)?,
         }),
         #[allow(clippy::cast_precision_loss)]
         "now" => Some(Value::Num(scope.now as f64)),
@@ -454,7 +467,7 @@ fn member<'a>(object: Value<'a>, name: Option<&str>, scope: &Scope<'a>) -> Optio
     match object {
         Value::AuthEmpty => Some(Value::AuthEmpty),
         Value::Json(Json::Object(map)) => Some(match name.and_then(|name| map.get(name)) {
-            Some(json) => from_json(json, scope.dialect.claims, &scope.work)?,
+            Some(json) => from_json(json, &scope.work)?,
             None => Value::AuthEmpty,
         }),
         // An array is an object keyed by its indexes, read as `Integer.parseInt` reads them
@@ -465,7 +478,7 @@ fn member<'a>(object: Value<'a>, name: Option<&str>, scope: &Scope<'a>) -> Optio
                 .and_then(|index| usize::try_from(index).ok())
                 .and_then(|index| items.get(index))
             {
-                Some(json) => from_json(json, scope.dialect.claims, &scope.work)?,
+                Some(json) => from_json(json, &scope.work)?,
                 None => Value::AuthEmpty,
             },
         ),
@@ -624,7 +637,7 @@ fn bound_value<'a>(bound: Option<&Bound>) -> Value<'a> {
     match bound.map(|b| &b.value) {
         None => Value::Null,
         Some(Json::Number(crate::number::Number::Int(n))) => Value::Long(*n),
-        Some(value) => from_json_uncharged(value, false),
+        Some(value) => from_json_uncharged(value),
     }
 }
 
@@ -929,7 +942,7 @@ fn snapshot_call<'a>(
             Some(value)
         }
         "child" => Some(Value::Snapshot(
-            snapshot.child(&path_argument(arguments, 0)?),
+            snapshot.child(&path_argument(arguments, 0)?, ctx.work)?,
             version,
         )),
         "parent" => snapshot.path.parent().map(|path| {
@@ -943,7 +956,9 @@ fn snapshot_call<'a>(
         }),
         "exists" => Some(Value::Bool(!matches!(located, Located::Absent))),
         "hasChild" => Some(Value::Bool(!matches!(
-            snapshot.child(&path_argument(arguments, 0)?).locate(),
+            snapshot
+                .child(&path_argument(arguments, 0)?, ctx.work)?
+                .locate(),
             Located::Absent
         ))),
         "hasChildren" => {
@@ -964,7 +979,7 @@ fn snapshot_call<'a>(
             // S25, and the r11 hasChildren table). An empty list is true anywhere.
             for key in keys {
                 let key = path_text(key)?;
-                if matches!(snapshot.child(&key).locate(), Located::Absent) {
+                if matches!(snapshot.child(&key, ctx.work)?.locate(), Located::Absent) {
                     return Some(Value::Bool(false));
                 }
             }

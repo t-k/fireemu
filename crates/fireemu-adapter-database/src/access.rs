@@ -25,7 +25,6 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 
-use fireemu_core_database::lone::{LoneClaims, Step};
 use fireemu_core_database::rules::{ReadKind, Requester, Rules, RulesError};
 use fireemu_core_database::{Json, Path, QueryParams, Tree};
 
@@ -61,37 +60,16 @@ impl fmt::Debug for Credentials {
 }
 
 impl Credentials {
-    /// Whether a lone surrogate in the claims of a token is read, as the official emulator reads it (the claims
-    /// read `?`, and a table says where the strings really held one, see [`fireemu_core_database::lone`]): every
-    /// credential but the strict profile's. The strict profile refuses a token whose claims hold one, as before;
-    /// production has not answered it.
-    pub(crate) fn lone_claims(&self) -> bool {
-        !self.strict
-    }
-
-    /// The `auth` of an ID token presented to `namespace`, if it names a user, and the table of its lone
-    /// surrogates (empty unless the emulator profile read some).
-    pub(crate) fn user(
-        &self,
-        token: &str,
-        namespace: &str,
-        now: i64,
-    ) -> Option<(Json, LoneClaims)> {
-        let (claims, lone) = match &self.id_tokens {
-            Some(verify) => {
-                let text = verify(token, namespace, now)?;
-                if self.lone_claims() {
-                    crate::json_parse::parse_claims(&text).ok()?
-                } else {
-                    (crate::json_parse::parse(&text).ok()?, LoneClaims::default())
-                }
-            }
-            None => crate::realtime::jwt_claims_for(token, self.lone_claims())?,
+    /// The `auth` of an ID token presented to `namespace`, if it names a user.
+    pub(crate) fn user(&self, token: &str, namespace: &str, now: i64) -> Option<Json> {
+        let claims = match &self.id_tokens {
+            Some(verify) => crate::json_parse::parse(&verify(token, namespace, now)?).ok()?,
+            None => crate::realtime::jwt_claims(token)?,
         };
         let Json::Object(claims) = claims else {
             return None;
         };
-        auth_from_claims_with(&claims, &lone).ok()
+        auth_from_claims(&claims).ok()
     }
 }
 
@@ -107,9 +85,9 @@ pub(crate) enum Access {
     /// Another administrator credential (an OAuth access token).
     Admin,
     /// The Rules `auth` value from a user credential.
-    User(Json, LoneClaims),
+    User(Json),
     /// Administrator origin with an exact object supplied only as Rules input.
-    AdminAsUser(Json, LoneClaims),
+    AdminAsUser(Json),
     /// Administrator origin with explicit null Rules input.
     AdminAsAnonymous,
     /// No usable credential.
@@ -137,7 +115,7 @@ impl Access {
             // scalar overrides fail closed as local policy, not an observed native error.
             return match crate::json_parse::parse(override_text).map_err(|_| Refused)? {
                 Json::Null => Ok(Self::AdminAsAnonymous),
-                object @ Json::Object(_) => Ok(Self::AdminAsUser(object, LoneClaims::default())),
+                object @ Json::Object(_) => Ok(Self::AdminAsUser(object)),
                 _ => Err(Refused),
             };
         }
@@ -145,7 +123,7 @@ impl Access {
             return Ok(Self::Anonymous);
         };
         match credentials.user(token, namespace, now) {
-            Some((auth, lone)) => Ok(Self::User(auth, lone)),
+            Some(auth) => Ok(Self::User(auth)),
             None if credentials.strict => Err(Refused),
             None => Ok(Self::Anonymous),
         }
@@ -205,23 +183,15 @@ impl Access {
     /// `auth` as rules see it.
     fn auth(&self) -> Json {
         match self {
-            Self::User(auth, _) | Self::AdminAsUser(auth, _) => auth.clone(),
+            Self::User(auth) | Self::AdminAsUser(auth) => auth.clone(),
             _ => Json::Null,
-        }
-    }
-
-    /// Which strings of `auth` really hold a lone surrogate (the emulator profile; empty for any other).
-    fn lone(&self) -> LoneClaims {
-        match self {
-            Self::User(_, lone) | Self::AdminAsUser(_, lone) => lone.clone(),
-            _ => LoneClaims::default(),
         }
     }
 
     /// The originating principal supplied to committed-change consumers.
     pub(crate) fn principal(&self) -> crate::changes::Principal {
         match self {
-            Self::Owner | Self::Admin | Self::AdminAsUser(..) | Self::AdminAsAnonymous => {
+            Self::Owner | Self::Admin | Self::AdminAsUser(_) | Self::AdminAsAnonymous => {
                 crate::changes::Principal {
                     auth_type: "ADMIN".to_owned(),
                     auth_id: None,
@@ -233,7 +203,7 @@ impl Access {
                 auth_id: None,
                 auth: None,
             },
-            Self::User(auth, _) => {
+            Self::User(auth) => {
                 let value: serde_json::Value = serde_json::from_str(&render(auth, Style::Compact))
                     .expect("validated Rules auth is representable as JSON");
                 crate::changes::Principal {
@@ -266,12 +236,8 @@ const RESERVED_CLAIMS: [&str; 10] = [
 /// Builds `auth` from token claims, as the official emulator does: `provider` from
 /// `firebase.sign_in_provider` (else `anonymous`) and `token` the claims, then every other
 /// claim as a member of its own (so a `provider` or `token` claim replaces those), then `uid`
-/// from `sub`. The error names the missing claim. The answer's table lists the claims' lone surrogates (see
-/// [`fireemu_core_database::lone`]) at their places in `auth`: in `token`, as members of their own, and `uid` for `sub`.
-pub(crate) fn auth_from_claims_with(
-    claims: &BTreeMap<String, Json>,
-    lone: &LoneClaims,
-) -> Result<(Json, LoneClaims), &'static str> {
+/// from `sub`. The error names the missing claim.
+pub(crate) fn auth_from_claims(claims: &BTreeMap<String, Json>) -> Result<Json, &'static str> {
     let Some(Json::String(subject)) = claims.get("sub") else {
         return Err("sub");
     };
@@ -295,18 +261,7 @@ pub(crate) fn auth_from_claims_with(
         }
     }
     auth.insert("uid".to_owned(), Json::String(subject.clone()));
-    // Where each claim went: under `token`, as a member of its own unless reserved, and `sub` as `uid`.
-    let mut table = lone.below(&[Step::Key("token".to_owned())]);
-    for name in claims.keys() {
-        let at = [Step::Key(name.clone())];
-        if !RESERVED_CLAIMS.contains(&name.as_str()) {
-            table.merge(lone.moved(&at, &at));
-        }
-        if name == "sub" {
-            table.merge(lone.moved(&at, &[Step::Key("uid".to_owned())]));
-        }
-    }
-    Ok((Json::Object(auth), table))
+    Ok(Json::Object(auth))
 }
 
 /// Rules loaded for a namespace, with the text they were loaded from.
@@ -357,12 +312,7 @@ impl Database {
             return self.options().rules == RulesMode::AllowAll;
         };
         let auth = access.auth();
-        let lone = access.lone();
-        let requester = Requester {
-            auth: &auth,
-            now,
-            lone: Some(&lone),
-        };
+        let requester = Requester { auth: &auth, now };
         let root = self.tree(namespace).and_then(Tree::root);
         loaded
             .rules
@@ -410,12 +360,7 @@ impl Database {
             }
         };
         let auth = access.auth();
-        let lone = access.lone();
-        let requester = Requester {
-            auth: &auth,
-            now,
-            lone: Some(&lone),
-        };
+        let requester = Requester { auth: &auth, now };
         loaded
             .rules
             .can_write(before.root(), after.root(), &written, &requester)
@@ -450,12 +395,7 @@ impl Database {
             .unwrap_or_else(|| Tree::new(limits));
         let context = fireemu_core_database::ServerValueContext { now_millis: now };
         let auth = access.auth();
-        let lone = access.lone();
-        let requester = Requester {
-            auth: &auth,
-            now,
-            lone: Some(&lone),
-        };
+        let requester = Requester { auth: &auth, now };
         let mut kept = Vec::new();
         for (keys, value) in entries {
             let path = Path::from_keys(keys.iter().cloned());
@@ -681,31 +621,6 @@ fn wire_query_text(q: &QueryParams) -> String {
 mod admin_override_tests {
     use super::*;
 
-    /// What a Functions handler receives of the user is the ordinary claims, not a view made for the Rules: a lone
-    /// surrogate reads `?`, and a real character that any internal encoding might reserve is itself, so an event
-    /// payload never carries an added or a stand-in character (coordinator review of 985528f1c).
-    #[test]
-    fn the_principal_carries_the_ordinary_claims() {
-        let reserved = "\u{10FFFF}\u{10F03D}";
-        let text =
-            format!(r#"{{"sub":"u1","iat":1,"real":"{reserved}","x":"\ud83d","k\ud83d":1}}"#);
-        let (claims, lone) = crate::json_parse::parse_claims(&text).unwrap();
-        assert!(!lone.is_empty());
-        let Json::Object(claims) = claims else {
-            panic!("an object")
-        };
-        let (auth, table) = auth_from_claims_with(&claims, &lone).unwrap();
-        let principal = Access::User(auth, table).principal();
-        assert_eq!(principal.auth_id.as_deref(), Some("u1"));
-        let auth = principal.auth.expect("the user's claims");
-        assert_eq!(auth["real"], reserved);
-        assert_eq!(auth["x"], "?");
-        assert_eq!(auth["token"]["real"], reserved);
-        assert_eq!(auth["token"]["x"], "?");
-        assert_eq!(auth["token"]["k?"], 1);
-        assert_eq!(auth["uid"], "u1");
-    }
-
     #[test]
     fn originating_principal_is_not_replaced_by_admin_rules_override() {
         for modifier in ["null", r#"{"uid":"impersonated","extra":true}"#] {
@@ -804,7 +719,6 @@ mod admin_override_tests {
                                 Some("null") => Ok(Access::AdminAsAnonymous),
                                 Some(value) if value.starts_with('{') => Ok(Access::AdminAsUser(
                                     crate::json_parse::parse(value).unwrap(),
-                                    LoneClaims::default(),
                                 )),
                                 Some(_) => Err(Refused),
                             },

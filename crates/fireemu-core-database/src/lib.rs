@@ -16,7 +16,6 @@ pub mod hash;
 pub mod json;
 pub mod key;
 pub mod limits;
-pub mod lone;
 pub mod node;
 pub mod number;
 pub mod path;

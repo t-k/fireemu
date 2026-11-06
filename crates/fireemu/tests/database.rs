@@ -830,13 +830,12 @@ fn mock_token_with(uid: &str, extra: &str) -> String {
     )
 }
 
-/// A claim that holds a lone surrogate (`"x":"\ud83d"`) is read by the emulator profile as the official emulator
-/// reads it (the daemon's own token verifier checks the claims on a copy and the Rules see the original), so
-/// `auth.token.x == '\uD83D'` holds there; the strict profile does not read such a token (it is refused). A pair and a claim name that
-/// holds one behave alike; a plain claim is unchanged (owner row "RTDB closure lone surrogates in claims and query
-/// values", 2026-11-06; jar rows in rules-lone-claims-query-official-emulator-4.11.2.json).
+/// A token whose claims hold a lone surrogate (`"x":"\ud83d"`, or as a claim name) is not read, as before 2286 (owner
+/// ledger line 2291, a declared difference: the official emulator keeps the surrogate): the strict profile refuses
+/// it (401) and the emulator profile judges the request as an anonymous one, through the daemon's own token verifier.
+/// A pair and a plain claim are read as always.
 #[test]
-fn a_claim_with_a_lone_surrogate_is_read_by_the_emulator_profile_only() {
+fn a_claim_with_a_lone_surrogate_is_not_read_on_either_profile() {
     let dir = Scratch::new("database", "lone-claims");
     let firebase_json = dir.join("firebase.json");
     std::fs::write(
@@ -844,20 +843,14 @@ fn a_claim_with_a_lone_surrogate_is_read_by_the_emulator_profile_only() {
         r#"{"database":[{"instance":"demo-rtdb-default-rtdb","rules":"database.rules.json"}]}"#,
     )
     .unwrap();
+    // (rule, extra claims, whether the claims hold a lone surrogate, read of a token that is read)
     let cases = [
-        // (rule, extra claims, emulator read, strict read)
-        ("auth.token.x == '\\uD83D'", r#""x":"\ud83d""#, 200, 401),
-        ("auth.token.x.length == 1", r#""x":"\ud83d""#, 200, 401),
-        ("!(auth.token.x == '\\uD83D')", r#""x":"\ud83d""#, 401, 401),
-        (
-            "auth.token.x == '\\uD83D'",
-            r#""x":"\ud83d\ude00""#,
-            401,
-            401,
-        ),
-        ("auth.token.x == '😀'", r#""x":"\ud83d\ude00""#, 200, 200),
-        ("auth.token['\\uD83D'] == 1", r#""\ud83d":1"#, 200, 401),
-        ("auth.token.x == 'v'", r#""x":"v""#, 200, 200),
+        ("auth.token.x == '\\uD83D'", r#""x":"\ud83d""#, true, 0),
+        ("auth.token.x.length == 1", r#""x":"\ud83d""#, true, 0),
+        ("!(auth.token.x == '\\uD83D')", r#""x":"\ud83d""#, true, 0),
+        ("auth.token['\\uD83D'] == 1", r#""\ud83d":1"#, true, 0),
+        ("auth.token.x == '😀'", r#""x":"\ud83d\ude00""#, false, 200),
+        ("auth.token.x == 'v'", r#""x":"v""#, false, 200),
     ];
     for (name, config) in [
         ("emulator", r#"{"schemaVersion":1,"profile":"emulator"}"#),
@@ -865,7 +858,7 @@ fn a_claim_with_a_lone_surrogate_is_read_by_the_emulator_profile_only() {
     ] {
         let path = dir.join(format!("{name}.json"));
         std::fs::write(&path, config).unwrap();
-        for (rule, extra, emulator, strict) in cases {
+        for (rule, extra, lone, read) in cases {
             std::fs::write(
                 dir.join("database.rules.json"),
                 format!(
@@ -887,8 +880,15 @@ fn a_claim_with_a_lone_surrogate_is_read_by_the_emulator_profile_only() {
             let token = mock_token_with("u1", extra);
             let target = format!("/t.json?ns=demo-rtdb-default-rtdb&auth={token}");
             let (status, body) = request(daemon.database_port(), "GET", &target, &[], "");
-            let want = if name == "emulator" { emulator } else { strict };
-            assert_eq!(status, want, "{name} {rule} {extra}: {body}");
+            if !lone {
+                assert_eq!(status, read, "{name} {rule} {extra}: {body}");
+            } else if name == "strict" {
+                assert_eq!(status, 401, "{name} {rule} {extra}: {body}");
+            } else {
+                let anonymous = "/t.json?ns=demo-rtdb-default-rtdb";
+                let (plain, _) = request(daemon.database_port(), "GET", anonymous, &[], "");
+                assert_eq!(status, plain, "{name} {rule} {extra}: {body}");
+            }
         }
     }
 }

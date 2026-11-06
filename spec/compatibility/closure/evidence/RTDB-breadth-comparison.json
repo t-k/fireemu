@@ -51,12 +51,12 @@
   "localRecordings": {
     "strict": {
       "path": "conformance/src/rtdb-functions/recorded/local-strict-rtdb-breadth.json",
-      "sha256": "9298c1283bbaf898a43557212d3cbf122abbc1707043fbc7c284ba6544a7e820",
+      "sha256": "d9680e8219bc02fe19170b3dd1a24a198bc428eae6c5dcef4f4b695cf73f1bbc",
       "frames": 75
     },
     "emulator": {
       "path": "conformance/src/rtdb-functions/recorded/local-emulator-rtdb-breadth.json",
-      "sha256": "81e1c5d2bccbb79f42c5f34ac472f52de7e8f49be32ad05bfbd2e965b4bce0a8",
+      "sha256": "a8b7e0cd7c87ea88f9f1ad515f037166146e2b8a236520d74ff8ee071bd6754d",
       "frames": 75
     }
   },
@@ -101,20 +101,20 @@
   "command": "node conformance/src/rtdb-functions/breadth-local-run.mjs --fireemu <binary> --profile strict|emulator --out <new dir> (Node 22, fixtures-breadth installed with npm ci); node conformance/src/rtdb-functions/breadth-compare.mjs conformance/src/rtdb-functions/recorded/production-rtdb-breadth.json <dir>/frames.jsonl",
   "binding": {
     "release": "closure-build",
-    "releaseAsset": "unpublished release-profile build of source commit 0883c38b639f9da59efe33894a149b163a17fa84 (cargo build --release --locked -p fireemu, RUSTC_WRAPPER empty, fresh worktree-local target directory)",
-    "releaseAssetSha256": "b349974553768dacee30a613f77b5c5c0debdef67abd2534081b48fd04218376",
-    "sourceCommit": "0883c38b639f9da59efe33894a149b163a17fa84",
+    "releaseAsset": "unpublished release-profile build of source commit d9f5cb906611a358d36a1efea60e0a61bd0bb6cf (cargo build --release --locked -p fireemu, RUSTC_WRAPPER empty, fresh worktree-local target directory)",
+    "releaseAssetSha256": "294051dd47fdebbc26b6412ca399f198f867b05c629dd343fa8b7ab81541d7de",
+    "sourceCommit": "d9f5cb906611a358d36a1efea60e0a61bd0bb6cf",
     "tagObject": null,
-    "binarySha256": "b349974553768dacee30a613f77b5c5c0debdef67abd2534081b48fd04218376",
+    "binarySha256": "294051dd47fdebbc26b6412ca399f198f867b05c629dd343fa8b7ab81541d7de",
     "version": "fireemu 0.43.0",
-    "toolCommit": "0883c38b639f9da59efe33894a149b163a17fa84",
+    "toolCommit": "d9f5cb906611a358d36a1efea60e0a61bd0bb6cf",
     "host": "Darwin arm64",
     "productionRequests": 0
   },
   "profiles": {
     "strict": {
       "profile": "strict",
-      "binarySha256": "b349974553768dacee30a613f77b5c5c0debdef67abd2534081b48fd04218376",
+      "binarySha256": "294051dd47fdebbc26b6412ca399f198f867b05c629dd343fa8b7ab81541d7de",
       "match": true,
       "totals": {
         "rows": 69,
@@ -128,7 +128,7 @@
     },
     "emulator": {
       "profile": "emulator",
-      "binarySha256": "b349974553768dacee30a613f77b5c5c0debdef67abd2534081b48fd04218376",
+      "binarySha256": "294051dd47fdebbc26b6412ca399f198f867b05c629dd343fa8b7ab81541d7de",
       "match": false,
       "totals": {
         "rows": 69,

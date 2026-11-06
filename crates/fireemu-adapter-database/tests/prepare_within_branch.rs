@@ -380,3 +380,50 @@ fn time_preparation_by_unrelated_and_written_branch_size() {
         }
     }
 }
+
+/// Keeps the changed path at depth two inside the wide sibling map. This catches
+/// work proportional to an ancestor's child count that a root-sibling case misses.
+#[test]
+#[ignore = "release nested-ancestor timing; run under an enforced memory limit"]
+fn time_preparation_inside_a_wide_ancestor() {
+    for siblings in [1_000, 10_000, 130_000] {
+        let mut tree = Tree::default();
+        tree.set(
+            &Path::root(),
+            &Json::object([
+                (
+                    "items",
+                    Json::object((0..siblings).map(|i| (format!("k{i:06}"), item(i)))),
+                ),
+                ("config", Json::Bool(true)),
+            ]),
+            NOW,
+        )
+        .unwrap();
+        let scope = path(&tree, "/items/k000042");
+        let sink = Sink {
+            references: vec!["/items/k000042"],
+            ..Sink::default()
+        };
+        let values = [0, 1]
+            .map(|value| Json::object((0..16).map(|i| (format!("k{i:04}"), Json::int(value)))));
+        tree.set(&scope, &values[0], NOW).unwrap();
+        for sample in 0..3 {
+            let rounds = 1_000;
+            let mut total = std::time::Duration::ZERO;
+            for round in 0..rounds {
+                let next = &values[(round + 1) % 2];
+                let started = Instant::now();
+                let (_, publication) =
+                    prepare_within(&mut tree, &scope, context(), Some(&sink), |tree| {
+                        tree.set(&scope, next, NOW)
+                    })
+                    .unwrap();
+                publication.commit();
+                total += started.elapsed();
+                sink.captured.lock().unwrap().clear();
+            }
+            println!("nested scoped timing: siblings={siblings} branch=16 depth=2 sample={sample} rounds={rounds} ns_per_write={}", total.as_nanos() / rounds as u128);
+        }
+    }
+}

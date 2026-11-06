@@ -290,7 +290,12 @@ impl Tree {
             else {
                 break;
             };
-            priorities.push(priority.clone());
+            priorities.push(
+                priority
+                    .as_ref()
+                    .map(std::borrow::Borrow::<Priority>::borrow)
+                    .cloned(),
+            );
             node = children.get(key);
         }
         ScopeSnapshot {
@@ -335,9 +340,12 @@ fn restore_spine(
     if children.is_empty() {
         return None;
     }
+    // Keep snapshot metadata independent of inline versus boxed node priorities.
+    #[allow(clippy::useless_conversion)]
+    let priority = priorities[0].clone().map(Into::into);
     Some(Node {
         content: Content::Children(children),
-        priority: priorities[0].clone(),
+        priority,
     })
 }
 
@@ -430,7 +438,10 @@ impl<'a> NodeView<'a> {
     /// Exact original priority.
     pub fn priority(self) -> Option<&'a Priority> {
         match self {
-            Self::Borrowed(node) => node.priority.as_ref(),
+            Self::Borrowed(node) => node
+                .priority
+                .as_ref()
+                .map(std::borrow::Borrow::<Priority>::borrow),
             Self::Spine {
                 snapshot, depth, ..
             } => snapshot.priorities[depth].as_ref(),
@@ -520,7 +531,12 @@ impl<'a> NodeView<'a> {
             scope_equality_tests::record_structural_comparison();
             return node == other;
         }
-        if self.priority() != other.priority.as_ref() {
+        if self.priority()
+            != other
+                .priority
+                .as_ref()
+                .map(std::borrow::Borrow::<Priority>::borrow)
+        {
             return false;
         }
         let Some(children) = node_children(other) else {

@@ -5032,10 +5032,10 @@ fn grpc_recording_comparison_keeps_status_and_all_response_metadata() {
         "messages": [{
             "executionTime": "2026-08-29T00:00:00Z",
             "results": [{
-                "createTime": "2026-08-29T00:00:01Z",
+                "createTime": "2026-08-29T00:00:00Z",
                 "fields": {},
                 "name": "projects/demo-app/databases/(default)/documents/c/d",
-                "updateTime": "2026-08-29T00:00:01Z"
+                "updateTime": "2026-08-29T00:00:00Z"
             }]
         }]
     });
@@ -5048,9 +5048,9 @@ fn grpc_recording_comparison_keeps_status_and_all_response_metadata() {
 
     let mut changed_time_relationship = recording.clone();
     changed_time_relationship["messages"][0]["results"][0]["createTime"] =
-        json!("2026-08-29T00:00:00Z");
+        json!("2026-08-29T00:00:01Z");
     changed_time_relationship["messages"][0]["results"][0]["updateTime"] =
-        json!("2026-08-29T00:00:00Z");
+        json!("2026-08-29T00:00:01Z");
     assert!(!grpc_recordings_match(
         &recording,
         &changed_time_relationship

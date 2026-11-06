@@ -137,7 +137,7 @@ class SmokeCases(private val context: android.content.Context, private val emit:
                     firestore.disableNetwork().await(); val pending=ref.set(mapOf("value" to 9L))
                     snapshot(queue) { it.metadata.hasPendingWrites() && it.getLong("value")==9L }
                     firestore.enableNetwork().await(); pending.await(); check(peer.document(ref.path).get(Source.SERVER).await().getLong("value")==9L)
-                } finally { firestore.enableNetwork().await(); listener.remove() }
+                } finally { listener.remove(); firestore.enableNetwork().await() }
             }
             runCase("firestore.batch-delete") {
                 val deleted=firestore.document("public/deleted"); val kept=firestore.document("public/kept")

@@ -8,7 +8,7 @@ Robolectric 4.17 can execute Firestore and Database round trips, but its host-JD
 
 ## Build and run
 
-Use Java 21 and a local Android SDK with platform 36, build-tools 35.0.0, platform-tools, command-line tools and an emulator. The local Apple Silicon device image is `system-images;android-34;default;arm64-v8a` revision 2, with emulator 36.4.10. Linux CI uses the API 34/default/x86_64 image revision 4 with emulator 37.2.13 (archive build16740729). The workflow verifies the SHA-1 checksums published in Google's repository metadata; this is not a claim of SHA-256 artifact verification. AVD data, Android preferences, Gradle caches, emulator downloads, debug signing and the ADB server belong to this tool's temporary or ignored directories. Existing SDK packages are read only.
+Use Java 21 and a local Android SDK with platform 36, build-tools 35.0.0, platform-tools, command-line tools and an emulator. The local Apple Silicon device image is `system-images;android-34;default;arm64-v8a` revision 2, with emulator 36.4.10. Linux CI uses the API 34/default/x86_64 image revision 4 with emulator 37.2.13 (archive build 16740729). The workflow verifies the SHA-1 checksums published in Google's repository metadata; this is not a claim of SHA-256 artifact verification. AVD data, Android preferences, Gradle caches, emulator downloads, debug signing and the ADB server belong to this tool's temporary or ignored directories. Existing SDK packages are read only.
 
 ```sh
 cd tools/sdk-smoke-android
@@ -39,4 +39,4 @@ The workflow is manual-dispatch only and is not a release gate. One Linux job ha
 
 ## Recorded compatibility limitation
 
-The initial same-checkout fireemu run reported17 passed cases, an Auth sign-up failure and5 blocked Auth-dependent cases, while all23 passed against the official emulators. Android Auth25.0.0 uses legacy Identity Toolkit routes for sign-up, password verification and account lookup. The smoke requires the runtime aliases supplied by PR122; it does not duplicate that runtime patch. The pull request distinguishes the base-runtime result from any temporary integration verification with that dependency.
+The initial same-checkout fireemu run reported 17 passed cases, an Auth sign-up failure and 5 blocked Auth-dependent cases, while all 23 passed against the official emulators. Android Auth 25.0.0 uses legacy Identity Toolkit routes for sign-up, password verification and account lookup. The smoke requires the runtime aliases supplied by [PR122](https://github.com/t-k/fireemu/pull/122); it does not duplicate that runtime patch. The pull request distinguishes the base-runtime result from any temporary integration verification with that dependency.

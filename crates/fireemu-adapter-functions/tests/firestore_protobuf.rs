@@ -125,7 +125,13 @@ fn all_event_sides_roundtrip_and_export_the_real_sdk_corpus() {
         rows.push(serde_json::json!({"kind":kind,"json":firestore_event_data_encoded(old,new,false),"protobuf":binary}));
     }
     if let Ok(path) = std::env::var("FE_FIRESTORE_CORPUS") {
-        std::fs::write(path, serde_json::to_vec(&rows).unwrap()).unwrap();
+        // Export evidence only once; repeated checks must choose a new artifact path.
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .unwrap();
+        serde_json::to_writer(file, &rows).unwrap();
     }
 }
 

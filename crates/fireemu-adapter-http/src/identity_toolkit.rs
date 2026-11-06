@@ -16504,7 +16504,7 @@ mod tests {
                                 seed["tenantId"] = json!(namespace);
                             }
                             let created = handle(&state, "POST", "/identitytoolkit.googleapis.com/v1/accounts:signUp?key=fake-api-key", &seed);
-                            assert_eq!(created.status, 200, "seed: {}", created.body);
+                            assert_eq!(created.status, 200, "seed account creation failed");
                             tokens.insert(namespace, created.body["idToken"].clone());
                         }
                         let mut body = if legacy == "signupNewUser" {

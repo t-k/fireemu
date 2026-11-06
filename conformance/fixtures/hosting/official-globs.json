@@ -1,0 +1,677 @@
+[
+  {
+    "pattern": "/**",
+    "path": "/a/x",
+    "matches": true
+  },
+  {
+    "pattern": "/**",
+    "path": "/a/y",
+    "matches": true
+  },
+  {
+    "pattern": "/**",
+    "path": "/a/xx",
+    "matches": true
+  },
+  {
+    "pattern": "/**",
+    "path": "/a/a",
+    "matches": true
+  },
+  {
+    "pattern": "/**",
+    "path": "/b/x",
+    "matches": true
+  },
+  {
+    "pattern": "/**",
+    "path": "/a/",
+    "matches": true
+  },
+  {
+    "pattern": "/**",
+    "path": "/a/n/x",
+    "matches": true
+  },
+  {
+    "pattern": "/**",
+    "path": "/a/.hidden",
+    "matches": false
+  },
+  {
+    "pattern": "/**",
+    "path": "/a/*",
+    "matches": true
+  },
+  {
+    "pattern": "/a/*",
+    "path": "/a/x",
+    "matches": true
+  },
+  {
+    "pattern": "/a/*",
+    "path": "/a/y",
+    "matches": true
+  },
+  {
+    "pattern": "/a/*",
+    "path": "/a/xx",
+    "matches": true
+  },
+  {
+    "pattern": "/a/*",
+    "path": "/a/a",
+    "matches": true
+  },
+  {
+    "pattern": "/a/*",
+    "path": "/b/x",
+    "matches": false
+  },
+  {
+    "pattern": "/a/*",
+    "path": "/a/",
+    "matches": false
+  },
+  {
+    "pattern": "/a/*",
+    "path": "/a/n/x",
+    "matches": false
+  },
+  {
+    "pattern": "/a/*",
+    "path": "/a/.hidden",
+    "matches": false
+  },
+  {
+    "pattern": "/a/*",
+    "path": "/a/*",
+    "matches": true
+  },
+  {
+    "pattern": "/a/**",
+    "path": "/a/x",
+    "matches": true
+  },
+  {
+    "pattern": "/a/**",
+    "path": "/a/y",
+    "matches": true
+  },
+  {
+    "pattern": "/a/**",
+    "path": "/a/xx",
+    "matches": true
+  },
+  {
+    "pattern": "/a/**",
+    "path": "/a/a",
+    "matches": true
+  },
+  {
+    "pattern": "/a/**",
+    "path": "/b/x",
+    "matches": false
+  },
+  {
+    "pattern": "/a/**",
+    "path": "/a/",
+    "matches": true
+  },
+  {
+    "pattern": "/a/**",
+    "path": "/a/n/x",
+    "matches": true
+  },
+  {
+    "pattern": "/a/**",
+    "path": "/a/.hidden",
+    "matches": false
+  },
+  {
+    "pattern": "/a/**",
+    "path": "/a/*",
+    "matches": true
+  },
+  {
+    "pattern": "/a/?",
+    "path": "/a/x",
+    "matches": true
+  },
+  {
+    "pattern": "/a/?",
+    "path": "/a/y",
+    "matches": true
+  },
+  {
+    "pattern": "/a/?",
+    "path": "/a/xx",
+    "matches": false
+  },
+  {
+    "pattern": "/a/?",
+    "path": "/a/a",
+    "matches": true
+  },
+  {
+    "pattern": "/a/?",
+    "path": "/b/x",
+    "matches": false
+  },
+  {
+    "pattern": "/a/?",
+    "path": "/a/",
+    "matches": false
+  },
+  {
+    "pattern": "/a/?",
+    "path": "/a/n/x",
+    "matches": false
+  },
+  {
+    "pattern": "/a/?",
+    "path": "/a/.hidden",
+    "matches": false
+  },
+  {
+    "pattern": "/a/?",
+    "path": "/a/*",
+    "matches": true
+  },
+  {
+    "pattern": "/{a,b}/x",
+    "path": "/a/x",
+    "matches": true
+  },
+  {
+    "pattern": "/{a,b}/x",
+    "path": "/a/y",
+    "matches": false
+  },
+  {
+    "pattern": "/{a,b}/x",
+    "path": "/a/xx",
+    "matches": false
+  },
+  {
+    "pattern": "/{a,b}/x",
+    "path": "/a/a",
+    "matches": false
+  },
+  {
+    "pattern": "/{a,b}/x",
+    "path": "/b/x",
+    "matches": true
+  },
+  {
+    "pattern": "/{a,b}/x",
+    "path": "/a/",
+    "matches": false
+  },
+  {
+    "pattern": "/{a,b}/x",
+    "path": "/a/n/x",
+    "matches": false
+  },
+  {
+    "pattern": "/{a,b}/x",
+    "path": "/a/.hidden",
+    "matches": false
+  },
+  {
+    "pattern": "/{a,b}/x",
+    "path": "/a/*",
+    "matches": false
+  },
+  {
+    "pattern": "/a/[ab]",
+    "path": "/a/x",
+    "matches": false
+  },
+  {
+    "pattern": "/a/[ab]",
+    "path": "/a/y",
+    "matches": false
+  },
+  {
+    "pattern": "/a/[ab]",
+    "path": "/a/xx",
+    "matches": false
+  },
+  {
+    "pattern": "/a/[ab]",
+    "path": "/a/a",
+    "matches": true
+  },
+  {
+    "pattern": "/a/[ab]",
+    "path": "/b/x",
+    "matches": false
+  },
+  {
+    "pattern": "/a/[ab]",
+    "path": "/a/",
+    "matches": false
+  },
+  {
+    "pattern": "/a/[ab]",
+    "path": "/a/n/x",
+    "matches": false
+  },
+  {
+    "pattern": "/a/[ab]",
+    "path": "/a/.hidden",
+    "matches": false
+  },
+  {
+    "pattern": "/a/[ab]",
+    "path": "/a/*",
+    "matches": false
+  },
+  {
+    "pattern": "/a/!(x)",
+    "path": "/a/x",
+    "matches": false
+  },
+  {
+    "pattern": "/a/!(x)",
+    "path": "/a/y",
+    "matches": true
+  },
+  {
+    "pattern": "/a/!(x)",
+    "path": "/a/xx",
+    "matches": true
+  },
+  {
+    "pattern": "/a/!(x)",
+    "path": "/a/a",
+    "matches": true
+  },
+  {
+    "pattern": "/a/!(x)",
+    "path": "/b/x",
+    "matches": false
+  },
+  {
+    "pattern": "/a/!(x)",
+    "path": "/a/",
+    "matches": false
+  },
+  {
+    "pattern": "/a/!(x)",
+    "path": "/a/n/x",
+    "matches": false
+  },
+  {
+    "pattern": "/a/!(x)",
+    "path": "/a/.hidden",
+    "matches": false
+  },
+  {
+    "pattern": "/a/!(x)",
+    "path": "/a/*",
+    "matches": true
+  },
+  {
+    "pattern": "/a/@(x|y)",
+    "path": "/a/x",
+    "matches": true
+  },
+  {
+    "pattern": "/a/@(x|y)",
+    "path": "/a/y",
+    "matches": true
+  },
+  {
+    "pattern": "/a/@(x|y)",
+    "path": "/a/xx",
+    "matches": false
+  },
+  {
+    "pattern": "/a/@(x|y)",
+    "path": "/a/a",
+    "matches": false
+  },
+  {
+    "pattern": "/a/@(x|y)",
+    "path": "/b/x",
+    "matches": false
+  },
+  {
+    "pattern": "/a/@(x|y)",
+    "path": "/a/",
+    "matches": false
+  },
+  {
+    "pattern": "/a/@(x|y)",
+    "path": "/a/n/x",
+    "matches": false
+  },
+  {
+    "pattern": "/a/@(x|y)",
+    "path": "/a/.hidden",
+    "matches": false
+  },
+  {
+    "pattern": "/a/@(x|y)",
+    "path": "/a/*",
+    "matches": false
+  },
+  {
+    "pattern": "/a/+(x|y)",
+    "path": "/a/x",
+    "matches": true
+  },
+  {
+    "pattern": "/a/+(x|y)",
+    "path": "/a/y",
+    "matches": true
+  },
+  {
+    "pattern": "/a/+(x|y)",
+    "path": "/a/xx",
+    "matches": true
+  },
+  {
+    "pattern": "/a/+(x|y)",
+    "path": "/a/a",
+    "matches": false
+  },
+  {
+    "pattern": "/a/+(x|y)",
+    "path": "/b/x",
+    "matches": false
+  },
+  {
+    "pattern": "/a/+(x|y)",
+    "path": "/a/",
+    "matches": false
+  },
+  {
+    "pattern": "/a/+(x|y)",
+    "path": "/a/n/x",
+    "matches": false
+  },
+  {
+    "pattern": "/a/+(x|y)",
+    "path": "/a/.hidden",
+    "matches": false
+  },
+  {
+    "pattern": "/a/+(x|y)",
+    "path": "/a/*",
+    "matches": false
+  },
+  {
+    "pattern": "/a/?(x)",
+    "path": "/a/x",
+    "matches": true
+  },
+  {
+    "pattern": "/a/?(x)",
+    "path": "/a/y",
+    "matches": false
+  },
+  {
+    "pattern": "/a/?(x)",
+    "path": "/a/xx",
+    "matches": false
+  },
+  {
+    "pattern": "/a/?(x)",
+    "path": "/a/a",
+    "matches": false
+  },
+  {
+    "pattern": "/a/?(x)",
+    "path": "/b/x",
+    "matches": false
+  },
+  {
+    "pattern": "/a/?(x)",
+    "path": "/a/",
+    "matches": false
+  },
+  {
+    "pattern": "/a/?(x)",
+    "path": "/a/n/x",
+    "matches": false
+  },
+  {
+    "pattern": "/a/?(x)",
+    "path": "/a/.hidden",
+    "matches": false
+  },
+  {
+    "pattern": "/a/?(x)",
+    "path": "/a/*",
+    "matches": false
+  },
+  {
+    "pattern": "/a/*(x)",
+    "path": "/a/x",
+    "matches": true
+  },
+  {
+    "pattern": "/a/*(x)",
+    "path": "/a/y",
+    "matches": false
+  },
+  {
+    "pattern": "/a/*(x)",
+    "path": "/a/xx",
+    "matches": true
+  },
+  {
+    "pattern": "/a/*(x)",
+    "path": "/a/a",
+    "matches": false
+  },
+  {
+    "pattern": "/a/*(x)",
+    "path": "/b/x",
+    "matches": false
+  },
+  {
+    "pattern": "/a/*(x)",
+    "path": "/a/",
+    "matches": false
+  },
+  {
+    "pattern": "/a/*(x)",
+    "path": "/a/n/x",
+    "matches": false
+  },
+  {
+    "pattern": "/a/*(x)",
+    "path": "/a/.hidden",
+    "matches": false
+  },
+  {
+    "pattern": "/a/*(x)",
+    "path": "/a/*",
+    "matches": false
+  },
+  {
+    "pattern": "!/a/x",
+    "path": "/a/x",
+    "matches": false
+  },
+  {
+    "pattern": "!/a/x",
+    "path": "/a/y",
+    "matches": true
+  },
+  {
+    "pattern": "!/a/x",
+    "path": "/a/xx",
+    "matches": true
+  },
+  {
+    "pattern": "!/a/x",
+    "path": "/a/a",
+    "matches": true
+  },
+  {
+    "pattern": "!/a/x",
+    "path": "/b/x",
+    "matches": true
+  },
+  {
+    "pattern": "!/a/x",
+    "path": "/a/",
+    "matches": true
+  },
+  {
+    "pattern": "!/a/x",
+    "path": "/a/n/x",
+    "matches": true
+  },
+  {
+    "pattern": "!/a/x",
+    "path": "/a/.hidden",
+    "matches": true
+  },
+  {
+    "pattern": "!/a/x",
+    "path": "/a/*",
+    "matches": true
+  },
+  {
+    "pattern": "/a/\\*",
+    "path": "/a/x",
+    "matches": false
+  },
+  {
+    "pattern": "/a/\\*",
+    "path": "/a/y",
+    "matches": false
+  },
+  {
+    "pattern": "/a/\\*",
+    "path": "/a/xx",
+    "matches": false
+  },
+  {
+    "pattern": "/a/\\*",
+    "path": "/a/a",
+    "matches": false
+  },
+  {
+    "pattern": "/a/\\*",
+    "path": "/b/x",
+    "matches": false
+  },
+  {
+    "pattern": "/a/\\*",
+    "path": "/a/",
+    "matches": false
+  },
+  {
+    "pattern": "/a/\\*",
+    "path": "/a/n/x",
+    "matches": false
+  },
+  {
+    "pattern": "/a/\\*",
+    "path": "/a/.hidden",
+    "matches": false
+  },
+  {
+    "pattern": "/a/\\*",
+    "path": "/a/*",
+    "matches": true
+  },
+  {
+    "pattern": "/a/.hidden",
+    "path": "/a/x",
+    "matches": false
+  },
+  {
+    "pattern": "/a/.hidden",
+    "path": "/a/y",
+    "matches": false
+  },
+  {
+    "pattern": "/a/.hidden",
+    "path": "/a/xx",
+    "matches": false
+  },
+  {
+    "pattern": "/a/.hidden",
+    "path": "/a/a",
+    "matches": false
+  },
+  {
+    "pattern": "/a/.hidden",
+    "path": "/b/x",
+    "matches": false
+  },
+  {
+    "pattern": "/a/.hidden",
+    "path": "/a/",
+    "matches": false
+  },
+  {
+    "pattern": "/a/.hidden",
+    "path": "/a/n/x",
+    "matches": false
+  },
+  {
+    "pattern": "/a/.hidden",
+    "path": "/a/.hidden",
+    "matches": true
+  },
+  {
+    "pattern": "/a/.hidden",
+    "path": "/a/*",
+    "matches": false
+  },
+  {
+    "pattern": "/a/**/x",
+    "path": "/a/x",
+    "matches": true
+  },
+  {
+    "pattern": "/a/**/x",
+    "path": "/a/y",
+    "matches": false
+  },
+  {
+    "pattern": "/a/**/x",
+    "path": "/a/xx",
+    "matches": false
+  },
+  {
+    "pattern": "/a/**/x",
+    "path": "/a/a",
+    "matches": false
+  },
+  {
+    "pattern": "/a/**/x",
+    "path": "/b/x",
+    "matches": false
+  },
+  {
+    "pattern": "/a/**/x",
+    "path": "/a/",
+    "matches": false
+  },
+  {
+    "pattern": "/a/**/x",
+    "path": "/a/n/x",
+    "matches": true
+  },
+  {
+    "pattern": "/a/**/x",
+    "path": "/a/.hidden",
+    "matches": false
+  },
+  {
+    "pattern": "/a/**/x",
+    "path": "/a/*",
+    "matches": false
+  }
+]

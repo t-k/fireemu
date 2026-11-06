@@ -1,0 +1,2461 @@
+{
+  "schemaVersion": 1,
+  "configs": {
+    "default": {
+      "public": "public",
+      "redirects": [
+        {
+          "source": "/old/**",
+          "destination": "/page.html",
+          "type": 302
+        },
+        {
+          "source": "/old/**",
+          "destination": "/second.html",
+          "type": 301
+        },
+        {
+          "source": "/capture/:name",
+          "destination": "/new/:name",
+          "type": 301
+        }
+      ],
+      "rewrites": [
+        {
+          "source": "/rewrite/**",
+          "destination": "/first.html"
+        },
+        {
+          "source": "/rewrite/**",
+          "destination": "/second.html"
+        },
+        {
+          "source": "/api/**",
+          "function": "echo"
+        },
+        {
+          "source": "/run/**",
+          "run": {
+            "serviceId": "echo",
+            "region": "us-central1"
+          }
+        }
+      ],
+      "headers": [
+        {
+          "source": "/**",
+          "headers": [
+            {
+              "key": "X-Fixture",
+              "value": "first"
+            }
+          ]
+        },
+        {
+          "source": "/data.json",
+          "headers": [
+            {
+              "key": "X-Fixture",
+              "value": "second"
+            },
+            {
+              "key": "Cache-Control",
+              "value": "public, max-age=123"
+            }
+          ]
+        }
+      ]
+    },
+    "clean": {
+      "public": "public",
+      "redirects": [
+        {
+          "source": "/old/**",
+          "destination": "/page.html",
+          "type": 302
+        },
+        {
+          "source": "/old/**",
+          "destination": "/second.html",
+          "type": 301
+        },
+        {
+          "source": "/capture/:name",
+          "destination": "/new/:name",
+          "type": 301
+        }
+      ],
+      "rewrites": [
+        {
+          "source": "/rewrite/**",
+          "destination": "/first.html"
+        },
+        {
+          "source": "/rewrite/**",
+          "destination": "/second.html"
+        },
+        {
+          "source": "/api/**",
+          "function": "echo"
+        },
+        {
+          "source": "/run/**",
+          "run": {
+            "serviceId": "echo",
+            "region": "us-central1"
+          }
+        }
+      ],
+      "headers": [
+        {
+          "source": "/**",
+          "headers": [
+            {
+              "key": "X-Fixture",
+              "value": "first"
+            }
+          ]
+        },
+        {
+          "source": "/data.json",
+          "headers": [
+            {
+              "key": "X-Fixture",
+              "value": "second"
+            },
+            {
+              "key": "Cache-Control",
+              "value": "public, max-age=123"
+            }
+          ]
+        }
+      ],
+      "cleanUrls": true
+    },
+    "slash": {
+      "public": "public",
+      "redirects": [
+        {
+          "source": "/old/**",
+          "destination": "/page.html",
+          "type": 302
+        },
+        {
+          "source": "/old/**",
+          "destination": "/second.html",
+          "type": 301
+        },
+        {
+          "source": "/capture/:name",
+          "destination": "/new/:name",
+          "type": 301
+        }
+      ],
+      "rewrites": [
+        {
+          "source": "/rewrite/**",
+          "destination": "/first.html"
+        },
+        {
+          "source": "/rewrite/**",
+          "destination": "/second.html"
+        },
+        {
+          "source": "/api/**",
+          "function": "echo"
+        },
+        {
+          "source": "/run/**",
+          "run": {
+            "serviceId": "echo",
+            "region": "us-central1"
+          }
+        }
+      ],
+      "headers": [
+        {
+          "source": "/**",
+          "headers": [
+            {
+              "key": "X-Fixture",
+              "value": "first"
+            }
+          ]
+        },
+        {
+          "source": "/data.json",
+          "headers": [
+            {
+              "key": "X-Fixture",
+              "value": "second"
+            },
+            {
+              "key": "Cache-Control",
+              "value": "public, max-age=123"
+            }
+          ]
+        }
+      ],
+      "trailingSlash": true
+    },
+    "noslash": {
+      "public": "public",
+      "redirects": [
+        {
+          "source": "/old/**",
+          "destination": "/page.html",
+          "type": 302
+        },
+        {
+          "source": "/old/**",
+          "destination": "/second.html",
+          "type": 301
+        },
+        {
+          "source": "/capture/:name",
+          "destination": "/new/:name",
+          "type": 301
+        }
+      ],
+      "rewrites": [
+        {
+          "source": "/rewrite/**",
+          "destination": "/first.html"
+        },
+        {
+          "source": "/rewrite/**",
+          "destination": "/second.html"
+        },
+        {
+          "source": "/api/**",
+          "function": "echo"
+        },
+        {
+          "source": "/run/**",
+          "run": {
+            "serviceId": "echo",
+            "region": "us-central1"
+          }
+        }
+      ],
+      "headers": [
+        {
+          "source": "/**",
+          "headers": [
+            {
+              "key": "X-Fixture",
+              "value": "first"
+            }
+          ]
+        },
+        {
+          "source": "/data.json",
+          "headers": [
+            {
+              "key": "X-Fixture",
+              "value": "second"
+            },
+            {
+              "key": "Cache-Control",
+              "value": "public, max-age=123"
+            }
+          ]
+        }
+      ],
+      "trailingSlash": false
+    },
+    "clean-slash": {
+      "public": "public",
+      "redirects": [
+        {
+          "source": "/old/**",
+          "destination": "/page.html",
+          "type": 302
+        },
+        {
+          "source": "/old/**",
+          "destination": "/second.html",
+          "type": 301
+        },
+        {
+          "source": "/capture/:name",
+          "destination": "/new/:name",
+          "type": 301
+        }
+      ],
+      "rewrites": [
+        {
+          "source": "/rewrite/**",
+          "destination": "/first.html"
+        },
+        {
+          "source": "/rewrite/**",
+          "destination": "/second.html"
+        },
+        {
+          "source": "/api/**",
+          "function": "echo"
+        },
+        {
+          "source": "/run/**",
+          "run": {
+            "serviceId": "echo",
+            "region": "us-central1"
+          }
+        }
+      ],
+      "headers": [
+        {
+          "source": "/**",
+          "headers": [
+            {
+              "key": "X-Fixture",
+              "value": "first"
+            }
+          ]
+        },
+        {
+          "source": "/data.json",
+          "headers": [
+            {
+              "key": "X-Fixture",
+              "value": "second"
+            },
+            {
+              "key": "Cache-Control",
+              "value": "public, max-age=123"
+            }
+          ]
+        }
+      ],
+      "cleanUrls": true,
+      "trailingSlash": true
+    },
+    "clean-noslash": {
+      "public": "public",
+      "redirects": [
+        {
+          "source": "/old/**",
+          "destination": "/page.html",
+          "type": 302
+        },
+        {
+          "source": "/old/**",
+          "destination": "/second.html",
+          "type": 301
+        },
+        {
+          "source": "/capture/:name",
+          "destination": "/new/:name",
+          "type": 301
+        }
+      ],
+      "rewrites": [
+        {
+          "source": "/rewrite/**",
+          "destination": "/first.html"
+        },
+        {
+          "source": "/rewrite/**",
+          "destination": "/second.html"
+        },
+        {
+          "source": "/api/**",
+          "function": "echo"
+        },
+        {
+          "source": "/run/**",
+          "run": {
+            "serviceId": "echo",
+            "region": "us-central1"
+          }
+        }
+      ],
+      "headers": [
+        {
+          "source": "/**",
+          "headers": [
+            {
+              "key": "X-Fixture",
+              "value": "first"
+            }
+          ]
+        },
+        {
+          "source": "/data.json",
+          "headers": [
+            {
+              "key": "X-Fixture",
+              "value": "second"
+            },
+            {
+              "key": "Cache-Control",
+              "value": "public, max-age=123"
+            }
+          ]
+        }
+      ],
+      "cleanUrls": true,
+      "trailingSlash": false
+    },
+    "i18n": {
+      "public": "public",
+      "redirects": [
+        {
+          "source": "/old/**",
+          "destination": "/page.html",
+          "type": 302
+        },
+        {
+          "source": "/old/**",
+          "destination": "/second.html",
+          "type": 301
+        },
+        {
+          "source": "/capture/:name",
+          "destination": "/new/:name",
+          "type": 301
+        }
+      ],
+      "rewrites": [
+        {
+          "source": "/rewrite/**",
+          "destination": "/first.html"
+        },
+        {
+          "source": "/rewrite/**",
+          "destination": "/second.html"
+        },
+        {
+          "source": "/api/**",
+          "function": "echo"
+        },
+        {
+          "source": "/run/**",
+          "run": {
+            "serviceId": "echo",
+            "region": "us-central1"
+          }
+        }
+      ],
+      "headers": [
+        {
+          "source": "/**",
+          "headers": [
+            {
+              "key": "X-Fixture",
+              "value": "first"
+            }
+          ]
+        },
+        {
+          "source": "/data.json",
+          "headers": [
+            {
+              "key": "X-Fixture",
+              "value": "second"
+            },
+            {
+              "key": "Cache-Control",
+              "value": "public, max-age=123"
+            }
+          ]
+        }
+      ],
+      "i18n": {
+        "root": "locales"
+      }
+    },
+    "pict-0": {
+      "public": "public",
+      "redirects": [
+        {
+          "source": "/old/**",
+          "destination": "/page.html",
+          "type": 302
+        },
+        {
+          "source": "/old/**",
+          "destination": "/second.html",
+          "type": 301
+        },
+        {
+          "source": "/capture/:name",
+          "destination": "/new/:name",
+          "type": 301
+        }
+      ],
+      "rewrites": [
+        {
+          "source": "/rewrite/**",
+          "destination": "/first.html"
+        },
+        {
+          "source": "/rewrite/**",
+          "destination": "/second.html"
+        },
+        {
+          "source": "/api/**",
+          "function": "echo"
+        },
+        {
+          "source": "/run/**",
+          "run": {
+            "serviceId": "echo",
+            "region": "us-central1"
+          }
+        }
+      ],
+      "headers": [
+        {
+          "source": "/**",
+          "headers": [
+            {
+              "key": "X-Fixture",
+              "value": "first"
+            }
+          ]
+        },
+        {
+          "source": "/data.json",
+          "headers": [
+            {
+              "key": "X-Fixture",
+              "value": "second"
+            },
+            {
+              "key": "Cache-Control",
+              "value": "public, max-age=123"
+            }
+          ]
+        }
+      ],
+      "cleanUrls": false
+    },
+    "pict-1": {
+      "public": "public",
+      "redirects": [
+        {
+          "source": "/old/**",
+          "destination": "/page.html",
+          "type": 302
+        },
+        {
+          "source": "/old/**",
+          "destination": "/second.html",
+          "type": 301
+        },
+        {
+          "source": "/capture/:name",
+          "destination": "/new/:name",
+          "type": 301
+        }
+      ],
+      "rewrites": [
+        {
+          "source": "/rewrite/**",
+          "destination": "/first.html"
+        },
+        {
+          "source": "/rewrite/**",
+          "destination": "/second.html"
+        },
+        {
+          "source": "/api/**",
+          "function": "echo"
+        },
+        {
+          "source": "/run/**",
+          "run": {
+            "serviceId": "echo",
+            "region": "us-central1"
+          }
+        }
+      ],
+      "headers": [
+        {
+          "source": "/**",
+          "headers": [
+            {
+              "key": "X-Fixture",
+              "value": "first"
+            }
+          ]
+        },
+        {
+          "source": "/data.json",
+          "headers": [
+            {
+              "key": "X-Fixture",
+              "value": "second"
+            },
+            {
+              "key": "Cache-Control",
+              "value": "public, max-age=123"
+            }
+          ]
+        }
+      ],
+      "cleanUrls": false
+    },
+    "pict-2": {
+      "public": "public",
+      "redirects": [
+        {
+          "source": "/old/**",
+          "destination": "/page.html",
+          "type": 302
+        },
+        {
+          "source": "/old/**",
+          "destination": "/second.html",
+          "type": 301
+        },
+        {
+          "source": "/capture/:name",
+          "destination": "/new/:name",
+          "type": 301
+        }
+      ],
+      "rewrites": [
+        {
+          "source": "/rewrite/**",
+          "destination": "/first.html"
+        },
+        {
+          "source": "/rewrite/**",
+          "destination": "/second.html"
+        },
+        {
+          "source": "/api/**",
+          "function": "echo"
+        },
+        {
+          "source": "/run/**",
+          "run": {
+            "serviceId": "echo",
+            "region": "us-central1"
+          }
+        }
+      ],
+      "headers": [
+        {
+          "source": "/**",
+          "headers": [
+            {
+              "key": "X-Fixture",
+              "value": "first"
+            }
+          ]
+        },
+        {
+          "source": "/data.json",
+          "headers": [
+            {
+              "key": "X-Fixture",
+              "value": "second"
+            },
+            {
+              "key": "Cache-Control",
+              "value": "public, max-age=123"
+            }
+          ]
+        }
+      ],
+      "cleanUrls": false
+    },
+    "pict-3": {
+      "public": "public",
+      "redirects": [
+        {
+          "source": "/old/**",
+          "destination": "/page.html",
+          "type": 302
+        },
+        {
+          "source": "/old/**",
+          "destination": "/second.html",
+          "type": 301
+        },
+        {
+          "source": "/capture/:name",
+          "destination": "/new/:name",
+          "type": 301
+        }
+      ],
+      "rewrites": [
+        {
+          "source": "/rewrite/**",
+          "destination": "/first.html"
+        },
+        {
+          "source": "/rewrite/**",
+          "destination": "/second.html"
+        },
+        {
+          "source": "/api/**",
+          "function": "echo"
+        },
+        {
+          "source": "/run/**",
+          "run": {
+            "serviceId": "echo",
+            "region": "us-central1"
+          }
+        }
+      ],
+      "headers": [
+        {
+          "source": "/**",
+          "headers": [
+            {
+              "key": "X-Fixture",
+              "value": "first"
+            }
+          ]
+        },
+        {
+          "source": "/data.json",
+          "headers": [
+            {
+              "key": "X-Fixture",
+              "value": "second"
+            },
+            {
+              "key": "Cache-Control",
+              "value": "public, max-age=123"
+            }
+          ]
+        }
+      ],
+      "cleanUrls": false
+    },
+    "pict-4": {
+      "public": "public",
+      "redirects": [
+        {
+          "source": "/old/**",
+          "destination": "/page.html",
+          "type": 302
+        },
+        {
+          "source": "/old/**",
+          "destination": "/second.html",
+          "type": 301
+        },
+        {
+          "source": "/capture/:name",
+          "destination": "/new/:name",
+          "type": 301
+        }
+      ],
+      "rewrites": [
+        {
+          "source": "/rewrite/**",
+          "destination": "/first.html"
+        },
+        {
+          "source": "/rewrite/**",
+          "destination": "/second.html"
+        },
+        {
+          "source": "/api/**",
+          "function": "echo"
+        },
+        {
+          "source": "/run/**",
+          "run": {
+            "serviceId": "echo",
+            "region": "us-central1"
+          }
+        }
+      ],
+      "headers": [
+        {
+          "source": "/**",
+          "headers": [
+            {
+              "key": "X-Fixture",
+              "value": "first"
+            }
+          ]
+        },
+        {
+          "source": "/data.json",
+          "headers": [
+            {
+              "key": "X-Fixture",
+              "value": "second"
+            },
+            {
+              "key": "Cache-Control",
+              "value": "public, max-age=123"
+            }
+          ]
+        }
+      ],
+      "cleanUrls": true,
+      "trailingSlash": true,
+      "i18n": {
+        "root": "locales"
+      }
+    },
+    "pict-5": {
+      "public": "public",
+      "redirects": [
+        {
+          "source": "/old/**",
+          "destination": "/page.html",
+          "type": 302
+        },
+        {
+          "source": "/old/**",
+          "destination": "/second.html",
+          "type": 301
+        },
+        {
+          "source": "/capture/:name",
+          "destination": "/new/:name",
+          "type": 301
+        }
+      ],
+      "rewrites": [
+        {
+          "source": "/rewrite/**",
+          "destination": "/first.html"
+        },
+        {
+          "source": "/rewrite/**",
+          "destination": "/second.html"
+        },
+        {
+          "source": "/api/**",
+          "function": "echo"
+        },
+        {
+          "source": "/run/**",
+          "run": {
+            "serviceId": "echo",
+            "region": "us-central1"
+          }
+        }
+      ],
+      "headers": [
+        {
+          "source": "/**",
+          "headers": [
+            {
+              "key": "X-Fixture",
+              "value": "first"
+            }
+          ]
+        },
+        {
+          "source": "/data.json",
+          "headers": [
+            {
+              "key": "X-Fixture",
+              "value": "second"
+            },
+            {
+              "key": "Cache-Control",
+              "value": "public, max-age=123"
+            }
+          ]
+        }
+      ],
+      "cleanUrls": true,
+      "trailingSlash": false
+    },
+    "pict-6": {
+      "public": "public",
+      "redirects": [
+        {
+          "source": "/old/**",
+          "destination": "/page.html",
+          "type": 302
+        },
+        {
+          "source": "/old/**",
+          "destination": "/second.html",
+          "type": 301
+        },
+        {
+          "source": "/capture/:name",
+          "destination": "/new/:name",
+          "type": 301
+        }
+      ],
+      "rewrites": [
+        {
+          "source": "/rewrite/**",
+          "destination": "/first.html"
+        },
+        {
+          "source": "/rewrite/**",
+          "destination": "/second.html"
+        },
+        {
+          "source": "/api/**",
+          "function": "echo"
+        },
+        {
+          "source": "/run/**",
+          "run": {
+            "serviceId": "echo",
+            "region": "us-central1"
+          }
+        }
+      ],
+      "headers": [
+        {
+          "source": "/**",
+          "headers": [
+            {
+              "key": "X-Fixture",
+              "value": "first"
+            }
+          ]
+        },
+        {
+          "source": "/data.json",
+          "headers": [
+            {
+              "key": "X-Fixture",
+              "value": "second"
+            },
+            {
+              "key": "Cache-Control",
+              "value": "public, max-age=123"
+            }
+          ]
+        }
+      ],
+      "cleanUrls": false,
+      "trailingSlash": false,
+      "i18n": {
+        "root": "locales"
+      }
+    },
+    "pict-7": {
+      "public": "public",
+      "redirects": [
+        {
+          "source": "/old/**",
+          "destination": "/page.html",
+          "type": 302
+        },
+        {
+          "source": "/old/**",
+          "destination": "/second.html",
+          "type": 301
+        },
+        {
+          "source": "/capture/:name",
+          "destination": "/new/:name",
+          "type": 301
+        }
+      ],
+      "rewrites": [
+        {
+          "source": "/rewrite/**",
+          "destination": "/first.html"
+        },
+        {
+          "source": "/rewrite/**",
+          "destination": "/second.html"
+        },
+        {
+          "source": "/api/**",
+          "function": "echo"
+        },
+        {
+          "source": "/run/**",
+          "run": {
+            "serviceId": "echo",
+            "region": "us-central1"
+          }
+        }
+      ],
+      "headers": [
+        {
+          "source": "/**",
+          "headers": [
+            {
+              "key": "X-Fixture",
+              "value": "first"
+            }
+          ]
+        },
+        {
+          "source": "/data.json",
+          "headers": [
+            {
+              "key": "X-Fixture",
+              "value": "second"
+            },
+            {
+              "key": "Cache-Control",
+              "value": "public, max-age=123"
+            }
+          ]
+        }
+      ],
+      "cleanUrls": true,
+      "i18n": {
+        "root": "locales"
+      }
+    },
+    "pict-8": {
+      "public": "public",
+      "redirects": [
+        {
+          "source": "/old/**",
+          "destination": "/page.html",
+          "type": 302
+        },
+        {
+          "source": "/old/**",
+          "destination": "/second.html",
+          "type": 301
+        },
+        {
+          "source": "/capture/:name",
+          "destination": "/new/:name",
+          "type": 301
+        }
+      ],
+      "rewrites": [
+        {
+          "source": "/rewrite/**",
+          "destination": "/first.html"
+        },
+        {
+          "source": "/rewrite/**",
+          "destination": "/second.html"
+        },
+        {
+          "source": "/api/**",
+          "function": "echo"
+        },
+        {
+          "source": "/run/**",
+          "run": {
+            "serviceId": "echo",
+            "region": "us-central1"
+          }
+        }
+      ],
+      "headers": [
+        {
+          "source": "/**",
+          "headers": [
+            {
+              "key": "X-Fixture",
+              "value": "first"
+            }
+          ]
+        },
+        {
+          "source": "/data.json",
+          "headers": [
+            {
+              "key": "X-Fixture",
+              "value": "second"
+            },
+            {
+              "key": "Cache-Control",
+              "value": "public, max-age=123"
+            }
+          ]
+        }
+      ],
+      "cleanUrls": true,
+      "trailingSlash": false,
+      "i18n": {
+        "root": "locales"
+      }
+    },
+    "pict-9": {
+      "public": "public",
+      "redirects": [
+        {
+          "source": "/old/**",
+          "destination": "/page.html",
+          "type": 302
+        },
+        {
+          "source": "/old/**",
+          "destination": "/second.html",
+          "type": 301
+        },
+        {
+          "source": "/capture/:name",
+          "destination": "/new/:name",
+          "type": 301
+        }
+      ],
+      "rewrites": [
+        {
+          "source": "/rewrite/**",
+          "destination": "/first.html"
+        },
+        {
+          "source": "/rewrite/**",
+          "destination": "/second.html"
+        },
+        {
+          "source": "/api/**",
+          "function": "echo"
+        },
+        {
+          "source": "/run/**",
+          "run": {
+            "serviceId": "echo",
+            "region": "us-central1"
+          }
+        }
+      ],
+      "headers": [
+        {
+          "source": "/**",
+          "headers": [
+            {
+              "key": "X-Fixture",
+              "value": "first"
+            }
+          ]
+        },
+        {
+          "source": "/data.json",
+          "headers": [
+            {
+              "key": "X-Fixture",
+              "value": "second"
+            },
+            {
+              "key": "Cache-Control",
+              "value": "public, max-age=123"
+            }
+          ]
+        }
+      ],
+      "cleanUrls": false,
+      "i18n": {
+        "root": "locales"
+      }
+    },
+    "pict-10": {
+      "public": "public",
+      "redirects": [
+        {
+          "source": "/old/**",
+          "destination": "/page.html",
+          "type": 302
+        },
+        {
+          "source": "/old/**",
+          "destination": "/second.html",
+          "type": 301
+        },
+        {
+          "source": "/capture/:name",
+          "destination": "/new/:name",
+          "type": 301
+        }
+      ],
+      "rewrites": [
+        {
+          "source": "/rewrite/**",
+          "destination": "/first.html"
+        },
+        {
+          "source": "/rewrite/**",
+          "destination": "/second.html"
+        },
+        {
+          "source": "/api/**",
+          "function": "echo"
+        },
+        {
+          "source": "/run/**",
+          "run": {
+            "serviceId": "echo",
+            "region": "us-central1"
+          }
+        }
+      ],
+      "headers": [
+        {
+          "source": "/**",
+          "headers": [
+            {
+              "key": "X-Fixture",
+              "value": "first"
+            }
+          ]
+        },
+        {
+          "source": "/data.json",
+          "headers": [
+            {
+              "key": "X-Fixture",
+              "value": "second"
+            },
+            {
+              "key": "Cache-Control",
+              "value": "public, max-age=123"
+            }
+          ]
+        }
+      ],
+      "cleanUrls": true,
+      "trailingSlash": false,
+      "i18n": {
+        "root": "locales"
+      }
+    },
+    "pict-11": {
+      "public": "public",
+      "redirects": [
+        {
+          "source": "/old/**",
+          "destination": "/page.html",
+          "type": 302
+        },
+        {
+          "source": "/old/**",
+          "destination": "/second.html",
+          "type": 301
+        },
+        {
+          "source": "/capture/:name",
+          "destination": "/new/:name",
+          "type": 301
+        }
+      ],
+      "rewrites": [
+        {
+          "source": "/rewrite/**",
+          "destination": "/first.html"
+        },
+        {
+          "source": "/rewrite/**",
+          "destination": "/second.html"
+        },
+        {
+          "source": "/api/**",
+          "function": "echo"
+        },
+        {
+          "source": "/run/**",
+          "run": {
+            "serviceId": "echo",
+            "region": "us-central1"
+          }
+        }
+      ],
+      "headers": [
+        {
+          "source": "/**",
+          "headers": [
+            {
+              "key": "X-Fixture",
+              "value": "first"
+            }
+          ]
+        },
+        {
+          "source": "/data.json",
+          "headers": [
+            {
+              "key": "X-Fixture",
+              "value": "second"
+            },
+            {
+              "key": "Cache-Control",
+              "value": "public, max-age=123"
+            }
+          ]
+        }
+      ],
+      "cleanUrls": true,
+      "trailingSlash": true
+    },
+    "pict-12": {
+      "public": "public",
+      "redirects": [
+        {
+          "source": "/old/**",
+          "destination": "/page.html",
+          "type": 302
+        },
+        {
+          "source": "/old/**",
+          "destination": "/second.html",
+          "type": 301
+        },
+        {
+          "source": "/capture/:name",
+          "destination": "/new/:name",
+          "type": 301
+        }
+      ],
+      "rewrites": [
+        {
+          "source": "/rewrite/**",
+          "destination": "/first.html"
+        },
+        {
+          "source": "/rewrite/**",
+          "destination": "/second.html"
+        },
+        {
+          "source": "/api/**",
+          "function": "echo"
+        },
+        {
+          "source": "/run/**",
+          "run": {
+            "serviceId": "echo",
+            "region": "us-central1"
+          }
+        }
+      ],
+      "headers": [
+        {
+          "source": "/**",
+          "headers": [
+            {
+              "key": "X-Fixture",
+              "value": "first"
+            }
+          ]
+        },
+        {
+          "source": "/data.json",
+          "headers": [
+            {
+              "key": "X-Fixture",
+              "value": "second"
+            },
+            {
+              "key": "Cache-Control",
+              "value": "public, max-age=123"
+            }
+          ]
+        }
+      ],
+      "cleanUrls": false,
+      "trailingSlash": true
+    },
+    "pict-13": {
+      "public": "public",
+      "redirects": [
+        {
+          "source": "/old/**",
+          "destination": "/page.html",
+          "type": 302
+        },
+        {
+          "source": "/old/**",
+          "destination": "/second.html",
+          "type": 301
+        },
+        {
+          "source": "/capture/:name",
+          "destination": "/new/:name",
+          "type": 301
+        }
+      ],
+      "rewrites": [
+        {
+          "source": "/rewrite/**",
+          "destination": "/first.html"
+        },
+        {
+          "source": "/rewrite/**",
+          "destination": "/second.html"
+        },
+        {
+          "source": "/api/**",
+          "function": "echo"
+        },
+        {
+          "source": "/run/**",
+          "run": {
+            "serviceId": "echo",
+            "region": "us-central1"
+          }
+        }
+      ],
+      "headers": [
+        {
+          "source": "/**",
+          "headers": [
+            {
+              "key": "X-Fixture",
+              "value": "first"
+            }
+          ]
+        },
+        {
+          "source": "/data.json",
+          "headers": [
+            {
+              "key": "X-Fixture",
+              "value": "second"
+            },
+            {
+              "key": "Cache-Control",
+              "value": "public, max-age=123"
+            }
+          ]
+        }
+      ],
+      "cleanUrls": true,
+      "trailingSlash": false,
+      "i18n": {
+        "root": "locales"
+      }
+    },
+    "pict-14": {
+      "public": "public",
+      "redirects": [
+        {
+          "source": "/old/**",
+          "destination": "/page.html",
+          "type": 302
+        },
+        {
+          "source": "/old/**",
+          "destination": "/second.html",
+          "type": 301
+        },
+        {
+          "source": "/capture/:name",
+          "destination": "/new/:name",
+          "type": 301
+        }
+      ],
+      "rewrites": [
+        {
+          "source": "/rewrite/**",
+          "destination": "/first.html"
+        },
+        {
+          "source": "/rewrite/**",
+          "destination": "/second.html"
+        },
+        {
+          "source": "/api/**",
+          "function": "echo"
+        },
+        {
+          "source": "/run/**",
+          "run": {
+            "serviceId": "echo",
+            "region": "us-central1"
+          }
+        }
+      ],
+      "headers": [
+        {
+          "source": "/**",
+          "headers": [
+            {
+              "key": "X-Fixture",
+              "value": "first"
+            }
+          ]
+        },
+        {
+          "source": "/data.json",
+          "headers": [
+            {
+              "key": "X-Fixture",
+              "value": "second"
+            },
+            {
+              "key": "Cache-Control",
+              "value": "public, max-age=123"
+            }
+          ]
+        }
+      ],
+      "cleanUrls": true,
+      "trailingSlash": true
+    },
+    "pict-15": {
+      "public": "public",
+      "redirects": [
+        {
+          "source": "/old/**",
+          "destination": "/page.html",
+          "type": 302
+        },
+        {
+          "source": "/old/**",
+          "destination": "/second.html",
+          "type": 301
+        },
+        {
+          "source": "/capture/:name",
+          "destination": "/new/:name",
+          "type": 301
+        }
+      ],
+      "rewrites": [
+        {
+          "source": "/rewrite/**",
+          "destination": "/first.html"
+        },
+        {
+          "source": "/rewrite/**",
+          "destination": "/second.html"
+        },
+        {
+          "source": "/api/**",
+          "function": "echo"
+        },
+        {
+          "source": "/run/**",
+          "run": {
+            "serviceId": "echo",
+            "region": "us-central1"
+          }
+        }
+      ],
+      "headers": [
+        {
+          "source": "/**",
+          "headers": [
+            {
+              "key": "X-Fixture",
+              "value": "first"
+            }
+          ]
+        },
+        {
+          "source": "/data.json",
+          "headers": [
+            {
+              "key": "X-Fixture",
+              "value": "second"
+            },
+            {
+              "key": "Cache-Control",
+              "value": "public, max-age=123"
+            }
+          ]
+        }
+      ],
+      "cleanUrls": true,
+      "trailingSlash": true,
+      "i18n": {
+        "root": "locales"
+      }
+    },
+    "pict-16": {
+      "public": "public",
+      "redirects": [
+        {
+          "source": "/old/**",
+          "destination": "/page.html",
+          "type": 302
+        },
+        {
+          "source": "/old/**",
+          "destination": "/second.html",
+          "type": 301
+        },
+        {
+          "source": "/capture/:name",
+          "destination": "/new/:name",
+          "type": 301
+        }
+      ],
+      "rewrites": [
+        {
+          "source": "/rewrite/**",
+          "destination": "/first.html"
+        },
+        {
+          "source": "/rewrite/**",
+          "destination": "/second.html"
+        },
+        {
+          "source": "/api/**",
+          "function": "echo"
+        },
+        {
+          "source": "/run/**",
+          "run": {
+            "serviceId": "echo",
+            "region": "us-central1"
+          }
+        }
+      ],
+      "headers": [
+        {
+          "source": "/**",
+          "headers": [
+            {
+              "key": "X-Fixture",
+              "value": "first"
+            }
+          ]
+        },
+        {
+          "source": "/data.json",
+          "headers": [
+            {
+              "key": "X-Fixture",
+              "value": "second"
+            },
+            {
+              "key": "Cache-Control",
+              "value": "public, max-age=123"
+            }
+          ]
+        }
+      ],
+      "cleanUrls": true,
+      "trailingSlash": false,
+      "i18n": {
+        "root": "locales"
+      }
+    },
+    "pict-17": {
+      "public": "public",
+      "redirects": [
+        {
+          "source": "/old/**",
+          "destination": "/page.html",
+          "type": 302
+        },
+        {
+          "source": "/old/**",
+          "destination": "/second.html",
+          "type": 301
+        },
+        {
+          "source": "/capture/:name",
+          "destination": "/new/:name",
+          "type": 301
+        }
+      ],
+      "rewrites": [
+        {
+          "source": "/rewrite/**",
+          "destination": "/first.html"
+        },
+        {
+          "source": "/rewrite/**",
+          "destination": "/second.html"
+        },
+        {
+          "source": "/api/**",
+          "function": "echo"
+        },
+        {
+          "source": "/run/**",
+          "run": {
+            "serviceId": "echo",
+            "region": "us-central1"
+          }
+        }
+      ],
+      "headers": [
+        {
+          "source": "/**",
+          "headers": [
+            {
+              "key": "X-Fixture",
+              "value": "first"
+            }
+          ]
+        },
+        {
+          "source": "/data.json",
+          "headers": [
+            {
+              "key": "X-Fixture",
+              "value": "second"
+            },
+            {
+              "key": "Cache-Control",
+              "value": "public, max-age=123"
+            }
+          ]
+        }
+      ],
+      "cleanUrls": false,
+      "trailingSlash": true,
+      "i18n": {
+        "root": "locales"
+      }
+    },
+    "pict-18": {
+      "public": "public",
+      "redirects": [
+        {
+          "source": "/old/**",
+          "destination": "/page.html",
+          "type": 302
+        },
+        {
+          "source": "/old/**",
+          "destination": "/second.html",
+          "type": 301
+        },
+        {
+          "source": "/capture/:name",
+          "destination": "/new/:name",
+          "type": 301
+        }
+      ],
+      "rewrites": [
+        {
+          "source": "/rewrite/**",
+          "destination": "/first.html"
+        },
+        {
+          "source": "/rewrite/**",
+          "destination": "/second.html"
+        },
+        {
+          "source": "/api/**",
+          "function": "echo"
+        },
+        {
+          "source": "/run/**",
+          "run": {
+            "serviceId": "echo",
+            "region": "us-central1"
+          }
+        }
+      ],
+      "headers": [
+        {
+          "source": "/**",
+          "headers": [
+            {
+              "key": "X-Fixture",
+              "value": "first"
+            }
+          ]
+        },
+        {
+          "source": "/data.json",
+          "headers": [
+            {
+              "key": "X-Fixture",
+              "value": "second"
+            },
+            {
+              "key": "Cache-Control",
+              "value": "public, max-age=123"
+            }
+          ]
+        }
+      ],
+      "cleanUrls": true,
+      "trailingSlash": false
+    },
+    "default404": {
+      "public": "public-empty"
+    }
+  },
+  "cases": [
+    {
+      "id": "root",
+      "path": "/",
+      "config": "default",
+      "method": "GET"
+    },
+    {
+      "id": "static",
+      "path": "/data.json",
+      "config": "default",
+      "method": "GET"
+    },
+    {
+      "id": "directory",
+      "path": "/dir",
+      "config": "default",
+      "method": "GET"
+    },
+    {
+      "id": "index",
+      "path": "/dir/",
+      "config": "default",
+      "method": "GET"
+    },
+    {
+      "id": "missing",
+      "path": "/missing",
+      "config": "default",
+      "method": "GET"
+    },
+    {
+      "id": "404-direct",
+      "path": "/404.html",
+      "config": "default",
+      "method": "GET"
+    },
+    {
+      "id": "rewrite-first",
+      "path": "/rewrite/a",
+      "config": "default",
+      "method": "GET"
+    },
+    {
+      "id": "redirect-first",
+      "path": "/old/a?q=1",
+      "config": "default",
+      "method": "GET"
+    },
+    {
+      "id": "redirect-capture",
+      "path": "/capture/name",
+      "config": "default",
+      "method": "GET"
+    },
+    {
+      "id": "query",
+      "path": "/data.json?q=1",
+      "config": "default",
+      "method": "GET"
+    },
+    {
+      "id": "reserved-json",
+      "path": "/__/firebase/init.json",
+      "config": "default",
+      "method": "GET"
+    },
+    {
+      "id": "reserved-js",
+      "path": "/__/firebase/init.js",
+      "config": "default",
+      "method": "GET"
+    },
+    {
+      "id": "reserved-emulator-js",
+      "path": "/__/firebase/init.js?useEmulator=true",
+      "config": "default",
+      "method": "GET"
+    },
+    {
+      "id": "reserved-unknown",
+      "path": "/__/missing",
+      "config": "default",
+      "method": "GET"
+    },
+    {
+      "id": "encoded-static",
+      "path": "/%64ata.json",
+      "config": "default",
+      "method": "GET"
+    },
+    {
+      "id": "head",
+      "path": "/data.json",
+      "config": "default",
+      "method": "HEAD"
+    },
+    {
+      "id": "static-post",
+      "path": "/data.json",
+      "config": "default",
+      "method": "POST",
+      "body": "input"
+    },
+    {
+      "id": "clean-_page",
+      "path": "/page?q=1",
+      "config": "clean",
+      "method": "GET"
+    },
+    {
+      "id": "clean-_page_",
+      "path": "/page/?q=1",
+      "config": "clean",
+      "method": "GET"
+    },
+    {
+      "id": "clean-_page.html",
+      "path": "/page.html?q=1",
+      "config": "clean",
+      "method": "GET"
+    },
+    {
+      "id": "clean-_dir",
+      "path": "/dir?q=1",
+      "config": "clean",
+      "method": "GET"
+    },
+    {
+      "id": "clean-_dir_",
+      "path": "/dir/?q=1",
+      "config": "clean",
+      "method": "GET"
+    },
+    {
+      "id": "clean-_dir_index.html",
+      "path": "/dir/index.html?q=1",
+      "config": "clean",
+      "method": "GET"
+    },
+    {
+      "id": "slash-_page",
+      "path": "/page?q=1",
+      "config": "slash",
+      "method": "GET"
+    },
+    {
+      "id": "slash-_page_",
+      "path": "/page/?q=1",
+      "config": "slash",
+      "method": "GET"
+    },
+    {
+      "id": "slash-_page.html",
+      "path": "/page.html?q=1",
+      "config": "slash",
+      "method": "GET"
+    },
+    {
+      "id": "slash-_dir",
+      "path": "/dir?q=1",
+      "config": "slash",
+      "method": "GET"
+    },
+    {
+      "id": "slash-_dir_",
+      "path": "/dir/?q=1",
+      "config": "slash",
+      "method": "GET"
+    },
+    {
+      "id": "slash-_dir_index.html",
+      "path": "/dir/index.html?q=1",
+      "config": "slash",
+      "method": "GET"
+    },
+    {
+      "id": "noslash-_page",
+      "path": "/page?q=1",
+      "config": "noslash",
+      "method": "GET"
+    },
+    {
+      "id": "noslash-_page_",
+      "path": "/page/?q=1",
+      "config": "noslash",
+      "method": "GET"
+    },
+    {
+      "id": "noslash-_page.html",
+      "path": "/page.html?q=1",
+      "config": "noslash",
+      "method": "GET"
+    },
+    {
+      "id": "noslash-_dir",
+      "path": "/dir?q=1",
+      "config": "noslash",
+      "method": "GET"
+    },
+    {
+      "id": "noslash-_dir_",
+      "path": "/dir/?q=1",
+      "config": "noslash",
+      "method": "GET"
+    },
+    {
+      "id": "noslash-_dir_index.html",
+      "path": "/dir/index.html?q=1",
+      "config": "noslash",
+      "method": "GET"
+    },
+    {
+      "id": "clean-slash-_page",
+      "path": "/page?q=1",
+      "config": "clean-slash",
+      "method": "GET"
+    },
+    {
+      "id": "clean-slash-_page_",
+      "path": "/page/?q=1",
+      "config": "clean-slash",
+      "method": "GET"
+    },
+    {
+      "id": "clean-slash-_page.html",
+      "path": "/page.html?q=1",
+      "config": "clean-slash",
+      "method": "GET"
+    },
+    {
+      "id": "clean-slash-_dir",
+      "path": "/dir?q=1",
+      "config": "clean-slash",
+      "method": "GET"
+    },
+    {
+      "id": "clean-slash-_dir_",
+      "path": "/dir/?q=1",
+      "config": "clean-slash",
+      "method": "GET"
+    },
+    {
+      "id": "clean-slash-_dir_index.html",
+      "path": "/dir/index.html?q=1",
+      "config": "clean-slash",
+      "method": "GET"
+    },
+    {
+      "id": "clean-noslash-_page",
+      "path": "/page?q=1",
+      "config": "clean-noslash",
+      "method": "GET"
+    },
+    {
+      "id": "clean-noslash-_page_",
+      "path": "/page/?q=1",
+      "config": "clean-noslash",
+      "method": "GET"
+    },
+    {
+      "id": "clean-noslash-_page.html",
+      "path": "/page.html?q=1",
+      "config": "clean-noslash",
+      "method": "GET"
+    },
+    {
+      "id": "clean-noslash-_dir",
+      "path": "/dir?q=1",
+      "config": "clean-noslash",
+      "method": "GET"
+    },
+    {
+      "id": "clean-noslash-_dir_",
+      "path": "/dir/?q=1",
+      "config": "clean-noslash",
+      "method": "GET"
+    },
+    {
+      "id": "clean-noslash-_dir_index.html",
+      "path": "/dir/index.html?q=1",
+      "config": "clean-noslash",
+      "method": "GET"
+    },
+    {
+      "id": "i18n-language",
+      "path": "/page.html",
+      "config": "i18n",
+      "method": "GET",
+      "headers": {
+        "accept-language": "fr"
+      }
+    },
+    {
+      "id": "i18n-country",
+      "path": "/page.html",
+      "config": "i18n",
+      "method": "GET",
+      "headers": {
+        "accept-language": "fr",
+        "x-country-code": "CA"
+      }
+    },
+    {
+      "id": "i18n-country-fallback",
+      "path": "/page.html",
+      "config": "i18n",
+      "method": "GET",
+      "headers": {
+        "x-country-code": "CA"
+      }
+    },
+    {
+      "id": "i18n-language-cookie",
+      "path": "/page.html",
+      "config": "i18n",
+      "method": "GET",
+      "headers": {
+        "accept-language": "en",
+        "cookie": "firebase-language-override=fr"
+      }
+    },
+    {
+      "id": "i18n-fallback",
+      "path": "/page.html",
+      "config": "i18n",
+      "method": "GET",
+      "headers": {
+        "accept-language": "de"
+      }
+    },
+    {
+      "id": "function",
+      "path": "/api/echo?q=one",
+      "config": "default",
+      "method": "GET"
+    },
+    {
+      "id": "run",
+      "path": "/run/echo?q=two",
+      "config": "default",
+      "method": "GET"
+    },
+    {
+      "id": "function-post",
+      "path": "/api/echo",
+      "config": "default",
+      "method": "POST",
+      "headers": {
+        "content-type": "text/plain"
+      },
+      "body": "request body"
+    },
+    {
+      "id": "pict-0",
+      "config": "pict-0",
+      "path": "/data.json",
+      "method": "GET",
+      "headers": {},
+      "pict": {
+        "Clean": "false",
+        "Slash": "default",
+        "Route": "static",
+        "Method": "GET",
+        "Locale": "none"
+      }
+    },
+    {
+      "id": "pict-1",
+      "config": "pict-1",
+      "path": "/rewrite/a",
+      "method": "GET",
+      "headers": {},
+      "pict": {
+        "Clean": "false",
+        "Slash": "default",
+        "Route": "rewrite",
+        "Method": "GET",
+        "Locale": "none"
+      }
+    },
+    {
+      "id": "pict-2",
+      "config": "pict-2",
+      "path": "/old/a",
+      "method": "GET",
+      "headers": {},
+      "pict": {
+        "Clean": "false",
+        "Slash": "default",
+        "Route": "redirect",
+        "Method": "GET",
+        "Locale": "none"
+      }
+    },
+    {
+      "id": "pict-3",
+      "config": "pict-3",
+      "path": "/missing",
+      "method": "GET",
+      "headers": {},
+      "pict": {
+        "Clean": "false",
+        "Slash": "default",
+        "Route": "missing",
+        "Method": "GET",
+        "Locale": "none"
+      }
+    },
+    {
+      "id": "pict-4",
+      "config": "pict-4",
+      "path": "/page.html",
+      "method": "GET",
+      "headers": {
+        "accept-language": "fr"
+      },
+      "pict": {
+        "Clean": "true",
+        "Slash": "true",
+        "Route": "html",
+        "Method": "GET",
+        "Locale": "fr"
+      }
+    },
+    {
+      "id": "pict-5",
+      "config": "pict-5",
+      "path": "/dir/",
+      "method": "HEAD",
+      "headers": {},
+      "pict": {
+        "Clean": "true",
+        "Slash": "false",
+        "Route": "directory",
+        "Method": "HEAD",
+        "Locale": "none"
+      }
+    },
+    {
+      "id": "pict-6",
+      "config": "pict-6",
+      "path": "/page.html",
+      "method": "HEAD",
+      "headers": {
+        "accept-language": "fr"
+      },
+      "pict": {
+        "Clean": "false",
+        "Slash": "false",
+        "Route": "html",
+        "Method": "HEAD",
+        "Locale": "fr"
+      }
+    },
+    {
+      "id": "pict-7",
+      "config": "pict-7",
+      "path": "/page.html",
+      "method": "HEAD",
+      "headers": {
+        "accept-language": "fr"
+      },
+      "pict": {
+        "Clean": "true",
+        "Slash": "default",
+        "Route": "html",
+        "Method": "HEAD",
+        "Locale": "fr"
+      }
+    },
+    {
+      "id": "pict-8",
+      "config": "pict-8",
+      "path": "/data.json",
+      "method": "HEAD",
+      "headers": {
+        "accept-language": "fr"
+      },
+      "pict": {
+        "Clean": "true",
+        "Slash": "false",
+        "Route": "static",
+        "Method": "HEAD",
+        "Locale": "fr"
+      }
+    },
+    {
+      "id": "pict-9",
+      "config": "pict-9",
+      "path": "/dir/",
+      "method": "GET",
+      "headers": {
+        "accept-language": "fr"
+      },
+      "pict": {
+        "Clean": "false",
+        "Slash": "default",
+        "Route": "directory",
+        "Method": "GET",
+        "Locale": "fr"
+      }
+    },
+    {
+      "id": "pict-10",
+      "config": "pict-10",
+      "path": "/missing",
+      "method": "HEAD",
+      "headers": {
+        "accept-language": "fr"
+      },
+      "pict": {
+        "Clean": "true",
+        "Slash": "false",
+        "Route": "missing",
+        "Method": "HEAD",
+        "Locale": "fr"
+      }
+    },
+    {
+      "id": "pict-11",
+      "config": "pict-11",
+      "path": "/old/a",
+      "method": "HEAD",
+      "headers": {},
+      "pict": {
+        "Clean": "true",
+        "Slash": "true",
+        "Route": "redirect",
+        "Method": "HEAD",
+        "Locale": "none"
+      }
+    },
+    {
+      "id": "pict-12",
+      "config": "pict-12",
+      "path": "/data.json",
+      "method": "GET",
+      "headers": {},
+      "pict": {
+        "Clean": "false",
+        "Slash": "true",
+        "Route": "static",
+        "Method": "GET",
+        "Locale": "none"
+      }
+    },
+    {
+      "id": "pict-13",
+      "config": "pict-13",
+      "path": "/rewrite/a",
+      "method": "GET",
+      "headers": {
+        "accept-language": "fr"
+      },
+      "pict": {
+        "Clean": "true",
+        "Slash": "false",
+        "Route": "rewrite",
+        "Method": "GET",
+        "Locale": "fr"
+      }
+    },
+    {
+      "id": "pict-14",
+      "config": "pict-14",
+      "path": "/missing",
+      "method": "HEAD",
+      "headers": {},
+      "pict": {
+        "Clean": "true",
+        "Slash": "true",
+        "Route": "missing",
+        "Method": "HEAD",
+        "Locale": "none"
+      }
+    },
+    {
+      "id": "pict-15",
+      "config": "pict-15",
+      "path": "/rewrite/a",
+      "method": "HEAD",
+      "headers": {
+        "accept-language": "fr"
+      },
+      "pict": {
+        "Clean": "true",
+        "Slash": "true",
+        "Route": "rewrite",
+        "Method": "HEAD",
+        "Locale": "fr"
+      }
+    },
+    {
+      "id": "pict-16",
+      "config": "pict-16",
+      "path": "/old/a",
+      "method": "HEAD",
+      "headers": {
+        "accept-language": "fr"
+      },
+      "pict": {
+        "Clean": "true",
+        "Slash": "false",
+        "Route": "redirect",
+        "Method": "HEAD",
+        "Locale": "fr"
+      }
+    },
+    {
+      "id": "pict-17",
+      "config": "pict-17",
+      "path": "/dir/",
+      "method": "GET",
+      "headers": {
+        "accept-language": "fr"
+      },
+      "pict": {
+        "Clean": "false",
+        "Slash": "true",
+        "Route": "directory",
+        "Method": "GET",
+        "Locale": "fr"
+      }
+    },
+    {
+      "id": "pict-18",
+      "config": "pict-18",
+      "path": "/page.html",
+      "method": "HEAD",
+      "headers": {},
+      "pict": {
+        "Clean": "true",
+        "Slash": "false",
+        "Route": "html",
+        "Method": "HEAD",
+        "Locale": "none"
+      }
+    },
+    {
+      "id": "range",
+      "config": "default",
+      "method": "GET",
+      "path": "/data.json",
+      "headers": {
+        "range": "bytes=0-3"
+      }
+    },
+    {
+      "id": "conditional-static",
+      "config": "default",
+      "method": "GET",
+      "path": "/data.json",
+      "headers": {
+        "if-none-match": "7589382fa60188be2d320bd7cf78d1f0"
+      }
+    },
+    {
+      "id": "conditional-rewrite",
+      "config": "default",
+      "method": "GET",
+      "path": "/rewrite/a",
+      "headers": {
+        "if-none-match": "eb260e9ae827821beceeed4104f0ad89"
+      }
+    },
+    {
+      "id": "modified-static",
+      "config": "default",
+      "method": "GET",
+      "path": "/data.json",
+      "headers": {
+        "if-modified-since": "Mon, 01 Jan 2001 00:00:00 GMT"
+      }
+    },
+    {
+      "id": "modified-rewrite",
+      "config": "default",
+      "method": "GET",
+      "path": "/rewrite/a",
+      "headers": {
+        "if-modified-since": "Mon, 01 Jan 2001 00:00:00 GMT"
+      }
+    },
+    {
+      "id": "default-404",
+      "config": "default404",
+      "path": "/not-found",
+      "method": "GET"
+    }
+  ]
+}

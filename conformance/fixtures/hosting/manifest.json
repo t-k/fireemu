@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "files": [
+    "cases.json",
+    "glob-cases.json",
+    "public/index.html",
+    "public/page.html",
+    "public/dir/index.html",
+    "public/404.html",
+    "public/first.html",
+    "public/second.html",
+    "public/data.json",
+    "public/locales/fr/page.html",
+    "public/locales/fr_CA/page.html",
+    "public/locales/ALL_CA/page.html",
+    "public/locales/en_ALL/page.html",
+    "security.json",
+    "public-empty/index.html"
+  ],
+  "generatedEvidence": [
+    "official.json",
+    "official-globs.json"
+  ],
+  "count": 80,
+  "production": "unobserved"
+}

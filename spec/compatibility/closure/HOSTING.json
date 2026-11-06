@@ -1,0 +1,146 @@
+{
+  "schemaVersion": 1,
+  "parent": "HOSTING",
+  "parentStatus": "IMPLEMENTING",
+  "inventoryStatus": "DRAFT",
+  "oracleTrack": "not-recorded",
+  "scopeDecisions": [
+    {
+      "id": "HOSTING-LOCAL-ONLY",
+      "decision": "Only local registered Functions targets can be rewritten. No Cloud Run lookup or live Functions fallback is allowed. Missing local targets remain unverified and are not an approved production equivalence.",
+      "status": "IMPLEMENTING"
+    }
+  ],
+  "conditions": [
+    {
+      "conditionId": "HOSTING/static-files",
+      "description": "Static files and directory indexes",
+      "status": "UNVERIFIED",
+      "recipeIds": [
+        "hosting/static-files"
+      ],
+      "fixture": "conformance/fixtures/hosting/cases.json",
+      "productionEvidence": []
+    },
+    {
+      "conditionId": "HOSTING/redirects",
+      "description": "First-match redirects, captures and query preservation",
+      "status": "UNVERIFIED",
+      "recipeIds": [
+        "hosting/redirects"
+      ],
+      "fixture": "conformance/fixtures/hosting/cases.json",
+      "productionEvidence": []
+    },
+    {
+      "conditionId": "HOSTING/rewrites",
+      "description": "Static precedence and first-match rewrites",
+      "status": "UNVERIFIED",
+      "recipeIds": [
+        "hosting/rewrites"
+      ],
+      "fixture": "conformance/fixtures/hosting/cases.json",
+      "productionEvidence": []
+    },
+    {
+      "conditionId": "HOSTING/glob-matching",
+      "description": "Glob matching and ordered overlapping rules",
+      "status": "UNVERIFIED",
+      "recipeIds": [
+        "hosting/glob-matching"
+      ],
+      "fixture": "conformance/fixtures/hosting/cases.json",
+      "productionEvidence": []
+    },
+    {
+      "conditionId": "HOSTING/headers-cache",
+      "description": "Custom headers and cache metadata",
+      "status": "UNVERIFIED",
+      "recipeIds": [
+        "hosting/headers-cache"
+      ],
+      "fixture": "conformance/fixtures/hosting/cases.json",
+      "productionEvidence": []
+    },
+    {
+      "conditionId": "HOSTING/clean-urls",
+      "description": "cleanUrls path selection",
+      "status": "UNVERIFIED",
+      "recipeIds": [
+        "hosting/clean-urls"
+      ],
+      "fixture": "conformance/fixtures/hosting/cases.json",
+      "productionEvidence": []
+    },
+    {
+      "conditionId": "HOSTING/trailing-slash",
+      "description": "trailingSlash path canonicalization",
+      "status": "UNVERIFIED",
+      "recipeIds": [
+        "hosting/trailing-slash"
+      ],
+      "fixture": "conformance/fixtures/hosting/cases.json",
+      "productionEvidence": []
+    },
+    {
+      "conditionId": "HOSTING/i18n",
+      "description": "Language, country, cookie and fallback selection",
+      "status": "UNVERIFIED",
+      "recipeIds": [
+        "hosting/i18n"
+      ],
+      "fixture": "conformance/fixtures/hosting/cases.json",
+      "productionEvidence": []
+    },
+    {
+      "conditionId": "HOSTING/reserved-paths",
+      "description": "Reserved initialization paths",
+      "status": "UNVERIFIED",
+      "recipeIds": [
+        "hosting/reserved-paths"
+      ],
+      "fixture": "conformance/fixtures/hosting/cases.json",
+      "productionEvidence": []
+    },
+    {
+      "conditionId": "HOSTING/not-found",
+      "description": "404 handling",
+      "status": "UNVERIFIED",
+      "recipeIds": [
+        "hosting/not-found"
+      ],
+      "fixture": "conformance/fixtures/hosting/cases.json",
+      "productionEvidence": []
+    },
+    {
+      "conditionId": "HOSTING/function-rewrites",
+      "description": "Registered local Functions rewrites",
+      "status": "UNVERIFIED",
+      "recipeIds": [
+        "hosting/function-rewrites"
+      ],
+      "fixture": "conformance/fixtures/hosting/cases.json",
+      "productionEvidence": []
+    },
+    {
+      "conditionId": "HOSTING/run-rewrites",
+      "description": "Registered local Run-style rewrites",
+      "status": "UNVERIFIED",
+      "recipeIds": [
+        "hosting/run-rewrites"
+      ],
+      "fixture": "conformance/fixtures/hosting/cases.json",
+      "productionEvidence": []
+    }
+  ],
+  "integratedRegression": {
+    "status": "NOT_RUN",
+    "suite": "conformance/src/hosting/run.mjs",
+    "matrix": "conformance/HOSTING-MATRIX.md"
+  },
+  "productionProposal": "spec/compatibility/hosting-production-packet.md",
+  "outOfScope": [
+    "Production deployment and live upstream routing are not executed by this offline task.",
+    "No condition is promoted from official-emulator behavior or documentation alone."
+  ]
+}

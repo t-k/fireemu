@@ -14,12 +14,13 @@ const directoryLink = process.platform === 'win32' ? 'junction' : 'dir';
 
 test('configuration open cancellation closes a handle returned after abort', async t => {
   const root = await mkdtemp(join(tmpdir(), 'fireemu-world-open-cancel-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  let openHandle;
+  t.after(async () => { if (openHandle) await openHandle.close().catch(() => {}); await rm(root, { recursive: true, force: true }); });
   const path = join(root, 'config.json');
   await writeFile(path, '{}');
   const controller = new AbortController();
   const reason = Error('cancel during configuration open');
-  let openHandle, releaseOpen, markStarted;
+  let releaseOpen, markStarted;
   const release = new Promise(resolve => { releaseOpen = resolve; });
   const started = new Promise(resolve => { markStarted = resolve; });
   const delayedOpen = async (file, flags) => {

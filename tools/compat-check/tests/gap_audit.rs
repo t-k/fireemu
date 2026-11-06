@@ -95,3 +95,68 @@ fn auth_local_token_matrix_does_not_imply_production_observation() {
     assert!(!gaps(&auth).contains("per-token-kind matrix against real Node SDK handlers"));
     assert!(gaps(&auth).contains("production expectation remains unobserved"));
 }
+
+#[test]
+fn pipeline_gap_preserves_finite_rest_and_grpc_selectors() {
+    let firestore = surface("firestore");
+    let gap = gaps(&firestore);
+    assert!(!gap.contains("write stages, new pipeline transactions"));
+    assert!(!gap.contains("REST consistency selectors and proxy"));
+    for supported in [
+        "gRPC and REST",
+        "documents",
+        "collection_group",
+        "new transaction",
+    ] {
+        assert!(
+            gap.contains(supported),
+            "missing supported subset: {supported}"
+        );
+    }
+    for boundary in [
+        "database",
+        "union",
+        "search",
+        "read time with auto-commit",
+        "unverified",
+    ] {
+        assert!(gap.contains(boundary), "missing boundary: {boundary}");
+    }
+    assert!(firestore["claims"]
+        .to_string()
+        .contains("crates/fireemu-adapter-grpc/src/rest/pipeline_selector_tests.rs"));
+}
+
+#[test]
+fn federation_gap_preserves_configured_signatures_and_finite_saml_checks() {
+    let auth = surface("auth");
+    let gap = gaps(&auth);
+    assert!(!gap.contains("SAML XML signature verification are not served"));
+    assert!(!gap.contains("no daemon trust configuration"));
+    for supported in [
+        "auth.idpSigners",
+        "configured certificates",
+        "signed OIDC/SAML",
+    ] {
+        assert!(
+            gap.contains(supported),
+            "missing local support: {supported}"
+        );
+    }
+    let claims = auth["claims"].to_string();
+    assert!(!claims.contains("validity window and InResponseTo are not checked"));
+    for boundary in [
+        "when present",
+        "unparseable times",
+        "daemon-issued",
+        "unobserved",
+    ] {
+        assert!(
+            claims.contains(boundary),
+            "missing SAML boundary: {boundary}"
+        );
+    }
+    let site = include_str!("../../../site/src/content/docs/compatibility/limitations.md");
+    assert!(!site.contains("authorization-code exchange and SAML XML signature verification."));
+    assert!(site.contains("signed OIDC/SAML"));
+}

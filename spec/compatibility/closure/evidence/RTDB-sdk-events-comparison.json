@@ -185,20 +185,20 @@
   "sdk": "firebase 12.18.0 (@firebase/database 1.1.5), firebase-admin 14.3.0, playwright 1.62.1 (headless Chromium)",
   "binding": {
     "release": "closure-build",
-    "releaseAsset": "unpublished release-profile build of source commit b26412575850f75c417ac930fe1bb4f93b959dcb (cargo build --release --locked -p fireemu, RUSTC_WRAPPER empty, fresh worktree-local target directory)",
-    "releaseAssetSha256": "5c2938fdfe941663c8bb450f54e65be2b9543f4dcd2d61c2ccef13538e82bba3",
-    "sourceCommit": "b26412575850f75c417ac930fe1bb4f93b959dcb",
+    "releaseAsset": "unpublished release-profile build of source commit d0e81b04377f08f7d32597e809eeca318b49af2a (cargo build --release --locked -p fireemu, RUSTC_WRAPPER empty, fresh worktree-local target directory)",
+    "releaseAssetSha256": "28c8708cd9245eef82c4e4f315f7ddf63fade919800c31f5a873235e9e0a46f2",
+    "sourceCommit": "d0e81b04377f08f7d32597e809eeca318b49af2a",
     "tagObject": null,
-    "binarySha256": "5c2938fdfe941663c8bb450f54e65be2b9543f4dcd2d61c2ccef13538e82bba3",
+    "binarySha256": "28c8708cd9245eef82c4e4f315f7ddf63fade919800c31f5a873235e9e0a46f2",
     "version": "fireemu 0.43.0",
-    "toolCommit": "b26412575850f75c417ac930fe1bb4f93b959dcb",
+    "toolCommit": "d0e81b04377f08f7d32597e809eeca318b49af2a",
     "host": "Darwin arm64",
     "productionRequests": 0
   },
   "profiles": {
     "strict": {
       "profile": "strict",
-      "binarySha256": "5c2938fdfe941663c8bb450f54e65be2b9543f4dcd2d61c2ccef13538e82bba3",
+      "binarySha256": "28c8708cd9245eef82c4e4f315f7ddf63fade919800c31f5a873235e9e0a46f2",
       "match": true,
       "counts": {
         "MATCH": 160,
@@ -1199,7 +1199,7 @@
           "verdict": "MATCH"
         }
       ],
-      "exportSha256": "353038a280edd5b2e09e4050401183a68afbf32caeb86669d57cfb095dfc3ee6",
+      "exportSha256": "99226905fce651e906e836ea8528c508672028d67bd7cd0c9a6ace5fdb2fe7aa",
       "sdkResources": {
         "package-lock.json": "fa9dab58f70425ee28c86a59f42135ab5533c3d8a19d3ffab6abe3bde5428a53",
         "node_modules/firebase/package.json": "8b02ad75fe0a38e30f4ab8116c0a46f076206bb5f924890c198434243bdb2232",
@@ -1212,7 +1212,7 @@
     },
     "emulator": {
       "profile": "emulator",
-      "binarySha256": "5c2938fdfe941663c8bb450f54e65be2b9543f4dcd2d61c2ccef13538e82bba3",
+      "binarySha256": "28c8708cd9245eef82c4e4f315f7ddf63fade919800c31f5a873235e9e0a46f2",
       "match": true,
       "counts": {
         "MATCH": 160,
@@ -2213,7 +2213,7 @@
           "verdict": "MATCH"
         }
       ],
-      "exportSha256": "24585d2eaa97709bffef406f956ceb44ee412e047c6508208dac2f2edd7ac957",
+      "exportSha256": "eb4e0bd2b5ce8af11fc46af98462169e2fe2a850bba116c34dfd32f77b700f64",
       "sdkResources": {
         "package-lock.json": "fa9dab58f70425ee28c86a59f42135ab5533c3d8a19d3ffab6abe3bde5428a53",
         "node_modules/firebase/package.json": "8b02ad75fe0a38e30f4ab8116c0a46f076206bb5f924890c198434243bdb2232",

@@ -1936,6 +1936,72 @@ fn the_rules_request_trace_lists_decided_requests_newest_first_with_their_expres
     assert_eq!(after.body["requests"], json!([]));
 }
 
+#[test]
+fn rules_request_trace_keeps_omitted_counts_and_truncation_markers() {
+    use fireemu_core_rules::ast::Span;
+    use fireemu_core_rules::coverage::{
+        Coverage, ExprValue, RequestTrace, UndefinedCause, COVERAGE_STRING_BYTES_PER_VALUE,
+    };
+
+    let s = state(Arc::new(AtomicUsize::new(0)));
+    let active = s.rules.snapshot().unwrap();
+    let mut coverage = Coverage::default();
+    for index in 0..65 {
+        coverage.record(
+            Span { line: 1, column: 1, offset: 10 },
+            11,
+            ExprValue::String(format!("value-{index}")),
+        );
+    }
+    for index in 0..64 {
+        coverage.record(
+            Span { line: 1, column: 20, offset: 20 },
+            21,
+            ExprValue::String(format!("kept-{index}")),
+        );
+    }
+    let prefix = "x".repeat(COVERAGE_STRING_BYTES_PER_VALUE);
+    coverage.record(
+        Span { line: 1, column: 30, offset: 30 },
+        31,
+        ExprValue::String(format!("{prefix}cut")),
+    );
+    coverage.record(
+        Span { line: 1, column: 40, offset: 40 },
+        41,
+        ExprValue::Undefined(UndefinedCause {
+            span: Span { line: 1, column: 40, offset: 40 },
+            end: 41,
+            message: format!("{prefix}cause"),
+        }),
+    );
+    let mut diagnostics = active.diagnostics.lock().unwrap();
+    diagnostics.enable_request_traces();
+    diagnostics.push(&coverage, |sequence| RequestTrace {
+        sequence,
+        method: "get",
+        path: "notes/synthetic".to_owned(),
+        allowed: true,
+        reason: String::new(),
+        uid: None,
+        expressions: coverage.entries().into_iter().cloned().collect(),
+    });
+    drop(diagnostics);
+
+    let response = handle(&s, "GET", "/v1/sessions/default/rules/requests", &json!({}));
+    assert_eq!(response.status, 200, "{}", response.body);
+    let expressions = response.body["requests"][0]["expressions"].as_array().unwrap();
+    let at = |offset| expressions.iter().find(|e| e["currentOffset"] == json!(offset)).unwrap();
+
+    assert_eq!(at(10)["values"].as_array().unwrap().len(), 64);
+    assert_eq!(at(10)["valuesOmitted"], 1);
+    assert_eq!(at(10)["valuesCountMayBeLower"], true);
+    assert_eq!(at(20)["values"].as_array().unwrap().len(), 64);
+    assert!(at(20).get("valuesOmitted").is_none());
+    assert_eq!(at(30)["values"][0]["value"]["truncated"], true);
+    assert_eq!(at(40)["values"][0]["value"]["truncated"], true);
+}
+
 /// FAULTH-1 on the route: the fired history is a bounded ring, so `GET faultPlan` says how
 /// many records fell out of it rather than silently serving a shorter history.
 #[test]

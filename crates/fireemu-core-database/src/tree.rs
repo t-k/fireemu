@@ -61,7 +61,7 @@ impl Tree {
             let parent = path.parent().unwrap_or_default();
             return self
                 .get(&parent)
-                .and_then(|node| node.priority.as_ref())
+                .and_then(|node| node.priority.as_deref())
                 .map_or(Json::Null, Priority::to_json);
         }
         self.get(path)
@@ -154,7 +154,7 @@ impl Tree {
             };
             let resolved = resolve(value, stored_priority(Some(node)).as_ref(), context)?;
             let priority = Priority::from_json(&resolved)?;
-            if priority == node.priority {
+            if priority.as_ref() == node.priority.as_deref() {
                 return Ok(Write::Unchanged(None));
             }
             return Ok(Write::Priority(parent, priority));
@@ -174,7 +174,7 @@ impl Tree {
             }
             Write::Priority(path, priority) => {
                 if let Some(node) = self.get_mut(&path) {
-                    node.priority = priority;
+                    node.priority = priority.map(Box::new);
                 }
             }
             Write::Unchanged(_) => {}

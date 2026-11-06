@@ -4755,9 +4755,7 @@ fn request_traces_keep_the_omitted_function_values_without_changing_decisions() 
 
     for expected_allow in [true, false] {
         let calls = (0..=COVERAGE_VALUES_PER_EXPRESSION)
-            .map(|index| {
-                format!("identity(request.resource.data.v{index}) == 'never'")
-            })
+            .map(|index| format!("identity(request.resource.data.v{index}) == 'never'"))
             .collect::<Vec<_>>()
             .join(" || ");
         let source = format!(
@@ -4773,11 +4771,9 @@ fn request_traces_keep_the_omitted_function_values_without_changing_decisions() 
                 SplitMix64::new(3),
                 TotpPolicy::default(),
             )));
-            let slot = Arc::new(RulesetSlot::new(
-                LoadedRules::from_source(&source).unwrap(),
-            ));
-            let enforcer = RulesEnforcer::new(slot.clone(), auth, clock)
-                .with_request_traces(record_traces);
+            let slot = Arc::new(RulesetSlot::new(LoadedRules::from_source(&source).unwrap()));
+            let enforcer =
+                RulesEnforcer::new(slot.clone(), auth, clock).with_request_traces(record_traces);
             let project = ProjectId::try_new("demo-app").unwrap();
             let database = DatabaseId::default_database();
             let parent = Parent {
@@ -4785,8 +4781,8 @@ fn request_traces_keep_the_omitted_function_values_without_changing_decisions() 
                 database,
                 document: None,
             };
-            let path = DocumentPath::parse(&project, &DatabaseId::default_database(), "items/a")
-                .unwrap();
+            let path =
+                DocumentPath::parse(&project, &DatabaseId::default_database(), "items/a").unwrap();
             let fields = (0..=COVERAGE_VALUES_PER_EXPRESSION)
                 .map(|index| (format!("v{index}"), Value::String(format!("value-{index}"))))
                 .collect();
@@ -4821,6 +4817,7 @@ fn request_traces_keep_the_omitted_function_values_without_changing_decisions() 
                     .find(|entry| entry.span.offset == body_offset)
                     .expect("the shared function body is traced");
                 assert_eq!(body.values.len(), COVERAGE_VALUES_PER_EXPRESSION);
+                assert_eq!(body.omitted, 1);
                 traced_values = Some(body.values.clone());
             } else {
                 assert!(diagnostics.requests().is_empty());

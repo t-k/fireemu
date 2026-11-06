@@ -1875,7 +1875,7 @@ fn the_rules_request_trace_lists_decided_requests_newest_first_with_their_expres
             request_query: None,
         };
         let (_, coverage) = evaluate_request_traced(&ruleset, &ctx, None);
-        let expressions = coverage.entries().into_iter().cloned().collect();
+        let expressions = coverage.trace_entries();
         let rules = s.rules.snapshot().unwrap();
         rules
             .diagnostics
@@ -1926,6 +1926,17 @@ fn the_rules_request_trace_lists_decided_requests_newest_first_with_their_expres
         condition["values"],
         json!([{"value": {"kind": "bool", "bool": false}, "count": 1}])
     );
+    assert_eq!(
+        condition,
+        &json!({
+            "line": condition["line"],
+            "column": condition["column"],
+            "currentOffset": condition_at,
+            "endOffset": condition_at + "id != 'secret'".len(),
+            "values": [{"value": {"kind": "bool", "bool": false}, "count": 1}],
+        }),
+        "an ordinary trace expression keeps its existing JSON shape"
+    );
 
     // Loading another ruleset drops the trace with the source it described.
     assert_eq!(
@@ -1948,29 +1959,49 @@ fn rules_request_trace_keeps_omitted_counts_and_truncation_markers() {
     let mut coverage = Coverage::default();
     for index in 0..65 {
         coverage.record(
-            Span { line: 1, column: 1, offset: 10 },
+            Span {
+                line: 1,
+                column: 1,
+                offset: 10,
+            },
             11,
             ExprValue::String(format!("value-{index}")),
         );
     }
     for index in 0..64 {
         coverage.record(
-            Span { line: 1, column: 20, offset: 20 },
+            Span {
+                line: 1,
+                column: 20,
+                offset: 20,
+            },
             21,
             ExprValue::String(format!("kept-{index}")),
         );
     }
     let prefix = "x".repeat(COVERAGE_STRING_BYTES_PER_VALUE);
     coverage.record(
-        Span { line: 1, column: 30, offset: 30 },
+        Span {
+            line: 1,
+            column: 30,
+            offset: 30,
+        },
         31,
         ExprValue::String(format!("{prefix}cut")),
     );
     coverage.record(
-        Span { line: 1, column: 40, offset: 40 },
+        Span {
+            line: 1,
+            column: 40,
+            offset: 40,
+        },
         41,
         ExprValue::Undefined(UndefinedCause {
-            span: Span { line: 1, column: 40, offset: 40 },
+            span: Span {
+                line: 1,
+                column: 40,
+                offset: 40,
+            },
             end: 41,
             message: format!("{prefix}cause"),
         }),
@@ -1984,14 +2015,21 @@ fn rules_request_trace_keeps_omitted_counts_and_truncation_markers() {
         allowed: true,
         reason: String::new(),
         uid: None,
-        expressions: coverage.entries().into_iter().cloned().collect(),
+        expressions: coverage.trace_entries(),
     });
     drop(diagnostics);
 
     let response = handle(&s, "GET", "/v1/sessions/default/rules/requests", &json!({}));
     assert_eq!(response.status, 200, "{}", response.body);
-    let expressions = response.body["requests"][0]["expressions"].as_array().unwrap();
-    let at = |offset| expressions.iter().find(|e| e["currentOffset"] == json!(offset)).unwrap();
+    let expressions = response.body["requests"][0]["expressions"]
+        .as_array()
+        .unwrap();
+    let at = |offset| {
+        expressions
+            .iter()
+            .find(|e| e["currentOffset"] == json!(offset))
+            .unwrap()
+    };
 
     assert_eq!(at(10)["values"].as_array().unwrap().len(), 64);
     assert_eq!(at(10)["valuesOmitted"], 1);
@@ -2000,6 +2038,136 @@ fn rules_request_trace_keeps_omitted_counts_and_truncation_markers() {
     assert!(at(20).get("valuesOmitted").is_none());
     assert_eq!(at(30)["values"][0]["value"]["truncated"], true);
     assert_eq!(at(40)["values"][0]["value"]["truncated"], true);
+}
+
+#[test]
+fn rules_request_trace_matches_all_seeded_pict_combinations() {
+    use fireemu_core_rules::ast::Span;
+    use fireemu_core_rules::coverage::{
+        Coverage, ExprValue, RequestTrace, UndefinedCause, COVERAGE_STRING_BYTES_PER_VALUE,
+        COVERAGE_VALUES_PER_EXPRESSION,
+    };
+
+    let cases = [
+        (false, "ordinary", true),
+        (true, "ordinary", true),
+        (true, "truncated-string", true),
+        (true, "truncated-undefined", true),
+        (true, "ordinary", false),
+        (true, "truncated-undefined", false),
+        (false, "truncated-undefined", false),
+        (false, "truncated-string", false),
+    ];
+    let s = state(Arc::new(AtomicUsize::new(0)));
+    let active = s.rules.snapshot().unwrap();
+    let mut diagnostics = active.diagnostics.lock().unwrap();
+    diagnostics.enable_request_traces();
+
+    for (index, &(omitted, representation, allowed)) in cases.iter().enumerate() {
+        let span = Span {
+            line: 1,
+            column: 2,
+            offset: 10 + index * 10,
+        };
+        let mut coverage = Coverage::default();
+        let target = match representation {
+            "ordinary" => ExprValue::String("ordinary".to_owned()),
+            "truncated-string" => ExprValue::String(format!(
+                "{}cut",
+                "x".repeat(COVERAGE_STRING_BYTES_PER_VALUE)
+            )),
+            "truncated-undefined" => ExprValue::Undefined(UndefinedCause {
+                span,
+                end: span.offset + 1,
+                message: format!("{}cause", "x".repeat(COVERAGE_STRING_BYTES_PER_VALUE)),
+            }),
+            _ => unreachable!("covered by the PICT model"),
+        };
+        coverage.record(span, span.offset + 1, target);
+        if omitted {
+            for value in 0..COVERAGE_VALUES_PER_EXPRESSION {
+                coverage.record(
+                    span,
+                    span.offset + 1,
+                    ExprValue::String(format!("other-{index}-{value}")),
+                );
+            }
+        }
+        let path = format!("notes/pict-{index}");
+        diagnostics.push(&coverage, |sequence| RequestTrace {
+            sequence,
+            method: "get",
+            path,
+            allowed,
+            reason: if allowed {
+                String::new()
+            } else {
+                "denied".to_owned()
+            },
+            uid: None,
+            expressions: coverage.trace_entries(),
+        });
+    }
+    drop(diagnostics);
+
+    let response = handle(&s, "GET", "/v1/sessions/default/rules/requests", &json!({}));
+    assert_eq!(response.status, 200, "{}", response.body);
+    let requests = response.body["requests"].as_array().unwrap();
+    assert_eq!(requests.len(), cases.len());
+    for (index, &(omitted, representation, allowed)) in cases.iter().enumerate() {
+        let path = format!("notes/pict-{index}");
+        let request = requests
+            .iter()
+            .find(|request| request["path"] == path)
+            .unwrap();
+        assert_eq!(request["allowed"], allowed, "{path}");
+        assert_eq!(
+            request["reason"],
+            if allowed { "" } else { "denied" },
+            "{path}"
+        );
+        let expression = &request["expressions"][0];
+        assert_eq!(expression.get("valuesOmitted").is_some(), omitted, "{path}");
+        assert_eq!(
+            expression.get("valuesCountMayBeLower").is_some(),
+            omitted,
+            "{path}"
+        );
+        if omitted {
+            assert_eq!(expression["valuesOmitted"], 1, "{path}");
+            assert_eq!(expression["valuesCountMayBeLower"], true, "{path}");
+        }
+        assert_eq!(
+            expression["values"][0]["value"].get("truncated").is_some(),
+            representation != "ordinary",
+            "{path}"
+        );
+    }
+
+    let small = requests
+        .iter()
+        .find(|request| request["path"] == "notes/pict-0")
+        .unwrap();
+    assert_eq!(
+        small,
+        &json!({
+            "sequence": 1,
+            "service": "firestore",
+            "method": "get",
+            "path": "notes/pict-0",
+            "allowed": true,
+            "reason": "",
+            "uid": null,
+            "expressions": [{
+                "line": 1,
+                "column": 2,
+                "currentOffset": 10,
+                "endOffset": 11,
+                "values": [{"value": {"kind": "string", "string": "ordinary"}, "count": 1}],
+            }],
+        }),
+        "the complete small trace remains byte-shape compatible"
+    );
 }
 
 /// FAULTH-1 on the route: the fired history is a bounded ring, so `GET faultPlan` says how
@@ -3233,7 +3401,7 @@ fn diagnostics_clear_releases_coverage_and_ring_without_reloading_or_disabling_t
                 allowed: true,
                 reason: String::new(),
                 uid: None,
-                expressions: coverage.entries().into_iter().cloned().collect(),
+                expressions: coverage.trace_entries(),
             });
     };
     record();

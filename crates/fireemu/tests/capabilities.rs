@@ -263,12 +263,18 @@ fn blocking_functions_metadata_matches_the_served_runtime() {
             .iter()
             .find(|surface| surface["id"] == surface_id)
             .unwrap_or_else(|| panic!("the contract lists the {surface_id} surface"));
-        assert!(
-            !text_of(&surface["gaps"])
-                .to_ascii_lowercase()
-                .contains("blocking"),
-            "the {surface_id} surface still publishes Blocking Functions as a gap"
-        );
+        for gap in surface["gaps"].as_array().expect("the surface lists gaps") {
+            for clause in gap.as_str().expect("a gap is text").split(';') {
+                let clause = clause.trim().to_ascii_lowercase();
+                // AI Logic is a different trigger product. Its scoped exclusion must not
+                // hide a whole-feature Blocking Functions gap in another clause or row.
+                assert!(
+                    !clause.contains("blocking")
+                        || clause == "firebase ai logic blocking triggers are not planned",
+                    "the {surface_id} surface still publishes Blocking Functions as a gap: {clause}"
+                );
+            }
+        }
         let claim = surface["claims"]
             .as_array()
             .expect("an active surface lists claims")

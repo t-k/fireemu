@@ -31,6 +31,8 @@ use crate::json::Json;
 use crate::node::Node;
 use crate::path::Path;
 use crate::query::QueryParams;
+use eval::Dialect;
+pub use eval::{evaluation_work_high_water, reset_evaluation_work_high_water};
 
 /// A rule expression as the rules file spells it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -146,6 +148,10 @@ struct RuleNode {
 #[derive(Debug, Clone, Default)]
 pub struct Rules {
     root: RuleNode,
+    /// Whether a regular expression is read in the official emulator's dialect where this
+    /// engine would otherwise refuse it (`\W`, `\D`, an escaped letter), as the emulator profile
+    /// does. The strict profile keeps the refusal: production has not answered these.
+    dialect: Dialect,
 }
 
 /// The stack of the thread that parses and checks rules.
@@ -160,6 +166,13 @@ pub struct Requester<'a> {
 }
 
 impl Rules {
+    /// These rules with the emulator profile's regular-expression dialect switched on or off.
+    #[must_use]
+    pub fn with_jar_dialect(mut self, on: bool) -> Self {
+        self.dialect.regex = on;
+        self
+    }
+
     /// Collects independent expression diagnostics, bounded for rejected files.
     /// The boolean reports that collection stopped before the whole tree was checked.
     pub fn diagnostics(spec: &RuleSpec) -> Result<(Vec<RulesError>, bool), RulesError> {
@@ -203,7 +216,10 @@ impl Rules {
                 })?
                 .join()
                 .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
-                .map(|root| Self { root })
+                .map(|root| Self {
+                    root,
+                    dialect: Dialect::default(),
+                })
         })
     }
 
@@ -291,6 +307,8 @@ impl Rules {
                     query,
                     read_kind: kind,
                     wildcards: &wildcards,
+                    dialect: self.dialect,
+                    work: std::cell::Cell::new(0),
                 };
                 if run(rule, &scope) {
                     return true;
@@ -353,6 +371,7 @@ impl Rules {
         at: &Path,
         requester: &Requester<'a>,
         wildcards: &'a BTreeMap<String, String>,
+        dialect: Dialect,
     ) -> eval::Scope<'a> {
         eval::Scope {
             auth: requester.auth,
@@ -372,6 +391,8 @@ impl Rules {
             query: None,
             read_kind: ReadKind::Check,
             wildcards,
+            dialect,
+            work: std::cell::Cell::new(0),
         }
     }
 
@@ -388,7 +409,7 @@ impl Rules {
         let mut keys = path.keys().iter();
         while let Some(rule_node) = node {
             if let Some(rule) = &rule_node.write {
-                let scope = Self::scope(before, after, &at, requester, &wildcards);
+                let scope = Self::scope(before, after, &at, requester, &wildcards, self.dialect);
                 if run(rule, &scope) {
                     return true;
                 }
@@ -415,7 +436,15 @@ impl Rules {
         let mut node = &self.root;
         let mut at = Path::root();
         for key in path.keys() {
-            if !Self::validate_here(node, before, after, &at, requester, &wildcards) {
+            if !Self::validate_here(
+                node,
+                before,
+                after,
+                &at,
+                requester,
+                &wildcards,
+                self.dialect,
+            ) {
                 return false;
             }
             match descend(node, key, &mut wildcards) {
@@ -424,7 +453,15 @@ impl Rules {
             }
             at = at.child(key);
         }
-        Self::validate_below(node, before, after, &at, requester, &mut wildcards)
+        Self::validate_below(
+            node,
+            before,
+            after,
+            &at,
+            requester,
+            &mut wildcards,
+            self.dialect,
+        )
     }
 
     fn validate_here(
@@ -434,6 +471,7 @@ impl Rules {
         at: &Path,
         requester: &Requester<'_>,
         wildcards: &BTreeMap<String, String>,
+        dialect: Dialect,
     ) -> bool {
         let Some(rule) = &node.validate else {
             return true;
@@ -441,7 +479,10 @@ impl Rules {
         if after.and_then(|r| r.descendant(at)).is_none() {
             return true;
         }
-        run(rule, &Self::scope(before, after, at, requester, wildcards))
+        run(
+            rule,
+            &Self::scope(before, after, at, requester, wildcards, dialect),
+        )
     }
 
     fn validate_below(
@@ -451,8 +492,9 @@ impl Rules {
         at: &Path,
         requester: &Requester<'_>,
         wildcards: &mut BTreeMap<String, String>,
+        dialect: Dialect,
     ) -> bool {
-        if !Self::validate_here(node, before, after, at, requester, wildcards) {
+        if !Self::validate_here(node, before, after, at, requester, wildcards, dialect) {
             return false;
         }
         let Some(written) = after.and_then(|r| r.descendant(at)) else {
@@ -466,7 +508,15 @@ impl Rules {
             let Some(child) = descend(node, key, &mut bound) else {
                 continue;
             };
-            if !Self::validate_below(child, before, after, &at.child(key), requester, &mut bound) {
+            if !Self::validate_below(
+                child,
+                before,
+                after,
+                &at.child(key),
+                requester,
+                &mut bound,
+                dialect,
+            ) {
                 return false;
             }
         }

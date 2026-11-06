@@ -15,6 +15,8 @@ export type Scripted = {
   body?: string | Buffer;
   /** Writes the response in pieces with a pause between them (streams). */
   chunks?: (string | Buffer)[];
+  /** Reports whether the HTTP response finished normally or the peer closed it early. */
+  onResponseClosed?: (finished: boolean) => void;
   /** Ends the socket without a response. */
   drop?: boolean;
 };
@@ -58,6 +60,7 @@ export const startTestServer = async (): Promise<{
       req.socket.destroy();
       return;
     }
+    res.on("close", () => answer.onResponseClosed?.(res.writableFinished));
     res.writeHead(answer.status ?? 200, answer.headers ?? {});
     if (answer.chunks) {
       for (const chunk of answer.chunks) {

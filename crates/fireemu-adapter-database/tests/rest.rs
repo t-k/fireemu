@@ -2853,3 +2853,173 @@ mod g10 {
         }
     }
 }
+
+/// A lone surrogate escape in a JSON string value is `?` on the emulator profile, one for each lone unit and a
+/// pair untouched, as the official emulator stores it (owner 2276; jar rows in
+/// `docs.local/runs/rtdb-lone-surrogate/jar-json1.json` and `jar-json2.json`). A key holding one is refused
+/// in both profiles. The strict profile refuses every value that holds one, as it did: production has not answered.
+#[test]
+fn a_lone_surrogate_in_a_body_value_is_a_question_mark_on_the_emulator_profile_only() {
+    let parse = error("Invalid data; couldn't parse JSON object, array, or value.");
+    // (method, path, seed, body, the emulator profile's answer, the strict profile's status)
+    type Row<'a> = (&'a str, &'a str, &'a str, &'a str, (u16, String), u16);
+    let rows: Vec<Row<'_>> = vec![
+        (
+            "PUT",
+            "/t",
+            "",
+            r#""a\ud83d""#,
+            (200, r#""a?""#.to_owned()),
+            400,
+        ),
+        (
+            "PUT",
+            "/t",
+            "",
+            r#""\ud83d\ud83d""#,
+            (200, r#""??""#.to_owned()),
+            400,
+        ),
+        (
+            "PUT",
+            "/t",
+            "",
+            r#""\ude00""#,
+            (200, r#""?""#.to_owned()),
+            400,
+        ),
+        (
+            "PUT",
+            "/t",
+            "",
+            r#""\ud83dx""#,
+            (200, r#""?x""#.to_owned()),
+            400,
+        ),
+        (
+            "PUT",
+            "/t",
+            "",
+            r#""\ud83dA""#,
+            (200, r#""?A""#.to_owned()),
+            400,
+        ),
+        (
+            "PUT",
+            "/t",
+            "",
+            r#""\ude00\ud83d""#,
+            (200, r#""??""#.to_owned()),
+            400,
+        ),
+        (
+            "PUT",
+            "/t",
+            "",
+            r#""😀""#,
+            (200, "\"\u{1F600}\"".to_owned()),
+            200,
+        ),
+        (
+            "PUT",
+            "/t",
+            "",
+            r#"{"a":"x\ud83d"}"#,
+            (200, r#"{"a":"x?"}"#.to_owned()),
+            400,
+        ),
+        (
+            "PUT",
+            "/t",
+            "",
+            r#"{".value":"x\ud83d"}"#,
+            (200, r#""x?""#.to_owned()),
+            400,
+        ),
+        (
+            "PUT",
+            "/t",
+            "",
+            r#"{".value":1,".priority":"p\ud83d"}"#,
+            (200, r#"{".value":1,".priority":"p?"}"#.to_owned()),
+            400,
+        ),
+        (
+            "PUT",
+            "/t/.priority",
+            "1",
+            r#""p\ud83d""#,
+            (200, r#""p?""#.to_owned()),
+            400,
+        ),
+        (
+            "PUT",
+            "/t",
+            "",
+            r#"{"a":["x\ud83d"]}"#,
+            (200, r#"{"a":["x?"]}"#.to_owned()),
+            400,
+        ),
+        (
+            "PUT",
+            "/t",
+            "",
+            r#"["x\ud83d"]"#,
+            (200, r#"["x?"]"#.to_owned()),
+            400,
+        ),
+        (
+            "PATCH",
+            "/t",
+            r#"{"a":1}"#,
+            r#"{"a/b":"x\ud83d","c":1}"#,
+            (200, r#"{"a":{"b":"x?"},"c":1}"#.to_owned()),
+            400,
+        ),
+        (
+            "PATCH",
+            "/t",
+            r#"{"a":1}"#,
+            r#"{".priority":"q\ud83d"}"#,
+            (200, r#"{".priority":"q?"}"#.to_owned()),
+            400,
+        ),
+        // A key holding a lone surrogate is refused on both profiles.
+        (
+            "PUT",
+            "/t",
+            "",
+            r#"{"a\ud83d":1}"#,
+            (400, parse.clone()),
+            400,
+        ),
+    ];
+    for strict in [false, true] {
+        for (method, path, seed, body, emulator, strict_status) in &rows {
+            let options = RestOptions {
+                production_shapes: strict,
+                ..RestOptions::default()
+            };
+            let mut db = Database::new(options, 42);
+            if !seed.is_empty() {
+                assert_eq!(call(&mut db, "PUT", "/t.json?ns=t1", seed).0, 200);
+            }
+            let got = call(&mut db, method, &format!("{path}.json?ns=t1"), body);
+            if strict {
+                assert_eq!(got.0, *strict_status, "strict {method} {path} {body}");
+                if *strict_status == 400 {
+                    assert_eq!(got.1, parse, "strict {method} {path} {body}");
+                }
+            } else {
+                assert_eq!(&got, emulator, "{method} {path} {body}");
+            }
+        }
+    }
+    // POST stores the value the same way.
+    let mut db = db();
+    let (status, answer) = call(&mut db, "POST", "/t.json?ns=t1", r#""x\ud83d""#);
+    assert_eq!(status, 200, "{answer}");
+    let (status, answer) = call(&mut db, "GET", "/t.json?ns=t1", "");
+    assert_eq!(status, 200);
+    assert!(answer.ends_with(r#":"x?"}"#), "{answer}");
+}

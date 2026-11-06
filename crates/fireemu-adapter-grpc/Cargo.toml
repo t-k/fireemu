@@ -37,6 +37,7 @@ regex = "1.13.1"
 [dev-dependencies]
 tokio-stream = { version = "0.1", features = ["net"] }
 proptest.workspace = true
+sha2.workspace = true
 
 [lints]
 workspace = true

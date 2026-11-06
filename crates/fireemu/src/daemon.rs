@@ -1217,8 +1217,13 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
         false
     });
     if let Some(dir) = &import {
-        let prepared = import_export::prepare(dir, exporter.products, &cfg.auth_project)
-            .map_err(|e| format!("--import {}: {e}", dir.display()))?;
+        let prepared = import_export::prepare(
+            dir,
+            exporter.products,
+            &cfg.auth_project,
+            cfg.profile != crate::config::CompatibilityProfile::Strict,
+        )
+        .map_err(|e| format!("--import {}: {e}", dir.display()))?;
         if !quiet {
             for notice in &prepared.notices {
                 eprintln!("note: --import {}: {notice}", dir.display());

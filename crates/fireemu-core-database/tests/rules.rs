@@ -107,6 +107,11 @@ fn query(params: &str, index_on: &[String]) -> Option<Option<QueryParams>> {
 }
 
 fn differences(fixture: &str) -> Vec<String> {
+    differences_with(fixture, false)
+}
+
+/// [`differences`] with the emulator profile's regular-expression dialect on or off.
+fn differences_with(fixture: &str, jar_dialect: bool) -> Vec<String> {
     let corpus: Vec<serde_json::Value> = serde_json::from_str(fixture).unwrap();
     let tree = seed();
     let auth = auth();
@@ -127,7 +132,8 @@ fn differences(fixture: &str) -> Vec<String> {
                     .collect()
             })
             .unwrap_or_default();
-        let compiled = Rules::compile(&read_rule_at_t(expr));
+        let compiled =
+            Rules::compile(&read_rule_at_t(expr)).map(|r| r.with_jar_dialect(jar_dialect));
         let got = match (&compiled, entry["load"].as_u64().unwrap()) {
             (Err(error), 400) => {
                 let expected = entry["error"].as_str().unwrap().trim_end_matches('\n');
@@ -165,12 +171,11 @@ fn every_recorded_pattern_decides_as_the_official_emulator_or_denies() {
     fn marked(mark: &'static str) -> impl Fn(&serde_json::Value) -> bool {
         move |entry| entry.get("fireemu").is_some_and(|f| f == mark)
     }
-    // Refused at load here: a lone escaped surrogate, which has no counterpart in this text
-    // (review r5 S13), where the official emulator loads it; and rules both refuse, with
-    // another text (a statement keyword such as `return`, an E4X `<`, a character outside the
-    // Basic Multilingual Plane or U+0085 inside a name). The illegal characters, escaped names,
-    // line offsets and Rhino's error texts and places agree since the rules-load fix of
-    // 2026-11-04 and are in the agreeing rows.
+    // Refused at load here, and by the official emulator with another text: a statement keyword such as `return`, an
+    // E4X `<`, a character outside the Basic Multilingual Plane or U+0085 inside a name (a lone escaped
+    // surrogate is held as UTF-16 units since 2026-11-06, and its rows are in the agreeing set).
+    // The illegal characters, escaped names, line offsets and Rhino's error texts and places agree
+    // since the rules-load fix of 2026-11-04 and are in the agreeing rows.
     let (refused, corpus): (Vec<serde_json::Value>, Vec<serde_json::Value>) =
         corpus.into_iter().partition(marked("refuses"));
     assert!(refused.len() >= 8);
@@ -198,6 +203,92 @@ fn every_recorded_pattern_decides_as_the_official_emulator_or_denies() {
         .collect();
     let failures = differences(&serde_json::to_string(&denied).unwrap());
     assert!(failures.is_empty(), "{failures:#?}");
+}
+
+/// Strings that hold a lone surrogate (an escape such as `'\uD83D'`, which Java holds as one UTF-16 unit), probed on the official
+/// emulator jar 4.11.2 (docs.local/runs/rtdb-lone-surrogate): length, `+`, equality, ordering and the string methods. Production
+/// has not answered these, so both profiles follow the jar.
+#[test]
+fn lone_surrogate_strings_load_and_decide_as_the_official_emulator() {
+    let failures = differences(include_str!(
+        "fixtures/rules-lone-surrogates-official-emulator-4.11.2.json"
+    ));
+    assert!(
+        failures.is_empty(),
+        "{} rows differ: {failures:#?}",
+        failures.len()
+    );
+}
+
+/// `query.orderBy` (documented by production) loads in both profiles and decides as the official
+/// emulator does (owner 2276): it is an ordering, equal to `query.orderByChild` when the read orders by a
+/// child, otherwise only to itself. The 81 rows were recorded with the jar (reads under each query kind
+/// and the load refusals of the other operators).
+#[test]
+fn query_order_by_loads_and_decides_as_the_official_emulator() {
+    let failures = differences(include_str!(
+        "fixtures/rules-query-orderby-official-emulator-4.11.2.json"
+    ));
+    assert!(
+        failures.is_empty(),
+        "{} rows differ: {failures:#?}",
+        failures.len()
+    );
+}
+
+/// The emulator profile reads `\W` and `\D` as the complement of a language of strings, and an escaped
+/// letter or digit as that character, as the official emulator does (owner 2276): 500 jar rows over
+/// bare, anchored, quantified, grouped and class forms, with and without `i`, and the `[\uD800-\uDFFF]` class,
+/// which there is the characters u, D, 8, 0 and the range 0-u, D, F. The strict profile keeps an error for
+/// them (production has not answered): every one of these rows that mentions one is denied there.
+#[test]
+fn the_emulator_profile_reads_complement_classes_and_escaped_letters_as_the_official_emulator() {
+    let fixture = include_str!("fixtures/rules-regex-dialect-official-emulator-4.11.2.json");
+    let failures = differences_with(fixture, true);
+    assert!(
+        failures.is_empty(),
+        "{} rows differ: {failures:#?}",
+        failures.len()
+    );
+    // Under the strict profile none of them reads 200 where the jar answers 401, and the rows that use
+    // one of the constructs read false, negated or not.
+    let strict = differences_with(fixture, false);
+    assert!(strict.len() > 60, "{}", strict.len());
+    assert!(
+        strict
+            .iter()
+            .all(|f| f.ends_with("read false, expected true")),
+        "{strict:#?}"
+    );
+}
+
+/// The 14k-row differential corpus of the regular-expression dialect, run with the emulator profile's dialect on:
+/// no row moves the wrong way (an allow where the official emulator denies, or a load that differs), and of the 323
+/// rows fireemu denied where the official emulator allows, 252 now decide as it does. The 71 others stay errors,
+/// hence denied: each uses the `i` flag with non-ASCII text, which needs a Java 21 case-folding table (a declared
+/// difference, owner ledger line 2288).
+#[test]
+fn the_emulator_profile_moves_no_corpus_row_the_wrong_way() {
+    let corpus: Vec<serde_json::Value> = serde_json::from_str(include_str!(
+        "fixtures/rules-expressions-3-official-emulator-4.11.2.json"
+    ))
+    .unwrap();
+    let rows: Vec<serde_json::Value> = corpus
+        .into_iter()
+        .filter(|e| e.get("fireemu") != Some(&serde_json::Value::from("refuses")))
+        .collect();
+    let denied = rows
+        .iter()
+        .filter(|e| e.get("fireemu").is_some_and(|f| f == "denies"))
+        .count();
+    let failures = differences_with(&serde_json::to_string(&rows).unwrap(), true);
+    let wrong_way: Vec<&String> = failures
+        .iter()
+        .filter(|f| !f.ends_with("read false, expected true"))
+        .collect();
+    assert!(wrong_way.is_empty(), "{wrong_way:#?}");
+    assert_eq!(denied, 323);
+    assert_eq!(failures.len(), 71, "{failures:#?}");
 }
 
 #[test]
@@ -231,15 +322,10 @@ fn every_recorded_expression_loads_and_decides_as_the_official_emulator() {
         r#""!'aa'.matches(/^(a)\\1$/)" : read false, expected true"#,
         // Ranges whose endpoints are surrogates of one character are, read by UTF-16 unit,
         // reversed or not ranges at all: an error here, false and true there.
-        // A lone escaped surrogate has no counterpart in this text: refused at load.
         // `\u` and `\x` in a pattern are escaped letters of the dialect: an error.
         r#""!('\u{e000}'.matches(/^[\u{e000}-😀]$/))" : read false, expected true"#,
         r#""!('😀'.matches(/^[😀-😁]$/))" : read false, expected true"#,
         r#""!('😀'.matches(/^[😀-😁]+$/))" : read false, expected true"#,
-        r#""'\\ud83d'.length == 1" : refused: 1:25: Unsupported javascript syntax."#,
-        r#""!('\\ud83d'.length == 1)" : refused: 1:27: Unsupported javascript syntax."#,
-        r#""'\\ude00\\ud83d'.length == 2" : refused: 1:25: Unsupported javascript syntax."#,
-        r#""!('\\ude00\\ud83d'.length == 2)" : refused: 1:27: Unsupported javascript syntax."#,
         r#""!('A'.matches(/\\u0041/))" : read false, expected true"#,
         r#""!('A'.matches(/\\x41/))" : read false, expected true"#,
         // `\W` and `\D` complement a language there; `i` is read only for ASCII patterns.
@@ -535,6 +621,253 @@ fn every_recorded_write_and_expression_error_matches_the_official_emulator() {
 mod properties {
     use super::*;
     use proptest::prelude::*;
+    use std::fmt::Write as _;
+
+    /// A string made of units a Rules literal can spell: ASCII, an astral character, and the surrogates alone or together.
+    fn unit_text() -> impl Strategy<Value = Vec<u16>> {
+        prop::collection::vec(
+            prop::sample::select(vec![
+                0x61_u16, 0x62, 0xD83D, 0xDE00, 0xD800, 0xDBFF, 0xDC00, 0xDFFF, 0x20AC,
+            ]),
+            0..5,
+        )
+    }
+
+    /// The literal that spells `units`: every unit as a `\u` escape, so a pair is two escapes.
+    fn literal(units: &[u16]) -> String {
+        let mut escapes = String::new();
+        for unit in units {
+            write!(escapes, "\\u{unit:04X}").unwrap();
+        }
+        format!("'{escapes}'")
+    }
+
+    fn holds(expr: &str) -> Option<bool> {
+        let rules = Rules::compile(&read_rule_at_t(expr)).ok()?;
+        let tree = seed();
+        let auth = auth();
+        let requester = Requester {
+            auth: &auth,
+            now: 1_792_464_733_000,
+        };
+        Some(rules.can_read(tree.root(), &p("/t"), None, &requester))
+    }
+
+    /// One atom of a pattern in the official emulator's dialect, with the language it stands for as a predicate on a
+    /// run of characters (the automaton's view): `\W` and `\D` are complements of languages of strings.
+    #[derive(Debug, Clone, Copy)]
+    enum Atom {
+        Lit(char, bool),
+        Dot,
+        Word,
+        Digit,
+        ComplementWord,
+        ComplementDigit,
+        ClassComplementWord,
+        ClassComplementWordOrA,
+        ClassComplementDigitOrA,
+        NegatedClassComplementWord,
+        NegatedClassComplementDigit,
+        PlainClass,
+        NegatedPlainClass,
+        EscapedLetterClass,
+        NegatedEscapedLetterClass,
+        BracketFirstClass,
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    enum Times {
+        Once,
+        Optional,
+        Star,
+        Plus,
+    }
+
+    fn is_word(c: char) -> bool {
+        c.is_ascii_alphanumeric() || c == '_'
+    }
+
+    impl Atom {
+        fn text(self) -> String {
+            match self {
+                Self::Lit(c, escaped) if escaped && c.is_ascii_alphanumeric() => format!("\\{c}"),
+                Self::Lit(c, _) => c.to_string(),
+                Self::Dot => ".".to_owned(),
+                Self::Word => "\\w".to_owned(),
+                Self::Digit => "\\d".to_owned(),
+                Self::ComplementWord => "\\W".to_owned(),
+                Self::ComplementDigit => "\\D".to_owned(),
+                Self::ClassComplementWord => "[\\W]".to_owned(),
+                Self::ClassComplementWordOrA => "[\\Wa]".to_owned(),
+                Self::ClassComplementDigitOrA => "[a\\D]".to_owned(),
+                Self::NegatedClassComplementWord => "[^\\W]".to_owned(),
+                Self::NegatedClassComplementDigit => "[^\\D]".to_owned(),
+                Self::PlainClass => "[ab]".to_owned(),
+                Self::NegatedPlainClass => "[^ab]".to_owned(),
+                Self::EscapedLetterClass => "[\\ub]".to_owned(),
+                Self::NegatedEscapedLetterClass => "[^\\ub]".to_owned(),
+                Self::BracketFirstClass => "[]a]".to_owned(),
+            }
+        }
+
+        fn accepts(self, run: &[char]) -> bool {
+            let one = |test: &dyn Fn(char) -> bool| run.len() == 1 && test(run[0]);
+            match self {
+                Self::Lit(c, _) => one(&|x| x == c),
+                Self::Dot => run.len() == 1,
+                Self::Word | Self::NegatedClassComplementWord => one(&is_word),
+                Self::Digit | Self::NegatedClassComplementDigit => one(&|x| x.is_ascii_digit()),
+                Self::ComplementWord | Self::ClassComplementWord => !one(&is_word),
+                Self::ComplementDigit => !one(&|x| x.is_ascii_digit()),
+                Self::ClassComplementWordOrA => !one(&|x| is_word(x) && x != 'a'),
+                // `a` is no digit, so the union with `\D` is `\D`.
+                Self::ClassComplementDigitOrA => !one(&|x| x.is_ascii_digit()),
+                Self::PlainClass => one(&|x| matches!(x, 'a' | 'b')),
+                Self::NegatedPlainClass => one(&|x| !matches!(x, 'a' | 'b')),
+                Self::EscapedLetterClass => one(&|x| matches!(x, 'u' | 'b')),
+                Self::NegatedEscapedLetterClass => one(&|x| !matches!(x, 'u' | 'b')),
+                Self::BracketFirstClass => one(&|x| matches!(x, ']' | 'a')),
+            }
+        }
+    }
+
+    /// Whether `^atoms$` matches all of `subject`, by the positions each atom can reach.
+    fn oracle(atoms: &[(Atom, Times)], subject: &[char]) -> bool {
+        let n = subject.len();
+        let mut reach = vec![false; n + 1];
+        reach[0] = true;
+        for &(atom, times) in atoms {
+            let step = |from: &[bool]| {
+                let mut to = vec![false; n + 1];
+                for i in (0..=n).filter(|&i| from[i]) {
+                    for j in i..=n {
+                        if atom.accepts(&subject[i..j]) {
+                            to[j] = true;
+                        }
+                    }
+                }
+                to
+            };
+            let closure = |mut set: Vec<bool>| loop {
+                let next = step(&set);
+                let merged: Vec<bool> = set.iter().zip(&next).map(|(a, b)| *a || *b).collect();
+                if merged == set {
+                    return set;
+                }
+                set = merged;
+            };
+            reach = match times {
+                Times::Once => step(&reach),
+                Times::Optional => {
+                    let once = step(&reach);
+                    reach.iter().zip(&once).map(|(a, b)| *a || *b).collect()
+                }
+                Times::Star => closure(reach),
+                Times::Plus => closure(step(&reach)),
+            };
+        }
+        reach[n]
+    }
+
+    fn atom() -> impl Strategy<Value = Atom> {
+        prop_oneof![
+            (
+                prop::sample::select(vec!['a', 'b', '1', '_', '!', 'u']),
+                any::<bool>()
+            )
+                .prop_map(|(c, e)| Atom::Lit(c, e)),
+            Just(Atom::Dot),
+            Just(Atom::Word),
+            Just(Atom::Digit),
+            Just(Atom::ComplementWord),
+            Just(Atom::ComplementDigit),
+            Just(Atom::ClassComplementWord),
+            Just(Atom::ClassComplementWordOrA),
+            Just(Atom::ClassComplementDigitOrA),
+            Just(Atom::NegatedClassComplementWord),
+            Just(Atom::NegatedClassComplementDigit),
+            Just(Atom::PlainClass),
+            Just(Atom::NegatedPlainClass),
+            Just(Atom::EscapedLetterClass),
+            Just(Atom::NegatedEscapedLetterClass),
+            Just(Atom::BracketFirstClass),
+        ]
+    }
+
+    fn times() -> impl Strategy<Value = Times> {
+        prop::sample::select(vec![
+            Times::Once,
+            Times::Once,
+            Times::Optional,
+            Times::Star,
+            Times::Plus,
+        ])
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig {cases: 600, rng_seed: proptest::test_runner::RngSeed::Fixed(0x10_5f), ..ProptestConfig::default()})]
+
+        /// The emulator profile's `\W`, `\D`, classes holding them and escaped letters match as the language they stand for
+        /// (the official emulator's automaton), over patterns of up to four atoms with every quantifier and subjects of up to
+        /// four characters; the strict profile never allows what the emulator profile denies, and denies each pattern
+        /// that uses the dialect.
+        #[test]
+        fn the_emulator_profile_matches_the_language_the_pattern_stands_for(
+            atoms in prop::collection::vec((atom(), times()), 1..5),
+            subject in prop::collection::vec(prop::sample::select(vec!['a', 'b', '1', '_', '!', 'é', 'u', '[', ']', '^']), 0..5),
+        ) {
+            let mut text = String::from("^");
+            for &(atom, times) in &atoms {
+                text.push_str(&atom.text());
+                text.push_str(match times {
+                    Times::Once => "",
+                    Times::Optional => "?",
+                    Times::Star => "*",
+                    Times::Plus => "+",
+                });
+            }
+            text.push('$');
+            let subject_text: String = subject.iter().collect();
+            let expr = format!("'{subject_text}'.matches(/{text}/)");
+            let rules = Rules::compile(&read_rule_at_t(&expr)).unwrap();
+            let tree = seed();
+            let auth = auth();
+            let requester = Requester { auth: &auth, now: 0 };
+            let read = |rules: &Rules| rules.can_read(tree.root(), &p("/t"), None, &requester);
+            let emulator = read(&rules.clone().with_jar_dialect(true));
+            prop_assert_eq!(emulator, oracle(&atoms, &subject), "{}", expr);
+            let strict = read(&rules);
+            prop_assert!(!strict || emulator, "{}", expr);
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig {cases: 400, rng_seed: proptest::test_runner::RngSeed::Fixed(0x10_5e), ..ProptestConfig::default()})]
+
+        /// Strings with lone surrogates behave as Java's UTF-16 strings: length counts units, `+` joins them (and a pair spelled
+        /// by two escapes is the character), `==` and the order compare unit by unit, and the searches are unit searches.
+        #[test]
+        fn strings_of_utf16_units_behave_as_java_strings(a in unit_text(), b in unit_text()) {
+            let (la, lb) = (literal(&a), literal(&b));
+            let joined: Vec<u16> = a.iter().chain(&b).copied().collect();
+            prop_assert_eq!(holds(&format!("{la}.length == {}", a.len())), Some(true));
+            prop_assert_eq!(holds(&format!("{la}.length == {}", a.len() + 1)), Some(false));
+            prop_assert_eq!(holds(&format!("{la} + {lb} == {}", literal(&joined))), Some(true));
+            prop_assert_eq!(holds(&format!("({la} + {lb}).length == {}", joined.len())), Some(true));
+            prop_assert_eq!(holds(&format!("{la} == {lb}")), Some(a == b));
+            prop_assert_eq!(holds(&format!("{la} != {lb}")), Some(a != b));
+            prop_assert_eq!(holds(&format!("{la} < {lb}")), Some(a < b));
+            prop_assert_eq!(holds(&format!("{la} >= {lb}")), Some(a >= b));
+            prop_assert_eq!(holds(&format!("{la}.beginsWith({lb})")), Some(a.starts_with(&b)));
+            prop_assert_eq!(holds(&format!("{la}.endsWith({lb})")), Some(a.ends_with(&b)));
+            let found = b.is_empty() || a.windows(b.len()).any(|window| window == b.as_slice());
+            prop_assert_eq!(holds(&format!("{la}.contains({lb})")), Some(found));
+            // A string that is valid UTF-16 equals the character it spells.
+            if let Ok(text) = String::from_utf16(&a) {
+                prop_assert_eq!(holds(&format!("{la} == '{text}'")), Some(!text.contains(['\'', '\\'])));
+            }
+        }
+    }
 
     /// Small expressions over the whole grammar, well-formed or not.
     fn expression() -> impl Strategy<Value = String> {
@@ -611,7 +944,7 @@ mod properties {
                 let before = seed();
                 let after = tree_with(serde_json::json!({"t":"changed"}));
                 let auth = if authenticated {auth()} else {Json::Null};
-                let requester = Requester {auth:&auth,now:123};
+                let requester = Requester {auth:&auth,now:123 };
                 rules.set_coverage_enabled(false);
                 let read = rules.can_read(before.root(), &p("t"), None, &requester);
                 let write = rules.can_write(before.root(), after.root(), &[p("t")], &requester);
@@ -1362,4 +1695,456 @@ fn query_equals_itself_through_a_ternary() {
             "{text}"
         );
     }
+}
+
+/// An astral string with the empty string replaced: Java puts the replacement between the halves of a
+/// pair, which is a string with lone surrogates, so the answer is the jar's (owner 2270 (2)).
+#[test]
+fn replacing_the_empty_string_in_an_astral_string_splits_its_pair() {
+    for (expr, expected) in [
+        ("'😀'.replace('', 'x').length == 5", true),
+        ("!('😀'.replace('', 'x').length == 5)", false),
+        ("'\\uD83D\\uDE00'.replace('', 'y').length == 5", true),
+        ("'😀'.replace('', 'x') == 'x\\uD83Dx\\uDE00x'", true),
+        ("'😀a'.replace('', '').length == 3", true),
+    ] {
+        assert_eq!(reads(expr), expected, "{expr}");
+    }
+}
+
+/// Reads `/t` as user `u1` with `expr` as the rule.
+fn reads(expr: &str) -> bool {
+    let rules = Rules::compile(&read_rule_at_t(expr)).unwrap();
+    let tree = seed();
+    let auth = auth();
+    let requester = Requester {
+        auth: &auth,
+        now: 123,
+    };
+    rules.can_read(tree.root(), &p("t"), None, &requester)
+}
+
+/// A string a Rules operation builds is bounded before it is allocated (Codex r2 Must): ten chained
+/// `replace('', '0123456789')` would reach 5e10 units. Up to the bound the answer is the jar's (seven
+/// chained replaces, 3.9e7 units, answer there under a 512 MB heap; eight, 4.3e8, are a 500, negated or
+/// not); past it the operation is an error, so the rule is false negated or not, for lone-surrogate
+/// strings and ordinary ones alike.
+#[test]
+fn a_string_grown_past_the_bound_is_an_error_negated_or_not() {
+    for base in ["'\\uD83D'", "'a'"] {
+        let chain = |n: usize| format!("{base}{}", ".replace('', '0123456789')".repeat(n));
+        assert!(
+            reads(&format!("{}.length == 38974341", chain(7))),
+            "{base} seven"
+        );
+        assert!(
+            reads(&format!("!({}.length == 0)", chain(7))),
+            "{base} seven negated"
+        );
+        for n in [8, 9, 10] {
+            assert!(!reads(&format!("{}.length == 0", chain(n))), "{base} {n}");
+            assert!(
+                !reads(&format!("!({}.length == 0)", chain(n))),
+                "{base} {n} negated"
+            );
+        }
+        // `+` is bounded on the same terms: 2 x 3.5e6 is within it, 2 x 3.9e7 is not.
+        assert!(reads(&format!(
+            "({} + {}).length == 7086242",
+            chain(6),
+            chain(6)
+        )));
+        assert!(!reads(&format!(
+            "({} + {}).length == 0",
+            chain(7),
+            chain(7)
+        )));
+        assert!(!reads(&format!(
+            "!(({} + {}).length == 0)",
+            chain(7),
+            chain(7)
+        )));
+    }
+    // A target that is not empty grows as fast: every `a` becomes a hundred.
+    let hundred = "a".repeat(100);
+    for start in ["'a'", "'a\\uD83D'"] {
+        let grow = |n: usize| format!("{start}{}", format!(".replace('a', '{hundred}')").repeat(n));
+        assert!(reads(&format!("{}.length >= 1000000", grow(3))), "{start}");
+        assert!(!reads(&format!("{}.length == 0", grow(4))), "{start}");
+        assert!(!reads(&format!("!({}.length == 0)", grow(4))), "{start}");
+    }
+}
+
+/// The Rules coverage report names a value by a JSON string, which cannot hold a lone surrogate: a literal that holds one
+/// is shown with U+FFFD for each (the character the report would otherwise lose). Decisions are not affected.
+#[test]
+fn the_coverage_report_shows_a_lone_surrogate_literal_with_the_replacement_character() {
+    let spec = read_rule_at_t(r"'\uD83D'.length == 1");
+    let rules = Rules::compile(&spec).unwrap();
+    rules.set_coverage_enabled(true);
+    let tree = seed();
+    let auth = auth();
+    let requester = Requester {
+        auth: &auth,
+        now: 123,
+    };
+    assert!(rules.can_read(tree.root(), &p("t"), None, &requester));
+    let report = format!("{:?}", rules.coverage_report());
+    assert!(
+        report.contains(&format!(
+            r#"String("'\\uD83D'"), "values": Array([Object({{"count": Number(Int(1)), "value": String("{}")}})])"#,
+            '\u{fffd}'
+        )),
+        "{report}"
+    );
+}
+
+/// Reads `/t` with the data `tree` and `expr` as the rule.
+fn reads_in(tree: &fireemu_core_database::Tree, expr: &str) -> bool {
+    let rules = Rules::compile(&read_rule_at_t(expr)).unwrap();
+    let auth = auth();
+    let requester = Requester {
+        auth: &auth,
+        now: 123,
+    };
+    rules.can_read(tree.root(), &p("t"), None, &requester)
+}
+
+/// Case conversion is measured before it allocates, in both string paths: a string just under the size bound that
+/// grows past it when converted (`ﬃ` is `FFI`, `ΐ` is three characters, six bytes for two) is an error, negated or
+/// not (Astra review of 985528f1c).
+#[test]
+fn case_conversion_past_the_size_bound_is_an_error_before_it_allocates() {
+    // The units path: 2^25 - 1 units of `ﬃ`, which become 3 units each.
+    let doubled = |start: &str, to: &str, n: usize| {
+        format!("{start}{}", format!(".replace('', '{to}')").repeat(n))
+    };
+    let units = doubled("'\\uD83D'", "\\uFB03", 24);
+    assert!(reads(&format!("{units}.length == 33554431")));
+    for expr in [
+        format!("{units}.toUpperCase().length > 67108864"),
+        format!("!({units}.toUpperCase().length > 67108864)"),
+    ] {
+        assert!(!reads(&expr), "units path");
+    }
+    // The Str path: 2^24 - 1 characters of `ΐ`, 2 bytes each, become 6 bytes each.
+    let text = doubled("'\u{390}'", "\u{390}", 23);
+    assert!(reads(&format!("{text}.length == 16777215")));
+    for expr in [
+        format!("{text}.toUpperCase().length > 0"),
+        format!("!({text}.toUpperCase().length > 0)"),
+    ] {
+        assert!(!reads(&expr), "str path");
+    }
+    // Within the bound the same conversion answers.
+    assert!(reads(&format!(
+        "{}.toUpperCase().length == 7",
+        doubled("'\\uD83D'", "\\uFB03", 1)
+    )));
+}
+
+/// Evaluation work is bounded, not only the size of one result: a long stored string joined again and again, each
+/// time below the size bound, stops; a search is linear, so a long string and a long needle that almost matches
+/// answer at once (Astra review of 985528f1c).
+#[test]
+fn repeated_work_on_long_strings_stops_and_a_search_is_linear() {
+    let long = "a".repeat(8 * 1024 * 1024);
+    let tree = tree_with(serde_json::json!({"t": {"h": long}}));
+    // Eight MiB read a few times is ordinary; read two hundred times it is past the bound (2^30).
+    let join = |times: usize| {
+        format!(
+            "(root.child('t').child('h').val(){}).length > 0",
+            " + ''".repeat(times)
+        )
+    };
+    assert!(reads_in(&tree, &join(10)));
+    for times in [200, 1000] {
+        assert!(!reads_in(&tree, &join(times)), "{times}");
+        assert!(
+            !reads_in(&tree, &format!("!({})", join(times))),
+            "{times} negated"
+        );
+    }
+    // The quadratic search of the review: 1 MiB of `a` and an almost matching needle of 512 KiB.
+    let haystack = "a".repeat(1024 * 1024);
+    let needle = format!("{}b", "a".repeat(512 * 1024));
+    let tree = tree_with(serde_json::json!({"t": {"h": haystack, "n": needle}}));
+    let started = std::time::Instant::now();
+    let found = reads_in(
+        &tree,
+        "(root.child('t').child('h').val() + '\\uD83D').contains(root.child('t').child('n').val())",
+    );
+    assert!(!found);
+    assert!(
+        reads_in(
+            &tree,
+            "!((root.child('t').child('h').val() + '\\uD83D').contains(root.child('t').child('n').val()))"
+        ),
+        "the search answers false, not an error"
+    );
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(30),
+        "{:?}",
+        started.elapsed()
+    );
+}
+
+/// The bound is sized on purpose: a maximum-size stored string (10 MiB) is read and searched thirteen times by an
+/// honest rule without being denied (the case Astra's review of 2258af58e named), and is denied, negated or not, when
+/// a rule does it a hundred and twenty times.
+#[test]
+fn honest_large_rules_are_not_denied_and_runaway_ones_are() {
+    let tree = tree_with(serde_json::json!({"t": {"h": "a".repeat(10 * 1024 * 1024)}}));
+    let search = "root.child('t').child('h').val().contains('a')";
+    let rule = |times: usize| vec![search; times].join(" && ");
+    assert!(reads_in(&tree, &rule(13)));
+    assert!(reads_in(&tree, &rule(40)));
+    // The known limit: 50 checks fit, 52 exceed the bound (20 MiB of work each, 2^30 in all).
+    assert!(reads_in(&tree, &rule(50)));
+    assert!(!reads_in(&tree, &rule(52)));
+    for times in [120, 400] {
+        assert!(!reads_in(&tree, &rule(times)), "{times}");
+        assert!(
+            !reads_in(&tree, &format!("!({})", rule(times))),
+            "{times} negated"
+        );
+    }
+}
+
+/// Building a location from a long path string costs its keys once, charged: Astra's quadratic example (a 50,000-key
+/// path read from the data, through `child`, `hasChild` and `hasChildren`) finishes at once, and a rule that does it
+/// again and again stops at the evaluation bound.
+#[test]
+fn a_location_built_from_a_long_path_is_neither_quadratic_nor_free() {
+    let long = "a/".repeat(50_000);
+    let tree = tree_with(serde_json::json!({"t": {"p": long}}));
+    let started = std::time::Instant::now();
+    assert!(reads_in(
+        &tree,
+        "!root.child(root.child('t').child('p').val()).exists()"
+    ));
+    assert!(reads_in(
+        &tree,
+        "!root.hasChild(root.child('t').child('p').val())"
+    ));
+    assert!(reads_in(
+        &tree,
+        "!root.child(root.child('t').child('p').val()).hasChildren()"
+    ));
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(10),
+        "{:?}",
+        started.elapsed()
+    );
+    // Each use copies the 100,000-byte string and builds 50,000 keys: ten thousand of them pass the bound.
+    let once = "!root.hasChild(root.child('t').child('p').val())";
+    let many = vec![once; 12_000].join(" && ");
+    assert!(!reads_in(&tree, &many));
+    assert!(!reads_in(&tree, &format!("!({many})")));
+}
+
+/// Copying the claims is work by their size: a rule that uses a large `auth` many times stops at the bound, whether
+/// or not it is negated, while a few uses are allowed.
+#[test]
+fn copies_of_the_claims_are_charged() {
+    let big = j(serde_json::json!({"uid": "u1", "token": {"blob": "x".repeat(1024 * 1024)}}));
+    let tree = tree_with(serde_json::json!({"t": {"s": 1}}));
+    let reads = |expr: &str| {
+        Rules::compile(&read_rule_at_t(expr)).unwrap().can_read(
+            tree.root(),
+            &p("t"),
+            None,
+            &Requester { auth: &big, now: 0 },
+        )
+    };
+    let rule = |times: usize| vec!["auth != null"; times].join(" && ");
+    assert!(reads(&rule(10)));
+    assert!(reads(&rule(500)));
+    assert!(!reads(&rule(2000)));
+    assert!(!reads(&format!("!({})", rule(2000))));
+    // The items of an array are copied with it.
+    let listed =
+        j(serde_json::json!({"uid": "u1", "token": {"list": ["x".repeat(1024 * 1024), 1]}}));
+    let reads_listed = |expr: &str| {
+        Rules::compile(&read_rule_at_t(expr)).unwrap().can_read(
+            tree.root(),
+            &p("t"),
+            None,
+            &Requester {
+                auth: &listed,
+                now: 0,
+            },
+        )
+    };
+    let list = |times: usize| vec!["auth.token.list != null"; times].join(" && ");
+    assert!(reads_listed(&list(10)));
+    assert!(!reads_listed(&list(2000)));
+    // A nested value read from the claims is copied too.
+    let nested = |times: usize| vec!["auth.token != null"; times].join(" && ");
+    assert!(reads(&nested(10)));
+    assert!(!reads(&nested(2000)));
+}
+
+/// The work a read does, as the high-water mark of one evaluation says (a fresh process per test).
+fn work_of(tree: &fireemu_core_database::Tree, query: Option<&QueryParams>, expr: &str) -> u64 {
+    use fireemu_core_database::rules::{
+        evaluation_work_high_water, reset_evaluation_work_high_water,
+    };
+    reset_evaluation_work_high_water();
+    let rules = Rules::compile(&read_rule_at_t(expr)).unwrap();
+    let auth = auth();
+    let requester = Requester {
+        auth: &auth,
+        now: 123,
+    };
+    let _ = rules.can_read(tree.root(), &p("t"), query, &requester);
+    evaluation_work_high_water()
+}
+
+/// Every copy a snapshot operation makes is charged by the bytes copied, before it is made (Astra's review of
+/// 4679a9cbd): `parent()` and `child('')` on a long location, a priority string, a query member and the output of a
+/// case conversion.
+#[test]
+fn snapshot_and_member_copies_are_charged_by_their_bytes() {
+    // A location of 1000 keys of 1000 bytes: about a megabyte.
+    let long = format!("{}/", "x".repeat(1000)).repeat(1000);
+    let bytes = long.len() as u64;
+    let tree = tree_with(serde_json::json!({"t": {"p": long}}));
+    let base = "root.child(root.child('t').child('p').val())";
+    let at = work_of(&tree, None, &format!("!{base}.exists()"));
+    let three_parents = work_of(
+        &tree,
+        None,
+        &format!("!{base}.parent().parent().parent().exists()"),
+    );
+    assert!(
+        three_parents >= at + 3 * (bytes - 1000),
+        "{at} {three_parents}"
+    );
+    let three_children = work_of(
+        &tree,
+        None,
+        &format!("!{base}.child('').child('').child('').exists()"),
+    );
+    assert!(three_children >= at + 3 * bytes, "{at} {three_children}");
+    // A priority string is copied out of the node.
+    let priority = "q".repeat(1 << 20);
+    let tree = tree_with(serde_json::json!({"t": {"s": 1, ".priority": priority}}));
+    assert!(work_of(&tree, None, "data.getPriority().length > 0") >= 1 << 20);
+    // The output of a case conversion is charged besides the value and the receiver: three passes over the string.
+    let text = "a".repeat(1 << 20);
+    let tree = tree_with(serde_json::json!({"t": {"s": text}}));
+    assert!(
+        work_of(
+            &tree,
+            None,
+            "data.child('s').val().toUpperCase().length > 0"
+        ) >= 3 << 20
+    );
+    // A child path and a bound of the query are copied out of it.
+    let tree = tree_with(serde_json::json!({"t": {"s": 1}}));
+    let mut q = QueryParams::default().start_at(Json::String("z".repeat(1 << 20)), None);
+    assert!(work_of(&tree, Some(&q), "query.startAt.length > 0") >= 1 << 20);
+    q.order_by = OrderBy::Child(Path::from_keys(vec!["k".repeat(1 << 20)]));
+    assert!(work_of(&tree, Some(&q), "query.orderByChild != null") >= 1 << 20);
+}
+
+/// The ordinary rules of the Rules corpora use a tiny fraction of the evaluation work bound (2^30): the most any
+/// one evaluation does stays under 2^18, a thousandth of it.
+#[test]
+fn ordinary_rules_stay_far_below_the_evaluation_work_bound() {
+    fireemu_core_database::rules::reset_evaluation_work_high_water();
+    for fixture in [
+        include_str!("fixtures/rules-expressions-official-emulator-4.11.2.json"),
+        include_str!("fixtures/rules-expressions-2-official-emulator-4.11.2.json"),
+        include_str!("fixtures/rules-expressions-3-official-emulator-4.11.2.json"),
+        include_str!("fixtures/rules-lone-surrogates-official-emulator-4.11.2.json"),
+        include_str!("fixtures/rules-query-orderby-official-emulator-4.11.2.json"),
+        include_str!("fixtures/rules-regex-dialect-official-emulator-4.11.2.json"),
+    ] {
+        let _ = differences_with(fixture, true);
+    }
+    let high = fireemu_core_database::rules::evaluation_work_high_water();
+    assert!(high < 1 << 18, "the most work one evaluation did: {high}");
+    assert!(high > 0);
+}
+
+/// The high-water mark follows the most work one evaluation did, keeps it across smaller ones, and starts again
+/// from zero when it is reset.
+#[test]
+fn the_high_water_mark_follows_the_most_work_one_evaluation_did() {
+    use fireemu_core_database::rules::{
+        evaluation_work_high_water, reset_evaluation_work_high_water,
+    };
+    reset_evaluation_work_high_water();
+    assert_eq!(evaluation_work_high_water(), 0);
+    assert!(reads("data.child('s').val().contains('ell')"));
+    let large = evaluation_work_high_water();
+    assert!(large >= 5, "{large}");
+    assert!(reads("data.child('n').val() == 5"));
+    assert_eq!(
+        evaluation_work_high_water(),
+        large,
+        "a smaller one keeps the mark"
+    );
+    reset_evaluation_work_high_water();
+    assert_eq!(evaluation_work_high_water(), 0);
+    assert!(reads("data.child('s').val().length == 5"));
+    let small = evaluation_work_high_water();
+    assert!(small > 0 && small < large + 100, "{small}");
+}
+
+/// The emulator profile reads a pattern by UTF-16 unit and a backslash before a line terminator or a character beyond
+/// ASCII as the official emulator does: 289 rows of the jar (a character beyond the Basic Multilingual Plane is two
+/// class members and two units for `.`; after a backslash CR, CR LF, U+2028 and U+2029 are a line feed, and U+FEFF and
+/// U+0085 are themselves).
+#[test]
+fn the_emulator_profile_reads_utf16_units_and_escaped_line_characters_as_the_official_emulator() {
+    let fixture =
+        include_str!("fixtures/rules-regex-escapes-and-units-official-emulator-4.11.2.json");
+    let failures = differences_with(fixture, true);
+    assert!(
+        failures.is_empty(),
+        "{} rows differ: {failures:#?}",
+        failures.len()
+    );
+}
+
+/// The edges of the emulator profile's class grammar: an end at U+FFFF is a character like another, a class that
+/// holds nothing matches nothing and its negation any one character, and a range whose end is an astral character
+/// ends at its high surrogate (its low surrogate is a member of its own).
+#[test]
+fn the_class_grammar_of_the_emulator_profile_at_the_edges_of_the_basic_plane() {
+    let jar = |expr: &str| {
+        Rules::compile(&read_rule_at_t(expr))
+            .unwrap()
+            .with_jar_dialect(true)
+            .can_read(
+                seed().root(),
+                &p("t"),
+                None,
+                &Requester {
+                    auth: &auth(),
+                    now: 123,
+                },
+            )
+    };
+    assert!(jar("'b'.matches(/^[a-\u{FFFF}]$/)"));
+    assert!(jar("'\u{FFFF}'.matches(/^[a-\u{FFFF}]$/)"));
+    assert!(jar("'\u{FFFF}'.matches(/^[\u{FFFF}-\u{FFFF}]$/)"));
+    assert!(jar("'\u{FFFF}'.matches(/^[\u{FFFF}-]$/)"));
+    assert!(jar("'-'.matches(/^[\u{FFFF}-]$/)"));
+    // `[a-😀]` is `a` to the high surrogate and the low surrogate: `b` is in it, the pair is two units.
+    assert!(jar("'b'.matches(/^[a-\u{1F600}]$/)"));
+    assert!(jar("'\\uDE00'.matches(/^[a-\u{1F600}]$/)"));
+    assert!(!jar("'\u{1F600}'.matches(/^[a-\u{1F600}]$/)"));
+    assert!(jar("'\u{1F600}'.matches(/^[a-\u{1F600}]{2}$/)"));
+    assert!(jar("'a'.matches(/^[a\u{1F600}]$/)"));
+    assert!(jar("!('\u{1F600}'.matches(/^[\u{1F600}]$/))"));
+    assert!(jar("'zx'.matches(/^[^b-a]x$/)"));
+    assert!(!jar("'x'.matches(/^[b-a]x$/)"));
+    // A `\W` in the pattern is read by the same grammar.
+    assert!(jar("'b!'.matches(/^[a-\u{FFFF}]\\W$/)"));
+    assert!(jar("'\u{FFFF}!'.matches(/^[\u{FFFF}-\u{FFFF}]\\W$/)"));
+    assert!(jar("'-!'.matches(/^[\u{FFFF}-]\\W$/)"));
 }

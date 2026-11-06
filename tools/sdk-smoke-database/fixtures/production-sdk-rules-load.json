@@ -1,0 +1,308 @@
+{
+ "kind": "rtdb-sdk-rules-load-journal-v1",
+ "suite": "rules-load",
+ "result": {
+  "status": "complete",
+  "observed": 14,
+  "exit": 0,
+  "cleanup": {
+   "prefix": "not-needed",
+   "rules": "verified"
+  },
+  "unverified": []
+ },
+ "faults": [],
+ "profiles": [
+  {
+   "name": "r1-rules-load",
+   "rows": [
+    {
+     "id": "g-dup-key",
+     "ok": true,
+     "outcome": "answered",
+     "requestBody": "{\"rules\":{\"a\":{\".read\":\"v0\"},\"a\":{\".read\":\"v1\"}}}",
+     "status": 400,
+     "body": "{\n  \"error\" : \"1:47: 'a' occurs multiple times.\\n\"\n}\n",
+     "bodyBytes": 53,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "53",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "g-dup-read",
+     "ok": true,
+     "outcome": "answered",
+     "requestBody": "{\"rules\":{\".read\":\"v0\",\".read\":\"v1\"}}",
+     "status": 400,
+     "body": "{\n  \"error\" : \"1:24: Cannot have multiple '.read' rules.\\n\"\n}\n",
+     "bodyBytes": 62,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "62",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "h-dup-indexOn",
+     "ok": true,
+     "outcome": "answered",
+     "requestBody": "{\"rules\":{\".indexOn\":\"a\",\".indexOn\":\"b\"}}",
+     "status": 400,
+     "body": "{\n  \"error\" : \"1:26: Cannot have multiple '.indexOn' keys.\\n\"\n}\n",
+     "bodyBytes": 64,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "64",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "e-index-root-dot",
+     "ok": true,
+     "outcome": "answered",
+     "requestBody": "{\"rules\":{\".indexOn\":\"a.b\"}}",
+     "status": 400,
+     "body": "{\n  \"error\" : \"1:22: Invalid key: a.b. Index must be either .value or declared on a valid path\\n\"\n}\n",
+     "bodyBytes": 100,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "100",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "e-index-root-dollar",
+     "ok": true,
+     "outcome": "answered",
+     "requestBody": "{\"rules\":{\".indexOn\":\"$x\"}}",
+     "status": 400,
+     "body": "{\n  \"error\" : \"1:22: Invalid key: $x. Index must be either .value or declared on a valid path\\n\"\n}\n",
+     "bodyBytes": 99,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "99",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "e-index-root-empty",
+     "ok": true,
+     "outcome": "answered",
+     "requestBody": "{\"rules\":{\".indexOn\":\"\"}}",
+     "status": 200,
+     "body": "{\"status\":\"ok\"}",
+     "bodyBytes": 15,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "15",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "h-index:\"a//b\"",
+     "ok": true,
+     "outcome": "answered",
+     "requestBody": "{\"rules\":{\".indexOn\":\"a//b\"}}",
+     "status": 200,
+     "body": "{\"status\":\"ok\"}",
+     "bodyBytes": 15,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "15",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    }
+   ]
+  },
+  {
+   "name": "r2-rules-load",
+   "rows": [
+    {
+     "id": "g-dup-key",
+     "ok": true,
+     "outcome": "answered",
+     "requestBody": "{\"rules\":{\"a\":{\".read\":\"v0\"},\"a\":{\".read\":\"v1\"}}}",
+     "status": 400,
+     "body": "{\n  \"error\" : \"1:47: 'a' occurs multiple times.\\n\"\n}\n",
+     "bodyBytes": 53,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "53",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "g-dup-read",
+     "ok": true,
+     "outcome": "answered",
+     "requestBody": "{\"rules\":{\".read\":\"v0\",\".read\":\"v1\"}}",
+     "status": 400,
+     "body": "{\n  \"error\" : \"1:24: Cannot have multiple '.read' rules.\\n\"\n}\n",
+     "bodyBytes": 62,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "62",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "h-dup-indexOn",
+     "ok": true,
+     "outcome": "answered",
+     "requestBody": "{\"rules\":{\".indexOn\":\"a\",\".indexOn\":\"b\"}}",
+     "status": 400,
+     "body": "{\n  \"error\" : \"1:26: Cannot have multiple '.indexOn' keys.\\n\"\n}\n",
+     "bodyBytes": 64,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "64",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "e-index-root-dot",
+     "ok": true,
+     "outcome": "answered",
+     "requestBody": "{\"rules\":{\".indexOn\":\"a.b\"}}",
+     "status": 400,
+     "body": "{\n  \"error\" : \"1:22: Invalid key: a.b. Index must be either .value or declared on a valid path\\n\"\n}\n",
+     "bodyBytes": 100,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "100",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "e-index-root-dollar",
+     "ok": true,
+     "outcome": "answered",
+     "requestBody": "{\"rules\":{\".indexOn\":\"$x\"}}",
+     "status": 400,
+     "body": "{\n  \"error\" : \"1:22: Invalid key: $x. Index must be either .value or declared on a valid path\\n\"\n}\n",
+     "bodyBytes": 99,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "99",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "e-index-root-empty",
+     "ok": true,
+     "outcome": "answered",
+     "requestBody": "{\"rules\":{\".indexOn\":\"\"}}",
+     "status": 200,
+     "body": "{\"status\":\"ok\"}",
+     "bodyBytes": 15,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "15",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "h-index:\"a//b\"",
+     "ok": true,
+     "outcome": "answered",
+     "requestBody": "{\"rules\":{\".indexOn\":\"a//b\"}}",
+     "status": 200,
+     "body": "{\"status\":\"ok\"}",
+     "bodyBytes": 15,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "15",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    }
+   ]
+  }
+ ],
+ "provenance": {
+  "runId": "RTDB-RULES-LOAD-20261105-01",
+  "target": "production",
+  "project": "fireemu-oracle-query",
+  "instance": "fireemu-q-rtdb2",
+  "suite": "rules-load",
+  "recordedOn": "2026-11-05",
+  "startedAt": "2026-11-05T15:55:22.668Z",
+  "endedAt": "2026-11-05T15:55:36.921Z",
+  "scriptSha256": "9c2cb8b9d9a25e56e1458e04cddfa2f09e963a464cee4d958300687c2d52ebf2",
+  "sourceHead": "cae9f99c8f0fc3285839cfe6ee02c10c27505ca9",
+  "packetSha256": "e4de3fe6ebcba64eb7da79d63bb97c718ded616146fe756d8d2dac3a4003c2df",
+  "caseSources": {
+   "rules-load-suite.mjs": "b38ac554bd3baed9d7c683528cd45acfdf5a8d0f16820b6b6f1a502a3ae517d9"
+  },
+  "counts": {
+   "requests": 27,
+   "direct": 25,
+   "reserve": 2,
+   "adc": 1,
+   "overflow": 0
+  },
+  "caps": {
+   "direct": 60,
+   "reserve": 12,
+   "adc": 1
+  },
+  "cleanup": {
+   "prefix": "not-needed",
+   "rules": "verified"
+  },
+  "observations": 14,
+  "sandboxLedger": {
+   "booking": 1268,
+   "close": 1269
+  },
+  "approvals": [
+   2266,
+   2267
+  ],
+  "journalSha256": "e71e43db35277b68e59d1e8aa82f4f578714d5eb19a5a1396e07eb0e9b961a38",
+  "resultSha256": "00ccd8f4a3228975d7cdd06a95b7601dc7d2ef74f4adc583e55b829c4ee4788c"
+ }
+}

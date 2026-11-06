@@ -1,0 +1,38 @@
+[
+ {
+  "label": "gauth-authvar-lone",
+  "authvar": "{\"uid\":\"u1\",\"x\":\"\\ud83d\"}",
+  "rule": "auth.x == '\\uD83D'",
+  "echo": {
+   "auth": {
+    "uid": "u1",
+    "x": "\ud83d"
+   }
+  },
+  "listen": "ok"
+ },
+ {
+  "label": "gauth-authvar-pair",
+  "authvar": "{\"uid\":\"u1\",\"x\":\"\\ud83d\\ude00\"}",
+  "rule": "auth.x == '\\uD83D'",
+  "echo": {
+   "auth": {
+    "uid": "u1",
+    "x": "\ud83d\ude00"
+   }
+  },
+  "listen": "permission_denied"
+ },
+ {
+  "label": "gauth-authvar-key",
+  "authvar": "{\"uid\":\"u1\",\"\\ud83d\":1}",
+  "rule": "auth.x == '\\uD83D'",
+  "echo": {
+   "auth": {
+    "uid": "u1",
+    "\ud83d": 1
+   }
+  },
+  "listen": "permission_denied"
+ }
+]

@@ -39,44 +39,35 @@ npx fireemu exec -- npm test
 ## Why Fireemu
 
 <CardGrid>
-	<Card title="Fewer surprises after you deploy" icon="approve-check">
-		The official emulator runs a query even when its composite index is missing, so the error first appears in production. Under the recommended `strict` profile, Fireemu checks every query against your `firestore.indexes.json` and rejects queries missing an index, returning production-exact errors and a link to create the required index.
-	</Card>
-	<Card title="Production behavior, without the setup" icon="setting">
-		The recommended `strict` profile behaves like production. The few places where matching production would only add setup to a test, such as signed tokens or an Admin API call to turn a feature on, are documented development defaults, and each can be switched with its own setting. [See the list](guides/profiles/#where-fireemu-departs-from-production-on-purpose).
-	</Card>
-	<Card title="Features the official emulator lacks" icon="puzzle">
-		Includes TOTP multi-factor authentication, a local App Check implementation with debug tokens, and, under `strict`, the `beforeEmailSent` blocking function—none of which are supported by the official emulator.
-	</Card>
-	<Card title="Control over time" icon="seti:clock">
-		Start at any point in time and advance a virtual clock. Scheduled functions run when the clock reaches them, so you can test a nightly job without waiting for night.
+	<Card title="Behaves like production" icon="approve-check">
+		Under the recommended `strict` profile, a query with no composite index fails as it does in production, with the same error. The few [development defaults](guides/profiles/#where-fireemu-departs-from-production-on-purpose) are documented and can each be switched.
 	</Card>
 	<Card title="Verified against real Firebase" icon="magnifier">
-		Behavior is compared with recordings from real Firebase projects. <VerifiedAreaCount /> areas, from Firestore transactions to Storage Security Rules, are verified against production: every condition matches the recordings or is a reviewed and documented difference.
+		<VerifiedAreaCount /> areas, from Firestore transactions to Storage Security Rules, are compared with recordings from real Firebase projects.
 	</Card>
-	<Card title="Explains denials" icon="information">
-		While production responds to Security Rules denials with a generic error message, Fireemu also prints which `allow` conditions were evaluated and their individual results.
+	<Card title="Built for tests" icon="puzzle">
+		TOTP multi-factor authentication and App Check, which the official emulator lacks, a virtual clock for scheduled functions, and Security Rules denials that show each evaluated condition.
 	</Card>
 	<Card title="Fast and light" icon="rocket">
-		A single native binary. In project benchmarks, it started 21.6x faster than the official Firestore emulator and used about 1/34th of its idle memory (one benchmark run, `emulator` profile; see [Performance](compatibility/performance/)).
+		A single native binary. In one benchmark run it started 21.6x faster than the official Firestore emulator and used about 1/34th of its idle memory ([details](compatibility/performance/)).
 	</Card>
 </CardGrid>
 
 ## Supported products
 
-| Product | Fireemu |
-|---|---|
-| Cloud Firestore | Supported, including Security Rules |
-| Firebase Authentication (Identity Platform) | Supported, including TOTP MFA, multi-tenancy and blocking functions |
-| Cloud Storage for Firebase | Supported, including Security Rules |
-| Cloud Functions for Firebase | Supported: HTTP, callable, event, scheduled, task queue and blocking functions |
-| Cloud Pub/Sub, Eventarc, Cloud Tasks | Supported |
-| Firebase App Check | Local implementation with debug tokens |
-| Firebase Realtime Database | Partially supported: served with Security Rules, Rules coverage, export and import, Functions triggers and a UI page; verified against production for the recorded cases only |
-| Firebase Hosting, App Hosting, Data Connect | Deferred (not yet supported) |
-| Firebase Extensions | Not planned |
+| Product | Status | What you can test |
+|---|---|---|
+| [Cloud Firestore](products/firestore/) | Supported | Standard and Enterprise editions, composite index validation, Security Rules |
+| [Firebase Authentication](products/auth/) (Identity Platform) | Supported | Sign-in methods, TOTP and SMS MFA, multi-tenancy, OIDC and SAML providers, blocking functions |
+| [Cloud Storage for Firebase](products/storage/) | Supported | Firebase and JSON APIs, Security Rules |
+| [Cloud Functions for Firebase](products/functions/) | Supported | HTTP, callable, event, scheduled, task queue and blocking functions |
+| [Cloud Pub/Sub, Eventarc](products/pubsub-eventarc/), Cloud Tasks | Supported | Topics, subscriptions, push and pull delivery, custom events, task queues |
+| [Firebase App Check](products/app-check/) | Local testing | Debug tokens |
+| [Firebase Realtime Database](products/realtime-database/) | Supported (recorded scope) | REST, realtime protocol, Security Rules, export and import, Functions triggers |
+| Firebase Hosting, App Hosting, Data Connect | Not yet supported | |
+| Firebase Extensions | Not planned | |
 
-See the [compatibility tables](compatibility/) for each product, the production verification status of each area, and the capability manifest.
+Known gaps are listed in [Limitations](compatibility/limitations/). The [compatibility tables](compatibility/) show the production verification status of each area.
 
 ## Next steps
 

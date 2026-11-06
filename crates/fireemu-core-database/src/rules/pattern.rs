@@ -11,6 +11,9 @@ pub struct Pattern {
     flags: String,
     /// `None` for a pattern this engine does not read as the official emulator does.
     search: Option<Arc<Regex>>,
+    /// The search for the emulator profile, which reads `\W`, `\D` and an escaped letter in the
+    /// official emulator's dialect (see [`jar_source`]); `None` when that does not apply.
+    jar_search: Option<Arc<Regex>>,
 }
 
 impl PartialEq for Pattern {
@@ -35,35 +38,58 @@ impl Pattern {
     /// `i` is read only for a pattern of ASCII characters, as the official emulator folds it:
     /// see [`fold_case`]. The subject is never transformed.
     pub fn new(text: String, flags: String) -> Self {
-        let dialect_only = opens_special_group(&text)
+        let other_dialect = opens_special_group(&text)
             || text.contains("[[:")
-            || escapes_a_letter(&text)
             || escapes_a_backslash_in_a_class(&text)
             || super::parse::regex_shape(&text) != Ok(false);
-        let search = (!dialect_only)
-            .then(|| {
-                let source = if flags.contains('i') {
-                    fold_case(&text)?
-                } else {
-                    utf16_view(&text)
-                };
-                Regex::new(&search_source(&source)).ok()
-            })
-            .flatten()
-            .map(Arc::new);
+        // `viewed`: the text is already written as UTF-16 units (see `jar_source`).
+        let compile = |text: &str, viewed: bool| {
+            let source = if flags.contains('i') {
+                fold_case(text)?
+            } else if viewed {
+                text.to_owned()
+            } else {
+                utf16_view(text)
+            };
+            Regex::new(&search_source(&source)).ok().map(Arc::new)
+        };
+        let search = (!other_dialect && !escapes_a_letter(&text))
+            .then(|| compile(&text, false))
+            .flatten();
+        // The emulator profile reads the constructs of `jar_source` as the official emulator does, for a pattern
+        // its grammar accepts (a POSIX class is not read).
+        let jar_search = if super::parse::regex_shape(&text).is_err() || text.contains("[[:") {
+            None
+        } else if search.is_some() {
+            search.clone()
+        } else {
+            jar_source(&text).and_then(|source| compile(&source, true))
+        };
         Self {
             text,
             flags,
             search,
+            jar_search,
         }
     }
 
+    /// The search that applies: the emulator profile's (`jar`) or the strict profile's.
+    fn search(&self, jar: bool) -> Option<&Regex> {
+        if jar { &self.jar_search } else { &self.search }.as_deref()
+    }
+
     /// Whether `subject` matches; `None` (an error) for a pattern not read, or when the
-    /// engine gives up on it.
-    pub fn matches(&self, subject: &str) -> Option<bool> {
-        self.search
-            .as_ref()?
-            .is_full_match(&utf16_view(subject))
+    /// engine gives up on it. `jar` reads the official emulator's dialect of `\W`, `\D` and an
+    /// escaped letter (the emulator profile).
+    pub fn matches(&self, subject: &str, jar: bool) -> Option<bool> {
+        self.search(jar)?.is_full_match(&utf16_view(subject)).ok()
+    }
+
+    /// [`Pattern::matches`] for a subject given as UTF-16 units, which may hold a surrogate
+    /// without its pair (a Rules string literal such as `'\uD83D'`).
+    pub fn matches_units(&self, subject: &[u16], jar: bool) -> Option<bool> {
+        self.search(jar)?
+            .is_full_match(&view_of_units(subject.iter().copied()))
             .ok()
     }
 }
@@ -79,7 +105,12 @@ fn utf16_view(text: &str) -> String {
     if text.chars().all(|c| u32::from(c) < 0xD800) {
         return text.to_owned();
     }
-    text.encode_utf16()
+    view_of_units(text.encode_utf16())
+}
+
+/// [`utf16_view`] of units that may hold a surrogate without its pair.
+fn view_of_units(units: impl Iterator<Item = u16>) -> String {
+    units
         .map(|unit| {
             let code = match unit {
                 0xD800.. => 0xF_0000 + u32::from(unit - 0xD800),
@@ -88,6 +119,195 @@ fn utf16_view(text: &str) -> String {
             char::from_u32(code).unwrap_or(char::REPLACEMENT_CHARACTER)
         })
         .collect()
+}
+
+/// The pattern as the official emulator's grammar reads the constructs this engine reads otherwise, written for
+/// this engine; `None` for what is not read so.
+///
+/// - `\W` and `\D` are the complement of a language of strings, not of a set of characters: `\W` is every string
+///   except one word character, so `'ab'` and `''` both match `/^\W$/` there and `'a'` does not (recorded rows,
+///   `docs.local/runs/rtdb-lone-surrogate/jar-w1.json`). That language is the empty string, a character that is
+///   no word character, or any run of two or more characters, which this engine can say as a group. A class that
+///   holds `\W` or `\D` is the union of its members as languages, so it is the same group around the class (its
+///   single characters being the class read as usual); a negated class is single characters either way.
+/// - Any other escaped letter or digit is that character itself (`\u0041` is `u0041`, `\b` is `b`).
+/// - An alternative that starts with `|`, `)`, `*`, `+`, `?` or `{` (after the start, a `(` or a `|`) starts with
+///   that character as a literal: `(a|))` is a group of `a` or `)`, `(|a)` one of `|a`, and `(?:a)` a group of
+///   `?:a`.
+/// - A class member is `\d`, `\w`, `\W` or `\D`, or a character that one backslash escapes and a second backslash
+///   escapes again (`[\\a]` holds `a` and no backslash), or two such characters with a `-` between: a range whose
+///   end is before its start holds nothing, and a `-` before the `]` is a character.
+///
+/// An escape that is not a letter or digit is kept.
+fn jar_source(text: &str) -> Option<String> {
+    // The language of a complement: the empty string, one character of the class, or two or more.
+    const ANY_TWO_OR_MORE: &str = "..+";
+    let literal_operators = super::parse::literal_operator_positions(text).ok()?;
+    // The pattern as UTF-16 units, as the official emulator reads it: a character beyond the Basic Multilingual
+    // Plane is two units (each a class member and each taken by `.`), written as `utf16_view` writes them. The
+    // result is in that alphabet too.
+    let mut chars: Vec<char> = Vec::with_capacity(text.len());
+    let mut view_at = Vec::with_capacity(text.len() + 1);
+    for c in text.chars() {
+        view_at.push(chars.len());
+        chars.extend(utf16_view(c.encode_utf8(&mut [0; 4])).chars());
+    }
+    view_at.push(chars.len());
+    let literal_operators: std::collections::BTreeSet<usize> = literal_operators
+        .into_iter()
+        .map(|at| view_at[at])
+        .collect();
+    let mut out = String::with_capacity(text.len() + 16);
+    let mut i = 0;
+    while i < chars.len() {
+        match chars[i] {
+            '\\' => {
+                let escaped = *chars.get(i + 1)?;
+                match escaped {
+                    'W' | 'D' => {
+                        out.push_str("(?:|");
+                        out.push_str(ANY_TWO_OR_MORE);
+                        out.push_str("|\\");
+                        out.push(escaped);
+                        out.push(')');
+                    }
+                    's' | 'S' => return None,
+                    'd' | 'w' => {
+                        out.push('\\');
+                        out.push(escaped);
+                    }
+                    c if c.is_ascii_alphanumeric() => out.push(c),
+                    // After a backslash the reader reads CR, U+2028 and U+2029 as the line feed they are
+                    // normalised to, and a character beyond ASCII (U+FEFF, U+0085 ...) as itself.
+                    '\r' | '\u{2028}' | '\u{2029}' | '\n' => out.push('\n'),
+                    c if !c.is_ascii() => out.push(c),
+                    c => {
+                        out.push('\\');
+                        out.push(c);
+                    }
+                }
+                i += 2;
+            }
+            '[' => {
+                let (class, complemented, negated, next) = jar_class(&chars, i)?;
+                if complemented && !negated {
+                    out.push_str("(?:|");
+                    out.push_str(ANY_TWO_OR_MORE);
+                    out.push('|');
+                    out.push_str(&class);
+                    out.push(')');
+                } else {
+                    out.push_str(&class);
+                }
+                i = next;
+            }
+            c if literal_operators.contains(&i) => {
+                out.push('\\');
+                out.push(c);
+                i += 1;
+            }
+            c => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    Some(out)
+}
+
+/// One character of a class as the official emulator reads it. The first character of a member is read after
+/// one optional backslash (a member that names no class) and then one more (so `\\a` is `a`); the end of a range is
+/// read after one. The character and the index after it.
+fn jar_class_char(chars: &[char], mut at: usize, member_start: bool) -> Option<(char, usize)> {
+    if member_start && chars.get(at) == Some(&'\\') {
+        at += 1;
+    }
+    let escaped = chars.get(at) == Some(&'\\');
+    if escaped {
+        at += 1;
+    }
+    let c = *chars.get(at)?;
+    // As after a backslash outside a class: a line terminator is the line feed.
+    let c = if escaped && matches!(c, '\r' | '\u{2028}' | '\u{2029}') {
+        '\n'
+    } else {
+        c
+    };
+    Some((c, at + 1))
+}
+
+/// Writes `c` as a class member this engine reads as that character.
+fn push_member_char(class: &mut String, c: char) {
+    if c.is_ascii() && !c.is_ascii_alphanumeric() && c != '\n' {
+        class.push('\\');
+    }
+    class.push(c);
+}
+
+/// The class at `chars[start]` (`[`), written for this engine: the class text, whether it holds `\W` or `\D`,
+/// whether it is negated, and the index after its `]`; `None` for what is not read so (`\s`). The characters are UTF-16 units
+/// (see `jar_source`): a character beyond the Basic Multilingual Plane is two members, and in a range its units
+/// are the end of one and the start of the next, as the official emulator reads them.
+fn jar_class(chars: &[char], start: usize) -> Option<(String, bool, bool, usize)> {
+    let mut at = start + 1;
+    let negated = chars.get(at) == Some(&'^');
+    if negated {
+        at += 1;
+    }
+    let mut members = String::new();
+    let mut complemented = false;
+    let mut first = true;
+    loop {
+        let c = *chars.get(at)?;
+        if c == ']' && !first {
+            break;
+        }
+        first = false;
+        if c == '\\' && matches!(chars.get(at + 1), Some('d' | 'w' | 'D' | 'W' | 's' | 'S')) {
+            let letter = chars[at + 1];
+            if matches!(letter, 's' | 'S') {
+                return None;
+            }
+            complemented |= matches!(letter, 'W' | 'D');
+            members.push('\\');
+            members.push(letter);
+            at += 2;
+            continue;
+        }
+        let (low, next) = jar_class_char(chars, at, true)?;
+        at = next;
+        if chars.get(at) == Some(&'-') {
+            at += 1;
+            if chars.get(at) == Some(&']') {
+                // `-` before the end is a character.
+                push_member_char(&mut members, low);
+                members.push_str("\\-");
+                continue;
+            }
+            let (high, next) = jar_class_char(chars, at, false)?;
+            at = next;
+            // A range whose end is before its start holds nothing.
+            if low <= high {
+                push_member_char(&mut members, low);
+                members.push('-');
+                push_member_char(&mut members, high);
+            }
+        } else {
+            push_member_char(&mut members, low);
+        }
+    }
+    if members.is_empty() {
+        // Nothing to hold: the union of a digit and a non-digit is every character, so its complement is none.
+        members.push_str("\\d\\D");
+        return Some((
+            format!("[{}{members}]", if negated { "" } else { "^" }),
+            false,
+            false,
+            at + 1,
+        ));
+    }
+    let class = format!("[{}{members}]", if negated { "^" } else { "" });
+    Some((class, complemented, negated, at + 1))
 }
 
 /// Whether an escape names a letter or digit other than the classes `\d` and `\w`, which
@@ -468,7 +688,7 @@ mod tests {
     use super::*;
 
     fn matches(text: &str, subject: &str) -> Option<bool> {
-        Pattern::new(text.to_owned(), String::new()).matches(subject)
+        Pattern::new(text.to_owned(), String::new()).matches(subject, false)
     }
 
     #[test]
@@ -495,7 +715,7 @@ mod tests {
     }
 
     fn matches_i(text: &str, subject: &str) -> Option<bool> {
-        Pattern::new(text.to_owned(), "i".to_owned()).matches(subject)
+        Pattern::new(text.to_owned(), "i".to_owned()).matches(subject, false)
     }
 
     #[test]
@@ -754,7 +974,7 @@ mod tests {
         assert_eq!(matches("b$", "abc"), Some(false));
         assert_eq!(matches("c$", "abc"), Some(true));
         assert_eq!(
-            Pattern::new("B".to_owned(), "i".to_owned()).matches("abc"),
+            Pattern::new("B".to_owned(), "i".to_owned()).matches("abc", false),
             Some(true)
         );
         assert_eq!(

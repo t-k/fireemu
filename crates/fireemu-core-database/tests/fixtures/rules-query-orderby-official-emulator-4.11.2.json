@@ -1,0 +1,893 @@
+[
+ {
+  "expr": "query.orderBy == 'a'",
+  "query": "",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == 'a'",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == 'a'",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == 'a'",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == 'a'",
+  "query": "orderBy=%22b%22&startAt=1",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == 'a'",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy != 'a'",
+  "query": "",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.orderBy != 'a'",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.orderBy != 'a'",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.orderBy != 'a'",
+  "query": "orderBy=%22b%22&startAt=1",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.orderBy != 'a'",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.orderBy == null",
+  "query": "",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == null",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == null",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == null",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == null",
+  "query": "orderBy=%22b%22&startAt=1",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == null",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy != null",
+  "query": "",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.orderBy != null",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.orderBy != null",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.orderBy != null",
+  "query": "orderBy=%22b%22&startAt=1",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.orderBy != null",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.orderBy == 'b'",
+  "query": "",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == 'b'",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == 'b'",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == 'b'",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == 'b'",
+  "query": "orderBy=%22b%22&startAt=1",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.orderBy == 'b'",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == 'a/b'",
+  "query": "",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == 'a/b'",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == 'a/b'",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == 'a/b'",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == 'a/b'",
+  "query": "orderBy=%22b%22&startAt=1",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == 'a/b'",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.orderBy == query.orderByChild",
+  "query": "",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == query.orderByChild",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == query.orderByChild",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == query.orderByChild",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == query.orderByChild",
+  "query": "orderBy=%22b%22&startAt=1",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.orderBy == query.orderByChild",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.orderBy == query.orderBy",
+  "query": "",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.orderBy == query.orderBy",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.orderBy == query.orderBy",
+  "query": "orderBy=%22b%22&startAt=1",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.orderBy != query.orderBy",
+  "query": "",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy != query.orderBy",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy != query.orderBy",
+  "query": "orderBy=%22b%22&startAt=1",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderByChild == null",
+  "query": "",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.orderByChild == null",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.orderByChild == null",
+  "query": "orderBy=%22b%22&startAt=1",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == 'b' || query.orderByKey",
+  "query": "",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.orderBy == 'b' || query.orderByKey",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.orderBy == 'b' || query.orderByKey",
+  "query": "orderBy=%22b%22&startAt=1",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.orderBy != 'b'",
+  "query": "",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.orderBy != 'b'",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.orderBy != 'b'",
+  "query": "orderBy=%22b%22&startAt=1",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.orderBy == 'B'",
+  "query": "",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == 'B'",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == 'B'",
+  "query": "orderBy=%22b%22&startAt=1",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == ''",
+  "query": "",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == ''",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == ''",
+  "query": "orderBy=%22b%22&startAt=1",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == 'a/b'",
+  "query": "",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == 'a/b'",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == 'a/b'",
+  "query": "orderBy=%22b%22&startAt=1",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == '$key'",
+  "query": "",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 400,
+  "error": "1:25: Invalid == expression: right operand must be an ordering or string literal when comparing against an ordering.\n",
+  "read": null
+ },
+ {
+  "expr": "query.orderBy == '$value'",
+  "query": "",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 400,
+  "error": "1:25: Invalid == expression: right operand must be an ordering or string literal when comparing against an ordering.\n",
+  "read": null
+ },
+ {
+  "expr": "query.orderBy == '$priority'",
+  "query": "",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 400,
+  "error": "1:25: Invalid == expression: right operand must be an ordering or string literal when comparing against an ordering.\n",
+  "read": null
+ },
+ {
+  "expr": "query.orderBy.length > 0",
+  "query": "",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 400,
+  "error": "1:25: Invalid property access: target is not an object.\n",
+  "read": null
+ },
+ {
+  "expr": "query.orderBy.contains('k')",
+  "query": "",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 400,
+  "error": "1:25: Invalid property access: target is not an object.\n",
+  "read": null
+ },
+ {
+  "expr": "query.orderBy == query.orderByKey",
+  "query": "",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 400,
+  "error": "1:25: Invalid == expression: right operand must be an ordering or string literal when comparing against an ordering.\n",
+  "read": null
+ },
+ {
+  "expr": "query.orderBy == true",
+  "query": "",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 400,
+  "error": "1:25: Invalid == expression: right operand must be an ordering or string literal when comparing against an ordering.\n",
+  "read": null
+ },
+ {
+  "expr": "query.orderBy == 1",
+  "query": "",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 400,
+  "error": "1:25: Invalid == expression: right operand must be an ordering or string literal when comparing against an ordering.\n",
+  "read": null
+ },
+ {
+  "expr": "query.orderBy < 'a'",
+  "query": "",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 400,
+  "error": "1:25: Invalid < expression: left operand must be a number or string.\n",
+  "read": null
+ },
+ {
+  "expr": "query.orderBy + 'x' == 'bx'",
+  "query": "",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 400,
+  "error": "1:25: Invalid + expression: left operand is not a number or string.\n",
+  "read": null
+ },
+ {
+  "expr": "!query.orderBy",
+  "query": "",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 400,
+  "error": "1:25: ! only operates on booleans.\n",
+  "read": null
+ },
+ {
+  "expr": "query.orderBy ? true : false",
+  "query": "",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 400,
+  "error": "1:25: condition of ? must be boolean.\n",
+  "read": null
+ },
+ {
+  "expr": "query.orderBy.exists()",
+  "query": "",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 400,
+  "error": "1:25: Invalid property access: target is not an object.\n",
+  "read": null
+ },
+ {
+  "expr": "query.orderBy == data",
+  "query": "",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 400,
+  "error": "1:25: Invalid == expression: right operand must be an ordering or string literal when comparing against an ordering.\n",
+  "read": null
+ },
+ {
+  "expr": "query.orderBy == auth",
+  "query": "",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 400,
+  "error": "1:25: Invalid == expression: right operand must be an ordering or string literal when comparing against an ordering.\n",
+  "read": null
+ },
+ {
+  "expr": "query.orderBy == query",
+  "query": "",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 400,
+  "error": "1:25: Invalid == expression: right operand must be an ordering or string literal when comparing against an ordering.\n",
+  "read": null
+ },
+ {
+  "expr": "query.orderBy == query.orderBy.val()",
+  "query": "",
+  "indexOn": [
+   "b",
+   "a/b"
+  ],
+  "load": 400,
+  "error": "1:42: Invalid property access: target is not an object.\n",
+  "read": null
+ }
+]

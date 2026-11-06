@@ -22,7 +22,7 @@ use fireemu_core_database::{
 };
 
 use crate::access::{auth_from_claims, Access, WriteOp};
-use crate::json_parse::parse_with_keys;
+use crate::json_parse::{parse_frame, parse_frame_with_keys, parse_with_keys};
 use crate::json_text::{priority_at, render, wire_json, Style};
 use crate::listen::Listen;
 use crate::namespace::route;
@@ -40,6 +40,8 @@ const VERSION_ERROR: &str =
 
 /// The result of opening a realtime connection.
 #[derive(Debug)]
+// One value per connection, moved once into its task: boxing the session would only change every caller.
+#[allow(clippy::large_enum_variant)]
 pub enum Opened {
     /// A session and the frames to send first (the handshake).
     Session(Session, Vec<String>),
@@ -72,8 +74,14 @@ pub struct Prepared(Ready);
 
 #[derive(Debug)]
 enum Ready {
-    /// A whole message, parsed (or not JSON), and for a merge its members in sent order.
-    Message(Result<Json, crate::json_parse::ParseError>, Vec<String>),
+    /// A whole message, parsed (or not JSON), for a merge its members in sent order, and whether a lone
+    /// surrogate escape in a value was read as `?`. The emulator profile answers as the official emulator
+    /// does; the strict profile treats such a message as not JSON (production has not answered it).
+    Message(
+        Result<Json, crate::json_parse::ParseError>,
+        Vec<String>,
+        bool,
+    ),
     /// The connection must close with this code.
     Close(CloseCode),
 }
@@ -246,13 +254,18 @@ impl Session {
             Err(code) => Some(Prepared(Ready::Close(code))),
             Ok(None) => None,
             Ok(Some(message)) => {
-                let parsed = crate::json_parse::parse(&message);
+                // A lone surrogate is `?` in a value, as the official emulator stores it, and `.` in a key and in
+                // the path of the message, which the official emulator answers as an invalid token.
+                let (parsed, replaced) = match parse_frame(&message) {
+                    Ok((json, replaced)) => (Ok(json), replaced),
+                    Err(err) => (Err(err), false),
+                };
                 let order = if is_merge(&parsed) {
                     merge_order(&message)
                 } else {
                     Vec::new()
                 };
-                Some(Prepared(Ready::Message(parsed, order)))
+                Some(Prepared(Ready::Message(parsed, order, replaced)))
             }
         }
     }
@@ -270,9 +283,13 @@ impl Session {
                 received.close = Some(code);
                 return received;
             }
-            Ready::Message(parsed, order) => {
+            Ready::Message(parsed, order, replaced) => {
                 self.merge_order = order;
-                parsed
+                if replaced && db.options().production_shapes {
+                    Err(crate::json_parse::ParseError)
+                } else {
+                    parsed
+                }
             }
         };
         let replies = match parsed {
@@ -766,8 +783,29 @@ impl Session {
             sent
         };
         let mut relative = Vec::with_capacity(entries.len());
+        let emulator = !db.options().production_shapes;
         for key in sent {
-            let parsed = Path::parse(key, &limits).map_err(|_| Failure::Malformed)?;
+            let parsed = match Path::parse(key, &limits) {
+                Ok(parsed) => parsed,
+                // Strict keeps the connection error; the emulator profile answers as the official emulator.
+                Err(_) if !emulator => return Err(Failure::Malformed),
+                Err(err) if err.kind == ErrorKind::PathTooLong => {
+                    return Err(invalid(format!(
+                        "Path specified exceeds the maximum length that can be written ({} bytes).",
+                        limits.max_path_bytes
+                    )))
+                }
+                Err(_) => return Err(invalid("Invalid token in path")),
+            };
+            if emulator && key.is_empty() {
+                return Err(invalid("Empty strings are not valid keys"));
+            }
+            if emulator && path.join(&parsed).depth() > limits.max_depth {
+                return Err(invalid(format!(
+                    "Path specified exceeds the maximum depth that can be written ({}).",
+                    limits.max_depth
+                )));
+            }
             relative.push((key.clone(), parsed));
         }
         refuse_overlap(&relative)?;
@@ -852,7 +890,7 @@ fn is_merge(parsed: &Result<Json, crate::json_parse::ParseError>) -> bool {
 /// The members of a merge's data (`d.b.d`), in the order they were sent: the official
 /// emulator pushes a merge's entries in that order.
 fn merge_order(message: &str) -> Vec<String> {
-    let Ok((_, keys)) = parse_with_keys(message) else {
+    let Ok((_, keys, _)) = parse_frame_with_keys(message) else {
         return Vec::new();
     };
     let mut order = Vec::new();

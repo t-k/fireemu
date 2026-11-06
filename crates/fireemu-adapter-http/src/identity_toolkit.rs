@@ -17078,3 +17078,449 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod body_tenant_selector_tests {
+    use super::*;
+    use fireemu_core_auth::mfa::TotpPolicy;
+    use fireemu_core_types::determinism::SplitMix64;
+
+    #[derive(Clone, Copy)]
+    struct CaseRoute {
+        name: &'static str,
+        method: &'static str,
+        path: &'static str,
+        handler: routes::Handler,
+    }
+
+    const ROUTES: [CaseRoute; 23] = [
+        CaseRoute {
+            name: "SignUp",
+            method: "POST",
+            path: "/identitytoolkit.googleapis.com/v1/accounts:signUp",
+            handler: routes::Handler::SignUp,
+        },
+        CaseRoute {
+            name: "SignInWithPassword",
+            method: "POST",
+            path: "/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword",
+            handler: routes::Handler::SignInWithPassword,
+        },
+        CaseRoute {
+            name: "SignInWithCustomToken",
+            method: "POST",
+            path: "/identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken",
+            handler: routes::Handler::SignInWithCustomToken,
+        },
+        CaseRoute {
+            name: "Lookup",
+            method: "POST",
+            path: "/identitytoolkit.googleapis.com/v1/accounts:lookup",
+            handler: routes::Handler::Lookup,
+        },
+        CaseRoute {
+            name: "Update",
+            method: "POST",
+            path: "/identitytoolkit.googleapis.com/v1/accounts:update",
+            handler: routes::Handler::Update,
+        },
+        CaseRoute {
+            name: "Delete",
+            method: "POST",
+            path: "/identitytoolkit.googleapis.com/v1/accounts:delete",
+            handler: routes::Handler::Delete,
+        },
+        CaseRoute {
+            name: "SendOobCode",
+            method: "POST",
+            path: "/identitytoolkit.googleapis.com/v1/accounts:sendOobCode",
+            handler: routes::Handler::SendOobCode,
+        },
+        CaseRoute {
+            name: "ResetPassword",
+            method: "POST",
+            path: "/identitytoolkit.googleapis.com/v1/accounts:resetPassword",
+            handler: routes::Handler::ResetPassword,
+        },
+        CaseRoute {
+            name: "SignInWithEmailLink",
+            method: "POST",
+            path: "/identitytoolkit.googleapis.com/v1/accounts:signInWithEmailLink",
+            handler: routes::Handler::SignInWithEmailLink,
+        },
+        CaseRoute {
+            name: "SendVerificationCode",
+            method: "POST",
+            path: "/identitytoolkit.googleapis.com/v1/accounts:sendVerificationCode",
+            handler: routes::Handler::SendVerificationCode,
+        },
+        CaseRoute {
+            name: "SignInWithPhoneNumber",
+            method: "POST",
+            path: "/identitytoolkit.googleapis.com/v1/accounts:signInWithPhoneNumber",
+            handler: routes::Handler::SignInWithPhoneNumber,
+        },
+        CaseRoute {
+            name: "SignInWithIdp",
+            method: "POST",
+            path: "/identitytoolkit.googleapis.com/v1/accounts:signInWithIdp",
+            handler: routes::Handler::SignInWithIdp,
+        },
+        CaseRoute {
+            name: "CreateAuthUri",
+            method: "POST",
+            path: "/identitytoolkit.googleapis.com/v1/accounts:createAuthUri",
+            handler: routes::Handler::CreateAuthUri,
+        },
+        CaseRoute {
+            name: "MfaEnrollmentStart",
+            method: "POST",
+            path: "/identitytoolkit.googleapis.com/v2/accounts/mfaEnrollment:start",
+            handler: routes::Handler::MfaEnrollmentStart,
+        },
+        CaseRoute {
+            name: "MfaEnrollmentFinalize",
+            method: "POST",
+            path: "/identitytoolkit.googleapis.com/v2/accounts/mfaEnrollment:finalize",
+            handler: routes::Handler::MfaEnrollmentFinalize,
+        },
+        CaseRoute {
+            name: "MfaEnrollmentWithdraw",
+            method: "POST",
+            path: "/identitytoolkit.googleapis.com/v2/accounts/mfaEnrollment:withdraw",
+            handler: routes::Handler::MfaEnrollmentWithdraw,
+        },
+        CaseRoute {
+            name: "MfaSignInStart",
+            method: "POST",
+            path: "/identitytoolkit.googleapis.com/v2/accounts/mfaSignIn:start",
+            handler: routes::Handler::MfaSignInStart,
+        },
+        CaseRoute {
+            name: "MfaSignInFinalize",
+            method: "POST",
+            path: "/identitytoolkit.googleapis.com/v2/accounts/mfaSignIn:finalize",
+            handler: routes::Handler::MfaSignInFinalize,
+        },
+        CaseRoute {
+            name: "LegacyCustomToken",
+            method: "POST",
+            path: "/www.googleapis.com/identitytoolkit/v3/relyingparty/verifyCustomToken",
+            handler: routes::Handler::SignInWithCustomToken,
+        },
+        CaseRoute {
+            name: "ProjectsGet",
+            method: "GET",
+            path: "/identitytoolkit.googleapis.com/v1/projects",
+            handler: routes::Handler::Projects,
+        },
+        CaseRoute {
+            name: "RecaptchaParamsGet",
+            method: "GET",
+            path: "/identitytoolkit.googleapis.com/v1/recaptchaParams",
+            handler: routes::Handler::RecaptchaParams,
+        },
+        CaseRoute {
+            name: "PasswordPolicyGet",
+            method: "GET",
+            path: "/identitytoolkit.googleapis.com/v2/passwordPolicy",
+            handler: routes::Handler::PasswordPolicy,
+        },
+        CaseRoute {
+            name: "RecaptchaConfigGet",
+            method: "GET",
+            path: "/identitytoolkit.googleapis.com/v2/recaptchaConfig",
+            handler: routes::Handler::RecaptchaConfig,
+        },
+    ];
+
+    fn profile(strict: bool) -> (AuthState, Arc<AuthRegistry>) {
+        let mut state = AuthState {
+            store: Arc::new(Mutex::new(AuthStore::new(
+                "demo-app",
+                SplitMix64::new(7),
+                TotpPolicy::default(),
+            ))),
+            clock: Arc::new(Mutex::new(VirtualClock::new(
+                LogicalInstant::from_unix_seconds(1_788_004_860),
+            ))),
+            wall_clock: None,
+            totp_extension_enabled: false,
+            barrier: None,
+            events: None,
+            notices: None,
+            blocking: None,
+            operation_gate: Arc::new(Mutex::new(())),
+            control_token: None,
+            tenancy: None,
+            registry: None,
+            allow_routed_projects: false,
+            stateless_refresh_tokens: !strict,
+            fake_custom_token_expiry: if strict {
+                FakeCustomTokenExpiry::Reject
+            } else {
+                FakeCustomTokenExpiry::Ignore
+            },
+            custom_token_trust: None,
+            allow_unsigned_custom_tokens: true,
+            idp_assertions: IdpAssertionPolicy::Fixture,
+            query_limits: if strict {
+                AuthQueryLimits::ProductionBounded
+            } else {
+                AuthQueryLimits::EmulatorUnbounded
+            },
+            client_api_key: if strict {
+                ClientApiKeyPolicy::Required
+            } else {
+                ClientApiKeyPolicy::Optional
+            },
+            idp_continuations: if strict {
+                IdpContinuationPolicy::LocalBounded
+            } else {
+                IdpContinuationPolicy::Disabled
+            },
+            app_check: None,
+            app_check_policy: None,
+        };
+        let registry = Arc::new(AuthRegistry::new("demo-app", state.store.clone()));
+        state.registry = Some(registry.clone());
+        let owner_headers = RequestHeaders {
+            authorization: Some(OWNER_CREDENTIAL.to_owned()),
+            origin: None,
+            content_type: Some("application/json".to_owned()),
+            host: Some("127.0.0.1:9099".to_owned()),
+            app_check: Vec::new(),
+            peer_ip: None,
+        };
+        let configured = handle_with(
+            &state,
+            "PATCH",
+            "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config?updateMask=multiTenant.allowTenants",
+            &owner_headers,
+            &json!({"multiTenant": {"allowTenants": true}}),
+        );
+        assert!(configured.status == 200, "tenant config setup failed");
+        for tenant in ["matrix-body", "matrix-other"] {
+            registry.ensure_tenant("demo-app", tenant).unwrap();
+        }
+        (state, registry)
+    }
+
+    fn id_token(tenant: Option<&str>) -> String {
+        use fireemu_core_auth::jwt::base64url_encode;
+
+        let mut firebase = json!({"sign_in_provider": "password", "identities": {}});
+        if let Some(tenant) = tenant {
+            firebase["tenant"] = json!(tenant);
+        }
+        let claims = json!({
+            "aud": "demo-app",
+            "iss": "https://securetoken.google.com/demo-app",
+            "sub": "selector-user",
+            "user_id": "selector-user",
+            "iat": 1_788_004_860,
+            "exp": 1_788_008_400,
+            "auth_time": 1_788_004_860,
+            "firebase": firebase,
+        });
+        format!(
+            "{}.{}.",
+            base64url_encode(br#"{"alg":"none","typ":"JWT"}"#),
+            base64url_encode(claims.to_string().as_bytes()),
+        )
+    }
+
+    fn expected_scope(
+        route: CaseRoute,
+        strict: bool,
+        body_case: &str,
+        token_case: &str,
+    ) -> Result<Option<&'static str>, (u16, &'static str)> {
+        let v1 = route
+            .path
+            .starts_with("/identitytoolkit.googleapis.com/v1/");
+        let body_tenant = match body_case {
+            "Match" => Some("matrix-body"),
+            "Mismatch" => Some("matrix-other"),
+            _ => None,
+        };
+        let token_tenant = match token_case {
+            "Match" => Some("matrix-body"),
+            "Conflict" => Some("matrix-other"),
+            "None" | "Project" => None,
+            _ => panic!("unexpected token case: {token_case}"),
+        };
+        if v1 && body_tenant.is_some() && token_tenant.is_some_and(|t| Some(t) != body_tenant) {
+            return Err((
+                400,
+                if strict {
+                    "TENANT_ID_MISMATCH : Specified tenant ID mismatches with the ID token."
+                } else {
+                    "TENANT_ID_MISMATCH"
+                },
+            ));
+        }
+        if strict && !v1 && body_case == "Empty" {
+            return Err((404, "TENANT_NOT_FOUND"));
+        }
+        if let Some(tenant) = body_tenant {
+            return Ok(Some(tenant));
+        }
+        if strict && v1 {
+            return Ok(token_tenant);
+        }
+        if !strict
+            && matches!(
+                route.handler,
+                routes::Handler::Lookup | routes::Handler::Update | routes::Handler::Delete
+            )
+        {
+            return Ok(token_tenant);
+        }
+        Ok(None)
+    }
+
+    fn selector_pipeline(
+        state: &AuthState,
+        route: CaseRoute,
+        resolution: routes::Resolution<'_>,
+        query: &str,
+        headers: &RequestHeaders,
+        at: LogicalInstant,
+        body: &Value,
+    ) -> Result<Arc<Mutex<AuthStore>>, JsonResponse> {
+        let routing = RoutingIdToken::default();
+        let strict_body = strict_named_tenant(state, &routing, route.path, Some(query), body)?
+            .unwrap_or_else(|| body.clone());
+        let effective_body =
+            emulator_tenant_id_reading(state, &strict_body, resolution).unwrap_or(strict_body);
+        let creation = TenantCreation {
+            method: route.method,
+            path: route.path,
+            query: Some(query),
+            headers,
+            api_key: true,
+            at,
+            app_check_admitted: std::cell::RefCell::new(None),
+        };
+        let made =
+            emulator_creates_named_tenant(state, &routing, &creation, &effective_body, resolution)?;
+        emulator_named_tenant(
+            state,
+            &routing,
+            resolution,
+            route.path,
+            Some(query),
+            &effective_body,
+            false,
+            made.as_deref(),
+        )?;
+        select_store(
+            state,
+            &routing,
+            route.path,
+            Some(query),
+            &effective_body,
+            resolution,
+        )
+    }
+
+    #[test]
+    fn client_body_tenant_routes_resolve_to_the_profile_token_selector_stage() {
+        let profiles = [profile(false), profile(true)];
+        let mut rows = include_str!("../tests/fixtures/auth_empty_body_client_stage.tsv").lines();
+        assert_eq!(rows.next(), Some("Profile\tRoute\tBodyTenant\tTokenTenant"));
+        let headers = RequestHeaders {
+            authorization: None,
+            origin: None,
+            content_type: Some("application/json".to_owned()),
+            host: Some("127.0.0.1:9099".to_owned()),
+            app_check: Vec::new(),
+            peer_ip: None,
+        };
+        let query = "key=fake-api-key";
+        let at = LogicalInstant::from_unix_seconds(1_788_004_860);
+        let mut row_count = 0;
+        let mut visited_routes = std::collections::BTreeSet::new();
+        for row in rows {
+            row_count += 1;
+            let columns: Vec<_> = row.split('\t').collect();
+            assert_eq!(columns.len(), 4, "bad PICT row: {row}");
+            let strict = columns[0] == "Strict";
+            assert!(matches!(columns[0], "Strict" | "Emulator"), "{row}");
+            let route = ROUTES
+                .iter()
+                .find(|route| route.name == columns[1])
+                .copied()
+                .unwrap_or_else(|| panic!("unknown PICT route {row}"));
+            visited_routes.insert(route.name);
+            let (state, registry) = &profiles[usize::from(strict)];
+            let resolution = routes::resolve(route.method, route.path);
+            let routes::Resolution::Matched {
+                route: resolved, ..
+            } = resolution
+            else {
+                panic!("route did not resolve: {row}");
+            };
+            assert_eq!(resolved.handler, route.handler, "wrong route: {row}");
+
+            let mut body = json!({});
+            match columns[2] {
+                "Missing" => {}
+                "Null" => body["tenantId"] = Value::Null,
+                "Empty" => body["tenantId"] = json!(""),
+                "Match" => body["tenantId"] = json!("matrix-body"),
+                "Mismatch" => body["tenantId"] = json!("matrix-other"),
+                _ => panic!("unexpected body value: {row}"),
+            }
+            match columns[3] {
+                "None" => {}
+                "Project" => body["idToken"] = json!(id_token(None)),
+                "Match" => body["idToken"] = json!(id_token(Some("matrix-body"))),
+                "Conflict" => body["idToken"] = json!(id_token(Some("matrix-other"))),
+                _ => panic!("unexpected token value: {row}"),
+            }
+
+            let expected = expected_scope(route, strict, columns[2], columns[3]);
+            let observed = selector_pipeline(state, route, resolution, query, &headers, at, &body);
+            match (expected, observed) {
+                (Err((status, message)), Err(error)) => {
+                    assert!(error.status == status, "{row}: selector status mismatch");
+                    assert!(
+                        error.body["error"]["message"] == message,
+                        "{row}: selector error class mismatch"
+                    );
+                }
+                (Ok(tenant), Ok(selected)) => {
+                    let expected_store = match tenant {
+                        Some(tenant) => registry
+                            .tenant_store("demo-app", tenant)
+                            .expect("preseeded tenant store must exist"),
+                        None => state.store.clone(),
+                    };
+                    assert!(Arc::ptr_eq(&selected, &expected_store), "{row}");
+                }
+                (_, _) => panic!("selector result mismatch for {row}"),
+            }
+        }
+        assert_eq!(row_count, 576, "PICT fixture was empty or truncated");
+        assert_eq!(
+            visited_routes.len(),
+            ROUTES.len(),
+            "not every route was consumed"
+        );
+        for route in ROUTES {
+            assert!(
+                visited_routes.contains(route.name),
+                "unvisited route: {}",
+                route.name
+            );
+        }
+        for (_, registry) in &profiles {
+            assert_eq!(
+                registry.tenants("demo-app"),
+                ["matrix-body", "matrix-other"]
+            );
+        }
+    }
+}

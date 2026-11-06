@@ -1,0 +1,9 @@
+Writer: admin, user-rest, user-sdk
+Operation: leaf-set, leaf-update, multi-path, leaf-remove, ancestor-group-set, ancestor-items-set, ancestor-remove, root-multi-path
+Generation: v1, v2
+Retry: on, off
+Failing: no, yes
+IF [Generation] = "v1" THEN [Retry] = "on";
+IF [Failing] = "yes" THEN [Writer] = "admin" AND [Operation] = "leaf-set";
+IF [Writer] = "user-sdk" THEN [Operation] IN {"ancestor-group-set", "multi-path", "ancestor-remove"};
+IF [Writer] = "user-rest" THEN [Operation] IN {"leaf-set", "leaf-update", "leaf-remove"};

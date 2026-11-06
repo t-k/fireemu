@@ -1,0 +1,1353 @@
+{
+ "kind": "rtdb-sdk-tokens-journal-v1",
+ "suite": "tokens",
+ "result": {
+  "status": "complete",
+  "observed": 54,
+  "exit": 0,
+  "cleanup": {
+   "prefix": "verified",
+   "rules": "verified"
+  },
+  "unverified": [],
+  "prefixLength": 18
+ },
+ "faults": [],
+ "profiles": [
+  {
+   "name": "r1-tokens",
+   "rows": [
+    {
+     "id": "seed",
+     "group": "seed",
+     "identity": "admin",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "{scope}.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": "{\"pub\":{\"v\":1},\"deny\":{\"v\":2},\"authreq\":{\"v\":3}}",
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "48",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"authreq\":{\"v\":3},\"deny\":{\"v\":2},\"pub\":{\"v\":1}}",
+     "bodyBytes": 48,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "ctl-anon-authreq",
+     "group": "control",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/authreq.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 401,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "ctl-anon-pub",
+     "group": "control",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/pub.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "7",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"v\":1}",
+     "bodyBytes": 7,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "ctl-admin-authreq",
+     "group": "control",
+     "identity": "admin",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/authreq.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "7",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"v\":3}",
+     "bodyBytes": 7,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "auth-empty",
+     "group": "auth",
+     "identity": "credential",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/authreq.json",
+     "query": "auth={cred}",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 401,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "auth-random",
+     "group": "auth",
+     "identity": "credential",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/authreq.json",
+     "query": "auth={cred}",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 401,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "auth-none-other",
+     "group": "auth",
+     "identity": "credential",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/authreq.json",
+     "query": "auth={cred}",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 401,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "auth-none-own",
+     "group": "auth",
+     "identity": "credential",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/authreq.json",
+     "query": "auth={cred}",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 401,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "auth-rs256",
+     "group": "auth",
+     "identity": "credential",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/authreq.json",
+     "query": "auth={cred}",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 401,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "auth-hs256",
+     "group": "auth",
+     "identity": "credential",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/authreq.json",
+     "query": "auth={cred}",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 401,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "auth-two-seg",
+     "group": "auth",
+     "identity": "credential",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/authreq.json",
+     "query": "auth={cred}",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 401,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "auth-huge",
+     "group": "auth",
+     "identity": "credential",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/authreq.json",
+     "query": "auth={cred}",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 401,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "auth-pct",
+     "group": "auth",
+     "identity": "credential",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/authreq.json",
+     "query": "auth={cred}",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 401,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "auth-null",
+     "group": "auth",
+     "identity": "credential",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/authreq.json",
+     "query": "auth={cred}",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 401,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "auth-adc",
+     "group": "auth",
+     "identity": "credential",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/authreq.json",
+     "query": "auth={cred}",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 401,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "auth-adc-deny",
+     "group": "auth",
+     "identity": "credential",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/deny.json",
+     "query": "auth={cred}",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 401,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "auth-random-pub",
+     "group": "auth",
+     "identity": "credential",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/pub.json",
+     "query": "auth={cred}",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "7",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"v\":1}",
+     "bodyBytes": 7,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "bearer-empty",
+     "group": "bearer",
+     "identity": "credential",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/authreq.json",
+     "query": "",
+     "requestHeaders": {
+      "authorization": "Bearer {cred}"
+     },
+     "requestBody": null,
+     "status": 401,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "bearer-random",
+     "group": "bearer",
+     "identity": "credential",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/authreq.json",
+     "query": "",
+     "requestHeaders": {
+      "authorization": "Bearer {cred}"
+     },
+     "requestBody": null,
+     "status": 401,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "40",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"Unauthorized request.\"\n}\n",
+     "bodyBytes": 40,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "bearer-none-own",
+     "group": "bearer",
+     "identity": "credential",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/authreq.json",
+     "query": "",
+     "requestHeaders": {
+      "authorization": "Bearer {cred}"
+     },
+     "requestBody": null,
+     "status": 401,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "40",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"Unauthorized request.\"\n}\n",
+     "bodyBytes": 40,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "bearer-rs256",
+     "group": "bearer",
+     "identity": "credential",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/authreq.json",
+     "query": "",
+     "requestHeaders": {
+      "authorization": "Bearer {cred}"
+     },
+     "requestBody": null,
+     "status": 401,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "40",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"Unauthorized request.\"\n}\n",
+     "bodyBytes": 40,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "bearer-null",
+     "group": "bearer",
+     "identity": "credential",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/authreq.json",
+     "query": "",
+     "requestHeaders": {
+      "authorization": "Bearer {cred}"
+     },
+     "requestBody": null,
+     "status": 401,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "40",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"Unauthorized request.\"\n}\n",
+     "bodyBytes": 40,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "bearer-random-pub",
+     "group": "bearer",
+     "identity": "credential",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/pub.json",
+     "query": "",
+     "requestHeaders": {
+      "authorization": "Bearer {cred}"
+     },
+     "requestBody": null,
+     "status": 401,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "40",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"Unauthorized request.\"\n}\n",
+     "bodyBytes": 40,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "at-empty",
+     "group": "access_token",
+     "identity": "credential",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/authreq.json",
+     "query": "access_token={cred}",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 401,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "40",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"Unauthorized request.\"\n}\n",
+     "bodyBytes": 40,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "at-random",
+     "group": "access_token",
+     "identity": "credential",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/authreq.json",
+     "query": "access_token={cred}",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 401,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "40",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"Unauthorized request.\"\n}\n",
+     "bodyBytes": 40,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "at-rs256",
+     "group": "access_token",
+     "identity": "credential",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/authreq.json",
+     "query": "access_token={cred}",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 401,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "40",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"Unauthorized request.\"\n}\n",
+     "bodyBytes": 40,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "at-random-pub",
+     "group": "access_token",
+     "identity": "credential",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/pub.json",
+     "query": "access_token={cred}",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 401,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "40",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"Unauthorized request.\"\n}\n",
+     "bodyBytes": 40,
+     "utf8": true,
+     "clipped": false
+    }
+   ],
+   "probes": [
+    {
+     "after": "start",
+     "attempts": 1,
+     "ready": true,
+     "outcome": "answered"
+    }
+   ]
+  },
+  {
+   "name": "r2-tokens",
+   "rows": [
+    {
+     "id": "seed",
+     "group": "seed",
+     "identity": "admin",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "{scope}.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": "{\"pub\":{\"v\":1},\"deny\":{\"v\":2},\"authreq\":{\"v\":3}}",
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "48",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"authreq\":{\"v\":3},\"deny\":{\"v\":2},\"pub\":{\"v\":1}}",
+     "bodyBytes": 48,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "ctl-anon-authreq",
+     "group": "control",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/authreq.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 401,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "ctl-anon-pub",
+     "group": "control",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/pub.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "7",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"v\":1}",
+     "bodyBytes": 7,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "ctl-admin-authreq",
+     "group": "control",
+     "identity": "admin",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/authreq.json",
+     "query": "",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "7",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"v\":3}",
+     "bodyBytes": 7,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "auth-empty",
+     "group": "auth",
+     "identity": "credential",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/authreq.json",
+     "query": "auth={cred}",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 401,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "auth-random",
+     "group": "auth",
+     "identity": "credential",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/authreq.json",
+     "query": "auth={cred}",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 401,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "auth-none-other",
+     "group": "auth",
+     "identity": "credential",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/authreq.json",
+     "query": "auth={cred}",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 401,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "auth-none-own",
+     "group": "auth",
+     "identity": "credential",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/authreq.json",
+     "query": "auth={cred}",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 401,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "auth-rs256",
+     "group": "auth",
+     "identity": "credential",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/authreq.json",
+     "query": "auth={cred}",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 401,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "auth-hs256",
+     "group": "auth",
+     "identity": "credential",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/authreq.json",
+     "query": "auth={cred}",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 401,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "auth-two-seg",
+     "group": "auth",
+     "identity": "credential",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/authreq.json",
+     "query": "auth={cred}",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 401,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "auth-huge",
+     "group": "auth",
+     "identity": "credential",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/authreq.json",
+     "query": "auth={cred}",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 401,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "auth-pct",
+     "group": "auth",
+     "identity": "credential",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/authreq.json",
+     "query": "auth={cred}",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 401,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "auth-null",
+     "group": "auth",
+     "identity": "credential",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/authreq.json",
+     "query": "auth={cred}",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 401,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "auth-adc",
+     "group": "auth",
+     "identity": "credential",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/authreq.json",
+     "query": "auth={cred}",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 401,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "auth-adc-deny",
+     "group": "auth",
+     "identity": "credential",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/deny.json",
+     "query": "auth={cred}",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 401,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "auth-random-pub",
+     "group": "auth",
+     "identity": "credential",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/pub.json",
+     "query": "auth={cred}",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 200,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "7",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\"v\":1}",
+     "bodyBytes": 7,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "bearer-empty",
+     "group": "bearer",
+     "identity": "credential",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/authreq.json",
+     "query": "",
+     "requestHeaders": {
+      "authorization": "Bearer {cred}"
+     },
+     "requestBody": null,
+     "status": 401,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "bearer-random",
+     "group": "bearer",
+     "identity": "credential",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/authreq.json",
+     "query": "",
+     "requestHeaders": {
+      "authorization": "Bearer {cred}"
+     },
+     "requestBody": null,
+     "status": 401,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "40",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"Unauthorized request.\"\n}\n",
+     "bodyBytes": 40,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "bearer-none-own",
+     "group": "bearer",
+     "identity": "credential",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/authreq.json",
+     "query": "",
+     "requestHeaders": {
+      "authorization": "Bearer {cred}"
+     },
+     "requestBody": null,
+     "status": 401,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "40",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"Unauthorized request.\"\n}\n",
+     "bodyBytes": 40,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "bearer-rs256",
+     "group": "bearer",
+     "identity": "credential",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/authreq.json",
+     "query": "",
+     "requestHeaders": {
+      "authorization": "Bearer {cred}"
+     },
+     "requestBody": null,
+     "status": 401,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "40",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"Unauthorized request.\"\n}\n",
+     "bodyBytes": 40,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "bearer-null",
+     "group": "bearer",
+     "identity": "credential",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/authreq.json",
+     "query": "",
+     "requestHeaders": {
+      "authorization": "Bearer {cred}"
+     },
+     "requestBody": null,
+     "status": 401,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "40",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"Unauthorized request.\"\n}\n",
+     "bodyBytes": 40,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "bearer-random-pub",
+     "group": "bearer",
+     "identity": "credential",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/pub.json",
+     "query": "",
+     "requestHeaders": {
+      "authorization": "Bearer {cred}"
+     },
+     "requestBody": null,
+     "status": 401,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "40",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"Unauthorized request.\"\n}\n",
+     "bodyBytes": 40,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "at-empty",
+     "group": "access_token",
+     "identity": "credential",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/authreq.json",
+     "query": "access_token={cred}",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 401,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "40",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"Unauthorized request.\"\n}\n",
+     "bodyBytes": 40,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "at-random",
+     "group": "access_token",
+     "identity": "credential",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/authreq.json",
+     "query": "access_token={cred}",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 401,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "40",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"Unauthorized request.\"\n}\n",
+     "bodyBytes": 40,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "at-rs256",
+     "group": "access_token",
+     "identity": "credential",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/authreq.json",
+     "query": "access_token={cred}",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 401,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "40",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"Unauthorized request.\"\n}\n",
+     "bodyBytes": 40,
+     "utf8": true,
+     "clipped": false
+    },
+    {
+     "id": "at-random-pub",
+     "group": "access_token",
+     "identity": "credential",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/pub.json",
+     "query": "access_token={cred}",
+     "requestHeaders": {},
+     "requestBody": null,
+     "status": 401,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "40",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     },
+     "body": "{\n  \"error\" : \"Unauthorized request.\"\n}\n",
+     "bodyBytes": 40,
+     "utf8": true,
+     "clipped": false
+    }
+   ],
+   "probes": [
+    {
+     "after": "start",
+     "attempts": 1,
+     "ready": true,
+     "outcome": "answered"
+    }
+   ]
+  }
+ ],
+ "provenance": {
+  "runId": "RTDB-TOKENS-20261104-01",
+  "target": "production",
+  "project": "fireemu-oracle-query",
+  "instance": "fireemu-q-rtdb2",
+  "suite": "tokens",
+  "recordedOn": "2026-11-04",
+  "startedAt": "2026-11-04T16:20:18.193Z",
+  "endedAt": "2026-11-04T16:20:32.877Z",
+  "scriptSha256": "be76c05bc729d07e215dbb807d68cdfb901d258bf412d0353be740a249fab90a",
+  "sourceHead": "acac9bde8dc50e8731860fedeec867b6383fe8bb",
+  "packetSha256": "de4f14acefd5b1a8c7a4764939cff80d9ecd7a23384c0137cf6ba7d54892177d",
+  "caseSources": {
+   "tokens-suite.mjs": "2420c5dd2059fe0e8eca7f6b0e91f8a25826551950a257f3dbd3de5b5940074b"
+  },
+  "counts": {
+   "requests": 66,
+   "direct": 62,
+   "reserve": 4,
+   "adc": 1,
+   "overflow": 0
+  },
+  "caps": {
+   "direct": 80,
+   "reserve": 12,
+   "adc": 1
+  },
+  "cleanup": {
+   "prefix": "verified",
+   "rules": "verified"
+  },
+  "observations": 54,
+  "sandboxLedger": {
+   "booking": 1262,
+   "close": 1263
+  },
+  "approvals": [
+   2253,
+   2254
+  ],
+  "journalSha256": "c53ec5d8c60a8ae8a0c767cc170eecdb6023bf58f23ea917c17f8eda23561163",
+  "resultSha256": "808a0f8a11b98c6235752d5c9710fe4df56d01037d1fee5b28edc45cd6a49156"
+ }
+}

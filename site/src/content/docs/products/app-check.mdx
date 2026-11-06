@@ -156,9 +156,9 @@ initializeAppCheck(app, { provider: new CustomProvider({ getToken: exchangeDebug
 
 ## Callable functions
 
-`enforceAppCheck: true` on a callable refuses a call without a valid token with the callable `UNAUTHENTICATED` error before the function runs (a 401 response, or the `200` SSE error record for a streaming call), and a valid token fills `request.app`. Replay protection is not supported: a call that presents a valid token to a callable with `consumeAppCheckToken: true` is refused with 501 `APP_CHECK_REPLAY_UNSUPPORTED`, so a test can never pass on a token that production would have consumed.
+`enforceAppCheck: true` on a Node callable refuses a call without a valid token with the callable `UNAUTHENTICATED` error before the function runs (a 401 response, or the `200` SSE error record for a streaming call), and a valid token fills `request.app`. Replay protection is not supported: a call that presents a valid token to a callable with `consumeAppCheckToken: true` is refused with 501 `APP_CHECK_REPLAY_UNSUPPORTED`, so a test can never pass on a token that production would have consumed.
 
-Tokens are signed with a key that belongs to one daemon instance and are invalidated by a session reset or snapshot restore, so a token does not carry over between runs.
+Tokens are signed with a key that belongs to one daemon instance. Node callables and other daemon-verified services reject them after a session reset or snapshot restore. Python callables verify token signatures and claims using the signing keys and real time, without checking current app state or project epoch, so resetting a project or disabling an app does not revoke an otherwise valid token before expiry. Python also refuses token consumption and explicit App Check configuration; see [Python codebases](../functions/#python-codebases) for setup and restrictions.
 
 ## Ordinary HTTP functions (`onRequest`)
 
@@ -259,3 +259,5 @@ The example's `new Date()` must use the same clock as token exchange. Test world
 **This is signature and claim verification, not Fireemu's full verifier.** A JWKS does not expose the current project epoch or app registry; the Admin SDK path above does. The example cannot reject a previously issued token after an in-place session reset, snapshot restore, project deletion or app disablement while the same signing key remains usable. Checking only that `fireemu_epoch` exists would not fix this. It also does not implement token consumption or replay protection.
 
 For tests using this recipe, recreate the whole world with `world.reset()` (or dispose and create another world), including the Functions runner, and obtain a fresh token. That replaces the daemon keys and verifier cache. Do not treat this workaround as proof of the daemon's epoch invalidation behavior; use its callable verification boundary to test that behavior.
+
+Firestore WebChannel App Check refusals arrive as a terminal `PERMISSION_DENIED` protocol error after HTTP 200 transport negotiation, unlike a REST refusal with HTTP 403. An invalid or different-app replacement token on an existing channel cannot replay retained documents. See [Listen streams](../firestore/#listen-streams).

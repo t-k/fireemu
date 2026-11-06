@@ -1,0 +1,177 @@
+{
+  "kind": "rtdb-production-comparison-v1",
+  "parent": "RTDB",
+  "comparison": "trigger-breadth-and-user-auth",
+  "conditions": [
+    "RTDB/functions-trigger-breadth-and-user-auth"
+  ],
+  "production": {
+    "recording": "RTDB-TRIGGERS-BREADTH-20261105-02",
+    "project": "fireemu-oracle-query",
+    "instance": "fireemu-q-rtdb2",
+    "region": "us-central1",
+    "recordedOn": "2026-11-05",
+    "functions": [
+      "g9WrittenV2Retry",
+      "g9WrittenV1Retry",
+      "g9WrittenV2"
+    ],
+    "writes": 12,
+    "frames": 76,
+    "rows": 69,
+    "writers": "admin REST (w1-w6), a real email/password Auth user over REST with an ID token (w7-w9), the same user through the web SDK 12.18.0 over WebSocket (w10-w12)",
+    "requests": {
+      "ledger": 135,
+      "recorder": 125,
+      "presendReads": 5,
+      "closeReadBacks": 5
+    },
+    "packetSha256": "3da2635de1c839cd3f47cf4c797b5a7d93c0de867f88495ba99da4f6c57bca22",
+    "sourceHead": "549167e75c098021678dbc3cf17628b6d2c9956a",
+    "scriptSha256": "5bc8d69fd76d78b396fb1dbc70a681b6e956636818bf2185a331bd724dcaded6",
+    "approvals": [
+      2262,
+      2263
+    ],
+    "sandboxLedger": {
+      "booking": 1266,
+      "close": 1267,
+      "earlierAttempt": {
+        "envelope": "RTDB-TRIGGERS-BREADTH-20261105-01",
+        "booking": 1264,
+        "close": 1265,
+        "note": "stopped before any observation; cleanup verified"
+      }
+    }
+  },
+  "fixture": {
+    "path": "conformance/src/rtdb-functions/recorded/production-rtdb-breadth.json",
+    "sha256": "3e67cd9f12bd1fedf3fabf66ace0b9f956ce6cdfda4d0bab22a99239d568987f"
+  },
+  "localRecordings": {
+    "strict": {
+      "path": "conformance/src/rtdb-functions/recorded/local-strict-rtdb-breadth.json",
+      "sha256": "72b4c3f4c0fc7e319e6dc82fd8bd741135422525d5a56265f6381b3195d80bfb",
+      "frames": 75
+    },
+    "emulator": {
+      "path": "conformance/src/rtdb-functions/recorded/local-emulator-rtdb-breadth.json",
+      "sha256": "8d5ec6d1ed37df33647a8e97e9d90c323c351660b44f35f470a7ef86c2c3a5e7",
+      "frames": 75
+    }
+  },
+  "tool": [
+    {
+      "path": "conformance/src/rtdb-functions/breadth-compare.mjs",
+      "sha256": "9d7fd70ffa6e8f1617dc9b135e54758d2816f990cde983320c615a5f0d05bf67"
+    },
+    {
+      "path": "conformance/src/rtdb-functions/breadth-frames.mjs",
+      "sha256": "a6d1c99e76da4599be9ff1091919a6cdb225cb554fc7ee6f38feb07bc21e1ffd"
+    },
+    {
+      "path": "conformance/src/rtdb-functions/breadth-judge.mjs",
+      "sha256": "57bf34e08d09184e7ba5895c69f39e58f34921c703cd8a22e27622bb48b599ac"
+    },
+    {
+      "path": "conformance/src/rtdb-functions/breadth-sequence.mjs",
+      "sha256": "22eb2680df317b6e80e9ae804f82d32adda227abcc8a0bb58bcb4d99541b3fa4"
+    },
+    {
+      "path": "conformance/src/rtdb-functions/breadth-local-run.mjs",
+      "sha256": "99aa0a1570be3494a36ccbd4a7849cf66e335245d8b0a9a49c8b64f6a56444a4"
+    },
+    {
+      "path": "conformance/src/rtdb-functions/breadth-recorded.test.mjs",
+      "sha256": "bfc88c88a01ab9c81edd0e403b5314dbfdb17f2efe7be0e16fe30766a84d0a9d"
+    },
+    {
+      "path": "conformance/src/rtdb-functions/mask-breadth.mjs",
+      "sha256": "7c9b8e130867ace0f9cb621c9b14b81579c5aad954c68a011f793fd5bed428e5"
+    },
+    {
+      "path": "conformance/src/rtdb-functions/fixtures-breadth/index.js",
+      "sha256": "fae657ab58b72becef3f84d946d5dfa04766fa5c3759d625eed78ebcf1ff5657"
+    },
+    {
+      "path": "conformance/src/rtdb-functions/fixtures-breadth/frames.js",
+      "sha256": "bece49be99ebfc28ba69ef8848ed0d7f1e40df0c55b692b594e7974524f975c7"
+    }
+  ],
+  "command": "node conformance/src/rtdb-functions/breadth-local-run.mjs --fireemu <binary> --profile strict|emulator --out <new dir> (Node 22, fixtures-breadth installed with npm ci); node conformance/src/rtdb-functions/breadth-compare.mjs conformance/src/rtdb-functions/recorded/production-rtdb-breadth.json <dir>/frames.jsonl",
+  "binding": {
+    "release": "closure-build",
+    "releaseAsset": "unpublished release-profile build of source commit d0e81b04377f08f7d32597e809eeca318b49af2a (cargo build --release --locked -p fireemu, RUSTC_WRAPPER empty, fresh worktree-local target directory)",
+    "releaseAssetSha256": "28c8708cd9245eef82c4e4f315f7ddf63fade919800c31f5a873235e9e0a46f2",
+    "sourceCommit": "d0e81b04377f08f7d32597e809eeca318b49af2a",
+    "tagObject": null,
+    "binarySha256": "28c8708cd9245eef82c4e4f315f7ddf63fade919800c31f5a873235e9e0a46f2",
+    "version": "fireemu 0.43.0",
+    "toolCommit": "d0e81b04377f08f7d32597e809eeca318b49af2a",
+    "host": "Darwin arm64",
+    "productionRequests": 0
+  },
+  "profiles": {
+    "strict": {
+      "profile": "strict",
+      "binarySha256": "28c8708cd9245eef82c4e4f315f7ddf63fade919800c31f5a873235e9e0a46f2",
+      "match": true,
+      "totals": {
+        "rows": 69,
+        "match": 69,
+        "difference": 0
+      },
+      "unattributed": {
+        "production": 0,
+        "local": 0
+      }
+    },
+    "emulator": {
+      "profile": "emulator",
+      "binarySha256": "28c8708cd9245eef82c4e4f315f7ddf63fade919800c31f5a873235e9e0a46f2",
+      "match": false,
+      "totals": {
+        "rows": 69,
+        "match": 0,
+        "difference": 69
+      },
+      "unattributed": {
+        "production": 0,
+        "local": 0
+      },
+      "differingPaths": [
+        "$[0].frames[0].event.authType",
+        "$[0].frames[0].event.context.eventId",
+        "$[0].frames[0].event.context.timestamp",
+        "$[0].frames[0].event.datacontenttype",
+        "$[0].frames[0].event.eventKeys.datacontenttype",
+        "$[0].frames[0].event.eventKeys.traceparent",
+        "$[0].frames[0].event.extras.context.keys",
+        "$[0].frames[0].event.extras.traceparent",
+        "$[0].frames[0].event.id",
+        "$[0].frames[0].event.source",
+        "$[0].frames[0].event.time",
+        "$[0].frames[1].event.authType",
+        "$[0].frames[1].event.context.eventId",
+        "$[0].frames[1].event.context.timestamp",
+        "$[0].frames[1].event.datacontenttype",
+        "$[0].frames[1].event.eventKeys.datacontenttype",
+        "$[0].frames[1].event.eventKeys.traceparent",
+        "$[0].frames[1].event.extras.context.keys",
+        "$[0].frames[1].event.extras.traceparent",
+        "$[0].frames[1].event.id",
+        "$[0].frames[1].event.source",
+        "$[0].frames[1].event.time"
+      ],
+      "declared": "/knownDifferences/triggerEventShapeEmulatorProfile"
+    }
+  },
+  "facts": [
+    "2nd gen: a user's write (REST and web SDK) carries authType app_user and authId the user's uid on every handler; admin and unauthenticated writes carry authType unknown",
+    "1st gen: a user's write carries authType USER and context.auth with the uid and the token claims; admin writes carry ADMIN with no auth",
+    "an ancestor write that creates or deletes children, an ancestor write one level down and a multi-path update each deliver one event per changed matching leaf and none for an unchanged leaf",
+    "a handler that fails gets redelivered only when it has the retry flag: v2 retry:true and v1 failurePolicy; the retry-off v2 handler is not redelivered; the retry-on handlers needed up to 4 failures",
+    "events keep their event id across redeliveries; the attempt pattern is compared by shape, not by count or timing"
+  ],
+  "scope": "69 compared rows of 12 writes over 3 handlers on the nested pattern /g9-rtdb/{group}/items/{id}, one instance, one region. The strict profile matches production in all 69 rows, attempt patterns by shape; the emulator profile's event shape is the declared difference /knownDifferences/triggerEventShapeEmulatorProfile, recorded against the official emulator's shape in CV14; no run of this recording compares firebase-tools. Not compared: delivery latency, retry timing and the order of deliveries across handlers."
+}

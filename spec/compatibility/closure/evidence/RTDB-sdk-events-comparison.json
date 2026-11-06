@@ -1,0 +1,2251 @@
+{
+  "kind": "rtdb-production-comparison-v1",
+  "parent": "RTDB",
+  "comparison": "sdk-events-and-admin",
+  "conditions": [
+    "RTDB/sdk-events-queries-and-transactions",
+    "RTDB/admin-sdk-websocket"
+  ],
+  "production": {
+    "recording": "RTDB-EVENTS-20261104-01",
+    "project": "fireemu-oracle-query",
+    "instance": "fireemu-q-rtdb2",
+    "recordedOn": "2026-11-04",
+    "suite": "events+admin",
+    "profiles": [
+      "r1-ws",
+      "r1-lp",
+      "r2-ws",
+      "r2-lp",
+      "r1-admin",
+      "r2-admin"
+    ],
+    "observations": 52,
+    "scenario": "events suite (r1-ws, r1-lp, r2-ws, r2-lp; web SDK, WebSocket and long polling, 2 rounds; 8 cases, 32 steps per profile): key_window (orderByKey limitToFirst(2) and limitToLast(2) while keys are added inside, before and after and the first removed), priority_window (orderByPriority limitToFirst(2) with setPriority, setWithPriority and a remove across the edge), value_range (orderByValue startAt(4)/endAt(8) with values moving in and out), equal_events (orderByChild('t') equalTo(2) with a field moving in and out and a write that changes nothing), cursor_pair (orderByChild('s') startAt(1,'b')/endAt(1,'c') on tied values: get, listener, a write inside), fanout (value and child listeners at a parent and two children, a multi-path update at the root, then a set of the parent), transactions (absent node, abort by returning undefined, object) with listeners on the three paths and the transaction writer's own events and resolution, get_exists (get of a limitToFirst(2) window and of a missing path); the ordered child_added/changed/moved/removed callbacks with prevName and the value callbacks of each step. Admin suite (r1-admin, r2-admin; firebase-admin 14.3.0 over WebSocket, 2 rounds; 10 cases, 16 steps per profile) under Rules that deny every client: set, get, multi-key update, push (the key's shape only), transactions on an absent node, an object and an abort, remove, a value and child_added listener on an orderByChild('s') limitToFirst(2) window with a write in between, and a get of a path under explicit deny Rules (the Admin SDK bypass).",
+    "credential": "the gcloud user OAuth access token of the operator, passed to firebase-admin 14.3.0 as a custom credential; not a service account",
+    "adminStartup": {
+      "r1-admin": true,
+      "r2-admin": true
+    },
+    "requests": {
+      "requests": 188,
+      "direct": 184,
+      "reserve": 4,
+      "adc": 1,
+      "overflow": 0
+    },
+    "maxInFlight": {
+      "r1-lp": 7,
+      "r2-lp": 7
+    },
+    "scriptSha256": "ffb061388fae0e1266e7ff0a84d68d9aa028f45ad6148ea607d3839fd76b3a76",
+    "sourceHead": "dcffbc656d75d5d10ddd49206102f6df3507a50e",
+    "packetSha256": "f42694b0837166d04aa17961d18323ff832b4b5f7a2383fe5e8f643a8b7d2147",
+    "closeRow": "sandbox-ledger lines 1252 (booking) and 1253 (close); approval and V lines owner-decisions.md 2227 and 2228; cleanup of prefix and Rules verified"
+  },
+  "fixture": {
+    "path": "tools/sdk-smoke-database/fixtures/production-sdk-events.json",
+    "sha256": "75a8e586267e6681d9f88085219920bc829a94d7600699557c08d91b85de2fe8"
+  },
+  "tool": [
+    {
+      "path": "tools/sdk-smoke-database/rtdb-sdk-events.mjs",
+      "sha256": "01f672bbe02c04bcab77f2c8dc36523879ec623ad2e36b3d2775295155e4f4e5"
+    },
+    {
+      "path": "tools/sdk-smoke-database/rtdb-sdk-events-fixture.mjs",
+      "sha256": "96503c33a12df71c23945bd64fe14234caf4eb59e765ccf83ab75ac48231fdd3"
+    },
+    {
+      "path": "tools/sdk-smoke-database/rtdb-sdk-events-judge.mjs",
+      "sha256": "8f9c9bcdaf03cf60cd384e30515b2a902c3db217070d96485013c7f489534ba3"
+    },
+    {
+      "path": "tools/sdk-smoke-database/rtdb-sdk-admin-judge.mjs",
+      "sha256": "faa961de0fec710fb9a25111fe972701b6a1f8ce5382cb4146056a7aa327974e"
+    },
+    {
+      "path": "tools/sdk-smoke-database/rtdb-sdk-small-fixture.mjs",
+      "sha256": "8ad27925cf5b52d2488cdd2b226d415eabf05d2b1597800ebfe24f5aa0f78daf"
+    },
+    {
+      "path": "tools/sdk-smoke-database/fixtures/production-sdk-events.json",
+      "sha256": "75a8e586267e6681d9f88085219920bc829a94d7600699557c08d91b85de2fe8"
+    },
+    {
+      "path": "tools/sdk-smoke-database/sdk-observer/events-actor.mjs",
+      "sha256": "b0c289c54544d8ea7807dab1ca4a2eada726b5062ea0b98383937c242147d2e4"
+    },
+    {
+      "path": "tools/sdk-smoke-database/sdk-observer/events-sequence.mjs",
+      "sha256": "0914a161bbee86a293fd1cac2821438ecccea30cfc8ab48b1f93a047207ba9c9"
+    },
+    {
+      "path": "tools/sdk-smoke-database/sdk-observer/events-rules.mjs",
+      "sha256": "7ccf8b379feeb2786ddd31e7678714fed8119cb5a60c0f0fee3aa4f32705337d"
+    },
+    {
+      "path": "tools/sdk-smoke-database/sdk-observer/events-page.mjs",
+      "sha256": "8f8f7d46767bcc35c9c90f97b7c0301a39b851503ab5d7cbfb7715def86028ee"
+    },
+    {
+      "path": "tools/sdk-smoke-database/sdk-observer/events-page.html",
+      "sha256": "ed68fba377c3133508742e41229961444870e681cfb10e62d6a2cdf5e44c97ee"
+    },
+    {
+      "path": "tools/sdk-smoke-database/sdk-observer/admin-suite.mjs",
+      "sha256": "f823f0467df868c655bbff018358a3718741af99d780dffd92175e305072f010"
+    },
+    {
+      "path": "tools/sdk-smoke-database/sdk-observer/lib.mjs",
+      "sha256": "6459e3ecae58a36f0b2037dab03c2490f96d93c707de681cb7e585822d89a7ab"
+    },
+    {
+      "path": "tools/sdk-smoke-database/sdk-observer/observer.mjs",
+      "sha256": "4a071f4e19c36e5f528a939cc9a19e7ea57ebdf38fbb89818029b8a89c2e2765"
+    },
+    {
+      "path": "tools/sdk-smoke-database/sdk-observer/actor.mjs",
+      "sha256": "18dd7a515bf3170dc82f2a6cfbdd889e92af165d8373dcfd9839062b3f9d8ec4"
+    },
+    {
+      "path": "tools/sdk-smoke-database/sdk-observer/sequence.mjs",
+      "sha256": "5ad890c540c97033f09c731260ed398ab43cfbd97544b455611d5a4beeff9337"
+    },
+    {
+      "path": "tools/sdk-smoke-database/sdk-observer/rules.mjs",
+      "sha256": "ab14aa7307dc96dea7152b599e6b7d8ad50b70a89158a0ac3daa094152d35efc"
+    },
+    {
+      "path": "tools/sdk-smoke-database/sdk-observer/page.mjs",
+      "sha256": "9a0cb6687bb72b1b93a4f063caaf648edd0e9a07afd7fc99c8be474530bfe100"
+    },
+    {
+      "path": "tools/sdk-smoke-database/sdk-observer/page.html",
+      "sha256": "9515927e1c1dfecb3363474acc89de14aae6e70de2fa384a0dce4cd0c3d61179"
+    },
+    {
+      "path": "tools/sdk-smoke-database/sdk-observer/readback.mjs",
+      "sha256": "7e55c364326c690386ed0c7f5f974a8b141e3497ef33cffff1d9eccd75848d33"
+    },
+    {
+      "path": "conformance/src/rtdb-release-replay.mjs",
+      "sha256": "50ff4b5fa7f7cd2993c110537102610159bdeffe4327c2ca5ad2a07e961decbd"
+    },
+    {
+      "path": "tools/sdk-smoke-database/cv11-genuine-auth.mjs",
+      "sha256": "d11f99646d940533627c643834314dfa18c96f87293f0e98a3c34ca413b4b002"
+    },
+    {
+      "path": "tools/sdk-smoke-database/adc-preflight.mjs",
+      "sha256": "461845ad6ca7b09d910f0bdc79cd4224e10fc8d0801f47ac81efb248f6502907"
+    },
+    {
+      "path": "tools/sdk-smoke-database/rtdb-admin.mjs",
+      "sha256": "f947b00861c3a2f34b8c6d7c321cd6843043b84c83d6ad89fd12ebc3ce530db8"
+    },
+    {
+      "path": "tools/sdk-smoke-database/rtdb-residual.mjs",
+      "sha256": "9701d81e7ff80f2e764da7c4443902ba8f24cf98d03c9f4f8c1fbee3015180d9"
+    },
+    {
+      "path": "tools/sdk-smoke-database/rtdb-residual-judge.mjs",
+      "sha256": "c86a91ea4a9efac4c294a042ef33c431ef71b71ead889de22b269c3f6a7b8356"
+    },
+    {
+      "path": "tools/sdk-smoke-database/cv07-ondisconnect.mjs",
+      "sha256": "1aba51a0ecb48857b19edd5b2c93ba1322a3cc14ac6766893f071fdd2b5ea04a"
+    },
+    {
+      "path": "tools/sdk-smoke-database/production-live.mjs",
+      "sha256": "18bc8d5e0d5b5cceb7e41aac4d76668b03f5e1bc37725f3ea7b31aeb5e126e79"
+    },
+    {
+      "path": "tools/sdk-smoke-database/jar.mjs",
+      "sha256": "2648dbdb0fc0312bd92e61a5ac7f6edb6e36737be003b439884cb666a8885801"
+    },
+    {
+      "path": "tools/sdk-smoke-database/compare.mjs",
+      "sha256": "6267b3c48476481de57aa5c0723650901a51ce7c768862e22f22d358c972c994"
+    },
+    {
+      "path": "conformance/src/rtdb-functions/frames.mjs",
+      "sha256": "ac7b3de0bf0e36c0a4afe589872460fc9b1f3978c29719724d61bbd4aab92d04"
+    },
+    {
+      "path": "conformance/src/rtdb-functions/mask-recording.mjs",
+      "sha256": "4ce861f7f3acdd5e1c2a5731ed89ead479aeba8217e81e06eb6fa17fa233df5c"
+    },
+    {
+      "path": "conformance/src/rtdb-functions/firebase.json",
+      "sha256": "55d0c9c1cc167b7eec811eb58120a0762577189816e3e5ca8ca9122b449270cf"
+    }
+  ],
+  "command": "node conformance/src/rtdb-release-replay.mjs local sdk-events --fireemu <binary> --out <dir> --export <file> (strict, as the release job runs it); node tools/sdk-smoke-database/rtdb-sdk-events.mjs local --fireemu <binary> --out <dir> --profile emulator --modules tools/sdk-smoke-database/node_modules, then conformance/src/rtdb-release-replay.mjs's adjudicate for the same export shape",
+  "sdk": "firebase 12.18.0 (@firebase/database 1.1.5), firebase-admin 14.3.0, playwright 1.62.1 (headless Chromium)",
+  "binding": {
+    "release": "closure-build",
+    "releaseAsset": "unpublished release-profile build of source commit d0e81b04377f08f7d32597e809eeca318b49af2a (cargo build --release --locked -p fireemu, RUSTC_WRAPPER empty, fresh worktree-local target directory)",
+    "releaseAssetSha256": "28c8708cd9245eef82c4e4f315f7ddf63fade919800c31f5a873235e9e0a46f2",
+    "sourceCommit": "d0e81b04377f08f7d32597e809eeca318b49af2a",
+    "tagObject": null,
+    "binarySha256": "28c8708cd9245eef82c4e4f315f7ddf63fade919800c31f5a873235e9e0a46f2",
+    "version": "fireemu 0.43.0",
+    "toolCommit": "d0e81b04377f08f7d32597e809eeca318b49af2a",
+    "host": "Darwin arm64",
+    "productionRequests": 0
+  },
+  "profiles": {
+    "strict": {
+      "profile": "strict",
+      "binarySha256": "28c8708cd9245eef82c4e4f315f7ddf63fade919800c31f5a873235e9e0a46f2",
+      "match": true,
+      "counts": {
+        "MATCH": 160,
+        "MISMATCH": 0,
+        "NEEDS_REVIEW": 0
+      },
+      "profiles": [
+        {
+          "name": "r1-ws",
+          "suite": "events",
+          "setup": "MATCH"
+        },
+        {
+          "name": "r1-lp",
+          "suite": "events",
+          "setup": "MATCH"
+        },
+        {
+          "name": "r2-ws",
+          "suite": "events",
+          "setup": "MATCH"
+        },
+        {
+          "name": "r2-lp",
+          "suite": "events",
+          "setup": "MATCH"
+        },
+        {
+          "name": "r1-admin",
+          "suite": "admin",
+          "setup": "MATCH"
+        },
+        {
+          "name": "r2-admin",
+          "suite": "admin",
+          "setup": "MATCH"
+        }
+      ],
+      "rows": [
+        {
+          "profile": "r1-ws",
+          "case": "key_window",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "key_window",
+          "step": "set-a",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "key_window",
+          "step": "set-f",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "key_window",
+          "step": "remove-a",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "key_window",
+          "step": "set-b",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "priority_window",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "priority_window",
+          "step": "priority-z-0",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "priority_window",
+          "step": "priority-x-10",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "priority_window",
+          "step": "add-v-1.5",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "priority_window",
+          "step": "remove-y",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "value_range",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "value_range",
+          "step": "set-a-6",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "value_range",
+          "step": "set-b-20",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "value_range",
+          "step": "set-c-5",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "value_range",
+          "step": "remove-c",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "equal_events",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "equal_events",
+          "step": "set-p-t-2",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "equal_events",
+          "step": "set-q-t-3",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "equal_events",
+          "step": "set-p-t-2-again",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "equal_events",
+          "step": "set-p",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "cursor_pair",
+          "step": "get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "cursor_pair",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "cursor_pair",
+          "step": "set-b2",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "fanout",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "fanout",
+          "step": "update-root",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "fanout",
+          "step": "set-fo",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "transactions",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "transactions",
+          "step": "absent",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "transactions",
+          "step": "abort",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "transactions",
+          "step": "object",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "get_exists",
+          "step": "get-window",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "get_exists",
+          "step": "get-missing",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "key_window",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "key_window",
+          "step": "set-a",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "key_window",
+          "step": "set-f",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "key_window",
+          "step": "remove-a",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "key_window",
+          "step": "set-b",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "priority_window",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "priority_window",
+          "step": "priority-z-0",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "priority_window",
+          "step": "priority-x-10",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "priority_window",
+          "step": "add-v-1.5",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "priority_window",
+          "step": "remove-y",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "value_range",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "value_range",
+          "step": "set-a-6",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "value_range",
+          "step": "set-b-20",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "value_range",
+          "step": "set-c-5",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "value_range",
+          "step": "remove-c",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "equal_events",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "equal_events",
+          "step": "set-p-t-2",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "equal_events",
+          "step": "set-q-t-3",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "equal_events",
+          "step": "set-p-t-2-again",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "equal_events",
+          "step": "set-p",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "cursor_pair",
+          "step": "get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "cursor_pair",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "cursor_pair",
+          "step": "set-b2",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "fanout",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "fanout",
+          "step": "update-root",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "fanout",
+          "step": "set-fo",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "transactions",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "transactions",
+          "step": "absent",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "transactions",
+          "step": "abort",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "transactions",
+          "step": "object",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "get_exists",
+          "step": "get-window",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "get_exists",
+          "step": "get-missing",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "key_window",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "key_window",
+          "step": "set-a",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "key_window",
+          "step": "set-f",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "key_window",
+          "step": "remove-a",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "key_window",
+          "step": "set-b",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "priority_window",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "priority_window",
+          "step": "priority-z-0",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "priority_window",
+          "step": "priority-x-10",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "priority_window",
+          "step": "add-v-1.5",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "priority_window",
+          "step": "remove-y",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "value_range",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "value_range",
+          "step": "set-a-6",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "value_range",
+          "step": "set-b-20",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "value_range",
+          "step": "set-c-5",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "value_range",
+          "step": "remove-c",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "equal_events",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "equal_events",
+          "step": "set-p-t-2",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "equal_events",
+          "step": "set-q-t-3",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "equal_events",
+          "step": "set-p-t-2-again",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "equal_events",
+          "step": "set-p",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "cursor_pair",
+          "step": "get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "cursor_pair",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "cursor_pair",
+          "step": "set-b2",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "fanout",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "fanout",
+          "step": "update-root",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "fanout",
+          "step": "set-fo",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "transactions",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "transactions",
+          "step": "absent",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "transactions",
+          "step": "abort",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "transactions",
+          "step": "object",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "get_exists",
+          "step": "get-window",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "get_exists",
+          "step": "get-missing",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "key_window",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "key_window",
+          "step": "set-a",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "key_window",
+          "step": "set-f",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "key_window",
+          "step": "remove-a",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "key_window",
+          "step": "set-b",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "priority_window",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "priority_window",
+          "step": "priority-z-0",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "priority_window",
+          "step": "priority-x-10",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "priority_window",
+          "step": "add-v-1.5",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "priority_window",
+          "step": "remove-y",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "value_range",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "value_range",
+          "step": "set-a-6",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "value_range",
+          "step": "set-b-20",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "value_range",
+          "step": "set-c-5",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "value_range",
+          "step": "remove-c",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "equal_events",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "equal_events",
+          "step": "set-p-t-2",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "equal_events",
+          "step": "set-q-t-3",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "equal_events",
+          "step": "set-p-t-2-again",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "equal_events",
+          "step": "set-p",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "cursor_pair",
+          "step": "get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "cursor_pair",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "cursor_pair",
+          "step": "set-b2",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "fanout",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "fanout",
+          "step": "update-root",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "fanout",
+          "step": "set-fo",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "transactions",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "transactions",
+          "step": "absent",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "transactions",
+          "step": "abort",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "transactions",
+          "step": "object",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "get_exists",
+          "step": "get-window",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "get_exists",
+          "step": "get-missing",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-admin",
+          "case": "set",
+          "step": "set",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-admin",
+          "case": "get",
+          "step": "get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-admin",
+          "case": "update",
+          "step": "update",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-admin",
+          "case": "update",
+          "step": "get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-admin",
+          "case": "push",
+          "step": "push",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-admin",
+          "case": "transaction_absent",
+          "step": "absent",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-admin",
+          "case": "transaction_object",
+          "step": "seed",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-admin",
+          "case": "transaction_object",
+          "step": "object",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-admin",
+          "case": "transaction_abort",
+          "step": "abort",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-admin",
+          "case": "remove",
+          "step": "remove",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-admin",
+          "case": "remove",
+          "step": "get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-admin",
+          "case": "listen_window",
+          "step": "seed",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-admin",
+          "case": "listen_window",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-admin",
+          "case": "listen_window",
+          "step": "set-d",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-admin",
+          "case": "get_denied",
+          "step": "seed",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-admin",
+          "case": "get_denied",
+          "step": "get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-admin",
+          "case": "set",
+          "step": "set",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-admin",
+          "case": "get",
+          "step": "get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-admin",
+          "case": "update",
+          "step": "update",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-admin",
+          "case": "update",
+          "step": "get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-admin",
+          "case": "push",
+          "step": "push",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-admin",
+          "case": "transaction_absent",
+          "step": "absent",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-admin",
+          "case": "transaction_object",
+          "step": "seed",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-admin",
+          "case": "transaction_object",
+          "step": "object",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-admin",
+          "case": "transaction_abort",
+          "step": "abort",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-admin",
+          "case": "remove",
+          "step": "remove",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-admin",
+          "case": "remove",
+          "step": "get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-admin",
+          "case": "listen_window",
+          "step": "seed",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-admin",
+          "case": "listen_window",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-admin",
+          "case": "listen_window",
+          "step": "set-d",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-admin",
+          "case": "get_denied",
+          "step": "seed",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-admin",
+          "case": "get_denied",
+          "step": "get",
+          "verdict": "MATCH"
+        }
+      ],
+      "exportSha256": "99226905fce651e906e836ea8528c508672028d67bd7cd0c9a6ace5fdb2fe7aa",
+      "sdkResources": {
+        "package-lock.json": "fa9dab58f70425ee28c86a59f42135ab5533c3d8a19d3ffab6abe3bde5428a53",
+        "node_modules/firebase/package.json": "8b02ad75fe0a38e30f4ab8116c0a46f076206bb5f924890c198434243bdb2232",
+        "node_modules/firebase-admin/package.json": "a0d177a7c7fba16efc9cd1eb836648a5a6ae9221c77297b3032735cf1c3a5d28",
+        "node_modules/playwright/package.json": "ca170ec143a88ed3043ac953eb3b2377b2b97304104f4e1e23316684ce2c35af",
+        "node_modules/firebase/firebase-app.js": "2fddac0600772c36b848b6b9651e52d00eb8f0a3656b5c24246cd8380b0e452a",
+        "node_modules/firebase/firebase-auth.js": "0b3c9a03c29d4acb408b832279d257a795a649440c9c3c5e862cdafaced139a5",
+        "node_modules/firebase/firebase-database.js": "3901ffc5c5e73d984da3b38c6246cfb2adb5fcd6377dc4b62c0b60ed997198d6"
+      }
+    },
+    "emulator": {
+      "profile": "emulator",
+      "binarySha256": "28c8708cd9245eef82c4e4f315f7ddf63fade919800c31f5a873235e9e0a46f2",
+      "match": true,
+      "counts": {
+        "MATCH": 160,
+        "MISMATCH": 0,
+        "NEEDS_REVIEW": 0
+      },
+      "profiles": [
+        {
+          "name": "r1-ws",
+          "suite": "events",
+          "setup": "MATCH"
+        },
+        {
+          "name": "r1-lp",
+          "suite": "events",
+          "setup": "MATCH"
+        },
+        {
+          "name": "r2-ws",
+          "suite": "events",
+          "setup": "MATCH"
+        },
+        {
+          "name": "r2-lp",
+          "suite": "events",
+          "setup": "MATCH"
+        },
+        {
+          "name": "r1-admin",
+          "suite": "admin",
+          "setup": "MATCH"
+        },
+        {
+          "name": "r2-admin",
+          "suite": "admin",
+          "setup": "MATCH"
+        }
+      ],
+      "rows": [
+        {
+          "profile": "r1-ws",
+          "case": "key_window",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "key_window",
+          "step": "set-a",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "key_window",
+          "step": "set-f",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "key_window",
+          "step": "remove-a",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "key_window",
+          "step": "set-b",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "priority_window",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "priority_window",
+          "step": "priority-z-0",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "priority_window",
+          "step": "priority-x-10",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "priority_window",
+          "step": "add-v-1.5",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "priority_window",
+          "step": "remove-y",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "value_range",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "value_range",
+          "step": "set-a-6",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "value_range",
+          "step": "set-b-20",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "value_range",
+          "step": "set-c-5",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "value_range",
+          "step": "remove-c",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "equal_events",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "equal_events",
+          "step": "set-p-t-2",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "equal_events",
+          "step": "set-q-t-3",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "equal_events",
+          "step": "set-p-t-2-again",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "equal_events",
+          "step": "set-p",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "cursor_pair",
+          "step": "get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "cursor_pair",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "cursor_pair",
+          "step": "set-b2",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "fanout",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "fanout",
+          "step": "update-root",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "fanout",
+          "step": "set-fo",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "transactions",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "transactions",
+          "step": "absent",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "transactions",
+          "step": "abort",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "transactions",
+          "step": "object",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "get_exists",
+          "step": "get-window",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-ws",
+          "case": "get_exists",
+          "step": "get-missing",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "key_window",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "key_window",
+          "step": "set-a",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "key_window",
+          "step": "set-f",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "key_window",
+          "step": "remove-a",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "key_window",
+          "step": "set-b",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "priority_window",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "priority_window",
+          "step": "priority-z-0",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "priority_window",
+          "step": "priority-x-10",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "priority_window",
+          "step": "add-v-1.5",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "priority_window",
+          "step": "remove-y",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "value_range",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "value_range",
+          "step": "set-a-6",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "value_range",
+          "step": "set-b-20",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "value_range",
+          "step": "set-c-5",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "value_range",
+          "step": "remove-c",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "equal_events",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "equal_events",
+          "step": "set-p-t-2",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "equal_events",
+          "step": "set-q-t-3",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "equal_events",
+          "step": "set-p-t-2-again",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "equal_events",
+          "step": "set-p",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "cursor_pair",
+          "step": "get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "cursor_pair",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "cursor_pair",
+          "step": "set-b2",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "fanout",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "fanout",
+          "step": "update-root",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "fanout",
+          "step": "set-fo",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "transactions",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "transactions",
+          "step": "absent",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "transactions",
+          "step": "abort",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "transactions",
+          "step": "object",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "get_exists",
+          "step": "get-window",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-lp",
+          "case": "get_exists",
+          "step": "get-missing",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "key_window",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "key_window",
+          "step": "set-a",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "key_window",
+          "step": "set-f",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "key_window",
+          "step": "remove-a",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "key_window",
+          "step": "set-b",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "priority_window",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "priority_window",
+          "step": "priority-z-0",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "priority_window",
+          "step": "priority-x-10",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "priority_window",
+          "step": "add-v-1.5",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "priority_window",
+          "step": "remove-y",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "value_range",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "value_range",
+          "step": "set-a-6",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "value_range",
+          "step": "set-b-20",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "value_range",
+          "step": "set-c-5",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "value_range",
+          "step": "remove-c",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "equal_events",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "equal_events",
+          "step": "set-p-t-2",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "equal_events",
+          "step": "set-q-t-3",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "equal_events",
+          "step": "set-p-t-2-again",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "equal_events",
+          "step": "set-p",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "cursor_pair",
+          "step": "get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "cursor_pair",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "cursor_pair",
+          "step": "set-b2",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "fanout",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "fanout",
+          "step": "update-root",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "fanout",
+          "step": "set-fo",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "transactions",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "transactions",
+          "step": "absent",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "transactions",
+          "step": "abort",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "transactions",
+          "step": "object",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "get_exists",
+          "step": "get-window",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-ws",
+          "case": "get_exists",
+          "step": "get-missing",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "key_window",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "key_window",
+          "step": "set-a",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "key_window",
+          "step": "set-f",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "key_window",
+          "step": "remove-a",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "key_window",
+          "step": "set-b",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "priority_window",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "priority_window",
+          "step": "priority-z-0",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "priority_window",
+          "step": "priority-x-10",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "priority_window",
+          "step": "add-v-1.5",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "priority_window",
+          "step": "remove-y",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "value_range",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "value_range",
+          "step": "set-a-6",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "value_range",
+          "step": "set-b-20",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "value_range",
+          "step": "set-c-5",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "value_range",
+          "step": "remove-c",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "equal_events",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "equal_events",
+          "step": "set-p-t-2",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "equal_events",
+          "step": "set-q-t-3",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "equal_events",
+          "step": "set-p-t-2-again",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "equal_events",
+          "step": "set-p",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "cursor_pair",
+          "step": "get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "cursor_pair",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "cursor_pair",
+          "step": "set-b2",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "fanout",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "fanout",
+          "step": "update-root",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "fanout",
+          "step": "set-fo",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "transactions",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "transactions",
+          "step": "absent",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "transactions",
+          "step": "abort",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "transactions",
+          "step": "object",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "get_exists",
+          "step": "get-window",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-lp",
+          "case": "get_exists",
+          "step": "get-missing",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-admin",
+          "case": "set",
+          "step": "set",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-admin",
+          "case": "get",
+          "step": "get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-admin",
+          "case": "update",
+          "step": "update",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-admin",
+          "case": "update",
+          "step": "get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-admin",
+          "case": "push",
+          "step": "push",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-admin",
+          "case": "transaction_absent",
+          "step": "absent",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-admin",
+          "case": "transaction_object",
+          "step": "seed",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-admin",
+          "case": "transaction_object",
+          "step": "object",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-admin",
+          "case": "transaction_abort",
+          "step": "abort",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-admin",
+          "case": "remove",
+          "step": "remove",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-admin",
+          "case": "remove",
+          "step": "get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-admin",
+          "case": "listen_window",
+          "step": "seed",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-admin",
+          "case": "listen_window",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-admin",
+          "case": "listen_window",
+          "step": "set-d",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-admin",
+          "case": "get_denied",
+          "step": "seed",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-admin",
+          "case": "get_denied",
+          "step": "get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-admin",
+          "case": "set",
+          "step": "set",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-admin",
+          "case": "get",
+          "step": "get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-admin",
+          "case": "update",
+          "step": "update",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-admin",
+          "case": "update",
+          "step": "get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-admin",
+          "case": "push",
+          "step": "push",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-admin",
+          "case": "transaction_absent",
+          "step": "absent",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-admin",
+          "case": "transaction_object",
+          "step": "seed",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-admin",
+          "case": "transaction_object",
+          "step": "object",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-admin",
+          "case": "transaction_abort",
+          "step": "abort",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-admin",
+          "case": "remove",
+          "step": "remove",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-admin",
+          "case": "remove",
+          "step": "get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-admin",
+          "case": "listen_window",
+          "step": "seed",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-admin",
+          "case": "listen_window",
+          "step": "attach",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-admin",
+          "case": "listen_window",
+          "step": "set-d",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-admin",
+          "case": "get_denied",
+          "step": "seed",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-admin",
+          "case": "get_denied",
+          "step": "get",
+          "verdict": "MATCH"
+        }
+      ],
+      "exportSha256": "eb4e0bd2b5ce8af11fc46af98462169e2fe2a850bba116c34dfd32f77b700f64",
+      "sdkResources": {
+        "package-lock.json": "fa9dab58f70425ee28c86a59f42135ab5533c3d8a19d3ffab6abe3bde5428a53",
+        "node_modules/firebase/package.json": "8b02ad75fe0a38e30f4ab8116c0a46f076206bb5f924890c198434243bdb2232",
+        "node_modules/firebase-admin/package.json": "a0d177a7c7fba16efc9cd1eb836648a5a6ae9221c77297b3032735cf1c3a5d28",
+        "node_modules/playwright/package.json": "ca170ec143a88ed3043ac953eb3b2377b2b97304104f4e1e23316684ce2c35af",
+        "node_modules/firebase/firebase-app.js": "2fddac0600772c36b848b6b9651e52d00eb8f0a3656b5c24246cd8380b0e452a",
+        "node_modules/firebase/firebase-auth.js": "0b3c9a03c29d4acb408b832279d257a795a649440c9c3c5e862cdafaced139a5",
+        "node_modules/firebase/firebase-database.js": "3901ffc5c5e73d984da3b38c6246cfb2adb5fcd6377dc4b62c0b60ed997198d6"
+      }
+    }
+  },
+  "judging": "tools/sdk-smoke-database/rtdb-sdk-events-judge.mjs (admin step tables in rtdb-sdk-admin-judge.mjs): per profile, case and step the recorded facts are compared exactly, member order included: the ordered observer callbacks (listener label, event, key, prevName, exported value), the writer's ordered callbacks and transaction resolution, the acknowledgement, the get and transaction results. No timings are compared and no masks are applied (the admin push records only the key's shape). A step whose quiescence or readiness bound was hit, a missing, extra, failed or out-of-place case, a journal fault, an incomplete run and an Admin SDK credential outcome fail closed.",
+  "scope": "The 160 recorded steps only (52 observations: 8 events cases x 4 profiles, 10 admin cases x 2 profiles). The Admin SDK authenticated with the operator's gcloud user OAuth access token passed as a custom credential: a service-account Admin SDK credential is not claimed. Not claimed: other windows, cursors and query combinations, applyLocally false, a write covering several per-path listens of one connection (that onDisconnect shape stays /knownDifferences/rootWriteListenOrder; the recorded fanout case is a multi-path update with listeners at a parent and its children), raw wire frames, timings and latency (/outOfScope of RTDB.json).",
+  "summary": {
+    "verdict": "match",
+    "match": true,
+    "counts": {
+      "MATCH": 160,
+      "MISMATCH": 0,
+      "NEEDS_REVIEW": 0
+    },
+    "profiles": {
+      "strict": {
+        "MATCH": 160,
+        "MISMATCH": 0,
+        "NEEDS_REVIEW": 0
+      },
+      "emulator": {
+        "MATCH": 160,
+        "MISMATCH": 0,
+        "NEEDS_REVIEW": 0
+      }
+    }
+  }
+}

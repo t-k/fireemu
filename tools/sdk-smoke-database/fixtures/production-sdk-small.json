@@ -1,0 +1,624 @@
+{
+ "kind": "rtdb-sdk-small-journal-v1",
+ "result": {
+  "status": "complete",
+  "observed": 32,
+  "exit": 0,
+  "cleanup": {
+   "prefix": "verified",
+   "rules": "verified"
+  }
+ },
+ "faults": [],
+ "profiles": [
+  {
+   "name": "r1-ws",
+   "events": {
+    "writer": [
+     "disconnected",
+     "connected",
+     "disconnected"
+    ],
+    "observer": [
+     "disconnected",
+     "connected",
+     "disconnected"
+    ]
+   },
+   "rows": [
+    {
+     "role": "writer",
+     "id": "startup",
+     "ok": true,
+     "value": null
+    },
+    {
+     "role": "observer",
+     "id": "startup",
+     "ok": true,
+     "value": null
+    },
+    {
+     "role": "writer",
+     "id": "seed",
+     "ok": true,
+     "value": null
+    },
+    {
+     "role": "observer",
+     "id": "key_range",
+     "ok": true,
+     "value": [
+      {
+       "key": "b",
+       "value": 2,
+       "priority": null
+      },
+      {
+       "key": "c",
+       "value": 2,
+       "priority": null
+      },
+      {
+       "key": "d",
+       "value": 3,
+       "priority": null
+      }
+     ]
+    },
+    {
+     "role": "observer",
+     "id": "value_equal",
+     "ok": true,
+     "value": [
+      {
+       "key": "b",
+       "value": 2,
+       "priority": null
+      },
+      {
+       "key": "c",
+       "value": 2,
+       "priority": null
+      }
+     ]
+    },
+    {
+     "role": "observer",
+     "id": "priority_range",
+     "ok": true,
+     "value": [
+      {
+       "key": "b",
+       "value": "B",
+       "priority": 2
+      },
+      {
+       "key": "c",
+       "value": "C",
+       "priority": 3
+      }
+     ]
+    },
+    {
+     "role": "writer",
+     "id": "push",
+     "ok": true,
+     "value": {
+      "keys": [
+       "-P5N1X8qwPXZ13L5CzJh",
+       "-P5N1X8qwPXZ13L5CzJi"
+      ],
+      "a": "a",
+      "b": "b"
+     }
+    },
+    {
+     "role": "writer",
+     "id": "update",
+     "ok": true,
+     "value": {
+      "edit": 2,
+      "keep": 1
+     }
+    },
+    {
+     "role": "writer",
+     "id": "multipath",
+     "ok": true,
+     "value": {
+      "x": 1,
+      "y": 2
+     }
+    },
+    {
+     "role": "writer",
+     "id": "server_timestamp",
+     "ok": true,
+     "value": {
+      "value": 1793552164782,
+      "before": 1793552164713,
+      "after": 1793552165001
+     }
+    },
+    {
+     "role": "writer",
+     "id": "increment",
+     "ok": true,
+     "value": {
+      "absent": 5,
+      "at": 1793552164782,
+      "numeric": 12,
+      "string": 5
+     }
+    }
+   ]
+  },
+  {
+   "name": "r1-lp",
+   "events": {
+    "writer": [
+     "disconnected",
+     "connected",
+     "disconnected"
+    ],
+    "observer": [
+     "disconnected",
+     "connected",
+     "disconnected"
+    ]
+   },
+   "rows": [
+    {
+     "role": "writer",
+     "id": "startup",
+     "ok": true,
+     "value": null
+    },
+    {
+     "role": "observer",
+     "id": "startup",
+     "ok": true,
+     "value": null
+    },
+    {
+     "role": "writer",
+     "id": "seed",
+     "ok": true,
+     "value": null
+    },
+    {
+     "role": "observer",
+     "id": "key_range",
+     "ok": true,
+     "value": [
+      {
+       "key": "b",
+       "value": 2,
+       "priority": null
+      },
+      {
+       "key": "c",
+       "value": 2,
+       "priority": null
+      },
+      {
+       "key": "d",
+       "value": 3,
+       "priority": null
+      }
+     ]
+    },
+    {
+     "role": "observer",
+     "id": "value_equal",
+     "ok": true,
+     "value": [
+      {
+       "key": "b",
+       "value": 2,
+       "priority": null
+      },
+      {
+       "key": "c",
+       "value": 2,
+       "priority": null
+      }
+     ]
+    },
+    {
+     "role": "observer",
+     "id": "priority_range",
+     "ok": true,
+     "value": [
+      {
+       "key": "b",
+       "value": "B",
+       "priority": 2
+      },
+      {
+       "key": "c",
+       "value": "C",
+       "priority": 3
+      }
+     ]
+    },
+    {
+     "role": "writer",
+     "id": "push",
+     "ok": true,
+     "value": {
+      "keys": [
+       "-P5N1YBX6smpiuP2V3uR",
+       "-P5N1YBX6smpiuP2V3uS"
+      ],
+      "a": "a",
+      "b": "b"
+     }
+    },
+    {
+     "role": "writer",
+     "id": "update",
+     "ok": true,
+     "value": {
+      "edit": 2,
+      "keep": 1
+     }
+    },
+    {
+     "role": "writer",
+     "id": "multipath",
+     "ok": true,
+     "value": {
+      "x": 1,
+      "y": 2
+     }
+    },
+    {
+     "role": "writer",
+     "id": "server_timestamp",
+     "ok": true,
+     "value": {
+      "value": 1793552169230,
+      "before": 1793552169158,
+      "after": 1793552169567
+     }
+    },
+    {
+     "role": "writer",
+     "id": "increment",
+     "ok": true,
+     "value": {
+      "absent": 5,
+      "at": 1793552169230,
+      "numeric": 12,
+      "string": 5
+     }
+    }
+   ]
+  },
+  {
+   "name": "r2-ws",
+   "events": {
+    "writer": [
+     "disconnected",
+     "connected",
+     "disconnected"
+    ],
+    "observer": [
+     "disconnected",
+     "connected",
+     "disconnected"
+    ]
+   },
+   "rows": [
+    {
+     "role": "writer",
+     "id": "startup",
+     "ok": true,
+     "value": null
+    },
+    {
+     "role": "observer",
+     "id": "startup",
+     "ok": true,
+     "value": null
+    },
+    {
+     "role": "writer",
+     "id": "seed",
+     "ok": true,
+     "value": null
+    },
+    {
+     "role": "observer",
+     "id": "key_range",
+     "ok": true,
+     "value": [
+      {
+       "key": "b",
+       "value": 2,
+       "priority": null
+      },
+      {
+       "key": "c",
+       "value": 2,
+       "priority": null
+      },
+      {
+       "key": "d",
+       "value": 3,
+       "priority": null
+      }
+     ]
+    },
+    {
+     "role": "observer",
+     "id": "value_equal",
+     "ok": true,
+     "value": [
+      {
+       "key": "b",
+       "value": 2,
+       "priority": null
+      },
+      {
+       "key": "c",
+       "value": 2,
+       "priority": null
+      }
+     ]
+    },
+    {
+     "role": "observer",
+     "id": "priority_range",
+     "ok": true,
+     "value": [
+      {
+       "key": "b",
+       "value": "B",
+       "priority": 2
+      },
+      {
+       "key": "c",
+       "value": "C",
+       "priority": 3
+      }
+     ]
+    },
+    {
+     "role": "writer",
+     "id": "push",
+     "ok": true,
+     "value": {
+      "keys": [
+       "-P5N1ZAo6w8BddzfrCsm",
+       "-P5N1ZAo6w8BddzfrCsn"
+      ],
+      "a": "a",
+      "b": "b"
+     }
+    },
+    {
+     "role": "writer",
+     "id": "update",
+     "ok": true,
+     "value": {
+      "edit": 2,
+      "keep": 1
+     }
+    },
+    {
+     "role": "writer",
+     "id": "multipath",
+     "ok": true,
+     "value": {
+      "x": 1,
+      "y": 2
+     }
+    },
+    {
+     "role": "writer",
+     "id": "server_timestamp",
+     "ok": true,
+     "value": {
+      "value": 1793552173157,
+      "before": 1793552173088,
+      "after": 1793552173458
+     }
+    },
+    {
+     "role": "writer",
+     "id": "increment",
+     "ok": true,
+     "value": {
+      "absent": 5,
+      "at": 1793552173157,
+      "numeric": 12,
+      "string": 5
+     }
+    }
+   ]
+  },
+  {
+   "name": "r2-lp",
+   "events": {
+    "writer": [
+     "disconnected",
+     "connected",
+     "disconnected"
+    ],
+    "observer": [
+     "disconnected",
+     "connected",
+     "disconnected"
+    ]
+   },
+   "rows": [
+    {
+     "role": "writer",
+     "id": "startup",
+     "ok": true,
+     "value": null
+    },
+    {
+     "role": "observer",
+     "id": "startup",
+     "ok": true,
+     "value": null
+    },
+    {
+     "role": "writer",
+     "id": "seed",
+     "ok": true,
+     "value": null
+    },
+    {
+     "role": "observer",
+     "id": "key_range",
+     "ok": true,
+     "value": [
+      {
+       "key": "b",
+       "value": 2,
+       "priority": null
+      },
+      {
+       "key": "c",
+       "value": 2,
+       "priority": null
+      },
+      {
+       "key": "d",
+       "value": 3,
+       "priority": null
+      }
+     ]
+    },
+    {
+     "role": "observer",
+     "id": "value_equal",
+     "ok": true,
+     "value": [
+      {
+       "key": "b",
+       "value": 2,
+       "priority": null
+      },
+      {
+       "key": "c",
+       "value": 2,
+       "priority": null
+      }
+     ]
+    },
+    {
+     "role": "observer",
+     "id": "priority_range",
+     "ok": true,
+     "value": [
+      {
+       "key": "b",
+       "value": "B",
+       "priority": 2
+      },
+      {
+       "key": "c",
+       "value": "C",
+       "priority": 3
+      }
+     ]
+    },
+    {
+     "role": "writer",
+     "id": "push",
+     "ok": true,
+     "value": {
+      "keys": [
+       "-P5N1_F2bWe8Vj9lZQ5D",
+       "-P5N1_F2bWe8Vj9lZQ5E"
+      ],
+      "a": "a",
+      "b": "b"
+     }
+    },
+    {
+     "role": "writer",
+     "id": "update",
+     "ok": true,
+     "value": {
+      "edit": 2,
+      "keep": 1
+     }
+    },
+    {
+     "role": "writer",
+     "id": "multipath",
+     "ok": true,
+     "value": {
+      "x": 1,
+      "y": 2
+     }
+    },
+    {
+     "role": "writer",
+     "id": "server_timestamp",
+     "ok": true,
+     "value": {
+      "value": 1793552177986,
+      "before": 1793552177902,
+      "after": 1793552178279
+     }
+    },
+    {
+     "role": "writer",
+     "id": "increment",
+     "ok": true,
+     "value": {
+      "absent": 5,
+      "at": 1793552177986,
+      "numeric": 12,
+      "string": 5
+     }
+    }
+   ]
+  }
+ ],
+ "provenance": {
+  "runId": "RTDB-SMALL-20261102-01",
+  "target": "production",
+  "project": "fireemu-oracle-query",
+  "instance": "fireemu-q-rtdb2",
+  "recordedOn": "2026-11-02",
+  "startedAt": "2026-11-01T16:55:58.685Z",
+  "endedAt": "2026-11-01T16:56:19.834Z",
+  "scriptSha256": "ec71543751275378dc0619f2e62b0073845aa6c2f1d3efb16c048fc501be92c3",
+  "sdk": {
+   "firebase": "12.18.0",
+   "database": "1.1.5",
+   "playwright": "1.62.1"
+  },
+  "caseSources": {
+   "actor.mjs": "18dd7a515bf3170dc82f2a6cfbdd889e92af165d8373dcfd9839062b3f9d8ec4",
+   "sequence.mjs": "5ad890c540c97033f09c731260ed398ab43cfbd97544b455611d5a4beeff9337",
+   "rules.mjs": "ab14aa7307dc96dea7152b599e6b7d8ad50b70a89158a0ac3daa094152d35efc",
+   "page.mjs": "9a0cb6687bb72b1b93a4f063caaf648edd0e9a07afd7fc99c8be474530bfe100",
+   "page.html": "9515927e1c1dfecb3363474acc89de14aae6e70de2fa384a0dce4cd0c3d61179"
+  },
+  "counts": {
+   "requests": 82,
+   "direct": 78,
+   "reserve": 4,
+   "adc": 1
+  },
+  "cleanup": {
+   "prefix": "verified",
+   "rules": "verified"
+  },
+  "observations": 32,
+  "ledgerRow": 1249,
+  "approval": 2202,
+  "journalSha256": "0dde7d6358ed411bbc4d67e7e0bf0c84bcccabff5261c00a59551c6df14c7386",
+  "resultSha256": "c2e41a9c8ba6075d4764463877e03a22456110fee9bc2aa57dab57e71d37e5bf"
+ }
+}

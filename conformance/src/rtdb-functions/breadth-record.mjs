@@ -1,0 +1,466 @@
+// The entry of the CV14 recorder (stage 2 of the Gen2 upload work): admission by a reviewed approval file
+// and packet, the pins, the environment of a real run (ADC, the Firebase CLI, the network), and the
+// private output of a run. This module has no side effects on import; the launch script owns the lock and
+// the sandbox ledger, and the recorder writes only inside its private run directory. The run itself is
+// flow.mjs; `executeRun` takes an environment so the whole path is exercised on fakes.
+
+import { createHash, randomBytes } from "node:crypto";
+import { isAbsolute } from "node:path";
+import { execFileSync } from "node:child_process";
+import { appendFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+import { parseKeyFile, redact } from "../../../tools/sdk-smoke-database/cv11-genuine-auth.mjs";
+import { createAuth } from "./breadth-auth.mjs";
+import { browserRunner, openSdk } from "./breadth-sdk.mjs";
+import { INSTANCE } from "./breadth-frames.mjs";
+import { adcPreflight } from "../../../tools/sdk-smoke-database/adc-preflight.mjs";
+import { PROJECT } from "../../functions-http/harness.mjs";
+import {
+  PRIVATE_ROOT,
+  PROJECT_IDENTITY_FILE,
+  PROJECT_IDENTITY_SHA,
+  acquireToken,
+  cli,
+  createControl,
+  ownerAdc,
+  readPrivateProjectIdentity,
+} from "../../functions-http/production.mjs";
+import { assembleBreadth } from "./breadth-assemble.mjs";
+import { runBreadth } from "./breadth-flow.mjs";
+import { BREADTH_HOSTS, bearerFetch, breadthCli, createBreadthBudget } from "./breadth-wiring.mjs";
+
+const STAGE_DIR = fileURLToPath(new URL("./", import.meta.url));
+const BREADTH_PINS = {
+  "firebase-breadth.json": "3ff5295c2cba9ad4223d35460217a9e9ed3271ed3f0e9018942ac991b046d2b9",
+  "fixtures-breadth/index.js": "fae657ab58b72becef3f84d946d5dfa04766fa5c3759d625eed78ebcf1ff5657",
+  "fixtures-breadth/frames.js": "bece49be99ebfc28ba69ef8848ed0d7f1e40df0c55b692b594e7974524f975c7",
+  "fixtures-breadth/package.json":
+    "7da22ccd9851e3119b81462c2c1e071fc0d72f0196415c52acd69e1b12ebdd1e",
+  "fixtures-breadth/package-lock.json":
+    "c492afe0fa1e5336d78be6f1fa76e594d357e0412cacfd9d963d2569389b7dea",
+};
+async function requiredBreadthSources() {
+  for (const [file, expected] of Object.entries(BREADTH_PINS)) {
+    const hash = createHash("sha256")
+      .update(await readFile(join(STAGE_DIR, file)))
+      .digest("hex");
+    if (hash !== expected) throw Error(`reviewed source changed: ${file}`);
+  }
+  for (const [name, version] of [
+    ["firebase-functions", "7.3.2"],
+    ["firebase-admin", "14.3.0"],
+  ]) {
+    const installed = JSON.parse(
+      await readFile(join(STAGE_DIR, "fixtures-breadth/node_modules", name, "package.json")),
+    );
+    if (installed.name !== name || installed.version !== version)
+      throw Error(`fixture dependency ${name} ${version} is required`);
+  }
+  const cliPackage = JSON.parse(
+    await readFile(join(STAGE_DIR, "../../node_modules/firebase-tools/package.json")),
+  );
+  if (cliPackage.version !== "15.28.2") throw Error("pinned Firebase CLI 15.28.2 is required");
+}
+const MASK = "123456789012";
+const SECRET_SHAPES =
+  /ya29\.|AIza[0-9A-Za-z_-]{20,}|eyJ[0-9A-Za-z_-]{8,}|Bearer\s+\S{8,}|X-Goog-Signature|Signature=/u;
+const sha256 = (bytes) =>
+  execFileSync("shasum", ["-a", "256"], { input: bytes, encoding: "utf8" }).split(" ")[0];
+
+/** The approval binds one decision, one commit and one packet, and no other line says otherwise. */
+export function assertApproval(content, gitSha, packetSha256) {
+  const lines = content.replaceAll("\r\n", "\n").split("\n");
+  if (
+    lines[0] !== "Decision: APPROVE" ||
+    lines[1] !== `gitSha: ${gitSha}` ||
+    lines[2] !== `packetSha256: ${packetSha256}` ||
+    lines.slice(3).some((line) => /(?:^|[\s#>])(?:Decision|gitSha|packetSha256)\s*:/u.test(line))
+  ) {
+    throw new Error("CV14 pre-send APPROVE must bind a single decision, commit and packet");
+  }
+}
+
+/** The one fenced `json cv14-pins` block of the packet: the values the packet fixes for the run. */
+export function parsePacketPins(markdown) {
+  const blocks = [...markdown.matchAll(/```json cv14-pins\n([\s\S]*?)\n```/gu)];
+  if (blocks.length !== 1) throw new Error("invalid packet pins: exactly one cv14-pins block");
+  let pins;
+  try {
+    pins = JSON.parse(blocks[0][1]);
+  } catch {
+    throw new Error("invalid packet pins: not JSON");
+  }
+  if (
+    pins === null ||
+    typeof pins !== "object" ||
+    Object.keys(pins).join() !== "baselineRulesSha256" ||
+    !/^[0-9a-f]{64}$/u.test(pins.baselineRulesSha256)
+  ) {
+    throw new Error("invalid packet pins: baselineRulesSha256 only, 64 hex");
+  }
+  return { baselineRulesSha256: pins.baselineRulesSha256 };
+}
+
+/** A token for the RTDB data plane, refreshed after it expired; every refresh is counted as a `token` request. */
+export function createTokenProvider(
+  adc,
+  budget,
+  { acquire = acquireToken, now = Date.now, onToken = () => {} } = {},
+) {
+  let token;
+  return async () => {
+    if (!token || now() >= token.expiresAt) {
+      token = await acquire(adc, budget, "token");
+      onToken(token.value);
+    }
+    return token.value;
+  };
+}
+
+/** A token provider and the list of every access token it has handed out: secrets a stored file must not hold. */
+export function tokenProviderWithSecrets(adc, budget, options = {}) {
+  const secrets = [];
+  const getToken = createTokenProvider(adc, budget, {
+    ...options,
+    onToken: (value) => secrets.push(value),
+  });
+  return { getToken, secrets };
+}
+
+/** The FUNCTIONS-HTTP accounting constant per deploy; not a measured bill. */
+export const estimatedUsd = (requests) => Number((0.01 + requests.cliDeploy * 0.55).toFixed(2));
+export const exitCodeOf = ({ outcome, residual }) =>
+  residual ? 3 : outcome === "recorded" ? 0 : 2;
+
+const maskNumber = (text, projectNumber) => text.replaceAll(projectNumber, MASK);
+
+/** Runs one CV14 observation in `environment`, writes its private output and returns counts only. */
+export async function executeRun({ environment, runDir, packetPins, assemble = assembleBreadth }) {
+  const journalPath = join(runDir, "journal.jsonl");
+  const log = (action, detail) =>
+    appendFile(
+      journalPath,
+      `${redact(JSON.stringify({ ts: new Date().toISOString(), action, detail }), environment.secrets)}\n`,
+      {
+        mode: 0o600,
+      },
+    );
+  const packet = {
+    ...(environment.rtdbPacket ?? {
+      projectId: environment.projectId,
+      projectNumber: environment.projectNumber,
+    }),
+    baselineRulesSha256: packetPins.baselineRulesSha256,
+  };
+  const auth = environment.createAuth?.(log) ?? environment.auth;
+  const sdk = environment.createSdk?.(auth) ?? environment.sdk;
+  const assembled = assemble({ ...environment, auth, sdk, packet, runDir, log });
+  const result = await runBreadth(assembled.deps);
+  if (environment.budget.snapshot().cliDeploy > 0) {
+    try {
+      const grants = await assembled.readGrantsAfter();
+      if (grants.iam.removed.length > 0) {
+        result.reasons.push(`${grants.iam.removed.length} project IAM binding(s) disappeared`);
+        result.residual = true;
+      }
+    } catch (error) {
+      result.reasons.push(`service-agent grant readback: ${error.message}`);
+      result.residual = true;
+    }
+  }
+  assembled.uploads.close();
+  if (environment.budget.cleanupExhausted) {
+    result.residual = true;
+    result.reasons.push("request ceiling reached; recovery required");
+  }
+  const requests = environment.budget.snapshot();
+  await log("requests", requests);
+
+  const write = async (name, text) => {
+    const masked = maskNumber(text, environment.projectNumber);
+    const secrets = (environment.secrets ?? []).filter(Boolean);
+    if (SECRET_SHAPES.test(masked) || secrets.some((secret) => masked.includes(secret))) {
+      throw new Error(`the output was refused: ${name} holds a secret`);
+    }
+    await writeFile(join(runDir, name), masked, { mode: 0o600 });
+  };
+  const json = (value) => `${JSON.stringify(value, null, 2)}\n`;
+  const outputs = {
+    "report.json": () => json(result.report),
+    "frames.jsonl": () => result.frames.map((frame) => JSON.stringify(frame)).join("\n") + "\n",
+    "records.json": () => json(result.records),
+    "forms.json": () => json(assembled.forms.summary()),
+    "lines-masked.txt": () => `${assembled.forms.maskedLines().join("\n")}\n`,
+    "inventory.json": () => json(result.cleanup?.inventory ?? null),
+    "grants.json": () => json(assembled.grants),
+  };
+  for (const [name, produce] of Object.entries(outputs)) {
+    try {
+      await write(name, produce());
+    } catch (error) {
+      if (!result.reasons.includes(error.message)) result.reasons.push(error.message);
+      result.outcome = "stopped-needs-review";
+      await writeFile(join(runDir, name), `${JSON.stringify({ withheld: error.message })}\n`, {
+        mode: 0o600,
+      });
+    }
+  }
+  const summary = {
+    outcome: result.reasons.length > 0 ? "stopped-needs-review" : result.outcome,
+    residual: result.residual,
+    runDir,
+    requests,
+    estimatedUsd: estimatedUsd(requests),
+  };
+  try {
+    await write(
+      "result.json",
+      json({
+        outcome: summary.outcome,
+        reasons: result.reasons,
+        residual: result.residual,
+        nonce: result.nonce ?? null,
+        uid: result.uid ?? null,
+        deployed: result.deployed,
+        deploys: result.deploys,
+        cleanup: result.cleanup,
+        logs: result.logs,
+        requests,
+        estimatedUsd: summary.estimatedUsd,
+      }),
+    );
+  } catch (error) {
+    // a reason that quotes a secret-shaped error must not turn a complete run into exit 1 without a result
+    summary.outcome = "stopped-needs-review";
+    await writeFile(
+      join(runDir, "result.json"),
+      json({
+        withheld: error.message,
+        outcome: summary.outcome,
+        residual: summary.residual,
+        requests,
+        estimatedUsd: summary.estimatedUsd,
+      }),
+      { mode: 0o600 },
+    );
+  }
+  return summary;
+}
+
+/**
+ * Admission: the private paths, a clean reviewed tree, the approval that binds this commit and packet,
+ * the packet's pins, the reviewed sources, and an ADC token with the scopes the RTDB hosts need. Every
+ * outside effect comes in through `deps`, so each refusal is tested.
+ */
+export async function admitRun({ env, privateRoot, root, deps }) {
+  const reviewPath = env.FIREEMU_CV14_REVIEW;
+  const packetPath = env.FIREEMU_CV14_PACKET;
+  if (
+    !reviewPath ||
+    !packetPath ||
+    !reviewPath.startsWith(`${privateRoot}/`) ||
+    !packetPath.startsWith(`${privateRoot}/`)
+  ) {
+    throw new Error("private review and packet paths are required");
+  }
+  const gitSha = (await deps.git(["rev-parse", "HEAD"], root)).trim();
+  const dirty = await deps.git(
+    [
+      "status",
+      "--porcelain",
+      // explicit: `status.showUntrackedFiles` in the user's git config would otherwise hide new files
+      "--untracked-files=all",
+      "--",
+      "conformance/functions-http",
+      "conformance/src/shared",
+      "conformance/src/rtdb-functions",
+      "tools/sdk-smoke-database",
+    ],
+    root,
+  );
+  if (dirty) throw new Error("CV14 needs a clean reviewed commit");
+  // The CLI uploads everything in fixtures-breadth/ except node_modules and .git and reads its .env files; an
+  // ignored file there would be deployed without showing in the status above.
+  const ignored = (
+    await deps.git(
+      [
+        "status",
+        "--porcelain",
+        // `normal`, not `all`: `all` lists every file inside an ignored node_modules, `normal` keeps the
+        // directory as one entry; both override `status.showUntrackedFiles=no`, which would otherwise
+        // hide even the ignored entries
+        "--untracked-files=normal",
+        "--ignored",
+        "--",
+        "conformance/src/rtdb-functions/fixtures-breadth",
+      ],
+      root,
+    )
+  )
+    .split("\n")
+    .filter(
+      (line) =>
+        line !== "" && line !== "!! conformance/src/rtdb-functions/fixtures-breadth/node_modules/",
+    );
+  if (ignored.length > 0) {
+    throw new Error(
+      `the fixture directory holds files git does not track: ${ignored.length} entry(ies)`,
+    );
+  }
+  const packet = await deps.readFile(packetPath);
+  assertApproval(await deps.readFile(reviewPath, "utf8"), gitSha, sha256(packet));
+  const packetPins = parsePacketPins(packet.toString("utf8"));
+  await deps.requiredSources();
+  const projectNumber = await deps.readPrivateProjectIdentity();
+  const verdict = await deps.adcVerdict();
+  if (!verdict.ok) throw new Error(`the ADC token is not usable (${verdict.reason})`);
+  return { gitSha, packetPins, projectNumber };
+}
+
+/** The command-line entry: admission by approval file, pins and the ADC scope check, then the run. */
+export async function recordBreadth() {
+  try {
+    const args = process.argv.slice(2);
+    if (args.length !== 2 || args[0] !== "--key-file" || !isAbsolute(args[1]))
+      throw Error("--key-file requires an absolute path");
+    let apiKey;
+    const root = fileURLToPath(new URL("../../..", import.meta.url));
+    let adc;
+    const budget = createBreadthBudget();
+    // every access token this process holds is a secret a stored file must not contain
+    let getToken;
+    const secrets = [];
+    const { packetPins, projectNumber } = await admitRun({
+      env: process.env,
+      privateRoot: PRIVATE_ROOT,
+      root,
+      deps: {
+        git: async (args, cwd) => execFileSync("git", args, { cwd, encoding: "utf8" }),
+        readFile,
+        requiredSources: async () => {
+          await requiredBreadthSources();
+          apiKey = parseKeyFile(await readFile(args[1], "utf8"));
+          secrets.push(apiKey);
+        },
+        readPrivateProjectIdentity: () =>
+          readPrivateProjectIdentity(PROJECT_IDENTITY_FILE, PROJECT_IDENTITY_SHA),
+        adcVerdict: async () => {
+          adc = await ownerAdc();
+          getToken = createTokenProvider(adc.file, budget, {
+            onToken: (token) => secrets.push(token),
+          });
+          return adcPreflight(
+            async (...args) => {
+              budget.take("control");
+              return fetch(...args);
+            },
+            await getToken(),
+          );
+        },
+      },
+    });
+    const runDir = join(
+      PRIVATE_ROOT,
+      "runs",
+      `breadth-${new Date().toISOString().replaceAll(":", "")}`,
+    );
+    await mkdir(runDir, { recursive: true, mode: 0o700 });
+    const nonce = randomBytes(8).toString("hex");
+    const email = `breadth-${nonce}@example.com`;
+    const password = randomBytes(24).toString("hex");
+    secrets.push(password, email);
+    const abort = { stopped: false };
+    const stop = { requested: false };
+    const onSignal = () => {
+      abort.stopped = true;
+      stop.requested = true;
+      void stop.closeBrowser?.();
+    };
+    for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(signal, onSignal);
+    try {
+      const environment = {
+        control: createControl(adc.file, budget, { extraHosts: [...BREADTH_HOSTS] }),
+        runCli: breadthCli((args, adcPath, runBudget, kind, dir, track) =>
+          cli(args, adcPath, runBudget, kind, dir, track, undefined, { cwd: STAGE_DIR }),
+        ),
+        adminFetch: async (...args) => {
+          budget.take("rtdbAdmin");
+          return bearerFetch(getToken, PROJECT)(...args);
+        },
+        anonymousFetch: async (...args) => {
+          budget.take("userClient");
+          return fetch(...args);
+        },
+        budget,
+        adcPath: adc.path,
+        projectNumber,
+        projectId: PROJECT,
+        clock: {
+          now: Date.now,
+          sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+        },
+        abort,
+        stop,
+        secrets,
+        nonce,
+        createAuth: (log) => {
+          const auth = createAuth({
+            adminFetch: async (...args) => {
+              budget.take("breadthAuth");
+              return bearerFetch(getToken, PROJECT)(...args);
+            },
+            fetchImpl: async (...args) => {
+              budget.take("breadthAuth");
+              return fetch(...args);
+            },
+            projectId: PROJECT,
+            apiKey,
+            email,
+            password,
+            log: (row) => log("auth", row),
+            stop,
+            secrets,
+          });
+          const signIn = auth.signIn;
+          auth.signIn = async () => {
+            const result = await signIn();
+            if (auth.idToken) secrets.push(auth.idToken);
+            return result;
+          };
+          return auth;
+        },
+        createSdk: (auth) =>
+          openSdk(
+            browserRunner({
+              modules: join(root, "conformance/node_modules"),
+              budget,
+              allowHost: (host) =>
+                ["identitytoolkit.googleapis.com", "securetoken.googleapis.com"].includes(host) ||
+                /^[a-z0-9-]+\.firebaseio\.com$/u.test(host),
+              stop,
+            }),
+            { apiKey, projectId: PROJECT, databaseURL: `https://${INSTANCE}.firebaseio.com` },
+            () => ({ email, password, uid: auth.uid, nonce }),
+          ),
+      };
+      const summary = await executeRun({ environment, runDir, packetPins });
+      console.log(JSON.stringify({ outcome: summary.outcome, residual: summary.residual, runDir }));
+      process.exitCode = exitCodeOf(summary);
+    } finally {
+      for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.off(signal, onSignal);
+    }
+  } finally {
+    for (const file of await readdir(STAGE_DIR)) {
+      if (/^firebase-debug.*\.log$/u.test(file)) await rm(join(STAGE_DIR, file), { force: true });
+    }
+  }
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  recordBreadth().catch((error) => {
+    console.error("breadth recorder failed", error?.constructor?.name ?? "Error");
+    process.exitCode = 1;
+  });
+}

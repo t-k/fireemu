@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 7454fb20d498d6777ba1fff4f8838b5b270780967907ebfbdf6f5656753ed38f # shrinks to grants = [(None, None), (Some(true), None)], depth = 2, priority = false
+cc 50e7cd161ecb616ace116e40d725454c8f1518e07d83608235cb96c6388c853b # shrinks to a = [55357], b = []

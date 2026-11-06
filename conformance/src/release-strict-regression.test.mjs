@@ -2029,26 +2029,44 @@ test("FS-LISTEN-SDK uses its disclosed exclusion as a verified closure", () => {
   assert.ok(reviewed.excluded.some((entry) => entry.kind === "fs-listen-sdk-comparison-v1"));
 });
 
-test("reopened RTDB retains its seven disclosed comparisons", () => {
+test("RTDB retains its fourteen disclosed comparisons", () => {
   const closures = committedClosures();
   const rtdb = closures.find((entry) => entry.closure.parent === "RTDB");
-  assert.equal(rtdb.closure.parentStatus, "IMPLEMENTING");
+  assert.equal(rtdb.closure.parentStatus, "COMPAT_VERIFIED");
   const reviewed = planComparisons(closures, readJson);
   assert.deepEqual(reviewed.errors, []);
   const planned = reviewed.comparisons.filter(
     (entry) => entry.kind === "rtdb-production-comparison-v1",
   );
-  assert.deepEqual(planned.map((entry) => entry.path).toSorted(), [
-    "spec/compatibility/closure/evidence/RTDB-functions-trigger-comparison.json",
-    "spec/compatibility/closure/evidence/RTDB-genuine-auth-comparison.json",
-    "spec/compatibility/closure/evidence/RTDB-residual-comparison.json",
-    "spec/compatibility/closure/evidence/RTDB-rest-comparison.json",
-    "spec/compatibility/closure/evidence/RTDB-rest-v033-comparison.json",
-    "spec/compatibility/closure/evidence/RTDB-s5-comparison.json",
-    "spec/compatibility/closure/evidence/RTDB-sdk-ondisconnect-comparison.json",
-  ]);
+  assert.deepEqual(
+    planned.map((entry) => entry.path).toSorted(),
+    [
+      "spec/compatibility/closure/evidence/RTDB-functions-trigger-comparison.json",
+      "spec/compatibility/closure/evidence/RTDB-genuine-auth-comparison.json",
+      "spec/compatibility/closure/evidence/RTDB-residual-comparison.json",
+      "spec/compatibility/closure/evidence/RTDB-rest-comparison.json",
+      "spec/compatibility/closure/evidence/RTDB-rest-v033-comparison.json",
+      "spec/compatibility/closure/evidence/RTDB-s5-comparison.json",
+      "spec/compatibility/closure/evidence/RTDB-sdk-events-comparison.json",
+      "spec/compatibility/closure/evidence/RTDB-sdk-ondisconnect-comparison.json",
+      "spec/compatibility/closure/evidence/RTDB-sdk-small-comparison.json",
+      "spec/compatibility/closure/evidence/RTDB-breadth-comparison.json",
+      "spec/compatibility/closure/evidence/RTDB-sdk-rest-comparison.json",
+      "spec/compatibility/closure/evidence/RTDB-sdk-rules-comparison.json",
+      "spec/compatibility/closure/evidence/RTDB-sdk-rules-load-comparison.json",
+      "spec/compatibility/closure/evidence/RTDB-sdk-tokens-comparison.json",
+    ].toSorted(),
+  );
   assert.ok(planned.every((entry) => entry.parents.join() === "RTDB" && entry.runIds.length === 1));
-  assert.equal(new Set(planned.map((entry) => entry.runIds[0])).size, 6);
+  assert.equal(new Set(planned.map((entry) => entry.runIds[0])).size, 13);
+  assert.deepEqual(
+    planned.find((entry) => entry.path.endsWith("RTDB-sdk-small-comparison.json")).runIds,
+    ["R28"],
+  );
+  assert.deepEqual(
+    planned.find((entry) => entry.path.endsWith("RTDB-sdk-events-comparison.json")).runIds,
+    ["R29"],
+  );
   rtdb.closure.integratedRegression.comparisons = [];
   assert.ok(planComparisons(closures, readJson).errors.some((error) => error.includes("RTDB:")));
 });
@@ -2190,7 +2208,7 @@ test("R20 declares the real check and evidence-reusing export CLI with scoped de
     assert.deepEqual(command.expectedExitCodes, [0]);
     assert.deepEqual(command.env, {});
   }
-  for (const other of RUNS.filter(({ id }) => id !== "R20" && !/^R2[2-8]$/.test(id)))
+  for (const other of RUNS.filter(({ id }) => id !== "R20" && !/^R(2[2-9]|3[0-4])$/.test(id)))
     for (const command of other.commands) assert.equal(command.timeoutMs, undefined, other.id);
   assert.match(strictProductionJob(), /timeout-minutes: 180\n/);
 });
@@ -2952,11 +2970,30 @@ test("RTDB replay dependencies are locked and installed before the offline relea
     job.indexOf("npm ci --prefix conformance/src/rtdb-functions/fixtures --ignore-scripts") <
       isolated,
   );
+  assert.ok(
+    job.indexOf(
+      "npm ci --prefix conformance/src/rtdb-functions/fixtures-breadth --ignore-scripts",
+    ) < isolated,
+  );
   assert.ok(job.includes("conformance/src/rtdb-release-replay.test.mjs"));
 });
 
 test("RTDB release entries bind every local producer to the installed binary", () => {
-  for (const id of ["R22", "R23", "R24", "R25", "R26", "R27"]) {
+  for (const id of [
+    "R22",
+    "R23",
+    "R24",
+    "R25",
+    "R26",
+    "R27",
+    "R28",
+    "R29",
+    "R30",
+    "R31",
+    "R32",
+    "R33",
+    "R34",
+  ]) {
     const run = RUNS.find((entry) => entry.id === id);
     assert.ok(run);
     for (const command of run.commands) {
@@ -2971,6 +3008,16 @@ test("RTDB release entries bind every local producer to the installed binary", (
     }
   }
   assert.equal(RUNS.find((entry) => entry.id === "R22").commands[1].argv[3], "smoke");
+  assert.equal(RUNS.find((entry) => entry.id === "R28").commands[0].argv[3], "sdk-small");
+  assert.equal(RUNS.find((entry) => entry.id === "R29").commands[0].argv[3], "sdk-events");
+  for (const [id, campaign] of [
+    ["R30", "sdk-rest"],
+    ["R31", "sdk-rules"],
+    ["R32", "sdk-tokens"],
+    ["R33", "sdk-rules-load"],
+    ["R34", "breadth"],
+  ])
+    assert.equal(RUNS.find((entry) => entry.id === id).commands[0].argv[3], campaign, id);
 });
 
 test("RTDB release planning rejects an unserved or ambiguously served comparison path", () => {
@@ -3019,7 +3066,21 @@ test("RTDB run entries expand the owned output and binary, and reject producer f
       out: dir,
       env: { PATH: dir },
     };
-    for (const id of ["R22", "R23", "R24", "R25", "R26", "R27"]) {
+    for (const id of [
+      "R22",
+      "R23",
+      "R24",
+      "R25",
+      "R26",
+      "R27",
+      "R28",
+      "R29",
+      "R30",
+      "R31",
+      "R32",
+      "R33",
+      "R34",
+    ]) {
       const run = clone(RUNS.find((entry) => entry.id === id));
       const result = await runEntry(run, context);
       assert.deepEqual(result.record.errors, [], id);
@@ -3093,6 +3154,37 @@ test("each REST history binds its own fixture identity and recomputes local payl
   corrupt.R22.result.rows[0].local = { status: 599, bodyText: "corrupt", etag: "wrong" };
   for (const path of [oldPath, newPath])
     assert.notDeepEqual(judge(cmp(path), corrupt, context), []);
+});
+
+test("R29 judges only a matching sdk-events export bound to the installed binary", () => {
+  const path = "spec/compatibility/closure/evidence/RTDB-sdk-events-comparison.json";
+  const cmp = { path, kind: "rtdb-production-comparison-v1", runIds: ["R29"] };
+  const context = { readJson, binarySha256: BINARY };
+  const ok = { campaign: "sdk-events", binarySha256: BINARY, match: true };
+  assert.deepEqual(judge(cmp, { R29: ok }, context), []);
+  for (const observed of [
+    { ...ok, campaign: "sdk-small" },
+    { ...ok, match: false },
+    { ...ok, binarySha256: "0".repeat(64) },
+    undefined,
+  ])
+    assert.notDeepEqual(judge(cmp, { R29: observed }, context), []);
+  assert.notDeepEqual(judge({ ...cmp, runIds: ["R28"] }, { R28: ok }, context), []);
+});
+
+test("R28 judges only a matching sdk-small export bound to the installed binary", () => {
+  const path = "spec/compatibility/closure/evidence/RTDB-sdk-small-comparison.json";
+  const cmp = { path, kind: "rtdb-production-comparison-v1", runIds: ["R28"] };
+  const context = { readJson, binarySha256: BINARY };
+  const ok = { campaign: "sdk-small", binarySha256: BINARY, match: true };
+  assert.deepEqual(judge(cmp, { R28: ok }, context), []);
+  for (const observed of [
+    { ...ok, campaign: "s5" },
+    { ...ok, match: false },
+    { ...ok, binarySha256: "0".repeat(64) },
+    undefined,
+  ])
+    assert.notDeepEqual(judge(cmp, { R28: observed }, context), []);
 });
 
 test("local timeout returns while namespace teardown remains responsible for detached children", async () => {
@@ -3364,4 +3456,36 @@ test("a timed-out RTDB entry does not parse a partial export before writing fail
   });
   assert.equal(result, undefined);
   assert.equal(called, false);
+});
+
+test("R30 to R34 judge only a matching export of their own campaign bound to the installed binary", () => {
+  const context = { readJson, binarySha256: BINARY };
+  const runs = [
+    ["R30", "sdk-rest", "RTDB-sdk-rest-comparison.json"],
+    ["R31", "sdk-rules", "RTDB-sdk-rules-comparison.json"],
+    ["R32", "sdk-tokens", "RTDB-sdk-tokens-comparison.json"],
+    ["R33", "sdk-rules-load", "RTDB-sdk-rules-load-comparison.json"],
+    ["R34", "breadth", "RTDB-breadth-comparison.json"],
+  ];
+  for (const [id, campaign, file] of runs) {
+    const cmp = {
+      path: `spec/compatibility/closure/evidence/${file}`,
+      kind: "rtdb-production-comparison-v1",
+      runIds: [id],
+    };
+    const ok = { campaign, binarySha256: BINARY, match: true };
+    assert.deepEqual(judge(cmp, { [id]: ok }, context), [], id);
+    const other = runs.find(([otherId]) => otherId !== id)[1];
+    for (const observed of [
+      { ...ok, campaign: other },
+      { ...ok, match: false },
+      { ...ok, binarySha256: "0".repeat(64) },
+      undefined,
+    ])
+      assert.notDeepEqual(
+        judge(cmp, { [id]: observed }, context),
+        [],
+        `${id} ${observed?.campaign}`,
+      );
+  }
 });

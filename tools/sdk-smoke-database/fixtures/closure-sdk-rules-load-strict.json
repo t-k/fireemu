@@ -1,0 +1,265 @@
+{
+ "kind": "rtdb-sdk-rules-load-journal-v1",
+ "suite": "rules-load",
+ "result": {
+  "status": "complete",
+  "observed": 14,
+  "exit": 0,
+  "cleanup": {
+   "prefix": "not-needed",
+   "rules": "verified"
+  },
+  "unverified": []
+ },
+ "faults": [],
+ "profiles": [
+  {
+   "name": "r1-rules-load",
+   "rows": [
+    {
+     "id": "g-dup-key",
+     "ok": true,
+     "outcome": "answered",
+     "requestBody": "{\"rules\":{\"a\":{\".read\":\"v0\"},\"a\":{\".read\":\"v1\"}}}",
+     "status": 400,
+     "body": "{\n  \"error\" : \"1:47: 'a' occurs multiple times.\\n\"\n}\n",
+     "bodyBytes": 53,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "53",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "g-dup-read",
+     "ok": true,
+     "outcome": "answered",
+     "requestBody": "{\"rules\":{\".read\":\"v0\",\".read\":\"v1\"}}",
+     "status": 400,
+     "body": "{\n  \"error\" : \"1:24: Cannot have multiple '.read' rules.\\n\"\n}\n",
+     "bodyBytes": 62,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "62",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "h-dup-indexOn",
+     "ok": true,
+     "outcome": "answered",
+     "requestBody": "{\"rules\":{\".indexOn\":\"a\",\".indexOn\":\"b\"}}",
+     "status": 400,
+     "body": "{\n  \"error\" : \"1:26: Cannot have multiple '.indexOn' keys.\\n\"\n}\n",
+     "bodyBytes": 64,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "64",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "e-index-root-dot",
+     "ok": true,
+     "outcome": "answered",
+     "requestBody": "{\"rules\":{\".indexOn\":\"a.b\"}}",
+     "status": 400,
+     "body": "{\n  \"error\" : \"1:22: Invalid key: a.b. Index must be either .value or declared on a valid path\\n\"\n}\n",
+     "bodyBytes": 100,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "100",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "e-index-root-dollar",
+     "ok": true,
+     "outcome": "answered",
+     "requestBody": "{\"rules\":{\".indexOn\":\"$x\"}}",
+     "status": 400,
+     "body": "{\n  \"error\" : \"1:22: Invalid key: $x. Index must be either .value or declared on a valid path\\n\"\n}\n",
+     "bodyBytes": 99,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "99",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "e-index-root-empty",
+     "ok": true,
+     "outcome": "answered",
+     "requestBody": "{\"rules\":{\".indexOn\":\"\"}}",
+     "status": 200,
+     "body": "{\"status\":\"ok\"}",
+     "bodyBytes": 15,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "15",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "h-index:\"a//b\"",
+     "ok": true,
+     "outcome": "answered",
+     "requestBody": "{\"rules\":{\".indexOn\":\"a//b\"}}",
+     "status": 200,
+     "body": "{\"status\":\"ok\"}",
+     "bodyBytes": 15,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "15",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    }
+   ]
+  },
+  {
+   "name": "r2-rules-load",
+   "rows": [
+    {
+     "id": "g-dup-key",
+     "ok": true,
+     "outcome": "answered",
+     "requestBody": "{\"rules\":{\"a\":{\".read\":\"v0\"},\"a\":{\".read\":\"v1\"}}}",
+     "status": 400,
+     "body": "{\n  \"error\" : \"1:47: 'a' occurs multiple times.\\n\"\n}\n",
+     "bodyBytes": 53,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "53",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "g-dup-read",
+     "ok": true,
+     "outcome": "answered",
+     "requestBody": "{\"rules\":{\".read\":\"v0\",\".read\":\"v1\"}}",
+     "status": 400,
+     "body": "{\n  \"error\" : \"1:24: Cannot have multiple '.read' rules.\\n\"\n}\n",
+     "bodyBytes": 62,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "62",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "h-dup-indexOn",
+     "ok": true,
+     "outcome": "answered",
+     "requestBody": "{\"rules\":{\".indexOn\":\"a\",\".indexOn\":\"b\"}}",
+     "status": 400,
+     "body": "{\n  \"error\" : \"1:26: Cannot have multiple '.indexOn' keys.\\n\"\n}\n",
+     "bodyBytes": 64,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "64",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "e-index-root-dot",
+     "ok": true,
+     "outcome": "answered",
+     "requestBody": "{\"rules\":{\".indexOn\":\"a.b\"}}",
+     "status": 400,
+     "body": "{\n  \"error\" : \"1:22: Invalid key: a.b. Index must be either .value or declared on a valid path\\n\"\n}\n",
+     "bodyBytes": 100,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "100",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "e-index-root-dollar",
+     "ok": true,
+     "outcome": "answered",
+     "requestBody": "{\"rules\":{\".indexOn\":\"$x\"}}",
+     "status": 400,
+     "body": "{\n  \"error\" : \"1:22: Invalid key: $x. Index must be either .value or declared on a valid path\\n\"\n}\n",
+     "bodyBytes": 99,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "99",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "e-index-root-empty",
+     "ok": true,
+     "outcome": "answered",
+     "requestBody": "{\"rules\":{\".indexOn\":\"\"}}",
+     "status": 200,
+     "body": "{\"status\":\"ok\"}",
+     "bodyBytes": 15,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "15",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "h-index:\"a//b\"",
+     "ok": true,
+     "outcome": "answered",
+     "requestBody": "{\"rules\":{\".indexOn\":\"a//b\"}}",
+     "status": 200,
+     "body": "{\"status\":\"ok\"}",
+     "bodyBytes": 15,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "15",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    }
+   ]
+  }
+ ]
+}

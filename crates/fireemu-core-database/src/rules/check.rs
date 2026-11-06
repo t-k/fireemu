@@ -309,10 +309,11 @@ impl Checker<'_> {
                 .ok_or_else(|| no_such(at, name));
         }
         if object.has(Tok::Query) {
-            // As the official emulator types them; `orderBy`, `endBefore` and
-            // `isOrderByChild` are not served here, so a rule naming them is refused.
+            // As the official emulator types them; `endBefore` and `isOrderByChild` are not
+            // served here, so a rule naming them is refused. `orderBy` is typed as `orderByChild`
+            // is: an ordering.
             return match name {
-                "orderByChild" => Ok(Types::one(Tok::OrderBy)),
+                "orderByChild" | "orderBy" => Ok(Types::one(Tok::OrderBy)),
                 "orderByKey" | "orderByValue" | "orderByPriority" => Ok(Types::one(Tok::Bool)),
                 "limitToFirst" | "limitToLast" => Ok(Types::one(Tok::Num)),
                 "startAt" | "endAt" | "equalTo" => Ok(Types::of(&DATA_VALUE)),

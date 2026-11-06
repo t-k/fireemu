@@ -27,7 +27,7 @@ use fireemu_core_database::{
 
 use crate::access::{Access, LoadedRules, WriteOp};
 pub use crate::access::{Credentials, IdTokenVerifier};
-use crate::json_parse::parse_with_keys;
+use crate::json_parse::{parse_replacing, parse_with_keys_replacing};
 use crate::json_text::{
     output_json, parse, priority_at, render, render_ordered, value_at, written_priority_at,
     Ordered, ParseError, Style,
@@ -883,7 +883,10 @@ impl Database {
                     call.want_etag,
                 )))
             }
-            "PUT" => self.put(&call, body(request, parsed)?),
+            "PUT" => self.put(
+                &call,
+                body(request, parsed, self.options.production_shapes)?,
+            ),
             "DELETE" => self.put(
                 &call,
                 Body {
@@ -892,8 +895,14 @@ impl Database {
                     order: Vec::new(),
                 },
             ),
-            "POST" => self.post(&call, body(request, parsed)?),
-            _ => self.patch(&call, body(request, parsed)?),
+            "POST" => self.post(
+                &call,
+                body(request, parsed, self.options.production_shapes)?,
+            ),
+            _ => self.patch(
+                &call,
+                body(request, parsed, self.options.production_shapes)?,
+            ),
         }
     }
 
@@ -1783,6 +1792,9 @@ fn condition<'a>(request: &'a HttpRequest, method: &str) -> Result<Option<Condit
 #[derive(Debug)]
 pub struct ParsedBody {
     json: Result<Json, ParseError>,
+    /// Whether a lone surrogate escape in a value was read as `?`. The emulator profile answers as the
+    /// official emulator does; the strict profile refuses the body (production has not answered).
+    replaced_lone_surrogate: bool,
     /// The members of an object body in the order they were sent.
     order: Vec<String>,
 }
@@ -1798,14 +1810,23 @@ pub fn parse_body(request: &HttpRequest) -> Option<ParsedBody> {
 /// its entries in that order.
 fn parse_ordered(text: &str) -> ParsedBody {
     if !text.trim_start().starts_with('{') {
-        return ParsedBody {
-            json: parse(text),
-            order: Vec::new(),
+        return match parse_replacing(text) {
+            Ok((json, replaced)) => ParsedBody {
+                json: Ok(json),
+                replaced_lone_surrogate: replaced,
+                order: Vec::new(),
+            },
+            Err(err) => ParsedBody {
+                json: Err(err),
+                replaced_lone_surrogate: false,
+                order: Vec::new(),
+            },
         };
     }
-    match parse_with_keys(text) {
-        Ok((json, keys)) => ParsedBody {
+    match parse_with_keys_replacing(text) {
+        Ok((json, keys, replaced)) => ParsedBody {
             json: Ok(json),
+            replaced_lone_surrogate: replaced,
             order: keys
                 .into_iter()
                 .filter(|at| at.depth == 0)
@@ -1814,6 +1835,7 @@ fn parse_ordered(text: &str) -> ParsedBody {
         },
         Err(err) => ParsedBody {
             json: Err(err),
+            replaced_lone_surrogate: false,
             order: Vec::new(),
         },
     }
@@ -1920,15 +1942,26 @@ struct Body<'a> {
     order: Vec<String>,
 }
 
-fn body(request: &HttpRequest, parsed: Option<ParsedBody>) -> Result<Body<'_>, Refusal> {
+/// The body of `request`. `strict` is the strict profile, which refuses a value holding a lone surrogate escape
+/// (production has not answered it) where the emulator profile stores `?` for it, as the official emulator does.
+fn body(
+    request: &HttpRequest,
+    parsed: Option<ParsedBody>,
+    strict: bool,
+) -> Result<Body<'_>, Refusal> {
     if request.body.is_empty() {
         return Err(Refusal::bad("No data supplied."));
     }
     let text = std::str::from_utf8(&request.body).map_err(|_| Refusal::bad(PARSE_ERROR))?;
     let parsed = parsed.unwrap_or_else(|| parse_ordered(text));
+    let json = if strict && parsed.replaced_lone_surrogate {
+        Err(ParseError)
+    } else {
+        parsed.json
+    };
     Ok(Body {
         text,
-        json: parsed.json,
+        json,
         order: parsed.order,
     })
 }
@@ -2293,8 +2326,8 @@ fn write_refusal(err: &DatabaseError, otherwise: impl FnOnce() -> Refusal) -> Re
 /// document order, that is empty or holds a forbidden character when there is one; the
 /// generic parse error otherwise.
 fn data_refusal(body: &str) -> Refusal {
-    let keys = parse_with_keys(body)
-        .map(|(_, keys)| keys)
+    let keys = parse_with_keys_replacing(body)
+        .map(|(_, keys, _)| keys)
         .unwrap_or_default();
     let refused = keys.iter().find(|at| {
         let special = matches!(at.key.as_str(), PRIORITY_KEY | VALUE_KEY | SERVER_VALUE_KEY);

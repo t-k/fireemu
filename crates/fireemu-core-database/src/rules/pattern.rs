@@ -11,6 +11,9 @@ pub struct Pattern {
     flags: String,
     /// `None` for a pattern this engine does not read as the official emulator does.
     search: Option<Arc<Regex>>,
+    /// The search for the emulator profile, which reads `\W`, `\D` and an escaped letter in the
+    /// official emulator's dialect (see [`jar_source`]); `None` when that does not apply.
+    jar_search: Option<Arc<Regex>>,
 }
 
 impl PartialEq for Pattern {
@@ -35,43 +38,52 @@ impl Pattern {
     /// `i` is read only for a pattern of ASCII characters, as the official emulator folds it:
     /// see [`fold_case`]. The subject is never transformed.
     pub fn new(text: String, flags: String) -> Self {
-        let dialect_only = opens_special_group(&text)
+        let other_dialect = opens_special_group(&text)
             || text.contains("[[:")
-            || escapes_a_letter(&text)
             || escapes_a_backslash_in_a_class(&text)
             || super::parse::regex_shape(&text) != Ok(false);
-        let search = (!dialect_only)
-            .then(|| {
-                let source = if flags.contains('i') {
-                    fold_case(&text)?
-                } else {
-                    utf16_view(&text)
-                };
-                Regex::new(&search_source(&source)).ok()
-            })
-            .flatten()
-            .map(Arc::new);
+        let compile = |text: &str| {
+            let source = if flags.contains('i') {
+                fold_case(text)?
+            } else {
+                utf16_view(text)
+            };
+            Regex::new(&search_source(&source)).ok().map(Arc::new)
+        };
+        let search = (!other_dialect && !escapes_a_letter(&text))
+            .then(|| compile(&text))
+            .flatten();
+        let jar_search = if other_dialect {
+            None
+        } else if escapes_a_letter(&text) {
+            jar_source(&text).and_then(|source| compile(&source))
+        } else {
+            search.clone()
+        };
         Self {
             text,
             flags,
             search,
+            jar_search,
         }
     }
 
+    /// The search that applies: the emulator profile's (`jar`) or the strict profile's.
+    fn search(&self, jar: bool) -> Option<&Regex> {
+        if jar { &self.jar_search } else { &self.search }.as_deref()
+    }
+
     /// Whether `subject` matches; `None` (an error) for a pattern not read, or when the
-    /// engine gives up on it.
-    pub fn matches(&self, subject: &str) -> Option<bool> {
-        self.search
-            .as_ref()?
-            .is_full_match(&utf16_view(subject))
-            .ok()
+    /// engine gives up on it. `jar` reads the official emulator's dialect of `\W`, `\D` and an
+    /// escaped letter (the emulator profile).
+    pub fn matches(&self, subject: &str, jar: bool) -> Option<bool> {
+        self.search(jar)?.is_full_match(&utf16_view(subject)).ok()
     }
 
     /// [`Pattern::matches`] for a subject given as UTF-16 units, which may hold a surrogate
     /// without its pair (a Rules string literal such as `'\uD83D'`).
-    pub fn matches_units(&self, subject: &[u16]) -> Option<bool> {
-        self.search
-            .as_ref()?
+    pub fn matches_units(&self, subject: &[u16], jar: bool) -> Option<bool> {
+        self.search(jar)?
             .is_full_match(&view_of_units(subject.iter().copied()))
             .ok()
     }
@@ -102,6 +114,103 @@ fn view_of_units(units: impl Iterator<Item = u16>) -> String {
             char::from_u32(code).unwrap_or(char::REPLACEMENT_CHARACTER)
         })
         .collect()
+}
+
+/// The pattern as the official emulator's grammar reads `\W`, `\D` and an escaped letter or digit,
+/// written for this engine; `None` for what is not read so.
+///
+/// The official emulator compiles to an automaton and reads `\W` and `\D` as the complement of a
+/// language of strings, not of a set of characters: `\W` is every string except one word
+/// character, so `'ab'` and `''` both match `/^\W$/` there and `'a'` does not (recorded rows,
+/// `docs.local/runs/rtdb-lone-surrogate/jar-w1.json`). That language is the empty string, a
+/// character that is no word character, or any run of two or more characters, which this
+/// engine can say as a group. A class that holds `\W` or `\D` is the union of its members as
+/// languages, so it is the same group around the class (its single characters being the class
+/// read as usual); a negated class is single characters either way and is left as it is. Any
+/// other escaped letter or digit is that character itself (`\u0041` is `u0041`, `\b` is `b`).
+/// An escape that is not a letter or digit is kept.
+fn jar_source(text: &str) -> Option<String> {
+    // The language of a complement: the empty string, one character of the class, or two or more.
+    const ANY_TWO_OR_MORE: &str = "..+";
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len() + 16);
+    let mut i = 0;
+    while i < chars.len() {
+        match chars[i] {
+            '\\' => {
+                let escaped = *chars.get(i + 1)?;
+                match escaped {
+                    'W' | 'D' => {
+                        out.push_str("(?:|");
+                        out.push_str(ANY_TWO_OR_MORE);
+                        out.push_str("|\\");
+                        out.push(escaped);
+                        out.push(')');
+                    }
+                    'd' | 'w' => {
+                        out.push('\\');
+                        out.push(escaped);
+                    }
+                    c if c.is_ascii_alphanumeric() => out.push(c),
+                    c => {
+                        out.push('\\');
+                        out.push(c);
+                    }
+                }
+                i += 2;
+            }
+            '[' => {
+                let negated = chars.get(i + 1) == Some(&'^');
+                let mut class = String::from("[");
+                let mut at = i + 1;
+                if negated {
+                    class.push('^');
+                    at += 1;
+                }
+                let mut first = true;
+                let mut complemented = false;
+                loop {
+                    let c = *chars.get(at)?;
+                    if c == ']' && !first {
+                        break;
+                    }
+                    first = false;
+                    if c == '\\' {
+                        let escaped = *chars.get(at + 1)?;
+                        complemented |= matches!(escaped, 'W' | 'D');
+                        if escaped.is_ascii_alphanumeric()
+                            && !matches!(escaped, 'd' | 'w' | 'W' | 'D')
+                        {
+                            class.push(escaped);
+                        } else {
+                            class.push('\\');
+                            class.push(escaped);
+                        }
+                        at += 2;
+                    } else {
+                        class.push(c);
+                        at += 1;
+                    }
+                }
+                class.push(']');
+                if complemented && !negated {
+                    out.push_str("(?:|");
+                    out.push_str(ANY_TWO_OR_MORE);
+                    out.push('|');
+                    out.push_str(&class);
+                    out.push(')');
+                } else {
+                    out.push_str(&class);
+                }
+                i = at + 1;
+            }
+            c => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    Some(out)
 }
 
 /// Whether an escape names a letter or digit other than the classes `\d` and `\w`, which
@@ -482,7 +591,7 @@ mod tests {
     use super::*;
 
     fn matches(text: &str, subject: &str) -> Option<bool> {
-        Pattern::new(text.to_owned(), String::new()).matches(subject)
+        Pattern::new(text.to_owned(), String::new()).matches(subject, false)
     }
 
     #[test]
@@ -509,7 +618,7 @@ mod tests {
     }
 
     fn matches_i(text: &str, subject: &str) -> Option<bool> {
-        Pattern::new(text.to_owned(), "i".to_owned()).matches(subject)
+        Pattern::new(text.to_owned(), "i".to_owned()).matches(subject, false)
     }
 
     #[test]
@@ -768,7 +877,7 @@ mod tests {
         assert_eq!(matches("b$", "abc"), Some(false));
         assert_eq!(matches("c$", "abc"), Some(true));
         assert_eq!(
-            Pattern::new("B".to_owned(), "i".to_owned()).matches("abc"),
+            Pattern::new("B".to_owned(), "i".to_owned()).matches("abc", false),
             Some(true)
         );
         assert_eq!(

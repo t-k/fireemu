@@ -467,7 +467,11 @@ impl Database {
         text: &str,
         now: i64,
     ) -> Result<Vec<(u64, SseEvent)>, RulesError> {
-        let rules = rules_file::compile(text)?;
+        // The emulator profile reads a regular expression's `\W`, `\D` and escaped letters as the
+        // official emulator does; the strict profile keeps them errors (production has not
+        // answered them).
+        let rules =
+            rules_file::compile(text)?.with_jar_regex_dialect(!self.options().production_shapes);
         if self
             .loaded_rules(namespace)
             .is_none_or(|loaded| loaded.text != text)

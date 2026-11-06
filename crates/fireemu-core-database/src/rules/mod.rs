@@ -146,6 +146,10 @@ struct RuleNode {
 #[derive(Debug, Clone, Default)]
 pub struct Rules {
     root: RuleNode,
+    /// Whether a regular expression is read in the official emulator's dialect where this
+    /// engine would otherwise refuse it (`\W`, `\D`, an escaped letter), as the emulator profile
+    /// does. The strict profile keeps the refusal: production has not answered these.
+    jar_regex: bool,
 }
 
 /// The stack of the thread that parses and checks rules.
@@ -160,6 +164,13 @@ pub struct Requester<'a> {
 }
 
 impl Rules {
+    /// These rules with the emulator profile's regular-expression dialect switched on or off.
+    #[must_use]
+    pub fn with_jar_regex_dialect(mut self, on: bool) -> Self {
+        self.jar_regex = on;
+        self
+    }
+
     /// Collects independent expression diagnostics, bounded for rejected files.
     /// The boolean reports that collection stopped before the whole tree was checked.
     pub fn diagnostics(spec: &RuleSpec) -> Result<(Vec<RulesError>, bool), RulesError> {
@@ -203,7 +214,10 @@ impl Rules {
                 })?
                 .join()
                 .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
-                .map(|root| Self { root })
+                .map(|root| Self {
+                    root,
+                    jar_regex: false,
+                })
         })
     }
 
@@ -291,6 +305,7 @@ impl Rules {
                     query,
                     read_kind: kind,
                     wildcards: &wildcards,
+                    jar_regex: self.jar_regex,
                 };
                 if run(rule, &scope) {
                     return true;
@@ -353,6 +368,7 @@ impl Rules {
         at: &Path,
         requester: &Requester<'a>,
         wildcards: &'a BTreeMap<String, String>,
+        jar_regex: bool,
     ) -> eval::Scope<'a> {
         eval::Scope {
             auth: requester.auth,
@@ -372,6 +388,7 @@ impl Rules {
             query: None,
             read_kind: ReadKind::Check,
             wildcards,
+            jar_regex,
         }
     }
 
@@ -388,7 +405,7 @@ impl Rules {
         let mut keys = path.keys().iter();
         while let Some(rule_node) = node {
             if let Some(rule) = &rule_node.write {
-                let scope = Self::scope(before, after, &at, requester, &wildcards);
+                let scope = Self::scope(before, after, &at, requester, &wildcards, self.jar_regex);
                 if run(rule, &scope) {
                     return true;
                 }
@@ -415,7 +432,15 @@ impl Rules {
         let mut node = &self.root;
         let mut at = Path::root();
         for key in path.keys() {
-            if !Self::validate_here(node, before, after, &at, requester, &wildcards) {
+            if !Self::validate_here(
+                node,
+                before,
+                after,
+                &at,
+                requester,
+                &wildcards,
+                self.jar_regex,
+            ) {
                 return false;
             }
             match descend(node, key, &mut wildcards) {
@@ -424,7 +449,15 @@ impl Rules {
             }
             at = at.child(key);
         }
-        Self::validate_below(node, before, after, &at, requester, &mut wildcards)
+        Self::validate_below(
+            node,
+            before,
+            after,
+            &at,
+            requester,
+            &mut wildcards,
+            self.jar_regex,
+        )
     }
 
     fn validate_here(
@@ -434,6 +467,7 @@ impl Rules {
         at: &Path,
         requester: &Requester<'_>,
         wildcards: &BTreeMap<String, String>,
+        jar_regex: bool,
     ) -> bool {
         let Some(rule) = &node.validate else {
             return true;
@@ -441,7 +475,10 @@ impl Rules {
         if after.and_then(|r| r.descendant(at)).is_none() {
             return true;
         }
-        run(rule, &Self::scope(before, after, at, requester, wildcards))
+        run(
+            rule,
+            &Self::scope(before, after, at, requester, wildcards, jar_regex),
+        )
     }
 
     fn validate_below(
@@ -451,8 +488,9 @@ impl Rules {
         at: &Path,
         requester: &Requester<'_>,
         wildcards: &mut BTreeMap<String, String>,
+        jar_regex: bool,
     ) -> bool {
-        if !Self::validate_here(node, before, after, at, requester, wildcards) {
+        if !Self::validate_here(node, before, after, at, requester, wildcards, jar_regex) {
             return false;
         }
         let Some(written) = after.and_then(|r| r.descendant(at)) else {
@@ -466,7 +504,15 @@ impl Rules {
             let Some(child) = descend(node, key, &mut bound) else {
                 continue;
             };
-            if !Self::validate_below(child, before, after, &at.child(key), requester, &mut bound) {
+            if !Self::validate_below(
+                child,
+                before,
+                after,
+                &at.child(key),
+                requester,
+                &mut bound,
+                jar_regex,
+            ) {
                 return false;
             }
         }

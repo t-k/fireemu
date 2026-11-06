@@ -107,6 +107,11 @@ fn query(params: &str, index_on: &[String]) -> Option<Option<QueryParams>> {
 }
 
 fn differences(fixture: &str) -> Vec<String> {
+    differences_with(fixture, false)
+}
+
+/// [`differences`] with the emulator profile's regular-expression dialect on or off.
+fn differences_with(fixture: &str, jar_regex: bool) -> Vec<String> {
     let corpus: Vec<serde_json::Value> = serde_json::from_str(fixture).unwrap();
     let tree = seed();
     let auth = auth();
@@ -127,7 +132,8 @@ fn differences(fixture: &str) -> Vec<String> {
                     .collect()
             })
             .unwrap_or_default();
-        let compiled = Rules::compile(&read_rule_at_t(expr));
+        let compiled =
+            Rules::compile(&read_rule_at_t(expr)).map(|r| r.with_jar_regex_dialect(jar_regex));
         let got = match (&compiled, entry["load"].as_u64().unwrap()) {
             (Err(error), 400) => {
                 let expected = entry["error"].as_str().unwrap().trim_end_matches('\n');
@@ -212,6 +218,77 @@ fn lone_surrogate_strings_load_and_decide_as_the_official_emulator() {
         "{} rows differ: {failures:#?}",
         failures.len()
     );
+}
+
+/// `query.orderBy` (documented by production) loads in both profiles and decides as the official
+/// emulator does (owner 2276): it is an ordering, equal to `query.orderByChild` when the read orders by a
+/// child, otherwise only to itself. The 81 rows were recorded with the jar (reads under each query kind
+/// and the load refusals of the other operators).
+#[test]
+fn query_order_by_loads_and_decides_as_the_official_emulator() {
+    let failures = differences(include_str!(
+        "fixtures/rules-query-orderby-official-emulator-4.11.2.json"
+    ));
+    assert!(
+        failures.is_empty(),
+        "{} rows differ: {failures:#?}",
+        failures.len()
+    );
+}
+
+/// The emulator profile reads `\W` and `\D` as the complement of a language of strings, and an escaped
+/// letter or digit as that character, as the official emulator does (owner 2276): 500 jar rows over
+/// bare, anchored, quantified, grouped and class forms, with and without `i`, and the `[\uD800-\uDFFF]` class,
+/// which there is the characters u, D, 8, 0 and the range 0-u, D, F. The strict profile keeps an error for
+/// them (production has not answered): every one of these rows that mentions one is denied there.
+#[test]
+fn the_emulator_profile_reads_complement_classes_and_escaped_letters_as_the_official_emulator() {
+    let fixture = include_str!("fixtures/rules-regex-dialect-official-emulator-4.11.2.json");
+    let failures = differences_with(fixture, true);
+    assert!(
+        failures.is_empty(),
+        "{} rows differ: {failures:#?}",
+        failures.len()
+    );
+    // Under the strict profile none of them reads 200 where the jar answers 401, and the rows that use
+    // one of the constructs read false, negated or not.
+    let strict = differences_with(fixture, false);
+    assert!(strict.len() > 60, "{}", strict.len());
+    assert!(
+        strict
+            .iter()
+            .all(|f| f.ends_with("read false, expected true")),
+        "{strict:#?}"
+    );
+}
+
+/// The 14k-row differential corpus of the regular-expression dialect, run with the emulator profile's dialect on:
+/// no row moves the wrong way (an allow where the official emulator denies, or a load that differs), and of the 323
+/// rows fireemu denied where the official emulator allows, 72 (those whose only difference was `\W`, `\D` or
+/// an escaped letter) now decide as it does. The 251 others use another construct of the dialect (an empty
+/// alternative, a literal operator, a case fold of non-ASCII text) and stay errors, hence denied.
+#[test]
+fn the_emulator_profile_moves_no_corpus_row_the_wrong_way() {
+    let corpus: Vec<serde_json::Value> = serde_json::from_str(include_str!(
+        "fixtures/rules-expressions-3-official-emulator-4.11.2.json"
+    ))
+    .unwrap();
+    let rows: Vec<serde_json::Value> = corpus
+        .into_iter()
+        .filter(|e| e.get("fireemu") != Some(&serde_json::Value::from("refuses")))
+        .collect();
+    let denied = rows
+        .iter()
+        .filter(|e| e.get("fireemu").is_some_and(|f| f == "denies"))
+        .count();
+    let failures = differences_with(&serde_json::to_string(&rows).unwrap(), true);
+    let wrong_way: Vec<&String> = failures
+        .iter()
+        .filter(|f| !f.ends_with("read false, expected true"))
+        .collect();
+    assert!(wrong_way.is_empty(), "{wrong_way:#?}");
+    assert_eq!(denied, 323);
+    assert_eq!(failures.len(), 251, "{failures:#?}");
 }
 
 #[test]
@@ -574,6 +651,174 @@ mod properties {
             now: 1_792_464_733_000,
         };
         Some(rules.can_read(tree.root(), &p("/t"), None, &requester))
+    }
+
+    /// One atom of a pattern in the official emulator's dialect, with the language it stands for as a predicate on a
+    /// run of characters (the automaton's view): `\W` and `\D` are complements of languages of strings.
+    #[derive(Debug, Clone, Copy)]
+    enum Atom {
+        Lit(char, bool),
+        Dot,
+        Word,
+        Digit,
+        ComplementWord,
+        ComplementDigit,
+        ClassComplementWord,
+        ClassComplementWordOrA,
+        ClassComplementDigitOrA,
+        NegatedClassComplementWord,
+        NegatedClassComplementDigit,
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    enum Times {
+        Once,
+        Optional,
+        Star,
+        Plus,
+    }
+
+    fn is_word(c: char) -> bool {
+        c.is_ascii_alphanumeric() || c == '_'
+    }
+
+    impl Atom {
+        fn text(self) -> String {
+            match self {
+                Self::Lit(c, escaped) if escaped && c.is_ascii_alphanumeric() => format!("\\{c}"),
+                Self::Lit(c, _) => c.to_string(),
+                Self::Dot => ".".to_owned(),
+                Self::Word => "\\w".to_owned(),
+                Self::Digit => "\\d".to_owned(),
+                Self::ComplementWord => "\\W".to_owned(),
+                Self::ComplementDigit => "\\D".to_owned(),
+                Self::ClassComplementWord => "[\\W]".to_owned(),
+                Self::ClassComplementWordOrA => "[\\Wa]".to_owned(),
+                Self::ClassComplementDigitOrA => "[a\\D]".to_owned(),
+                Self::NegatedClassComplementWord => "[^\\W]".to_owned(),
+                Self::NegatedClassComplementDigit => "[^\\D]".to_owned(),
+            }
+        }
+
+        fn accepts(self, run: &[char]) -> bool {
+            let one = |test: &dyn Fn(char) -> bool| run.len() == 1 && test(run[0]);
+            match self {
+                Self::Lit(c, _) => one(&|x| x == c),
+                Self::Dot => run.len() == 1,
+                Self::Word | Self::NegatedClassComplementWord => one(&is_word),
+                Self::Digit | Self::NegatedClassComplementDigit => one(&|x| x.is_ascii_digit()),
+                Self::ComplementWord | Self::ClassComplementWord => !one(&is_word),
+                Self::ComplementDigit => !one(&|x| x.is_ascii_digit()),
+                Self::ClassComplementWordOrA => !one(&|x| is_word(x) && x != 'a'),
+                // `a` is no digit, so the union with `\D` is `\D`.
+                Self::ClassComplementDigitOrA => !one(&|x| x.is_ascii_digit()),
+            }
+        }
+    }
+
+    /// Whether `^atoms$` matches all of `subject`, by the positions each atom can reach.
+    fn oracle(atoms: &[(Atom, Times)], subject: &[char]) -> bool {
+        let n = subject.len();
+        let mut reach = vec![false; n + 1];
+        reach[0] = true;
+        for &(atom, times) in atoms {
+            let step = |from: &[bool]| {
+                let mut to = vec![false; n + 1];
+                for i in (0..=n).filter(|&i| from[i]) {
+                    for j in i..=n {
+                        if atom.accepts(&subject[i..j]) {
+                            to[j] = true;
+                        }
+                    }
+                }
+                to
+            };
+            let closure = |mut set: Vec<bool>| loop {
+                let next = step(&set);
+                let merged: Vec<bool> = set.iter().zip(&next).map(|(a, b)| *a || *b).collect();
+                if merged == set {
+                    return set;
+                }
+                set = merged;
+            };
+            reach = match times {
+                Times::Once => step(&reach),
+                Times::Optional => {
+                    let once = step(&reach);
+                    reach.iter().zip(&once).map(|(a, b)| *a || *b).collect()
+                }
+                Times::Star => closure(reach),
+                Times::Plus => closure(step(&reach)),
+            };
+        }
+        reach[n]
+    }
+
+    fn atom() -> impl Strategy<Value = Atom> {
+        prop_oneof![
+            (
+                prop::sample::select(vec!['a', 'b', '1', '_', '!', 'u']),
+                any::<bool>()
+            )
+                .prop_map(|(c, e)| Atom::Lit(c, e)),
+            Just(Atom::Dot),
+            Just(Atom::Word),
+            Just(Atom::Digit),
+            Just(Atom::ComplementWord),
+            Just(Atom::ComplementDigit),
+            Just(Atom::ClassComplementWord),
+            Just(Atom::ClassComplementWordOrA),
+            Just(Atom::ClassComplementDigitOrA),
+            Just(Atom::NegatedClassComplementWord),
+            Just(Atom::NegatedClassComplementDigit),
+        ]
+    }
+
+    fn times() -> impl Strategy<Value = Times> {
+        prop::sample::select(vec![
+            Times::Once,
+            Times::Once,
+            Times::Optional,
+            Times::Star,
+            Times::Plus,
+        ])
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig {cases: 600, rng_seed: proptest::test_runner::RngSeed::Fixed(0x10_5f), ..ProptestConfig::default()})]
+
+        /// The emulator profile's `\W`, `\D`, classes holding them and escaped letters match as the language they stand for
+        /// (the official emulator's automaton), over patterns of up to four atoms with every quantifier and subjects of up to
+        /// four characters; the strict profile never allows what the emulator profile denies, and denies each pattern
+        /// that uses the dialect.
+        #[test]
+        fn the_emulator_profile_matches_the_language_the_pattern_stands_for(
+            atoms in prop::collection::vec((atom(), times()), 1..5),
+            subject in prop::collection::vec(prop::sample::select(vec!['a', 'b', '1', '_', '!', 'é', 'u']), 0..5),
+        ) {
+            let mut text = String::from("^");
+            for &(atom, times) in &atoms {
+                text.push_str(&atom.text());
+                text.push_str(match times {
+                    Times::Once => "",
+                    Times::Optional => "?",
+                    Times::Star => "*",
+                    Times::Plus => "+",
+                });
+            }
+            text.push('$');
+            let subject_text: String = subject.iter().collect();
+            let expr = format!("'{subject_text}'.matches(/{text}/)");
+            let rules = Rules::compile(&read_rule_at_t(&expr)).unwrap();
+            let tree = seed();
+            let auth = auth();
+            let requester = Requester { auth: &auth, now: 0 };
+            let read = |rules: &Rules| rules.can_read(tree.root(), &p("/t"), None, &requester);
+            let emulator = read(&rules.clone().with_jar_regex_dialect(true));
+            prop_assert_eq!(emulator, oracle(&atoms, &subject), "{}", expr);
+            let strict = read(&rules);
+            prop_assert!(!strict || emulator, "{}", expr);
+        }
     }
 
     proptest! {
@@ -1432,27 +1677,81 @@ fn query_equals_itself_through_a_ternary() {
     }
 }
 
-/// Replacing the empty string in a string that is valid UTF-16 and holds a character outside the Basic Multilingual Plane is
-/// an error here (the rule is false, negated or not), where the official emulator answers: this is older than the units
-/// strings and stays as it was (a string without a lone surrogate keeps its own path).
+/// An astral string with the empty string replaced: Java puts the replacement between the halves of a
+/// pair, which is a string with lone surrogates, so the answer is the jar's (owner 2270 (2)).
 #[test]
-fn replacing_the_empty_string_in_an_astral_string_stays_an_error() {
-    for expr in [
-        "'😀'.replace('', 'x').length == 5",
-        "!('😀'.replace('', 'x').length == 5)",
-        "'\\uD83D\\uDE00'.replace('', 'y').length == 5",
+fn replacing_the_empty_string_in_an_astral_string_splits_its_pair() {
+    for (expr, expected) in [
+        ("'😀'.replace('', 'x').length == 5", true),
+        ("!('😀'.replace('', 'x').length == 5)", false),
+        ("'\\uD83D\\uDE00'.replace('', 'y').length == 5", true),
+        ("'😀'.replace('', 'x') == 'x\\uD83Dx\\uDE00x'", true),
+        ("'😀a'.replace('', '').length == 3", true),
     ] {
-        let rules = Rules::compile(&read_rule_at_t(expr)).unwrap();
-        let tree = seed();
-        let auth = auth();
-        let requester = Requester {
-            auth: &auth,
-            now: 123,
-        };
+        assert_eq!(reads(expr), expected, "{expr}");
+    }
+}
+
+/// Reads `/t` as user `u1` with `expr` as the rule.
+fn reads(expr: &str) -> bool {
+    let rules = Rules::compile(&read_rule_at_t(expr)).unwrap();
+    let tree = seed();
+    let auth = auth();
+    let requester = Requester {
+        auth: &auth,
+        now: 123,
+    };
+    rules.can_read(tree.root(), &p("t"), None, &requester)
+}
+
+/// A string a Rules operation builds is bounded before it is allocated (Codex r2 Must): ten chained
+/// `replace('', '0123456789')` would reach 5e10 units. Up to the bound the answer is the jar's (seven
+/// chained replaces, 3.9e7 units, answer there under a 512 MB heap; eight, 4.3e8, are a 500, negated or
+/// not); past it the operation is an error, so the rule is false negated or not, for lone-surrogate
+/// strings and ordinary ones alike.
+#[test]
+fn a_string_grown_past_the_bound_is_an_error_negated_or_not() {
+    for base in ["'\\uD83D'", "'a'"] {
+        let chain = |n: usize| format!("{base}{}", ".replace('', '0123456789')".repeat(n));
         assert!(
-            !rules.can_read(tree.root(), &p("t"), None, &requester),
-            "{expr}"
+            reads(&format!("{}.length == 38974341", chain(7))),
+            "{base} seven"
         );
+        assert!(
+            reads(&format!("!({}.length == 0)", chain(7))),
+            "{base} seven negated"
+        );
+        for n in [8, 9, 10] {
+            assert!(!reads(&format!("{}.length == 0", chain(n))), "{base} {n}");
+            assert!(
+                !reads(&format!("!({}.length == 0)", chain(n))),
+                "{base} {n} negated"
+            );
+        }
+        // `+` is bounded on the same terms: 2 x 3.5e6 is within it, 2 x 3.9e7 is not.
+        assert!(reads(&format!(
+            "({} + {}).length == 7086242",
+            chain(6),
+            chain(6)
+        )));
+        assert!(!reads(&format!(
+            "({} + {}).length == 0",
+            chain(7),
+            chain(7)
+        )));
+        assert!(!reads(&format!(
+            "!(({} + {}).length == 0)",
+            chain(7),
+            chain(7)
+        )));
+    }
+    // A target that is not empty grows as fast: every `a` becomes a hundred.
+    let hundred = "a".repeat(100);
+    for start in ["'a'", "'a\\uD83D'"] {
+        let grow = |n: usize| format!("{start}{}", format!(".replace('a', '{hundred}')").repeat(n));
+        assert!(reads(&format!("{}.length >= 1000000", grow(3))), "{start}");
+        assert!(!reads(&format!("{}.length == 0", grow(4))), "{start}");
+        assert!(!reads(&format!("!({}.length == 0)", grow(4))), "{start}");
     }
 }
 

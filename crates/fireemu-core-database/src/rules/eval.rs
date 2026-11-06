@@ -111,6 +111,8 @@ pub struct Scope<'a> {
     pub read_kind: ReadKind,
     /// The `$wildcard` keys of the location.
     pub wildcards: &'a BTreeMap<String, String>,
+    /// Whether regular expressions are read in the official emulator's dialect (emulator profile).
+    pub jar_regex: bool,
 }
 
 /// Which version of the tree a snapshot value reads: `root` and `data` read the tree before
@@ -262,16 +264,19 @@ fn eval_inner<'a>(
         ExprKind::Member(object, name) => {
             let object = eval(object, scope, observer)?;
             observer.member_name(expr.diagnostic, name);
-            member(object, name, scope)
+            member(object, Some(name), scope)
         }
         ExprKind::Index(object, index) => {
             let object = eval(object, scope, observer)?;
+            // A key holding a lone surrogate names no member of anything (no stored or claimed
+            // name can hold one), so it reads as an absent member, not an error.
             let key = match eval(index, scope, observer)? {
-                Value::Str(s) => s,
-                Value::Num(n) => number_text(n),
+                Value::Str(s) => Some(s),
+                Value::Num(n) => Some(number_text(n)),
+                Value::Units(_) => None,
                 _ => return None,
             };
-            member(object, &key, scope)
+            member(object, key.as_deref(), scope)
         }
         ExprKind::Call(callee, arguments) => {
             let ExprKind::Member(object, name) = &callee.kind else {
@@ -299,7 +304,7 @@ fn eval_inner<'a>(
             if !callable {
                 observer.suppressed -= 1;
             }
-            call(object, name, &arguments?)
+            call(object, name, &arguments?, scope.jar_regex)
         }
         ExprKind::Not(operand) => match eval(operand, scope, observer)? {
             Value::Bool(b) => Some(Value::Bool(!b)),
@@ -339,37 +344,45 @@ fn variable<'a>(name: &str, scope: &Scope<'a>) -> Option<Value<'a>> {
     }
 }
 
-/// A member of `object`. Inside `auth` any member of an object or array, `length` included,
+/// A member of `object`; `None` for a name that holds a lone surrogate, which no member bears.
+/// Inside `auth` any member of an object or array, `length` included,
 /// is its value, or the empty object when absent; the empty object's members are itself
 /// (review r8 M23, the r10 ternary matrix). Anything else has only `length` of a string and
 /// the members of `query`.
-fn member<'a>(object: Value<'a>, name: &str, scope: &Scope<'a>) -> Option<Value<'a>> {
+fn member<'a>(object: Value<'a>, name: Option<&str>, scope: &Scope<'a>) -> Option<Value<'a>> {
     let object = match object {
         Value::Auth(json) => Value::Json(json),
         other => other,
     };
     match object {
         Value::AuthEmpty => Some(Value::AuthEmpty),
-        Value::Json(Json::Object(map)) => Some(map.get(name).map_or(Value::AuthEmpty, from_json)),
+        Value::Json(Json::Object(map)) => Some(
+            name.and_then(|name| map.get(name))
+                .map_or(Value::AuthEmpty, from_json),
+        ),
         // An array is an object keyed by its indexes, read as `Integer.parseInt` reads them
         // (review r10 M33).
         Value::Json(Json::Array(items)) => Some(
-            java_int(name)
+            name.and_then(java_int)
                 .and_then(|index| usize::try_from(index).ok())
                 .and_then(|index| items.get(index))
                 .map_or(Value::AuthEmpty, from_json),
         ),
-        Value::Str(s) if name == "length" =>
+        Value::Str(s) if name == Some("length") =>
         {
             #[allow(clippy::cast_precision_loss)]
             Some(Value::Num(s.encode_utf16().count() as f64))
         }
-        Value::Units(units) if name == "length" =>
+        Value::Units(units) if name == Some("length") =>
         {
             #[allow(clippy::cast_precision_loss)]
             Some(Value::Num(units.len() as f64))
         }
-        Value::Query => Some(query_member(scope.query, scope.read_kind, name)),
+        Value::Query => Some(query_member(
+            scope.query,
+            scope.read_kind,
+            name.unwrap_or_default(),
+        )),
         _ => None,
     }
 }
@@ -451,17 +464,35 @@ fn plain_sigma_neighbour(c: Option<char>) -> bool {
             && (c.to_lowercase().ne(std::iter::once(c)) || c.to_uppercase().ne(std::iter::once(c))))
 }
 
+/// The longest string a Rules operation (`replace`, `+`) may build, in UTF-16 units (bytes for
+/// a [`Value::Str`], which is never fewer). The operation is checked before it allocates, and
+/// past the bound it is an error, so the rule is false negated or not. A chain of ten
+/// `replace('', '0123456789')` would otherwise grow 11 times per step to about 5e10 units
+/// from a rule an anonymous read evaluates. The official emulator's heap decides its own limit:
+/// at 512 MB it answers seven such steps (3.9e7 units) and fails the eighth (4.3e8) with a 500,
+/// negated or not. 2^26 lies between, and is above the largest stored string (10 MiB) grown
+/// threefold by a case change.
+pub(crate) const MAX_STRING_UNITS: usize = 1 << 26;
+
 /// `s.replace(from, to)` as Java gives it: an empty `from` puts `to` before every UTF-16 unit
-/// and at the end (a string with a character beyond the Basic Multilingual Plane would be
-/// split there, which this text cannot hold, so that is an error).
+/// and at the end. The caller sends a string with a character beyond the Basic Multilingual
+/// Plane through [`units_call`], since the replacement splits its pair. `None` past
+/// [`MAX_STRING_UNITS`], before any allocation.
 fn java_replace(s: &str, from: &str, to: &str) -> Option<String> {
     if !from.is_empty() {
+        let found = s.matches(from).count();
+        let grown = found.checked_mul(to.len())?.checked_add(s.len())?;
+        if grown.saturating_sub(found.checked_mul(from.len())?) > MAX_STRING_UNITS {
+            return None;
+        }
         return Some(s.replace(from, to));
     }
-    if s.chars().any(|c| u32::from(c) > 0xFFFF) {
+    debug_assert!(s.chars().all(|c| u32::from(c) <= 0xFFFF));
+    let pieces = s.chars().count().checked_add(1)?;
+    if pieces.checked_mul(to.len())?.checked_add(s.len())? > MAX_STRING_UNITS {
         return None;
     }
-    let mut out = String::with_capacity(s.len() + to.len() * (s.len() + 1));
+    let mut out = String::with_capacity(s.len() + to.len() * pieces);
     for c in s.chars() {
         out.push_str(to);
         out.push(c);
@@ -478,6 +509,17 @@ fn bound_value<'a>(bound: Option<&Bound>) -> Value<'a> {
     }
 }
 
+/// `query.orderBy` on a read that does not order by a child: an ordering no path names (`$` is
+/// no key), so it equals only itself. In a write, a validation or a shallow read it is null, as
+/// the official emulator answers (`query.orderBy != null` is false in those).
+fn order_by_marker<'a>(kind: ReadKind) -> Value<'a> {
+    if kind == ReadKind::Check {
+        Value::Null
+    } else {
+        Value::Ordering(vec!["$".to_owned()])
+    }
+}
+
 /// A member of `query`. A read without a query is ordered as its [`ReadKind`] says. `startAt` is the start
 /// bound, inclusive or not; `endAt` is an inclusive end bound only; `equalTo` is the start
 /// value when an inclusive end bound has the same value.
@@ -487,6 +529,7 @@ fn query_member<'a>(query: Option<&QueryParams>, kind: ReadKind, name: &str) -> 
             "orderByKey" => Value::Bool(kind == ReadKind::Get),
             "orderByPriority" => Value::Bool(kind == ReadKind::Stream),
             "orderByValue" => Value::Bool(false),
+            "orderBy" => order_by_marker(kind),
             _ => Value::Null,
         };
     };
@@ -503,6 +546,14 @@ fn query_member<'a>(query: Option<&QueryParams>, kind: ReadKind, name: &str) -> 
             OrderBy::Child(path) => Value::Ordering(path.keys().to_vec()),
             _ => Value::Null,
         },
+        // The same ordering as `orderByChild` when the query orders by a child. Otherwise a
+        // value that is not null and equals nothing but itself (the official emulator answers
+        // `query.orderBy == null` false and `query.orderBy == query.orderBy` true on a read
+        // ordered by key, by value or by priority).
+        "orderBy" => match &q.order_by {
+            OrderBy::Child(path) => Value::Ordering(path.keys().to_vec()),
+            _ => order_by_marker(kind),
+        },
         "equalTo" => bound_value(equal),
         "startAt" => bound_value(q.start.as_ref()),
         "endAt" => bound_value(end),
@@ -518,6 +569,27 @@ fn query_member<'a>(query: Option<&QueryParams>, kind: ReadKind, name: &str) -> 
     }
 }
 
+/// A path or key argument as text. A lone surrogate is written `$` and its four hex digits: no
+/// stored key holds a `$`, so a path with one names nothing, as in the official emulator.
+fn path_argument(arguments: &[Value<'_>], i: usize) -> Option<String> {
+    path_text(arguments.get(i)?)
+}
+
+fn path_text(value: &Value<'_>) -> Option<String> {
+    match value {
+        Value::Str(s) => Some(s.clone()),
+        Value::Units(units) => Some(
+            char::decode_utf16(units.iter().copied())
+                .map(|decoded| match decoded {
+                    Ok(c) => c.to_string(),
+                    Err(lone) => format!("${:04X}", lone.unpaired_surrogate()),
+                })
+                .collect(),
+        ),
+        _ => None,
+    }
+}
+
 fn string_argument(arguments: &[Value<'_>], i: usize) -> Option<String> {
     match arguments.get(i)? {
         Value::Str(s) => Some(s.clone()),
@@ -525,27 +597,45 @@ fn string_argument(arguments: &[Value<'_>], i: usize) -> Option<String> {
     }
 }
 
-fn call<'a>(object: Value<'a>, name: &str, arguments: &[Value<'a>]) -> Option<Value<'a>> {
+fn call<'a>(
+    object: Value<'a>,
+    name: &str,
+    arguments: &[Value<'a>],
+    jar_regex: bool,
+) -> Option<Value<'a>> {
     match object {
         Value::Snapshot(snapshot, version) => snapshot_call(&snapshot, version, name, arguments),
-        Value::Str(s) if arguments.iter().any(|a| matches!(a, Value::Units(_))) => {
-            units_call(&s.encode_utf16().collect::<Vec<_>>(), name, arguments)
-        }
-        Value::Units(units) => units_call(&units, name, arguments),
+        Value::Str(s) if arguments.iter().any(|a| matches!(a, Value::Units(_))) => units_call(
+            &s.encode_utf16().collect::<Vec<_>>(),
+            name,
+            arguments,
+            jar_regex,
+        ),
+        Value::Units(units) => units_call(&units, name, arguments, jar_regex),
         Value::Str(s) => match name {
             "contains" => Some(Value::Bool(s.contains(&string_argument(arguments, 0)?))),
             "beginsWith" => Some(Value::Bool(s.starts_with(&string_argument(arguments, 0)?))),
             "endsWith" => Some(Value::Bool(s.ends_with(&string_argument(arguments, 0)?))),
-            "replace" => java_replace(
-                &s,
-                &string_argument(arguments, 0)?,
-                &string_argument(arguments, 1)?,
-            )
-            .map(Value::Str),
+            "replace" => {
+                let (from, to) = (
+                    string_argument(arguments, 0)?,
+                    string_argument(arguments, 1)?,
+                );
+                if from.is_empty() && s.chars().any(|c| c.len_utf16() == 2) {
+                    // Java puts the replacement between the halves of a pair.
+                    return units_call(
+                        &s.encode_utf16().collect::<Vec<_>>(),
+                        name,
+                        arguments,
+                        jar_regex,
+                    );
+                }
+                java_replace(&s, &from, &to).map(Value::Str)
+            }
             "toLowerCase" => java_case(&s, true).map(Value::Str),
             "toUpperCase" => java_case(&s, false).map(Value::Str),
             "matches" => match arguments.first()? {
-                Value::Regex(pattern) => pattern.matches(&s).map(Value::Bool),
+                Value::Regex(pattern) => pattern.matches(&s, jar_regex).map(Value::Bool),
                 _ => None,
             },
             _ => None,
@@ -581,7 +671,12 @@ fn find_units(haystack: &[u16], needle: &[u16]) -> Option<usize> {
 
 /// The string methods on a string that holds a lone surrogate, or whose argument does, read by UTF-16
 /// unit as Java reads them. A method not listed here is an error, so the rule is false negated or not.
-fn units_call<'a>(units: &[u16], name: &str, arguments: &[Value<'a>]) -> Option<Value<'a>> {
+fn units_call<'a>(
+    units: &[u16],
+    name: &str,
+    arguments: &[Value<'a>],
+    jar_regex: bool,
+) -> Option<Value<'a>> {
     let argument = |i: usize| arguments.get(i).and_then(units_of);
     match name {
         "contains" => Some(Value::Bool(find_units(units, &argument(0)?).is_some())),
@@ -590,6 +685,10 @@ fn units_call<'a>(units: &[u16], name: &str, arguments: &[Value<'a>]) -> Option<
         "replace" => {
             let (from, to) = (argument(0)?, argument(1)?);
             if from.is_empty() {
+                let pieces = units.len().checked_add(1)?;
+                if pieces.checked_mul(to.len())?.checked_add(units.len())? > MAX_STRING_UNITS {
+                    return None;
+                }
                 // Java puts the replacement before every unit and after the last, even between the halves of a pair.
                 let mut out = to.clone();
                 for unit in units {
@@ -601,9 +700,15 @@ fn units_call<'a>(units: &[u16], name: &str, arguments: &[Value<'a>]) -> Option<
             let mut out = Vec::with_capacity(units.len());
             let mut rest = units;
             while let Some(at) = find_units(rest, &from) {
+                if out.len() + at + to.len() > MAX_STRING_UNITS {
+                    return None;
+                }
                 out.extend_from_slice(&rest[..at]);
                 out.extend_from_slice(&to);
                 rest = &rest[at + from.len()..];
+            }
+            if out.len() + rest.len() > MAX_STRING_UNITS {
+                return None;
             }
             out.extend_from_slice(rest);
             Some(from_units(out))
@@ -625,7 +730,7 @@ fn units_call<'a>(units: &[u16], name: &str, arguments: &[Value<'a>]) -> Option<
             Some(from_units(out))
         }
         "matches" => match arguments.first()? {
-            Value::Regex(pattern) => pattern.matches_units(units).map(Value::Bool),
+            Value::Regex(pattern) => pattern.matches_units(units, jar_regex).map(Value::Bool),
             _ => None,
         },
         _ => None,
@@ -650,7 +755,7 @@ fn snapshot_call<'a>(
             Located::Node(_) => Value::Sentinel,
         }),
         "child" => Some(Value::Snapshot(
-            snapshot.child(&string_argument(arguments, 0)?),
+            snapshot.child(&path_argument(arguments, 0)?),
             version,
         )),
         "parent" => snapshot.path.parent().map(|path| {
@@ -664,7 +769,7 @@ fn snapshot_call<'a>(
         }),
         "exists" => Some(Value::Bool(!matches!(located, Located::Absent))),
         "hasChild" => Some(Value::Bool(!matches!(
-            snapshot.child(&string_argument(arguments, 0)?).locate(),
+            snapshot.child(&path_argument(arguments, 0)?).locate(),
             Located::Absent
         ))),
         "hasChildren" => {
@@ -684,8 +789,8 @@ fn snapshot_call<'a>(
             // name that is no string before that is an error, on any node (review r10 M31,
             // S25, and the r11 hasChildren table). An empty list is true anywhere.
             for key in keys {
-                let Value::Str(key) = key else { return None };
-                if matches!(snapshot.child(key).locate(), Located::Absent) {
+                let key = path_text(key)?;
+                if matches!(snapshot.child(&key).locate(), Located::Absent) {
                     return Some(Value::Bool(false));
                 }
             }
@@ -818,11 +923,22 @@ fn combine<'a>(op: BinaryOp, l: &Value<'a>, r: &Value<'a>) -> Option<Value<'a>> 
             (Value::Num(a), Value::Num(b)) => Some(Value::Num(a + b)),
             (Value::Units(_), _) | (_, Value::Units(_)) => {
                 let mut units = units_text(l)?;
-                units.extend(units_text(r)?);
+                let right = units_text(r)?;
+                if units.len() + right.len() > MAX_STRING_UNITS {
+                    return None;
+                }
+                units.extend(right);
                 Some(from_units(units))
             }
-            (Value::Str(a), _) => Some(Value::Str(format!("{a}{}", text(r)?))),
-            (_, Value::Str(b)) => Some(Value::Str(format!("{}{b}", text(l)?))),
+            (Value::Str(a), _) => {
+                let right = text(r)?;
+                (a.len() + right.len() <= MAX_STRING_UNITS)
+                    .then(|| Value::Str(format!("{a}{right}")))
+            }
+            (_, Value::Str(b)) => {
+                let left = text(l)?;
+                (left.len() + b.len() <= MAX_STRING_UNITS).then(|| Value::Str(format!("{left}{b}")))
+            }
             _ => None,
         },
         BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem => {

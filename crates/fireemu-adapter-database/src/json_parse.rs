@@ -35,6 +35,24 @@ pub fn parse_with_keys(text: &str) -> Result<(Json, Vec<KeyAt>), ParseError> {
     Ok((value, parser.keys))
 }
 
+/// [`parse_with_keys`] for a body the emulator profile accepts as the official emulator does: a lone
+/// surrogate escape in a string value (`"a\ud83d"`) is `?`, one for each lone unit, and the last
+/// answer says whether any was. A key holding one is still refused.
+pub fn parse_with_keys_replacing(text: &str) -> Result<(Json, Vec<KeyAt>, bool), ParseError> {
+    let mut parser = Parser::new(text, true);
+    parser.replace_lone = true;
+    let value = parser.whole()?;
+    Ok((value, parser.keys, parser.replaced))
+}
+
+/// [`parse`] with a lone surrogate in a string value read as `?`, as [`parse_with_keys_replacing`] does.
+pub fn parse_replacing(text: &str) -> Result<(Json, bool), ParseError> {
+    let mut parser = Parser::new(text, false);
+    parser.replace_lone = true;
+    let value = parser.whole()?;
+    Ok((value, parser.replaced))
+}
+
 /// Parses one JSON value without recording key positions (the common path).
 pub fn parse(text: &str) -> Result<Json, ParseError> {
     Parser::new(text, false).whole()
@@ -54,6 +72,10 @@ struct Parser<'a> {
     at: usize,
     /// Whether to record where each key starts.
     record_keys: bool,
+    /// Whether a lone surrogate escape in a string value is `?` (never in a key).
+    replace_lone: bool,
+    /// Whether one was.
+    replaced: bool,
     keys: Vec<KeyAt>,
     /// The last position computed: byte index, line and column. Positions are asked for in
     /// increasing order, so each is computed from the previous one in linear total time.
@@ -66,6 +88,8 @@ impl<'a> Parser<'a> {
             text,
             at: 0,
             record_keys,
+            replace_lone: false,
+            replaced: false,
             keys: Vec::new(),
             mark: (0, 1, 1),
         }
@@ -108,7 +132,7 @@ impl<'a> Parser<'a> {
             b'n' => self.expect("null").map(|()| Json::Null),
             b't' => self.expect("true").map(|()| Json::Bool(true)),
             b'f' => self.expect("false").map(|()| Json::Bool(false)),
-            b'"' => self.string().map(Json::String),
+            b'"' => self.string(self.replace_lone).map(Json::String),
             b'[' => self.array(depth),
             b'{' => self.object(depth),
             b'-' | b'0'..=b'9' => self.number(),
@@ -153,7 +177,7 @@ impl<'a> Parser<'a> {
                 return Err(ParseError);
             }
             let position = self.record_keys.then(|| self.position());
-            let key = self.string()?;
+            let key = self.string(false)?;
             if let Some((line, column)) = position {
                 self.keys.push(KeyAt {
                     key: key.clone(),
@@ -194,7 +218,7 @@ impl<'a> Parser<'a> {
         (line, column)
     }
 
-    fn string(&mut self) -> Result<String, ParseError> {
+    fn string(&mut self, replace_lone: bool) -> Result<String, ParseError> {
         self.at += 1;
         let mut out = String::new();
         loop {
@@ -204,14 +228,14 @@ impl<'a> Parser<'a> {
             self.at += c.len_utf8();
             match c {
                 '"' => return Ok(out),
-                '\\' => out.push(self.escape()?),
+                '\\' => out.push(self.escape(replace_lone)?),
                 '\u{0}'..='\u{1f}' => return Err(ParseError),
                 c => out.push(c),
             }
         }
     }
 
-    fn escape(&mut self) -> Result<char, ParseError> {
+    fn escape(&mut self, replace_lone: bool) -> Result<char, ParseError> {
         let c = self.peek().ok_or(ParseError)?;
         self.at += 1;
         Ok(match c {
@@ -226,13 +250,26 @@ impl<'a> Parser<'a> {
             b'u' => {
                 let first = self.hex4()?;
                 if (0xD800..0xDC00).contains(&first) {
-                    self.expect("\\u")?;
-                    let second = self.hex4()?;
-                    if !(0xDC00..0xE000).contains(&second) {
+                    let after_first = self.at;
+                    let second = self
+                        .expect("\\u")
+                        .and_then(|()| self.hex4())
+                        .ok()
+                        .filter(|second| (0xDC00..0xE000).contains(second));
+                    let Some(second) = second else {
+                        if replace_lone {
+                            // A high surrogate without its low one is a `?`; what follows is read afresh.
+                            self.at = after_first;
+                            self.replaced = true;
+                            return Ok('?');
+                        }
                         return Err(ParseError);
-                    }
+                    };
                     let code = 0x10000 + ((first - 0xD800) << 10) + (second - 0xDC00);
                     char::from_u32(code).ok_or(ParseError)?
+                } else if (0xDC00..0xE000).contains(&first) && replace_lone {
+                    self.replaced = true;
+                    '?'
                 } else {
                     char::from_u32(first).ok_or(ParseError)?
                 }

@@ -95,7 +95,7 @@ test('the entry refuses an existing --out, fails with the observer status, and e
 });
 
 
-// The closure replays of the recording on the release-profile build 0c450112 (fireemu 0.43.0, both profiles) are committed as
+// The closure replays of the recording on the release-profile build f73f2c71 (fireemu 0.43.0, both profiles) are committed as
 // reductions (fixtures/closure-sdk-rest-<profile>.json). The strict profile reproduces production in every observation; the emulator
 // profile differs only in the cases named here, in each round, and the closure record declares them (knownDifferences).
 const PRODUCTION = path.join(here, 'fixtures', 'production-sdk-rest.json');

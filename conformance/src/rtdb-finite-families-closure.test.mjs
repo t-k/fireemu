@@ -25,8 +25,8 @@ const SDK_SMALL = "spec/compatibility/closure/evidence/RTDB-sdk-small-comparison
 // --locked -p fireemu, RUSTC_WRAPPER empty, a fresh worktree-local target directory). The Rust sources
 // are unchanged between that commit and the commit that carries these records.
 const V043 = {
-  sourceCommit: "df8dc29d91deb671dcfbe460f323e7df96fca759",
-  binarySha256: "0c45011298261cb59b06a7f1236946c75369057e4546cca97766054876e0f441",
+  sourceCommit: "013ee66853f7c43c05372acfa8ceeb51b5deadc4",
+  binarySha256: "f73f2c710ddbd2d9b123daf20d87b44c2c986eecf21534b34c0f7175e4b1df07",
 };
 const SDK_EVENTS = "spec/compatibility/closure/evidence/RTDB-sdk-events-comparison.json";
 const EVENTS_FIXTURE = "tools/sdk-smoke-database/fixtures/production-sdk-events.json";
@@ -655,7 +655,12 @@ test("the forged-token refusals outside the recorded shape are declared with the
 
 test("the 2276 round's jar-only rows, emulator-profile differences and claims, query values and frames are recorded with their fixtures and owner row", () => {
   const evidence = condition("RTDB/rules-document-load-diagnostics").evidence;
-  for (const key of ["jarOnlyRows", "jarOnlyQueryOrderBy", "jarOnlyRegexDialect"]) {
+  for (const key of [
+    "jarOnlyRows",
+    "jarOnlyQueryOrderBy",
+    "jarOnlyRegexDialect",
+    "jarOnlyRegexEscapesAndUnits",
+  ]) {
     const rows = evidence[key];
     assert.equal(rows.productionObserved, false, key);
     assert.equal(
@@ -678,12 +683,23 @@ test("the 2276 round's jar-only rows, emulator-profile differences and claims, q
   // The retained denials are counted by cause, and the record does not claim the profile refuses nothing the jar admits.
   assert.match(
     evidence.jarOnlyRegexDialect.statement,
-    /239 of the 323 corpus rows.*84 stay denied.*71 use the `i` flag.*11 put a backslash.*2 use a class range/s,
+    /252 of the 323 corpus rows.*71 stay denied.*`i` flag with non-ASCII/s,
   );
   assert.match(evidence.jarOnlyBodyLoneSurrogate.statement, /Emulator profile only/);
   assert.match(evidence.jarOnlyBodyLoneSurrogate.statement, /key that holds one stays refused/);
   for (const file of evidence.jarOnlyBodyLoneSurrogate.tests) assert.ok(exists(file), file);
   const known = closure().knownDifferences;
+  assert.equal(
+    json(evidence.jarOnlyRegexEscapesAndUnits.fixture).length,
+    evidence.jarOnlyRegexEscapesAndUnits.rows,
+  );
+  // The i flag with non-ASCII text stays refused as a declared difference (owner ledger line 2288).
+  assert.match(known.regexIFlagNonAsciiEmulatorProfile.statement, /71 rows/);
+  assert.match(
+    known.regexIFlagNonAsciiEmulatorProfile.decisionRef,
+    /\(2288, "RTDB closure regex i flag difference"/,
+  );
+  assert.ok(exists(known.regexIFlagNonAsciiEmulatorProfile.evidence));
   for (const key of ["regexDialectEmulatorProfile", "bodyLoneSurrogateEmulatorProfile"]) {
     assert.match(known[key].statement, /no production answer/, key);
     assert.match(known[key].decisionRef, /\(2276, "RTDB closure older over-refusals"/, key);
@@ -722,7 +738,7 @@ test("the 2276 round's jar-only rows, emulator-profile differences and claims, q
   const regexItem = closure().closureBasis.notClaimedItems.find(
     (i) => i.key === "notClaimed_emulator_profile_regex_and_body_surrogates",
   );
-  assert.match(regexItem.detail, /239 of the 323 corpus rows.*84 stay denied/s);
+  assert.match(regexItem.detail, /252 of the 323 corpus rows.*71 stay denied/s);
   assert.match(closure().scopeDecisions.find((s) => s.id === "R11").decisionRef, /\b2276\b/);
 });
 

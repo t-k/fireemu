@@ -65,20 +65,20 @@
   "command": "node tools/sdk-smoke-database/rtdb-sdk-rest.mjs local --fireemu <binary> --out <dir> --profile strict|emulator --against tools/sdk-smoke-database/fixtures/production-sdk-rest.json",
   "binding": {
     "release": "closure-build",
-    "releaseAsset": "unpublished release-profile build of source commit df8dc29d91deb671dcfbe460f323e7df96fca759 (cargo build --release --locked -p fireemu, RUSTC_WRAPPER empty, fresh worktree-local target directory)",
-    "releaseAssetSha256": "0c45011298261cb59b06a7f1236946c75369057e4546cca97766054876e0f441",
-    "sourceCommit": "df8dc29d91deb671dcfbe460f323e7df96fca759",
+    "releaseAsset": "unpublished release-profile build of source commit 013ee66853f7c43c05372acfa8ceeb51b5deadc4 (cargo build --release --locked -p fireemu, RUSTC_WRAPPER empty, fresh worktree-local target directory)",
+    "releaseAssetSha256": "f73f2c710ddbd2d9b123daf20d87b44c2c986eecf21534b34c0f7175e4b1df07",
+    "sourceCommit": "013ee66853f7c43c05372acfa8ceeb51b5deadc4",
     "tagObject": null,
-    "binarySha256": "0c45011298261cb59b06a7f1236946c75369057e4546cca97766054876e0f441",
+    "binarySha256": "f73f2c710ddbd2d9b123daf20d87b44c2c986eecf21534b34c0f7175e4b1df07",
     "version": "fireemu 0.43.0",
-    "toolCommit": "df8dc29d91deb671dcfbe460f323e7df96fca759",
+    "toolCommit": "013ee66853f7c43c05372acfa8ceeb51b5deadc4",
     "host": "Darwin arm64",
     "productionRequests": 0
   },
   "profiles": {
     "strict": {
       "profile": "strict",
-      "binarySha256": "0c45011298261cb59b06a7f1236946c75369057e4546cca97766054876e0f441",
+      "binarySha256": "f73f2c710ddbd2d9b123daf20d87b44c2c986eecf21534b34c0f7175e4b1df07",
       "match": true,
       "counts": {
         "MATCH": 144,
@@ -811,7 +811,7 @@
     },
     "emulator": {
       "profile": "emulator",
-      "binarySha256": "0c45011298261cb59b06a7f1236946c75369057e4546cca97766054876e0f441",
+      "binarySha256": "f73f2c710ddbd2d9b123daf20d87b44c2c986eecf21534b34c0f7175e4b1df07",
       "match": false,
       "counts": {
         "MATCH": 138,

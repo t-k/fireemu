@@ -25,7 +25,7 @@ impl ChangeSink for Sink {
     fn capture_references(
         &self,
         _: &str,
-        _: &Tree,
+        _: changes::ScopeView<'_>,
         _: &Tree,
     ) -> Result<Option<Vec<Path>>, EventAdmissionError> {
         Ok(self.references.clone())
@@ -57,7 +57,7 @@ fn context() -> ChangeContext {
 fn a_reservation_is_not_published_until_the_candidate_is_committed() {
     let mut tree = Tree::default();
     let sink = Sink::default();
-    let (_, candidate) = prepare(&tree, context(), Some(&sink), |tree| {
+    let (_, candidate) = prepare(&mut tree, context(), Some(&sink), |tree| {
         tree.set(
             &Path::root(),
             &Json::Bool(true),
@@ -65,9 +65,9 @@ fn a_reservation_is_not_published_until_the_candidate_is_committed() {
         )
     })
     .unwrap();
-    assert!(tree.root().is_none());
+    assert!(tree.root().is_some());
     assert_eq!(*sink.published.lock().unwrap(), 0);
-    candidate.commit(&mut tree);
+    candidate.commit();
     assert_eq!(
         tree.get_json(&Path::root(), fireemu_core_database::Format::Export),
         Json::Bool(true)
@@ -84,12 +84,12 @@ fn a_reservation_is_not_published_until_the_candidate_is_committed() {
 }
 #[test]
 fn refusing_the_complete_batch_leaves_the_original_tree_unchanged() {
-    let tree = Tree::default();
+    let mut tree = Tree::default();
     let sink = Sink {
         reject: true,
         ..Sink::default()
     };
-    assert!(prepare(&tree, context(), Some(&sink), |tree| {
+    assert!(prepare(&mut tree, context(), Some(&sink), |tree| {
         tree.set(
             &Path::root(),
             &Json::Bool(true),
@@ -105,7 +105,7 @@ fn null_to_null_and_empty_updates_do_not_reserve_even_without_listeners() {
     let mut tree = Tree::default();
     let sink = Sink::default();
     for _ in 0..3 {
-        let (_, candidate) = prepare(&tree, context(), Some(&sink), |tree| {
+        let (_, candidate) = prepare(&mut tree, context(), Some(&sink), |tree| {
             tree.set(
                 &Path::root(),
                 &Json::Null,
@@ -113,13 +113,13 @@ fn null_to_null_and_empty_updates_do_not_reserve_even_without_listeners() {
             )
         })
         .unwrap();
-        candidate.commit(&mut tree);
+        candidate.commit();
     }
-    let ((), candidate) = prepare(&tree, context(), Some(&sink), |tree| {
+    let ((), candidate) = prepare(&mut tree, context(), Some(&sink), |tree| {
         tree.update(&Path::root(), &[], ServerValueContext { now_millis: 100 })
     })
     .unwrap();
-    candidate.commit(&mut tree);
+    candidate.commit();
     assert!(sink.captured.lock().unwrap().is_empty());
     assert_eq!(*sink.published.lock().unwrap(), 0);
 }
@@ -150,7 +150,7 @@ fn projected_snapshots_deduplicate_refs_keep_ancestors_and_exclude_unrelated_dat
         ]),
         ..Sink::default()
     };
-    let (_, candidate) = prepare(&tree, context(), Some(&sink), |tree| {
+    let (_, candidate) = prepare(&mut tree, context(), Some(&sink), |tree| {
         tree.set(
             &path("/users/a"),
             &Json::int(3),
@@ -158,7 +158,7 @@ fn projected_snapshots_deduplicate_refs_keep_ancestors_and_exclude_unrelated_dat
         )
     })
     .unwrap();
-    candidate.commit(&mut tree);
+    candidate.commit();
     let captured = sink.captured.lock().unwrap();
     let changes::ChangeData::References(refs) = &captured[0].data else {
         panic!("projected capture expected")
@@ -174,12 +174,12 @@ fn projected_snapshots_deduplicate_refs_keep_ancestors_and_exclude_unrelated_dat
 
 #[test]
 fn projected_empty_selection_and_invalid_candidates_never_reserve() {
-    let tree = Tree::default();
+    let mut tree = Tree::default();
     let sink = Sink {
         references: Some(Vec::new()),
         ..Sink::default()
     };
-    let (_, candidate) = prepare(&tree, context(), Some(&sink), |tree| {
+    let (_, candidate) = prepare(&mut tree, context(), Some(&sink), |tree| {
         tree.set(
             &Path::root(),
             &Json::Bool(true),
@@ -189,16 +189,21 @@ fn projected_empty_selection_and_invalid_candidates_never_reserve() {
     .unwrap();
     drop(candidate);
     assert!(sink.captured.lock().unwrap().is_empty());
-    assert!(prepare(&tree, context(), Some(&sink), |tree| tree.update(
-        &Path::root(),
-        &[
-            ("a".to_owned(), Json::Bool(true)),
-            ("a/x".to_owned(), Json::int(1))
-        ],
-        ServerValueContext { now_millis: 100 },
-    ))
-    .is_err());
-    assert!(tree.root().is_none());
+    assert!(
+        prepare(&mut tree, context(), Some(&sink), |tree| tree.update(
+            &Path::root(),
+            &[
+                ("a".to_owned(), Json::Bool(true)),
+                ("a/x".to_owned(), Json::int(1))
+            ],
+            ServerValueContext { now_millis: 100 },
+        ))
+        .is_err()
+    );
+    assert_eq!(
+        tree.get_json(&Path::root(), fireemu_core_database::Format::Export),
+        Json::Bool(true)
+    );
     assert!(sink.captured.lock().unwrap().is_empty());
 }
 
@@ -217,7 +222,7 @@ fn priority_only_changes_preserve_both_export_snapshots() {
         references: Some(vec![Path::root()]),
         ..Sink::default()
     };
-    let (_, candidate) = prepare(&tree, context(), Some(&sink), |tree| {
+    let (_, candidate) = prepare(&mut tree, context(), Some(&sink), |tree| {
         tree.set(
             &Path::root(),
             &value(3),
@@ -225,7 +230,7 @@ fn priority_only_changes_preserve_both_export_snapshots() {
         )
     })
     .unwrap();
-    candidate.commit(&mut tree);
+    candidate.commit();
     let captured = sink.captured.lock().unwrap();
     let changes::ChangeData::References(refs) = &captured[0].data else {
         panic!("projected capture expected")
@@ -252,12 +257,12 @@ proptest::proptest! {
         for (value, reject) in operations {
             let sink = Sink { reject, ..Sink::default() };
             let json = value.map_or(Json::Null, Json::Bool);
-            let result = prepare(&tree, context(), Some(&sink), |tree| tree.set(&Path::root(), &json, ServerValueContext {now_millis:100}));
+            let result = prepare(&mut tree, context(), Some(&sink), |tree| tree.set(&Path::root(), &json, ServerValueContext {now_millis:100}));
             let changes = expected != value;
             if reject && changes {
                 proptest::prop_assert!(matches!(result, Err(changes::ChangeError::Admission(_))));
             } else {
-                result.unwrap().1.commit(&mut tree);
+                result.unwrap().1.commit();
                 expected = value;
                 published += usize::from(changes);
             }
@@ -446,12 +451,12 @@ fn captured_snapshots(
         references: Some(references),
         ..Sink::default()
     };
-    let (_, prepared) = prepare(tree, context(), Some(&sink), |tree| {
+    let mut after = tree.clone();
+    let (_, prepared) = prepare(&mut after, context(), Some(&sink), |tree| {
         tree.set(&Path::root(), next, ServerValueContext { now_millis: 100 })
     })
     .ok()?;
-    let mut after = tree.clone();
-    prepared.commit(&mut after);
+    prepared.commit();
     let captured = sink.captured.lock().unwrap();
     let snapshots = captured
         .iter()
@@ -587,4 +592,401 @@ proptest::proptest! {
             proptest::prop_assert_eq!(after_text, serde_json::to_string(&rendered_snapshot(&after, &reference)).unwrap());
         }
     }
+}
+
+#[test]
+fn successful_prepare_changes_source_before_publication_and_drop_keeps_data() {
+    let mut tree = Tree::default();
+    let sink = Sink::default();
+    let (_, prepared) = prepare(&mut tree, context(), Some(&sink), |tree| {
+        tree.set(
+            &Path::root(),
+            &Json::Bool(true),
+            ServerValueContext { now_millis: 100 },
+        )
+    })
+    .unwrap();
+    assert_eq!(
+        tree.get_json(&Path::root(), fireemu_core_database::Format::Export),
+        Json::Bool(true)
+    );
+    assert_eq!(*sink.published.lock().unwrap(), 0);
+    drop(prepared);
+    assert_eq!(
+        tree.get_json(&Path::root(), fireemu_core_database::Format::Export),
+        Json::Bool(true)
+    );
+    assert_eq!(*sink.published.lock().unwrap(), 0);
+}
+
+#[derive(Debug)]
+struct RefusalSink {
+    stage: &'static str,
+    capture: &'static str,
+    reserved: Mutex<Vec<CommittedChange>>,
+    published: Arc<Mutex<usize>>,
+}
+impl ChangeSink for RefusalSink {
+    fn capture_references_within(
+        &self,
+        _: &str,
+        _: changes::ScopeView<'_>,
+        _: &Tree,
+        scope: &Path,
+    ) -> Result<Option<Vec<Path>>, EventAdmissionError> {
+        if self.stage == "capture" {
+            return Err(EventAdmissionError::Unavailable("capture refused".into()));
+        }
+        Ok(match self.capture {
+            "whole" => None,
+            "empty" => Some(Vec::new()),
+            _ => Some(vec![scope.clone(), Path::root(), scope.clone()]),
+        })
+    }
+    fn reserve(
+        &self,
+        change: &CommittedChange,
+    ) -> Result<Box<dyn Publication>, EventAdmissionError> {
+        if self.stage == "reserve" {
+            return Err(EventAdmissionError::Unavailable(
+                "reservation refused".into(),
+            ));
+        }
+        self.reserved.lock().unwrap().push(change.clone());
+        Ok(Box::new(Reserved(self.published.clone())))
+    }
+}
+fn exact_export(tree: &Tree) -> String {
+    fireemu_adapter_database::json_text::render(
+        &tree.get_json(&Path::root(), fireemu_core_database::Format::Export),
+        fireemu_adapter_database::json_text::Style::Compact,
+    )
+}
+fn injected_failure() -> fireemu_core_database::DatabaseError {
+    fireemu_core_database::DatabaseError::new(
+        fireemu_core_database::ErrorKind::ReadOnlyPath,
+        "refused after scoped write",
+    )
+}
+
+const SCOPED_REFUSAL_CASES: &[(&str, &str, &str, &str, &str, &str)] = &[
+    ("sibling", "existing", "set", "none", "reference", "absent"),
+    (
+        "leaf",
+        "deep",
+        "partial_error",
+        "operation",
+        "reference",
+        "number",
+    ),
+    (
+        "single_child",
+        "existing",
+        "delete",
+        "reserve",
+        "reference",
+        "string",
+    ),
+    ("absent", "deep", "set", "capture", "reference", "absent"),
+    ("absent", "root", "set", "reserve", "whole", "number"),
+    ("sibling", "existing", "noop", "none", "reference", "absent"),
+    ("single_child", "existing", "set", "none", "whole", "number"),
+    ("leaf", "missing", "set", "reserve", "whole", "string"),
+    (
+        "sibling",
+        "existing",
+        "priority",
+        "reserve",
+        "reference",
+        "number",
+    ),
+    ("absent", "root", "priority", "operation", "empty", "string"),
+    ("sibling", "missing", "update", "capture", "empty", "string"),
+    (
+        "absent",
+        "missing",
+        "partial_error",
+        "operation",
+        "whole",
+        "absent",
+    ),
+    ("leaf", "deep", "noop", "none", "empty", "number"),
+    ("sibling", "deep", "delete", "capture", "whole", "absent"),
+    ("leaf", "missing", "delete", "capture", "empty", "absent"),
+    (
+        "single_child",
+        "existing",
+        "priority",
+        "capture",
+        "empty",
+        "absent",
+    ),
+    ("absent", "missing", "update", "none", "reference", "number"),
+    ("absent", "root", "update", "reserve", "reference", "absent"),
+    (
+        "single_child",
+        "existing",
+        "update",
+        "operation",
+        "whole",
+        "number",
+    ),
+    ("absent", "root", "noop", "none", "whole", "string"),
+    ("single_child", "missing", "noop", "none", "whole", "number"),
+    (
+        "absent",
+        "root",
+        "partial_error",
+        "operation",
+        "empty",
+        "string",
+    ),
+    ("leaf", "deep", "update", "capture", "reference", "number"),
+    ("absent", "root", "delete", "operation", "empty", "number"),
+    (
+        "single_child",
+        "deep",
+        "delete",
+        "none",
+        "reference",
+        "string",
+    ),
+    (
+        "sibling",
+        "existing",
+        "partial_error",
+        "operation",
+        "whole",
+        "number",
+    ),
+    (
+        "single_child",
+        "deep",
+        "set",
+        "operation",
+        "empty",
+        "absent",
+    ),
+    ("absent", "root", "priority", "capture", "whole", "number"),
+    ("absent", "root", "priority", "none", "reference", "number"),
+    (
+        "sibling",
+        "deep",
+        "update",
+        "reserve",
+        "reference",
+        "string",
+    ),
+    (
+        "single_child",
+        "existing",
+        "partial_error",
+        "operation",
+        "whole",
+        "absent",
+    ),
+];
+
+fn scoped_refusal_fixture(ancestor: &str, location: &str) -> Json {
+    match ancestor {
+        "leaf" => Json::object([(
+            "a",
+            Json::Number(fireemu_core_database::Number::Double(-0.0)),
+        )]),
+        "single_child" => Json::object([("a", Json::object([("x", Json::int(1))]))]),
+        "sibling" => Json::object([
+            (
+                "a",
+                Json::object([("x", Json::int(1)), ("y", Json::Bool(true))]),
+            ),
+            ("b", Json::string("untouched")),
+        ]),
+        _ => {
+            if location == "root" {
+                Json::object([("a", Json::int(1))])
+            } else {
+                Json::Null
+            }
+        }
+    }
+}
+
+#[test]
+fn scoped_refusal_matrix_covers_ancestor_shapes_capture_modes_and_priorities() {
+    // Pairwise combinations with explicit regression cases for displaced leaves,
+    // missing chains, pruned priorities, root writes and unchanged operations.
+
+    assert_eq!(SCOPED_REFUSAL_CASES.len(), 31);
+    let now = ServerValueContext { now_millis: 100 };
+    for &(ancestor, location, operation, refusal, capture, priority) in SCOPED_REFUSAL_CASES {
+        let mut tree = Tree::default();
+        let fixture = scoped_refusal_fixture(ancestor, location);
+        tree.set(&Path::root(), &fixture, now).unwrap();
+        let scope = Path::from_keys(match location {
+            "root" => vec![],
+            "existing" => vec!["a", "x"],
+            "missing" => vec!["a", "missing"],
+            _ => vec!["a", "x", "deep"],
+        });
+        let priority = match priority {
+            "number" => Json::int(9),
+            "string" => Json::string("p"),
+            _ => Json::Null,
+        };
+        for at in [
+            Path::root(),
+            Path::from_keys(["a"]),
+            Path::from_keys(["a", "x"]),
+        ] {
+            if tree.get(&at).is_some() {
+                tree.set(&at.child(".priority"), &priority, now).unwrap();
+            }
+        }
+        let original = tree.clone();
+        let bytes = exact_export(&tree);
+        let sink = RefusalSink {
+            stage: refusal,
+            capture,
+            reserved: Mutex::new(Vec::new()),
+            published: Arc::default(),
+        };
+        let result = changes::prepare_within(&mut tree, &scope, context(), Some(&sink), |tree| {
+            match operation {
+                "delete" => {
+                    tree.set(&scope, &Json::Null, now)?;
+                }
+                "update" => {
+                    tree.update(&scope, &[("child".into(), Json::int(42))], now)?;
+                }
+                "priority" => {
+                    tree.set(&scope.child(".priority"), &Json::string("changed"), now)?;
+                }
+                "noop" => {}
+                _ => {
+                    tree.set(&scope, &Json::int(42), now)?;
+                }
+            }
+            if refusal == "operation" {
+                return Err(injected_failure());
+            }
+            Ok(())
+        });
+        // Deletion of an absent scope is a successful no-op; capture/reserve is
+        // intentionally skipped even if that stage was configured to refuse.
+        let refused = refusal == "operation" || (refusal != "none" && tree != original);
+        match result {
+            Err(_) => {
+                assert_ne!(refusal, "none");
+                assert_eq!(
+                    exact_export(&tree),
+                    bytes,
+                    "{ancestor}/{location}/{operation}/{refusal}/{capture}"
+                );
+                assert_eq!(format!("{tree:?}"), format!("{original:?}"));
+            }
+            Ok(((), prepared)) => {
+                assert!(
+                    !refused,
+                    "a changed operation must reach its configured refusal"
+                );
+                prepared.commit();
+            }
+        }
+        if refusal != "none" {
+            assert_eq!(*sink.published.lock().unwrap(), 0);
+        }
+        for change in sink.reserved.lock().unwrap().iter() {
+            match &change.data {
+                changes::ChangeData::Whole { before, after } => {
+                    assert_eq!(before, &rendered_snapshot(&original, &Path::root()));
+                    assert_eq!(after, &rendered_snapshot(&tree, &Path::root()));
+                }
+                changes::ChangeData::References(refs) => {
+                    for reference in refs {
+                        assert_eq!(
+                            reference.before,
+                            rendered_snapshot(&original, &reference.reference)
+                        );
+                        assert_eq!(
+                            reference.after,
+                            rendered_snapshot(&tree, &reference.reference)
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config::with_cases(128))]
+    #[test]
+    fn every_scoped_refusal_restores_exact_export_bytes(
+        first in arbitrary_json(),
+        second in arbitrary_json(),
+        depth in 0usize..4,
+        refusal in 0usize..3,
+    ) {
+        let mut tree = Tree::default();
+        let now = ServerValueContext { now_millis: 100 };
+        proptest::prop_assume!(tree.set(&Path::root(), &first, now).is_ok());
+        let original = exact_export(&tree);
+        let stored_form = format!("{tree:?}");
+        let scope = Path::from_keys(std::iter::repeat_n("a", depth));
+        let stage = ["operation", "capture", "reserve"][refusal];
+        let sink = RefusalSink { stage, capture: "reference", reserved: Mutex::new(Vec::new()), published: Arc::default() };
+        let result = changes::prepare_within(&mut tree, &scope, context(), Some(&sink), |tree| {
+            tree.set(&scope, &second, now)?;
+            if stage == "operation" { return Err(injected_failure()); }
+            Ok(())
+        });
+        if result.is_err() {
+            proptest::prop_assert_eq!(exact_export(&tree), original);
+            proptest::prop_assert_eq!(format!("{tree:?}"), stored_form);
+        } else {
+            // The only successful path is a semantically unchanged write.
+            proptest::prop_assert_eq!(exact_export(&tree), original);
+        }
+        proptest::prop_assert_eq!(*sink.published.lock().unwrap(), 0);
+    }
+}
+
+#[test]
+fn successful_scoped_preparation_preserves_unrelated_string_allocation() {
+    use fireemu_core_database::{Content, Leaf};
+    let mut tree = Tree::default();
+    let now = ServerValueContext { now_millis: 100 };
+    tree.set(
+        &Path::root(),
+        &Json::object([
+            ("a", Json::int(1)),
+            ("b", Json::string("unrelated".repeat(4096))),
+        ]),
+        now,
+    )
+    .unwrap();
+    let sibling = Path::from_keys(["b"]);
+    let pointer = |tree: &Tree| match &tree.get(&sibling).unwrap().content {
+        Content::Leaf(Leaf::String(text)) => text.as_ptr(),
+        _ => panic!("string fixture"),
+    };
+    let original = pointer(&tree);
+    let sink = Sink {
+        references: Some(vec![Path::from_keys(["a"])]),
+        ..Sink::default()
+    };
+    let (_, prepared) = changes::prepare_within(
+        &mut tree,
+        &Path::from_keys(["a"]),
+        context(),
+        Some(&sink),
+        |tree| tree.set(&Path::from_keys(["a"]), &Json::int(2), now),
+    )
+    .unwrap();
+    prepared.commit();
+    assert_eq!(
+        pointer(&tree),
+        original,
+        "publishing a copied namespace would replace this allocation"
+    );
 }

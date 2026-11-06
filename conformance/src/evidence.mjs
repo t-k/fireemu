@@ -148,13 +148,14 @@ const isSelector = (key, value) =>
   /selector|pointer/i.test(key) &&
   value.startsWith("/") &&
   (value === "/" ||
-    ([...value].every(
-      (character) =>
-        character === "/" ||
-        character === "[" ||
-        character === "]" ||
-        selectorCharacter.test(character),
-    ) &&
+    (JSON_SELECTOR_ROOTS.has(value.match(/^\/([A-Za-z][A-Za-z0-9_-]*)/)?.[1]) &&
+      [...value].every(
+        (character) =>
+          character === "/" ||
+          character === "[" ||
+          character === "]" ||
+          selectorCharacter.test(character),
+      ) &&
       !/(?:^|\/)\.\.(?:\/|$)/.test(value) &&
       [...value.matchAll(/(?:^|[,;\s])\/([A-Za-z][A-Za-z0-9_-]*)/g)].every((match) =>
         JSON_SELECTOR_ROOTS.has(match[1]),

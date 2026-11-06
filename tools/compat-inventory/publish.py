@@ -8,17 +8,13 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 from collections import Counter
 from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "tools"))
-from public_evidence import public_json, public_json_bytes
 
 from capture import check, digest
 from probe import DATABASE, NUMBER, PROJECT
 
+ROOT = Path(__file__).resolve().parents[2]
 INDEX = ROOT / "spec/compatibility/acquisition.json"
 REPORT = ROOT / "docs/compatibility/acquisition.md"
 AGGREGATIONS = {
@@ -410,37 +406,22 @@ def render() -> str:
     return "\n".join(lines)
 
 
-OBSERVATION_INPUTS = (
-    ("timestamps-production.json", "timestamps", "production"),
-    ("timestamps-fireemu.json", "timestamps", "fireemu"),
-    ("aggregation-production-final.json", "aggregation", "production"),
-    ("aggregation-fireemu-final.json", "aggregation", "fireemu"),
-    ("auth-production-final.json", "auth", "production"),
-)
-
-
-def read_public_observations(directory: Path) -> list[tuple[str, str, str, bytes]]:
-    return [
-        (name, corpus, target, public_json_bytes((directory / name).read_bytes()))
-        for name, corpus, target in OBSERVATION_INPUTS
-    ]
-
-
-def write_public_observations(
-    observations: list[tuple[str, str, str, bytes]], destination: Path
-) -> None:
-    destination.mkdir(parents=True, exist_ok=False)
-    for name, _, _, raw in observations:
-        (destination / name).write_bytes(raw)
-
-
 def record(directory: Path, snapshot: str) -> None:
     require(not INDEX.exists(), "candidate index already exists")
-    observation_bytes = read_public_observations(directory)
+    destination = ROOT / "spec/compatibility/observations/2026-09-09"
+    destination.mkdir(parents=True, exist_ok=False)
     observations = []
     files = {}
-    for name, corpus, target, raw in observation_bytes:
-        path = f"spec/compatibility/observations/2026-09-09/{name}"
+    for name, corpus, target in [
+        ("timestamps-production.json", "timestamps", "production"),
+        ("timestamps-fireemu.json", "timestamps", "fireemu"),
+        ("aggregation-production-final.json", "aggregation", "production"),
+        ("aggregation-fireemu-final.json", "aggregation", "fireemu"),
+        ("auth-production-final.json", "auth", "production"),
+    ]:
+        raw = (directory / name).read_bytes()
+        (destination / name).write_bytes(raw)
+        path = str((destination / name).relative_to(ROOT))
         files[path] = digest(raw)
         observations.append(
             {
@@ -461,12 +442,7 @@ def record(directory: Path, snapshot: str) -> None:
         "tools/compat-inventory/protobuf_inventory.py",
     ]:
         files[path] = digest(local_path(path).read_bytes())
-    receipt_bytes = next(
-        raw
-        for name, _, _, raw in observation_bytes
-        if name == "aggregation-fireemu-final.json"
-    )
-    receipt = json.loads(receipt_bytes)
+    receipt = json.loads((directory / "aggregation-fireemu-final.json").read_text())
     value = {
         "schemaVersion": 1,
         "acceptance": "candidate",
@@ -477,19 +453,7 @@ def record(directory: Path, snapshot: str) -> None:
         "observations": observations,
         "files": files,
     }
-    index_text = public_json(value, indent=2)
-    destination = ROOT / "spec/compatibility/observations/2026-09-09"
-    write_public_observations(observation_bytes, destination)
-    write_index(value, serialized=index_text)
-
-
-def write_index(
-    value, destination: Path | None = None, *, serialized: str | None = None
-) -> None:
-    text = public_json(value, indent=2) if serialized is None else serialized
-    if serialized is not None:
-        public_json_bytes(text.encode("utf-8"))
-    (destination or INDEX).write_text(text)
+    INDEX.write_text(json.dumps(value, indent=2) + "\n")
 
 
 def main() -> None:

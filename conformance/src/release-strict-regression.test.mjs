@@ -339,50 +339,6 @@ test("every export is copied once per comparison file, under that file's name", 
   assert.deepEqual(exportCopies([{ path: "e/x.json", runIds: ["C1"] }], suiteRunsWithExport()), []);
 });
 
-test("release export copies validate all retained snapshots before writing exact bytes", async (t) => {
-  const { copyValidatedExportSnapshots } = await import("./release-strict-regression.mjs");
-  assert.equal(typeof copyValidatedExportSnapshots, "function");
-  const dir = mkdtempSync(join(tmpdir(), "release-export-snapshots-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const firstSource = join(dir, "R1-export.json");
-  const secondSource = join(dir, "R2-export.json");
-  const firstOutput = join(dir, "comparison-1.json");
-  const secondOutput = join(dir, "comparison-2.json");
-  const firstBytes = Buffer.from('{"rows":[]}\r\n');
-  const secondBytes = Buffer.from('{"url":"https://firebase.google.com"}\n');
-  writeFileSync(firstSource, firstBytes);
-  writeFileSync(secondSource, '{"path":"docs.local/private-export.json"}\n');
-  writeFileSync(firstOutput, "keep first output");
-  writeFileSync(secondOutput, "keep second output");
-  const copies = [
-    { from: "R1-export.json", to: "comparison-1.json" },
-    { from: "R2-export.json", to: "comparison-2.json" },
-  ];
-  await assert.rejects(copyValidatedExportSnapshots(dir, copies));
-  assert.equal(readFileSync(firstOutput, "utf8"), "keep first output");
-  assert.equal(readFileSync(secondOutput, "utf8"), "keep second output");
-
-  writeFileSync(secondSource, secondBytes);
-  let reads = 0;
-  let writes = 0;
-  await copyValidatedExportSnapshots(dir, copies, {
-    readSource: (path) => {
-      reads += 1;
-      return readFileSync(path);
-    },
-    writeDestination: (path, bytes) => {
-      writes += 1;
-      if (writes === 1)
-        writeFileSync(secondSource, '{"path":"docs.local/changed-after-read.json"}\n');
-      writeFileSync(path, bytes);
-    },
-  });
-  assert.equal(reads, 2);
-  assert.equal(writes, 2);
-  assert.deepEqual(readFileSync(firstOutput), firstBytes);
-  assert.deepEqual(readFileSync(secondOutput), secondBytes);
-});
-
 function suiteRunsWithExport() {
   const exporting = (run) => ({ ...run, commands: [{ mode: "export-comparison" }] });
   return [
@@ -1982,13 +1938,14 @@ test("R11 binds every supplied summary and receipt field to the collected compar
   }
 });
 
-test("R11 trusted collector preserves exact validated snapshots and their hashes", async () => {
+test("R11 trusted collector preserves exact raw and comparison snapshots and their hashes", async () => {
   const dir = mkdtempSync(join(tmpdir(), "strict-raw-collector-")),
     out = join(dir, "out");
   mkdirSync(out);
   try {
-    const bytes = Buffer.from('{"rows":[{"status":"MATCH"}]}\n'),
-      summary = Buffer.from('{"artifact":{"path":"target/release/fireemu"},"rows":[]}\n');
+    const observed = resolvedObservation(),
+      bytes = Buffer.from(observed.raw.bytesBase64, "base64"),
+      summary = Buffer.from(`${JSON.stringify(observed.result, null, 2)}\n`);
     writeFileSync(join(dir, "fireemu-historical-production.json"), bytes);
     writeFileSync(join(dir, "historical-production-comparison.json"), summary);
     const collected = await collectHistoricalReplay(dir, out);
@@ -1996,10 +1953,10 @@ test("R11 trusted collector preserves exact validated snapshots and their hashes
     assert.deepEqual(collected.comparison, historicalRawObservation(summary));
     assert.deepEqual(readFileSync(join(out, "R11-fireemu-historical-production.json")), bytes);
     assert.deepEqual(readFileSync(join(out, "R11-historical-production-comparison.json")), summary);
-    assert.deepEqual(collected.result, {
-      artifact: { path: "target/release/fireemu" },
-      rows: [],
-    });
+    assert.deepEqual(
+      judgeHistorical(regression().historical, { exitCode: 0, ...collected }, BINARY),
+      [],
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

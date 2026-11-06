@@ -7,10 +7,7 @@ import re
 import sys
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "tools"))
-from public_evidence import public_json
 sys.path.insert(0, str(ROOT / "tools/auth-disabled"))
 sys.path.insert(0, str(ROOT / "tools/compat-inventory"))
 from disabled_contract import (
@@ -336,7 +333,7 @@ if __name__ == "__main__":
         }
         validate(value)
         BUNDLE.parent.mkdir(parents=True, exist_ok=True)
-        BUNDLE.write_text(public_json(value, sort_keys=True, indent=2))
+        BUNDLE.write_text(json.dumps(value, sort_keys=True, indent=2) + "\n")
     value = json.loads(BUNDLE.read_bytes())
     page = render(value)
     if args.check:

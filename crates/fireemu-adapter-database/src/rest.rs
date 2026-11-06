@@ -504,7 +504,7 @@ impl Database {
         let tree = self.tree_mut(namespace);
         let (result, candidate) =
             crate::changes::prepare_within(tree, &scope, change, sink.as_deref(), operation)?;
-        candidate.commit(tree);
+        candidate.commit();
         self.next_change = next;
         Ok(result)
     }

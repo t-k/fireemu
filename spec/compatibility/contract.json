@@ -1870,7 +1870,7 @@
         },
         {
           "id": "FN-CLAIM-DISCOVERY",
-          "statement": "Every export a codebase declares is accounted for: served, or named with the reason it is not, every codebase a firebase.json declares is loaded on a runner of its own, and SIGINT or SIGTERM shuts those runners and their descendants down cleanly. Node codebases reload source changes while retaining in-flight invocations; Python codebases (python310 through python314, or requirements.txt detection without package.json) execute with their own venv but require a restart for source changes.",
+          "statement": "Every export a codebase declares is accounted for: served, or named with the reason it is not, every codebase a firebase.json declares is loaded on a runner of its own, and SIGINT or SIGTERM shuts those runners and their descendants down cleanly. Node codebases reload source changes while retaining in-flight invocations when no fixed inspector port is configured; with a fixed inspector port (--inspect-functions), reload kills the existing runner and interrupts its in-flight invocations. Python codebases (python310 through python314, or requirements.txt detection without package.json) execute with their own venv but require a restart for source changes.",
           "capabilities": [
             {
               "id": "FN-DISCOVERY-1",

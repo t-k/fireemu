@@ -87,15 +87,20 @@ if (process.env.PYTHON_PARENT_PICT) {
       if (c.Alteration === "extra") actual.extra = true;
       assert.equal(compare(expected, actual, c.Profile).length > 0, c.Alteration !== "exact");
       const candidate = structuredClone(record);
-      if (c.Decision === "answered") candidate.scopeDecisions[0].answer = "strict";
+      if (c.Decision === "pending") {
+        candidate.scopeDecisions[0].status = "PENDING";
+        candidate.scopeDecisions[0].answer = null;
+      }
       const corpus = JSON.parse(
         readFileSync(new URL("../functions-python/corpus.json", import.meta.url)),
       );
       const bytes = readFileSync(
         new URL("../functions-python/fixtures/observations.json", import.meta.url),
       );
-      if (c.Decision === "answered") assert.throws(() => validate(candidate, corpus, bytes), /PY1/);
-      else validate(candidate, corpus, bytes);
+      validate(candidate, corpus, bytes);
+      if (c.Decision === "answered") candidate.scopeDecisions[0].authority = "";
+      else candidate.scopeDecisions[0].answer = "unapproved";
+      assert.throws(() => validate(candidate, corpus, bytes), /PY1/);
     });
   }
 }

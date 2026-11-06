@@ -41,7 +41,7 @@ test("record refuses promotion, a fabricated pass, accepted differences and miss
       r.scopeDecisions.pop();
     },
     (r) => {
-      r.scopeDecisions[0].answer = "strict";
+      r.scopeDecisions[0].authority = "";
     },
     (r) => {
       r.declaredDifferences[0].status = "APPROVED";
@@ -51,6 +51,12 @@ test("record refuses promotion, a fabricated pass, accepted differences and miss
     },
     (r) => {
       r.conditions[0].fixtureSha256 = "0".repeat(64);
+    },
+    (r) => {
+      r.conditions[0].profiles.strict = "UNRESTRICTED";
+    },
+    (r) => {
+      r.conditions[0].profiles.emulator = "PRODUCTION_CLAIM";
     },
   ]) {
     const r = record();
@@ -124,4 +130,19 @@ test("deleting or widening a declared replay difference is rejected", () => {
     mutate(r);
     assert.throws(() => validate(r, corpus(), bytes()), /difference inventory/);
   }
+});
+
+test("the three owner answers retain recorded strict scope, unresolved differences and blocking OPEN", () => {
+  const r = record();
+  assert.deepEqual(
+    r.scopeDecisions.map((d) => d.status),
+    ["ANSWERED", "ANSWERED", "ANSWERED"],
+  );
+  assert.deepEqual(
+    r.scopeDecisions.map((d) => d.answer),
+    ["recorded-strict-only", "declare-compared-differences-keep-unverified", "keep-blocking-open"],
+  );
+  assert.equal(r.parentStatus, "IMPLEMENTING");
+  assert.deepEqual(r.recordingPolicy, { observedPasses: 1, requiredPasses: 2, waiver: null });
+  assert.equal(r.conditions.find((c) => c.conditionId.endsWith("/auth-blocking")).status, "OPEN");
 });

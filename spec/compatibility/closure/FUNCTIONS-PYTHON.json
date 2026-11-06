@@ -14,22 +14,25 @@
       "id": "PY1",
       "question": "Is the eventual production claim strict-profile-only?",
       "recommendation": "Claim only finite recorded strict cases; test emulator differences separately.",
-      "status": "PENDING",
-      "answer": null
+      "status": "ANSWERED",
+      "answer": "recorded-strict-only",
+      "authority": "Owner direct decision on 2026-11-06 for PR #120; no promotion, pass waiver or production request authorized."
     },
     {
       "id": "PY2",
       "question": "How should request-view and OIDC differences be declared?",
       "recommendation": "Keep exact named differences pending; do not hide missing infrastructure or authorization fields with masks.",
-      "status": "PENDING",
-      "answer": null
+      "status": "ANSWERED",
+      "answer": "declare-compared-differences-keep-unverified",
+      "authority": "Owner direct decision on 2026-11-06 for PR #120; no promotion, pass waiver or production request authorized."
     },
     {
       "id": "PY3",
       "question": "Should Auth blocking remain OPEN?",
       "recommendation": "Retain OPEN with the recorded503; the SDK allow path has no recording.",
-      "status": "PENDING",
-      "answer": null
+      "status": "ANSWERED",
+      "answer": "keep-blocking-open",
+      "authority": "Owner direct decision on 2026-11-06 for PR #120; no promotion, pass waiver or production request authorized."
     }
   ],
   "closureReview": {
@@ -52,8 +55,8 @@
       ],
       "note": "Created and updated SDK projections; only created raw CloudEvent. Deleted and written are unobserved; complete payload and resource identity comparison remain open.",
       "profiles": {
-        "strict": "PENDING_SCOPE",
-        "emulator": "PENDING_SCOPE"
+        "strict": "LIMITED_TO_RECORDED_CASES",
+        "emulator": "NO_PRODUCTION_CLAIM"
       },
       "fixturePath": "conformance/functions-python/fixtures/observations.json",
       "fixtureSha256": "cfcfac41f70adf9523b63856d2260de2f963fb66bccae91425b5bf05a7f96155"
@@ -74,8 +77,8 @@
       ],
       "note": "Plain and ordered SDK projections. Message bytes and arbitrary delivery attributes remain unobserved by this replay.",
       "profiles": {
-        "strict": "PENDING_SCOPE",
-        "emulator": "PENDING_SCOPE"
+        "strict": "LIMITED_TO_RECORDED_CASES",
+        "emulator": "NO_PRODUCTION_CLAIM"
       },
       "fixturePath": "conformance/functions-python/fixtures/observations.json",
       "fixtureSha256": "cfcfac41f70adf9523b63856d2260de2f963fb66bccae91425b5bf05a7f96155"
@@ -96,8 +99,8 @@
       ],
       "note": "Finalized SDK projection only. Deleted, archived and metadata updates remain unobserved; complete object members are not compared.",
       "profiles": {
-        "strict": "PENDING_SCOPE",
-        "emulator": "PENDING_SCOPE"
+        "strict": "LIMITED_TO_RECORDED_CASES",
+        "emulator": "NO_PRODUCTION_CLAIM"
       },
       "fixturePath": "conformance/functions-python/fixtures/observations.json",
       "fixtureSha256": "cfcfac41f70adf9523b63856d2260de2f963fb66bccae91425b5bf05a7f96155"
@@ -118,8 +121,8 @@
       ],
       "note": "Fractional SDK delivery and whole-second SDK absence recorded. Emulator accepts whole-second time; strict rejects it.",
       "profiles": {
-        "strict": "PENDING_SCOPE",
-        "emulator": "PENDING_SCOPE"
+        "strict": "LIMITED_TO_RECORDED_CASES",
+        "emulator": "NO_PRODUCTION_CLAIM"
       },
       "fixturePath": "conformance/functions-python/fixtures/observations.json",
       "fixtureSha256": "cfcfac41f70adf9523b63856d2260de2f963fb66bccae91425b5bf05a7f96155"
@@ -140,8 +143,8 @@
       ],
       "note": "SDK job and schedule time; raw request constants. OIDC and infrastructure header differences remain pending.",
       "profiles": {
-        "strict": "PENDING_SCOPE",
-        "emulator": "PENDING_SCOPE"
+        "strict": "LIMITED_TO_RECORDED_CASES",
+        "emulator": "NO_PRODUCTION_CLAIM"
       },
       "fixturePath": "conformance/functions-python/fixtures/observations.json",
       "fixtureSha256": "cfcfac41f70adf9523b63856d2260de2f963fb66bccae91425b5bf05a7f96155"
@@ -162,8 +165,8 @@
       ],
       "note": "SDK data without auth/app context and masked raw body order. Replay exercises HTTP pass-through, not daemon task-name/header generation or retries.",
       "profiles": {
-        "strict": "PENDING_SCOPE",
-        "emulator": "PENDING_SCOPE"
+        "strict": "LIMITED_TO_RECORDED_CASES",
+        "emulator": "NO_PRODUCTION_CLAIM"
       },
       "fixturePath": "conformance/functions-python/fixtures/observations.json",
       "fixtureSha256": "cfcfac41f70adf9523b63856d2260de2f963fb66bccae91425b5bf05a7f96155"
@@ -182,8 +185,8 @@
       ],
       "note": "Recorded client503 and raw delivery; SDK success is unobserved. No token contents are retained or verified by this replay.",
       "profiles": {
-        "strict": "PENDING_SCOPE",
-        "emulator": "PENDING_SCOPE"
+        "strict": "LIMITED_TO_RECORDED_CASES",
+        "emulator": "NO_PRODUCTION_CLAIM"
       },
       "fixturePath": "conformance/functions-python/fixtures/observations.json",
       "fixtureSha256": "cfcfac41f70adf9523b63856d2260de2f963fb66bccae91425b5bf05a7f96155"
@@ -202,8 +205,8 @@
       ],
       "note": "Recorded function inventory only; local discovery/deployed-resource equivalence has not been compared.",
       "profiles": {
-        "strict": "PENDING_SCOPE",
-        "emulator": "PENDING_SCOPE"
+        "strict": "LIMITED_TO_RECORDED_CASES",
+        "emulator": "NO_PRODUCTION_CLAIM"
       },
       "fixturePath": "conformance/functions-python/fixtures/observations.json",
       "fixtureSha256": "cfcfac41f70adf9523b63856d2260de2f963fb66bccae91425b5bf05a7f96155"
@@ -223,7 +226,7 @@
   "declaredDifferences": [
     {
       "id": "request-infrastructure",
-      "status": "PENDING",
+      "status": "DECLARED_UNVERIFIED",
       "profiles": [
         "strict",
         "emulator"
@@ -267,7 +270,7 @@
     },
     {
       "id": "emulator-eventarc-whole-second",
-      "status": "PENDING",
+      "status": "DECLARED_UNVERIFIED",
       "profiles": [
         "emulator"
       ],
@@ -278,7 +281,7 @@
     },
     {
       "id": "emulator-request-constants",
-      "status": "PENDING",
+      "status": "DECLARED_UNVERIFIED",
       "profiles": [
         "emulator"
       ],
@@ -301,7 +304,7 @@
     },
     {
       "id": "emulator-scheduler-offset",
-      "status": "PENDING",
+      "status": "DECLARED_UNVERIFIED",
       "profiles": [
         "emulator"
       ],

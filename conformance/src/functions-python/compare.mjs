@@ -62,7 +62,10 @@ export function validate(record, corpus, fixtureBytes) {
       "no verified condition",
     );
     assert.deepEqual(condition.generations, [2]);
-    assert.deepEqual(condition.profiles, { strict: "PENDING_SCOPE", emulator: "PENDING_SCOPE" });
+    assert.deepEqual(condition.profiles, {
+      strict: "LIMITED_TO_RECORDED_CASES",
+      emulator: "NO_PRODUCTION_CLAIM",
+    });
     assert.deepEqual(condition.recipeIds, [`functions-python/${row.condition}`]);
     assert.equal(condition.fixturePath, corpus.fixturePath);
     assert.equal(condition.fixtureSha256, digest(fixtureBytes), "condition fixture digest");
@@ -101,7 +104,7 @@ export function validate(record, corpus, fixtureBytes) {
     "exact replay difference inventory",
   );
   for (const d of record.declaredDifferences) {
-    assert.equal(d.status, "PENDING", "difference not accepted");
+    assert.equal(d.status, "DECLARED_UNVERIFIED", "difference remains unverified");
     assert.ok(d.fields.length && d.profiles.length && d.reason);
     assert.ok(
       d.fields.every((p) => !p.includes("*")),

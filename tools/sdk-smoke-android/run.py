@@ -67,6 +67,7 @@ def client(args):
         command += ["-e", "caseFilter", os.environ["ANDROID_SMOKE_CASE"]]
     command += ["-e", "class", "dev.fireemu.smoke.SmokeInstrumentedTest", "dev.fireemu.smoke.test/androidx.test.runner.AndroidJUnitRunner"]
     adb_env = os.environ.copy()
+    adb_env.pop("ADB_VENDOR_KEYS", None)
     adb_env["HOME"] = os.environ["ANDROID_SMOKE_ADB_HOME"]
     result = subprocess.run(command, env=adb_env, text=True, capture_output=True, timeout=660)
     raw = TOOL / "build/diagnostics" / ("instrumentation-" + str(time.time_ns()) + ".log")
@@ -80,6 +81,39 @@ def client(args):
     summary = {"backend": args.backend, "cases": cases, "instrumentation_ok": "OK (1 test)" in result.stdout}
     Path(args.report).write_text(json.dumps(summary, indent=2) + "\n")
     return 0 if result.returncode == 0 and summary["instrumentation_ok"] and len(cases) == 23 and len({x['id'] for x in cases}) == 23 and all(x["status"] == "passed" for x in cases) else 1
+
+
+def cleanup(owned, children, leases, registry, work, temporary, observe, primary=None):
+    failures = []
+
+    def attempt(stage, action):
+        try:
+            return action()
+        except BaseException as error:
+            failures.append((stage, type(error).__name__))
+            return None
+
+    attempt("observe", observe)
+    for pid, command in reversed(list(owned.items())):
+        attempt("stop", lambda: stop(pid, command))
+    for process, stream in children:
+        attempt("wait", lambda: process.wait(timeout=5))
+        attempt("stream-close", stream.close)
+    diagnostics = TOOL / "build/diagnostics" / str(time.time_ns())
+    attempt("diagnostics-directory", lambda: diagnostics.mkdir(parents=True))
+    files = attempt("diagnostics-list", lambda: list(work.glob("*.log"))) or []
+    for file in files:
+        attempt("diagnostics-copy", lambda: shutil.copy2(file, diagnostics / file.name))
+    attempt("temporary-cleanup", temporary.cleanup)
+    for lease in reversed(leases):
+        attempt("lease-release", lambda: checked(registry + ["release", "--token", lease["token"]]))
+    attempt("diagnostics-report", lambda: print("Private diagnostics:", diagnostics))
+    if failures:
+        if primary is not None:
+            attempt("cleanup-report", lambda: print("Cleanup failures: " + json.dumps(failures), file=sys.stderr))
+            primary.cleanup_failures = tuple(failures)
+        else:
+            raise RuntimeError("Cleanup failures: " + json.dumps(failures))
 
 
 def run(args):
@@ -96,6 +130,7 @@ def run(args):
     temporary = tempfile.TemporaryDirectory(prefix="android-run-", dir=TOOL / "build")
     work = Path(temporary.name)
     env = os.environ.copy()
+    env.pop("ADB_VENDOR_KEYS", None)
     env.update(ANDROID_HOME=str(sdk), ANDROID_SDK_ROOT=str(sdk), ANDROID_USER_HOME=str(work / "android"), ANDROID_EMULATOR_HOME=str(work / "android"), ANDROID_AVD_HOME=str(work / "avd"), XDG_CONFIG_HOME=str(work / "config"), FIREBASE_EMULATORS_PATH=str(TOOL / ".emulators"), FIREBASE_CLI_DISABLE_UPDATE_CHECK="true", CI="true", GCLOUD_PROJECT="demo-app")
     for name in ["android", "avd", "config", "adb-home", "home"]:
         (work / name).mkdir()
@@ -130,7 +165,11 @@ def run(args):
 
     def launch(command, log, process_env=None):
         stream = (work / log).open("w")
-        process = subprocess.Popen(command, cwd=work, env=process_env or env, stdout=stream, stderr=subprocess.STDOUT, start_new_session=True)
+        try:
+            process = subprocess.Popen(command, cwd=work, env=process_env or env, stdout=stream, stderr=subprocess.STDOUT, start_new_session=True)
+        except BaseException:
+            stream.close()
+            raise
         children.append((process, stream))
         return process
 
@@ -196,27 +235,7 @@ def run(args):
             print(report.read_text())
         return backend.returncode
     finally:
-        try:
-            observe()
-        except Exception:
-            pass
-        for pid, command in reversed(list(owned.items())):
-            stop(pid, command)
-        for process, stream in children:
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                raise RuntimeError("owned process did not exit")
-            stream.close()
-        # Keep raw diagnostics local; only the sanitized JSON report is publishable.
-        diagnostics = TOOL / "build/diagnostics" / str(time.time_ns())
-        diagnostics.mkdir(parents=True)
-        for file in work.glob("*.log"):
-            shutil.copy2(file, diagnostics / file.name)
-        temporary.cleanup()
-        print("Private diagnostics:", diagnostics)
-        for lease in reversed(leases):
-            checked(registry + ["release", "--token", lease["token"]])
+        cleanup(owned, children, leases, registry, work, temporary, observe, sys.exc_info()[1])
 
 
 def main():

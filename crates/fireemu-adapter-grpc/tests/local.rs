@@ -6466,6 +6466,7 @@ fn filtered_scalar_nested_mut(request: &mut pb::ExecutePipelineRequest) -> &mut 
     nested
 }
 
+#[allow(clippy::too_many_lines)]
 async fn execute_filtered_correlated_case(
     strict: bool,
     parent_count: usize,
@@ -6776,6 +6777,7 @@ strict	one	non_string	several	matched_first
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn filtered_correlated_scalar_grpc_near_misses_remain_rejected() {
     use pb::value::ValueType as V;
     for policy in [

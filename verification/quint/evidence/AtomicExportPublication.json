@@ -630,7 +630,7 @@
     "crates/fireemu-core-database/src/rules/java_chars.rs": "021e983a9023954bc74858f8bcf7bc1b37f5e90a860c2eed391d173ebb41383d",
     "crates/fireemu-core-database/src/rules/mod.rs": "37632494f2c679cf2cf91f90c31eaeae5b5828f300c8301afa2aab388191b7be",
     "crates/fireemu-core-database/src/rules/parse.rs": "aa3cf6c6a04ae7ae7b56d52c3f03e57b68e62f5f41c79d29fad58e61479ee463",
-    "crates/fireemu-core-database/src/rules/pattern.rs": "1bf88e217d21d85c367ac108b57d09ce4e502ee7dc8ed060cceb72b807dd85b9",
+    "crates/fireemu-core-database/src/rules/pattern.rs": "5082f7ab92dba008427772728ab098188e1006094b5447e9cf5ad572fc2afac8",
     "crates/fireemu-core-database/src/rules/regex_admission.rs": "642ece6e26e836b6382f43c31245f10b1e7133c1638e4de4a20656e5119f3ab9",
     "crates/fireemu-core-database/src/rules/regex_admission/ast.rs": "6bb45ea933c6318cfa824e43be3fdf6092648e647b177aa69e583cf68ef358f9",
     "crates/fireemu-core-database/src/rules/regex_admission/java21_case.rs": "57f0e96a834edc208666bba635f2a7a81ffb82924e574c1a1d138d329c01e1aa",

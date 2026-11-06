@@ -42,16 +42,19 @@ impl Pattern {
             || text.contains("[[:")
             || escapes_a_backslash_in_a_class(&text)
             || super::parse::regex_shape(&text) != Ok(false);
-        let compile = |text: &str| {
+        // `viewed`: the text is already written as UTF-16 units (see `jar_source`).
+        let compile = |text: &str, viewed: bool| {
             let source = if flags.contains('i') {
                 fold_case(text)?
+            } else if viewed {
+                text.to_owned()
             } else {
                 utf16_view(text)
             };
             Regex::new(&search_source(&source)).ok().map(Arc::new)
         };
         let search = (!other_dialect && !escapes_a_letter(&text))
-            .then(|| compile(&text))
+            .then(|| compile(&text, false))
             .flatten();
         // The emulator profile reads the constructs of `jar_source` as the official emulator does, for a pattern
         // its grammar accepts (a POSIX class is not read).
@@ -60,7 +63,7 @@ impl Pattern {
         } else if search.is_some() {
             search.clone()
         } else {
-            jar_source(&text).and_then(|source| compile(&source))
+            jar_source(&text).and_then(|source| compile(&source, true))
         };
         Self {
             text,
@@ -139,12 +142,21 @@ fn view_of_units(units: impl Iterator<Item = u16>) -> String {
 fn jar_source(text: &str) -> Option<String> {
     // The language of a complement: the empty string, one character of the class, or two or more.
     const ANY_TWO_OR_MORE: &str = "..+";
-    let literal_operators: std::collections::BTreeSet<usize> =
-        super::parse::literal_operator_positions(text)
-            .ok()?
-            .into_iter()
-            .collect();
-    let chars: Vec<char> = text.chars().collect();
+    let literal_operators = super::parse::literal_operator_positions(text).ok()?;
+    // The pattern as UTF-16 units, as the official emulator reads it: a character beyond the Basic Multilingual
+    // Plane is two units (each a class member and each taken by `.`), written as `utf16_view` writes them. The
+    // result is in that alphabet too.
+    let mut chars: Vec<char> = Vec::with_capacity(text.len());
+    let mut view_at = Vec::with_capacity(text.len() + 1);
+    for c in text.chars() {
+        view_at.push(chars.len());
+        chars.extend(utf16_view(c.encode_utf8(&mut [0; 4])).chars());
+    }
+    view_at.push(chars.len());
+    let literal_operators: std::collections::BTreeSet<usize> = literal_operators
+        .into_iter()
+        .map(|at| view_at[at])
+        .collect();
     let mut out = String::with_capacity(text.len() + 16);
     let mut i = 0;
     while i < chars.len() {
@@ -165,6 +177,10 @@ fn jar_source(text: &str) -> Option<String> {
                         out.push(escaped);
                     }
                     c if c.is_ascii_alphanumeric() => out.push(c),
+                    // After a backslash the reader reads CR, U+2028 and U+2029 as the line feed they are
+                    // normalised to, and a character beyond ASCII (U+FEFF, U+0085 ...) as itself.
+                    '\r' | '\u{2028}' | '\u{2029}' | '\n' => out.push('\n'),
+                    c if !c.is_ascii() => out.push(c),
                     c => {
                         out.push('\\');
                         out.push(c);
@@ -206,23 +222,32 @@ fn jar_class_char(chars: &[char], mut at: usize, member_start: bool) -> Option<(
     if member_start && chars.get(at) == Some(&'\\') {
         at += 1;
     }
-    if chars.get(at) == Some(&'\\') {
+    let escaped = chars.get(at) == Some(&'\\');
+    if escaped {
         at += 1;
     }
-    Some((*chars.get(at)?, at + 1))
+    let c = *chars.get(at)?;
+    // As after a backslash outside a class: a line terminator is the line feed.
+    let c = if escaped && matches!(c, '\r' | '\u{2028}' | '\u{2029}') {
+        '\n'
+    } else {
+        c
+    };
+    Some((c, at + 1))
 }
 
 /// Writes `c` as a class member this engine reads as that character.
 fn push_member_char(class: &mut String, c: char) {
-    if c.is_ascii() && !c.is_ascii_alphanumeric() {
+    if c.is_ascii() && !c.is_ascii_alphanumeric() && c != '\n' {
         class.push('\\');
     }
     class.push(c);
 }
 
 /// The class at `chars[start]` (`[`), written for this engine: the class text, whether it holds `\W` or `\D`,
-/// whether it is negated, and the index after its `]`; `None` for what is not read so (a range with an end beyond
-/// the Basic Multilingual Plane, which the official emulator reads as two units, and `\s`).
+/// whether it is negated, and the index after its `]`; `None` for what is not read so (`\s`). The characters are UTF-16 units
+/// (see `jar_source`): a character beyond the Basic Multilingual Plane is two members, and in a range its units
+/// are the end of one and the start of the next, as the official emulator reads them.
 fn jar_class(chars: &[char], start: usize) -> Option<(String, bool, bool, usize)> {
     let mut at = start + 1;
     let negated = chars.get(at) == Some(&'^');
@@ -255,18 +280,12 @@ fn jar_class(chars: &[char], start: usize) -> Option<(String, bool, bool, usize)
             at += 1;
             if chars.get(at) == Some(&']') {
                 // `-` before the end is a character.
-                if u32::from(low) > 0xFFFF {
-                    return None;
-                }
                 push_member_char(&mut members, low);
                 members.push_str("\\-");
                 continue;
             }
             let (high, next) = jar_class_char(chars, at, false)?;
             at = next;
-            if u32::from(low) > 0xFFFF || u32::from(high) > 0xFFFF {
-                return None;
-            }
             // A range whose end is before its start holds nothing.
             if low <= high {
                 push_member_char(&mut members, low);
@@ -274,8 +293,6 @@ fn jar_class(chars: &[char], start: usize) -> Option<(String, bool, bool, usize)
                 push_member_char(&mut members, high);
             }
         } else {
-            // A single character beyond the Basic Multilingual Plane stays one member (as before this reading:
-            // the official emulator holds its two units, which a subject without lone surrogates cannot tell).
             push_member_char(&mut members, low);
         }
     }

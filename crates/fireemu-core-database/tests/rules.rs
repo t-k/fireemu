@@ -328,10 +328,9 @@ fn the_emulator_profile_reads_complement_classes_and_escaped_letters_as_the_offi
 
 /// The 14k-row differential corpus of the regular-expression dialect, run with the emulator profile's dialect on:
 /// no row moves the wrong way (an allow where the official emulator denies, or a load that differs), and of the 323
-/// rows fireemu denied where the official emulator allows, 239 now decide as it does. The 84 others stay errors,
-/// hence denied: 71 use the `i` flag with non-ASCII text (a case-folding table), 11 put a backslash before a format
-/// or line character (the official emulator reads each such character differently), and 2 use an astral class
-/// endpoint (UTF-16 unit semantics).
+/// rows fireemu denied where the official emulator allows, 252 now decide as it does. The 71 others stay errors,
+/// hence denied: each uses the `i` flag with non-ASCII text, which needs a Java 21 case-folding table (a declared
+/// difference, owner ledger line 2288).
 #[test]
 fn the_emulator_profile_moves_no_corpus_row_the_wrong_way() {
     let corpus: Vec<serde_json::Value> = serde_json::from_str(include_str!(
@@ -353,7 +352,7 @@ fn the_emulator_profile_moves_no_corpus_row_the_wrong_way() {
         .collect();
     assert!(wrong_way.is_empty(), "{wrong_way:#?}");
     assert_eq!(denied, 323);
-    assert_eq!(failures.len(), 84, "{failures:#?}");
+    assert_eq!(failures.len(), 71, "{failures:#?}");
 }
 
 #[test]
@@ -2109,16 +2108,31 @@ fn a_write_and_validate_rule_reads_the_lone_claims_too() {
     assert!(!with(None), "without the table the claim is `?`");
 }
 
-/// The emulator profile's class grammar at the edges of the Basic Multilingual Plane: an end at U+FFFF is a
-/// character like another, a class that holds nothing matches nothing and its negation any one character, and a
-/// range with an end beyond the plane (which the official emulator reads by UTF-16 unit) is left to the engine's
-/// default reading, so the emulator profile decides it as the strict one does.
+/// The emulator profile reads a pattern by UTF-16 unit and a backslash before a line terminator or a character beyond
+/// ASCII as the official emulator does: 289 rows of the jar (a character beyond the Basic Multilingual Plane is two
+/// class members and two units for `.`; after a backslash CR, CR LF, U+2028 and U+2029 are a line feed, and U+FEFF and
+/// U+0085 are themselves).
+#[test]
+fn the_emulator_profile_reads_utf16_units_and_escaped_line_characters_as_the_official_emulator() {
+    let fixture =
+        include_str!("fixtures/rules-regex-escapes-and-units-official-emulator-4.11.2.json");
+    let failures = differences_with(fixture, true);
+    assert!(
+        failures.is_empty(),
+        "{} rows differ: {failures:#?}",
+        failures.len()
+    );
+}
+
+/// The edges of the emulator profile's class grammar: an end at U+FFFF is a character like another, a class that
+/// holds nothing matches nothing and its negation any one character, and a range whose end is an astral character
+/// ends at its high surrogate (its low surrogate is a member of its own).
 #[test]
 fn the_class_grammar_of_the_emulator_profile_at_the_edges_of_the_basic_plane() {
-    let decide = |expr: &str, jar_dialect: bool| {
+    let jar = |expr: &str| {
         Rules::compile(&read_rule_at_t(expr))
             .unwrap()
-            .with_jar_dialect(jar_dialect)
+            .with_jar_dialect(true)
             .can_read(
                 seed().root(),
                 &p("t"),
@@ -2130,48 +2144,22 @@ fn the_class_grammar_of_the_emulator_profile_at_the_edges_of_the_basic_plane() {
                 },
             )
     };
-    let jar = |expr: &str| decide(expr, true);
     assert!(jar("'b'.matches(/^[a-\u{FFFF}]$/)"));
     assert!(jar("'\u{FFFF}'.matches(/^[a-\u{FFFF}]$/)"));
     assert!(jar("'\u{FFFF}'.matches(/^[\u{FFFF}-\u{FFFF}]$/)"));
     assert!(jar("'\u{FFFF}'.matches(/^[\u{FFFF}-]$/)"));
     assert!(jar("'-'.matches(/^[\u{FFFF}-]$/)"));
-    // A single character beyond the plane is a member (matched by character; the official emulator holds its two
-    // units, which a subject without such a character cannot tell).
+    // `[a-😀]` is `a` to the high surrogate and the low surrogate: `b` is in it, the pair is two units.
+    assert!(jar("'b'.matches(/^[a-\u{1F600}]$/)"));
+    assert!(jar("'\\uDE00'.matches(/^[a-\u{1F600}]$/)"));
+    assert!(!jar("'\u{1F600}'.matches(/^[a-\u{1F600}]$/)"));
+    assert!(jar("'\u{1F600}'.matches(/^[a-\u{1F600}]{2}$/)"));
     assert!(jar("'a'.matches(/^[a\u{1F600}]$/)"));
-    assert!(jar("!('b'.matches(/^[\u{1F600}]$/))"));
-    // A `\W` in the pattern is read only by the emulator profile's own grammar, so these show which patterns that
-    // grammar reads (the others are left to the default reading, where `\W` is an error, false negated or not).
+    assert!(jar("!('\u{1F600}'.matches(/^[\u{1F600}]$/))"));
+    assert!(jar("'zx'.matches(/^[^b-a]x$/)"));
+    assert!(!jar("'x'.matches(/^[b-a]x$/)"));
+    // A `\W` in the pattern is read by the same grammar.
     assert!(jar("'b!'.matches(/^[a-\u{FFFF}]\\W$/)"));
     assert!(jar("'\u{FFFF}!'.matches(/^[\u{FFFF}-\u{FFFF}]\\W$/)"));
     assert!(jar("'-!'.matches(/^[\u{FFFF}-]\\W$/)"));
-    for pattern in [
-        "^[a-\u{1F600}]\\W$",
-        "^[\u{1F600}-a]\\W$",
-        "^[\u{1F600}-\u{1F601}]\\W$",
-        "^[\u{1F600}-]\\W$",
-    ] {
-        for expr in [
-            format!("'b!'.matches(/{pattern}/)"),
-            format!("!('b!'.matches(/{pattern}/))"),
-        ] {
-            assert!(!jar(&expr), "{expr}");
-        }
-    }
-    assert!(jar("'zx'.matches(/^[^b-a]x$/)"));
-    assert!(!jar("'x'.matches(/^[b-a]x$/)"));
-    for pattern in [
-        "^[a-\u{1F600}]$",
-        "^[\u{1F600}-a]$",
-        "^[\u{1F600}-\u{1F601}]$",
-        "^[\u{1F600}-]$",
-    ] {
-        for expr in [
-            format!("'b'.matches(/{pattern}/)"),
-            format!("!('b'.matches(/{pattern}/))"),
-            format!("'\u{1F600}'.matches(/{pattern}/)"),
-        ] {
-            assert_eq!(jar(&expr), decide(&expr, false), "{expr}");
-        }
-    }
 }

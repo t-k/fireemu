@@ -54,9 +54,10 @@ impl<'a> Snapshot<'a> {
     }
 
     /// The snapshot `path` below this one: its keys, empty ones dropped. The location is built once, so its cost is
-    /// the keys of this location and of `path` (charged), not their product; `None` past the evaluation's budget.
+    /// the bytes of the keys of this location (copied) and of `path` (charged before anything is copied), not their
+    /// product; `None` past the evaluation's budget.
     fn child(&self, path: &str, work: &std::cell::Cell<u64>) -> Option<Self> {
-        charge(work, self.path.depth().saturating_add(path.len()))?;
+        charge(work, self.path_cost().saturating_add(path.len()))?;
         let mut keys: Vec<String> = Vec::with_capacity(self.path.depth() + 1);
         keys.extend(self.path.keys().iter().cloned());
         keys.extend(path.split('/').filter(|k| !k.is_empty()).map(str::to_owned));
@@ -64,6 +65,11 @@ impl<'a> Snapshot<'a> {
             root: self.root,
             path: Path::from_keys(keys),
         })
+    }
+
+    /// What copying this location costs: its keys' bytes, and one unit for each key.
+    fn path_cost(&self) -> usize {
+        self.path.byte_len().saturating_add(self.path.depth())
     }
 
     /// Whether the official emulator takes this location as a path: every key valid (a
@@ -184,8 +190,11 @@ pub fn allows(expr: &Expr, scope: &Scope<'_>, observer: &mut Observer<'_>) -> bo
 /// time below the size bound, and a path or an `auth` copied again and again.
 ///
 /// The matcher of a regular expression is bounded on its own: at most 200,000 steps and 32 levels of nesting for each
-/// `matches` call (`fireemu_core_rules::regex`), an error past either, and the subject and the pattern are charged
-/// by their length here as for any string method.
+/// `matches` call (`fireemu_core_rules::regex`), an error past either. The subject is charged by its length here as
+/// for any string method; the pattern, a literal of the rules document, is not (its size is the document's).
+///
+/// The bound is per evaluation: one request can run many (a write validates each child it writes), and nothing here is
+/// a wall-clock limit. Thirteen searches of a 10 MiB string fit; about fifty-two of them do not.
 pub(crate) const MAX_EVALUATION_WORK: u64 = 1 << 30;
 
 thread_local! {
@@ -492,11 +501,12 @@ fn member<'a>(object: Value<'a>, name: Option<&str>, scope: &Scope<'a>) -> Optio
             #[allow(clippy::cast_precision_loss)]
             Some(Value::Num(units.len() as f64))
         }
-        Value::Query => Some(query_member(
+        Value::Query => query_member(
             scope.query,
             scope.read_kind,
             name.unwrap_or_default(),
-        )),
+            &scope.work,
+        ),
         _ => None,
     }
 }
@@ -655,27 +665,43 @@ fn order_by_marker<'a>(kind: ReadKind) -> Value<'a> {
 /// A member of `query`. A read without a query is ordered as its [`ReadKind`] says. `startAt` is the start
 /// bound, inclusive or not; `endAt` is an inclusive end bound only; `equalTo` is the start
 /// value when an inclusive end bound has the same value.
-fn query_member<'a>(query: Option<&QueryParams>, kind: ReadKind, name: &str) -> Value<'a> {
+fn query_member<'a>(
+    query: Option<&QueryParams>,
+    kind: ReadKind,
+    name: &str,
+    work: &std::cell::Cell<u64>,
+) -> Option<Value<'a>> {
     let Some(q) = query else {
-        return match name {
+        return Some(match name {
             "orderByKey" => Value::Bool(kind == ReadKind::Get),
             "orderByPriority" => Value::Bool(kind == ReadKind::Stream),
             "orderByValue" => Value::Bool(false),
             "orderBy" => order_by_marker(kind),
             _ => Value::Null,
-        };
+        });
     };
     let end = q.end.as_ref().filter(|e| e.inclusive);
     let equal = match (&q.start, end) {
         (Some(s), Some(e)) if s.value == e.value => Some(s),
         _ => None,
     };
-    match name {
+    // A member that copies the query's child path or a bound value is work by the size copied, charged first.
+    let ordering = |path: &Path| -> Option<Value<'a>> {
+        charge(work, path.byte_len().saturating_add(path.depth()))?;
+        Some(Value::Ordering(path.keys().to_vec()))
+    };
+    let bound = |bound: Option<&Bound>| -> Option<Value<'a>> {
+        if let Some(bound) = bound {
+            charge(work, json_cost(&bound.value))?;
+        }
+        Some(bound_value(bound))
+    };
+    Some(match name {
         "orderByKey" => Value::Bool(q.order_by == OrderBy::Key),
         "orderByValue" => Value::Bool(q.order_by == OrderBy::Value),
         "orderByPriority" => Value::Bool(q.order_by == OrderBy::Priority),
         "orderByChild" => match &q.order_by {
-            OrderBy::Child(path) => Value::Ordering(path.keys().to_vec()),
+            OrderBy::Child(path) => ordering(path)?,
             _ => Value::Null,
         },
         // The same ordering as `orderByChild` when the query orders by a child. Otherwise a
@@ -683,12 +709,12 @@ fn query_member<'a>(query: Option<&QueryParams>, kind: ReadKind, name: &str) -> 
         // `query.orderBy == null` false and `query.orderBy == query.orderBy` true on a read
         // ordered by key, by value or by priority).
         "orderBy" => match &q.order_by {
-            OrderBy::Child(path) => Value::Ordering(path.keys().to_vec()),
+            OrderBy::Child(path) => ordering(path)?,
             _ => order_by_marker(kind),
         },
-        "equalTo" => bound_value(equal),
-        "startAt" => bound_value(q.start.as_ref()),
-        "endAt" => bound_value(end),
+        "equalTo" => bound(equal)?,
+        "startAt" => bound(q.start.as_ref())?,
+        "endAt" => bound(end)?,
         "limitToFirst" => match q.limit {
             Some(Limit::First(n)) => Value::Num(f64::from(n)),
             _ => Value::Null,
@@ -698,7 +724,7 @@ fn query_member<'a>(query: Option<&QueryParams>, kind: ReadKind, name: &str) -> 
             _ => Value::Null,
         },
         _ => Value::Null,
-    }
+    })
 }
 
 /// A path or key argument as text. A lone surrogate is written `$` and its four hex digits: no
@@ -767,8 +793,12 @@ fn call<'a>(
                 charge(ctx.work, replaced.len())?;
                 Some(Value::Str(replaced))
             }
-            "toLowerCase" => java_case(&s, true).map(Value::Str),
-            "toUpperCase" => java_case(&s, false).map(Value::Str),
+            "toLowerCase" | "toUpperCase" => {
+                let converted = java_case(&s, name == "toLowerCase")?;
+                // The converted copy is work by its length (it can be longer than the receiver).
+                charge(ctx.work, converted.len())?;
+                Some(Value::Str(converted))
+            }
             "matches" => match arguments.first()? {
                 Value::Regex(pattern) => pattern.matches(&s, ctx.regex).map(Value::Bool),
                 _ => None,
@@ -908,6 +938,8 @@ fn units_call<'a>(
             }
             let room = MAX_STRING_UNITS.checked_sub(out.len())?;
             out.extend(java_case_within(&run, lower, room, char::len_utf16)?.encode_utf16());
+            // The converted copy is work by its length.
+            charge(ctx.work, out.len())?;
             Some(from_units(out))
         }
         "matches" => match arguments.first()? {
@@ -945,15 +977,19 @@ fn snapshot_call<'a>(
             snapshot.child(&path_argument(arguments, 0)?, ctx.work)?,
             version,
         )),
-        "parent" => snapshot.path.parent().map(|path| {
-            Value::Snapshot(
-                Snapshot {
-                    root: snapshot.root,
-                    path,
-                },
-                version,
-            )
-        }),
+        "parent" => {
+            // The parent is a copy of the location without its last key: charged by the bytes copied.
+            charge(ctx.work, snapshot.path_cost())?;
+            snapshot.path.parent().map(|path| {
+                Value::Snapshot(
+                    Snapshot {
+                        root: snapshot.root,
+                        path,
+                    },
+                    version,
+                )
+            })
+        }
         "exists" => Some(Value::Bool(!matches!(located, Located::Absent))),
         "hasChild" => Some(Value::Bool(!matches!(
             snapshot
@@ -1004,7 +1040,10 @@ fn snapshot_call<'a>(
                 Located::Node(Node {
                     priority: Some(Priority::String(s)),
                     ..
-                }) => Value::Str(s.clone()),
+                }) => {
+                    charge(ctx.work, s.len())?;
+                    Value::Str(s.clone())
+                }
                 _ => Value::Null,
             })
         }

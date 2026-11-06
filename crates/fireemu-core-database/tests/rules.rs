@@ -1899,6 +1899,9 @@ fn honest_large_rules_are_not_denied_and_runaway_ones_are() {
     let rule = |times: usize| vec![search; times].join(" && ");
     assert!(reads_in(&tree, &rule(13)));
     assert!(reads_in(&tree, &rule(40)));
+    // The known limit: 50 checks fit, 52 exceed the bound (20 MiB of work each, 2^30 in all).
+    assert!(reads_in(&tree, &rule(50)));
+    assert!(!reads_in(&tree, &rule(52)));
     for times in [120, 400] {
         assert!(!reads_in(&tree, &rule(times)), "{times}");
         assert!(
@@ -1980,6 +1983,70 @@ fn copies_of_the_claims_are_charged() {
     let nested = |times: usize| vec!["auth.token != null"; times].join(" && ");
     assert!(reads(&nested(10)));
     assert!(!reads(&nested(2000)));
+}
+
+/// The work a read does, as the high-water mark of one evaluation says (a fresh process per test).
+fn work_of(tree: &fireemu_core_database::Tree, query: Option<&QueryParams>, expr: &str) -> u64 {
+    use fireemu_core_database::rules::{
+        evaluation_work_high_water, reset_evaluation_work_high_water,
+    };
+    reset_evaluation_work_high_water();
+    let rules = Rules::compile(&read_rule_at_t(expr)).unwrap();
+    let auth = auth();
+    let requester = Requester {
+        auth: &auth,
+        now: 123,
+    };
+    let _ = rules.can_read(tree.root(), &p("t"), query, &requester);
+    evaluation_work_high_water()
+}
+
+/// Every copy a snapshot operation makes is charged by the bytes copied, before it is made (Astra's review of
+/// 4679a9cbd): `parent()` and `child('')` on a long location, a priority string, a query member and the output of a
+/// case conversion.
+#[test]
+fn snapshot_and_member_copies_are_charged_by_their_bytes() {
+    // A location of 1000 keys of 1000 bytes: about a megabyte.
+    let long = format!("{}/", "x".repeat(1000)).repeat(1000);
+    let bytes = long.len() as u64;
+    let tree = tree_with(serde_json::json!({"t": {"p": long}}));
+    let base = "root.child(root.child('t').child('p').val())";
+    let at = work_of(&tree, None, &format!("!{base}.exists()"));
+    let three_parents = work_of(
+        &tree,
+        None,
+        &format!("!{base}.parent().parent().parent().exists()"),
+    );
+    assert!(
+        three_parents >= at + 3 * (bytes - 1000),
+        "{at} {three_parents}"
+    );
+    let three_children = work_of(
+        &tree,
+        None,
+        &format!("!{base}.child('').child('').child('').exists()"),
+    );
+    assert!(three_children >= at + 3 * bytes, "{at} {three_children}");
+    // A priority string is copied out of the node.
+    let priority = "q".repeat(1 << 20);
+    let tree = tree_with(serde_json::json!({"t": {"s": 1, ".priority": priority}}));
+    assert!(work_of(&tree, None, "data.getPriority().length > 0") >= 1 << 20);
+    // The output of a case conversion is charged besides the value and the receiver: three passes over the string.
+    let text = "a".repeat(1 << 20);
+    let tree = tree_with(serde_json::json!({"t": {"s": text}}));
+    assert!(
+        work_of(
+            &tree,
+            None,
+            "data.child('s').val().toUpperCase().length > 0"
+        ) >= 3 << 20
+    );
+    // A child path and a bound of the query are copied out of it.
+    let tree = tree_with(serde_json::json!({"t": {"s": 1}}));
+    let mut q = QueryParams::default().start_at(Json::String("z".repeat(1 << 20)), None);
+    assert!(work_of(&tree, Some(&q), "query.startAt.length > 0") >= 1 << 20);
+    q.order_by = OrderBy::Child(Path::from_keys(vec!["k".repeat(1 << 20)]));
+    assert!(work_of(&tree, Some(&q), "query.orderByChild != null") >= 1 << 20);
 }
 
 /// The ordinary rules of the Rules corpora use a tiny fraction of the evaluation work bound (2^30): the most any

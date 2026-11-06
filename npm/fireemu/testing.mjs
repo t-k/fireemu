@@ -1,13 +1,13 @@
 // A test world owns a daemon, private input snapshots and generation-scoped clients.
 import { spawn } from 'node:child_process';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { resolveBinary, ensureExecutable } from './binary.mjs';
-import { snapshotInputs, prepareGeneration } from './testing-snapshot.mjs';
+import { snapshotInputs, prepareGeneration, removeSnapshotTree } from './testing-snapshot.mjs';
 import { createControlClient } from './control.mjs';
 
 const endpointVariables = {firestore:'FIRESTORE_EMULATOR_HOST',auth:'FIREBASE_AUTH_EMULATOR_HOST',storage:'FIREBASE_STORAGE_EMULATOR_HOST',functions:'FIREEMU_FUNCTIONS_HOST',eventarc:'CLOUD_EVENTARC_EMULATOR_HOST',tasks:'CLOUD_TASKS_EMULATOR_HOST',pubsub:'PUBSUB_EMULATOR_HOST',database:'FIREBASE_DATABASE_EMULATOR_HOST',hub:'FIREBASE_EMULATOR_HUB',logging:'FIREBASE_LOGGING_EMULATOR_HOST'};
@@ -78,6 +78,10 @@ function snapshotFailure(error,signal){
   return Error(`test world snapshot aborted${reason?.message?`: ${reason.message}`:''}`,{cause:reason??error});
 }
 
+function retainCleanupError(error,cleanupError){
+  if(error&&typeof error==='object')try{error.cleanupError=cleanupError;}catch{}
+}
+
 /** Create an independent emulator world; no method changes the parent's environment. */
 export async function createTestWorld(options={}){
   options={...options,nodePathExcludes:Array.isArray(options.nodePathExcludes)?[...options.nodePathExcludes]:options.nodePathExcludes,config:typeof options.config==='object'?structuredClone(options.config):options.config,services:options.services?[...options.services]:undefined,env:{...(options.env??{...process.env,NODE_PATH:''})},clock:options.clock?{...options.clock}:undefined};
@@ -104,7 +108,7 @@ export async function createTestWorld(options={}){
     const clientResults=await Promise.allSettled([...clients].map(async client=>{await stop(client);clients.delete(client);}));
     const daemonResults=await Promise.allSettled([...retiring].map(async active=>{
       await stop(active.process,options.shutdownTimeoutMs??5000);
-      if(!clients.size){await rm(active.directory,{recursive:true,force:true});retiring.delete(active);}
+      if(!clients.size){await removeSnapshotTree(active.directory);retiring.delete(active);}
     }));
     const failures=[...clientResults,...daemonResults].filter(result=>result.status==='rejected').map(result=>result.reason);
     if(failures.length)throw new AggregateError(failures,'test world retirement failed; cleanup can be retried');
@@ -173,12 +177,12 @@ export async function createTestWorld(options={}){
       const next=generation+1,generationDirectory=join(directory,`generation-${next}`),budget=snapshotBudget(options,snapshotTimeout);
       let prepared;
       try{prepared=await prepareGeneration(snapshot,generationDirectory,budget.signal);budget.check();}
-      catch(error){if(prepared)await rm(generationDirectory,{recursive:true,force:true});throw snapshotFailure(error,budget.signal);}
+      catch(error){const failure=snapshotFailure(error,budget.signal);if(prepared)try{await removeSnapshotTree(generationDirectory);}catch(cleanupError){retainCleanupError(failure,cleanupError);}throw failure;}
       finally{budget.close();}
       await start(prepared,generationDirectory);
       return world;
     }),
-    dispose:()=>{closing=true;return enqueue(async()=>{if(disposed)return;await retire();await rm(directory,{recursive:true,force:true});disposed=true;});},
+    dispose:()=>{closing=true;return enqueue(async()=>{if(disposed)return;await retire();await removeSnapshotTree(directory);disposed=true;});},
     async run(command,args=[],runOptions={}){
       await tail;check();
       const active=current;
@@ -214,8 +218,8 @@ export async function createTestWorld(options={}){
   }catch(error){
     const failure=snapshotFailure(error,budget.signal);
     budget.close();
-    await retire();
-    await rm(directory,{recursive:true,force:true});
+    try{await retire();}catch(cleanupError){retainCleanupError(failure,cleanupError);}
+    try{await removeSnapshotTree(directory);}catch(cleanupError){retainCleanupError(failure,cleanupError);}
     throw failure;
   }
 }

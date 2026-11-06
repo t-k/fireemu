@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, writeFile, rm, stat } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile, rm, stat, mkdir, chmod, open } from 'node:fs/promises';
+import { execFile, execFileSync } from 'node:child_process';
+import { promisify } from 'node:util';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { createTestWorld, withTestWorld } from '../fireemu/testing.mjs';
 
 const binary = process.env.FIREEMU_TEST_BINARY;
+const runFile = promisify(execFile);
 const native = { skip: !binary, timeout: 30_000 };
 const options = { binaryPath: binary, env:{...process.env,NODE_PATH:''}, projectId: 'demo-test-worlds', clockStart: '2026-01-31T23:59:00Z', services: ['auth','firestore'], config: { schemaVersion:1, firestore:{edition:'standard'} } };
 
@@ -189,7 +192,7 @@ test('Functions snapshots own dependencies and reset keeps creation bytes', asyn
 });
 
 test('snapshot copying preserves executable files and read-only directory modes', async()=>{
-  const {snapshotInputs,prepareGeneration}=await import('../fireemu/testing-snapshot.mjs');
+  const {snapshotInputs,prepareGeneration,removeSnapshotTree}=await import('../fireemu/testing-snapshot.mjs');
   const {mkdir,chmod}=await import('node:fs/promises');
   const root=await mkdtemp(join(tmpdir(),'fireemu-world-modes-'));
   const source=join(root,'source'),nested=join(source,'readonly');
@@ -209,12 +212,132 @@ test('snapshot copying preserves executable files and read-only directory modes'
     assert.equal((await stat(join(snapshot.config.functions.source,'readonly'))).mode&0o777,0o555);
     assert.equal((await stat(generationFile)).mode&0o777,0o751);
     assert.equal((await stat(join(generation.cwd,'functions-0','readonly'))).mode&0o777,0o555);
-  }finally{
-    await chmod(nested,0o700);
-    const copied=join(worldRoot,'baseline','functions-0','readonly');
-    const generated=join(worldRoot,'generation','inputs','functions-0','readonly');
-    await Promise.all([chmod(copied,0o700).catch(()=>{}),chmod(generated,0o700).catch(()=>{})]);
-    await rm(root,{recursive:true,force:true});
+  }finally{await removeSnapshotTree(worldRoot);await chmod(nested,0o700).catch(()=>{});await rm(root,{recursive:true,force:true});}
+});
+
+test('world cleanup removes read-only snapshots after generation cancellation and dispose', native, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'fireemu-world-readonly-cleanup-'));
+  const source = join(root, 'source'), readonly = join(source, 'readonly');
+  await mkdir(readonly, { recursive: true });
+  const large = join(readonly, 'large.bin');
+  const handle = await open(large, 'w');
+  await handle.truncate(256 * 1024 * 1024);
+  await handle.close();
+  await chmod(readonly, 0o555);
+  t.after(async () => { await chmod(readonly, 0o700).catch(() => {}); await rm(root, { recursive: true, force: true }); });
+
+  const controller = new AbortController();
+  const tempRoot = join(root, 'worlds');
+  await mkdir(tempRoot);
+  const pending = createTestWorld({ ...options, functionsSource: source, tempRoot, signal: controller.signal, snapshotTimeoutMs: 30_000 });
+  let worldDirectory;
+  const observationDeadline = Date.now() + 20_000;
+  while (!worldDirectory && Date.now() < observationDeadline) {
+    const entries = await (await import('node:fs/promises')).readdir(tempRoot);
+    if (entries.length) worldDirectory = join(tempRoot, entries[0]);
+    else await new Promise(resolve => setTimeout(resolve, 2));
+  }
+  assert.ok(worldDirectory, 'world construction allocated its owned root');
+  const generatedFile = join(worldDirectory, 'generation-1', 'inputs', 'functions-0', 'readonly', 'large.bin');
+  let partial = false;
+  while (!partial && Date.now() < observationDeadline) {
+    try {
+      const size = (await stat(generatedFile)).size;
+      partial = size > 0 && size < 256 * 1024 * 1024;
+    } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    if (!partial) await new Promise(resolve => setTimeout(resolve, 2));
+  }
+  if (!partial) {
+    controller.abort(Error('cancelled because generation copy did not become observable'));
+    await assert.rejects(pending);
+    assert.fail('expected to observe generation copying below the read-only directory');
+  }
+  const reason = Error('read-only generation deadline elapsed');
+  reason.name = 'TimeoutError';
+  const deadline = setTimeout(() => controller.abort(reason), 5);
+  await assert.rejects(pending, error => {
+    assert.match(error.message, /test world snapshot timed out/);
+    assert.equal(error.cause, reason);
+    return true;
+  });
+  clearTimeout(deadline);
+  assert.deepEqual(await (await import('node:fs/promises')).readdir(tempRoot), []);
+
+  const world = await createTestWorld({ ...options, functionsSource: source, tempRoot });
+  const owned = world.directory;
+  assert.equal((await stat(join(owned, 'baseline', 'functions-0', 'readonly'))).mode & 0o777, 0o555);
+  await world.reset();
+  assert.equal(world.generation, 2);
+  await world.dispose();
+  await assert.rejects(stat(owned), { code: 'ENOENT' });
+  assert.deepEqual(await (await import('node:fs/promises')).readdir(tempRoot), []);
+});
+
+test('owned cleanup does not follow symlinks into caller-owned directories', async () => {
+  const { removeSnapshotTree } = await import('../fireemu/testing-snapshot.mjs');
+  const root = await mkdtemp(join(tmpdir(), 'fireemu-world-cleanup-link-'));
+  const owned = join(root, 'owned'), external = join(root, 'external');
+  await mkdir(owned); await mkdir(external);
+  await writeFile(join(external, 'caller.txt'), 'caller data');
+  await chmod(external, 0o555);
+  await (await import('node:fs/promises')).symlink(external, join(owned, 'external-link'), process.platform === 'win32' ? 'junction' : 'dir');
+  try {
+    await removeSnapshotTree(owned);
+    assert.equal((await stat(external)).mode & 0o777, 0o555);
+    assert.equal(await readFile(join(external, 'caller.txt'), 'utf8'), 'caller data');
+  } finally {
+    await chmod(external, 0o700);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('configuration FIFO inputs reject promptly inside a bounded child process', async t => {
+  if (process.platform === 'win32') return t.skip('named pipes are not portable to Windows');
+  const root = await mkdtemp(join(tmpdir(), 'fireemu-world-config-fifo-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const moduleUrl = new URL('../fireemu/testing.mjs', import.meta.url).href;
+  const script = `
+    import { createTestWorld } from ${JSON.stringify(moduleUrl)};
+    try {
+      const mode = process.argv[1], fifo = process.argv[2], tempRoot = process.argv[3];
+      const config = mode === 'config' ? fifo : mode === 'config.firebaseJson' ? { schemaVersion: 1, firebaseJson: fifo } : { schemaVersion: 1 };
+      const firebaseJson = mode === 'firebaseJson' ? fifo : undefined;
+      await createTestWorld({ binaryPath: process.execPath, config, firebaseJson, tempRoot, snapshotTimeoutMs: 50, env: { NODE_PATH: '' } });
+      console.error('unexpected world creation success'); process.exitCode = 2;
+    } catch (error) {
+      console.log(JSON.stringify({ message: error.message, cause: error.cause?.message }));
+    }
+  `;
+  for (const mode of ['config', 'config.firebaseJson', 'firebaseJson']) {
+    const fifo = join(root, `${mode}.json`), tempRoot = join(root, `worlds-${mode}`);
+    execFileSync('mkfifo', [fifo]);
+    await mkdir(tempRoot);
+    const { stdout } = await runFile(process.execPath, ['--input-type=module', '-e', script, mode, fifo, tempRoot], { timeout: 4_000, killSignal: 'SIGKILL', encoding: 'utf8' });
+    const result = JSON.parse(stdout.trim());
+    assert.match(`${result.message} ${result.cause}`, /regular file|unsupported|Cannot read/);
+    assert.deepEqual(await (await import('node:fs/promises')).readdir(tempRoot), []);
+  }
+});
+
+test('configuration paths that symlink to regular files remain supported', async () => {
+  const { snapshotInputs, removeSnapshotTree } = await import('../fireemu/testing-snapshot.mjs');
+  const { symlink } = await import('node:fs/promises');
+  const root = await mkdtemp(join(tmpdir(), 'fireemu-world-config-symlink-'));
+  const source = join(root, 'firebase-source.json'), link = join(root, 'firebase-link.json');
+  await writeFile(source, JSON.stringify({ schemaVersion: 1, firestore: { edition: 'standard' } }));
+  await symlink(source, link);
+  try {
+    const configInput = join(root, 'from-config'); await mkdir(configInput);
+    const configSnapshot = await snapshotInputs({ config: link, cwd: root }, configInput);
+    assert.equal(configSnapshot.config.schemaVersion, 1);
+    const nestedInput = join(root, 'from-nested-option'); await mkdir(nestedInput);
+    const nestedSnapshot = await snapshotInputs({ config: { schemaVersion: 1, firebaseJson: link }, cwd: root }, nestedInput);
+    assert.ok(nestedSnapshot.config.firebaseJson);
+    const optionInput = join(root, 'from-option'); await mkdir(optionInput);
+    const optionSnapshot = await snapshotInputs({ firebaseJson: link, cwd: root }, optionInput);
+    assert.ok(optionSnapshot.config.firebaseJson);
+  } finally {
+    await removeSnapshotTree(root);
   }
 });
 

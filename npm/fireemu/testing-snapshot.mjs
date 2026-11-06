@@ -1,6 +1,6 @@
 // Snapshot caller-owned input once; each generation gets its own writable copy.
-import { createReadStream, createWriteStream } from 'node:fs';
-import { mkdir, readFile, writeFile, realpath, symlink, lstat, stat, unlink, readdir, readlink, chmod, rm } from 'node:fs/promises';
+import { constants as fsConstants, createReadStream, createWriteStream } from 'node:fs';
+import { mkdir, open, readFile, writeFile, realpath, symlink, lstat, stat, unlink, readdir, readlink, chmod, rm } from 'node:fs/promises';
 import { pipeline } from 'node:stream/promises';
 import { basename, dirname, join, resolve, relative, sep, delimiter, isAbsolute } from 'node:path';
 import { execFile } from 'node:child_process';
@@ -10,6 +10,34 @@ import { resolveBinary, ensureExecutable } from './binary.mjs';
 const runFile = promisify(execFile);
 
 function checkSignal(signal){signal?.throwIfAborted();}
+
+function retainCleanupError(error,cleanupError){
+  if(error&&typeof error==='object')try{error.cleanupError=cleanupError;}catch{}
+}
+
+async function readRegularFile(path,signal){
+  const flags=fsConstants.O_RDONLY|(fsConstants.O_NONBLOCK??0);
+  const handle=await checked(signal,()=>open(path,flags));
+  try{
+    const info=await checked(signal,()=>handle.stat());
+    if(!info.isFile())throw Error(`configuration input must be a regular file: ${JSON.stringify(path)}`);
+    return await checked(signal,()=>handle.readFile({encoding:'utf8',signal}));
+  }finally{await handle.close();}
+}
+
+export async function removeSnapshotTree(root){
+  const makeWritable=async(path,knownInfo)=>{
+    let info=knownInfo;
+    try{info??=await lstat(path);}catch(error){if(error.code==='ENOENT')return;throw error;}
+    if(!info.isDirectory()||info.isSymbolicLink())return;
+    await chmod(path,0o700);
+    for(const entry of await readdir(path,{withFileTypes:true})){
+      if(entry.isDirectory())await makeWritable(join(path,entry.name));
+    }
+  };
+  try{await makeWritable(root);}catch(error){if(error.code!=='ENOENT')throw error;}
+  await rm(root,{recursive:true,force:true});
+}
 
 async function checked(signal,operation){
   checkSignal(signal);
@@ -83,7 +111,7 @@ async function copyInputTree(source,destination,{signal,dereference=true,filter,
 async function readConfiguration(path, options, signal) {
   const format = path.toLowerCase().endsWith('.toml') ? 'TOML' : 'JSON';
   try {
-    if (format === 'JSON') return JSON.parse(await checked(signal,()=>readFile(path, 'utf8')));
+    if (format === 'JSON') return JSON.parse(await readRegularFile(path,signal));
     const binary = resolveBinary(options.binaryPath ? resolve(options.binaryPath) : undefined);
     if (!binary) throw Error('install the fireemu platform package or supply binaryPath');
     ensureExecutable(binary.path);
@@ -212,13 +240,13 @@ export async function snapshotInputs(options, root, signal=options.signal) {
   if(input.schemaVersion===undefined){config={schemaVersion:1,firebaseJson:await snapshotFirebase(input,configBase)};}
   else{
     config=structuredClone(input);
-    if(config.firebaseJson){const path=resolve(configBase,config.firebaseJson);config.firebaseJson=await snapshotFirebase(JSON.parse(await checked(signal,()=>readFile(path,'utf8'))),dirname(path));}
+    if(config.firebaseJson){const path=resolve(configBase,config.firebaseJson);config.firebaseJson=await snapshotFirebase(JSON.parse(await readRegularFile(path,signal)),dirname(path));}
     for(const [section,key] of [['rules','source'],['firestore','indexFile'],['firestore','textIndexDefinitionFile'],['storage','rules'],['functions','manifest']]){
       if(config[section]?.[key])config[section][key]=await copyFile(config[section][key],cwd);
     }
     if(config.functions?.source)config.functions.source=await copySource(config.functions.source,cwd);
   }
-  if(options.firebaseJson){const path=resolve(cwd,options.firebaseJson);config.firebaseJson=await snapshotFirebase(JSON.parse(await checked(signal,()=>readFile(path,'utf8'))),dirname(path));}
+  if(options.firebaseJson){const path=resolve(cwd,options.firebaseJson);config.firebaseJson=await snapshotFirebase(JSON.parse(await readRegularFile(path,signal)),dirname(path));}
   if(options.functionsSource){config.functions??={};config.functions.source=await copySource(options.functionsSource,cwd);}
   const functionsConfigured=Boolean(graph.size||config.functions?.manifest||config.functions?.runner);
   const nodePaths=[];
@@ -284,5 +312,5 @@ export async function prepareGeneration(snapshot,directory,signal){
     owned=true;
     checkSignal(signal);
     return await prepareGenerationInputs(snapshot,directory,signal);
-  }catch(error){if(owned)await rm(directory,{recursive:true,force:true});throw error;}
+  }catch(error){if(owned)try{await removeSnapshotTree(directory);}catch(cleanupError){retainCleanupError(error,cleanupError);}throw error;}
 }

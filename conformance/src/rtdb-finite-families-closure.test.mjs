@@ -653,8 +653,16 @@ test("the forged-token refusals outside the recorded shape are declared with the
   );
 });
 
-test("every emulator-profile difference the RTDB record declares for the 2026-11 recordings cites an owner decision row", () => {
+test("each emulator-profile difference the RTDB record declares for the 2026-11 recordings cites the owner row that decided it", () => {
   const known = closure().knownDifferences;
-  for (const key of ["restEmulatorFollowsOfficialEmulator", "invalidCredentialsEmulatorProfile"])
-    assert.match(known[key].decisionRef, /owner-decisions\.md \(.*\b2270\b/, key);
+  // The forged tokens: 713 extended to RTDB by row 2270; the three REST cases: row 2273.
+  assert.match(
+    known.invalidCredentialsEmulatorProfile.decisionRef,
+    /\(713, extended to RTDB by 2270 \(1\)\)/,
+  );
+  assert.match(
+    known.restEmulatorFollowsOfficialEmulator.decisionRef,
+    /\(2273, "RTDB closure REST emulator differences"/,
+  );
+  assert.doesNotMatch(known.restEmulatorFollowsOfficialEmulator.decisionRef, /2270/);
 });

@@ -116,33 +116,86 @@ def test_whole_second_eventarc_preserves_recorded_absence_and_profile_difference
         assert len(replay(case, profile, monkeypatch)) == 1
 
 
-@pytest.mark.parametrize("profile", ["strict", "emulator"])
-def test_raw_cloudevent_request_constants_and_pending_infrastructure(profile, monkeypatch):
+CORPUS = json.loads((ROOT / "conformance/functions-python/corpus.json").read_text())
+RECORD = json.loads((ROOT / "spec/compatibility/closure/FUNCTIONS-PYTHON.json").read_text())
+INFRASTRUCTURE_HEADERS = ("authorization", "forwarded", "x-forwarded-for", "function-execution-id", "x-cloud-trace-context", "from", "accept")
+
+
+def actual_replay_differences(profile, monkeypatch):
+    """Derive paths from recorded-versus-current output, never from declared fields."""
     monkeypatch.setenv("FIREEMU_HTTP_PROFILE", profile)
+    differences = set()
     for row in OBSERVATIONS:
-        if row["condition"] not in {"firestore-events", "pubsub-events", "storage-events", "eventarc-custom-events"}:
+        family = row["condition"]
+        if family not in {"firestore-events", "pubsub-events", "storage-events", "eventarc-custom-events", "scheduler-events"}:
             continue
-        expected = next(f for f in row["frames"] if f["kind"] == "raw-event")
+        expected = next(f for f in row["frames"] if f["kind"] in {"raw-event", "raw-request"})
         case = row["sdkCases"][0]
         captured = []
         def handler(event):
-            captured.append({"method": flask.request.method, "path": flask.request.path, "headers": dict((k.lower(), v) for k, v in flask.request.headers.items()), "attributes": dict(event._get_attributes())})
+            captured.append({"method": flask.request.method, "path": flask.request.path, "headers": dict((k.lower(), v) for k, v in flask.request.headers.items()), "attributes": {} if family == "scheduler-events" else dict(event._get_attributes())})
+            return flask.Response("ok")
         dispatch._deliver(case["trigger"], handler, case["event"])
         actual = captured[0]
-        assert actual["method"] == expected["request"]["method"]
-        assert actual["path"] == expected["request"]["path"]
+        for field in ("method", "path"):
+            if actual[field] != expected["request"][field]:
+                differences.add(family + ".request." + field)
         for key, value in expected["request"]["headers"].items():
-            if profile == "emulator" and key in {"user-agent", "accept-encoding", "x-forwarded-proto"}:
-                assert key not in actual["headers"]
-            else:
-                assert actual["headers"][key] == value
-        for key, value in expected["attributes"].items():
-            if key == "dataschema" and profile == "emulator":
-                assert key not in actual["attributes"]
-            else:
-                assert actual["attributes"][key] == value
-        assert "authorization" in expected["request"]["headerNames"]
-        assert "authorization" not in actual["headers"]
+            if actual["headers"].get(key) != value:
+                if profile == "emulator" and family != "scheduler-events" and key in {"user-agent", "accept-encoding", "x-forwarded-proto"}:
+                    assert key not in actual["headers"], "declared emulator constant difference is absence only"
+                differences.add(family + ".request.headers." + key)
+        for key in INFRASTRUCTURE_HEADERS:
+            if (key in expected["request"]["headerNames"]) != (key in actual["headers"]):
+                differences.add(family + ".request.presence." + key)
+        for key, value in expected.get("attributes", {}).items():
+            if actual["attributes"].get(key) != value:
+                if profile == "emulator" and key == "dataschema":
+                    assert key not in actual["attributes"], "declared dataschema difference is absence only"
+                differences.add(family + "." + key)
+    scheduler = next(r for r in OBSERVATIONS if r["condition"] == "scheduler-events")["sdkCases"][0]
+    actual = replay(scheduler, profile, monkeypatch)[0]
+    for key, value in scheduler["expected"].items():
+        if actual.get(key) != value:
+            differences.add("scheduler-events." + key)
+    eventarc = next(r for r in OBSERVATIONS if r["condition"] == "eventarc-custom-events")
+    case = {**eventarc["sdkCases"][0], "event": eventarc["wholeSecondInput"]}
+    try:
+        count = len(replay(case, profile, monkeypatch))
+    except ValueError:
+        count = 0
+    if count != eventarc["wholeSecondSdkFrames"]:
+        differences.add("eventarc-custom-events.wholeSecondSdkFrames")
+    return differences
+
+
+def assert_declared_replay(profile, differences, record):
+    inventory = [{key: entry[key] for key in ("id", "profiles", "fields")} for entry in record["declaredDifferences"]]
+    assert inventory == CORPUS["replayDifferences"], "exact replay difference inventory"
+    declared = {field for entry in inventory if profile in entry["profiles"] for field in entry["fields"]}
+    assert differences == declared, "actual replay differences must equal the declared inventory"
+
+
+@pytest.mark.parametrize("profile", ["strict", "emulator"])
+def test_raw_cloudevent_request_constants_and_pending_infrastructure(profile, monkeypatch):
+    assert_declared_replay(profile, actual_replay_differences(profile, monkeypatch), RECORD)
+
+
+@pytest.mark.parametrize("profile", ["strict", "emulator"])
+def test_actual_replay_refuses_removed_or_widened_declarations_and_neighbor_differences(profile, monkeypatch):
+    differences = actual_replay_differences(profile, monkeypatch)
+    for i, entry in enumerate(RECORD["declaredDifferences"]):
+        removed = json.loads(json.dumps(RECORD))
+        removed["declaredDifferences"].pop(i)
+        with pytest.raises(AssertionError, match="difference inventory"):
+            assert_declared_replay(profile, differences, removed)
+        for field in entry["fields"]:
+            widened = json.loads(json.dumps(RECORD))
+            widened["declaredDifferences"][i]["fields"].append(field + "-neighbor")
+            with pytest.raises(AssertionError, match="difference inventory"):
+                assert_declared_replay(profile, differences, widened)
+            with pytest.raises(AssertionError, match="actual replay differences"):
+                assert_declared_replay(profile, differences | {field + "-neighbor"}, RECORD)
 
 
 def test_recorded_task_bytes_survive_current_http_router():
@@ -157,3 +210,52 @@ def test_recorded_task_bytes_survive_current_http_router():
     assert response.status_code == 200
     response.close()
     assert seen == [body]
+
+
+@pytest.mark.parametrize("profile", ["strict", "emulator"])
+@pytest.mark.parametrize("field", ["user-agent", "accept-encoding", "x-cloudscheduler", "x-forwarded-proto"])
+def test_scheduler_recorded_constant_change_is_rejected(profile, field, monkeypatch):
+    row = next(r for r in OBSERVATIONS if r["condition"] == "scheduler-events")
+    frame = next(f for f in row["frames"] if f["kind"] == "raw-request")
+    old = frame["request"]["headers"][field]
+    try:
+        frame["request"]["headers"][field] = "corrupted-observation"
+        with pytest.raises(AssertionError):
+            test_raw_cloudevent_request_constants_and_pending_infrastructure(profile, monkeypatch)
+    finally:
+        frame["request"]["headers"][field] = old
+
+
+@pytest.mark.parametrize("profile", ["strict", "emulator"])
+def test_undeclared_request_method_change_fails_against_actual_scheduler(profile, monkeypatch):
+    row = next(r for r in OBSERVATIONS if r["condition"] == "scheduler-events")
+    request = next(f["request"] for f in row["frames"] if f["kind"] == "raw-request")
+    old = request["method"]
+    try:
+        request["method"] = "DELETE"
+        with pytest.raises(AssertionError, match="actual replay differences"):
+            assert_declared_replay(profile, actual_replay_differences(profile, monkeypatch), RECORD)
+    finally:
+        request["method"] = old
+
+
+@pytest.mark.parametrize("field", ["user-agent", "accept-encoding", "x-forwarded-proto"])
+def test_declared_emulator_header_absence_does_not_accept_a_wrong_value(field, monkeypatch):
+    from fireemu_runner import request_view
+    original = request_view.request_headers
+    def wrong_value(headers, event):
+        return {**original(headers, event), field: "unexpected-local-value"}
+    monkeypatch.setattr(request_view, "request_headers", wrong_value)
+    with pytest.raises(AssertionError, match="absence only"):
+        actual_replay_differences("emulator", monkeypatch)
+
+
+def test_declared_dataschema_absence_does_not_accept_a_wrong_schema(monkeypatch):
+    case = next(r for r in OBSERVATIONS if r["condition"] == "firestore-events")["sdkCases"][0]
+    assert "dataschema" not in case["event"]
+    try:
+        case["event"]["dataschema"] = "unexpected-schema"
+        with pytest.raises(AssertionError, match="absence only"):
+            actual_replay_differences("emulator", monkeypatch)
+    finally:
+        del case["event"]["dataschema"]

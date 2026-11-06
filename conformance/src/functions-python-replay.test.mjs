@@ -27,27 +27,35 @@ test("complete projections reject value, presence, extra fields, type and array-
   );
   assert.throws(() => compare({}, {}, "other"), /known profile/);
 });
-for (const difference of record.declaredDifferences) {
-  test(`${difference.id}: exact declared field stays pending and its neighbor is a DIFF`, () => {
-    for (const profile of difference.profiles) {
-      const path = difference.fields[0];
-      assert.deepEqual(compare({ [path]: 1 }, { [path]: 2 }, profile, [difference]), [
-        { path, status: "PENDING_DIFFERENCE" },
-      ]);
-      assert.deepEqual(
-        compare({ [`${path}-neighbor`]: 1 }, { [`${path}-neighbor`]: 2 }, profile, [difference]),
-        [{ path: `${path}-neighbor`, status: "DIFF" }],
-      );
-    }
-    const otherProfile = ["strict", "emulator"].find((p) => !difference.profiles.includes(p));
-    if (otherProfile)
-      assert.equal(
-        compare({ [difference.fields[0]]: 1 }, { [difference.fields[0]]: 2 }, otherProfile, [
-          difference,
-        ])[0].status,
-        "DIFF",
-      );
-  });
+const corpus = JSON.parse(
+  readFileSync(new URL("../functions-python/corpus.json", import.meta.url)),
+);
+for (const observed of corpus.replayDifferences) {
+  for (const path of observed.fields) {
+    test(`${observed.id}/${path}: exact replay field stays pending and neighbors remain DIFF`, () => {
+      for (const profile of observed.profiles) {
+        assert.deepEqual(
+          compare({ [path]: 1 }, { [path]: 2 }, profile, record.declaredDifferences),
+          [{ path, status: "PENDING_DIFFERENCE" }],
+        );
+        assert.deepEqual(
+          compare(
+            { [`${path}-neighbor`]: 1 },
+            { [`${path}-neighbor`]: 2 },
+            profile,
+            record.declaredDifferences,
+          ),
+          [{ path: `${path}-neighbor`, status: "DIFF" }],
+        );
+      }
+      const otherProfile = ["strict", "emulator"].find((p) => !observed.profiles.includes(p));
+      if (otherProfile)
+        assert.equal(
+          compare({ [path]: 1 }, { [path]: 2 }, otherProfile, record.declaredDifferences)[0].status,
+          "DIFF",
+        );
+    });
+  }
 }
 test("masked task body remains bytes, not JSON equality", () => {
   const body = fixture.observations

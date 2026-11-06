@@ -108,3 +108,20 @@ test("a recorded owner answer changes one decision entry and cannot waive the pa
     assert.equal(r.recordingPolicy.waiver, null);
   }
 });
+
+test("deleting or widening a declared replay difference is rejected", () => {
+  for (const mutate of [
+    (r) => {
+      r.declaredDifferences = r.declaredDifferences.filter(
+        (d) => d.id !== "emulator-scheduler-offset",
+      );
+    },
+    (r) => {
+      r.declaredDifferences[0].fields.push("request.method");
+    },
+  ]) {
+    const r = record();
+    mutate(r);
+    assert.throws(() => validate(r, corpus(), bytes()), /difference inventory/);
+  }
+});

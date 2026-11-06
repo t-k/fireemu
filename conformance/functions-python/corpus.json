@@ -52,5 +52,75 @@
       "frames": 0,
       "sdkCases": 0
     }
+  ],
+  "replayDifferences": [
+    {
+      "id": "request-infrastructure",
+      "profiles": ["strict", "emulator"],
+      "fields": [
+        "firestore-events.request.presence.authorization",
+        "firestore-events.request.presence.forwarded",
+        "firestore-events.request.presence.x-forwarded-for",
+        "firestore-events.request.presence.function-execution-id",
+        "firestore-events.request.presence.x-cloud-trace-context",
+        "firestore-events.request.presence.from",
+        "firestore-events.request.presence.accept",
+        "pubsub-events.request.presence.authorization",
+        "pubsub-events.request.presence.forwarded",
+        "pubsub-events.request.presence.x-forwarded-for",
+        "pubsub-events.request.presence.function-execution-id",
+        "pubsub-events.request.presence.x-cloud-trace-context",
+        "pubsub-events.request.presence.from",
+        "pubsub-events.request.presence.accept",
+        "storage-events.request.presence.authorization",
+        "storage-events.request.presence.forwarded",
+        "storage-events.request.presence.x-forwarded-for",
+        "storage-events.request.presence.function-execution-id",
+        "storage-events.request.presence.x-cloud-trace-context",
+        "storage-events.request.presence.from",
+        "storage-events.request.presence.accept",
+        "eventarc-custom-events.request.presence.authorization",
+        "eventarc-custom-events.request.presence.forwarded",
+        "eventarc-custom-events.request.presence.x-forwarded-for",
+        "eventarc-custom-events.request.presence.function-execution-id",
+        "eventarc-custom-events.request.presence.x-cloud-trace-context",
+        "eventarc-custom-events.request.presence.from",
+        "eventarc-custom-events.request.presence.accept",
+        "scheduler-events.request.presence.authorization",
+        "scheduler-events.request.presence.forwarded",
+        "scheduler-events.request.presence.x-forwarded-for",
+        "scheduler-events.request.presence.function-execution-id",
+        "scheduler-events.request.presence.x-cloud-trace-context"
+      ]
+    },
+    {
+      "id": "emulator-eventarc-whole-second",
+      "profiles": ["emulator"],
+      "fields": ["eventarc-custom-events.wholeSecondSdkFrames"]
+    },
+    {
+      "id": "emulator-request-constants",
+      "profiles": ["emulator"],
+      "fields": [
+        "firestore-events.dataschema",
+        "firestore-events.request.headers.user-agent",
+        "firestore-events.request.headers.accept-encoding",
+        "firestore-events.request.headers.x-forwarded-proto",
+        "pubsub-events.request.headers.user-agent",
+        "pubsub-events.request.headers.accept-encoding",
+        "pubsub-events.request.headers.x-forwarded-proto",
+        "storage-events.request.headers.user-agent",
+        "storage-events.request.headers.accept-encoding",
+        "storage-events.request.headers.x-forwarded-proto",
+        "eventarc-custom-events.request.headers.user-agent",
+        "eventarc-custom-events.request.headers.accept-encoding",
+        "eventarc-custom-events.request.headers.x-forwarded-proto"
+      ]
+    },
+    {
+      "id": "emulator-scheduler-offset",
+      "profiles": ["emulator"],
+      "fields": ["scheduler-events.schedule_time"]
+    }
   ]
 }

@@ -95,6 +95,11 @@ export function validate(record, corpus, fixtureBytes) {
   assert.equal(fixture.observations[6].sdkEventObserved, false, "blocking success unobserved");
   assert.equal(fixture.observations[7].localComparison, false, "deployment not compared");
   assert.equal(fixture.observations[7].observedFunctionCount, 13);
+  assert.deepEqual(
+    record.declaredDifferences.map(({ id, profiles, fields }) => ({ id, profiles, fields })),
+    corpus.replayDifferences,
+    "exact replay difference inventory",
+  );
   for (const d of record.declaredDifferences) {
     assert.equal(d.status, "PENDING", "difference not accepted");
     assert.ok(d.fields.length && d.profiles.length && d.reason);

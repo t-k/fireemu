@@ -6,6 +6,7 @@
 use fireemu_adapter_grpc::encode::encode_document;
 use fireemu_adapter_grpc::rest::json::{document_to_json, shorten_fraction};
 use fireemu_core_auth::store::UserRecord;
+use fireemu_core_firestore::field_path::FieldPath;
 use fireemu_core_firestore::store::Document;
 use fireemu_core_functions::event::{
     auth_attributes, firestore_attributes, pubsub_attributes, schedule_attributes,
@@ -230,13 +231,21 @@ pub fn change_kind(before: Option<&Document>, after: Option<&Document>) -> Optio
 fn update_mask(before: &Document, after: &Document) -> Vec<String> {
     let mut paths: Vec<String> = Vec::new();
     for (k, v) in &after.fields {
-        if before.fields.get(k) != Some(v) {
-            paths.push(k.clone());
+        if !before.fields.get(k).is_some_and(|old| old.stored_eq(v)) {
+            paths.push(
+                FieldPath::from_segments([k.as_str()])
+                    .expect("valid stored field name")
+                    .canonical(),
+            );
         }
     }
     for k in before.fields.keys() {
         if !after.fields.contains_key(k) {
-            paths.push(k.clone());
+            paths.push(
+                FieldPath::from_segments([k.as_str()])
+                    .expect("valid stored field name")
+                    .canonical(),
+            );
         }
     }
     paths.sort();

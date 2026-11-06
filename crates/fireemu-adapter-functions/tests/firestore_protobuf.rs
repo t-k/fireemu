@@ -189,3 +189,55 @@ fn floating_point_and_empty_container_boundaries_survive() {
         assert_eq!(decoded, encode_document(&doc));
     }
 }
+
+#[test]
+fn update_masks_use_canonical_literal_paths_for_added_changed_and_deleted_fields() {
+    for (name, path) in [
+        ("a.b", "`a.b`"),
+        ("a`b", "`a\\`b`"),
+        ("a\\b", "`a\\\\b`"),
+        ("plain", "plain"),
+    ] {
+        for (old, new) in [(None, Some(2)), (Some(1), Some(2)), (Some(1), None)] {
+            let mut before = document(1);
+            let mut after = before.clone();
+            if let Some(value) = old {
+                before.fields.insert(name.into(), Value::Integer(value));
+            }
+            if let Some(value) = new {
+                after.fields.insert(name.into(), Value::Integer(value));
+            }
+            let binary = firestore_event_data_encoded(Some(&before), Some(&after), true);
+            assert_eq!(decode(&binary).mask.unwrap().field_paths, [path]);
+            let json = firestore_event_data_encoded(Some(&before), Some(&after), false);
+            assert_eq!(json["updateMask"]["fieldPaths"], serde_json::json!([path]));
+        }
+    }
+}
+
+#[test]
+fn update_masks_omit_unchanged_nan() {
+    let mut before = document(1);
+    before.fields.insert("n".into(), Value::Double(f64::NAN));
+    let mut after = before.clone();
+    after.fields.insert("integer".into(), Value::Integer(2));
+    let binary = firestore_event_data_encoded(Some(&before), Some(&after), true);
+    assert_eq!(decode(&binary).mask.unwrap().field_paths, ["integer"]);
+    let json = firestore_event_data_encoded(Some(&before), Some(&after), false);
+    assert_eq!(
+        json["updateMask"]["fieldPaths"],
+        serde_json::json!(["integer"])
+    );
+}
+
+#[test]
+fn update_masks_include_negative_zero_to_positive_zero() {
+    let mut before = document(1);
+    before.fields.insert("n".into(), Value::Double(-0.0));
+    let mut after = before.clone();
+    after.fields.insert("n".into(), Value::Double(0.0));
+    let binary = firestore_event_data_encoded(Some(&before), Some(&after), true);
+    assert_eq!(decode(&binary).mask.unwrap().field_paths, ["n"]);
+    let json = firestore_event_data_encoded(Some(&before), Some(&after), false);
+    assert_eq!(json["updateMask"]["fieldPaths"], serde_json::json!(["n"]));
+}

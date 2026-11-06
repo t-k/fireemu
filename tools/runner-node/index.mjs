@@ -1510,7 +1510,9 @@ function firestoreProtoFields(fields) {
 
 function writtenFirestoreEvent(event) {
   if (event.datacontenttype === "application/protobuf") {
-    if (typeof event.data !== "string" || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(event.data)) {
+    // A single character repetition avoids stack growth; require the absolute end, including no trailing newline.
+    if (typeof event.data !== "string" || event.data.length % 4 !== 0 ||
+        !/^[A-Za-z0-9+/]*={0,2}(?![\s\S])/.test(event.data)) {
       throw new Error("Firestore protobuf IPC data must be base64 text");
     }
     return { ...event, data: Buffer.from(event.data, "base64") };

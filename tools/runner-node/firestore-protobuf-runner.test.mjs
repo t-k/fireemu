@@ -3,6 +3,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
 import { once } from 'node:events';
+import { createRequire } from 'node:module';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -163,3 +164,53 @@ for (const [kind,method] of [['Created','onCreate'],['Updated','onUpdate'],['Del
     }
   });
 }
+
+test('large valid protobuf array update reaches the SDK handler', { timeout: 30000 }, async t => {
+  const require = createRequire(import.meta.url);
+  const codec = require(join(sdkRoot, 'protos/compiledFirestore.js')).google.events.cloud.firestore.v1.DocumentEventData;
+  const name = 'projects/demo-proj/databases/(default)/documents/items/a';
+  const data = codec.encode({
+    oldValue: { name, createTime: { seconds: 1 }, updateTime: { seconds: 1 }, fields: { arr: { arrayValue: { values: Array(900000).fill({ booleanValue: false }) } } } },
+    value: { name, createTime: { seconds: 1 }, updateTime: { seconds: 2 }, fields: { arr: { arrayValue: { values: Array(900000).fill({ booleanValue: true }) } } } },
+    updateMask: { fieldPaths: ['arr'] },
+  }).finish();
+  const event = {
+    specversion: '1.0', id: 'large-update', time: '2026-01-01T00:00:00.000Z',
+    type: 'google.cloud.firestore.document.v1.updated',
+    source: '//firestore.googleapis.com/projects/demo-proj/databases/(default)',
+    subject: 'documents/items/a', project: 'demo-proj', database: '(default)',
+    namespace: '(default)', location: 'local', document: 'items/a',
+    datacontenttype: 'application/protobuf', data: Buffer.from(data).toString('base64'),
+  };
+  assert(event.data.length > 9600000);
+  assert(frame({ type: 'invoke', event }).length < 16 * 1024 * 1024);
+  const f = await start(t, `
+const {appendFileSync}=require('node:fs');
+const assert=require('node:assert/strict');
+const sdk=require(${JSON.stringify(join(sdkRoot, 'lib/v2/providers/firestore.js'))});
+exports.large=sdk.onDocumentUpdated('items/{id}',e=>{
+ const before=e.data.before.data().arr, after=e.data.after.data().arr;
+ assert.equal(before.length,900000); assert.equal(after.length,900000);
+ assert(before.every(value=>value===false)); assert(after.every(value=>value===true));
+ appendFileSync(__dirname+'/calls.jsonl',JSON.stringify({before:before.length,after:after.length})+'\\n');
+});
+`, 'strict');
+  const result = await f.invoke('large', 'firestore', event);
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(await f.calls(), [{ before: 900000, after: 900000 }]);
+});
+
+test('protobuf IPC rejects invalid base64 before calling the handler', async t => {
+  const f = await start(t, `
+const {appendFileSync}=require('node:fs');
+exports.invalid=Object.assign(e=>appendFileSync(__dirname+'/calls.jsonl','{}\\n'),{
+ __endpoint:{platform:'gcfv2',eventTrigger:{eventType:'google.cloud.firestore.document.v1.updated',eventFilters:{database:'(default)'},eventFilterPathPatterns:{document:'items/{id}'}}}
+});
+`, 'strict');
+  for (const data of [null, 42, 'A', 'AAA', 'A===', '====', '=AAA', 'AA=A', 'AA==AAAA', 'AAAA\n', 'AAA\n', 'AA\r\n', 'AA-_']) {
+    const result = await f.invoke('invalid', 'firestore', { datacontenttype: 'application/protobuf', data });
+    assert.equal(result.ok, false, JSON.stringify({ data, result }));
+    assert.match(JSON.stringify(result), /Firestore protobuf IPC data must be base64 text/);
+  }
+  assert.deepEqual(await f.calls(), []);
+});

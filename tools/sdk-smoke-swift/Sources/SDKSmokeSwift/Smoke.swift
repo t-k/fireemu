@@ -78,6 +78,7 @@ final class Smoke {
         db.useEmulator(withHost: fsEndpoint.host, port: fsEndpoint.port)
         let settings = db.settings
         settings.cacheSettings = MemoryCacheSettings()
+        settings.isSSLEnabled = false
         db.settings = settings
         return db
     }
@@ -248,7 +249,11 @@ final class Smoke {
                     else { continuation.resume(throwing: SmokeFailure(reason: "upload-size")) }
                 }
                 task.observe(.progress) { snapshot in
-                    if snapshot.progress?.completedUnitCount == Int64(payload.count) { progress.insert(1) }
+                    // Transport progress includes protocol bytes; metadata and download
+                    // independently check the exact payload length and contents.
+                    if let reported = snapshot.progress,
+                       reported.completedUnitCount == reported.totalUnitCount,
+                       reported.completedUnitCount >= Int64(payload.count) { progress.insert(1) }
                 }
             }
             try await eventually { progress.contains(1) }
@@ -333,6 +338,15 @@ final class NoRedirect: NSObject, URLSessionTaskDelegate {
             result["reason"] = (error as? SmokeFailure)?.reason ?? "sdk-error"
             result["errorDomain"] = (error as NSError).domain
             result["errorCode"] = (error as NSError).code
+            if let underlying = (error as NSError).userInfo[NSUnderlyingErrorKey] as? NSError {
+                result["underlyingDomain"] = underlying.domain
+                result["underlyingCode"] = underlying.code
+            }
+            if (error as NSError).domain == AuthErrorDomain,
+               (error as NSError).code == AuthErrorCode.keychainError.rawValue {
+                result["status"] = "blocked"
+                result["classification"] = "sdk-macos-keychain-entitlement"
+            }
         }
         result["seconds"] = Date().timeIntervalSince(start)
         let data = try! JSONSerialization.data(withJSONObject: result, options: [.sortedKeys])

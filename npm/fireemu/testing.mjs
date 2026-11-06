@@ -92,7 +92,7 @@ export async function createTestWorld(options={}){
   const timeout=options.startupTimeoutMs??60_000;
   if(!Number.isSafeInteger(timeout)||timeout<=0)throw TypeError('startupTimeoutMs must be a positive integer');
   const snapshotTimeout=options.snapshotTimeoutMs??60_000;
-  if(!Number.isSafeInteger(snapshotTimeout)||snapshotTimeout<=0)throw TypeError('snapshotTimeoutMs must be a positive integer');
+  if(!Number.isSafeInteger(snapshotTimeout)||snapshotTimeout<=0||snapshotTimeout>2147483647)throw TypeError('snapshotTimeoutMs must be a positive integer no greater than 2147483647');
   let services=options.services;
   if(services&&(!Array.isArray(services)||!services.length||services.some(name=>typeof name!=='string'||! /^(auth|firestore|storage|functions(?::[A-Za-z0-9_-]+)?|pubsub|database|appcheck)$/.test(name))))throw TypeError('services must name supported test-world services');
   const id=randomUUID();

@@ -232,6 +232,7 @@ export async function snapshotInputs(options, root, signal=options.signal) {
     const path=join(baseline,'firebase.json');
     await checked(signal,()=>writeFile(path,JSON.stringify(value),{mode:0o600}));
     // Storage target associations require the original project's alias file.
+    await checked(signal,()=>rm(join(baseline,'.firebaserc'),{force:true}));
     try{await copyInputTree(join(base,'.firebaserc'),join(baseline,'.firebaserc'),{signal,directoryModes});}catch(error){if(error.code!=='ENOENT')throw error;}
     return path;
   };

@@ -263,18 +263,47 @@ test('snapshot timeout names its phase, removes partial input and never starts t
   assert.deepEqual(await readdir(temporary), []);
 });
 
-test('snapshotTimeoutMs must be a positive safe integer before creating a world directory', async t => {
+test('Firebase JSON overrides preserve the alias file when both configurations are snapshotted', async t => {
+  const f = await fixture(t);
+  const aliases = JSON.stringify({ projects: { default: 'demo-test-worlds' } });
+  await writeFile(join(f.root, 'firebase.json'), JSON.stringify({ emulators: { auth: { port: 9099 } } }));
+  await writeFile(join(f.root, 'firebase.test.json'), JSON.stringify({ emulators: { firestore: { port: 8080 } } }));
+  await writeFile(join(f.root, '.firebaserc'), aliases);
+  const snapshot = await snapshotInputs({
+    cwd: f.root,
+    config: { schemaVersion: 1, firebaseJson: 'firebase.json' },
+    firebaseJson: 'firebase.test.json',
+  }, f.world);
+  assert.deepEqual(JSON.parse(await readFile(snapshot.config.firebaseJson, 'utf8')), { emulators: { firestore: { host: '127.0.0.1', port: 0 } } });
+  assert.equal(await readFile(join(snapshot.baseline, '.firebaserc'), 'utf8'), aliases);
+  assert.equal(await readFile(join(f.root, '.firebaserc'), 'utf8'), aliases);
+});
+
+test('snapshotTimeoutMs must fit the timer range before creating a world directory', async t => {
   const f = await fixture(t), temporary = join(f.root, 'temporary');
   await mkdir(temporary);
-  for (const snapshotTimeoutMs of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, NaN]) {
+  for (const snapshotTimeoutMs of [2147483648, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER + 1, 0, -1, 1.5, NaN]) {
     await assert.rejects(createTestWorld({
       ...f.options,
       binaryPath: process.execPath,
       tempRoot: temporary,
       snapshotTimeoutMs,
-    }), /snapshotTimeoutMs must be a positive integer/);
+    }), /snapshotTimeoutMs must be a positive integer no greater than 2147483647/);
   }
   assert.deepEqual(await readdir(temporary), []);
+});
+
+test('snapshotTimeoutMs accepts the maximum timer delay', async t => {
+  const f = await fixture(t);
+  const reason = Error('cancel before snapshot');
+  await assert.rejects(createTestWorld({
+    ...f.options,
+    binaryPath: process.execPath,
+    tempRoot: f.world,
+    snapshotTimeoutMs: 2147483647,
+    signal: AbortSignal.abort(reason),
+  }), error => error.cause === reason);
+  assert.deepEqual(await readdir(f.world), []);
 });
 
 test('external abort during an active file copy settles I/O before removing the world directory', { timeout: 30_000 }, async t => {

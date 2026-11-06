@@ -109,8 +109,7 @@ def execute(command, environment, directory, log, seconds):
                 raise RuntimeError('Malformed owned launcher readiness.')
             identity = owner_identity(process)
             os.write(go_writer, b'GO\n')
-            os.close(go_writer)
-            go_writer = None
+            # Keep the caller lifeline open until verified group cleanup finishes.
             if not select.select([reader], [], [], seconds)[0]:
                 return 124
             result = os.read(reader, 64)

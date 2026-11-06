@@ -1064,36 +1064,17 @@ fn normalize_with_timestamp_symbols(value: &Value, keep_timestamp_symbols: bool)
     }
 }
 
-/// Normalizes the run-dependent gRPC execution time while retaining its per-message position.
+/// Normalizes run-dependent gRPC instants while retaining their shared equality relationships.
 fn normalize_grpc_recording(value: &Value) -> Value {
-    let mut normalized = value.clone();
-    let mut symbols = BTreeMap::<(i64, u32), String>::new();
-    if let Some(messages) = normalized["messages"].as_array_mut() {
-        for message in messages {
-            let Some(text) = message.get("executionTime").and_then(Value::as_str) else {
-                continue;
-            };
-            let Ok(time) = chrono::DateTime::parse_from_rfc3339(text) else {
-                continue;
-            };
-            let instant = (time.timestamp(), time.timestamp_subsec_nanos());
-            let next = symbols.len() + 1;
-            let symbol = symbols
-                .entry(instant)
-                .or_insert_with(|| format!("<t{next}>"))
-                .clone();
-            message["executionTime"] = json!(symbol);
-        }
-    }
-    normalize(&normalized)
+    normalize_grpc_shared_timestamps(value)
 }
 
 fn grpc_recordings_match(actual: &Value, expected: &Value) -> bool {
     normalize_grpc_recording(actual) == normalize_grpc_recording(expected)
 }
 
-/// Mirrors the shared encounter-order instant symbols used before compact fixture hashing.
-fn normalize_grpc_compact_recording(value: &Value) -> Value {
+/// Mirrors the shared encounter-order instant symbols used for gRPC fixture comparison.
+fn normalize_grpc_shared_timestamps(value: &Value) -> Value {
     fn visit(value: &mut Value, symbols: &mut BTreeMap<(i64, u32), String>) {
         match value {
             Value::Object(fields) => {
@@ -1123,6 +1104,10 @@ fn normalize_grpc_compact_recording(value: &Value) -> Value {
     let mut normalized = value.clone();
     visit(&mut normalized, &mut BTreeMap::new());
     normalize_with_timestamp_symbols(&normalized, true)
+}
+
+fn normalize_grpc_compact_recording(value: &Value) -> Value {
+    normalize_grpc_shared_timestamps(value)
 }
 
 /// Applies the committed compact gRPC framing reduction after full response normalization.
@@ -4679,16 +4664,29 @@ fn grpc_pipeline_recording_replays_complete_response_before_normalization() {
         .iter()
         .find(|step| step["id"] == "bare")
         .unwrap();
-    let state = state(true);
-    for seed in program["seed"].as_array().unwrap() {
-        let (status, body) = call(
-            &state,
-            "PATCH",
-            &format!("{DOCS}/{}", seed[0].as_str().unwrap()),
-            &json!({"fields": fill(&seed[1])}),
-        );
-        assert_eq!(status, 200, "seed: {body}");
-    }
+    let replay_clock = Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::from_nanos(
+        i128::from(REPLAY_CLOCK_SECONDS) * 1_000_000_000,
+    ))));
+    let state = state_with_clock(true, Arc::clone(&replay_clock));
+    let writes: Vec<_> = program["seed"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|seed| {
+            json!({"update": {
+                "name": format!("{DOCS}/{}", seed[0].as_str().unwrap()),
+                "fields": fill(&seed[1]),
+            }})
+        })
+        .collect();
+    let (status, body) = call(
+        &state,
+        "POST",
+        &format!("{DOCS}:commit"),
+        &json!({"writes": writes}),
+    );
+    assert_eq!(status, 200, "seed batch: {body}");
+    advance_replay_clock(Some(&replay_clock));
     let request = fireemu_adapter_grpc::rest::pipeline_json::request_from_json(
         "projects/demo-app/databases/(default)",
         &fill(&step["body"]),
@@ -4873,51 +4871,35 @@ fn seed_grpc_replay_state(
         row,
         "fs-ent-pipeline/o8a/framing-small#f5-grpc" | "fs-ent-pipeline/o8a/framing-small#f50-grpc"
     );
-    if framing_small {
-        let writes: Vec<_> = program["seed"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|seed| {
-                seed[0]
+    let seeds: Vec<_> = program["seed"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|seed| {
+            !framing_small
+                || seed[0]
                     .as_str()
                     .is_some_and(|name| name.starts_with("f5/") || name.starts_with("f50/"))
-            })
-            .map(|seed| {
-                json!({"update": {
-                    "name": format!("{docs}/{}", seed[0].as_str().unwrap()),
-                    "fields": fill_at(&seed[1], docs),
-                }})
-            })
-            .collect();
+        })
+        .collect();
+    let writes: Vec<_> = seeds
+        .iter()
+        .map(|seed| {
+            json!({"update": {
+                "name": format!("{docs}/{}", seed[0].as_str().unwrap()),
+                "fields": fill_at(&seed[1], docs),
+            }})
+        })
+        .collect();
+    for batch in writes.chunks(500) {
         let (status, body) = call(
             state,
             "POST",
             &format!("{docs}:commit"),
-            &json!({"writes": writes}),
+            &json!({"writes": batch}),
         );
         assert_eq!(status, 200, "{row} seed batch: {body}");
-    } else {
-        for seed in program["seed"].as_array().unwrap() {
-            let name = seed[0].as_str().unwrap();
-            let (status, body) = call(
-                state,
-                "PATCH",
-                &format!("{docs}/{name}"),
-                &json!({"fields": fill_at(&seed[1], docs)}),
-            );
-            assert_eq!(status, 200, "{row} seed {name}: {body}");
-        }
-    }
-    if framing_small {
-        replay_clock
-            .unwrap()
-            .lock()
-            .unwrap()
-            .advance(fireemu_core_types::time::LogicalDuration::from_nanos(
-                1_000_000_000,
-            ))
-            .unwrap();
+        advance_replay_clock(replay_clock);
     }
 
     replay_committed_setup_steps(state, program, row, docs, replay_clock);
@@ -4973,18 +4955,19 @@ fn replay_committed_setup_steps(
             &fill_at(&step["body"], docs),
         );
         assert_eq!(status, 200, "{row} seed commit {step_id}: {body}");
-        // Preserve the ordering of the separate l3 and m30 commits before the read.
-        if row == "fs-ent-pipeline/o8a/framing-large#l3-grpc" {
-            replay_clock
-                .unwrap()
-                .lock()
-                .unwrap()
-                .advance(fireemu_core_types::time::LogicalDuration::from_nanos(
-                    1_000_000_000,
-                ))
-                .unwrap();
-        }
+        advance_replay_clock(replay_clock);
     }
+}
+
+fn advance_replay_clock(replay_clock: Option<&Arc<Mutex<VirtualClock>>>) {
+    replay_clock
+        .unwrap()
+        .lock()
+        .unwrap()
+        .advance(fireemu_core_types::time::LogicalDuration::from_nanos(
+            1_000_000_000,
+        ))
+        .unwrap();
 }
 
 fn verified_grpc_rows(closure: &Value, comparison: &Value) -> Vec<(String, String)> {
@@ -5048,7 +5031,12 @@ fn grpc_recording_comparison_keeps_status_and_all_response_metadata() {
         "code": 0,
         "messages": [{
             "executionTime": "2026-08-29T00:00:00Z",
-            "results": [{"name": "projects/demo-app/databases/(default)/documents/c/d"}]
+            "results": [{
+                "createTime": "2026-08-29T00:00:01Z",
+                "fields": {},
+                "name": "projects/demo-app/databases/(default)/documents/c/d",
+                "updateTime": "2026-08-29T00:00:01Z"
+            }]
         }]
     });
     let mut missing_execution_time = recording.clone();
@@ -5057,6 +5045,16 @@ fn grpc_recording_comparison_keeps_status_and_all_response_metadata() {
         .unwrap()
         .remove("executionTime");
     assert!(!grpc_recordings_match(&recording, &missing_execution_time));
+
+    let mut changed_time_relationship = recording.clone();
+    changed_time_relationship["messages"][0]["results"][0]["createTime"] =
+        json!("2026-08-29T00:00:00Z");
+    changed_time_relationship["messages"][0]["results"][0]["updateTime"] =
+        json!("2026-08-29T00:00:00Z");
+    assert!(!grpc_recordings_match(
+        &recording,
+        &changed_time_relationship
+    ));
 
     let mut added_metadata = recording.clone();
     added_metadata["messages"][0]["explainMetrics"] = json!({"readOperations": 1});
@@ -5094,16 +5092,11 @@ fn every_verified_grpc_pipeline_match_replays_the_committed_recording() {
             .unwrap_or_else(|| panic!("{row}: request program is missing"));
         let request_step = request_step_for_grpc_row(request_program, &row);
         let expected = &production["programs"][program_id]["steps"][row_step];
-        let replay_clock = row.starts_with("fs-ent-pipeline/o8a/framing-").then(|| {
-            Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::from_nanos(
-                i128::from(REPLAY_CLOCK_SECONDS) * 1_000_000_000,
-            ))))
-        });
-        let state = replay_clock.as_ref().map_or_else(
-            || state(true),
-            |clock| state_with_clock(true, Arc::clone(clock)),
-        );
-        seed_grpc_replay_state(&state, request_program, &row, replay_clock.as_ref());
+        let replay_clock = Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::from_nanos(
+            i128::from(REPLAY_CLOCK_SECONDS) * 1_000_000_000,
+        ))));
+        let state = state_with_clock(true, Arc::clone(&replay_clock));
+        seed_grpc_replay_state(&state, request_program, &row, Some(&replay_clock));
         let mut request_body = grpc_body_for_request_step(request_step, &row);
         if row == "fs-ent-pipeline/o6/sort-kinds-cross#v-desc-limit2-grpc" {
             request_body["structuredPipeline"]["pipeline"]["stages"]

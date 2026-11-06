@@ -2834,30 +2834,53 @@ impl FunctionsRuntime {
         // Trigger matching reads only the immutable manifest, and the document data (the
         // O(document bytes) part of an event) depends only on the change, so both are done
         // before the runtime lock is taken: once per change, as the locked pass used to.
-        let matched: Vec<_> = commit
+        let mut encoded_bytes = 0usize;
+        let matched = commit
             .changes
             .iter()
-            .filter_map(|change| {
-                let kind = change_kind(change.before.as_deref(), change.after.as_deref())?;
+            .try_fold(Vec::new(), |mut matched, change| {
+                let Some(kind) = change_kind(change.before.as_deref(), change.after.as_deref())
+                else {
+                    return Ok(matched);
+                };
                 let relative = change.path.relative();
                 let matches = self
                     .manifest
                     .firestore_matches(&commit.database, &relative, kind);
-                let raw_data = matches
-                    .iter()
-                    .any(|m| matches!(m.function.trigger, Trigger::Firestore { .. }))
-                    .then(|| {
-                        let data = crate::events::firestore_event_data(
-                            change.before.as_deref(),
-                            change.after.as_deref(),
-                        );
-                        Arc::<str>::from(
-                            serde_json::to_string(&data).expect("Firestore data serializes"),
-                        )
-                    });
-                Some((kind, relative, matches, raw_data))
-            })
-            .collect();
+                let binary = |m: &fireemu_core_functions::manifest::FunctionSpec| {
+                    self.profile == FunctionsHttpProfile::Strict
+                        && m.generation
+                            == fireemu_core_functions::manifest::FunctionGeneration::Second
+                };
+                let mut encode = |protobuf| {
+                    let data = crate::events::firestore_event_data_encoded(
+                        change.before.as_deref(),
+                        change.after.as_deref(),
+                        protobuf,
+                    );
+                    let raw = serde_json::to_string(&data).expect("Firestore data serializes");
+                    // Each matched format has at least one delivery. Stop retaining payloads once this lower bound exceeds admission's byte budget; temporary encoding is bounded by the current document.
+                    encoded_bytes = encoded_bytes
+                        .checked_add(raw.len())
+                        .filter(|bytes| *bytes <= MAX_ACTIVE_EVENT_BYTES)
+                        .ok_or(SourceEventAdmissionError::Capacity)?;
+                    Ok::<_, SourceEventAdmissionError>(Arc::<str>::from(raw))
+                };
+                let raw_data = (
+                    matches
+                        .iter()
+                        .any(|m| !binary(m.function))
+                        .then(|| encode(false))
+                        .transpose()?,
+                    matches
+                        .iter()
+                        .any(|m| binary(m.function))
+                        .then(|| encode(true))
+                        .transpose()?,
+                );
+                matched.push((kind, relative, matches, raw_data));
+                Ok(matched)
+            })?;
         let mut inner = self
             .inner
             .lock()
@@ -2874,7 +2897,10 @@ impl FunctionsRuntime {
                     continue;
                 };
                 // Encoded above for every change with a Firestore match.
-                let Some(raw_data) = raw_data else {
+                let protobuf = self.profile == FunctionsHttpProfile::Strict
+                    && m.function.generation
+                        == fireemu_core_functions::manifest::FunctionGeneration::Second;
+                let Some(raw_data) = (if protobuf { &raw_data.1 } else { &raw_data.0 }) else {
                     continue;
                 };
                 // A `written` trigger receives the written type; others their own kind.
@@ -2917,6 +2943,9 @@ impl FunctionsRuntime {
                     }),
                 );
                 payload["data"] = Value::Null;
+                if protobuf {
+                    payload["datacontenttype"] = json!("application/protobuf");
+                }
                 payload["params"] = json!(m.params);
                 let event_type = payload
                     .get("type")
@@ -6870,6 +6899,71 @@ mod task_completion_tests {
     }
 
     #[tokio::test]
+    async fn firestore_large_delete_batch_stops_encoding_at_the_event_budget() {
+        use crate::events::FIRESTORE_DOCUMENT_ENCODINGS;
+        use crate::http::FunctionsHttpProfile;
+        use fireemu_core_firestore::value::Value as FsValue;
+        use fireemu_core_functions::manifest::{DocumentEvent, FunctionGeneration};
+
+        let base = runtime().await;
+        base.runner().kill_now();
+        let mut manifest = base.manifest.clone();
+        let mut function = manifest.get("ok").unwrap().clone();
+        function.generation = FunctionGeneration::Second;
+        if let Trigger::Firestore { event, .. } = &mut function.trigger {
+            *event = DocumentEvent::Deleted;
+        }
+        manifest.functions = vec![function];
+        let runtime = FunctionsRuntime::with_codebases(
+            vec![super::CodebaseSpec {
+                name: "default".into(),
+                manifest,
+                runner: base.runner(),
+                spawn: None,
+                cleanup_dir: None,
+            }],
+            base.config.clone(),
+            base.clock.clone(),
+            FunctionsHttpProfile::Strict,
+        )
+        .unwrap();
+        let mut commit = created_commit();
+        let mut document = commit.changes[0].after.as_deref().unwrap().clone();
+        document
+            .fields
+            .insert("blob".into(), FsValue::Bytes(vec![0; 900 * 1024]));
+        commit.changes = (0..100)
+            .map(|index| {
+                let mut before = document.clone();
+                before.path = DocumentPath::parse(
+                    &ProjectId::try_new("demo-app").unwrap(),
+                    &DatabaseId::try_new("(default)").unwrap(),
+                    &format!("items/delete{index}"),
+                )
+                .unwrap();
+                DocumentChange {
+                    path: before.path.clone(),
+                    before: Some(Arc::new(before)),
+                    after: None,
+                }
+            })
+            .collect::<Vec<_>>()
+            .into();
+        let before_id = runtime.inner.lock().unwrap().next_event;
+        FIRESTORE_DOCUMENT_ENCODINGS.set(0);
+        let held = locks_held_while_encoding(&runtime);
+        let result = runtime.reserve_commit_events(&commit);
+        crate::events::PAYLOAD_ENCODING_PROBE.set(None);
+        assert!(matches!(result, Err(SourceEventAdmissionError::Capacity)));
+        assert_eq!(FIRESTORE_DOCUMENT_ENCODINGS.get(), 55);
+        assert_eq!(*held.lock().unwrap(), vec![(false, false); 55]);
+        assert_eq!(runtime.inner.lock().unwrap().next_event, before_id);
+        assert_eq!(runtime.inner.lock().unwrap().active_event_bytes, 0);
+        runtime.shutdown().await;
+        base.shutdown().await;
+    }
+
+    #[tokio::test]
     async fn eventarc_admission_encodes_payloads_outside_both_locks() {
         const CHANNEL: &str = "projects/demo-app/locations/us-central1/channels/custom";
         let runtime = runtime().await;
@@ -7551,10 +7645,22 @@ mod task_completion_tests {
     #[allow(clippy::too_many_lines)]
     async fn firestore_fanout_preserves_frames_and_exact_logical_admission_bytes() {
         use crate::events::{firestore_event, FIRESTORE_DOCUMENT_ENCODINGS};
+        use crate::http::FunctionsHttpProfile;
         use fireemu_core_firestore::value::Value as FsValue;
         use fireemu_core_functions::manifest::DocumentEvent;
 
-        for triggers in [1, 4, 16] {
+        for (triggers, profile, generation) in [1, 4, 16].into_iter().flat_map(|triggers| {
+            [FunctionsHttpProfile::Strict, FunctionsHttpProfile::Emulator]
+                .into_iter()
+                .flat_map(move |profile| {
+                    [
+                        fireemu_core_functions::manifest::FunctionGeneration::First,
+                        fireemu_core_functions::manifest::FunctionGeneration::Second,
+                    ]
+                    .into_iter()
+                    .map(move |generation| (triggers, profile, generation))
+                })
+        }) {
             let base = runtime().await;
             base.runner().kill_now();
             let mut manifest = base.manifest.clone();
@@ -7563,6 +7669,7 @@ mod task_completion_tests {
                 .map(|index| {
                     let mut spec = template.clone();
                     spec.name = format!("fanout{index}");
+                    spec.generation = generation;
                     if let Trigger::Firestore {
                         event,
                         with_auth_context,
@@ -7579,13 +7686,19 @@ mod task_completion_tests {
                     spec
                 })
                 .collect();
-            let runtime = FunctionsRuntime::new(
-                manifest,
+            let runtime = FunctionsRuntime::with_codebases(
+                vec![super::CodebaseSpec {
+                    name: "default".into(),
+                    manifest,
+                    runner: base.runner(),
+                    spawn: None,
+                    cleanup_dir: None,
+                }],
                 base.config.clone(),
                 base.clock.clone(),
-                base.runner(),
-                None,
-            );
+                profile,
+            )
+            .unwrap();
             let faults = Arc::new(Mutex::new(FaultState::default()));
             faults.lock().unwrap().install(FaultPlan {
                 seed: 1,
@@ -7645,6 +7758,16 @@ mod task_completion_tests {
                     commit.commit_time.unwrap(),
                     with_auth_context.then(|| runtime.auth_context_of("system", None)),
                 );
+                if profile == FunctionsHttpProfile::Strict
+                    && generation == fireemu_core_functions::manifest::FunctionGeneration::Second
+                {
+                    expected["datacontenttype"] = json!("application/protobuf");
+                    expected["data"] = crate::events::firestore_event_data_encoded(
+                        commit.changes[0].before.as_deref(),
+                        commit.changes[0].after.as_deref(),
+                        true,
+                    );
+                }
                 expected["params"] = json!({"id": "reserved"});
                 let expected_len = FunctionsRuntime::retained_event_bytes(
                     &spec.name,
@@ -7671,6 +7794,19 @@ mod task_completion_tests {
                     .as_object_mut()
                     .unwrap()
                     .remove("traceparent");
+                if expected["datacontenttype"] == "application/protobuf" {
+                    use base64::Engine as _;
+                    use prost::Message as _;
+                    let decode = |data: &serde_json::Value| {
+                        let bytes = base64::engine::general_purpose::STANDARD
+                            .decode(data.as_str().unwrap())
+                            .unwrap();
+                        crate::events::DocumentEventData::decode(bytes.as_slice()).unwrap()
+                    };
+                    // Protobuf maps have no wire order; compare the decoded documents and retain exact byte lengths above.
+                    assert_eq!(decode(&actual["event"]["data"]), decode(&expected["data"]));
+                    expected["data"] = actual["event"]["data"].clone();
+                }
                 assert_eq!(actual["event"], expected);
                 assert_eq!(actual["invocationId"], format!("{}-1", index + 1));
                 assert_eq!(actual["function"], spec.name);

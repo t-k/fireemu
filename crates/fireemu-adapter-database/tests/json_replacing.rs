@@ -1,7 +1,9 @@
 //! A lone surrogate escape in a JSON string value read as the official emulator stores it: `?` for each lone
 //! unit, a high surrogate followed by an escaped low one a single character. Keys are never read so.
 
-use fireemu_adapter_database::json_parse::{parse, parse_replacing, parse_with_keys_replacing};
+use fireemu_adapter_database::json_parse::{
+    parse, parse_claims, parse_frame, parse_replacing, parse_with_keys_replacing,
+};
 use fireemu_core_database::Json;
 use proptest::prelude::*;
 
@@ -46,4 +48,49 @@ proptest! {
         let key = format!("{{\"{}\":1}}", spelled(&units));
         prop_assert_eq!(parse_with_keys_replacing(&key, '?').is_err(), lone);
     }
+}
+
+/// Every escape of JSON reads as the character it names, in a value and in a key, in every mode.
+#[test]
+fn every_json_escape_reads_as_the_character_it_names() {
+    for (escape, expected) in [
+        ("\\\"", '"'),
+        ("\\\\", '\\'),
+        ("\\/", '/'),
+        ("\\b", '\u{8}'),
+        ("\\f", '\u{c}'),
+        ("\\n", '\n'),
+        ("\\r", '\r'),
+        ("\\t", '\t'),
+        ("\\u0041", 'A'),
+    ] {
+        let text = format!("\"x{escape}y\"");
+        let want = Json::String(format!("x{expected}y"));
+        assert_eq!(parse(&text).unwrap(), want, "{escape}");
+        assert_eq!(parse_replacing(&text, '?').unwrap().0, want, "{escape}");
+        assert_eq!(parse_claims(&text).unwrap(), want, "{escape}");
+        assert_eq!(parse_frame(&text).unwrap().0, want, "{escape}");
+        assert!(parse(&format!("\"x\\{}y\"", 'q')).is_err());
+    }
+}
+
+/// Text of a real character that the claims encoding reserves survives it (it is escaped, and read back).
+#[test]
+fn claims_keep_a_real_character_that_the_encoding_reserves() {
+    let reserved = '\u{10F03D}';
+    let text = format!("{{\"k{reserved}\":\"v{reserved}\\ud83d\"}}");
+    let Json::Object(map) = parse_claims(&text).unwrap() else {
+        panic!("an object");
+    };
+    let (key, value) = map.iter().next().unwrap();
+    assert_eq!(
+        fireemu_core_database::lone::decode(key),
+        format!("k{reserved}").encode_utf16().collect::<Vec<_>>()
+    );
+    let Json::String(value) = value else {
+        panic!("a string")
+    };
+    let mut expected: Vec<u16> = format!("v{reserved}").encode_utf16().collect();
+    expected.push(0xD83D);
+    assert_eq!(fireemu_core_database::lone::decode(value), expected);
 }

@@ -139,12 +139,28 @@ mod tests {
     }
 
     #[test]
+    fn the_stand_ins_are_exactly_the_2048_characters_below_the_escape() {
+        assert!(!is_reserved('\u{10EFFF}'));
+        assert!(is_reserved('\u{10F000}'));
+        assert!(is_reserved('\u{10F7FF}'));
+        assert!(!is_reserved('\u{10F800}'));
+        assert!(!is_reserved('\u{10FFFE}'));
+        assert!(is_reserved(ESCAPE));
+        assert_eq!(stand_in(0xD800), '\u{10F000}');
+        assert_eq!(stand_in(0xDFFF), '\u{10F7FF}');
+    }
+
+    #[test]
     fn a_lone_surrogate_is_a_stand_in_and_text_without_one_is_unchanged() {
         assert_eq!(encode(&[0x61, 0xD83D]), format!("a{}", stand_in(0xD83D)));
         assert_eq!(encode(&[0x61, 0x62]), "ab");
         assert!(!is_encoded("ab😀"));
         assert!(is_encoded(&encode(&[0xDE00])));
         assert_eq!(json_text(&encode(&[0x61, 0xD83D, 0x62])), "a\\uD83Db");
-        assert_eq!(json_text(&escape("\u{10F83D}")), "\u{10F83D}");
+        assert_eq!(json_text(&escape("\u{10F03D}")), "\u{10F03D}");
+        // A protected stand-in stays the character; a character just above the range is not one.
+        let protected = stand_in(0xD83D).to_string();
+        assert_eq!(json_text(&escape(&protected)), protected);
+        assert_eq!(json_text("\u{10F800}x\u{10FFFD}"), "\u{10F800}x\u{10FFFD}");
     }
 }

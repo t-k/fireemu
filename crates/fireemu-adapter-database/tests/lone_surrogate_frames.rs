@@ -199,3 +199,20 @@ fn the_claims_of_an_auth_credential_keep_a_lone_surrogate() {
         }
     }
 }
+
+/// Only the answer to an `auth` frame shows the claims encoding as escapes: a reply to any other frame keeps a
+/// real character that the encoding reserves, whatever the profile.
+#[test]
+fn a_reply_other_than_the_credential_answer_keeps_a_reserved_character() {
+    let stored = "a\u{10F03D}b\u{10FFFF}c";
+    for strict in [false, true] {
+        let mut db = database(strict);
+        rest(&mut db, "PUT", "/t.json?ns=c", &format!("\"{stored}\""));
+        let got = replies(
+            &mut db,
+            &[r#"{"t":"d","d":{"r":1,"a":"g","b":{"p":"/t"}}}"#],
+        )
+        .join("\n");
+        assert!(got.contains(stored), "strict={strict}: {got}");
+    }
+}

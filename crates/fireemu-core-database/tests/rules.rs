@@ -236,6 +236,48 @@ fn query_order_by_loads_and_decides_as_the_official_emulator() {
     );
 }
 
+/// Claims are read as written unless the encoding flag is on: without it a claim that holds a stand-in character is
+/// that character (two units), a key that holds one is found by its text, and an index with a lone surrogate is
+/// undefined (the strict profile); with it the stand-in is the lone surrogate.
+#[test]
+fn claims_are_decoded_only_when_the_encoding_flag_is_on() {
+    let stand_in = fireemu_core_database::lone::stand_in(0xD83D);
+    let auth = j(serde_json::json!({
+        "uid": "u1",
+        "x": stand_in.to_string(),
+        "token": {"x": stand_in.to_string(), format!("k{stand_in}"): 1, "y": 2},
+    }));
+    let holds = |expr: &str, encoded: bool| {
+        let rules = Rules::compile(&read_rule_at_t(expr))
+            .unwrap()
+            .with_encoded_claims(encoded);
+        let tree = seed();
+        let requester = Requester {
+            auth: &auth,
+            now: 0,
+        };
+        rules.can_read(tree.root(), &p("/t"), None, &requester)
+    };
+    // The stand-in is a character of two units, or a lone surrogate of one.
+    assert!(holds("auth.x.length == 2", false));
+    assert!(!holds("auth.x.length == 1", false));
+    assert!(holds("auth.x.length == 1", true));
+    assert!(!holds("auth.x.length == 2", true));
+    assert!(holds("auth.token.x == '\\uD83D'", true));
+    assert!(!holds("auth.token.x == '\\uD83D'", false));
+    // A key that holds the stand-in is found by the text without the flag; an index with the surrogate finds it with.
+    let key = format!("auth.token['k{stand_in}'] == 1");
+    assert!(holds(&key, false));
+    assert!(
+        !holds(&key, true),
+        "the flag reads the key as the escaped text"
+    );
+    assert!(holds("auth.token['k\\uD83D'] == 1", true));
+    assert!(!holds("auth.token['k\\uD83D'] == 1", false));
+    assert!(holds("auth.token['\\uD83D'] == null", false));
+    assert!(holds("auth.token['y'] == 2", true) && holds("auth.token['y'] == 2", false));
+}
+
 /// The emulator profile reads `\W` and `\D` as the complement of a language of strings, and an escaped
 /// letter or digit as that character, as the official emulator does (owner 2276): 500 jar rows over
 /// bare, anchored, quantified, grouped and class forms, with and without `i`, and the `[\uD800-\uDFFF]` class,

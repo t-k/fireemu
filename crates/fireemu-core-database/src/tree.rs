@@ -513,6 +513,11 @@ impl<'a> NodeView<'a> {
     /// Compares logical contents, retaining the core's existing node equality.
     pub fn equals(self, other: &Node) -> bool {
         if let Self::Borrowed(node) = self {
+            if std::ptr::eq(node, other) {
+                return true;
+            }
+            #[cfg(test)]
+            scope_equality_tests::record_structural_comparison();
             return node == other;
         }
         if self.priority() != other.priority.as_ref() {
@@ -574,5 +579,55 @@ impl<'a> Iterator for ViewChildren<'a> {
         self.iter
             .next()
             .map(|(key, node)| (key.as_str(), NodeView::Borrowed(node)))
+    }
+}
+
+#[cfg(test)]
+mod scope_equality_tests {
+    use super::*;
+    use std::cell::Cell;
+
+    thread_local! {
+        static STRUCTURAL_COMPARISONS: Cell<usize> = const { Cell::new(0) };
+    }
+    pub(super) fn record_structural_comparison() {
+        STRUCTURAL_COMPARISONS.with(|count| count.set(count.get() + 1));
+    }
+
+    #[test]
+    fn identical_borrowed_nodes_never_enter_structural_comparison() {
+        let mut tree = Tree::default();
+        let now = ServerValueContext { now_millis: 0 };
+        tree.set(
+            &Path::root(),
+            &Json::object([
+                ("a", Json::int(1)),
+                ("b", Json::object([("nested", Json::int(2))])),
+            ]),
+            now,
+        )
+        .unwrap();
+        let original = tree.clone();
+        let snapshot = tree.save_scope(&Path::from_keys(["a"]));
+        tree.set(&Path::from_keys(["a"]), &Json::int(3), now)
+            .unwrap();
+        let sibling = Path::from_keys(["b"]);
+        let before = snapshot.view(&tree).get(&sibling).unwrap();
+        let after = tree.get(&sibling).unwrap();
+        STRUCTURAL_COMPARISONS.with(|count| count.set(0));
+        assert!(before.equals(after));
+        assert_eq!(
+            STRUCTURAL_COMPARISONS.with(Cell::get),
+            0,
+            "unchanged borrowed siblings must not enter recursive equality"
+        );
+        assert!(before.equals(original.get(&sibling).unwrap()));
+        assert_eq!(
+            STRUCTURAL_COMPARISONS.with(Cell::get),
+            1,
+            "distinct nodes still require structural equality"
+        );
+        assert!(!before.equals(tree.get(&Path::from_keys(["a"])).unwrap()));
+        assert_eq!(STRUCTURAL_COMPARISONS.with(Cell::get), 2);
     }
 }

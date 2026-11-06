@@ -640,7 +640,12 @@ impl ChangeSink for RefusalSink {
         Ok(match self.capture {
             "whole" => None,
             "empty" => Some(Vec::new()),
-            _ => Some(vec![scope.clone(), Path::root(), scope.clone()]),
+            _ => Some(vec![
+                scope.clone(),
+                Path::root(),
+                scope.clone(),
+                Path::from_keys(["b"]),
+            ]),
         })
     }
     fn reserve(

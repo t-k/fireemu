@@ -427,3 +427,50 @@ fn time_preparation_inside_a_wide_ancestor() {
         }
     }
 }
+
+/// Generic sinks may return a large unchanged reference alongside the write.
+/// Filtering that reference must not recursively compare its borrowed subtree.
+#[test]
+#[ignore = "release unrelated-reference timing; run under an enforced memory limit"]
+fn time_preparation_with_an_unrelated_reference() {
+    for unrelated in [1_000, 10_000, 130_000] {
+        let mut tree = Tree::default();
+        tree.set(
+            &Path::root(),
+            &Json::object([
+                (
+                    "items",
+                    Json::object((0..unrelated).map(|i| (format!("k{i:06}"), item(i)))),
+                ),
+                ("changed", Json::int(0)),
+            ]),
+            NOW,
+        )
+        .unwrap();
+        let scope = path(&tree, "/changed");
+        let sink = Sink {
+            references: vec!["/changed", "/items"],
+            ..Sink::default()
+        };
+        let values = [0, 1]
+            .map(|value| Json::object((0..16).map(|i| (format!("k{i:04}"), Json::int(value)))));
+        tree.set(&scope, &values[0], NOW).unwrap();
+        for sample in 0..3 {
+            let rounds = 1_000;
+            let mut total = std::time::Duration::ZERO;
+            for round in 0..rounds {
+                let next = &values[(round + 1) % 2];
+                let started = Instant::now();
+                let (_, publication) =
+                    prepare_within(&mut tree, &scope, context(), Some(&sink), |tree| {
+                        tree.set(&scope, next, NOW)
+                    })
+                    .unwrap();
+                publication.commit();
+                total += started.elapsed();
+                sink.captured.lock().unwrap().clear();
+            }
+            println!("unrelated-reference timing: unrelated={unrelated} branch=16 sample={sample} rounds={rounds} ns_per_write={}", total.as_nanos() / rounds as u128);
+        }
+    }
+}

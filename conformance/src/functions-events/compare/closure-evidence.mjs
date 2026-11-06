@@ -32,7 +32,7 @@
 // A comparison labelled preliminary is never written. "Both recordings" are the two passes of the one production run: the
 // same deploy, two source-script passes, which is what owner ledger 812 counts as two recordings.
 
-import { publicEvidence } from "../../evidence.mjs";
+import { publicEvidence, publicEvidenceBytes } from "../../evidence.mjs";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -649,9 +649,13 @@ export function closureEvidenceCommand(
   checkDeclaredMasks(comparison, closure);
   const mapping = mapConditions(closure, comparison);
   const report = buildReport({ comparison, mapping });
-  if (options["report-out"]) write(options["report-out"], `${JSON.stringify(report, null, 2)}\n`);
+  const reportOutput = options["report-out"] ? `${JSON.stringify(report, null, 2)}\n` : undefined;
+  if (reportOutput) publicEvidenceBytes(Buffer.from(reportOutput));
   log(reportText(report));
-  if (options.write !== true) return { report };
+  if (options.write !== true) {
+    if (reportOutput) write(options["report-out"], reportOutput);
+    return { report };
+  }
 
   if (/preliminary/i.test(comparison.execution))
     refuse("a preliminary comparison is never written into the closure");
@@ -676,6 +680,7 @@ export function closureEvidenceCommand(
   });
   checkLedger(read(options["sandbox-ledger"]), resolve(dirname(options["production-run"])));
   const buildBytes = read(options["build-record"]);
+  publicEvidenceBytes(Buffer.from(buildBytes));
   const finalArtifact = checkBuildRecord(JSON.parse(buildBytes), comparison);
   checkLocalBinary(comparison, finalArtifact, { git });
   checkComparator(comparison, { git });
@@ -713,9 +718,13 @@ export function closureEvidenceCommand(
             comparisonSha256: sha256(evidenceText),
           },
   });
+  const closureOutput = `${JSON.stringify(next, null, 2)}\n`;
+  publicEvidenceBytes(Buffer.from(evidenceText));
+  publicEvidenceBytes(Buffer.from(closureOutput));
+  if (reportOutput) write(options["report-out"], reportOutput);
   write(options["build-record-out"], buildBytes);
   write(options.out, evidenceText);
-  write(options.closure, `${JSON.stringify(next, null, 2)}\n`);
+  write(options.closure, closureOutput);
   log(
     `closure evidence written: ${next.conditions.filter((c) => c.status === "VERIFIED").length} conditions VERIFIED`,
   );

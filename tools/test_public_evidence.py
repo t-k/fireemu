@@ -51,6 +51,12 @@ def test_public_json_bytes_rejects_before_any_public_copy():
         public_json_bytes(data)
 
 
+def test_public_json_bytes_rejects_duplicate_keys_before_copying_original_bytes():
+    data = b'{"extra":{"path":"docs.local/private.json","path":"safe"}}\n'
+    with pytest.raises(ValueError, match="^public evidence path validation failed$"):
+        public_json_bytes(data)
+
+
 def test_every_auth_publisher_and_compat_index_use_the_shared_bridge():
     publishers = sorted(TOOLS.glob("publish-auth-*.py"))
     assert len(publishers) == 39

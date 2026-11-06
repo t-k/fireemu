@@ -25,11 +25,11 @@ import { gunzipSync } from "node:zlib";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
-import { copyFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
-import { publicEvidence } from "./evidence.mjs";
+import { publicEvidence, publicEvidenceBytes } from "./evidence.mjs";
 
 import {
   historicalProductionSummary,
@@ -1593,6 +1593,23 @@ export function exportCopies(comparisons, runs) {
     }));
 }
 
+/** Validate each retained export snapshot before writing any public comparison copy. */
+export async function copyValidatedExportSnapshots(
+  outDir,
+  copies,
+  { readSource = readFile, writeDestination = writeFile } = {},
+) {
+  const snapshots = [];
+  for (const { from, to } of copies) {
+    const source = join(outDir, from);
+    if (!existsSync(source)) continue;
+    const bytes = await readSource(source);
+    publicEvidenceBytes(bytes);
+    snapshots.push([join(outDir, to), bytes]);
+  }
+  for (const [destination, bytes] of snapshots) await writeDestination(destination, bytes);
+}
+
 /** Persist the final outcome before the namespace process exits. */
 export async function writeReleaseSummary(out, summary) {
   await writeFile(join(out, "summary.json"), `${JSON.stringify(summary, null, 2)}\n`);
@@ -1691,9 +1708,7 @@ async function main() {
         summary.comparisons.push({ ...comparison, differences });
       }
     if (!fatalTimeout)
-      for (const { from, to } of exportCopies(plan.comparisons, RUNS)) {
-        if (existsSync(join(out, from))) await copyFile(join(out, from), join(out, to));
-      }
+      await copyValidatedExportSnapshots(out, exportCopies(plan.comparisons, RUNS));
   }
   if (!fatalTimeout) {
     const expectedRaw = context.readJson(

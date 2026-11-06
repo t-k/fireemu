@@ -81,6 +81,10 @@ test("the guard refuses forbidden directories in keys or nested values without e
     { path: "docs.local/runs/private/record.json" },
     { sourcePath: ".codex/private/notes.json" },
     { reviewPath: "docs/superpowers/private/plan.md" },
+    { path: "docs/./superpowers/private/plan.md" },
+    { path: "docs//superpowers/private/plan.md" },
+    { path: "docs/intermediate/../superpowers/private/plan.md" },
+    { "docs/intermediate/../superpowers/private/plan.md": "safe" },
     { nested: [{ "docs.local/private": "safe" }] },
   ];
   for (const value of unsafe) {
@@ -105,7 +109,11 @@ test("the guard keeps contextual URLs, API routes, RPC identifiers and JSON sele
     url: "https://example.invalid/v1/projects/demo",
     firestoreOrigin: "https://firestore.example.invalid",
     authority: "https://firebase.google.com",
+    source: "https://firebase.google.com/docs",
     request: { path: "/v1/projects/demo/databases/(default)/documents" },
+    actionRequest: {
+      path: "/v1/projects/demo/databases/(default)/documents:executePipeline",
+    },
     rpc: { path: "/google.firestore.v1.Firestore/Commit" },
     selector: "/rows/0/status",
     selectorList: "/rows/1; /groups/0",
@@ -119,10 +127,16 @@ test("the guard keeps contextual URLs, API routes, RPC identifiers and JSON sele
   assert.throws(() => publicEvidence({ arbitrary: "/arbitrary/slash-rooted/value" }));
   assert.throws(() => publicEvidence({ selector: "/arbitrary/selector/path" }));
   assert.throws(() => publicEvidence({ selector: "/var/lib/fireemu" }));
+  assert.throws(() => publicEvidence({ path: "/v1/../../etc/private.json" }));
+  assert.throws(() =>
+    publicEvidence({ rpcPath: "/google.firestore.v1.Firestore/../../etc/private.json" }),
+  );
+  assert.throws(() => publicEvidence({ artifactPath: "/v1/projects/demo" }));
 });
 
 test("base64 Firestore byte values preserve binary bytes but cannot hide encoded paths", () => {
   assert.equal(publicEvidence({ bytesValue: "/w==" }).bytesValue, "/w==");
+  assert.equal(publicEvidence({ bytesValue: "/wAA" }).bytesValue, "/wAA");
   assert.equal(
     publicEvidence({ bytesValue: Buffer.from([0xff]).toString("base64") }).bytesValue,
     "/w==",

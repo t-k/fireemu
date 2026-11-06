@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { publicEvidence } from "./evidence.mjs";
+import { publicEvidence, publicEvidenceBytes } from "./evidence.mjs";
 import { historicalArtifactIdentity } from "./firestore-probe/historical-production-check.mjs";
 
 const [, , tablePath] = process.argv;
@@ -20,17 +20,25 @@ const values = {
   privateDocsLocal: "docs.local/private.json",
   privateCodex: ".codex/private.json",
   privateSuperpowers: "docs/superpowers/private.md",
+  privateSuperpowersDot: "docs/./superpowers/private.md",
+  privateSuperpowersRepeated: "docs//superpowers/private.md",
+  privateSuperpowersParent: "docs/intermediate/../superpowers/private.md",
   httpsUrl: "https://example.invalid/v1/projects/demo",
   fileUrl: "file:///tmp/private.json",
   apiRoute: "/v1/projects/demo/databases/(default)/documents",
+  apiActionRoute: "/v1/projects/demo/databases/(default)/documents:executePipeline",
+  apiDotTraversal: "/v1/projects/../etc/private.json",
   firestoreRpc: "/google.firestore.v1.Firestore/Commit",
+  rpcDotTraversal: "/google.firestore.v1.Firestore/../../etc/private.json",
   resourceIdentifier: "projects/demo/topics/topic-a",
   jsonPointer: "/rows/0/status",
   arbitrarySlashRooted: "/arbitrary/private/path",
   absoluteInProse: "diagnostic at /tmp/private.json",
   rootRoute: "/",
   base64Binary: "/w==",
+  base64BinaryUnpadded: "/wAA",
   base64TextPath: "/tmp/private.json",
+  duplicateJsonKey: "unused",
   artifactOutside: "unused",
   artifactPrivate: "unused",
 };
@@ -38,12 +46,14 @@ const keyFor = (context) =>
   ({
     path: "path",
     pathSuffix: "artifactPath",
+    route: "route",
     url: "url",
     selector: "selector",
     coordinate: "coordinate",
     knownDifference: "knownDifferences",
     recordedRootRoute: "production",
     bytesValue: "bytesValue",
+    rawJson: "rawJson",
     resource: "resourceName",
     generic: "note",
     dictionaryKey: "note",
@@ -72,7 +82,23 @@ for (const line of lines) {
         ? "/knownDifferences/example"
         : values[row.ValueForm];
   if (row.ValueForm === "base64Binary") value = Buffer.from([0xff]).toString("base64");
-  if (row.ValueForm === "base64TextPath") value = Buffer.from("/tmp/private.json").toString("base64");
+  if (row.ValueForm === "base64BinaryUnpadded")
+    value = Buffer.from([0xff, 0x00, 0x00]).toString("base64");
+  if (row.ValueForm === "base64TextPath")
+    value = Buffer.from("/tmp/private.json").toString("base64");
+  if (row.ValueForm === "duplicateJsonKey") {
+    let passed = true;
+    try {
+      publicEvidenceBytes(
+        Buffer.from('{"extra":{"path":"docs.local/private.json","path":"safe"}}'),
+      );
+    } catch {
+      passed = false;
+    }
+    if (passed) throw new Error(`PICT row ${checked + 2} accepted duplicate object keys`);
+    checked++;
+    continue;
+  }
   const contextKey = keyFor(row.KeyContext);
   let candidate;
   if (row.KeyContext === "artifactPath") {
@@ -106,6 +132,13 @@ for (const line of lines) {
     checked++;
     continue;
   }
+  const decodedBytes =
+    row.KeyContext === "bytesValue" ? Buffer.from(value, "base64") : Buffer.alloc(0);
+  const canonicalBinaryBytesValue =
+    row.KeyContext === "bytesValue" &&
+    /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value) &&
+    decodedBytes.toString("base64") === value &&
+    !Buffer.from(decodedBytes.toString("utf8"), "utf8").equals(decodedBytes);
   if (row.KeyContext === "dictionaryKey" && row.ValueForm.startsWith("private")) {
     candidate = { [value]: "synthetic" };
   } else if (row.Container === "scalar") candidate = value;
@@ -115,11 +148,11 @@ for (const line of lines) {
 
   const mustPass =
     (row.ValueForm === "httpsUrl" && row.KeyContext === "url" && row.Container !== "scalar") ||
-    (row.ValueForm === "apiRoute" &&
-      ["path", "pathSuffix"].includes(row.KeyContext) &&
+    (["apiRoute", "apiActionRoute"].includes(row.ValueForm) &&
+      ["path", "route"].includes(row.KeyContext) &&
       row.Container !== "scalar") ||
     (row.ValueForm === "firestoreRpc" &&
-      ["path", "pathSuffix"].includes(row.KeyContext) &&
+      ["path", "route"].includes(row.KeyContext) &&
       row.Container !== "scalar") ||
     (row.ValueForm === "jsonPointer" &&
       row.KeyContext === "selector" &&
@@ -131,10 +164,12 @@ for (const line of lines) {
       row.KeyContext === "knownDifference" &&
       row.Container !== "scalar") ||
     (row.ValueForm === "rootRoute" &&
-      ["url", "recordedRootRoute"].includes(row.KeyContext) &&
+      ["url", "selector", "recordedRootRoute"].includes(row.KeyContext) &&
       row.Container !== "scalar") ||
-    (row.ValueForm === "base64Binary" && row.Container !== "scalar") ||
+    (["base64Binary", "base64BinaryUnpadded"].includes(row.ValueForm) &&
+      row.Container !== "scalar") ||
     (row.ValueForm === "base64TextPath" && row.Container === "scalar") ||
+    canonicalBinaryBytesValue ||
     ["repoRelative", "normalizedRepo", "resourceIdentifier"].includes(row.ValueForm);
   let passed = true;
   try {

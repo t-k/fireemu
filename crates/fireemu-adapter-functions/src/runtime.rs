@@ -3189,9 +3189,11 @@ impl FunctionsRuntime {
     ) -> Result<usize, SourceEventAdmissionError> {
         let (first, second) = crate::events::remote_config_events(&self.config.project, body)
             .map_err(|_| SourceEventAdmissionError::InvalidEvent)?;
+        let (first, second) = (first.map(Arc::new), second.map(Arc::new));
         let time = self.now();
         let subject = format!("projects/{}", self.config.project);
         let mut drafts = Vec::new();
+        let mut planned_bytes = 0_usize;
         let deliver = self.background_triggers_enabled();
         for spec in self
             .manifest
@@ -3212,11 +3214,26 @@ impl FunctionsRuntime {
             if !deliver {
                 continue;
             }
-            let payload = Arc::new(payload.clone());
+            let payload = Arc::clone(payload);
             let retained_bytes =
                 Self::retained_event_bytes(&spec.name, event_type, &subject, &payload)
                     .ok_or(SourceEventAdmissionError::Capacity)?;
             let copies = self.delivery_copies(&spec.name, event_type);
+            // Refuse before expanding duplicates or visiting more targets. A rejected
+            // local publication must not allocate an unbounded temporary fanout either.
+            let next_records = drafts
+                .len()
+                .checked_add(copies)
+                .ok_or(SourceEventAdmissionError::Capacity)?;
+            let next_bytes = retained_bytes
+                .checked_mul(copies)
+                .and_then(|bytes| planned_bytes.checked_add(bytes))
+                .ok_or(SourceEventAdmissionError::Capacity)?;
+            if next_records > MAX_ACTIVE_EVENT_RECORDS || next_bytes > MAX_ACTIVE_EVENT_BYTES {
+                self.note_admission_refusal(SourceEventAdmissionError::Capacity);
+                return Err(SourceEventAdmissionError::Capacity);
+            }
+            planned_bytes = next_bytes;
             for _ in 0..copies {
                 drafts.push(DeliveryDraft {
                     function: spec.name.clone(),
@@ -6972,6 +6989,62 @@ mod task_completion_tests {
             Err(SourceEventAdmissionError::Unavailable)
         );
         runtime.shutdown().await;
+        base.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn remote_config_refuses_overflow_before_expanding_the_remaining_targets() {
+        use fireemu_core_functions::manifest::FunctionGeneration;
+        let base = runtime().await;
+        for (duplicates, description, expected_visits) in [
+            (3000, "small".to_owned(), 2),
+            (1023, "x".repeat(64 * 1024), 1),
+        ] {
+            let mut manifest = base.manifest.clone();
+            let template = manifest.get("echo").unwrap().clone();
+            manifest.functions = (0..4)
+                .map(|index| {
+                    let mut spec = template.clone();
+                    spec.name = format!("config{index}");
+                    spec.generation = FunctionGeneration::Second;
+                    spec.trigger = Trigger::RemoteConfig;
+                    spec
+                })
+                .collect();
+            let runtime = FunctionsRuntime::new(
+                manifest,
+                base.config.clone(),
+                base.clock.clone(),
+                base.runner(),
+                None,
+            );
+            let faults = Arc::new(Mutex::new(FaultState::default()));
+            faults.lock().unwrap().install(FaultPlan {
+                seed: 1,
+                rules: vec![FaultRule {
+                    matches: FaultMatch {
+                        operation: "functions.deliver".into(),
+                        nth: None,
+                        function: None,
+                        event_type: None,
+                    },
+                    action: FaultAction::Duplicate { count: duplicates },
+                }],
+            });
+            runtime.set_faults(faults.clone());
+            let body = json!({
+                "data": {"versionNumber": 7, "updateTime": "2026-01-02T03:04:05Z", "description": description},
+                "v2Context": {"specversion": "1.0", "id": "caller", "time": "2026-01-02T03:04:07Z", "type": "google.firebase.remoteconfig.remoteConfig.v1.updated", "source": "//firebaseremoteconfig.googleapis.com/projects/demo-app"}
+            });
+            assert_eq!(
+                runtime.publish_remote_config(&body),
+                Err(SourceEventAdmissionError::Capacity)
+            );
+            assert!(runtime.inner.lock().unwrap().payloads.is_empty());
+            assert_eq!(faults.lock().unwrap().counters()["functions.deliver"], expected_visits,
+                "stop planning once the existing record or byte budget cannot fit; do not expand the remaining functions");
+            runtime.shutdown().await;
+        }
         base.shutdown().await;
     }
 

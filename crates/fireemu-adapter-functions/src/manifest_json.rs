@@ -590,6 +590,7 @@ fn ignored_to_json(ignored: &IgnoredFunction) -> Value {
 
 /// The manifest as canonical JSON (capabilities / status output).
 #[must_use]
+#[allow(clippy::too_many_lines)]
 pub fn manifest_to_json(m: &FunctionManifest) -> Value {
     let functions: Vec<Value> = m
         .functions

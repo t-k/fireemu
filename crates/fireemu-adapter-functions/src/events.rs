@@ -2142,6 +2142,7 @@ fn database_delta(before: &Value, after: &Value) -> Value {
 /// Validates local fixture metadata against the published Functions SDK types, without
 /// filling absent fields. The caller supplies envelope identity and time: production's
 /// Remote Config envelopes have not been observed. This is not a template publishing API.
+#[allow(clippy::too_many_lines)]
 pub fn remote_config_events(
     project: &str,
     body: &Value,

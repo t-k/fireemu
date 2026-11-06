@@ -724,7 +724,7 @@ function ignoredBlocking(base, eventType) {
   return ignored(base, "blocking", "unsupported", `blocking identity event ${eventType} is not served`);
 }
 
-// Products the official emulator has a trigger service for and fireemu does not serve.
+// Trigger families outside the served surface; exact supported types are handled first.
 // The event-type substring is matched the way `getServiceFromEventType` matches it.
 const DEFERRED_TRIGGER_PRODUCTS = [
   {

@@ -71,9 +71,11 @@ fn control(runtime: Arc<FunctionsRuntime>, clock: Arc<Mutex<VirtualClock>>) -> C
         require_control_token: false,
         barrier: None,
         snapshot_hooks: vec![],
-        snapshots: Mutex::new(Default::default()),
+        snapshots: Mutex::new(std::collections::BTreeMap::new()),
         faults: None,
-        text_indexes: Arc::new(Mutex::new(Default::default())),
+        text_indexes: Arc::new(Mutex::new(
+            fireemu_core_firestore::text_index::TextIndexCatalog::default(),
+        )),
         default_project: "demo-app".into(),
         tenancy: Arc::new(RwLock::new(Tenancy::new("demo-app"))),
         sessions: Mutex::new(
@@ -143,10 +145,11 @@ async fn wait_rows(runtime: &FunctionsRuntime, count: usize) {
 
 /// PICT rows may be supplied by the private verification run; default rows keep CI useful.
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 #[ignore = "requires own tools/sdk-smoke npm ci dependencies"]
 async fn remote_config_control_delivers_real_sdk_events_in_both_profiles() {
     let rows = std::env::var("REMOTE_CONFIG_PICT").map_or_else(|_| {
-        "Generation\tProfile\tMetadata\tCapability\tDelivery\tBackground\nboth\tstrict\tabsent\tvalid\tsuccess\tenabled\nboth\temulator\tfull\tvalid\tretry\tenabled\nv1\tstrict\trollback\tmissing\tsuccess\tenabled\nv2\temulator\tabsent\twrong\tsuccess\tenabled\nboth\tstrict\trollback\tvalid\tsuccess\tdisabled\n".to_owned()
+        "Generation\tProfile\tMetadata\tCapability\tDelivery\tBackground\nboth\tstrict\tabsent\tvalid\tsuccess\tenabled\nboth\temulator\tfull\tvalid\tretry\tenabled\nv1\tstrict\trollback\tmissing\tsuccess\tenabled\nv2\temulator\tabsent\twrong\tsuccess\tenabled\nboth\tstrict\trollback\tvalid\tsuccess\tdisabled\nboth\tstrict\trollback\tvalid\tretry\tenabled\nboth\temulator\tabsent\tvalid\tsuccess\tenabled\nv1\temulator\tfull\tvalid\tsuccess\tenabled\nv1\tstrict\tabsent\tvalid\tsuccess\tenabled\n".to_owned()
     }, |path| std::fs::read_to_string(path).unwrap());
     for (index, row) in rows.lines().skip(1).enumerate() {
         let columns: Vec<_> = row.split('\t').collect();

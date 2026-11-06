@@ -783,6 +783,7 @@ pub async fn handle_async(
 /// Routes one control request with its headers: browser requests from non-loopback origins
 /// are refused (the control API mutates runtime state).
 #[must_use]
+#[allow(clippy::too_many_lines)]
 pub fn handle_with(
     state: &ControlState,
     method: &str,
@@ -1361,6 +1362,7 @@ fn app_check_observations(
     }))
 }
 
+#[allow(clippy::too_many_lines)]
 fn session_route(state: &ControlState, method: &str, path: &str, body: &Value) -> JsonResponse {
     let rest = &path["/v1/sessions/".len()..];
     let (session, action) = rest.split_once('/').map_or((rest, ""), |(s, a)| (s, a));

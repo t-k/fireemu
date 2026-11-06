@@ -91,3 +91,21 @@ if (process.env.PYTHON_PARENT_PICT) {
     });
   }
 }
+
+test("seeded projection properties preserve equality and detect every single-leaf change", () => {
+  let state = 1729;
+  const next = () => (state = (Math.imul(state, 1664525) + 1013904223) >>> 0);
+  for (let i = 0; i < 128; i += 1) {
+    const value = {
+      nested: { count: next(), present: Boolean(next() & 1) },
+      values: [next(), null],
+    };
+    assert.deepEqual(compare(value, structuredClone(value), "strict"), []);
+    const changed = structuredClone(value);
+    changed.nested.count += 1;
+    assert.deepEqual(compare(value, changed, "strict"), [{ path: "nested.count", status: "DIFF" }]);
+    assert.deepEqual(compare(changed, value, "emulator"), [
+      { path: "nested.count", status: "DIFF" },
+    ]);
+  }
+});

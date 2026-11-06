@@ -56,7 +56,7 @@
         "emulator": "PENDING_SCOPE"
       },
       "fixturePath": "conformance/functions-python/fixtures/observations.json",
-      "fixtureSha256": "ab67d28cfabeec1c380d7a572972a6cf412b9945ab3923096dcdf9ba46b1d12b"
+      "fixtureSha256": "cfcfac41f70adf9523b63856d2260de2f963fb66bccae91425b5bf05a7f96155"
     },
     {
       "conditionId": "FUNCTIONS-PYTHON/pubsub-events",
@@ -78,7 +78,7 @@
         "emulator": "PENDING_SCOPE"
       },
       "fixturePath": "conformance/functions-python/fixtures/observations.json",
-      "fixtureSha256": "ab67d28cfabeec1c380d7a572972a6cf412b9945ab3923096dcdf9ba46b1d12b"
+      "fixtureSha256": "cfcfac41f70adf9523b63856d2260de2f963fb66bccae91425b5bf05a7f96155"
     },
     {
       "conditionId": "FUNCTIONS-PYTHON/storage-events",
@@ -100,7 +100,7 @@
         "emulator": "PENDING_SCOPE"
       },
       "fixturePath": "conformance/functions-python/fixtures/observations.json",
-      "fixtureSha256": "ab67d28cfabeec1c380d7a572972a6cf412b9945ab3923096dcdf9ba46b1d12b"
+      "fixtureSha256": "cfcfac41f70adf9523b63856d2260de2f963fb66bccae91425b5bf05a7f96155"
     },
     {
       "conditionId": "FUNCTIONS-PYTHON/eventarc-custom-events",
@@ -122,7 +122,7 @@
         "emulator": "PENDING_SCOPE"
       },
       "fixturePath": "conformance/functions-python/fixtures/observations.json",
-      "fixtureSha256": "ab67d28cfabeec1c380d7a572972a6cf412b9945ab3923096dcdf9ba46b1d12b"
+      "fixtureSha256": "cfcfac41f70adf9523b63856d2260de2f963fb66bccae91425b5bf05a7f96155"
     },
     {
       "conditionId": "FUNCTIONS-PYTHON/scheduler-events",
@@ -144,7 +144,7 @@
         "emulator": "PENDING_SCOPE"
       },
       "fixturePath": "conformance/functions-python/fixtures/observations.json",
-      "fixtureSha256": "ab67d28cfabeec1c380d7a572972a6cf412b9945ab3923096dcdf9ba46b1d12b"
+      "fixtureSha256": "cfcfac41f70adf9523b63856d2260de2f963fb66bccae91425b5bf05a7f96155"
     },
     {
       "conditionId": "FUNCTIONS-PYTHON/tasks-events",
@@ -166,7 +166,7 @@
         "emulator": "PENDING_SCOPE"
       },
       "fixturePath": "conformance/functions-python/fixtures/observations.json",
-      "fixtureSha256": "ab67d28cfabeec1c380d7a572972a6cf412b9945ab3923096dcdf9ba46b1d12b"
+      "fixtureSha256": "cfcfac41f70adf9523b63856d2260de2f963fb66bccae91425b5bf05a7f96155"
     },
     {
       "conditionId": "FUNCTIONS-PYTHON/auth-blocking",
@@ -186,7 +186,7 @@
         "emulator": "PENDING_SCOPE"
       },
       "fixturePath": "conformance/functions-python/fixtures/observations.json",
-      "fixtureSha256": "ab67d28cfabeec1c380d7a572972a6cf412b9945ab3923096dcdf9ba46b1d12b"
+      "fixtureSha256": "cfcfac41f70adf9523b63856d2260de2f963fb66bccae91425b5bf05a7f96155"
     },
     {
       "conditionId": "FUNCTIONS-PYTHON/deployment",
@@ -206,7 +206,7 @@
         "emulator": "PENDING_SCOPE"
       },
       "fixturePath": "conformance/functions-python/fixtures/observations.json",
-      "fixtureSha256": "ab67d28cfabeec1c380d7a572972a6cf412b9945ab3923096dcdf9ba46b1d12b"
+      "fixtureSha256": "cfcfac41f70adf9523b63856d2260de2f963fb66bccae91425b5bf05a7f96155"
     }
   ],
   "releaseRegressions": [
@@ -304,5 +304,5 @@
     }
   ],
   "corpusPath": "conformance/functions-python/corpus.json",
-  "corpusSha256": "866ae64647b5f6676fa4faef13773d3b858ad15d3bf1ce3d703a42330827b310"
+  "corpusSha256": "b0673a7000c6203b5b5c346e1bb5f3f57a81bd9b0b850ca6a18e999e8609a2f7"
 }

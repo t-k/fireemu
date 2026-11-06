@@ -639,7 +639,9 @@
               "x-forwarded-proto": "https"
             }
           },
-          "bodyText": "{\"data\":{\"run\":\"fixture-run\",\"label\":\"fixture-label\"}}"
+          "bodyText": "{\"data\":{\"run\":\"fixture-run\",\"label\":\"fixture-label\"}}",
+          "originalBodyBytes": 61,
+          "layoutVerifiedAgainstRecordedLength": true
         }
       ],
       "sdkCases": [

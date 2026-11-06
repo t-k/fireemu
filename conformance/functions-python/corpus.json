@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "parent": "FUNCTIONS-PYTHON",
   "fixturePath": "conformance/functions-python/fixtures/observations.json",
-  "fixtureSha256": "ab67d28cfabeec1c380d7a572972a6cf412b9945ab3923096dcdf9ba46b1d12b",
+  "fixtureSha256": "cfcfac41f70adf9523b63856d2260de2f963fb66bccae91425b5bf05a7f96155",
   "conditions": [
     {
       "id": "FUNCTIONS-PYTHON/firestore-events",

@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
 import time
@@ -31,12 +32,57 @@ def main():
     args.output.mkdir(parents=True)
     results = []
     started = time.monotonic()
+    stopping = 0
+
+    def handle_signal(signum, frame):
+        nonlocal stopping
+        stopping = signum
+
+    signal.signal(signal.SIGTERM, handle_signal)
+    signal.signal(signal.SIGINT, handle_signal)
     for case in CASES:
+        if stopping:
+            return 128 + stopping
         before = time.monotonic()
         result = {"case": case, "status": "failed", "reason": "harness-no-result"}
         try:
-            child = subprocess.run([str(binary), case], capture_output=True, text=True, timeout=30, env=os.environ)
-            for line in child.stdout.splitlines():
+            child = subprocess.Popen([str(binary), case], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=os.environ, start_new_session=True)
+            try:
+                deadline = time.monotonic() + 30
+                while True:
+                    if stopping:
+                        raise SystemExit(128 + stopping)
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise subprocess.TimeoutExpired(child.args, 30)
+                    try:
+                        stdout, _ = child.communicate(timeout=min(0.1, remaining))
+                        break
+                    except subprocess.TimeoutExpired:
+                        continue
+                if stopping:
+                    raise SystemExit(128 + stopping)
+            except BaseException:
+                try:
+                    os.killpg(child.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+                try:
+                    child.wait(timeout=1)
+                except subprocess.TimeoutExpired:
+                    pass
+                finally:
+                    # Sweep the group even if its leader has already exited.
+                    try:
+                        os.killpg(child.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    child.wait()
+                raise
+            finally:
+                child.stdout.close()
+                child.stderr.close()
+            for line in stdout.splitlines():
                 try:
                     candidate = json.loads(line)
                 except (ValueError, TypeError):
@@ -56,7 +102,7 @@ def main():
         print(json.dumps(result, sort_keys=True), flush=True)
     summary = {"cases": results, "seconds": round(time.monotonic() - started, 3), "passed": complete(results)}
     (args.output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
-    return 0 if summary["passed"] else 1
+    return (128 + stopping) if stopping else (0 if summary["passed"] else 1)
 
 if __name__ == "__main__":
     sys.exit(main())

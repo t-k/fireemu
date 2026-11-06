@@ -653,6 +653,54 @@ test("the forged-token refusals outside the recorded shape are declared with the
   );
 });
 
+test("the 2276 round's jar-only rows, emulator-profile differences and unfollowed shapes are recorded with their fixtures and owner row", () => {
+  const evidence = condition("RTDB/rules-document-load-diagnostics").evidence;
+  for (const key of ["jarOnlyRows", "jarOnlyQueryOrderBy", "jarOnlyRegexDialect"]) {
+    const rows = evidence[key];
+    assert.equal(rows.productionObserved, false, key);
+    assert.equal(
+      sha(rows.fixture ?? evidence.jarOnlyRows.fixture),
+      rows.fixtureSha256 ?? evidence.jarOnlyRows.fixtureSha256,
+    );
+    for (const file of rows.tests) assert.ok(exists(file), file);
+  }
+  assert.equal(json(evidence.jarOnlyRows.fixture).length, 536);
+  assert.equal(
+    json(evidence.jarOnlyQueryOrderBy.fixture).length,
+    evidence.jarOnlyQueryOrderBy.rows,
+  );
+  assert.equal(
+    json(evidence.jarOnlyRegexDialect.fixture).length,
+    evidence.jarOnlyRegexDialect.rows,
+  );
+  assert.match(evidence.jarOnlyRegexDialect.statement, /Emulator profile only/);
+  assert.match(evidence.jarOnlyRegexDialect.statement, /strict profile keeps today's refusal/);
+  assert.match(evidence.jarOnlyBodyLoneSurrogate.statement, /Emulator profile only/);
+  assert.match(evidence.jarOnlyBodyLoneSurrogate.statement, /key that holds one stays refused/);
+  for (const file of evidence.jarOnlyBodyLoneSurrogate.tests) assert.ok(exists(file), file);
+  const known = closure().knownDifferences;
+  for (const key of ["regexDialectEmulatorProfile", "bodyLoneSurrogateEmulatorProfile"]) {
+    assert.match(known[key].statement, /no production answer/, key);
+    assert.match(known[key].decisionRef, /\(2276, "RTDB closure older over-refusals"/, key);
+    assert.ok(exists(known[key].evidence), key);
+  }
+  // The shapes found by pinning are named as unfollowed, with no owner row yet.
+  const unfollowed = known.loneSurrogateClaimsAndQueryValues;
+  assert.match(unfollowed.statement, /not followed/);
+  assert.match(unfollowed.statement, /Constraint index field must be a JSON primitive/);
+  assert.doesNotMatch(unfollowed.decisionRef, /\b2276\b/);
+  assert.ok(exists(unfollowed.evidence));
+  const keys = closure().closureBasis.notClaimedItems.map((i) => i.key);
+  for (const key of [
+    "notClaimed_emulator_profile_regex_and_body_surrogates",
+    "notClaimed_lone_surrogate_claims_query_values_frames",
+    "notClaimed_over_refusal_probed_corpora_only",
+  ])
+    assert.ok(keys.includes(key), key);
+  assert.match(closure().closureReview.note, /probed corpora only/);
+  assert.match(closure().scopeDecisions.find((s) => s.id === "R11").decisionRef, /\b2276\b/);
+});
+
 test("each emulator-profile difference the RTDB record declares for the 2026-11 recordings cites the owner row that decided it", () => {
   const known = closure().knownDifferences;
   // The forged tokens: 713 extended to RTDB by row 2270; the three REST cases: row 2273.

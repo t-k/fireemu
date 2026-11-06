@@ -70,9 +70,27 @@
         "reportSha256": "56da53303d93aa10378fee338372ffa4ec0679e9edbc8f8749a1eddc1263ec81",
         "reviewedCommit": "5dafdade28bdc89c1db48e248c304b943719a8e1",
         "outcome": "Independent CV14 final artifact review: candidate R6 suitable, conditional on mutation, current bindings and final CI."
+      },
+      {
+        "reportPath": "docs.local/reviews/2026-11-06-rtdb-closure-review.md",
+        "reportSha256": "9c1639d331a11bef19addc44156663e93f9cede8fa7e4a390d620eb8a04fd290",
+        "reviewedCommit": "e4429f9eac1716a8a14c8d7998c0921a5568100c",
+        "outcome": "Opus full-parent closure review of the 2026-11-06 refresh: CHANGES REQUESTED (M1 release runs missing, M2 undeclared forged-token refusals, M3 lone-surrogate load refusals); answered at 2e34b5ae7 (owner 2270, 2273)."
+      },
+      {
+        "reportPath": "docs.local/reviews/2026-11-06-rtdb-closure-review-delta.md",
+        "reportSha256": "4f38e2ed10b2d472c7ddf3e54614dbaee9d9cb88e363c5300a30c07a8525f5eb",
+        "reviewedCommit": "2e34b5ae7a83b2a3d7d2a52156cf2021312a6865",
+        "outcome": "Opus delta review of 2e34b5ae7: CHANGES REQUESTED (M1 negated child, hasChild, index and astral empty-target replace still errors; M2 three older over-refusals undeclared; Shoulds S1 to S3); answered by owner 2276 and the next head."
+      },
+      {
+        "reportPath": "docs.local/reviews/2026-11-06-rtdb-closure-codex-r2.md",
+        "reportSha256": "d82f416278d8a7a234912ab41eeed798a91af563238fb37e245e10542bbe2501",
+        "reviewedCommit": "2e34b5ae7a83b2a3d7d2a52156cf2021312a6865",
+        "outcome": "Codex delta review of 2e34b5ae7: CHANGES REQUESTED (one Must: unbounded intermediate string growth of replace on the new lone-surrogate path; two Shoulds); answered by the string bound of the next head."
       }
     ],
-    "note": "The record was refreshed on 2026-11-03 to the committed evidence, and on 2026-11-06 with the recordings of RTDB-REST-20261104-01, RTDB-RULES-20261104-01, RTDB-TOKENS-20261104-01, RTDB-TRIGGERS-BREADTH-20261105-02 and RTDB-RULES-LOAD-20261105-01 (scope decision R11); the review of that refresh is pending, the decision stays CHANGES_REQUESTED and the parent remains IMPLEMENTING."
+    "note": "The record was refreshed on 2026-11-03 to the committed evidence, and on 2026-11-06 with the recordings of RTDB-REST-20261104-01, RTDB-RULES-20261104-01, RTDB-TOKENS-20261104-01, RTDB-TRIGGERS-BREADTH-20261105-02 and RTDB-RULES-LOAD-20261105-01 (scope decision R11). The Opus full-parent review and the Opus and Codex delta reviews of 2026-11-06 requested changes; the last round (owner 2270 (2) and 2276) answers them: the Rules string bound, the lone-surrogate paths and keys, query.orderBy, and, on the emulator profile only, the regular-expression dialect and lone surrogates in JSON bodies. The review of that refresh is pending, the decision stays CHANGES_REQUESTED and the parent remains IMPLEMENTING. Over-refusal by the emulator profile was checked on the probed corpora only (see notClaimed_over_refusal_probed_corpora_only)."
   },
   "scopeDecisions": [
     {
@@ -172,13 +190,13 @@
     },
     {
       "id": "R11",
-      "decision": "R2 (as amended by R4 to R7, R9 and R10) is amended for the recordings of 2026-11-04 and 2026-11-05, replayed on the closure build in both profiles and for the recorded cases only: REST options, POST and push forms, .sv, orderBy and shallow windows, ETag, method override, callback and download and the malformed escape (RTDB/rest-options-and-refusals, run RTDB-REST-20261104-01); Rules claims, indexes, cascade grammar, query members, concatenation, conditional writes and load texts (RTDB/rules-claims-indexes-and-load-texts, RTDB-RULES-20261104-01); seven Rules documents that fail or load (RTDB/rules-document-load-diagnostics, RTDB-RULES-LOAD-20261105-01); generated invalid credentials over REST (RTDB/invalid-credentials-rest, RTDB-TOKENS-20261104-01); and RTDB-triggered Functions for an end user's write, ancestor and multi-path writes and redelivery (RTDB/functions-trigger-breadth-and-user-auth, RTDB-TRIGGERS-BREADTH-20261105-02). Inventory items G7, G8, G9 and G10 leave /outOfScope as far as these recordings reach; what lies beyond them stays listed in /outOfScope and /knownGaps. The sdk-small and sdk-events comparisons are rebound to the same build. The closure build is an unpublished release-profile build of source commit 0883c38b6 (binary b3499745...), built with --locked and an empty RUSTC_WRAPPER in a fresh worktree-local target directory; the Rust sources are unchanged since. Rules strings that hold a lone surrogate load and are judged by UTF-16 units in both profiles as the official emulator does (owner 2270 (2); unobserved in production, so strict follows the jar), and the emulator profile's refusals of forged signed tokens outside the recorded shape are a declared difference (owner 713 extended by 2270 (1)). The parent remains IMPLEMENTING; the Mac controls named in /knownGaps stay bound to the older binaries.",
+      "decision": "R2 (as amended by R4 to R7, R9 and R10) is amended for the recordings of 2026-11-04 and 2026-11-05, replayed on the closure build in both profiles and for the recorded cases only: REST options, POST and push forms, .sv, orderBy and shallow windows, ETag, method override, callback and download and the malformed escape (RTDB/rest-options-and-refusals, run RTDB-REST-20261104-01); Rules claims, indexes, cascade grammar, query members, concatenation, conditional writes and load texts (RTDB/rules-claims-indexes-and-load-texts, RTDB-RULES-20261104-01); seven Rules documents that fail or load (RTDB/rules-document-load-diagnostics, RTDB-RULES-LOAD-20261105-01); generated invalid credentials over REST (RTDB/invalid-credentials-rest, RTDB-TOKENS-20261104-01); and RTDB-triggered Functions for an end user's write, ancestor and multi-path writes and redelivery (RTDB/functions-trigger-breadth-and-user-auth, RTDB-TRIGGERS-BREADTH-20261105-02). Inventory items G7, G8, G9 and G10 leave /outOfScope as far as these recordings reach; what lies beyond them stays listed in /outOfScope and /knownGaps. The sdk-small and sdk-events comparisons are rebound to the same build. The closure build is an unpublished release-profile build of source commit 0883c38b6 (binary b3499745...), built with --locked and an empty RUSTC_WRAPPER in a fresh worktree-local target directory; the Rust sources are unchanged since. Rules strings that hold a lone surrogate load and are judged by UTF-16 units in both profiles as the official emulator does (owner 2270 (2), completed by 2276: child, hasChild, hasChildren, an index and the empty-target replace answer as the jar; unobserved in production, so strict follows the jar). A string a rule builds is bounded at 2^26 UTF-16 units. query.orderBy loads in both profiles as the jar answers it. On the emulator profile only, a regular expression's \\W, \\D and escaped letters, and a lone surrogate escape in a JSON body value, are read as the official emulator reads them while the strict profile keeps refusing them (owner 2276; unobserved in production), and the emulator profile's refusals of forged signed tokens outside the recorded shape are a declared difference (owner 713 extended by 2270 (1)). The parent remains IMPLEMENTING; the Mac controls named in /knownGaps stay bound to the older binaries.",
       "rationale": "Five production runs of 2026-11-04 and 2026-11-05 (RTDB-REST-20261104-01, RTDB-RULES-20261104-01, RTDB-TOKENS-20261104-01, RTDB-TRIGGERS-BREADTH-20261105-02 and RTDB-RULES-LOAD-20261105-01; a sixth envelope, RTDB-TRIGGERS-BREADTH-20261105-01, stopped before any observation) answered the questions the frozen inventory listed as unobserved; their reductions are committed as fixtures and replayed in both profiles, and every defect they found in the strict or the emulator profile was fixed and merged before the replay.",
       "amends": "R2",
       "status": "FROZEN",
       "decidedBy": "project coordinator (delegated by the owner)",
       "decidedOn": "2026-11-06",
-      "decisionRef": "docs.local/instructions/owner-decisions.md (2217, 2218, 2251, 2231, 2232, 2239, 2240, 2253, 2254, 2262, 2263, 2266, 2267, 2270); docs.local/runs/rtdb-closure-4a/inventory.md (G7 to G10)"
+      "decisionRef": "docs.local/instructions/owner-decisions.md (2217, 2218, 2251, 2231, 2232, 2239, 2240, 2253, 2254, 2262, 2263, 2266, 2267, 2270, 2273, 2276); docs.local/runs/rtdb-closure-4a/inventory.md (G7 to G10)"
     }
   ],
   "conditions": [
@@ -1429,7 +1447,7 @@
       "cases": [
         "7 Rules documents in two rounds (r1-rules-load, r2-rules-load) PUT to /.settings/rules.json: a duplicate key, a duplicate .read, a duplicate .indexOn, an .indexOn of a.b, of $x and of the empty string, and an .indexOn of a//b",
         "the status, the body text with its line and column, and the recorded headers of the 3 + 2 refusals and of the 2 accepted documents (the empty .indexOn and a//b are accepted)",
-        "a Rules string that holds a lone surrogate loads and is judged by UTF-16 units in both profiles as the official emulator judges it (259 probed rows); unobserved in production, so strict follows the jar"
+        "a Rules string that holds a lone surrogate loads and is judged by UTF-16 units in both profiles as the official emulator judges it, a path or key that holds one names nothing (536 probed rows); query.orderBy loads in both profiles (81 probed rows); on the emulator profile only, \\W, \\D and escaped letters in a regular expression are read as the official emulator reads them (500 probed rows). All unobserved in production, so strict follows the jar except where the record says the strict profile keeps refusing"
       ],
       "status": "VERIFIED",
       "evidence": {
@@ -1488,16 +1506,50 @@
           }
         },
         "jarOnlyRows": {
-          "statement": "Rules strings that hold a lone surrogate (an escape such as '\\uD83D') load and evaluate by UTF-16 units in both profiles, as the official emulator does (owner 2270 (2)): length, +, ==, !=, <, >, <=, >=, contains, beginsWith, endsWith, replace, toLowerCase, toUpperCase and matches. Production has not answered these shapes, so they are unobserved in production and the strict profile follows the jar; child(), hasChild, an index and the empty-target replace of a string with a character outside the Basic Multilingual Plane stay errors.",
+          "statement": "Rules strings that hold a lone surrogate (an escape such as '\\uD83D') load and evaluate by UTF-16 units in both profiles, as the official emulator does (owner 2270 (2), completed by 2276): length, +, ==, !=, <, >, <=, >=, contains, beginsWith, endsWith, replace (an empty target between the halves of a pair included), toLowerCase, toUpperCase and matches. A path or key that holds one names nothing: child() reads absent, hasChild and hasChildren are false and an index is undefined, so the negated forms read as the official emulator reads them. Production has not answered these shapes, so they are unobserved in production and the strict profile follows the jar. A string a rule builds past 2^26 UTF-16 units is an error here (the official emulator answers 500 from a heap-dependent size); that bound is a difference, not a lone-surrogate one. What stays different (not claimed): a token whose claims hold a lone surrogate, and a query value that holds one (see knownDifferences.loneSurrogateClaimsAndQueryValues).",
           "fixture": "crates/fireemu-core-database/tests/fixtures/rules-lone-surrogates-official-emulator-4.11.2.json",
-          "fixtureSha256": "3a82c9dae5e0f17148236b96a3132709591357b6aa4b487b4da6070050d02c7f",
-          "rows": 259,
+          "fixtureSha256": "7a80b60127121e4f48b13a1ca2c0c1660f9b6f8d09288476df8bf0e686304b6f",
+          "rows": 536,
+          "tests": [
+            "crates/fireemu-core-database/tests/rules.rs",
+            "crates/fireemu-core-database/src/rules/eval.rs",
+            "crates/fireemu-adapter-database/tests/rules.rs",
+            "crates/fireemu-adapter-database/tests/rules_cells.rs"
+          ],
+          "productionObserved": false
+        },
+        "jarOnlyQueryOrderBy": {
+          "statement": "query.orderBy loads in both profiles and decides as the official emulator does (owner 2276; production documents it): it is the child ordering when the read orders by a child, otherwise a value that equals only itself, so `query.orderBy == null` is false and `query.orderBy != null` is true on a plain read, a stream and a listen, and null in a write, a validation and a shallow read. Rules that use it were refused at load before, so none was in force; the rules that can now allow a read are those that name query.orderBy. Unobserved in production, so strict follows the jar.",
+          "fixture": "crates/fireemu-core-database/tests/fixtures/rules-query-orderby-official-emulator-4.11.2.json",
+          "fixtureSha256": "b153dc32a598626e774a5278b425250907209cb7c4517ab1bffa234997b36148",
+          "rows": 81,
           "tests": [
             "crates/fireemu-core-database/tests/rules.rs",
             "crates/fireemu-adapter-database/tests/rules.rs",
             "crates/fireemu-adapter-database/tests/rules_cells.rs"
           ],
           "productionObserved": false
+        },
+        "jarOnlyRegexDialect": {
+          "statement": "Emulator profile only (owner 2276): in a regular expression `\\W` and `\\D` are the complement of a language of strings (`'ab'` and `''` match `/^\\W$/`, `'a'` does not), a class that holds one is the union of its members as languages, a negated class is single characters, and an escaped letter or digit other than d, w, D and W is that character (so `/[\\uD800-\\uDFFF]/` is the class of `0` to `u`, `D` and `F`). The strict profile keeps today's refusal (the rule is an error, so false negated or not) because production has not answered these shapes. 72 of the 323 corpus rows that fireemu denied and the official emulator allowed now decide as it does; 251 stay denied (other constructs of the dialect), and no corpus row moves the wrong way.",
+          "fixture": "crates/fireemu-core-database/tests/fixtures/rules-regex-dialect-official-emulator-4.11.2.json",
+          "fixtureSha256": "3d3a7bf619fd781c33d88a43510354e70d6370c78c7bf260331528b41caa85c5",
+          "rows": 500,
+          "tests": [
+            "crates/fireemu-core-database/tests/rules.rs",
+            "crates/fireemu-adapter-database/tests/rules.rs"
+          ],
+          "productionObserved": false,
+          "strictProfile": "refuses (rule false) and is unobserved in production"
+        },
+        "jarOnlyBodyLoneSurrogate": {
+          "statement": "Emulator profile only (owner 2276): a lone surrogate escape in a JSON string value of a write body (PUT, PATCH, POST; an object, an array, `.value` and `.priority` included) is stored as `?`, one for each lone surrogate and a valid pair untouched, as the official emulator stores it (23 jar probes of docs.local/runs/rtdb-lone-surrogate). A key that holds one stays refused with 400 on both profiles. The strict profile refuses the value as before; production has not answered it.",
+          "tests": [
+            "crates/fireemu-adapter-database/tests/rest.rs",
+            "crates/fireemu-adapter-database/tests/json_replacing.rs"
+          ],
+          "productionObserved": false,
+          "strictProfile": "refuses (400) and is unobserved in production"
         }
       }
     },
@@ -2059,6 +2111,21 @@
         }
       ],
       "refusalsEvidence": "WebSocket auth agrees for the shapes tried (expired, other aud, ES256: jar ok, emulator invalid_token). The emulator and strict answers are pinned by crates/fireemu/tests/database.rs (credentials_follow_the_profile_and_bind_tokens_to_the_instance_project); the jar answers are the probe of docs.local/reviews/2026-11-06-rtdb-closure-review.md (jar 4.11.2, closure binary 44c3c889)."
+    },
+    "regexDialectEmulatorProfile": {
+      "statement": "Official-emulator-only difference with no production answer: on the emulator profile a regular expression's `\\W`, `\\D` and escaped letters are read as the official emulator reads them; the strict profile keeps them errors. This lets a rule allow a read that the strict profile (and, for these patterns, the earlier emulator profile) denied, only where the official emulator allows it; the 500 corpus rows and 14k-row corpus show no case where it allows what the official emulator denies.",
+      "decisionRef": "docs.local/instructions/owner-decisions.md (2276, \"RTDB closure older over-refusals\", 2026-11-06)",
+      "evidence": "crates/fireemu-core-database/tests/fixtures/rules-regex-dialect-official-emulator-4.11.2.json"
+    },
+    "bodyLoneSurrogateEmulatorProfile": {
+      "statement": "Official-emulator-only difference with no production answer: on the emulator profile a lone surrogate escape in a JSON string value of a write body is stored as `?`, as the official emulator stores it; the strict profile refuses it with 400 as before.",
+      "decisionRef": "docs.local/instructions/owner-decisions.md (2276, \"RTDB closure older over-refusals\", 2026-11-06)",
+      "evidence": "crates/fireemu-adapter-database/tests/rest.rs"
+    },
+    "loneSurrogateClaimsAndQueryValues": {
+      "statement": "Found by pinning the shapes (Opus delta S3) and not followed: on the emulator profile a token whose claim holds a lone surrogate is not read (the request is judged without that claim, so `auth.token.x == '\\uD83D'` is false where the official emulator reads the claim and allows it, and `!(auth.token.x == '\\uD83D')` is true where it denies), and a query parameter value that holds one (`startAt=\"\\ud83d\"`) is refused with 400 `Constraint index field must be a JSON primitive` where the official emulator runs the query. A WebSocket frame and an import file with a lone surrogate in a value were not probed and are refused as before. Both refuse more than the official emulator and are not declared by an owner row: they are listed here and as not claimed until the owner decides to fix or declare them.",
+      "decisionRef": "none yet; reported to the coordinator with the head that introduces it (question in the status file)",
+      "evidence": "crates/fireemu-adapter-database/tests/rules.rs"
     }
   },
   "knownGaps": {
@@ -2200,7 +2267,25 @@
         "item": "Rules strings that hold a lone surrogate, in production",
         "key": "notClaimed_rules_lone_surrogate_strings",
         "localBehaviour": "follows-official-emulator",
-        "detail": "both profiles load and evaluate them by UTF-16 units as the jar does (owner 2270 (2)); production has not been asked and the production budget has no room for it, so strict follows the jar and the condition says so."
+        "detail": "both profiles load and evaluate them by UTF-16 units as the jar does (owner 2270 (2), completed by 2276), and a path or key that holds one names nothing; production has not been asked and the production budget has no room for it, so strict follows the jar and the condition says so."
+      },
+      {
+        "item": "the emulator-profile regular-expression dialect (escaped letters, \\W, \\D) and lone surrogates in JSON bodies, in production",
+        "key": "notClaimed_emulator_profile_regex_and_body_surrogates",
+        "localBehaviour": "follows-official-emulator",
+        "detail": "owner 2276: the emulator profile follows the jar for these; the strict profile keeps refusing them because production has not been asked. 251 of the 323 corpus rows of the dialect that fireemu denies and the jar allows stay denied (other constructs of the dialect)."
+      },
+      {
+        "item": "a token claim, a query value, a WebSocket frame or an import file that holds a lone surrogate",
+        "key": "notClaimed_lone_surrogate_claims_query_values_frames",
+        "localBehaviour": "own-implementation",
+        "detail": "the emulator profile does not read a token with such a claim and refuses such a query value with 400, where the jar reads and runs them; frames and import files were not probed (knownDifferences.loneSurrogateClaimsAndQueryValues). Not followed and not claimed."
+      },
+      {
+        "item": "over-refusal by the emulator profile beyond the probed corpora",
+        "key": "notClaimed_over_refusal_probed_corpora_only",
+        "localBehaviour": "own-implementation",
+        "detail": "that the emulator profile refuses nothing the official emulator admits was checked on the probed corpora only (the 22k-row Rules corpora, the lone-surrogate, query.orderBy and regular-expression rows, the REST and token cases); each round of review found shapes the corpora lacked, so other refusals may exist."
       }
     ]
   }

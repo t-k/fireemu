@@ -41,6 +41,11 @@ class RunnerContractTest(unittest.TestCase):
     def test_completed_junit_without_required_cases_fails(self):
         self.assertEqual(self.client_result("OK (1 test)"), 1)
 
+    def test_extra_duplicate_case_fails(self):
+        output = "".join("CASE case." + chr(97 + index) + " passed none 1\n" for index in range(23))
+        output += "CASE case.a passed none 1\nOK (1 test)"
+        self.assertEqual(self.client_result(output), 1)
+
     def test_duplicate_case_ids_fail(self):
         output = "CASE auth.signup passed none 1\n" * 23 + "OK (1 test)"
         self.assertEqual(self.client_result(output), 1)

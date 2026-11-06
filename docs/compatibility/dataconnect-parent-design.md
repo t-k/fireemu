@@ -1,6 +1,6 @@
 # Proposed Data Connect compatibility parent
 
-Status: design proposal awaiting owner decision. Data Connect remains deferred in fireemu. This document proposes a future compatibility parent; it does not register a parent, enable a service, claim parity or authorize implementation. The owner must choose an approach before the offline fixture phase begins.
+Status: the owner selected approach B (PostgreSQL/podman) and approved the common offline fixture phase. Data Connect remains deferred in fireemu. This document does not register a parent, enable a service or claim parity. Implementing the fireemu runtime remains a separate phase.
 
 ## Current behavior
 
@@ -46,13 +46,13 @@ The official emulator used as a test oracle is a separate development dependency
 
 ## Recommendation and initial scope
 
-Recommend **B**, subject to owner acceptance of the PostgreSQL/podman dependency and its cost. It respects the existing exclusion of the Google toolkit from fireemu's distribution while delegating relational storage to PostgreSQL. It is a schema and protocol implementation project, not a thin SQL proxy. If the owner instead changes the distribution policy and resolves the toolkit terms, A provides the shorter route to official-emulator compatibility. C has the highest cost and semantic risk with the evidence currently available.
+The owner selected **B**, accepting the PostgreSQL/podman dependency and the estimated cost. It respects the existing exclusion of the Google toolkit from fireemu's distribution while delegating relational storage to PostgreSQL. It is a schema and protocol implementation project, not a thin SQL proxy. If the owner instead changes the distribution policy and resolves the toolkit terms, A provides the shorter route to official-emulator compatibility. C has the highest cost and semantic risk with the evidence currently available.
 
 A first proposed B slice would support one local service and connector, checked-in schema and named operations, scalar CRUD, one relationship, deterministic response envelopes and verified local Auth integration. Schema compilation and generated-SDK interoperability need their own evidence. Initial exclusions would include service provisioning, Cloud SQL IAM, remote resolvers, production-backed embeddings, subscriptions, SDK generation and official snapshot compatibility. Excluded features remain gaps, not completed parity. Data Connect stays deferred until a separately reviewed implementation and evidence justify changing that status.
 
 ## Common fixture phase after the decision
 
-No fixtures are introduced by this design. The next phase would define synthetic schema, connector, data and requests with a configurable target endpoint. The same suite must first run against the pinned official emulator offline and later against fireemu. Keep toolkit digests, dependency locks, schema bytes, target identity and raw results with the fixture provenance.
+The approved common fixture work is located in [conformance/dataconnect](../../conformance/dataconnect/README.md). It defines synthetic schema, connector, data and requests with a configurable target endpoint. The same suite must first run against the pinned official emulator offline and later against fireemu. Keep toolkit digests, dependency locks, schema bytes, target identity and raw results with the fixture provenance.
 
 Cover successful named queries and mutations, invalid variables and nullability, relationships, ordering/pagination, error envelopes, absent/valid/invalid authentication, transaction rollback and concurrent visibility, schema reload, reset and persistence. Treat default PGlite and external PostgreSQL as distinct configurations; the latter's export refusal is an expected observation to capture. Normalization may hide volatile values only when it preserves their semantic shape.
 
@@ -66,6 +66,6 @@ For an already provisioned synthetic schema, a minimal later data-plane proposal
 
 ## Owner decision and validation boundary
 
-Choose whether to approve B's restricted scope and external dependency, pursue A with a distribution-policy decision and toolkit-terms review, fund C, or retain deferral. The offline fixture phase and implementation stop until that decision is recorded. Naming the prospective parent `DATACONNECT` here creates no registered claim or closure record.
+The owner chose B and accepted its external dependency and restricted MVP estimate. The common offline fixture phase is approved; the full fireemu implementation and any production observation remain outside this phase. Naming the prospective parent `DATACONNECT` here creates no registered claim or closure record.
 
-This change is documentation only. Validation consists of checking source references, option completeness, privacy, diff whitespace and whether the new document is bound by existing evidence digests. Runtime tests, failing-first evidence, mutation testing and executable formal models are not applicable; zero tests or mutants were executed. Future implementation must supply those forms of evidence for its own behavior changes.
+The common fixture suite records 24 cases for each official-emulator backend, including PGlite snapshot restoration and the external-PostgreSQL export refusal. The checked-in synthetic expectations were verified by a fresh offline run. Runner tests, scoped mutations and a bounded lifecycle model support the harness; they do not establish production parity or implement the proposed fireemu runtime.

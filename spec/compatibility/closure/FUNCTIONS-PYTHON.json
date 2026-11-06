@@ -1,0 +1,308 @@
+{
+  "schemaVersion": 1,
+  "parent": "FUNCTIONS-PYTHON",
+  "parentStatus": "IMPLEMENTING",
+  "inventoryStatus": "PROPOSED",
+  "oracleTrack": "masked-recorded-observations",
+  "recordingPolicy": {
+    "observedPasses": 1,
+    "requiredPasses": 2,
+    "waiver": null
+  },
+  "scopeDecisions": [
+    {
+      "id": "PY1",
+      "question": "Is the eventual production claim strict-profile-only?",
+      "recommendation": "Claim only finite recorded strict cases; test emulator differences separately.",
+      "status": "PENDING",
+      "answer": null
+    },
+    {
+      "id": "PY2",
+      "question": "How should request-view and OIDC differences be declared?",
+      "recommendation": "Keep exact named differences pending; do not hide missing infrastructure or authorization fields with masks.",
+      "status": "PENDING",
+      "answer": null
+    },
+    {
+      "id": "PY3",
+      "question": "Should Auth blocking remain OPEN?",
+      "recommendation": "Retain OPEN with the recorded503; the SDK allow path has no recording.",
+      "status": "PENDING",
+      "answer": null
+    }
+  ],
+  "closureReview": {
+    "decision": "PENDING"
+  },
+  "conditions": [
+    {
+      "conditionId": "FUNCTIONS-PYTHON/firestore-events",
+      "recipeIds": [
+        "functions-python/firestore-events"
+      ],
+      "cases": [
+        "recorded-projection",
+        "strict-replay",
+        "emulator-replay"
+      ],
+      "status": "PRODUCTION_RECORDED",
+      "generations": [
+        2
+      ],
+      "note": "Created and updated SDK projections; only created raw CloudEvent. Deleted and written are unobserved; complete payload and resource identity comparison remain open.",
+      "profiles": {
+        "strict": "PENDING_SCOPE",
+        "emulator": "PENDING_SCOPE"
+      },
+      "fixturePath": "conformance/functions-python/fixtures/observations.json",
+      "fixtureSha256": "ab67d28cfabeec1c380d7a572972a6cf412b9945ab3923096dcdf9ba46b1d12b"
+    },
+    {
+      "conditionId": "FUNCTIONS-PYTHON/pubsub-events",
+      "recipeIds": [
+        "functions-python/pubsub-events"
+      ],
+      "cases": [
+        "recorded-projection",
+        "strict-replay",
+        "emulator-replay"
+      ],
+      "status": "PRODUCTION_RECORDED",
+      "generations": [
+        2
+      ],
+      "note": "Plain and ordered SDK projections. Message bytes and arbitrary delivery attributes remain unobserved by this replay.",
+      "profiles": {
+        "strict": "PENDING_SCOPE",
+        "emulator": "PENDING_SCOPE"
+      },
+      "fixturePath": "conformance/functions-python/fixtures/observations.json",
+      "fixtureSha256": "ab67d28cfabeec1c380d7a572972a6cf412b9945ab3923096dcdf9ba46b1d12b"
+    },
+    {
+      "conditionId": "FUNCTIONS-PYTHON/storage-events",
+      "recipeIds": [
+        "functions-python/storage-events"
+      ],
+      "cases": [
+        "recorded-projection",
+        "strict-replay",
+        "emulator-replay"
+      ],
+      "status": "PRODUCTION_RECORDED",
+      "generations": [
+        2
+      ],
+      "note": "Finalized SDK projection only. Deleted, archived and metadata updates remain unobserved; complete object members are not compared.",
+      "profiles": {
+        "strict": "PENDING_SCOPE",
+        "emulator": "PENDING_SCOPE"
+      },
+      "fixturePath": "conformance/functions-python/fixtures/observations.json",
+      "fixtureSha256": "ab67d28cfabeec1c380d7a572972a6cf412b9945ab3923096dcdf9ba46b1d12b"
+    },
+    {
+      "conditionId": "FUNCTIONS-PYTHON/eventarc-custom-events",
+      "recipeIds": [
+        "functions-python/eventarc-custom-events"
+      ],
+      "cases": [
+        "recorded-projection",
+        "strict-replay",
+        "emulator-replay"
+      ],
+      "status": "PRODUCTION_RECORDED",
+      "generations": [
+        2
+      ],
+      "note": "Fractional SDK delivery and whole-second SDK absence recorded. Emulator accepts whole-second time; strict rejects it.",
+      "profiles": {
+        "strict": "PENDING_SCOPE",
+        "emulator": "PENDING_SCOPE"
+      },
+      "fixturePath": "conformance/functions-python/fixtures/observations.json",
+      "fixtureSha256": "ab67d28cfabeec1c380d7a572972a6cf412b9945ab3923096dcdf9ba46b1d12b"
+    },
+    {
+      "conditionId": "FUNCTIONS-PYTHON/scheduler-events",
+      "recipeIds": [
+        "functions-python/scheduler-events"
+      ],
+      "cases": [
+        "recorded-projection",
+        "strict-replay",
+        "emulator-replay"
+      ],
+      "status": "PRODUCTION_RECORDED",
+      "generations": [
+        2
+      ],
+      "note": "SDK job and schedule time; raw request constants. OIDC and infrastructure header differences remain pending.",
+      "profiles": {
+        "strict": "PENDING_SCOPE",
+        "emulator": "PENDING_SCOPE"
+      },
+      "fixturePath": "conformance/functions-python/fixtures/observations.json",
+      "fixtureSha256": "ab67d28cfabeec1c380d7a572972a6cf412b9945ab3923096dcdf9ba46b1d12b"
+    },
+    {
+      "conditionId": "FUNCTIONS-PYTHON/tasks-events",
+      "recipeIds": [
+        "functions-python/tasks-events"
+      ],
+      "cases": [
+        "recorded-projection",
+        "strict-replay",
+        "emulator-replay"
+      ],
+      "status": "PRODUCTION_RECORDED",
+      "generations": [
+        2
+      ],
+      "note": "SDK data without auth/app context and masked raw body order. Replay exercises HTTP pass-through, not daemon task-name/header generation or retries.",
+      "profiles": {
+        "strict": "PENDING_SCOPE",
+        "emulator": "PENDING_SCOPE"
+      },
+      "fixturePath": "conformance/functions-python/fixtures/observations.json",
+      "fixtureSha256": "ab67d28cfabeec1c380d7a572972a6cf412b9945ab3923096dcdf9ba46b1d12b"
+    },
+    {
+      "conditionId": "FUNCTIONS-PYTHON/auth-blocking",
+      "recipeIds": [
+        "functions-python/auth-blocking"
+      ],
+      "cases": [
+        "recorded-open-obligation"
+      ],
+      "status": "OPEN",
+      "generations": [
+        2
+      ],
+      "note": "Recorded client503 and raw delivery; SDK success is unobserved. No token contents are retained or verified by this replay.",
+      "profiles": {
+        "strict": "PENDING_SCOPE",
+        "emulator": "PENDING_SCOPE"
+      },
+      "fixturePath": "conformance/functions-python/fixtures/observations.json",
+      "fixtureSha256": "ab67d28cfabeec1c380d7a572972a6cf412b9945ab3923096dcdf9ba46b1d12b"
+    },
+    {
+      "conditionId": "FUNCTIONS-PYTHON/deployment",
+      "recipeIds": [
+        "functions-python/deployment"
+      ],
+      "cases": [
+        "recorded-open-obligation"
+      ],
+      "status": "NOT_COMPARED",
+      "generations": [
+        2
+      ],
+      "note": "Recorded function inventory only; local discovery/deployed-resource equivalence has not been compared.",
+      "profiles": {
+        "strict": "PENDING_SCOPE",
+        "emulator": "PENDING_SCOPE"
+      },
+      "fixturePath": "conformance/functions-python/fixtures/observations.json",
+      "fixtureSha256": "ab67d28cfabeec1c380d7a572972a6cf412b9945ab3923096dcdf9ba46b1d12b"
+    }
+  ],
+  "releaseRegressions": [
+    "conformance/src/functions-python-closure.test.mjs",
+    "conformance/src/functions-python-replay.test.mjs",
+    "tools/runner-python/tests/test_closure_replay.py"
+  ],
+  "limitations": [
+    "One production pass; no one-pass exception has been granted.",
+    "Synthetic identity and timestamp aliases preserve selected types and formats; they do not establish identity parity.",
+    "Runner replay does not establish daemon delivery, deployment or OIDC verification parity.",
+    "HTTP/callable, secret isolation, async handlers, reload and before-sign-in are unobserved by this parent."
+  ],
+  "declaredDifferences": [
+    {
+      "id": "request-infrastructure",
+      "status": "PENDING",
+      "profiles": [
+        "strict",
+        "emulator"
+      ],
+      "fields": [
+        "authorization",
+        "forwarded",
+        "x-forwarded-for",
+        "function-execution-id",
+        "x-cloud-trace-context",
+        "from",
+        "accept",
+        "host"
+      ],
+      "reason": "Recorded infrastructure fields have no equivalent local identity or issuer; only header presence is retained."
+    },
+    {
+      "id": "emulator-eventarc-whole-second",
+      "status": "PENDING",
+      "profiles": [
+        "emulator"
+      ],
+      "fields": [
+        "eventarc-custom-events.wholeSecondSdkFrames"
+      ],
+      "reason": "The emulator profile adds fractional time so the SDK runs; recorded production and strict do not."
+    },
+    {
+      "id": "emulator-request-constants",
+      "status": "PENDING",
+      "profiles": [
+        "emulator"
+      ],
+      "fields": [
+        "firestore-events.dataschema",
+        "request.user-agent",
+        "request.accept-encoding",
+        "request.x-forwarded-proto"
+      ],
+      "reason": "CloudEvent strict constants and Firestore dataschema are not added by the emulator profile."
+    },
+    {
+      "id": "task-delivery",
+      "status": "PENDING",
+      "profiles": [
+        "strict",
+        "emulator"
+      ],
+      "fields": [
+        "x-cloudtasks-taskname",
+        "host",
+        "authorization"
+      ],
+      "reason": "Daemon task naming, infrastructure host and OIDC remain outside the runner replay."
+    },
+    {
+      "id": "blocking-sdk",
+      "status": "PENDING",
+      "profiles": [
+        "strict",
+        "emulator"
+      ],
+      "fields": [
+        "auth-blocking.sdkEventObserved"
+      ],
+      "reason": "Development blocking may run where the pinned production SDK failed; no authorization behavior is changed."
+    },
+    {
+      "id": "emulator-scheduler-offset",
+      "status": "PENDING",
+      "profiles": [
+        "emulator"
+      ],
+      "fields": [
+        "scheduler-events.schedule_time"
+      ],
+      "reason": "The emulator SDK reports the same instant in UTC; strict reproduces the recorded Los Angeles offset."
+    }
+  ],
+  "corpusPath": "conformance/functions-python/corpus.json",
+  "corpusSha256": "866ae64647b5f6676fa4faef13773d3b858ad15d3bf1ce3d703a42330827b310"
+}

@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "parent": "FUNCTIONS-PYTHON",
+  "fixturePath": "conformance/functions-python/fixtures/observations.json",
+  "fixtureSha256": "ab67d28cfabeec1c380d7a572972a6cf412b9945ab3923096dcdf9ba46b1d12b",
+  "conditions": [
+    {
+      "id": "FUNCTIONS-PYTHON/firestore-events",
+      "recipeIds": ["functions-python/firestore-events"],
+      "frames": 3,
+      "sdkCases": 2
+    },
+    {
+      "id": "FUNCTIONS-PYTHON/pubsub-events",
+      "recipeIds": ["functions-python/pubsub-events"],
+      "frames": 4,
+      "sdkCases": 2
+    },
+    {
+      "id": "FUNCTIONS-PYTHON/storage-events",
+      "recipeIds": ["functions-python/storage-events"],
+      "frames": 2,
+      "sdkCases": 1
+    },
+    {
+      "id": "FUNCTIONS-PYTHON/eventarc-custom-events",
+      "recipeIds": ["functions-python/eventarc-custom-events"],
+      "frames": 3,
+      "sdkCases": 1
+    },
+    {
+      "id": "FUNCTIONS-PYTHON/scheduler-events",
+      "recipeIds": ["functions-python/scheduler-events"],
+      "frames": 2,
+      "sdkCases": 1
+    },
+    {
+      "id": "FUNCTIONS-PYTHON/tasks-events",
+      "recipeIds": ["functions-python/tasks-events"],
+      "frames": 2,
+      "sdkCases": 1
+    },
+    {
+      "id": "FUNCTIONS-PYTHON/auth-blocking",
+      "recipeIds": ["functions-python/auth-blocking"],
+      "frames": 1,
+      "sdkCases": 0
+    },
+    {
+      "id": "FUNCTIONS-PYTHON/deployment",
+      "recipeIds": ["functions-python/deployment"],
+      "frames": 0,
+      "sdkCases": 0
+    }
+  ]
+}

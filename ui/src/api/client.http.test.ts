@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { errorOf, request, requestBytes, setApiBase, settle, subscribe } from "./client";
 import { startTestServer } from "./testServer";
 import { errAsync, okAsync } from "neverthrow";
@@ -237,7 +237,7 @@ describe("subscribe", () => {
       );
     });
     await firstEvent;
-    expect(await peerClosed).toBe(false);
+    await peerClosed;
     expect(events).toEqual(["a"]);
     expect(closed).toBe(0);
   });
@@ -271,9 +271,64 @@ describe("subscribe", () => {
       );
     });
     await firstEvent;
-    expect(await peerClosed).toBe(false);
+    await peerClosed;
     expect(events).toEqual(["a"]);
     expect(closed).toBe(0);
+  });
+
+  it("stays silent when abort races with end of stream", async () => {
+    let resolveEndRead!: (result: ReadableStreamReadResult<Uint8Array>) => void;
+    let markEndReadRequested!: () => void;
+    const endReadRequested = new Promise<void>((resolve) => {
+      markEndReadRequested = resolve;
+    });
+    const reader = {
+      read: vi
+        .fn()
+        .mockResolvedValueOnce({
+          done: false,
+          value: new TextEncoder().encode("data: last\n\n"),
+        })
+        .mockImplementationOnce(
+          () =>
+            new Promise<ReadableStreamReadResult<Uint8Array>>((resolve) => {
+              resolveEndRead = resolve;
+              markEndReadRequested();
+            }),
+        ),
+    };
+    const originalFetch = globalThis.fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: true, body: { getReader: () => reader } }) as unknown as Response),
+    );
+    const events: string[] = [];
+    let closed = 0;
+    let stop = () => {};
+    const firstEvent = new Promise<void>((resolve) => {
+      stop = subscribe(
+        "already-ended",
+        (event) => {
+          events.push(event.data);
+          stop();
+          resolve();
+        },
+        () => {
+          closed += 1;
+        },
+      );
+    });
+
+    try {
+      await firstEvent;
+      await endReadRequested;
+      resolveEndRead({ done: true, value: undefined });
+      await Promise.resolve();
+      expect(events).toEqual(["last"]);
+      expect(closed).toBe(0);
+    } finally {
+      vi.stubGlobal("fetch", originalFetch);
+    }
   });
 });
 

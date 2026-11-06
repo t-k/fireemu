@@ -65,20 +65,20 @@
   "command": "node tools/sdk-smoke-database/rtdb-sdk-rules-load.mjs local --fireemu <binary> --out <dir> --profile strict|emulator --against tools/sdk-smoke-database/fixtures/production-sdk-rules-load.json",
   "binding": {
     "release": "closure-build",
-    "releaseAsset": "unpublished release-profile build of source commit 013ee66853f7c43c05372acfa8ceeb51b5deadc4 (cargo build --release --locked -p fireemu, RUSTC_WRAPPER empty, fresh worktree-local target directory)",
-    "releaseAssetSha256": "f73f2c710ddbd2d9b123daf20d87b44c2c986eecf21534b34c0f7175e4b1df07",
-    "sourceCommit": "013ee66853f7c43c05372acfa8ceeb51b5deadc4",
+    "releaseAsset": "unpublished release-profile build of source commit b26412575850f75c417ac930fe1bb4f93b959dcb (cargo build --release --locked -p fireemu, RUSTC_WRAPPER empty, fresh worktree-local target directory)",
+    "releaseAssetSha256": "5c2938fdfe941663c8bb450f54e65be2b9543f4dcd2d61c2ccef13538e82bba3",
+    "sourceCommit": "b26412575850f75c417ac930fe1bb4f93b959dcb",
     "tagObject": null,
-    "binarySha256": "f73f2c710ddbd2d9b123daf20d87b44c2c986eecf21534b34c0f7175e4b1df07",
+    "binarySha256": "5c2938fdfe941663c8bb450f54e65be2b9543f4dcd2d61c2ccef13538e82bba3",
     "version": "fireemu 0.43.0",
-    "toolCommit": "013ee66853f7c43c05372acfa8ceeb51b5deadc4",
+    "toolCommit": "b26412575850f75c417ac930fe1bb4f93b959dcb",
     "host": "Darwin arm64",
     "productionRequests": 0
   },
   "profiles": {
     "strict": {
       "profile": "strict",
-      "binarySha256": "f73f2c710ddbd2d9b123daf20d87b44c2c986eecf21534b34c0f7175e4b1df07",
+      "binarySha256": "5c2938fdfe941663c8bb450f54e65be2b9543f4dcd2d61c2ccef13538e82bba3",
       "match": true,
       "counts": {
         "MATCH": 14,
@@ -161,7 +161,7 @@
     },
     "emulator": {
       "profile": "emulator",
-      "binarySha256": "f73f2c710ddbd2d9b123daf20d87b44c2c986eecf21534b34c0f7175e4b1df07",
+      "binarySha256": "5c2938fdfe941663c8bb450f54e65be2b9543f4dcd2d61c2ccef13538e82bba3",
       "match": true,
       "counts": {
         "MATCH": 14,

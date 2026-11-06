@@ -25,8 +25,8 @@ const SDK_SMALL = "spec/compatibility/closure/evidence/RTDB-sdk-small-comparison
 // --locked -p fireemu, RUSTC_WRAPPER empty, a fresh worktree-local target directory). The Rust sources
 // are unchanged between that commit and the commit that carries these records.
 const V043 = {
-  sourceCommit: "013ee66853f7c43c05372acfa8ceeb51b5deadc4",
-  binarySha256: "f73f2c710ddbd2d9b123daf20d87b44c2c986eecf21534b34c0f7175e4b1df07",
+  sourceCommit: "b26412575850f75c417ac930fe1bb4f93b959dcb",
+  binarySha256: "5c2938fdfe941663c8bb450f54e65be2b9543f4dcd2d61c2ccef13538e82bba3",
 };
 const SDK_EVENTS = "spec/compatibility/closure/evidence/RTDB-sdk-events-comparison.json";
 const EVENTS_FIXTURE = "tools/sdk-smoke-database/fixtures/production-sdk-events.json";
@@ -705,28 +705,37 @@ test("the 2276 round's jar-only rows, emulator-profile differences and claims, q
     assert.match(known[key].decisionRef, /\(2276, "RTDB closure older over-refusals"/, key);
     assert.ok(exists(known[key].evidence), key);
   }
-  // The shapes the pin of the delta review found are fixed on the emulator profile by owner row 2286.
-  const claims = evidence.jarOnlyClaimsAndQueryValues;
+  // Query values stay fixed by owner row 2286; claims and the gauth authvar are a declared difference (owner row 2291).
+  const queries = evidence.jarOnlyQueryValues;
+  assert.equal(queries.productionObserved, false);
+  assert.equal(sha(queries.fixture), queries.fixtureSha256);
+  assert.equal(json(queries.fixture).length, queries.rows);
+  assert.match(queries.statement, /Emulator profile only/);
+  for (const file of queries.tests) assert.ok(exists(file), file);
+  const claims = evidence.jarClaimsAndAuthvarNotRead;
   assert.equal(claims.productionObserved, false);
   assert.equal(sha(claims.fixture), claims.fixtureSha256);
   assert.equal(json(claims.fixture).length, claims.rows);
-  assert.match(claims.statement, /Emulator profile only/);
-  assert.match(claims.statement, /strict profile does not read such a token/);
-  assert.doesNotMatch(claims.statement, /stand-in/);
-  assert.match(
-    claims.statement,
-    /signature of a signed token is always verified against its original payload/,
-  );
+  assert.equal(sha(claims.authvarFixture), claims.authvarFixtureSha256);
+  assert.equal(json(claims.authvarFixture).length, claims.authvarRows);
+  assert.match(claims.statement, /owner ledger line 2291/);
+  assert.match(claims.statement, /NOT read/);
+  assert.doesNotMatch(claims.statement, /LoneClaims|typed table|stand-in/);
   for (const file of claims.tests) assert.ok(exists(file), file);
-  assert.equal(known.loneSurrogateClaimsAndQueryValues, undefined);
-  const fixed = known.loneSurrogateClaimsQueryValuesFramesEmulatorProfile;
+  assert.equal(evidence.jarOnlyClaimsAndQueryValues, undefined);
+  assert.equal(known.loneSurrogateClaimsQueryValuesFramesEmulatorProfile, undefined);
+  const fixed = known.loneSurrogateQueryValuesFramesImportEmulatorProfile;
   assert.match(fixed.statement, /no production answer/);
   assert.match(
     fixed.decisionRef,
     /\(2286, "RTDB closure lone surrogates in claims and query values"/,
   );
   assert.match(fixed.statement, /Invalid token in path/);
+  assert.match(fixed.statement, /U\+0000/);
   assert.ok(exists(fixed.evidence));
+  const declared = known.loneSurrogateClaimsAndAuthvarNotRead;
+  assert.match(declared.decisionRef, /\(2291, "RTDB closure claims and regex declarations"/);
+  assert.ok(exists(declared.evidence));
   const keys = closure().closureBasis.notClaimedItems.map((i) => i.key);
   for (const key of [
     "notClaimed_emulator_profile_regex_and_body_surrogates",

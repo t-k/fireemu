@@ -95,18 +95,54 @@ const JSON_SELECTOR_ROOTS = new Set([
   "cases",
 ]);
 const selectorCharacter = /[\w~.()=:,; -]/;
+const apiPathname = (pathname) =>
+  /^\/v1(?:\/[A-Za-z0-9_().:-]+)+$/.test(pathname) ||
+  /^\/google\.[A-Za-z0-9_.]+\.[A-Za-z0-9_.]+\/[A-Za-z][A-Za-z0-9]+$/.test(pathname);
+const channelResource = "projects/[A-Za-z0-9_-]+/locations/[A-Za-z0-9_-]+/channels/[A-Za-z0-9_-]+";
+const safeQueryText = (value) => {
+  if (
+    [...value].some(
+      (character) => character.charCodeAt(0) < 0x20 || character.charCodeAt(0) === 0x7f,
+    )
+  )
+    return false;
+  return !/[?#]/.test(value);
+};
+const safeQueryScalar = (value) => safeQueryText(value) && !/[\\/]/.test(value);
+const safeChannelFilter = (value) => {
+  if (!safeQueryText(value)) return false;
+  if (!/[\\/]/.test(value)) return true;
+  return new RegExp(`^(?:name|channelId)=["']?${channelResource}["']?$`).test(value);
+};
+const isSafeChannelQuery = (query, pathname) => {
+  if (!query || /%(?![0-9A-Fa-f]{2})/.test(query)) return false;
+  const collection = /^\/v1\/projects\/[A-Za-z0-9_.:-]+\/locations\/[A-Za-z0-9_.:-]+\/channels$/;
+  if (!collection.test(pathname)) return false;
+  const seen = new Set();
+  for (const [key, value] of new URLSearchParams(query)) {
+    if (seen.has(key)) return false;
+    seen.add(key);
+    if (hasPrivatePath(value) || isFilesystemPath(value)) return false;
+    if (value.split("/").some((segment) => segment === "." || segment === "..")) return false;
+    if (["pageSize", "pageToken", "channelId"].includes(key) && safeQueryScalar(value)) continue;
+    if (key === "filter" && safeChannelFilter(value)) continue;
+    return false;
+  }
+  return seen.size > 0;
+};
 const isApiOrRpc = (key, value) => {
   const allowedContexts = ["path", "requestPath", "rpcPath", "route"];
-  const segments = value.split("/");
+  const queryIndex = value.indexOf("?");
+  const pathname = queryIndex < 0 ? value : value.slice(0, queryIndex);
+  const query = queryIndex < 0 ? null : value.slice(queryIndex + 1);
+  const segments = pathname.split("/");
   if (
     !allowedContexts.includes(key) ||
     segments.some((segment) => segment === "." || segment === "..")
   )
     return false;
-  return (
-    /^\/v1(?:\/[A-Za-z0-9_().:-]+)+$/.test(value) ||
-    /^\/google\.[A-Za-z0-9_.]+\.[A-Za-z0-9_.]+\/[A-Za-z][A-Za-z0-9]+$/.test(value)
-  );
+  if (query !== null) return isSafeChannelQuery(query, pathname);
+  return apiPathname(pathname);
 };
 const isSelector = (key, value) =>
   /selector|pointer/i.test(key) &&

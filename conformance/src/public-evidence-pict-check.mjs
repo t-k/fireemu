@@ -28,6 +28,21 @@ const values = {
   apiRoute: "/v1/projects/demo/databases/(default)/documents",
   apiActionRoute: "/v1/projects/demo/databases/(default)/documents:executePipeline",
   apiDotTraversal: "/v1/projects/../etc/private.json",
+  apiQueryPageSize: "/v1/projects/demo/locations/global/channels?pageSize=1",
+  apiQueryInvalidPageSize: "/v1/projects/demo/locations/global/channels?pageSize=-1",
+  apiQueryLongPageSize: "/v1/projects/demo/locations/global/channels?pageSize=100000",
+  apiQueryPageToken: "/v1/projects/demo/locations/global/channels?pageToken=next_page-1",
+  apiQueryFilter:
+    "/v1/projects/demo/locations/global/channels?filter=type%3Dgoogle.cloud.audit.log.v1.written%20OR%20state%3DACTIVE",
+  apiQueryResourceFilter:
+    "/v1/projects/demo/locations/global/channels?filter=name%3Dprojects%2Fdemo%2Flocations%2Fglobal%2Fchannels%2Fone",
+  apiQueryChannelId: "/v1/projects/demo/locations/global/channels?channelId=channel-one",
+  apiQueryTraversal: "/v1/projects/demo/locations/global/channels?pageToken=%2e%2e%2Fetc",
+  apiQueryPrivateMarker: "/v1/projects/demo/locations/global/channels?filter=docs%2Elocal",
+  apiQueryFilesystemPath:
+    "/v1/projects/demo/locations/global/channels?filter=%2Ftmp%2Fprivate.json",
+  apiQuerySlashFilter: "/v1/projects/demo/locations/global/channels?filter=name%3D..%2Fetc",
+  apiQueryUnknown: "/v1/projects/demo/locations/global/channels?unexpected=value",
   firestoreRpc: "/google.firestore.v1.Firestore/Commit",
   rpcDotTraversal: "/google.firestore.v1.Firestore/../../etc/private.json",
   resourceIdentifier: "projects/demo/topics/topic-a",
@@ -150,6 +165,17 @@ for (const line of lines) {
     (row.ValueForm === "httpsUrl" && row.KeyContext === "url" && row.Container !== "scalar") ||
     (["apiRoute", "apiActionRoute"].includes(row.ValueForm) &&
       ["path", "route"].includes(row.KeyContext) &&
+      row.Container !== "scalar") ||
+    ([
+      "apiQueryPageSize",
+      "apiQueryInvalidPageSize",
+      "apiQueryLongPageSize",
+      "apiQueryPageToken",
+      "apiQueryFilter",
+      "apiQueryResourceFilter",
+      "apiQueryChannelId",
+    ].includes(row.ValueForm) &&
+      row.KeyContext === "path" &&
       row.Container !== "scalar") ||
     (row.ValueForm === "firestoreRpc" &&
       ["path", "route"].includes(row.KeyContext) &&

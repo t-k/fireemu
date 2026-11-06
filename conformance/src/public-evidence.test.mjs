@@ -134,6 +134,37 @@ test("the guard keeps contextual URLs, API routes, RPC identifiers and JSON sele
   assert.throws(() => publicEvidence({ artifactPath: "/v1/projects/demo" }));
 });
 
+test("the API exception preserves finite EVENTARC channel query shapes and refuses unsafe queries", () => {
+  const safe = {
+    pageSize: { path: "/v1/projects/demo/locations/global/channels?pageSize=1" },
+    invalidPageSize: { path: "/v1/projects/demo/locations/global/channels?pageSize=-1" },
+    largePageSize: { path: "/v1/projects/demo/locations/global/channels?pageSize=100000" },
+    pageToken: { path: "/v1/projects/demo/locations/global/channels?pageToken=next_page-1" },
+    scalarFilter: {
+      path: "/v1/projects/demo/locations/global/channels?filter=type%3Dgoogle.cloud.audit.log.v1.written%20OR%20state%3DACTIVE",
+    },
+    resourceFilter: {
+      path: "/v1/projects/demo/locations/global/channels?filter=name%3Dprojects%2Fdemo%2Flocations%2Fglobal%2Fchannels%2Fone",
+    },
+    createChannel: {
+      path: "/v1/projects/demo/locations/global/channels?channelId=channel-one",
+    },
+  };
+  assert.equal(publicEvidence(safe), safe);
+
+  for (const path of [
+    "/v1/projects/demo/locations/global/channels?pageToken=%2e%2e%2Fetc",
+    "/v1/projects/demo/locations/global/channels?pageSize=%2Ftmp%2Fprivate.json",
+    "/v1/projects/demo/locations/global/channels?filter=docs%2Elocal",
+    "/v1/projects/demo/locations/global/channels?filter=%2Ftmp%2Fprivate.json",
+    "/v1/projects/demo/locations/global/channels?filter=name%3D..%2Fetc",
+    "/v1/projects/demo/locations/global/channels?filter=arbitrary%2Fprivate%2Fpath",
+    "/v1/projects/demo/locations/global/channels?unexpected=value",
+  ]) {
+    assert.throws(() => publicEvidence({ path }));
+  }
+});
+
 test("base64 Firestore byte values preserve binary bytes but cannot hide encoded paths", () => {
   assert.equal(publicEvidence({ bytesValue: "/w==" }).bytesValue, "/w==");
   assert.equal(publicEvidence({ bytesValue: "/wAA" }).bytesValue, "/wAA");

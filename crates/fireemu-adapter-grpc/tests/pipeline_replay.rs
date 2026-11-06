@@ -4723,6 +4723,10 @@ const VERIFIED_GRPC_REQUEST_STEPS: &[(&str, &str)] = &[
         "fs-ent-pipeline/o2/select-width#select-64-grpc",
         "select-64",
     ),
+    (
+        "fs-ent-pipeline/o2/select-width#select-65-grpc",
+        "select-65",
+    ),
     ("fs-ent-pipeline/o3/aliases#empty-grpc", "empty"),
     ("fs-ent-pipeline/o6/sort-kinds-cross#v-asc-grpc", "v-asc"),
     (
@@ -4754,6 +4758,8 @@ const VERIFIED_GRPC_REQUEST_STEPS: &[(&str, &str)] = &[
     ("fs-ent-pipeline/o8a/nesting-main#array-21-grpc", "array-21"),
     ("fs-ent-pipeline/o8a/nesting-main#chain-20-grpc", "chain-20"),
     ("fs-ent-pipeline/o8a/nesting-main#chain-32-grpc", "chain-32"),
+    ("fs-ent-pipeline/o8a/nesting-main#chain-33-grpc", "chain-33"),
+    ("fs-ent-pipeline/o8a/nesting-main#chain-47-grpc", "chain-47"),
     ("fs-ent-pipeline/o8a/nesting-main#map-21-grpc", "map-21"),
     ("fs-ent-pipeline/o6/order-writes#bare-grpc", "bare"),
     ("fs-ent-pipeline/results/order#unsorted-grpc", "unsorted"),
@@ -4800,6 +4806,47 @@ fn run_grpc_recording(state: &RestState, row: &str, database: &str, body: &Value
         .unwrap();
     runtime.block_on(async {
         use tokio_stream::StreamExt as _;
+        if row == "fs-ent-pipeline/o8a/nesting-main#chain-47-grpc" {
+            use fireemu_adapter_grpc::serve::serve_multiplexed;
+            use fireemu_proto_firestore::google::firestore::v1::{
+                firestore_client::FirestoreClient, firestore_server::FirestoreServer,
+            };
+
+            // This recorded refusal comes from protobuf decoding, before the handler runs.
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let rest = Arc::new(RestState {
+                local: Arc::clone(&state.local),
+                gateway: Arc::clone(&state.gateway),
+                rules: state.rules.clone(),
+                app_check: state.app_check.clone(),
+                control_token: state.control_token.clone(),
+            });
+            let server = tokio::spawn(serve_multiplexed(
+                listener,
+                FirestoreServer::new(service),
+                rest,
+            ));
+            let channel = tonic::transport::Endpoint::from_shared(format!("http://{addr}"))
+                .unwrap()
+                .connect()
+                .await
+                .unwrap();
+            let mut client = FirestoreClient::new(channel);
+            let error = match client.execute_pipeline(request).await {
+                Err(error) => error,
+                Ok(response) => response.into_inner().message().await.unwrap_err(),
+            };
+            server.abort();
+            assert!(server.await.unwrap_err().is_cancelled());
+            assert!(error.details().is_empty(), "{row}: {error:?}");
+            return json!({
+                "transport": "grpc",
+                "code": error.code() as i32,
+                "message": error.message(),
+                "messages": [],
+            });
+        }
         let response =
             match Firestore::execute_pipeline(&service, tonic::Request::new(request)).await {
                 Ok(response) => response,
@@ -4855,6 +4902,27 @@ fn grpc_body_for_request_step(step: &Value, row: &str) -> Value {
     let raw_body = step["rawBody"]
         .as_str()
         .unwrap_or_else(|| panic!("{row}: committed request body is missing"));
+    if row == "fs-ent-pipeline/o8a/nesting-main#chain-47-grpc" {
+        // Parse the recorded chain in two parts to stay below serde_json's depth limit.
+        let nested = format!(
+            "{}{{\"fieldReferenceValue\":\"i\"}}{}",
+            r#"{"functionValue":{"name":"array","args":["#.repeat(47),
+            "]}}".repeat(47),
+        );
+        let (before, after) = raw_body
+            .split_once(&nested)
+            .unwrap_or_else(|| panic!("{row}: committed array chain changed"));
+        let mut body: Value =
+            serde_json::from_str(&format!("{before}\"replay-chain-placeholder\"{after}")).unwrap();
+        let value = &mut body["structuredPipeline"]["pipeline"]["stages"][1]["args"][0]["mapValue"]
+            ["fields"]["v"];
+        assert_eq!(*value, json!("replay-chain-placeholder"), "{row}");
+        *value = json!({"fieldReferenceValue": "i"});
+        for _ in 0..47 {
+            *value = json!({"functionValue": {"name": "array", "args": [value.take()]}});
+        }
+        return body;
+    }
     serde_json::from_str(raw_body).unwrap_or_else(|error| {
         panic!("{row}: committed raw request body is invalid JSON: {error}")
     })
@@ -5001,17 +5069,32 @@ fn verified_grpc_rows(closure: &Value, comparison: &Value) -> Vec<(String, Strin
 #[test]
 fn verified_grpc_selection_rejects_missing_rows_and_status_changes() {
     let closure = read("../spec/compatibility/closure/FS-PIPELINE.json");
-    let comparison = read("../spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json");
+    let comparison =
+        read("../spec/compatibility/closure/evidence/FS-PIPELINE-current-comparison.json");
     let selected = verified_grpc_rows(&closure, &comparison);
-    assert_eq!(selected.len(), 29);
+    let mut claimed: Vec<_> = closure["conditions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|condition| condition["status"] == "VERIFIED")
+        .flat_map(|condition| condition["recipeIds"].as_array().unwrap())
+        .filter_map(|recipe| {
+            let row = recipe.as_str().unwrap();
+            row.ends_with("-grpc")
+                .then(|| (row.to_owned(), "MATCH".to_owned()))
+        })
+        .collect();
+    claimed.sort();
+    assert_eq!(selected, claimed, "claimed gRPC match set changed");
 
     let selected_row = &selected[0].0;
+    let remaining = selected[1..].to_vec();
     let mut missing_row = comparison.clone();
     missing_row["rows"]
         .as_array_mut()
         .unwrap()
         .retain(|entry| entry["row"] != selected_row.as_str());
-    assert_eq!(verified_grpc_rows(&closure, &missing_row).len(), 28);
+    assert_eq!(verified_grpc_rows(&closure, &missing_row), remaining);
 
     let mut changed_status = comparison;
     let pinned = changed_status["rows"]
@@ -5021,7 +5104,7 @@ fn verified_grpc_selection_rejects_missing_rows_and_status_changes() {
         .find(|entry| entry["row"] == selected_row.as_str())
         .unwrap();
     pinned["status"] = json!("MISMATCH");
-    assert_eq!(verified_grpc_rows(&closure, &changed_status).len(), 28);
+    assert_eq!(verified_grpc_rows(&closure, &changed_status), remaining);
 }
 
 #[test]
@@ -5072,17 +5155,20 @@ fn grpc_recording_comparison_keeps_status_and_all_response_metadata() {
 #[test]
 fn every_verified_grpc_pipeline_match_replays_the_committed_recording() {
     let closure = read("../spec/compatibility/closure/FS-PIPELINE.json");
-    let comparison = read("../spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json");
+    let comparison =
+        read("../spec/compatibility/closure/evidence/FS-PIPELINE-current-comparison.json");
     let requests = read("fs-ent-pipeline-requests.json");
     let production = read("fs-ent-pipeline-production.json");
     let selected = verified_grpc_rows(&closure, &comparison);
-    assert_eq!(selected.len(), 29, "claimed gRPC match set changed");
-    assert_eq!(VERIFIED_GRPC_REQUEST_STEPS.len(), 29);
+    let mut expected_rows: Vec<_> = VERIFIED_GRPC_REQUEST_STEPS
+        .iter()
+        .map(|(row, _)| ((*row).to_owned(), "MATCH".to_owned()))
+        .collect();
+    expected_rows.sort();
+    assert_eq!(selected, expected_rows, "claimed gRPC match set changed");
     let mut observed_strata = HashSet::new();
-    let mut replayed_rows = 0;
 
     for (row, expected_status) in selected {
-        replayed_rows += 1;
         let (program_id, row_step) = row.split_once('#').unwrap();
         let request_program = requests["programs"]
             .as_array()
@@ -5147,7 +5233,7 @@ fn every_verified_grpc_pipeline_match_replays_the_committed_recording() {
         } else {
             assert!(
                 grpc_recordings_match(&recording, expected),
-                "{row}: normalized gRPC response differs"
+                "{row}: normalized gRPC response differs; actual: {recording}; recorded: {expected}"
             );
         }
     }
@@ -5157,5 +5243,4 @@ fn every_verified_grpc_pipeline_match_replays_the_committed_recording() {
             "missing PICT row {stratum:?}"
         );
     }
-    assert_eq!(replayed_rows, 29, "not every pinned gRPC row was replayed");
 }

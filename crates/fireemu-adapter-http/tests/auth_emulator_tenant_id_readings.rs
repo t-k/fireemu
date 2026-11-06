@@ -169,7 +169,6 @@ fn matrix_scope_name(tenant: Option<&str>) -> &'static str {
         None => "project",
         Some("matrix-path") => "path",
         Some("matrix-body") => "body",
-        Some("matrix-other") => "other",
         Some(_) => "other",
     }
 }
@@ -348,6 +347,7 @@ fn the_strict_profile_reads_an_empty_body_tenant_as_before() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn body_tenant_profile_route_path_and_value_matrix_preserves_tenant_isolation() {
     let mut rows = include_str!("fixtures/auth_empty_body_tenant.tsv").lines();
     assert_eq!(rows.next(), Some("Profile\tRoute\tPathTenant\tBodyTenant"));
@@ -384,10 +384,9 @@ fn body_tenant_profile_route_path_and_value_matrix_preserves_tenant_isolation() 
 
         let mut body = json!({"tenantId": body_name, "returnSecureToken": true});
         match body_tenant {
-            "Missing" => {}
+            "Missing" | "Match" | "Mismatch" => {}
             "Null" => body["tenantId"] = Value::Null,
             "Empty" => body["tenantId"] = json!(""),
-            "Match" | "Mismatch" => {}
             unexpected => panic!("unexpected body tenant case: {unexpected}"),
         }
         let suffix = match route {
@@ -573,7 +572,7 @@ fn body_tenant_profile_route_path_and_value_matrix_preserves_tenant_isolation() 
                 "{row}: {response}"
             ),
             "AdminSendOobCode" => {
-                assert_eq!(response["email"], selected_email, "{row}: {response}")
+                assert_eq!(response["email"], selected_email, "{row}: {response}");
             }
             "AdminCreateSessionCookie" => assert!(
                 response["sessionCookie"].as_str().is_some(),
@@ -592,9 +591,8 @@ fn body_tenant_profile_route_path_and_value_matrix_preserves_tenant_isolation() 
         {
             let store = matrix_store(&state, &registry, foreign);
             let guard = store.lock().unwrap();
-            assert_eq!(
-                guard.user_by_email(&new_email).is_some(),
-                false,
+            assert!(
+                guard.user_by_email(&new_email).is_none(),
                 "{row}: new user leaked to {foreign:?}"
             );
             let foreign_name = matrix_scope_name(foreign);
@@ -608,91 +606,6 @@ fn body_tenant_profile_route_path_and_value_matrix_preserves_tenant_isolation() 
             } else if matches!(route, "AdminDelete" | "AdminBatchDelete") {
                 assert!(seeded.is_some(), "{row}: delete leaked to {foreign:?}");
             }
-        }
-    }
-}
-
-#[test]
-fn empty_body_tenant_is_absent_for_each_emulator_admin_account_handler() {
-    let rows: [(&str, &str, Value); 9] = [
-        (
-            "Create",
-            "/accounts",
-            account("admin-create-empty@example.com"),
-        ),
-        (
-            "Lookup",
-            "/accounts:lookup",
-            json!({"localId": ["missing-user"]}),
-        ),
-        (
-            "Update",
-            "/accounts:update",
-            json!({"localId": "missing-user", "displayName": "changed"}),
-        ),
-        (
-            "Delete",
-            "/accounts:delete",
-            json!({"localId": "missing-user"}),
-        ),
-        (
-            "BatchCreate",
-            "/accounts:batchCreate",
-            json!({"users": [{"localId": "batch-user", "email": "batch@example.com"}]}),
-        ),
-        (
-            "BatchDelete",
-            "/accounts:batchDelete",
-            json!({"localIds": ["missing-user"], "force": true}),
-        ),
-        ("Query", "/accounts:query", json!({"returnUserInfo": false})),
-        (
-            "SendOobCode",
-            "/accounts:sendOobCode",
-            json!({"requestType": "PASSWORD_RESET", "email": "missing@example.com", "returnOobLink": true}),
-        ),
-        (
-            "CreateSessionCookie",
-            ":createSessionCookie",
-            json!({"idToken": project_token("demo-app", "project-user", ""), "validDuration": "3600"}),
-        ),
-    ];
-
-    for (case, suffix, original) in rows {
-        let run = |tenant_value: Option<Value>| {
-            let (state, _registry) = emulator();
-            let mut body = original.clone();
-            if let Some(value) = tenant_value {
-                body["tenantId"] = value;
-            }
-            let (status, response) = admin(
-                &state,
-                "POST",
-                &format!("{V1}/projects/demo-app{suffix}"),
-                &body,
-            );
-            let project_users = state.store.lock().unwrap().user_count();
-            (
-                status,
-                response["error"]["message"].clone(),
-                tenant_names(&state, "demo-app"),
-                project_users,
-            )
-        };
-
-        let baseline = run(None);
-        assert!(
-            baseline.2.is_empty(),
-            "{case}: baseline unexpectedly made a tenant"
-        );
-        for tenant_value in [Some(Value::Null), Some(json!(""))] {
-            let observed = run(tenant_value);
-            assert_eq!(
-                (observed.0, &observed.1, &observed.2, observed.3),
-                (baseline.0, &baseline.1, &baseline.2, baseline.3),
-                "{case}: empty/null body tenant changed the project-path request"
-            );
-            assert!(observed.2.is_empty(), "{case}: body selector made a tenant");
         }
     }
 }

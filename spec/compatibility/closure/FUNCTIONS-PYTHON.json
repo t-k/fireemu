@@ -1,0 +1,355 @@
+{
+  "schemaVersion": 1,
+  "parent": "FUNCTIONS-PYTHON",
+  "parentStatus": "IMPLEMENTING",
+  "inventoryStatus": "PROPOSED",
+  "oracleTrack": "masked-recorded-observations",
+  "recordingPolicy": {
+    "observedPasses": 1,
+    "requiredPasses": 2,
+    "waiver": null
+  },
+  "scopeDecisions": [
+    {
+      "id": "PY1",
+      "question": "Is the eventual production claim strict-profile-only?",
+      "recommendation": "Claim only finite recorded strict cases; test emulator differences separately.",
+      "status": "ANSWERED",
+      "answer": "recorded-strict-only",
+      "authority": "Owner direct decision on 2026-11-06 for PR #120; no promotion, pass waiver or production request authorized."
+    },
+    {
+      "id": "PY2",
+      "question": "How should request-view and OIDC differences be declared?",
+      "recommendation": "Keep exact named differences pending; do not hide missing infrastructure or authorization fields with masks.",
+      "status": "ANSWERED",
+      "answer": "declare-compared-differences-keep-unverified",
+      "authority": "Owner direct decision on 2026-11-06 for PR #120; no promotion, pass waiver or production request authorized."
+    },
+    {
+      "id": "PY3",
+      "question": "Should Auth blocking remain OPEN?",
+      "recommendation": "Retain OPEN with the recorded503; the SDK allow path has no recording.",
+      "status": "ANSWERED",
+      "answer": "keep-blocking-open",
+      "authority": "Owner direct decision on 2026-11-06 for PR #120; no promotion, pass waiver or production request authorized."
+    }
+  ],
+  "closureReview": {
+    "decision": "PENDING"
+  },
+  "conditions": [
+    {
+      "conditionId": "FUNCTIONS-PYTHON/firestore-events",
+      "recipeIds": [
+        "functions-python/firestore-events"
+      ],
+      "cases": [
+        "recorded-projection",
+        "strict-replay",
+        "emulator-replay"
+      ],
+      "status": "PRODUCTION_RECORDED",
+      "generations": [
+        2
+      ],
+      "note": "Created and updated SDK projections; only created raw CloudEvent. Deleted and written are unobserved; complete payload and resource identity comparison remain open.",
+      "profiles": {
+        "strict": "LIMITED_TO_RECORDED_CASES",
+        "emulator": "NO_PRODUCTION_CLAIM"
+      },
+      "fixturePath": "conformance/functions-python/fixtures/observations.json",
+      "fixtureSha256": "cfcfac41f70adf9523b63856d2260de2f963fb66bccae91425b5bf05a7f96155"
+    },
+    {
+      "conditionId": "FUNCTIONS-PYTHON/pubsub-events",
+      "recipeIds": [
+        "functions-python/pubsub-events"
+      ],
+      "cases": [
+        "recorded-projection",
+        "strict-replay",
+        "emulator-replay"
+      ],
+      "status": "PRODUCTION_RECORDED",
+      "generations": [
+        2
+      ],
+      "note": "Plain and ordered SDK projections. Message bytes and arbitrary delivery attributes remain unobserved by this replay.",
+      "profiles": {
+        "strict": "LIMITED_TO_RECORDED_CASES",
+        "emulator": "NO_PRODUCTION_CLAIM"
+      },
+      "fixturePath": "conformance/functions-python/fixtures/observations.json",
+      "fixtureSha256": "cfcfac41f70adf9523b63856d2260de2f963fb66bccae91425b5bf05a7f96155"
+    },
+    {
+      "conditionId": "FUNCTIONS-PYTHON/storage-events",
+      "recipeIds": [
+        "functions-python/storage-events"
+      ],
+      "cases": [
+        "recorded-projection",
+        "strict-replay",
+        "emulator-replay"
+      ],
+      "status": "PRODUCTION_RECORDED",
+      "generations": [
+        2
+      ],
+      "note": "Finalized SDK projection only. Deleted, archived and metadata updates remain unobserved; complete object members are not compared.",
+      "profiles": {
+        "strict": "LIMITED_TO_RECORDED_CASES",
+        "emulator": "NO_PRODUCTION_CLAIM"
+      },
+      "fixturePath": "conformance/functions-python/fixtures/observations.json",
+      "fixtureSha256": "cfcfac41f70adf9523b63856d2260de2f963fb66bccae91425b5bf05a7f96155"
+    },
+    {
+      "conditionId": "FUNCTIONS-PYTHON/eventarc-custom-events",
+      "recipeIds": [
+        "functions-python/eventarc-custom-events"
+      ],
+      "cases": [
+        "recorded-projection",
+        "strict-replay",
+        "emulator-replay"
+      ],
+      "status": "PRODUCTION_RECORDED",
+      "generations": [
+        2
+      ],
+      "note": "Fractional SDK delivery and whole-second SDK absence recorded. Emulator accepts whole-second time; strict rejects it.",
+      "profiles": {
+        "strict": "LIMITED_TO_RECORDED_CASES",
+        "emulator": "NO_PRODUCTION_CLAIM"
+      },
+      "fixturePath": "conformance/functions-python/fixtures/observations.json",
+      "fixtureSha256": "cfcfac41f70adf9523b63856d2260de2f963fb66bccae91425b5bf05a7f96155"
+    },
+    {
+      "conditionId": "FUNCTIONS-PYTHON/scheduler-events",
+      "recipeIds": [
+        "functions-python/scheduler-events"
+      ],
+      "cases": [
+        "recorded-projection",
+        "strict-replay",
+        "emulator-replay"
+      ],
+      "status": "PRODUCTION_RECORDED",
+      "generations": [
+        2
+      ],
+      "note": "SDK job and schedule time; raw request constants. OIDC and infrastructure header differences remain pending.",
+      "profiles": {
+        "strict": "LIMITED_TO_RECORDED_CASES",
+        "emulator": "NO_PRODUCTION_CLAIM"
+      },
+      "fixturePath": "conformance/functions-python/fixtures/observations.json",
+      "fixtureSha256": "cfcfac41f70adf9523b63856d2260de2f963fb66bccae91425b5bf05a7f96155"
+    },
+    {
+      "conditionId": "FUNCTIONS-PYTHON/tasks-events",
+      "recipeIds": [
+        "functions-python/tasks-events"
+      ],
+      "cases": [
+        "recorded-projection",
+        "strict-replay",
+        "emulator-replay"
+      ],
+      "status": "PRODUCTION_RECORDED",
+      "generations": [
+        2
+      ],
+      "note": "SDK data without auth/app context and masked raw body order. Replay exercises HTTP pass-through, not daemon task-name/header generation or retries.",
+      "profiles": {
+        "strict": "LIMITED_TO_RECORDED_CASES",
+        "emulator": "NO_PRODUCTION_CLAIM"
+      },
+      "fixturePath": "conformance/functions-python/fixtures/observations.json",
+      "fixtureSha256": "cfcfac41f70adf9523b63856d2260de2f963fb66bccae91425b5bf05a7f96155"
+    },
+    {
+      "conditionId": "FUNCTIONS-PYTHON/auth-blocking",
+      "recipeIds": [
+        "functions-python/auth-blocking"
+      ],
+      "cases": [
+        "recorded-open-obligation"
+      ],
+      "status": "OPEN",
+      "generations": [
+        2
+      ],
+      "note": "Recorded client503 and raw delivery; SDK success is unobserved. No token contents are retained or verified by this replay.",
+      "profiles": {
+        "strict": "LIMITED_TO_RECORDED_CASES",
+        "emulator": "NO_PRODUCTION_CLAIM"
+      },
+      "fixturePath": "conformance/functions-python/fixtures/observations.json",
+      "fixtureSha256": "cfcfac41f70adf9523b63856d2260de2f963fb66bccae91425b5bf05a7f96155"
+    },
+    {
+      "conditionId": "FUNCTIONS-PYTHON/deployment",
+      "recipeIds": [
+        "functions-python/deployment"
+      ],
+      "cases": [
+        "recorded-open-obligation"
+      ],
+      "status": "NOT_COMPARED",
+      "generations": [
+        2
+      ],
+      "note": "Recorded function inventory only; local discovery/deployed-resource equivalence has not been compared.",
+      "profiles": {
+        "strict": "LIMITED_TO_RECORDED_CASES",
+        "emulator": "NO_PRODUCTION_CLAIM"
+      },
+      "fixturePath": "conformance/functions-python/fixtures/observations.json",
+      "fixtureSha256": "cfcfac41f70adf9523b63856d2260de2f963fb66bccae91425b5bf05a7f96155"
+    }
+  ],
+  "releaseRegressions": [
+    "conformance/src/functions-python-closure.test.mjs",
+    "conformance/src/functions-python-replay.test.mjs",
+    "tools/runner-python/tests/test_closure_replay.py"
+  ],
+  "limitations": [
+    "One production pass; no one-pass exception has been granted.",
+    "Synthetic identity and timestamp aliases preserve selected types and formats; they do not establish identity parity.",
+    "Runner replay does not establish daemon delivery, deployment or OIDC verification parity.",
+    "HTTP/callable, secret isolation, async handlers, reload and before-sign-in are unobserved by this parent."
+  ],
+  "declaredDifferences": [
+    {
+      "id": "request-infrastructure",
+      "status": "DECLARED_UNVERIFIED",
+      "profiles": [
+        "strict",
+        "emulator"
+      ],
+      "fields": [
+        "firestore-events.request.presence.authorization",
+        "firestore-events.request.presence.forwarded",
+        "firestore-events.request.presence.x-forwarded-for",
+        "firestore-events.request.presence.function-execution-id",
+        "firestore-events.request.presence.x-cloud-trace-context",
+        "firestore-events.request.presence.from",
+        "firestore-events.request.presence.accept",
+        "pubsub-events.request.presence.authorization",
+        "pubsub-events.request.presence.forwarded",
+        "pubsub-events.request.presence.x-forwarded-for",
+        "pubsub-events.request.presence.function-execution-id",
+        "pubsub-events.request.presence.x-cloud-trace-context",
+        "pubsub-events.request.presence.from",
+        "pubsub-events.request.presence.accept",
+        "storage-events.request.presence.authorization",
+        "storage-events.request.presence.forwarded",
+        "storage-events.request.presence.x-forwarded-for",
+        "storage-events.request.presence.function-execution-id",
+        "storage-events.request.presence.x-cloud-trace-context",
+        "storage-events.request.presence.from",
+        "storage-events.request.presence.accept",
+        "eventarc-custom-events.request.presence.authorization",
+        "eventarc-custom-events.request.presence.forwarded",
+        "eventarc-custom-events.request.presence.x-forwarded-for",
+        "eventarc-custom-events.request.presence.function-execution-id",
+        "eventarc-custom-events.request.presence.x-cloud-trace-context",
+        "eventarc-custom-events.request.presence.from",
+        "eventarc-custom-events.request.presence.accept",
+        "scheduler-events.request.presence.authorization",
+        "scheduler-events.request.presence.forwarded",
+        "scheduler-events.request.presence.x-forwarded-for",
+        "scheduler-events.request.presence.function-execution-id",
+        "scheduler-events.request.presence.x-cloud-trace-context"
+      ],
+      "reason": "Recorded header presence differs in current request replay. Header values, host identity and token verification remain un-compared."
+    },
+    {
+      "id": "emulator-eventarc-whole-second",
+      "status": "DECLARED_UNVERIFIED",
+      "profiles": [
+        "emulator"
+      ],
+      "fields": [
+        "eventarc-custom-events.wholeSecondSdkFrames"
+      ],
+      "reason": "The emulator profile adds fractional time so the SDK runs; recorded production and strict do not."
+    },
+    {
+      "id": "emulator-request-constants",
+      "status": "DECLARED_UNVERIFIED",
+      "profiles": [
+        "emulator"
+      ],
+      "fields": [
+        "firestore-events.dataschema",
+        "firestore-events.request.headers.user-agent",
+        "firestore-events.request.headers.accept-encoding",
+        "firestore-events.request.headers.x-forwarded-proto",
+        "pubsub-events.request.headers.user-agent",
+        "pubsub-events.request.headers.accept-encoding",
+        "pubsub-events.request.headers.x-forwarded-proto",
+        "storage-events.request.headers.user-agent",
+        "storage-events.request.headers.accept-encoding",
+        "storage-events.request.headers.x-forwarded-proto",
+        "eventarc-custom-events.request.headers.user-agent",
+        "eventarc-custom-events.request.headers.accept-encoding",
+        "eventarc-custom-events.request.headers.x-forwarded-proto"
+      ],
+      "reason": "CloudEvent strict constants and Firestore dataschema are not added by the emulator profile."
+    },
+    {
+      "id": "emulator-scheduler-offset",
+      "status": "DECLARED_UNVERIFIED",
+      "profiles": [
+        "emulator"
+      ],
+      "fields": [
+        "scheduler-events.schedule_time"
+      ],
+      "reason": "The emulator SDK reports the same instant in UTC; strict reproduces the recorded Los Angeles offset."
+    }
+  ],
+  "corpusPath": "conformance/functions-python/corpus.json",
+  "corpusSha256": "7b75cbb504d56d699663a0770aabf3daea49e7a60b0a3cefb7763496bdeb4da0",
+  "uncomparedObligations": [
+    {
+      "id": "task-delivery",
+      "status": "PENDING",
+      "profiles": [
+        "strict",
+        "emulator"
+      ],
+      "fields": [
+        "x-cloudtasks-taskname",
+        "host",
+        "authorization"
+      ],
+      "reason": "Daemon task naming, infrastructure host and OIDC remain outside the runner replay."
+    },
+    {
+      "id": "blocking-sdk",
+      "status": "PENDING",
+      "profiles": [
+        "strict",
+        "emulator"
+      ],
+      "fields": [
+        "auth-blocking.sdkEventObserved"
+      ],
+      "reason": "Development blocking may run where the pinned production SDK failed; no authorization behavior is changed."
+    },
+    {
+      "id": "host-identity",
+      "status": "NOT_COMPARED",
+      "fields": [
+        "request.host"
+      ],
+      "reason": "Original host identity is not retained; replay does not establish equality or a measured value difference."
+    }
+  ]
+}

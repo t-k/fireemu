@@ -184,3 +184,28 @@ test('the home page counts the areas whose parent is verified against production
 		productionAreaRows(closures).filter((row) => row.status === 'Verified against production').length,
 	);
 });
+
+test('the Python parent remains in progress with recorded, open and un-compared conditions', async () => {
+	const data = await loadRepositoryData();
+	const python = data.closures.find((record) => record.parent === 'FUNCTIONS-PYTHON');
+	assert.ok(python);
+	const [row] = productionAreaRows([python]);
+	assert.equal(row.product, 'Cloud Functions');
+	assert.equal(row.title, 'Python functions');
+	assert.equal(row.status, 'In progress');
+	assert.equal(row.verified, 0);
+	assert.equal(row.total, 8);
+	assert.equal(verifiedAreaCount([python]), 0);
+	assert.deepEqual(new Set(row.conditions.map((condition) => condition.status)), new Set(['PRODUCTION_RECORDED', 'OPEN', 'NOT_COMPARED']));
+	assert.deepEqual(row.knownDifferences, []);
+});
+
+for (const status of ['PRODUCTION_RECORDED', 'OPEN', 'NOT_COMPARED']) {
+	test(`${status} is retained without increasing the verified count`, () => {
+		const [row] = productionAreaRows([closure('FUNCTIONS-HTTP', [status, 'VERIFIED'], { parentStatus: 'IMPLEMENTING' })]);
+		assert.equal(row.status, 'In progress');
+		assert.equal(row.verified, 1);
+		assert.equal(row.total, 2);
+		assert.equal(row.conditions[0].status, status);
+	});
+}

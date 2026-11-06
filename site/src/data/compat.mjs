@@ -126,6 +126,11 @@ export const AREAS = {
 		title: 'Event triggers',
 		covers: 'Firestore, Storage, Authentication and Pub/Sub triggers: which events fire, their payloads and routing, and delivery retries.',
 	},
+	'FUNCTIONS-PYTHON': {
+		product: 'Cloud Functions',
+		title: 'Python functions',
+		covers: 'Recorded Python SDK and request projections for Firestore, Pub/Sub, Storage, Eventarc, Scheduler and Tasks under the strict profile. Auth blocking remains open and deployment equivalence is not compared; this parent is not verified.',
+	},
 	'SCHEDULED-FUNCTIONS': {
 		product: 'Cloud Functions',
 		title: 'Scheduled functions',
@@ -168,7 +173,7 @@ export function productSurfaceRows(contract) {
 }
 
 const AREA_STATUS = { COMPAT_VERIFIED: 'Verified against production', IN_PROGRESS: 'In progress', IMPLEMENTING: 'In progress' };
-const CONDITION_STATUSES = new Set(['VERIFIED', 'KNOWN_DIFFERENCE_APPROVED']);
+const CONDITION_STATUSES = new Set(['VERIFIED', 'KNOWN_DIFFERENCE_APPROVED', 'PRODUCTION_RECORDED', 'OPEN', 'NOT_COMPARED']);
 
 function differenceTexts(record) {
 	const texts = [];

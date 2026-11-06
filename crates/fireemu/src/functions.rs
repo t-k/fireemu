@@ -1113,6 +1113,22 @@ fn snapshot_functions_source_with_charge(
     charge: &mut dyn FnMut(u64, u64) -> Result<(), String>,
     cancelled: &AtomicBool,
 ) -> Result<FunctionsSourceSnapshot, String> {
+    snapshot_functions_source_with_charge_at(
+        root,
+        ignores,
+        charge,
+        cancelled,
+        &std::env::temp_dir(),
+    )
+}
+
+fn snapshot_functions_source_with_charge_at(
+    root: &Path,
+    ignores: &[String],
+    charge: &mut dyn FnMut(u64, u64) -> Result<(), String>,
+    cancelled: &AtomicBool,
+    snapshot_root: &Path,
+) -> Result<FunctionsSourceSnapshot, String> {
     static NEXT_SNAPSHOT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let source_root = std::fs::canonicalize(root)
         .map_err(|error| format!("snapshot {}: {error}", root.display()))?;
@@ -1125,7 +1141,7 @@ fn snapshot_functions_source_with_charge(
     let name = snapshot_directory_name(std::process::id(), sequence);
     #[cfg(windows)]
     let name = format!("fireemu-functions-{}-{sequence}", std::process::id());
-    let destination = std::env::temp_dir().join(name);
+    let destination = snapshot_root.join(name);
     std::fs::create_dir(&destination)
         .map_err(|e| format!("snapshot {}: {e}", destination.display()))?;
     let dependencies: Vec<_> = source_root
@@ -1187,8 +1203,116 @@ fn secure_snapshot_directory(path: &Path) -> Result<(), String> {
 }
 
 #[cfg(windows)]
-fn secure_snapshot_directory(_path: &Path) -> Result<(), String> {
-    Ok(())
+fn secure_snapshot_directory(path: &Path) -> Result<(), String> {
+    use std::os::windows::fs::MetadataExt as _;
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    const ACL_CHECK: &str = r#"
+$ErrorActionPreference = 'Stop'
+try {
+    $path = [Environment]::GetEnvironmentVariable('FIREEMU_SNAPSHOT_ACL_PATH')
+    if ([string]::IsNullOrEmpty($path)) { exit 20 }
+    $userSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    $trusted = @($userSid, 'S-1-5-18', 'S-1-5-32-544', 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
+    $dangerous = [int64]([System.Security.AccessControl.FileSystemRights]::WriteData -bor
+        [System.Security.AccessControl.FileSystemRights]::WriteAttributes -bor
+        [System.Security.AccessControl.FileSystemRights]::Delete -bor
+        [System.Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor
+        [System.Security.AccessControl.FileSystemRights]::ChangePermissions -bor
+        [System.Security.AccessControl.FileSystemRights]::TakeOwnership)
+    $directories = New-Object 'System.Collections.Generic.List[System.IO.DirectoryInfo]'
+    $directory = New-Object System.IO.DirectoryInfo($path)
+    while ($null -ne $directory) {
+        $directories.Add($directory)
+        $directory = $directory.Parent
+    }
+    for ($index = 0; $index -lt $directories.Count; $index++) {
+        $directory = $directories[$index]
+        $acl = Get-Acl -LiteralPath $directory.FullName
+        $raw = [System.Security.AccessControl.RawSecurityDescriptor]::new($acl.GetSecurityDescriptorBinaryForm(), 0)
+        if ($null -eq $raw.DiscretionaryAcl) { exit 21 }
+        $ownerSid = $acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value
+        if ($ownerSid -notin $trusted) { exit 22 }
+        $rules = $acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])
+        foreach ($rule in $rules) {
+            if ($rule.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow) { continue }
+            $sid = $rule.IdentityReference.Value
+            $inheritOnly = ($rule.PropagationFlags -band [System.Security.AccessControl.PropagationFlags]::InheritOnly) -ne 0
+            if ($index -lt 2) {
+                if ($sid -notin $trusted -and -not ($sid -eq 'S-1-3-0' -and $inheritOnly)) { exit 23 }
+            } elseif (-not $inheritOnly -and $sid -notin $trusted -and
+                (([int64]$rule.FileSystemRights -band $dangerous) -ne 0)) {
+                exit 24
+            }
+        }
+    }
+    exit 0
+} catch {
+    exit 26
+}
+"#;
+
+    if !path.is_absolute() {
+        return Err("snapshot ACL validation refused a non-absolute directory".to_owned());
+    }
+    for ancestor in path.ancestors() {
+        let metadata = std::fs::symlink_metadata(ancestor).map_err(|_| {
+            format!(
+                "snapshot ACL validation could not inspect directory {}",
+                path.display()
+            )
+        })?;
+        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err(format!(
+                "snapshot ACL validation refused a reparse path {}",
+                path.display()
+            ));
+        }
+    }
+
+    let system_root = std::env::var_os("SystemRoot")
+        .map(PathBuf::from)
+        .filter(|root| root.is_absolute())
+        .ok_or_else(|| "snapshot ACL validation could not locate Windows PowerShell".to_owned())?;
+    let powershell = system_root.join(r"System32\WindowsPowerShell\v1.0\powershell.exe");
+    let status = Command::new(powershell)
+        .args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            ACL_CHECK,
+        ])
+        .env("FIREEMU_SNAPSHOT_ACL_PATH", path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|_| "snapshot ACL validation could not start Windows PowerShell".to_owned())?;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut child = status;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => return Ok(()),
+            Ok(Some(_)) => {
+                return Err(format!(
+                    "snapshot ACL validation refused directory {}",
+                    path.display()
+                ));
+            }
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
+            Ok(None) | Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!(
+                    "snapshot ACL validation timed out or failed for {}",
+                    path.display()
+                ));
+            }
+        }
+    }
 }
 
 #[cfg(unix)]
@@ -12925,6 +13049,170 @@ sys.stdin.buffer.read()
         assert!(!snapshot_path.exists());
         assert!(root.join("node_modules/pkg/index.js").is_file());
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    fn grant_windows_test_ace(path: &std::path::Path, rights: &str) {
+        use std::process::Command;
+
+        let icacls = std::env::var_os("SystemRoot")
+            .map(std::path::PathBuf::from)
+            .expect("Windows defines SystemRoot")
+            .join(r"System32\icacls.exe");
+        let output = Command::new(icacls)
+            .arg(path)
+            .arg("/grant")
+            .arg(format!("*S-1-1-0:{rights}"))
+            .output()
+            .expect("icacls.exe is available on Windows");
+        assert!(
+            output.status.success(),
+            "failed to add test ACL: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_reload_snapshot_accepts_private_temp_acl() {
+        let root = std::env::temp_dir().join(format!(
+            "fireemu-windows-private-snapshot-source-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join(".secret.local"), "LOCAL_SECRET=value").unwrap();
+
+        let snapshot = snapshot_functions_source(&root, &[]).expect("private TEMP ACL accepted");
+        assert_eq!(
+            std::fs::read(snapshot.join(".secret.local")).unwrap(),
+            b"LOCAL_SECRET=value"
+        );
+        drop(snapshot);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_reload_snapshot_refuses_permissive_acl_before_copying_secret() {
+        let id = std::process::id();
+        let source = std::env::temp_dir().join(format!("fireemu-windows-acl-source-{id}"));
+        let snapshot_root = std::env::temp_dir().join(format!("fireemu-windows-acl-target-{id}"));
+        let _ = std::fs::remove_dir_all(&source);
+        let _ = std::fs::remove_dir_all(&snapshot_root);
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::create_dir(&snapshot_root).unwrap();
+        let secret = b"LOCAL_SECRET=must-not-be-copied";
+        std::fs::write(source.join(".secret.local"), secret).unwrap();
+
+        grant_windows_test_ace(&snapshot_root, "(OI)(CI)F");
+
+        let mut charged_bytes = 0;
+        let result = super::snapshot_functions_source_with_charge_at(
+            &source,
+            &[],
+            &mut |_, bytes| {
+                charged_bytes += bytes;
+                Ok(())
+            },
+            &AtomicBool::new(false),
+            &snapshot_root,
+        );
+        assert!(
+            result
+                .as_ref()
+                .expect_err("permissive ACL must be refused")
+                .contains("snapshot ACL"),
+            "the failure should identify snapshot ACL validation"
+        );
+        assert_eq!(
+            charged_bytes,
+            secret.len() as u64,
+            "only the initial source scan may read secret bytes; snapshot copy must not start"
+        );
+        assert_eq!(
+            std::fs::read_dir(&snapshot_root).unwrap().count(),
+            0,
+            "a refused snapshot must leave no copied runtime files"
+        );
+
+        std::fs::remove_dir_all(source).unwrap();
+        std::fs::remove_dir_all(snapshot_root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_reload_snapshot_refuses_a_mutable_grandparent_before_copying_secret() {
+        let id = std::process::id();
+        let outer = std::env::temp_dir().join(format!("fireemu-windows-acl-outer-{id}"));
+        let snapshot_root = outer.join("private-parent");
+        let source = std::env::temp_dir().join(format!("fireemu-windows-acl-source-{id}"));
+        let _ = std::fs::remove_dir_all(&outer);
+        let _ = std::fs::remove_dir_all(&source);
+        std::fs::create_dir_all(&snapshot_root).unwrap();
+        std::fs::create_dir_all(&source).unwrap();
+        let secret = b"LOCAL_SECRET=must-not-be-copied";
+        std::fs::write(source.join(".secret.local"), secret).unwrap();
+        grant_windows_test_ace(&outer, "(DC)");
+
+        let mut charged_bytes = 0;
+        let result = super::snapshot_functions_source_with_charge_at(
+            &source,
+            &[],
+            &mut |_, bytes| {
+                charged_bytes += bytes;
+                Ok(())
+            },
+            &AtomicBool::new(false),
+            &snapshot_root,
+        );
+        assert!(
+            result
+                .as_ref()
+                .expect_err("a mutable grandparent must be refused")
+                .contains("snapshot ACL"),
+            "the failure should identify snapshot ACL validation"
+        );
+        assert_eq!(
+            charged_bytes,
+            secret.len() as u64,
+            "the runtime secret must not be read for a snapshot copy"
+        );
+        assert_eq!(std::fs::read_dir(&snapshot_root).unwrap().count(), 0);
+
+        std::fs::remove_dir_all(source).unwrap();
+        std::fs::remove_dir_all(outer).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_reload_snapshot_allows_ancestor_create_directory_right_without_delete_child() {
+        let id = std::process::id();
+        let outer = std::env::temp_dir().join(format!("fireemu-windows-acl-near-miss-{id}"));
+        let snapshot_root = outer.join("private-parent");
+        let source = std::env::temp_dir().join(format!("fireemu-windows-acl-source-{id}"));
+        let _ = std::fs::remove_dir_all(&outer);
+        let _ = std::fs::remove_dir_all(&source);
+        std::fs::create_dir_all(&snapshot_root).unwrap();
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(source.join(".secret.local"), "LOCAL_SECRET=value").unwrap();
+        grant_windows_test_ace(&outer, "(AD)");
+
+        let snapshot = super::snapshot_functions_source_with_charge_at(
+            &source,
+            &[],
+            &mut |_, _| Ok(()),
+            &AtomicBool::new(false),
+            &snapshot_root,
+        )
+        .expect("create-directory-only ancestor access cannot replace the protected parent");
+        assert_eq!(
+            std::fs::read_to_string(snapshot.join(".secret.local")).unwrap(),
+            "LOCAL_SECRET=value"
+        );
+        drop(snapshot);
+        std::fs::remove_dir_all(source).unwrap();
+        std::fs::remove_dir_all(outer).unwrap();
     }
 
     #[test]

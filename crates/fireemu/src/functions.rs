@@ -1139,6 +1139,7 @@ fn snapshot_functions_source_with_charge_at(
     )
 }
 
+#[allow(clippy::too_many_lines)] // Keep atomic Windows DACL creation with snapshot setup.
 fn snapshot_functions_source_with_charge_at_and_acl_check<F>(
     root: &Path,
     ignores: &[String],
@@ -1163,8 +1164,65 @@ where
     #[cfg(windows)]
     let name = format!("fireemu-functions-{}-{sequence}", std::process::id());
     let destination = snapshot_root.join(name);
+    #[cfg(unix)]
     std::fs::create_dir(&destination)
         .map_err(|e| format!("snapshot {}: {e}", destination.display()))?;
+    #[cfg(windows)]
+    run_snapshot_acl_checker(
+        &destination,
+        &windows_powershell_path()?,
+        // A later DACL check cannot revoke an attacker's already-open WRITE_DAC handle.
+        // Protect the root at creation and let only trusted ACEs propagate to its children.
+        r#"
+$ErrorActionPreference = 'Stop'
+$descriptor = [IntPtr]::Zero
+try {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class FireemuSnapshotDirectoryNative {
+    [StructLayout(LayoutKind.Sequential)]
+    public struct SECURITY_ATTRIBUTES {
+        public uint nLength;
+        public IntPtr lpSecurityDescriptor;
+        public int bInheritHandle;
+    }
+
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern bool ConvertStringSecurityDescriptorToSecurityDescriptorW(
+        string sddl, uint revision, out IntPtr descriptor, IntPtr size);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern bool CreateDirectoryW(string path, ref SECURITY_ATTRIBUTES attributes);
+
+    [DllImport("kernel32.dll")]
+    public static extern IntPtr LocalFree(IntPtr memory);
+}
+'@ -ErrorAction Stop
+    $userSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    $sddl = "D:P(A;OICI;FA;;;$userSid)(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)"
+    if (-not [FireemuSnapshotDirectoryNative]::ConvertStringSecurityDescriptorToSecurityDescriptorW(
+        $sddl, 1, [ref]$descriptor, [IntPtr]::Zero)) {
+        throw 'could not construct snapshot DACL'
+    }
+    $attributes = New-Object FireemuSnapshotDirectoryNative+SECURITY_ATTRIBUTES
+    $attributes.nLength = [System.Runtime.InteropServices.Marshal]::SizeOf($attributes)
+    $attributes.lpSecurityDescriptor = $descriptor
+    $attributes.bInheritHandle = 0
+    if (-not [FireemuSnapshotDirectoryNative]::CreateDirectoryW(
+        $env:FIREEMU_SNAPSHOT_ACL_PATH, [ref]$attributes)) {
+        throw 'could not create protected snapshot directory'
+    }
+} catch { exit 1 } finally {
+    if ($descriptor -ne [IntPtr]::Zero) {
+        [void][FireemuSnapshotDirectoryNative]::LocalFree($descriptor)
+    }
+}
+exit 0
+"#,
+        // Add-Type compiles the interop class, which takes seconds on a loaded runner.
+        Duration::from_secs(30),
+    )?;
     let dependencies: Vec<_> = source_root
         .ancestors()
         .enumerate()
@@ -13834,6 +13892,67 @@ Start-Sleep -Seconds 60
         }
         assert_windows_acl_null_overlap_and_compound(10);
         assert_windows_acl_noop_control(20);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_snapshot_is_created_with_a_protected_dacl_before_validation() {
+        let id = std::process::id();
+        let source = std::env::temp_dir().join(format!("fireemu-atomic-acl-source-{id}"));
+        let parent = std::env::temp_dir().join(format!("fireemu-atomic-acl-parent-{id}"));
+        std::fs::create_dir(&source).unwrap();
+        std::fs::create_dir(&parent).unwrap();
+        grant_windows_test_ace(&parent, "(OI)(CI)F");
+
+        let result = super::snapshot_functions_source_with_charge_at_and_acl_check(
+            &source,
+            &[],
+            &mut |_, _| Ok(()),
+            &AtomicBool::new(false),
+            &parent,
+            |path| {
+                // Observe creation before validation can change or accept the DACL.
+                std::fs::write(path.join("child.txt"), b"fixture").unwrap();
+                super::run_snapshot_acl_checker(
+                    path,
+                    &super::windows_powershell_path().unwrap(),
+                    r#"
+$ErrorActionPreference = 'Stop'
+try {
+    $path = $env:FIREEMU_SNAPSHOT_ACL_PATH
+    $trusted = @([System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value, 'S-1-5-18', 'S-1-5-32-544')
+    $rootAcl = Get-Acl -LiteralPath $path
+    if (-not $rootAcl.AreAccessRulesProtected) { throw 'root DACL is not protected' }
+    foreach ($entry in @($path, (Join-Path $path 'child.txt'))) {
+        $acl = Get-Acl -LiteralPath $entry
+        $rules = @($acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
+        if ($rules.Count -ne $trusted.Count) { throw 'unexpected ACE count' }
+        foreach ($sid in $trusted) {
+            $rule = @($rules | Where-Object { $_.IdentityReference.Value -eq $sid })
+            if ($rule.Count -ne 1 -or $rule[0].AccessControlType -ne 'Allow' -or
+                $rule[0].FileSystemRights -ne [System.Security.AccessControl.FileSystemRights]::FullControl) {
+                throw 'unexpected principal or rights'
+            }
+            if ($entry -eq $path -and $rule[0].IsInherited) { throw 'root inherited an ACE' }
+            if ($entry -ne $path -and -not $rule[0].IsInherited) { throw 'child did not inherit trusted ACE' }
+        }
+    }
+} catch { exit 1 }
+exit 0
+"#,
+                    Duration::from_secs(5),
+                )
+                .expect("creation must block the permissive parent's inheritable grant");
+                super::secure_snapshot_directory(path)
+            },
+        );
+        assert!(
+            result.unwrap_err().contains("snapshot ACL"),
+            "a protected root must still refuse an unsafe parent"
+        );
+        assert_eq!(std::fs::read_dir(&parent).unwrap().count(), 0);
+        std::fs::remove_dir_all(source).unwrap();
+        std::fs::remove_dir_all(parent).unwrap();
     }
 
     #[cfg(windows)]

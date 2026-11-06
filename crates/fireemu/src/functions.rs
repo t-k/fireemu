@@ -13433,13 +13433,13 @@ Add-Type -TypeDefinition $native -ErrorAction Stop
         let diagnostic_catch =
             "} catch {\n    $checkerError = $_.ToString()\n    $exitCode = 1\n} finally {";
         let mutant = mutant.replacen(catch_block, diagnostic_catch, 1);
-        let exit_block = "}\nexit $exitCode\n\"#;";
+        let exit_block = "}\nexit $exitCode\n";
         assert_eq!(
             mutant.matches(exit_block).count(),
             1,
             "checker exit block must be unique"
         );
-        let diagnostic_exit = "}\nif ($null -ne $checkerError) {\n    try { [IO.File]::WriteAllText($env:FIREEMU_SNAPSHOT_ACL_PATH + '.checker-error', $checkerError) } catch {}\n}\nexit $exitCode\n\"#;";
+        let diagnostic_exit = "}\nif ($null -ne $checkerError) {\n    try { [IO.File]::WriteAllText($env:FIREEMU_SNAPSHOT_ACL_PATH + '.checker-error', $checkerError) } catch {}\n}\nexit $exitCode\n";
         mutant.replacen(exit_block, diagnostic_exit, 1)
     }
 

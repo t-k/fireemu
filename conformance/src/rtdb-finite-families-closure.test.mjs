@@ -25,8 +25,8 @@ const SDK_SMALL = "spec/compatibility/closure/evidence/RTDB-sdk-small-comparison
 // --locked -p fireemu, RUSTC_WRAPPER empty, a fresh worktree-local target directory). The Rust sources
 // are unchanged between that commit and the commit that carries these records.
 const V043 = {
-  sourceCommit: "285f5200113a6d874626e6b8e2216ad0f6b98641",
-  binarySha256: "b2fd5b2c27e84f9b08834ac130e775fc6af2101f53c6db585e6de92315cc649d",
+  sourceCommit: "df8dc29d91deb671dcfbe460f323e7df96fca759",
+  binarySha256: "0c45011298261cb59b06a7f1236946c75369057e4546cca97766054876e0f441",
 };
 const SDK_EVENTS = "spec/compatibility/closure/evidence/RTDB-sdk-events-comparison.json";
 const EVENTS_FIXTURE = "tools/sdk-smoke-database/fixtures/production-sdk-events.json";
@@ -675,6 +675,11 @@ test("the 2276 round's jar-only rows, emulator-profile differences and claims, q
   );
   assert.match(evidence.jarOnlyRegexDialect.statement, /Emulator profile only/);
   assert.match(evidence.jarOnlyRegexDialect.statement, /strict profile keeps today's refusal/);
+  // The retained denials are counted by cause, and the record does not claim the profile refuses nothing the jar admits.
+  assert.match(
+    evidence.jarOnlyRegexDialect.statement,
+    /239 of the 323 corpus rows.*84 stay denied.*71 use the `i` flag.*11 put a backslash.*2 use a class range/s,
+  );
   assert.match(evidence.jarOnlyBodyLoneSurrogate.statement, /Emulator profile only/);
   assert.match(evidence.jarOnlyBodyLoneSurrogate.statement, /key that holds one stays refused/);
   for (const file of evidence.jarOnlyBodyLoneSurrogate.tests) assert.ok(exists(file), file);
@@ -691,6 +696,11 @@ test("the 2276 round's jar-only rows, emulator-profile differences and claims, q
   assert.equal(json(claims.fixture).length, claims.rows);
   assert.match(claims.statement, /Emulator profile only/);
   assert.match(claims.statement, /strict profile does not read such a token/);
+  assert.doesNotMatch(claims.statement, /stand-in/);
+  assert.match(
+    claims.statement,
+    /signature of a signed token is always verified against its original payload/,
+  );
   for (const file of claims.tests) assert.ok(exists(file), file);
   assert.equal(known.loneSurrogateClaimsAndQueryValues, undefined);
   const fixed = known.loneSurrogateClaimsQueryValuesFramesEmulatorProfile;
@@ -709,6 +719,10 @@ test("the 2276 round's jar-only rows, emulator-profile differences and claims, q
   ])
     assert.ok(keys.includes(key), key);
   assert.match(closure().closureReview.note, /probed corpora only/);
+  const regexItem = closure().closureBasis.notClaimedItems.find(
+    (i) => i.key === "notClaimed_emulator_profile_regex_and_body_surrogates",
+  );
+  assert.match(regexItem.detail, /239 of the 323 corpus rows.*84 stay denied/s);
   assert.match(closure().scopeDecisions.find((s) => s.id === "R11").decisionRef, /\b2276\b/);
 });
 

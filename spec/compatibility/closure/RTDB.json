@@ -190,7 +190,7 @@
     },
     {
       "id": "R11",
-      "decision": "R2 (as amended by R4 to R7, R9 and R10) is amended for the recordings of 2026-11-04 and 2026-11-05, replayed on the closure build in both profiles and for the recorded cases only: REST options, POST and push forms, .sv, orderBy and shallow windows, ETag, method override, callback and download and the malformed escape (RTDB/rest-options-and-refusals, run RTDB-REST-20261104-01); Rules claims, indexes, cascade grammar, query members, concatenation, conditional writes and load texts (RTDB/rules-claims-indexes-and-load-texts, RTDB-RULES-20261104-01); seven Rules documents that fail or load (RTDB/rules-document-load-diagnostics, RTDB-RULES-LOAD-20261105-01); generated invalid credentials over REST (RTDB/invalid-credentials-rest, RTDB-TOKENS-20261104-01); and RTDB-triggered Functions for an end user's write, ancestor and multi-path writes and redelivery (RTDB/functions-trigger-breadth-and-user-auth, RTDB-TRIGGERS-BREADTH-20261105-02). Inventory items G7, G8, G9 and G10 leave /outOfScope as far as these recordings reach; what lies beyond them stays listed in /outOfScope and /knownGaps. The sdk-small and sdk-events comparisons are rebound to the same build. The closure build is an unpublished release-profile build of source commit 285f52001 (binary b2fd5b2c...), built with --locked and an empty RUSTC_WRAPPER in a fresh worktree-local target directory; the Rust sources are unchanged since. Rules strings that hold a lone surrogate load and are judged by UTF-16 units in both profiles as the official emulator does (owner 2270 (2), completed by 2276: child, hasChild, hasChildren, an index and the empty-target replace answer as the jar; unobserved in production, so strict follows the jar). A string a rule builds is bounded at 2^26 UTF-16 units. query.orderBy loads in both profiles as the jar answers it. On the emulator profile only, a regular expression's \\W, \\D and escaped letters, and a lone surrogate escape in a JSON body value, are read as the official emulator reads them while the strict profile keeps refusing them (owner 2276; unobserved in production). The emulator profile also reads a lone surrogate in a token claim, a query value, a WebSocket frame value and an import file value as the official emulator does (owner 2286); the strict profile does not, and the emulator profile's refusals of forged signed tokens outside the recorded shape are a declared difference (owner 713 extended by 2270 (1)). The parent remains IMPLEMENTING; the Mac controls named in /knownGaps stay bound to the older binaries.",
+      "decision": "R2 (as amended by R4 to R7, R9 and R10) is amended for the recordings of 2026-11-04 and 2026-11-05, replayed on the closure build in both profiles and for the recorded cases only: REST options, POST and push forms, .sv, orderBy and shallow windows, ETag, method override, callback and download and the malformed escape (RTDB/rest-options-and-refusals, run RTDB-REST-20261104-01); Rules claims, indexes, cascade grammar, query members, concatenation, conditional writes and load texts (RTDB/rules-claims-indexes-and-load-texts, RTDB-RULES-20261104-01); seven Rules documents that fail or load (RTDB/rules-document-load-diagnostics, RTDB-RULES-LOAD-20261105-01); generated invalid credentials over REST (RTDB/invalid-credentials-rest, RTDB-TOKENS-20261104-01); and RTDB-triggered Functions for an end user's write, ancestor and multi-path writes and redelivery (RTDB/functions-trigger-breadth-and-user-auth, RTDB-TRIGGERS-BREADTH-20261105-02). Inventory items G7, G8, G9 and G10 leave /outOfScope as far as these recordings reach; what lies beyond them stays listed in /outOfScope and /knownGaps. The sdk-small and sdk-events comparisons are rebound to the same build. The closure build is an unpublished release-profile build of source commit df8dc29d9 (binary 0c450112...), built with --locked and an empty RUSTC_WRAPPER in a fresh worktree-local target directory; the Rust sources are unchanged since. Rules strings that hold a lone surrogate load and are judged by UTF-16 units in both profiles as the official emulator does (owner 2270 (2), completed by 2276: child, hasChild, hasChildren, an index and the empty-target replace answer as the jar; unobserved in production, so strict follows the jar). A string a rule builds is bounded at 2^26 UTF-16 units. query.orderBy loads in both profiles as the jar answers it. On the emulator profile only, a regular expression's \\W, \\D and escaped letters, and a lone surrogate escape in a JSON body value, are read as the official emulator reads them while the strict profile keeps refusing them (owner 2276; unobserved in production). The emulator profile also reads a lone surrogate in a token claim, a query value, a WebSocket frame value and an import file value as the official emulator does (owner 2286); the strict profile does not, and the emulator profile's refusals of forged signed tokens outside the recorded shape are a declared difference (owner 713 extended by 2270 (1)). The parent remains IMPLEMENTING; the Mac controls named in /knownGaps stay bound to the older binaries.",
       "rationale": "Five production runs of 2026-11-04 and 2026-11-05 (RTDB-REST-20261104-01, RTDB-RULES-20261104-01, RTDB-TOKENS-20261104-01, RTDB-TRIGGERS-BREADTH-20261105-02 and RTDB-RULES-LOAD-20261105-01; a sixth envelope, RTDB-TRIGGERS-BREADTH-20261105-01, stopped before any observation) answered the questions the frozen inventory listed as unobserved; their reductions are committed as fixtures and replayed in both profiles, and every defect they found in the strict or the emulator profile was fixed and merged before the replay.",
       "amends": "R2",
       "status": "FROZEN",
@@ -1157,11 +1157,11 @@
         "fixtureSha256": "ed2b866ffa7d33ba76c3bab870a02293d2033a4a2587b01eb897affd88deb57f",
         "comparisonTool": "tools/sdk-smoke-database/rtdb-sdk-small-judge.mjs",
         "comparisonPath": "spec/compatibility/closure/evidence/RTDB-sdk-small-comparison.json",
-        "comparisonSha256": "16df2cdd293debc8fc65ad0cd3b5bf21268f4d979cdbfbfa5f450d85c6d483b3",
+        "comparisonSha256": "5334b451d137c88ed3155b8db6209027349f7a0079fa92401eb84678dab44842",
         "release": "closure-build",
-        "sourceCommit": "285f5200113a6d874626e6b8e2216ad0f6b98641",
-        "binarySha256": "b2fd5b2c27e84f9b08834ac130e775fc6af2101f53c6db585e6de92315cc649d",
-        "toolCommit": "285f5200113a6d874626e6b8e2216ad0f6b98641",
+        "sourceCommit": "df8dc29d91deb671dcfbe460f323e7df96fca759",
+        "binarySha256": "0c45011298261cb59b06a7f1236946c75369057e4546cca97766054876e0f441",
+        "toolCommit": "df8dc29d91deb671dcfbe460f323e7df96fca759",
         "rows": {
           "strict": {
             "MATCH": 32
@@ -1171,7 +1171,7 @@
           }
         },
         "productionRequests": 0,
-        "ownerDecisions": "docs.local/instructions/owner-decisions.md (2202: the production run RTDB-SMALL-20261102-01; 2203: the default clock follows real time; 2218 D6: the closure binary is built from head or is the v0.43.0 release, the coordinator decides; this refresh uses the closure build of source 285f52001)",
+        "ownerDecisions": "docs.local/instructions/owner-decisions.md (2202: the production run RTDB-SMALL-20261102-01; 2203: the default clock follows real time; 2218 D6: the closure binary is built from head or is the v0.43.0 release, the coordinator decides; this refresh uses the closure build of source df8dc29d9)",
         "tests": [
           "tools/sdk-smoke-database/rtdb-sdk-small-judge.test.mjs",
           "tools/sdk-smoke-database/rtdb-sdk-small-fixture.test.mjs",
@@ -1179,7 +1179,7 @@
           "conformance/src/rtdb-finite-families-closure.test.mjs"
         ],
         "scope": "The 32 recorded observations only: one-shot gets, not listeners. Listeners, child events, windows, compound cursors, transactions and the Admin SDK paths are recorded since by RTDB/sdk-events-queries-and-transactions and RTDB/admin-sdk-websocket; shapes beyond those stay unobserved (/outOfScope).",
-        "releaseRun": "R28 in conformance/src/release-strict-regression.mjs (rtdb-production-comparison-v1, campaign sdk-small); the evidence is rebound to the closure build (an unpublished release-profile build of source commit 285f52001); the release job replays the same campaign on the installed binary and judges it against the fixture"
+        "releaseRun": "R28 in conformance/src/release-strict-regression.mjs (rtdb-production-comparison-v1, campaign sdk-small); the evidence is rebound to the closure build (an unpublished release-profile build of source commit df8dc29d9); the release job replays the same campaign on the installed binary and judges it against the fixture"
       }
     },
     {
@@ -1216,11 +1216,11 @@
         "fixtureSha256": "75a8e586267e6681d9f88085219920bc829a94d7600699557c08d91b85de2fe8",
         "comparisonTool": "tools/sdk-smoke-database/rtdb-sdk-events-judge.mjs",
         "comparisonPath": "spec/compatibility/closure/evidence/RTDB-sdk-events-comparison.json",
-        "comparisonSha256": "c57e9c97d123bf4f05bfcacdb8138c1a442abfd1d87b6d21df3dfff8294d2eb0",
+        "comparisonSha256": "717fb898309fe8d93b7ffb360c3fd9330f13f9967dcf8a25037c50b5500c025c",
         "release": "closure-build",
-        "sourceCommit": "285f5200113a6d874626e6b8e2216ad0f6b98641",
-        "binarySha256": "b2fd5b2c27e84f9b08834ac130e775fc6af2101f53c6db585e6de92315cc649d",
-        "toolCommit": "285f5200113a6d874626e6b8e2216ad0f6b98641",
+        "sourceCommit": "df8dc29d91deb671dcfbe460f323e7df96fca759",
+        "binarySha256": "0c45011298261cb59b06a7f1236946c75369057e4546cca97766054876e0f441",
+        "toolCommit": "df8dc29d91deb671dcfbe460f323e7df96fca759",
         "rows": {
           "strict": {
             "MATCH": 128
@@ -1230,7 +1230,7 @@
           }
         },
         "productionRequests": 0,
-        "ownerDecisions": "docs.local/instructions/owner-decisions.md (2217: the closure path and caps; 2218 D6: the closure binary is built from head or is the v0.43.0 release, the coordinator decides; this refresh uses the closure build of source 285f52001; 2227: the approval line of run RTDB-EVENTS-20261104-01; 2228: its V line); sandbox-ledger lines 1252 (booking) and 1253 (close)",
+        "ownerDecisions": "docs.local/instructions/owner-decisions.md (2217: the closure path and caps; 2218 D6: the closure binary is built from head or is the v0.43.0 release, the coordinator decides; this refresh uses the closure build of source df8dc29d9; 2227: the approval line of run RTDB-EVENTS-20261104-01; 2228: its V line); sandbox-ledger lines 1252 (booking) and 1253 (close)",
         "tests": [
           "tools/sdk-smoke-database/rtdb-sdk-events-judge.test.mjs",
           "tools/sdk-smoke-database/rtdb-sdk-events-fixture.test.mjs",
@@ -1240,7 +1240,7 @@
           "conformance/src/rtdb-finite-families-closure.test.mjs"
         ],
         "scope": "The 128 recorded steps of the four web SDK profiles only. Not claimed: other windows, cursors and query combinations, applyLocally false, raw wire frames and timings; a write that covers several per-path listens of one connection stays /knownDifferences/rootWriteListenOrder (the recorded fanout case is a multi-path update with listeners at a parent and its children).",
-        "releaseRun": "R29 in conformance/src/release-strict-regression.mjs (rtdb-production-comparison-v1, campaign sdk-events); the evidence is rebound to the closure build (an unpublished release-profile build of source commit 285f52001); the release job replays the same campaign on the installed binary and judges it against the fixture"
+        "releaseRun": "R29 in conformance/src/release-strict-regression.mjs (rtdb-production-comparison-v1, campaign sdk-events); the evidence is rebound to the closure build (an unpublished release-profile build of source commit df8dc29d9); the release job replays the same campaign on the installed binary and judges it against the fixture"
       }
     },
     {
@@ -1273,11 +1273,11 @@
         "fixtureSha256": "75a8e586267e6681d9f88085219920bc829a94d7600699557c08d91b85de2fe8",
         "comparisonTool": "tools/sdk-smoke-database/rtdb-sdk-events-judge.mjs",
         "comparisonPath": "spec/compatibility/closure/evidence/RTDB-sdk-events-comparison.json",
-        "comparisonSha256": "c57e9c97d123bf4f05bfcacdb8138c1a442abfd1d87b6d21df3dfff8294d2eb0",
+        "comparisonSha256": "717fb898309fe8d93b7ffb360c3fd9330f13f9967dcf8a25037c50b5500c025c",
         "release": "closure-build",
-        "sourceCommit": "285f5200113a6d874626e6b8e2216ad0f6b98641",
-        "binarySha256": "b2fd5b2c27e84f9b08834ac130e775fc6af2101f53c6db585e6de92315cc649d",
-        "toolCommit": "285f5200113a6d874626e6b8e2216ad0f6b98641",
+        "sourceCommit": "df8dc29d91deb671dcfbe460f323e7df96fca759",
+        "binarySha256": "0c45011298261cb59b06a7f1236946c75369057e4546cca97766054876e0f441",
+        "toolCommit": "df8dc29d91deb671dcfbe460f323e7df96fca759",
         "rows": {
           "strict": {
             "MATCH": 32
@@ -1287,7 +1287,7 @@
           }
         },
         "productionRequests": 0,
-        "ownerDecisions": "docs.local/instructions/owner-decisions.md (2217: the closure path and caps; 2218 D6: the closure binary is built from head or is the v0.43.0 release, the coordinator decides; this refresh uses the closure build of source 285f52001; 2227: the approval line of run RTDB-EVENTS-20261104-01; 2228: its V line); sandbox-ledger lines 1252 (booking) and 1253 (close)",
+        "ownerDecisions": "docs.local/instructions/owner-decisions.md (2217: the closure path and caps; 2218 D6: the closure binary is built from head or is the v0.43.0 release, the coordinator decides; this refresh uses the closure build of source df8dc29d9; 2227: the approval line of run RTDB-EVENTS-20261104-01; 2228: its V line); sandbox-ledger lines 1252 (booking) and 1253 (close)",
         "tests": [
           "tools/sdk-smoke-database/rtdb-sdk-events-judge.test.mjs",
           "tools/sdk-smoke-database/rtdb-sdk-events-fixture.test.mjs",
@@ -1297,7 +1297,7 @@
           "conformance/src/rtdb-finite-families-closure.test.mjs"
         ],
         "scope": "The 32 recorded steps only. In production the Admin SDK authenticated with the operator's gcloud user OAuth access token passed as a custom credential, not a service account; locally it uses fireemu's owner credential. An Admin SDK with a service-account credential, the Java and Python Admin SDKs and other Admin SDK shapes are not claimed.",
-        "releaseRun": "R29 in conformance/src/release-strict-regression.mjs (rtdb-production-comparison-v1, campaign sdk-events); the evidence is rebound to the closure build (an unpublished release-profile build of source commit 285f52001); the release job replays the same campaign on the installed binary and judges it against the fixture"
+        "releaseRun": "R29 in conformance/src/release-strict-regression.mjs (rtdb-production-comparison-v1, campaign sdk-events); the evidence is rebound to the closure build (an unpublished release-profile build of source commit df8dc29d9); the release job replays the same campaign on the installed binary and judges it against the fixture"
       }
     },
     {
@@ -1326,11 +1326,11 @@
         "fixtureSha256": "d3fb07dedd12c1a066c39ea167eda6ef948e3c43e2e4eb97ed8453eb5e16d7bb",
         "comparisonTool": "tools/sdk-smoke-database/rtdb-sdk-rest-judge.mjs",
         "comparisonPath": "spec/compatibility/closure/evidence/RTDB-sdk-rest-comparison.json",
-        "comparisonSha256": "6c110265c696bc4febd5d480d439e5a891aa88a7e54c21c3214f4ed5d1875475",
+        "comparisonSha256": "f27432dd660fc100ce11d464d99a67d3dc08f2941fa0add29f591d80f0200df1",
         "release": "closure-build",
-        "sourceCommit": "285f5200113a6d874626e6b8e2216ad0f6b98641",
-        "binarySha256": "b2fd5b2c27e84f9b08834ac130e775fc6af2101f53c6db585e6de92315cc649d",
-        "toolCommit": "285f5200113a6d874626e6b8e2216ad0f6b98641",
+        "sourceCommit": "df8dc29d91deb671dcfbe460f323e7df96fca759",
+        "binarySha256": "0c45011298261cb59b06a7f1236946c75369057e4546cca97766054876e0f441",
+        "toolCommit": "df8dc29d91deb671dcfbe460f323e7df96fca759",
         "rows": {
           "strict": {
             "MATCH": 144
@@ -1400,11 +1400,11 @@
         "fixtureSha256": "455517043f3628bf3930c8db9792bf297e077c07152726f76c27982f6d4ce49b",
         "comparisonTool": "tools/sdk-smoke-database/rtdb-sdk-rules-judge.mjs",
         "comparisonPath": "spec/compatibility/closure/evidence/RTDB-sdk-rules-comparison.json",
-        "comparisonSha256": "e1461a24de873fc972b7abe30890de2375c8d529eb4b7ff51695aa8fed246fa4",
+        "comparisonSha256": "3629d10c2277420174b2a6e6866412c0487d231884b053e744cd19181821e10d",
         "release": "closure-build",
-        "sourceCommit": "285f5200113a6d874626e6b8e2216ad0f6b98641",
-        "binarySha256": "b2fd5b2c27e84f9b08834ac130e775fc6af2101f53c6db585e6de92315cc649d",
-        "toolCommit": "285f5200113a6d874626e6b8e2216ad0f6b98641",
+        "sourceCommit": "df8dc29d91deb671dcfbe460f323e7df96fca759",
+        "binarySha256": "0c45011298261cb59b06a7f1236946c75369057e4546cca97766054876e0f441",
+        "toolCommit": "df8dc29d91deb671dcfbe460f323e7df96fca759",
         "rows": {
           "strict": {
             "MATCH": 140
@@ -1463,11 +1463,11 @@
         "fixtureSha256": "298f58e842e3982e42c0638017bfc285224867ac39359da7b65eb8b2b43c061b",
         "comparisonTool": "tools/sdk-smoke-database/rtdb-sdk-rules-load-judge.mjs",
         "comparisonPath": "spec/compatibility/closure/evidence/RTDB-sdk-rules-load-comparison.json",
-        "comparisonSha256": "b9e70fbc077dc541640d35625a434beba1c5080c7c7e44af3dfa7576a57f8d9e",
+        "comparisonSha256": "9f17eaf869359f42f7074a41b73ca9b20eaac7891b693b17ca1756215c893676",
         "release": "closure-build",
-        "sourceCommit": "285f5200113a6d874626e6b8e2216ad0f6b98641",
-        "binarySha256": "b2fd5b2c27e84f9b08834ac130e775fc6af2101f53c6db585e6de92315cc649d",
-        "toolCommit": "285f5200113a6d874626e6b8e2216ad0f6b98641",
+        "sourceCommit": "df8dc29d91deb671dcfbe460f323e7df96fca759",
+        "binarySha256": "0c45011298261cb59b06a7f1236946c75369057e4546cca97766054876e0f441",
+        "toolCommit": "df8dc29d91deb671dcfbe460f323e7df96fca759",
         "rows": {
           "strict": {
             "MATCH": 14
@@ -1506,7 +1506,7 @@
           }
         },
         "jarOnlyRows": {
-          "statement": "Rules strings that hold a lone surrogate (an escape such as '\\uD83D') load and evaluate by UTF-16 units in both profiles, as the official emulator does (owner 2270 (2), completed by 2276): length, +, ==, !=, <, >, <=, >=, contains, beginsWith, endsWith, replace (an empty target between the halves of a pair included), toLowerCase, toUpperCase and matches. A path or key that holds one names nothing: child() reads absent, hasChild and hasChildren are false and an index is undefined, so the negated forms read as the official emulator reads them. Production has not answered these shapes, so they are unobserved in production and the strict profile follows the jar. A string a rule builds past 2^26 UTF-16 units is an error here (the official emulator answers 500 from a heap-dependent size); that bound is a difference, not a lone-surrogate one. What stays different (not claimed): a token whose claims hold a lone surrogate, and a query value that holds one (see knownDifferences.loneSurrogateClaimsAndQueryValues).",
+          "statement": "Rules strings that hold a lone surrogate (an escape such as '\\uD83D') load and evaluate by UTF-16 units in both profiles, as the official emulator does (owner 2270 (2), completed by 2276): length, +, ==, !=, <, >, <=, >=, contains, beginsWith, endsWith, replace (an empty target between the halves of a pair included), toLowerCase, toUpperCase and matches. A path or key that holds one names nothing: child() reads absent, hasChild and hasChildren are false and an index is undefined, so the negated forms read as the official emulator reads them. Production has not answered these shapes, so they are unobserved in production and the strict profile follows the jar. A string a rule builds past 2^26 UTF-16 units is an error here (the official emulator answers 500 from a heap-dependent size); that bound is a difference, not a lone-surrogate one. Case conversion is measured before it allocates, in both paths. A single rule evaluation that does more than 2^28 units of work (MAX_EVALUATION_WORK: one unit for each UTF-16 unit a string operation reads, copies or converts, so a quadratic `contains` or repeated concatenation stops) is an error here, which the official emulator answers from the memory and time of the machine; the most any one evaluation of the recorded Rules corpora does is 43 units, and a test holds every corpus under 2^18. What stays different (not claimed): a token whose claims hold a lone surrogate, and a query value that holds one (see knownDifferences.loneSurrogateClaimsAndQueryValues).",
           "fixture": "crates/fireemu-core-database/tests/fixtures/rules-lone-surrogates-official-emulator-4.11.2.json",
           "fixtureSha256": "7a80b60127121e4f48b13a1ca2c0c1660f9b6f8d09288476df8bf0e686304b6f",
           "rows": 536,
@@ -1531,7 +1531,7 @@
           "productionObserved": false
         },
         "jarOnlyRegexDialect": {
-          "statement": "Emulator profile only (owner 2276): in a regular expression `\\W` and `\\D` are the complement of a language of strings (`'ab'` and `''` match `/^\\W$/`, `'a'` does not), a class that holds one is the union of its members as languages, a negated class is single characters, and an escaped letter or digit other than d, w, D and W is that character (so `/[\\uD800-\\uDFFF]/` is the class of `0` to `u`, `D` and `F`). The strict profile keeps today's refusal (the rule is an error, so false negated or not) because production has not answered these shapes. 72 of the 323 corpus rows that fireemu denied and the official emulator allowed now decide as it does; 251 stay denied (other constructs of the dialect), and no corpus row moves the wrong way.",
+          "statement": "Emulator profile only (owner 2276): in a regular expression `\\W` and `\\D` are the complement of a language of strings (`'ab'` and `''` match `/^\\W$/`, `'a'` does not), a class that holds one is the union of its members as languages, a negated class is single characters, an escaped letter or digit other than d, w, D and W is that character (so `/[\\uD800-\\uDFFF]/` is the class of `0` to `u`, `D` and `F`), a quantifier at the start of an alternative is that character, and a class is read by the official emulator's grammar (a range whose end is before its start holds nothing, `[\\\\a]` holds `a`, a `-` before the closing bracket is a character, `(?` is a group followed by a literal `?`). The strict profile keeps today's refusal (the rule is an error, so false negated or not) because production has not answered these shapes. 239 of the 323 corpus rows that fireemu denied and the official emulator allowed now decide as it does, and no corpus row moves the wrong way. 84 stay denied, which the emulator profile therefore still refuses where the official emulator admits: 71 use the `i` flag with non-ASCII text (a case-folding table fireemu does not have), 11 put a backslash before a format or line character (the official emulator reads each such character differently), and 2 use a class range with an end beyond the Basic Multilingual Plane (the official emulator reads two UTF-16 units). The owner is asked whether these need a new engine.",
           "fixture": "crates/fireemu-core-database/tests/fixtures/rules-regex-dialect-official-emulator-4.11.2.json",
           "fixtureSha256": "3d3a7bf619fd781c33d88a43510354e70d6370c78c7bf260331528b41caa85c5",
           "rows": 500,
@@ -1557,7 +1557,7 @@
           "strictProfile": "refuses (400, or the connection error for a frame) and is unobserved in production"
         },
         "jarOnlyClaimsAndQueryValues": {
-          "statement": "Emulator profile only (owner 2286): the claims of a token keep a lone surrogate (`\"x\":\"\\ud83d\"`, a claim name and `sub`/`uid` included), as the official emulator holds them as Java strings: `auth.token.x == '\\uD83D'` holds and its length is 1. The claims are written in a stand-in encoding between the claims parser and the Rules binding (crates/fireemu-core-database/src/lone.rs), which only the RTDB Rules decode; no shared type, Auth, Firestore or Storage code reads it. A query value that holds one reads as `?` (query.startAt == '?' holds, == '\\uD83D' does not). The daemon's token check reads a copy of the token whose claims read the surrogate as `?`; a signed token whose claims were altered fails its signature. The strict profile does not read such a token (401) and refuses such a query value with 400 as before. Unobserved in production. 76 jar rows.",
+          "statement": "Emulator profile only (owner 2286): the claims of a token keep a lone surrogate (`\"x\":\"\\ud83d\"`, a claim name and `sub`/`uid` included), as the official emulator holds them as Java strings: `auth.token.x == '\\uD83D'` holds and its length is 1. The claims stay ordinary strings (a lone surrogate reads `?`, so every other reader, event payload and echo sees the ordinary value); the places that held a lone surrogate travel in a separate typed table (`LoneClaims`, crates/fireemu-core-database/src/lone.rs) that only the RTDB Rules binding reads, and the binding turns it into an evaluation-local view that is never stored or shown (a valid string that resembles the earlier encoding is just that string). The `authvar` of a frame is detected from the parsed frame, not from its text. A query value that holds one reads as `?` (query.startAt == '?' holds, == '\\uD83D' does not). The daemon reads the claims from a copy of an unsigned token (empty signature) only; the signature of a signed token is always verified against its original payload, so a signed token whose payload holds a lone surrogate is not read (401) and no normalised substitute is ever verified. The strict profile does not read such a token (401) and refuses such a query value with 400 as before. Unobserved in production. 76 jar rows.",
           "fixture": "crates/fireemu-adapter-database/tests/fixtures/rules-lone-claims-query-official-emulator-4.11.2.json",
           "fixtureSha256": "eb8b336e05af24842d92adfb1b44ba115b24a65fef401c9fdf80f48ff939e5ce",
           "rows": 76,
@@ -1597,11 +1597,11 @@
         "fixtureSha256": "877d31ba10797590672527623da0b07429ce614d7f1e8240f457bd1168e1e502",
         "comparisonTool": "tools/sdk-smoke-database/rtdb-sdk-tokens-judge.mjs",
         "comparisonPath": "spec/compatibility/closure/evidence/RTDB-sdk-tokens-comparison.json",
-        "comparisonSha256": "aee539501a324203ffc9a42aa0b5efebec4cfc8f74954f4edb7afc48e63dca86",
+        "comparisonSha256": "9524ada950b57d926237bc446ee17bfbe96d53c3c9cb495d76baf74f75395a74",
         "release": "closure-build",
-        "sourceCommit": "285f5200113a6d874626e6b8e2216ad0f6b98641",
-        "binarySha256": "b2fd5b2c27e84f9b08834ac130e775fc6af2101f53c6db585e6de92315cc649d",
-        "toolCommit": "285f5200113a6d874626e6b8e2216ad0f6b98641",
+        "sourceCommit": "df8dc29d91deb671dcfbe460f323e7df96fca759",
+        "binarySha256": "0c45011298261cb59b06a7f1236946c75369057e4546cca97766054876e0f441",
+        "toolCommit": "df8dc29d91deb671dcfbe460f323e7df96fca759",
         "rows": {
           "strict": {
             "MATCH": 54
@@ -1671,11 +1671,11 @@
         "fixtureSha256": "3e67cd9f12bd1fedf3fabf66ace0b9f956ce6cdfda4d0bab22a99239d568987f",
         "comparisonTool": "conformance/src/rtdb-functions/breadth-judge.mjs",
         "comparisonPath": "spec/compatibility/closure/evidence/RTDB-breadth-comparison.json",
-        "comparisonSha256": "3a7424311b3af65385ecee1c1e5dc18b5982f595a0ca8402ef48b9e3c3efb1da",
+        "comparisonSha256": "c035ca13004bb7c84bfc3f93ed5f27d6e66e2af48622a12e475516c4998e076e",
         "release": "closure-build",
-        "sourceCommit": "285f5200113a6d874626e6b8e2216ad0f6b98641",
-        "binarySha256": "b2fd5b2c27e84f9b08834ac130e775fc6af2101f53c6db585e6de92315cc649d",
-        "toolCommit": "285f5200113a6d874626e6b8e2216ad0f6b98641",
+        "sourceCommit": "df8dc29d91deb671dcfbe460f323e7df96fca759",
+        "binarySha256": "0c45011298261cb59b06a7f1236946c75369057e4546cca97766054876e0f441",
+        "toolCommit": "df8dc29d91deb671dcfbe460f323e7df96fca759",
         "rows": {
           "strict": {
             "MATCH": 69
@@ -1799,7 +1799,7 @@
       },
       {
         "path": "spec/compatibility/closure/evidence/RTDB-sdk-small-comparison.json",
-        "sha256": "16df2cdd293debc8fc65ad0cd3b5bf21268f4d979cdbfbfa5f450d85c6d483b3",
+        "sha256": "5334b451d137c88ed3155b8db6209027349f7a0079fa92401eb84678dab44842",
         "rows": 32,
         "summary": {
           "strict": {
@@ -1813,11 +1813,11 @@
             "NEEDS_REVIEW": 0
           }
         },
-        "binding": "the closure build, an unpublished release-profile build of source commit 285f52001 (binary b2fd5b2c...), --locked, RUSTC_WRAPPER empty; the release job still replays it (R28) on the installed binary"
+        "binding": "the closure build, an unpublished release-profile build of source commit df8dc29d9 (binary 0c450112...), --locked, RUSTC_WRAPPER empty; the release job still replays it (R28) on the installed binary"
       },
       {
         "path": "spec/compatibility/closure/evidence/RTDB-sdk-events-comparison.json",
-        "sha256": "c57e9c97d123bf4f05bfcacdb8138c1a442abfd1d87b6d21df3dfff8294d2eb0",
+        "sha256": "717fb898309fe8d93b7ffb360c3fd9330f13f9967dcf8a25037c50b5500c025c",
         "rows": 160,
         "summary": {
           "strict": {
@@ -1831,11 +1831,11 @@
             "NEEDS_REVIEW": 0
           }
         },
-        "binding": "the closure build, an unpublished release-profile build of source commit 285f52001 (binary b2fd5b2c...), --locked, RUSTC_WRAPPER empty; the release job still replays it (R29) on the installed binary"
+        "binding": "the closure build, an unpublished release-profile build of source commit df8dc29d9 (binary 0c450112...), --locked, RUSTC_WRAPPER empty; the release job still replays it (R29) on the installed binary"
       },
       {
         "path": "spec/compatibility/closure/evidence/RTDB-sdk-rest-comparison.json",
-        "sha256": "6c110265c696bc4febd5d480d439e5a891aa88a7e54c21c3214f4ed5d1875475",
+        "sha256": "f27432dd660fc100ce11d464d99a67d3dc08f2941fa0add29f591d80f0200df1",
         "rows": 144,
         "summary": {
           "strict": {
@@ -1849,11 +1849,11 @@
             "NEEDS_REVIEW": 0
           }
         },
-        "binding": "the closure build, an unpublished release-profile build of source commit 285f52001 (binary b2fd5b2c...), --locked, RUSTC_WRAPPER empty"
+        "binding": "the closure build, an unpublished release-profile build of source commit df8dc29d9 (binary 0c450112...), --locked, RUSTC_WRAPPER empty"
       },
       {
         "path": "spec/compatibility/closure/evidence/RTDB-sdk-rules-comparison.json",
-        "sha256": "e1461a24de873fc972b7abe30890de2375c8d529eb4b7ff51695aa8fed246fa4",
+        "sha256": "3629d10c2277420174b2a6e6866412c0487d231884b053e744cd19181821e10d",
         "rows": 140,
         "summary": {
           "strict": {
@@ -1867,11 +1867,11 @@
             "NEEDS_REVIEW": 0
           }
         },
-        "binding": "the closure build, an unpublished release-profile build of source commit 285f52001 (binary b2fd5b2c...), --locked, RUSTC_WRAPPER empty"
+        "binding": "the closure build, an unpublished release-profile build of source commit df8dc29d9 (binary 0c450112...), --locked, RUSTC_WRAPPER empty"
       },
       {
         "path": "spec/compatibility/closure/evidence/RTDB-sdk-tokens-comparison.json",
-        "sha256": "aee539501a324203ffc9a42aa0b5efebec4cfc8f74954f4edb7afc48e63dca86",
+        "sha256": "9524ada950b57d926237bc446ee17bfbe96d53c3c9cb495d76baf74f75395a74",
         "rows": 54,
         "summary": {
           "strict": {
@@ -1885,11 +1885,11 @@
             "NEEDS_REVIEW": 0
           }
         },
-        "binding": "the closure build, an unpublished release-profile build of source commit 285f52001 (binary b2fd5b2c...), --locked, RUSTC_WRAPPER empty"
+        "binding": "the closure build, an unpublished release-profile build of source commit df8dc29d9 (binary 0c450112...), --locked, RUSTC_WRAPPER empty"
       },
       {
         "path": "spec/compatibility/closure/evidence/RTDB-sdk-rules-load-comparison.json",
-        "sha256": "b9e70fbc077dc541640d35625a434beba1c5080c7c7e44af3dfa7576a57f8d9e",
+        "sha256": "9f17eaf869359f42f7074a41b73ca9b20eaac7891b693b17ca1756215c893676",
         "rows": 14,
         "summary": {
           "strict": {
@@ -1903,11 +1903,11 @@
             "NEEDS_REVIEW": 0
           }
         },
-        "binding": "the closure build, an unpublished release-profile build of source commit 285f52001 (binary b2fd5b2c...), --locked, RUSTC_WRAPPER empty"
+        "binding": "the closure build, an unpublished release-profile build of source commit df8dc29d9 (binary 0c450112...), --locked, RUSTC_WRAPPER empty"
       },
       {
         "path": "spec/compatibility/closure/evidence/RTDB-breadth-comparison.json",
-        "sha256": "3a7424311b3af65385ecee1c1e5dc18b5982f595a0ca8402ef48b9e3c3efb1da",
+        "sha256": "c035ca13004bb7c84bfc3f93ed5f27d6e66e2af48622a12e475516c4998e076e",
         "rows": 69,
         "summary": {
           "strict": {
@@ -1921,7 +1921,7 @@
             "difference": 69
           }
         },
-        "binding": "the closure build, an unpublished release-profile build of source commit 285f52001 (binary b2fd5b2c...), --locked, RUSTC_WRAPPER empty"
+        "binding": "the closure build, an unpublished release-profile build of source commit df8dc29d9 (binary 0c450112...), --locked, RUSTC_WRAPPER empty"
       }
     ],
     "productionRequests": 0,
@@ -2016,11 +2016,11 @@
       "scope": "Existing finite public replay only; the parent remains IMPLEMENTING."
     },
     "historicalBinding": {
-      "statement": "integrationCommit, releaseBinarySha256, buildReceiptPath and buildPath above are the integration build of 2026-10-28 (source 8cda683b8, binary f3cb6d17...). The comparisons not listed under currentBinding stay bound to that build, to the published v0.35 and v0.41 releases or to the older binaries their own binding names."
+      "statement": "integrationCommit, releaseBinarySha256, buildReceiptPath and buildPath above are the integration build of 2026-10-28 (source 8cda683b8, binary f3cb6d17...). Exactly seven of the fourteen comparisons in `comparisons` are bound to the build under currentBinding (sdk-small, sdk-events, sdk-rest, sdk-rules, sdk-tokens, sdk-rules-load and breadth). The other seven stay historical and were not replayed on that build: RTDB-rest-comparison, RTDB-sdk-ondisconnect-comparison and RTDB-genuine-auth-comparison (the integration build of 2026-10-28, binary f3cb6d17...), RTDB-residual-comparison (binary 7df56bd9..., built from origin/main 00abe06b4), RTDB-s5-comparison (binary a18a612e...), RTDB-functions-trigger-comparison (binary 3385153b..., source 0158be06b) and RTDB-rest-v033-comparison (binary 988a5fce..., source 81dca801d). The v0.34 and v0.35 revalidations and the v0.41 public replay named above are bound to their own releases. Code changed after those builds (the 2026-11 changes of this record) is not covered by these seven comparisons."
     },
     "currentBinding": {
-      "sourceCommit": "285f5200113a6d874626e6b8e2216ad0f6b98641",
-      "binarySha256": "b2fd5b2c27e84f9b08834ac130e775fc6af2101f53c6db585e6de92315cc649d",
+      "sourceCommit": "df8dc29d91deb671dcfbe460f323e7df96fca759",
+      "binarySha256": "0c45011298261cb59b06a7f1236946c75369057e4546cca97766054876e0f441",
       "build": "an unpublished release-profile build: cargo build --release --locked -p fireemu, RUSTC_WRAPPER empty, a fresh worktree-local target directory; the Rust sources are unchanged between the source commit and the commit that carries this record",
       "comparisons": [
         "spec/compatibility/closure/evidence/RTDB-sdk-small-comparison.json",
@@ -2031,7 +2031,7 @@
         "spec/compatibility/closure/evidence/RTDB-sdk-rules-load-comparison.json",
         "spec/compatibility/closure/evidence/RTDB-breadth-comparison.json"
       ],
-      "note": "The release job replays each of these campaigns (R28 to R34) on the installed binary and judges it against the fixtures; the older campaigns' replays on this build, run by the review of 2026-11-06, all matched but are not bound by this record."
+      "note": "The release job replays each of these seven campaigns (R28 to R34) on the installed binary and judges it against the fixtures, and the replays of this record were run on the build named here. The other seven aggregate comparisons were not replayed on this build; they keep the historical bindings of historicalBinding. The older campaigns that the review of 2026-11-06 replayed all matched on an earlier binary, which is history only and binds nothing here."
     }
   },
   "knownDifferences": {
@@ -2142,7 +2142,7 @@
       "evidence": "crates/fireemu-adapter-database/tests/rest.rs"
     },
     "loneSurrogateClaimsQueryValuesFramesEmulatorProfile": {
-      "statement": "Official-emulator-only difference with no production answer: on the emulator profile a token claim that holds a lone surrogate is read, a lone surrogate in a query value, a WebSocket frame value or an import file value is `?`, as the official emulator does; the strict profile does not read such a token and refuses such values as before. Found by the pin of the Opus delta review S3 and fixed by owner 2286. Found with it and fixed on the emulator profile (the strict profile is unchanged): a WebSocket merge entry whose key is not a valid path is answered `invalid_parameters` (\"Invalid token in path\", \"Empty strings are not valid keys\" for the empty key, the path length and depth texts) where the connection error was sent and the empty key was accepted; the `authvar` of a `gauth` frame keeps a lone surrogate and is echoed as the object in the answer (it was read with `?` and the answer said null). The echo lists the members in the order of the map, not in the order sent.",
+      "statement": "Official-emulator-only difference with no production answer: on the emulator profile a token claim that holds a lone surrogate is read, a lone surrogate in a query value, a WebSocket frame value or an import file value is `?`, as the official emulator does; the strict profile does not read such a token and refuses such values as before. Found by the pin of the Opus delta review S3 and fixed by owner 2286. Found with it and fixed on the emulator profile (the strict profile is unchanged): a WebSocket frame is read once and its path is validated in that read, so a frame whose path holds a lone surrogate answers `invalid_parameters` and writes nothing; a WebSocket merge entry whose key is not a valid path is answered `invalid_parameters` (\"Invalid token in path\", \"Empty strings are not valid keys\" for the empty key, the path length and depth texts) where the connection error was sent and the empty key was accepted; the `authvar` of a `gauth` frame keeps a lone surrogate and is echoed as the object in the answer (it was read with `?` and the answer said null). The echo lists the members in the order of the map, not in the order sent.",
       "decisionRef": "docs.local/instructions/owner-decisions.md (2286, \"RTDB closure lone surrogates in claims and query values\", 2026-11-06)",
       "evidence": "crates/fireemu-adapter-database/tests/fixtures/rules-lone-claims-query-official-emulator-4.11.2.json"
     }
@@ -2292,7 +2292,7 @@
         "item": "the emulator-profile regular-expression dialect (escaped letters, \\W, \\D) and lone surrogates in JSON bodies, in production",
         "key": "notClaimed_emulator_profile_regex_and_body_surrogates",
         "localBehaviour": "follows-official-emulator",
-        "detail": "owner 2276: the emulator profile follows the jar for these; the strict profile keeps refusing them because production has not been asked. 251 of the 323 corpus rows of the dialect that fireemu denies and the jar allows stay denied (other constructs of the dialect)."
+        "detail": "owner 2276: the emulator profile follows the jar for these; the strict profile keeps refusing them because production has not been asked. 239 of the 323 corpus rows of the dialect that fireemu denied and the jar allows now decide as the jar; 84 stay denied (71 with the `i` flag and non-ASCII text, 11 with a backslash before a format or line character, 2 with a class range whose end is beyond the Basic Multilingual Plane)."
       },
       {
         "item": "a lone surrogate in a token claim, a query value, a WebSocket frame or an import file, in production; and the shapes of the connection around them",
@@ -2304,7 +2304,7 @@
         "item": "over-refusal by the emulator profile beyond the probed corpora",
         "key": "notClaimed_over_refusal_probed_corpora_only",
         "localBehaviour": "own-implementation",
-        "detail": "that the emulator profile refuses nothing the official emulator admits was checked on the probed corpora only (the 22k-row Rules corpora, the lone-surrogate, query.orderBy and regular-expression rows, the REST and token cases); each round of review found shapes the corpora lacked, so other refusals may exist."
+        "detail": "that the emulator profile refuses nothing the official emulator admits was checked on the probed corpora only (the 22k-row Rules corpora, the lone-surrogate, query.orderBy and regular-expression rows, the REST and token cases); each round of review found shapes the corpora lacked, so other refusals may exist. The 84 regular-expression rows listed under notClaimed_emulator_profile_regex_and_body_surrogates are known refusals of that kind."
       }
     ]
   }

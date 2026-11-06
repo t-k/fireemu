@@ -17,7 +17,7 @@ class SmokeCases(private val context: android.content.Context, private val emit:
     private fun <T> Task<T>.await(): T = Tasks.await(this, 10, TimeUnit.SECONDS)
     private val results = linkedMapOf<String, String>()
     private fun runCase(id: String, requires: List<String> = emptyList(), body: () -> Unit) {
-        if (selectedCase != null && selectedCase != id) {
+        if (selectedCase != null && selectedCase != id && !id.startsWith("$selectedCase.")) {
             results[id] = "blocked"
             emit("CASE $id blocked diagnostic_filter 0")
             return
@@ -38,7 +38,12 @@ class SmokeCases(private val context: android.content.Context, private val emit:
             results[id] = "failed"
             var cause = error
             while (cause.cause != null) cause = cause.cause!!
-            if (selectedCase != null) emit("PRIVATE_DETAIL $id ${cause.javaClass.name}: ${cause.message}")
+            if (selectedCase != null) {
+                val message = cause.message.orEmpty()
+                val known = listOf("MISSING_REFRESH_TOKEN", "INVALID_REFRESH_TOKEN", "TOKEN_EXPIRED", "USER_DISABLED", "USER_NOT_FOUND", "INVALID_API_KEY", "MISSING_GRANT_TYPE", "INVALID_GRANT_TYPE")
+                val code = (cause as? com.google.firebase.auth.FirebaseAuthException)?.errorCode ?: known.firstOrNull { message.contains(it) } ?: "unknown"
+                emit("PRIVATE_DETAIL $id type=${cause.javaClass.simpleName} code=$code html404=${message.contains("<!DOCTYPE html>") && message.contains("404")} jsonConversion=${message.contains("Json conversion failed")}")
+            }
             val classification = when (cause) {
                 is FirebaseFirestoreException -> "firestore_${cause.code.name}"
                 is StorageException -> "storage_${cause.errorCode}_${cause.httpResultCode}"

@@ -359,6 +359,51 @@ async function inside(mode) {
   }
 }
 
+export function cleanupOwned(
+  { id, owner, directory, podman, absent, save = writeFileSync },
+  primaryFailure,
+) {
+  const failures = [];
+  const report = () => {
+    if (failures.length)
+      throw new AggregateError(
+        primaryFailure ? [primaryFailure, ...failures] : failures,
+        "owned cleanup or diagnostics failed",
+        { cause: primaryFailure },
+      );
+  };
+  const attempt = (operation) => {
+    try {
+      operation();
+    } catch (error) {
+      failures.push(error);
+    }
+  };
+  let info;
+  try {
+    info = JSON.parse(podman(["inspect", id]))[0];
+    verifyIdentity(info, id, owner);
+  } catch (error) {
+    if (!primaryFailure) throw error;
+    failures.push(error);
+    report();
+  }
+  attempt(() => save(path.join(directory, "final-inspect.json"), JSON.stringify(info, null, 2)));
+  if (info.State.Running) attempt(() => podman(["stop", "--time", "5", id]));
+  attempt(() =>
+    save(path.join(directory, "container.log"), podman(["logs", id], { includeStderr: true })),
+  );
+  attempt(() => podman(["rm", "--volumes", id]));
+  attempt(() => assert.ok(absent("container", id), "owned container must be absent"));
+  for (const mount of info.Mounts ?? []) {
+    if (mount.Type === "volume")
+      attempt(() =>
+        assert.ok(absent("volume", mount.Name), "owned anonymous volume must be absent"),
+      );
+  }
+  report();
+}
+
 async function host(action, connection, image, toolkit, output) {
   assert.ok(["record", "check"].includes(action), "use record or check");
   assert.ok(
@@ -376,6 +421,7 @@ async function host(action, connection, image, toolkit, output) {
   for (const mode of ["pglite", "postgres"]) {
     const owner = `dataconnect-${mode}-${process.pid}-${Date.now()}`;
     let id;
+    let primaryFailure;
     const directory = path.join(output, mode);
     mkdirSync(directory);
     try {
@@ -429,21 +475,22 @@ async function host(action, connection, image, toolkit, output) {
           JSON.parse(readFileSync(path.join(here, "fixtures", `${mode}.json`), "utf8")),
           records[mode],
         );
+    } catch (error) {
+      primaryFailure = error;
+      throw error;
     } finally {
-      if (id) {
-        const info = JSON.parse(podman(["inspect", id]))[0];
-        verifyIdentity(info, id, owner);
-        writeFileSync(path.join(directory, "final-inspect.json"), JSON.stringify(info, null, 2));
-        if (info.State.Running) podman(["stop", "--time", "5", id]);
-        // Preserve logs even when startup fails before creating /out.
-        writeFileSync(
-          path.join(directory, "container.log"),
-          podman(["logs", id], { includeStderr: true }),
+      if (id)
+        cleanupOwned(
+          {
+            id,
+            owner,
+            directory,
+            podman,
+            absent: (kind, name) =>
+              spawnSync("podman", ["--connection", connection, kind, "exists", name]).status === 1,
+          },
+          primaryFailure,
         );
-        podman(["rm", id]);
-        const exists = spawnSync("podman", ["--connection", connection, "container", "exists", id]);
-        assert.equal(exists.status, 1, "owned container must be absent");
-      }
     }
   }
   if (action === "record") {

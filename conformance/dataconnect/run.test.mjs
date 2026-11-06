@@ -156,3 +156,114 @@ test("local toolkit build errors are fatal even when the process exits zero", ()
     assert.throws(() => verifyBuild(result), /build/);
   }
 });
+
+import { cleanupOwned } from "./run.mjs";
+
+for (const fault of ["none", "inspect-write", "logs", "log-write"]) {
+  test(`owned cleanup removes anonymous volumes despite ${fault}`, () => {
+    const id = "c".repeat(64);
+    const calls = [];
+    const primary = new Error("original oracle failure");
+    const input = {
+      id,
+      owner: "cleanup-test",
+      directory: "/unused",
+      podman(args) {
+        calls.push(args);
+        if (args[0] === "inspect")
+          return JSON.stringify([
+            {
+              Id: id,
+              Config: { Labels: { "fireemu.dataconnect.run": "cleanup-test" } },
+              State: { Running: true },
+              Mounts: [{ Type: "volume", Name: "anonymous-test-volume" }],
+            },
+          ]);
+        if (args[0] === "logs" && fault === "logs") throw new Error("log capture failed");
+        return "";
+      },
+      save(file) {
+        if (
+          (fault === "inspect-write" && file.endsWith("final-inspect.json")) ||
+          (fault === "log-write" && file.endsWith("container.log"))
+        )
+          throw new Error("disk full");
+      },
+      absent: () => true,
+    };
+    let failure;
+    try {
+      cleanupOwned(input, primary);
+    } catch (error) {
+      failure = error;
+    }
+    assert.ok(
+      calls.some((args) => args[0] === "stop"),
+      "stop must be attempted independently of diagnostics",
+    );
+    assert.ok(
+      calls.some((args) => args[0] === "rm" && args.includes("--volumes") && args.at(-1) === id),
+      "owned anonymous volumes must be removed",
+    );
+    if (fault !== "none") {
+      assert.equal(failure.cause, primary);
+      assert.equal(failure.errors[0], primary);
+      assert.ok(failure.errors.length >= 2);
+    } else assert.equal(failure, undefined);
+  });
+}
+
+test("cleanup never removes a container whose ownership cannot be established", () => {
+  const calls = [];
+  assert.throws(
+    () =>
+      cleanupOwned({
+        id: "d".repeat(64),
+        owner: "expected",
+        directory: "/unused",
+        podman(args) {
+          calls.push(args);
+          return JSON.stringify([{ Id: "d".repeat(64), Config: { Labels: {} } }]);
+        },
+        absent: () => false,
+        save() {},
+      }),
+    /ownership/,
+  );
+  assert.deepEqual(
+    calls.map((args) => args[0]),
+    ["inspect"],
+  );
+});
+
+for (const retained of ["container", "volume"]) {
+  test(`cleanup rejects retained ${retained}`, () => {
+    const id = "e".repeat(64);
+    assert.throws(
+      () =>
+        cleanupOwned({
+          id,
+          owner: "absence-test",
+          directory: "/unused",
+          save() {},
+          podman(args) {
+            if (args[0] === "inspect")
+              return JSON.stringify([
+                {
+                  Id: id,
+                  Config: { Labels: { "fireemu.dataconnect.run": "absence-test" } },
+                  State: { Running: false },
+                  Mounts: [{ Type: "volume", Name: "owned-volume" }],
+                },
+              ]);
+            return "";
+          },
+          absent(kind, name) {
+            assert.equal(name, kind === "container" ? id : "owned-volume");
+            return kind !== retained;
+          },
+        }),
+      AggregateError,
+    );
+  });
+}

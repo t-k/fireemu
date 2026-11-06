@@ -73,6 +73,11 @@ fn snapshot_admission_keeps_the_inline_node_byte_charge() {
         _priority: Option<Priority>,
     }
     let node = size_of::<InlineNode>() as u64;
+    #[cfg(target_pointer_width = "64")]
+    assert_eq!(
+        node, 56,
+        "the historical snapshot charge is a policy boundary"
+    );
     let options = RestOptions::default();
     let prepared = prepare_import(
         "demo-footprint",
@@ -96,35 +101,37 @@ fn snapshot_admission_keeps_the_inline_node_byte_charge() {
     assert!(existing + 1 + snapshot.retained_bytes() > budget);
 }
 
+const PRIORITY_CASES: [(&str, &str, &str, &str); 21] = [
+    ("leaf", "none", "int", "replace"),
+    ("leaf", "int", "double", "priority"),
+    ("dense", "string", "negzero", "replace"),
+    ("sparse", "double", "int", "delete"),
+    ("small", "int", "int", "delete"),
+    ("leaf", "double", "negzero", "unchanged"),
+    ("wide", "none", "int", "replace"),
+    ("sparse", "none", "negzero", "priority"),
+    ("dense", "none", "double", "delete"),
+    ("small", "none", "double", "unchanged"),
+    ("small", "string", "negzero", "priority"),
+    ("sparse", "string", "int", "unchanged"),
+    ("leaf", "string", "double", "delete"),
+    ("sparse", "double", "double", "replace"),
+    ("wide", "string", "negzero", "delete"),
+    ("wide", "double", "double", "priority"),
+    ("sparse", "int", "negzero", "replace"),
+    ("dense", "int", "int", "unchanged"),
+    ("dense", "double", "int", "priority"),
+    ("wide", "int", "int", "unchanged"),
+    ("small", "double", "double", "replace"),
+];
+
 #[test]
 fn generated_priority_representation_cases() {
     use fireemu_adapter_database::json_text::{output_json, parse, render, Style};
     use fireemu_core_database::{Content, Format, Json, Limits, Path, ServerValueContext, Tree};
-    let rows = [
-        ("leaf", "none", "int", "replace"),
-        ("leaf", "int", "double", "priority"),
-        ("dense", "string", "negzero", "replace"),
-        ("sparse", "double", "int", "delete"),
-        ("small", "int", "int", "delete"),
-        ("leaf", "double", "negzero", "unchanged"),
-        ("wide", "none", "int", "replace"),
-        ("sparse", "none", "negzero", "priority"),
-        ("dense", "none", "double", "delete"),
-        ("small", "none", "double", "unchanged"),
-        ("small", "string", "negzero", "priority"),
-        ("sparse", "string", "int", "unchanged"),
-        ("leaf", "string", "double", "delete"),
-        ("sparse", "double", "double", "replace"),
-        ("wide", "string", "negzero", "delete"),
-        ("wide", "double", "double", "priority"),
-        ("sparse", "int", "negzero", "replace"),
-        ("dense", "int", "int", "unchanged"),
-        ("dense", "double", "int", "priority"),
-        ("wide", "int", "int", "unchanged"),
-        ("small", "double", "double", "replace"),
-    ];
+
     let context = ServerValueContext { now_millis: 0 };
-    for (shape, priority, number, operation) in rows {
+    for (shape, priority, number, operation) in PRIORITY_CASES {
         let leaf = match number {
             "double" => "1.0",
             "negzero" => "-0.0",
@@ -186,6 +193,10 @@ fn generated_priority_representation_cases() {
                 let path = Path::parse("/.priority", &Limits::default()).unwrap();
                 tree.set(&path, &Json::int(4), context).unwrap();
                 assert!(tree.get_json(&path, Format::Plain).same_form(&Json::int(4)));
+                assert!(
+                    fireemu_adapter_database::json_text::written_priority_at(&tree, &path)
+                        .same_form(&Json::int(4))
+                );
                 assert_eq!(export(&tree, Format::Plain), before_plain);
             }
             _ => {

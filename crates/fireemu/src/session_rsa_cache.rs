@@ -757,6 +757,7 @@ mod tests {
         let root = scratch("warm-performance");
         let first = load_or_generate_at(&root, 0x5eed).unwrap();
         assert!(!first.hit);
+        place_valid_entry(&root, 0x5eed, &first.signer);
         let mut samples = (0..21)
             .map(|_| {
                 let started = std::time::Instant::now();
@@ -907,6 +908,17 @@ mod tests {
         let _ = place_entry(root, seed, bytes, 0o600);
     }
 
+    #[cfg(unix)]
+    fn encoded_entry(seed: u64, signer: &super::RsaSigner) -> Vec<u8> {
+        let document = signer.to_pkcs8_der().unwrap();
+        super::encode_envelope(seed, document.as_bytes()).to_vec()
+    }
+
+    #[cfg(unix)]
+    fn place_valid_entry(root: &std::path::Path, seed: u64, signer: &super::RsaSigner) {
+        place_entry(root, seed, &encoded_entry(seed, signer), 0o600);
+    }
+
     /// Makes `step` of `publish_entry` fail after the managed directories opened, first for a
     /// missing entry and then for an invalid one, and checks that neither load is fatal: the
     /// key is generated with `hit` false, and the entry is left as it was.
@@ -967,7 +979,7 @@ mod tests {
         let first = load_or_generate_at(&root, 10).unwrap();
         assert!(!first.hit);
         let entry = cache_entry_path(&root, 10);
-        let valid = std::fs::read(&entry).unwrap();
+        let valid = encoded_entry(10, &first.signer);
         overwrite_owner_only_entry(&root, 10, b"corrupt cache entry");
 
         let repaired = load_or_generate_at(&root, 10).unwrap();
@@ -994,15 +1006,16 @@ mod tests {
         let root = scratch("repair-foreign");
         let first = load_or_generate_at(&root, 10).unwrap();
         let entry = cache_entry_path(&root, 10);
-        let valid = std::fs::read(&entry).unwrap();
+        let valid = encoded_entry(10, &first.signer);
 
         overwrite_owner_only_entry(&root, 10, &valid[..valid.len() / 2]);
         assert!(!load_or_generate_at(&root, 10).unwrap().hit);
         assert_eq!(std::fs::read(&entry).unwrap(), valid);
         assert!(load_or_generate_at(&root, 10).unwrap().hit);
 
-        let _ = load_or_generate_at(&root, 11).unwrap();
-        let foreign = std::fs::read(cache_entry_path(&root, 11)).unwrap();
+        let seed_eleven = load_or_generate_at(&root, 11).unwrap();
+        let foreign = encoded_entry(11, &seed_eleven.signer);
+        place_entry(&root, 11, &foreign, 0o600);
         overwrite_owner_only_entry(&root, 10, &foreign);
         let repaired = load_or_generate_at(&root, 10).unwrap();
         assert!(!repaired.hit);
@@ -1025,7 +1038,8 @@ mod tests {
     #[test]
     fn an_owner_only_entry_is_read_once_which_is_what_the_read_counter_counts() {
         let root = scratch("read-counter");
-        let _ = load_or_generate_at(&root, 12).unwrap();
+        let generated = load_or_generate_at(&root, 12).unwrap();
+        place_valid_entry(&root, 12, &generated.signer);
         let directory = open_cache_directory(&root).unwrap();
         reset_content_reads();
         assert!(matches!(
@@ -1088,7 +1102,8 @@ mod tests {
         use std::os::unix::fs::PermissionsExt as _;
 
         let root = scratch("unread");
-        let _ = load_or_generate_at(&root, 13).unwrap();
+        let generated = load_or_generate_at(&root, 13).unwrap();
+        place_valid_entry(&root, 13, &generated.signer);
         let entry = cache_entry_path(&root, 13);
         std::fs::set_permissions(&entry, std::fs::Permissions::from_mode(0o644)).unwrap();
         let directory = open_cache_directory(&root).unwrap();
@@ -1107,7 +1122,8 @@ mod tests {
         use std::os::unix::fs::PermissionsExt as _;
 
         let root = scratch("fifo");
-        let _ = load_or_generate_at(&root, 12).unwrap();
+        let generated = load_or_generate_at(&root, 12).unwrap();
+        place_valid_entry(&root, 12, &generated.signer);
         let entry = cache_entry_path(&root, 12);
         std::fs::remove_file(&entry).unwrap();
         let status = std::process::Command::new("mkfifo")
@@ -1200,7 +1216,9 @@ mod tests {
         for depth in 1..=super::MANAGED_DIRECTORIES.len() {
             let root = scratch("acl-directory");
             let seed = 20 + depth as u64;
+            let generated = super::generate(seed).unwrap();
             assert!(!load_or_generate_at(&root, seed).unwrap().hit);
+            place_valid_entry(&root, seed, &generated.signer);
             assert!(load_or_generate_at(&root, seed).unwrap().hit);
             let entry = cache_entry_path(&root, seed);
             let original = std::fs::read(&entry).unwrap();
@@ -1231,6 +1249,7 @@ mod tests {
         let root = scratch("acl-entry");
         let first = load_or_generate_at(&root, 24).unwrap();
         assert!(!first.hit);
+        place_valid_entry(&root, 24, &first.signer);
         assert!(load_or_generate_at(&root, 24).unwrap().hit);
         let entry = cache_entry_path(&root, 24);
         let original = std::fs::read(&entry).unwrap();
@@ -1270,6 +1289,7 @@ mod tests {
 
         clear_acl_entries(&root);
         assert!(!load_or_generate_at(&root, 25).unwrap().hit);
+        place_valid_entry(&root, 25, &first.signer);
         assert!(load_or_generate_at(&root, 25).unwrap().hit);
         let _ = std::fs::remove_dir_all(root);
     }
@@ -1295,6 +1315,7 @@ mod tests {
     fn an_unreadable_entry_acl_refuses_the_entry_without_touching_it() {
         let root = scratch("acl-unreadable-entry");
         let first = load_or_generate_at(&root, 27).unwrap();
+        place_valid_entry(&root, 27, &first.signer);
         assert!(load_or_generate_at(&root, 27).unwrap().hit);
         let entry = cache_entry_path(&root, 27);
         let original = std::fs::read(&entry).unwrap();
@@ -1362,6 +1383,7 @@ mod tests {
         let _cleanup = AclCleanup(root.to_path_buf());
         let first = load_or_generate_at(&root, 28).unwrap();
         assert!(!first.hit);
+        place_valid_entry(&root, 28, &first.signer);
         assert!(load_or_generate_at(&root, 28).unwrap().hit);
         let entry = cache_entry_path(&root, 28);
         let original = std::fs::read(&entry).unwrap();
@@ -1390,6 +1412,7 @@ mod tests {
             let seed = 30 + depth as u64;
             let first = load_or_generate_at(&root, seed).unwrap();
             assert!(!first.hit);
+            place_valid_entry(&root, seed, &first.signer);
             assert!(load_or_generate_at(&root, seed).unwrap().hit);
             let entry = cache_entry_path(&root, seed);
             let original = std::fs::read(&entry).unwrap();

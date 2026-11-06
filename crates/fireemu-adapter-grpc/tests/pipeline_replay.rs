@@ -5081,8 +5081,10 @@ fn every_verified_grpc_pipeline_match_replays_the_committed_recording() {
     assert_eq!(selected.len(), 29, "claimed gRPC match set changed");
     assert_eq!(VERIFIED_GRPC_REQUEST_STEPS.len(), 29);
     let mut observed_strata = HashSet::new();
+    let mut replayed_rows = 0;
 
     for (row, expected_status) in selected {
+        replayed_rows += 1;
         let (program_id, row_step) = row.split_once('#').unwrap();
         let request_program = requests["programs"]
             .as_array()
@@ -5162,4 +5164,5 @@ fn every_verified_grpc_pipeline_match_replays_the_committed_recording() {
             "missing PICT row {stratum:?}"
         );
     }
+    assert_eq!(replayed_rows, 29, "not every pinned gRPC row was replayed");
 }

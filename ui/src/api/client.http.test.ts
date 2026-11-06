@@ -243,15 +243,21 @@ describe("subscribe", () => {
   });
 
   it("stops the current parsed batch when its subscriber aborts", async () => {
-    let responseFinished!: (finished: boolean) => void;
-    const peerClosed = new Promise<boolean>((resolve) => {
-      responseFinished = resolve;
-    });
-    server.script.set("GET /ui/api/same-chunk", {
-      headers: { "content-type": "text/event-stream" },
-      chunks: ["data: a\n\ndata: b\n\ndata: c\n\n"],
-      onResponseClosed: responseFinished,
-    });
+    // Control the reader so all three events are guaranteed to arrive in one read.
+    const reader = {
+      read: vi
+        .fn()
+        .mockResolvedValueOnce({
+          done: false,
+          value: new TextEncoder().encode("data: a\n\ndata: b\n\ndata: c\n\n"),
+        })
+        .mockResolvedValueOnce({ done: true, value: undefined }),
+    };
+    const originalFetch = globalThis.fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: true, body: { getReader: () => reader } }) as unknown as Response),
+    );
     const events: string[] = [];
     let closed = 0;
     let stop = () => {};
@@ -270,10 +276,14 @@ describe("subscribe", () => {
         },
       );
     });
-    await firstEvent;
-    await peerClosed;
-    expect(events).toEqual(["a"]);
-    expect(closed).toBe(0);
+    try {
+      await firstEvent;
+      expect(reader.read).toHaveBeenCalledTimes(2);
+      expect(events).toEqual(["a"]);
+      expect(closed).toBe(0);
+    } finally {
+      vi.stubGlobal("fetch", originalFetch);
+    }
   });
 
   it("stays silent when abort races with end of stream", async () => {

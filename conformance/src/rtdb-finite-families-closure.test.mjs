@@ -652,3 +652,9 @@ test("the forged-token refusals outside the recorded shape are declared with the
     ),
   );
 });
+
+test("every emulator-profile difference the RTDB record declares for the 2026-11 recordings cites an owner decision row", () => {
+  const known = closure().knownDifferences;
+  for (const key of ["restEmulatorFollowsOfficialEmulator", "invalidCredentialsEmulatorProfile"])
+    assert.match(known[key].decisionRef, /owner-decisions\.md \(.*\b2270\b/, key);
+});

@@ -1926,17 +1926,6 @@ fn the_rules_request_trace_lists_decided_requests_newest_first_with_their_expres
         condition["values"],
         json!([{"value": {"kind": "bool", "bool": false}, "count": 1}])
     );
-    assert_eq!(
-        condition,
-        &json!({
-            "line": condition["line"],
-            "column": condition["column"],
-            "currentOffset": condition_at,
-            "endOffset": condition_at + "id != 'secret'".len(),
-            "values": [{"value": {"kind": "bool", "bool": false}, "count": 1}],
-        }),
-        "an ordinary trace expression keeps its existing JSON shape"
-    );
 
     // Loading another ruleset drops the trace with the source it described.
     assert_eq!(
@@ -2041,6 +2030,7 @@ fn rules_request_trace_keeps_omitted_counts_and_truncation_markers() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn rules_request_trace_matches_all_seeded_pict_combinations() {
     use fireemu_core_rules::ast::Span;
     use fireemu_core_rules::coverage::{
@@ -2167,6 +2157,11 @@ fn rules_request_trace_matches_all_seeded_pict_combinations() {
             }],
         }),
         "the complete small trace remains byte-shape compatible"
+    );
+    assert_eq!(
+        small.to_string(),
+        r#"{"allowed":true,"expressions":[{"column":2,"currentOffset":10,"endOffset":11,"line":1,"values":[{"count":1,"value":{"kind":"string","string":"ordinary"}}]}],"method":"get","path":"notes/pict-0","reason":"","sequence":1,"service":"firestore","uid":null}"#,
+        "the serialized small trace remains byte-identical"
     );
 }
 

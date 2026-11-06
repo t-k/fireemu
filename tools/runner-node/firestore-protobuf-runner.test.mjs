@@ -92,7 +92,8 @@ async function start(t, sdkSource, profile) {
   };
 }
 
-const sdkRoot = fileURLToPath(new URL('../../conformance/functions-events/fixtures/node_modules/firebase-functions', import.meta.url));
+const sdkRoot = process.env.FE_SOURCE_SDK_ROOT
+  ?? fileURLToPath(new URL('../../conformance/node_modules/firebase-functions', import.meta.url));
 
 
 const corpusPath = process.env.FE_FIRESTORE_CORPUS ?? new URL('../../crates/fireemu-adapter-functions/tests/fixtures/firestore-protobuf.json', import.meta.url);

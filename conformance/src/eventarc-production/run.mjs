@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawn, execFileSync } from "node:child_process";
+import { publicEvidence } from "../evidence.mjs";
 import {
   readFileSync,
   writeFileSync,
@@ -907,7 +908,7 @@ export function exportComparison({ evidencePath, output, binary }) {
   // All checks run after physical report binding, on the actual retained wire.
   validateEventarcSemantics(comparison);
   comparison.checkEvidenceSha256 = digest(evidencePath);
-  save(output, comparison);
+  save(output, publicEvidence(comparison));
   return comparison;
 }
 export function buildExecArgs({ work, project, tasksPort, guard, session: sessionPath }) {

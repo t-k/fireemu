@@ -1,16 +1,21 @@
 """Offline receipt validation must reject false passes and cleanup gaps."""
 
 import copy
+import json
 
 import pytest
 from probe import DATABASE, NUMBER, PROJECT
 from publish import (
     AGGREGATIONS,
+    OBSERVATION_INPUTS,
     REFUSAL,
     UNCHANGED,
+    read_public_observations,
     validate_aggregation,
     validate_identity,
     validate_timestamps,
+    write_index,
+    write_public_observations,
 )
 
 
@@ -146,3 +151,37 @@ def test_aggregation_rejects_incomplete_or_false_pass_receipts():
 def test_timestamp_empty_report_cannot_become_sixty_passes():
     with pytest.raises(ValueError):
         validate_timestamps({"results": [], "cleanup": []})
+
+
+def test_public_index_sink_validates_before_truncation_and_preserves_json_bytes(tmp_path):
+    destination = tmp_path / "acquisition.json"
+    destination.write_text("keep existing bytes", encoding="utf-8")
+    with pytest.raises(ValueError, match="public evidence path validation failed"):
+        write_index({"path": "../../outside.json"}, destination)
+    assert destination.read_text(encoding="utf-8") == "keep existing bytes"
+
+    value = {"schemaVersion": 1, "snapshot": "snapshot-a"}
+    write_index(value, destination)
+    assert destination.read_text(encoding="utf-8") == json.dumps(value, indent=2) + "\n"
+
+
+def test_public_observation_copies_validate_all_bytes_before_creating_destination(tmp_path):
+    private_input = tmp_path / "private-input"
+    destination = tmp_path / "public-observations"
+    private_input.mkdir()
+    expected = {}
+    for name, _, _ in OBSERVATION_INPUTS:
+        raw = b'{"receipt":"safe"}\r\n'
+        (private_input / name).write_bytes(raw)
+        expected[name] = raw
+    (private_input / "auth-production-final.json").write_bytes(
+        b'{"path":"../../outside.json"}\n'
+    )
+    with pytest.raises(ValueError, match="public evidence path validation failed"):
+        read_public_observations(private_input)
+    assert not destination.exists()
+
+    (private_input / "auth-production-final.json").write_bytes(expected["auth-production-final.json"])
+    observations = read_public_observations(private_input)
+    write_public_observations(observations, destination)
+    assert {path.name: path.read_bytes() for path in destination.iterdir()} == expected

@@ -20,6 +20,7 @@
 // session restores it and reads it back, and the run requires MFA to be off before it starts
 // and after it ends. Second factors are TOTP and SMS to configured test numbers only.
 
+import { publicEvidence } from "../evidence.mjs";
 import { execFile, spawn } from "node:child_process";
 import { createHash, generateKeyPairSync, randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
@@ -858,7 +859,7 @@ async function exportComparison(out) {
         : { row, status },
     ),
   };
-  await writeFile(out, `${JSON.stringify(evidence, null, 2)}\n`);
+  await writeFile(out, `${JSON.stringify(publicEvidence(evidence), null, 2)}\n`);
   console.log(JSON.stringify({ out, summary: evidence.summary, fixtureSha256 }, null, 2));
 }
 

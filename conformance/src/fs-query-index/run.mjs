@@ -34,6 +34,7 @@
 // the whole sandbox `(default)` database, so a recording holds a lock file next to the ledger and
 // the other lane cannot record at the same time.
 
+import { publicEvidence } from "../evidence.mjs";
 import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
@@ -1245,7 +1246,7 @@ async function exportComparison(out) {
       },
     ),
   };
-  await writeFile(out, `${JSON.stringify(evidence, null, 2)}\n`);
+  await writeFile(out, `${JSON.stringify(publicEvidence(evidence), null, 2)}\n`);
   console.log(JSON.stringify({ out, summary: evidence.summary, fixtureSha256 }, null, 2));
 }
 
@@ -1265,7 +1266,7 @@ async function exportContent(out) {
     covered: content.covered,
     steps: content.steps,
   };
-  await writeFile(out, `${JSON.stringify(evidence, null, 2)}\n`);
+  await writeFile(out, `${JSON.stringify(publicEvidence(evidence), null, 2)}\n`);
   console.log(JSON.stringify({ out, covered: evidence.covered.length }, null, 2));
 }
 

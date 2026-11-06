@@ -44,6 +44,142 @@ const stable = (value) => {
   return value;
 };
 
+const PRIVATE_PATH_PARTS = ["docs.local", ".codex", "docs/superpowers"];
+const hasPrivatePath = (value) => {
+  const normalized = value.replaceAll("\\", "/");
+  return PRIVATE_PATH_PARTS.some((part) => normalized.includes(part));
+};
+const isUrl = (value) => /^https?:\/\/[^\s]+$/i.test(value);
+const isCanonicalBase64 = (value) =>
+  /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value) &&
+  Buffer.from(value, "base64").toString("base64") === value;
+// These selector roots are the finite roots observed in the tracked public JSON corpus.
+const JSON_SELECTOR_ROOTS = new Set([
+  "wire",
+  "publishes",
+  "evidence",
+  "rows",
+  "observations",
+  "localCapture",
+  "frames",
+  "originalEvidence",
+  "publications",
+  "groups",
+  "calls",
+  "manifest",
+  "segments",
+  "native",
+  "artifact",
+  "proofs",
+  "profile",
+  "production",
+  "fixtureSources",
+  "fixtureDigests",
+  "runs",
+  "comparisons",
+  "binary",
+  "sha256",
+  "result",
+  "cases",
+]);
+const selectorCharacter = /[\w~.()=:,; -]/;
+const isApiOrRpc = (key, value) =>
+  /(?:path|route|rpc|endpoint)/i.test(key) &&
+  (/^\/v1(?:\/|$)/.test(value) || /^\/google\.[^/]+\.[^/]+\//.test(value));
+const isSelector = (key, value) =>
+  /selector|pointer/i.test(key) &&
+  value.startsWith("/") &&
+  (value === "/" ||
+    ([...value].every(
+      (character) =>
+        character === "/" ||
+        character === "[" ||
+        character === "]" ||
+        selectorCharacter.test(character),
+    ) &&
+      !/(?:^|\/)\.\.(?:\/|$)/.test(value) &&
+      [...value.matchAll(/(?:^|[,;\s])\/([A-Za-z][A-Za-z0-9_-]*)/g)].every((match) =>
+        JSON_SELECTOR_ROOTS.has(match[1]),
+      )));
+const isPubsubCoordinate = (key, value) =>
+  key === "coordinate" && /^\/conditions\/\d+\/cases\/\d+$/.test(value);
+const isKnownDifferencePointer = (key, value) =>
+  key === "knownDifferences" && /^\/knownDifferences\/[A-Za-z0-9_-]+$/.test(value);
+const isKnownRootUrl = (key, value) => /url/i.test(key) && value === "/";
+const isRecordedRootRoute = (key, value) => ["production", "local"].includes(key) && value === "/";
+const isFilesystemPath = (value) => {
+  if (/^~(?:[\\/]|$)/.test(value)) return true;
+  if (/^file:/i.test(value) || /^[A-Za-z]:[\\/]/.test(value) || value.startsWith("\\\\"))
+    return true;
+  if (value.includes("\\") && /(?:^|[\\/])\.\.(?:[\\/]|$)/.test(value)) return true;
+  if (value.startsWith("/")) return true;
+  const parts = value.replaceAll("\\", "/").split("/");
+  let depth = 0;
+  for (const part of parts) {
+    if (!part || part === ".") continue;
+    if (part === "..") {
+      depth--;
+      if (depth < 0) return true;
+    } else depth++;
+  }
+  return false;
+};
+
+/** Refuse public evidence values or keys that can disclose private filesystem paths. */
+export function publicEvidence(value) {
+  const fail = (code) => {
+    const error = new Error("public evidence contains a disallowed filesystem path");
+    error.code = code;
+    throw error;
+  };
+  const walk = (current, key = "") => {
+    if (typeof current === "string") {
+      if (hasPrivatePath(current)) fail("PRIVATE_MARKER");
+      if (/bytesValue$/i.test(key) && isCanonicalBase64(current)) {
+        if (current.startsWith("/") && !current.includes("=")) fail("ABSOLUTE_PATH");
+        const decoded = Buffer.from(current, "base64");
+        const text = decoded.toString("utf8");
+        if (Buffer.from(text, "utf8").equals(decoded)) walk(text, "decodedText");
+        return;
+      }
+      if (isUrl(current)) {
+        if (/url|uri|link|origin|authority/i.test(key)) return;
+        fail("URL_CONTEXT");
+      }
+      if (
+        isSelector(key, current) ||
+        isPubsubCoordinate(key, current) ||
+        isKnownDifferencePointer(key, current) ||
+        isApiOrRpc(key, current) ||
+        isKnownRootUrl(key, current) ||
+        isRecordedRootRoute(key, current)
+      )
+        return;
+      if (/^file:/i.test(current)) fail("FILE_URL");
+      if (isFilesystemPath(current))
+        fail(current.startsWith("..") ? "PARENT_ESCAPE" : "ABSOLUTE_PATH");
+      // Absolute paths embedded in prose are unsafe even when the whole string is not a path.
+      if (
+        /(?:^|\s)(?:\/(?:Users|home|tmp|private|var|etc|usr|opt|root|mnt|Volumes|System|Library|Applications|workspace|work)(?:\/|\s|$)|[A-Za-z]:\\)/.test(
+          current,
+        )
+      )
+        fail("EMBEDDED_ABSOLUTE");
+      return;
+    }
+    if (Array.isArray(current)) {
+      for (const item of current) walk(item, key);
+    } else if (current && typeof current === "object") {
+      for (const [childKey, child] of Object.entries(current)) {
+        walk(childKey, "dictionaryKey");
+        walk(child, childKey);
+      }
+    }
+  };
+  walk(value);
+  return value;
+}
+
 /** SHA-256 digest for a JSON identity value. */
 export const digestJson = (value) =>
   "sha256-" +

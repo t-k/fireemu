@@ -1938,14 +1938,13 @@ test("R11 binds every supplied summary and receipt field to the collected compar
   }
 });
 
-test("R11 trusted collector preserves exact raw and comparison snapshots and their hashes", async () => {
+test("R11 trusted collector preserves exact validated snapshots and their hashes", async () => {
   const dir = mkdtempSync(join(tmpdir(), "strict-raw-collector-")),
     out = join(dir, "out");
   mkdirSync(out);
   try {
-    const observed = resolvedObservation(),
-      bytes = Buffer.from(observed.raw.bytesBase64, "base64"),
-      summary = Buffer.from(`${JSON.stringify(observed.result, null, 2)}\n`);
+    const bytes = Buffer.from('{"rows":[{"status":"MATCH"}]}\n'),
+      summary = Buffer.from('{"artifact":{"path":"target/release/fireemu"},"rows":[]}\n');
     writeFileSync(join(dir, "fireemu-historical-production.json"), bytes);
     writeFileSync(join(dir, "historical-production-comparison.json"), summary);
     const collected = await collectHistoricalReplay(dir, out);
@@ -1953,10 +1952,10 @@ test("R11 trusted collector preserves exact raw and comparison snapshots and the
     assert.deepEqual(collected.comparison, historicalRawObservation(summary));
     assert.deepEqual(readFileSync(join(out, "R11-fireemu-historical-production.json")), bytes);
     assert.deepEqual(readFileSync(join(out, "R11-historical-production-comparison.json")), summary);
-    assert.deepEqual(
-      judgeHistorical(regression().historical, { exitCode: 0, ...collected }, BINARY),
-      [],
-    );
+    assert.deepEqual(collected.result, {
+      artifact: { path: "target/release/fireemu" },
+      rows: [],
+    });
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

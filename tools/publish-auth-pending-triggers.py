@@ -13,7 +13,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "tools"))
+from public_evidence import public_json
 sys.path.insert(0, str(ROOT / "tools/auth-pending-triggers"))
 sys.path.insert(0, str(ROOT / "tools/compat-inventory"))
 from triggers_contract import (
@@ -331,7 +334,7 @@ if __name__ == "__main__":
         }
         validate(value, trigger)
         bundle(trigger).parent.mkdir(parents=True, exist_ok=True)
-        bundle(trigger).write_text(json.dumps(value, sort_keys=True, indent=2) + "\n")
+        bundle(trigger).write_text(public_json(value, sort_keys=True, indent=2))
     value = json.loads(bundle(trigger).read_bytes())
     page = render(value, trigger)
     if args.check:

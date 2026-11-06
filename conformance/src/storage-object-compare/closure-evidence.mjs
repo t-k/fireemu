@@ -20,6 +20,7 @@
 // copies the record into the repository and cites its digest. Running it again for another binary replaces the evidence of every condition together,
 // and an existing note on a condition stays.
 
+import { publicEvidence } from "../evidence.mjs";
 import { createHash } from "node:crypto";
 import { readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
@@ -361,7 +362,7 @@ export function closureEvidenceCommand(
     writeFileSync(options["build-record-out"], recordBytes);
   }
   mkdirSync(dirname(options.out), { recursive: true });
-  writeFileSync(options.out, `${JSON.stringify(comparison, null, 1)}\n`);
+  writeFileSync(options.out, `${JSON.stringify(publicEvidence(comparison), null, 1)}\n`);
   writeFileSync(options.closure, replaceConditionLines(closureText, closure));
   log(
     `closure evidence: ${comparison.rows.length} rows of ${comparison.artifactSha256} written; ${closure.conditions.filter((c) => c.status === "VERIFIED").length} conditions verified`,

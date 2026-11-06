@@ -29,6 +29,7 @@ import { copyFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promi
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
+import { publicEvidence } from "./evidence.mjs";
 
 import {
   historicalProductionSummary,
@@ -1136,6 +1137,8 @@ export async function collectHistoricalReplay(runDir, outDir) {
   const rawPath = join(runDir, "fireemu-historical-production.json");
   const comparisonBytes = existsSync(summaryPath) ? await readFile(summaryPath) : undefined;
   const rawBytes = existsSync(rawPath) ? await readFile(rawPath) : undefined;
+  if (comparisonBytes) publicEvidence(parseUniqueJson(comparisonBytes.toString("utf8")));
+  if (rawBytes) publicEvidence(parseUniqueJson(rawBytes.toString("utf8")));
   if (comparisonBytes)
     await writeFile(join(outDir, "R11-historical-production-comparison.json"), comparisonBytes);
   if (rawBytes) await writeFile(join(outDir, "R11-fireemu-historical-production.json"), rawBytes);

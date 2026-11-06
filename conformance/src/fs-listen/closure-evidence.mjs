@@ -18,6 +18,7 @@ import {
   recordingProblems,
 } from "./compare.mjs";
 
+import { publicEvidence } from "../evidence.mjs";
 const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 const HERE = dirname(fileURLToPath(import.meta.url));
 const RUNS = [
@@ -616,7 +617,7 @@ export async function closureEvidence(options) {
         "Local binary provenance is not a clean build of the current source head.",
       );
   mkdirSync(dirname(out), { recursive: true });
-  writeFileSync(out, `${JSON.stringify(evidence, null, 2)}\n`);
+  writeFileSync(out, `${JSON.stringify(publicEvidence(evidence), null, 2)}\n`);
   if (relative(ROOT, out) === evidence.evidencePath) {
     const formatted = spawnSync(join(ROOT, "conformance/node_modules/.bin/oxfmt"), [out], {
       cwd: ROOT,

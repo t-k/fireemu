@@ -1497,6 +1497,8 @@ function firestoreProtoTimestamp(value) {
 function firestoreProtoFields(fields) {
   return Object.fromEntries(Object.entries(fields ?? {}).map(([key, value]) => {
     const converted = { ...value };
+    // protobufjs skips null members; the NullValue enum must be its numeric zero.
+    if (value.nullValue === null) converted.nullValue = 0;
     if (value.timestampValue !== undefined) converted.timestampValue = firestoreProtoTimestamp(value.timestampValue);
     if (value.mapValue !== undefined) converted.mapValue = { fields: firestoreProtoFields(value.mapValue.fields) };
     if (value.arrayValue !== undefined) {
@@ -1507,6 +1509,12 @@ function firestoreProtoFields(fields) {
 }
 
 function writtenFirestoreEvent(event) {
+  if (event.datacontenttype === "application/protobuf") {
+    if (typeof event.data !== "string" || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(event.data)) {
+      throw new Error("Firestore protobuf IPC data must be base64 text");
+    }
+    return { ...event, data: Buffer.from(event.data, "base64") };
+  }
   if (!["google.cloud.firestore.document.v1.written", "google.cloud.firestore.document.v1.written.withAuthContext"].includes(event.type) ||
       !event.datacontenttype?.includes("application/json")) return event;
   // The SDK's protobuf decoder derives missing snapshot paths from typed metadata,

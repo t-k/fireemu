@@ -358,6 +358,52 @@ pub fn firestore_event_data(before: Option<&Document>, after: Option<&Document>)
     Value::Object(data)
 }
 
+/// Firestore `CloudEvents` data, wire-compatible with google-cloudevents at `5427368e99996f3185f45d6eb444f8f7c1cd6e2d`, proto/google/events/cloud/firestore/v1/data.proto.
+/// The existing Firestore document and mask messages have the same field tags and wire types.
+#[derive(Clone, PartialEq, prost::Message)]
+pub(crate) struct DocumentEventData {
+    #[prost(message, optional, tag = "1")]
+    value: Option<fireemu_proto_firestore::google::firestore::v1::Document>,
+    #[prost(message, optional, tag = "2")]
+    old_value: Option<fireemu_proto_firestore::google::firestore::v1::Document>,
+    #[prost(message, optional, tag = "3")]
+    update_mask: Option<fireemu_proto_firestore::google::firestore::v1::DocumentMask>,
+}
+
+/// Encodes Firestore event data for the runner IPC. Binary data uses a base64 JSON string.
+/// This is an internal IPC convention, not a structured HTTP `CloudEvent`.
+#[must_use]
+pub fn firestore_event_data_encoded(
+    before: Option<&Document>,
+    after: Option<&Document>,
+    protobuf: bool,
+) -> Value {
+    use prost::Message as _;
+    if !protobuf {
+        return firestore_event_data(before, after);
+    }
+    #[cfg(test)]
+    if before.is_some() || after.is_some() {
+        probe_payload_encoding();
+    }
+    #[cfg(test)]
+    FIRESTORE_DOCUMENT_ENCODINGS.with(|count| {
+        count.set(count.get() + usize::from(before.is_some()) + usize::from(after.is_some()));
+    });
+    let message = DocumentEventData {
+        value: after.map(encode_document),
+        old_value: before.map(encode_document),
+        update_mask: before.zip(after).map(|(b, a)| {
+            fireemu_proto_firestore::google::firestore::v1::DocumentMask {
+                field_paths: update_mask(b, a),
+            }
+        }),
+    };
+    Value::String(fireemu_core_types::hash::base64_standard(
+        &message.encode_to_vec(),
+    ))
+}
+
 /// Object resource JSON (`StorageObjectData`), as the JSON API reports it.
 #[must_use]
 pub fn object_json(m: &ObjectMetadata) -> Value {

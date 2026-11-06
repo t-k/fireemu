@@ -1397,6 +1397,38 @@ const published = signals => Promise.race([
 ]);
 ";
 
+#[cfg(unix)]
+const RELOAD_MARKER_JSON_WRITER_JS: &str = r"
+const publishMarkerJson = (file, value) => {
+  const temporary = `${file}.tmp-${process.pid}`;
+  fs.writeFileSync(temporary, JSON.stringify(value));
+  fs.renameSync(temporary, file);
+};
+";
+
+#[cfg(unix)]
+struct ReloadMarkerSignalsGuard(PathBuf);
+
+#[cfg(unix)]
+impl Drop for ReloadMarkerSignalsGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+#[cfg(unix)]
+struct ReloadMarkerProbeChild(std::process::Child);
+
+#[cfg(unix)]
+impl Drop for ReloadMarkerProbeChild {
+    fn drop(&mut self) {
+        if !matches!(self.0.try_wait(), Ok(Some(_))) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+}
+
 /// Runs `command` to completion while reading the daemon's stderr line by line, and writes the
 /// handshake file for each reload outcome the daemon reports for the `default` codebase. The
 /// `reloaded generation` line is printed only after the new generation is published, so a
@@ -1442,6 +1474,94 @@ fn run_with_reload_handshake(mut command: Command, signals: &Path) -> Output {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn reload_marker_publication_does_not_expose_partial_json() {
+    let signals = reload_signals("partial-marker-publication");
+    let _signals = ReloadMarkerSignalsGuard(signals.clone());
+    let target = signals.join("started.json");
+    let paused = signals.join("paused");
+    let release = signals.join("release");
+    let script = format!(
+        "{}\n{}\n{}",
+        r#"
+const fs = require('node:fs');
+const [target, paused, release] = process.argv.slice(1);
+const temporary = `${target}.tmp-${process.pid}`;
+const writeFileSync = fs.writeFileSync.bind(fs);
+const appendFile = (file, value) => {
+  const descriptor = fs.openSync(file, 'a');
+  fs.writeSync(descriptor, value);
+  fs.closeSync(descriptor);
+};
+fs.writeFileSync = (file, value, ...options) => {
+  if (file !== target && file !== temporary) return writeFileSync(file, value, ...options);
+  writeFileSync(file, '{"marker":');
+  writeFileSync(paused, '');
+  const gate = new Int32Array(new SharedArrayBuffer(4));
+  while (!fs.existsSync(release)) Atomics.wait(gate, 0, 0, 10);
+  appendFile(file, '"complete"}');
+};
+"#,
+        RELOAD_MARKER_JSON_WRITER_JS,
+        "publishMarkerJson(target, { marker: 'complete' });",
+    );
+    let mut child = ReloadMarkerProbeChild(
+        Command::new("node")
+            .args(["--eval", &script])
+            .arg(&target)
+            .arg(&paused)
+            .arg(&release)
+            .spawn()
+            .unwrap(),
+    );
+    let mut writer_paused = false;
+    for _ in 0..500 {
+        if paused.exists() {
+            writer_paused = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let final_path_was_visible_before_completion = target.exists();
+    let temporary = PathBuf::from(format!("{}.tmp-{}", target.display(), child.0.id()));
+    let temporary_was_visible_before_completion = temporary.exists();
+    let temporary_was_partial =
+        std::fs::read_to_string(&temporary).is_ok_and(|contents| contents == "{\"marker\":");
+    std::fs::write(&release, "").unwrap();
+    let mut exit_status = None;
+    for _ in 0..500 {
+        match child.0.try_wait().unwrap() {
+            Some(status) => {
+                exit_status = Some(status);
+                break;
+            }
+            None => std::thread::sleep(std::time::Duration::from_millis(10)),
+        }
+    }
+    let Some(exit_status) = exit_status else {
+        let _ = child.0.kill();
+        let _ = child.0.wait();
+        panic!("marker writer did not finish after release");
+    };
+    let complete = std::fs::read(&target)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
+    assert!(
+        writer_paused,
+        "writer did not reach the controlled partial write"
+    );
+    assert!(exit_status.success());
+    let complete = complete.expect("marker writer did not publish complete JSON");
+    assert_eq!(complete["marker"], "complete");
+    assert!(
+        !final_path_was_visible_before_completion,
+        "a reader can observe the final path before its JSON is complete"
+    );
+    assert!(temporary_was_visible_before_completion);
+    assert!(temporary_was_partial);
+}
+
 /// Actual HTTP, callable, streaming and queued task handlers retain their selected runner
 /// through two publications. Releasing generation 1 first must not stop generation 0.
 #[cfg(unix)]
@@ -1452,16 +1572,16 @@ fn http_callable_stream_and_task_requests_finish_across_two_reloads() {
     assert!(have_sdk(), "install tools/sdk-smoke dependencies first");
     let dir = scratch_codebase("in-flight-reload");
     let signals = reload_signals("in-flight-reload");
-    write(
-        &dir,
-        "index.js",
+    let index = format!(
+        "{}\n{}\n{}",
+        "const fs = require('node:fs');",
+        RELOAD_MARKER_JSON_WRITER_JS,
         r"
-const fs = require('node:fs');
 const { onRequest, onCall } = require('firebase-functions/v2/https');
 const { onTaskDispatched } = require('firebase-functions/v2/tasks');
 const marker = 'before';
 const wait = data => {
-  fs.writeFileSync(data.started, JSON.stringify({ marker, pid: process.pid, cwd: process.cwd() }));
+  publishMarkerJson(data.started, { marker, pid: process.pid, cwd: process.cwd() });
   return new Promise(resolve => {
     const poll = () => fs.existsSync(data.release) ? resolve() : setTimeout(poll, 20);
     poll();
@@ -1480,10 +1600,11 @@ exports.fxStream = onCall(async (request, response) => {
 });
 exports.fxTask = onTaskDispatched(async request => {
   await wait(request.data);
-  fs.writeFileSync(request.data.done, JSON.stringify({ marker }));
+  publishMarkerJson(request.data.done, { marker });
 });
 ",
     );
+    write(&dir, "index.js", &index);
     let script = format!(
         r"{RELOAD_HANDSHAKE_JS}
 const assert = require('node:assert/strict');

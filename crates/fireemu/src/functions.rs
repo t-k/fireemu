@@ -1204,16 +1204,96 @@ fn secure_snapshot_directory(path: &Path) -> Result<(), String> {
 
 #[cfg(windows)]
 fn secure_snapshot_directory(path: &Path) -> Result<(), String> {
-    use std::os::windows::fs::MetadataExt as _;
+    use process_wrap::std::{JobObject, StdCommandWrap};
     use std::process::{Command, Stdio};
     use std::time::{Duration, Instant};
 
-    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    // The helper reads ACLs and attributes from the same handle and retains checked handles
+    // until the root-to-leaf pass finishes, preventing path replacement during validation.
     const ACL_CHECK: &str = r#"
 $ErrorActionPreference = 'Stop'
+$native = @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
+
+public static class FireemuSnapshotAclNative {
+    [StructLayout(LayoutKind.Sequential)]
+    private struct FileAttributeTagInfo {
+        public uint FileAttributes;
+        public uint ReparseTag;
+    }
+
+    [DllImport("kernel32.dll", EntryPoint = "CreateFileW", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern SafeFileHandle CreateFile(
+        string path, uint access, uint share, IntPtr security, uint creation, uint flags, IntPtr template);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GetFileInformationByHandleEx(
+        SafeFileHandle handle, int informationClass, out FileAttributeTagInfo info, uint size);
+
+    [DllImport("advapi32.dll", SetLastError = false)]
+    private static extern uint GetSecurityInfo(
+        SafeFileHandle handle, int objectType, uint securityInfo,
+        out IntPtr owner, out IntPtr group, out IntPtr dacl, out IntPtr sacl, out IntPtr descriptor);
+
+    [DllImport("advapi32.dll", SetLastError = false)]
+    private static extern uint GetSecurityDescriptorLength(IntPtr descriptor);
+
+    [DllImport("kernel32.dll", SetLastError = false)]
+    private static extern IntPtr LocalFree(IntPtr memory);
+
+    public static SafeFileHandle OpenDirectory(string path) {
+        const uint readControl = 0x00020000;
+        const uint readAttributes = 0x00000080;
+        const uint shareRead = 0x00000001;
+        const uint openExisting = 3;
+        const uint backupSemantics = 0x02000000;
+        const uint openReparsePoint = 0x00200000;
+        var handle = CreateFile(path, readControl | readAttributes, shareRead, IntPtr.Zero,
+            openExisting, backupSemantics | openReparsePoint, IntPtr.Zero);
+        if (handle.IsInvalid) {
+            int error = Marshal.GetLastWin32Error();
+            handle.Dispose();
+            throw new Win32Exception(error);
+        }
+        return handle;
+    }
+
+    public static uint ReadAttributes(SafeFileHandle handle) {
+        FileAttributeTagInfo info;
+        if (!GetFileInformationByHandleEx(handle, 9, out info,
+            (uint)Marshal.SizeOf(typeof(FileAttributeTagInfo))))
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+        return info.FileAttributes;
+    }
+
+    public static byte[] ReadOwnerAndDacl(SafeFileHandle handle) {
+        IntPtr owner, group, dacl, sacl, descriptor;
+        uint result = GetSecurityInfo(handle, 1, 0x00000005,
+            out owner, out group, out dacl, out sacl, out descriptor);
+        if (result != 0) throw new Win32Exception((int)result);
+        try {
+            if (descriptor == IntPtr.Zero) throw new InvalidOperationException("missing security descriptor");
+            uint length = GetSecurityDescriptorLength(descriptor);
+            if (length == 0 || length > int.MaxValue)
+                throw new InvalidOperationException("invalid security descriptor length");
+            byte[] bytes = new byte[checked((int)length)];
+            Marshal.Copy(descriptor, bytes, 0, bytes.Length);
+            return bytes;
+        } finally {
+            if (descriptor != IntPtr.Zero) LocalFree(descriptor);
+        }
+    }
+}
+'@
+$handles = New-Object 'System.Collections.Generic.List[Microsoft.Win32.SafeHandles.SafeFileHandle]'
+$exitCode = 0
 try {
+    Add-Type -TypeDefinition $native -ErrorAction Stop
     $path = [Environment]::GetEnvironmentVariable('FIREEMU_SNAPSHOT_ACL_PATH')
-    if ([string]::IsNullOrEmpty($path)) { exit 20 }
+    if ([string]::IsNullOrEmpty($path)) { throw 'snapshot path is missing' }
     $userSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
     $trusted = @($userSid, 'S-1-5-18', 'S-1-5-32-544', 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
     $dangerous = [int64]([System.Security.AccessControl.FileSystemRights]::WriteData -bor
@@ -1223,61 +1303,56 @@ try {
         [System.Security.AccessControl.FileSystemRights]::ChangePermissions -bor
         [System.Security.AccessControl.FileSystemRights]::TakeOwnership)
     $directories = New-Object 'System.Collections.Generic.List[System.IO.DirectoryInfo]'
-    $directory = New-Object System.IO.DirectoryInfo($path)
+    $directory = [System.IO.DirectoryInfo]::new($path)
     while ($null -ne $directory) {
         $directories.Add($directory)
         $directory = $directory.Parent
     }
-    for ($index = 0; $index -lt $directories.Count; $index++) {
+    for ($index = $directories.Count - 1; $index -ge 0; $index--) {
         $directory = $directories[$index]
-        $acl = Get-Acl -LiteralPath $directory.FullName
-        $raw = [System.Security.AccessControl.RawSecurityDescriptor]::new($acl.GetSecurityDescriptorBinaryForm(), 0)
-        if ($null -eq $raw.DiscretionaryAcl) { exit 21 }
+        $handle = [FireemuSnapshotAclNative]::OpenDirectory($directory.FullName)
+        $handles.Add($handle)
+        $descriptor = [FireemuSnapshotAclNative]::ReadOwnerAndDacl($handle)
+        $acl = New-Object System.Security.AccessControl.DirectorySecurity
+        $acl.SetSecurityDescriptorBinaryForm($descriptor)
+        $raw = [System.Security.AccessControl.RawSecurityDescriptor]::new($descriptor, 0)
+        if ($null -eq $raw.DiscretionaryAcl) { throw 'null DACL' }
         $ownerSid = $acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value
-        if ($ownerSid -notin $trusted) { exit 22 }
+        if ($ownerSid -notin $trusted) { throw 'untrusted owner' }
         $rules = $acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])
         foreach ($rule in $rules) {
             if ($rule.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow) { continue }
             $sid = $rule.IdentityReference.Value
             $inheritOnly = ($rule.PropagationFlags -band [System.Security.AccessControl.PropagationFlags]::InheritOnly) -ne 0
             if ($index -lt 2) {
-                if ($sid -notin $trusted -and -not ($sid -eq 'S-1-3-0' -and $inheritOnly)) { exit 23 }
+                if ($sid -notin $trusted -and -not ($sid -eq 'S-1-3-0' -and $inheritOnly)) { throw 'untrusted allow ACE' }
             } elseif (-not $inheritOnly -and $sid -notin $trusted -and
                 (([int64]$rule.FileSystemRights -band $dangerous) -ne 0)) {
-                exit 24
+                throw 'untrusted ancestor mutation ACE'
             }
         }
+        $attributes = [FireemuSnapshotAclNative]::ReadAttributes($handle)
+        if (($attributes -band [uint32][System.IO.FileAttributes]::ReparsePoint) -ne 0 -or
+            ($attributes -band [uint32][System.IO.FileAttributes]::Directory) -eq 0) { throw 'reparse or non-directory component' }
     }
-    exit 0
 } catch {
-    exit 26
+    $exitCode = 1
+} finally {
+    foreach ($handle in $handles) { $handle.Dispose() }
 }
+exit $exitCode
 "#;
 
     if !path.is_absolute() {
         return Err("snapshot ACL validation refused a non-absolute directory".to_owned());
     }
-    for ancestor in path.ancestors() {
-        let metadata = std::fs::symlink_metadata(ancestor).map_err(|_| {
-            format!(
-                "snapshot ACL validation could not inspect directory {}",
-                path.display()
-            )
-        })?;
-        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-            return Err(format!(
-                "snapshot ACL validation refused a reparse path {}",
-                path.display()
-            ));
-        }
-    }
-
     let system_root = std::env::var_os("SystemRoot")
         .map(PathBuf::from)
         .filter(|root| root.is_absolute())
         .ok_or_else(|| "snapshot ACL validation could not locate Windows PowerShell".to_owned())?;
     let powershell = system_root.join(r"System32\WindowsPowerShell\v1.0\powershell.exe");
-    let status = Command::new(powershell)
+    let mut command = Command::new(powershell);
+    command
         .args([
             "-NoLogo",
             "-NoProfile",
@@ -1288,11 +1363,13 @@ try {
         .env("FIREEMU_SNAPSHOT_ACL_PATH", path)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::null());
+    let mut wrapped = StdCommandWrap::from(command);
+    wrapped.wrap(JobObject);
+    let mut child = wrapped
         .spawn()
         .map_err(|_| "snapshot ACL validation could not start Windows PowerShell".to_owned())?;
     let deadline = Instant::now() + Duration::from_secs(5);
-    let mut child = status;
     loop {
         match child.try_wait() {
             Ok(Some(status)) if status.success() => return Ok(()),
@@ -1304,7 +1381,7 @@ try {
             }
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
             Ok(None) | Err(_) => {
-                let _ = child.kill();
+                let _ = child.start_kill();
                 let _ = child.wait();
                 return Err(format!(
                     "snapshot ACL validation timed out or failed for {}",
@@ -13073,6 +13150,33 @@ sys.stdin.buffer.read()
     }
 
     #[cfg(windows)]
+    fn create_windows_junction(link: &std::path::Path, target: &std::path::Path) {
+        use std::process::Command;
+
+        let powershell = std::env::var_os("SystemRoot")
+            .map(std::path::PathBuf::from)
+            .expect("Windows defines SystemRoot")
+            .join(r"System32\WindowsPowerShell\v1.0\powershell.exe");
+        let output = Command::new(powershell)
+            .args([
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "New-Item -ItemType Junction -Path $env:FIREEMU_TEST_LINK -Target $env:FIREEMU_TEST_TARGET | Out-Null",
+            ])
+            .env("FIREEMU_TEST_LINK", link)
+            .env("FIREEMU_TEST_TARGET", target)
+            .output()
+            .expect("Windows PowerShell is available");
+        assert!(
+            output.status.success(),
+            "failed to create junction: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[cfg(windows)]
     #[test]
     fn windows_reload_snapshot_accepts_private_temp_acl() {
         let root = std::env::temp_dir().join(format!(
@@ -13213,6 +13317,110 @@ sys.stdin.buffer.read()
         drop(snapshot);
         std::fs::remove_dir_all(source).unwrap();
         std::fs::remove_dir_all(outer).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_reload_snapshot_refuses_reparse_higher_ancestor_before_copying_secret() {
+        let id = std::process::id();
+        let root = std::env::temp_dir().join(format!("fireemu-windows-junction-ancestor-{id}"));
+        let target = root.join("target");
+        let link = root.join("redirect");
+        let snapshot_target = target.join("private-parent");
+        let snapshot_root = link.join("private-parent");
+        let source = std::env::temp_dir().join(format!("fireemu-windows-junction-source-{id}"));
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&source);
+        std::fs::create_dir_all(&snapshot_target).unwrap();
+        std::fs::create_dir_all(&source).unwrap();
+        let secret = b"LOCAL_SECRET=must-not-be-copied";
+        std::fs::write(source.join(".secret.local"), secret).unwrap();
+        create_windows_junction(&link, &target);
+
+        let mut charged_bytes = 0;
+        let result = super::snapshot_functions_source_with_charge_at(
+            &source,
+            &[],
+            &mut |_, bytes| {
+                charged_bytes += bytes;
+                Ok(())
+            },
+            &AtomicBool::new(false),
+            &snapshot_root,
+        );
+        assert!(
+            result
+                .as_ref()
+                .expect_err("a reparse ancestor must be refused")
+                .contains("snapshot ACL"),
+            "the failure should identify snapshot path validation"
+        );
+        assert_eq!(charged_bytes, secret.len() as u64);
+        assert_eq!(std::fs::read_dir(&snapshot_target).unwrap().count(), 0);
+
+        std::fs::remove_dir(&link).unwrap();
+        std::fs::remove_dir_all(source).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_reload_snapshot_refuses_reparse_immediate_parent_before_copying_secret() {
+        let id = std::process::id();
+        let root = std::env::temp_dir().join(format!("fireemu-windows-junction-parent-{id}"));
+        let target = root.join("target");
+        let link = root.join("redirect");
+        let source = std::env::temp_dir().join(format!("fireemu-windows-junction-source-{id}"));
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&source);
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::create_dir_all(&source).unwrap();
+        let secret = b"LOCAL_SECRET=must-not-be-copied";
+        std::fs::write(source.join(".secret.local"), secret).unwrap();
+        create_windows_junction(&link, &target);
+
+        let mut charged_bytes = 0;
+        let result = super::snapshot_functions_source_with_charge_at(
+            &source,
+            &[],
+            &mut |_, bytes| {
+                charged_bytes += bytes;
+                Ok(())
+            },
+            &AtomicBool::new(false),
+            &link,
+        );
+        assert!(
+            result
+                .as_ref()
+                .expect_err("a reparse immediate parent must be refused")
+                .contains("snapshot ACL"),
+            "the failure should identify snapshot path validation"
+        );
+        assert_eq!(charged_bytes, secret.len() as u64);
+        assert_eq!(std::fs::read_dir(&target).unwrap().count(), 0);
+
+        std::fs::remove_dir(&link).unwrap();
+        std::fs::remove_dir_all(source).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_snapshot_acl_check_refuses_reparse_leaf() {
+        let id = std::process::id();
+        let root = std::env::temp_dir().join(format!("fireemu-windows-junction-leaf-{id}"));
+        let target = root.join("target");
+        let link = root.join("redirect");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&target).unwrap();
+        create_windows_junction(&link, &target);
+
+        let error = super::secure_snapshot_directory(&link).unwrap_err();
+        assert!(error.contains("snapshot ACL"), "{error}");
+
+        std::fs::remove_dir(&link).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

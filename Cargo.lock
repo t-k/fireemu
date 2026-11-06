@@ -2104,7 +2104,6 @@ dependencies = [
  "indexmap 2.14.1",
  "nix",
  "tokio",
- "tracing",
  "windows",
 ]
 

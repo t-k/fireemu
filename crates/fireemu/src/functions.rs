@@ -1204,9 +1204,9 @@ fn secure_snapshot_directory(path: &Path) -> Result<(), String> {
 
 #[cfg(windows)]
 fn secure_snapshot_directory(path: &Path) -> Result<(), String> {
-    use process_wrap::std::{JobObject, StdCommandWrap};
-    use std::process::{Command, Stdio};
-    use std::time::{Duration, Instant};
+    use process_wrap::tokio::{JobObject, KillOnDrop, TokioCommandWrap};
+    use std::process::Stdio;
+    use std::time::Duration;
 
     // The helper reads ACLs and attributes from the same handle and retains checked handles
     // until the root-to-leaf pass finishes, preventing path replacement during validation.
@@ -1351,45 +1351,61 @@ exit $exitCode
         .filter(|root| root.is_absolute())
         .ok_or_else(|| "snapshot ACL validation could not locate Windows PowerShell".to_owned())?;
     let powershell = system_root.join(r"System32\WindowsPowerShell\v1.0\powershell.exe");
-    let mut command = Command::new(powershell);
-    command
-        .args([
-            "-NoLogo",
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            ACL_CHECK,
-        ])
-        .env("FIREEMU_SNAPSHOT_ACL_PATH", path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    let mut wrapped = StdCommandWrap::from(command);
-    wrapped.wrap(JobObject);
-    let mut child = wrapped
-        .spawn()
-        .map_err(|_| "snapshot ACL validation could not start Windows PowerShell".to_owned())?;
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) if status.success() => return Ok(()),
-            Ok(Some(_)) => {
-                return Err(format!(
-                    "snapshot ACL validation refused directory {}",
-                    path.display()
-                ));
-            }
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
-            Ok(None) | Err(_) => {
-                let _ = child.start_kill();
-                let _ = child.wait();
-                return Err(format!(
-                    "snapshot ACL validation timed out or failed for {}",
-                    path.display()
-                ));
-            }
-        }
-    }
+    let path = path.to_owned();
+    std::thread::Builder::new()
+        .name("fireemu-snapshot-acl".to_owned())
+        .spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|_| {
+                    "snapshot ACL validation could not initialize its runtime".to_owned()
+                })?;
+            runtime.block_on(async move {
+                let mut command = tokio::process::Command::new(powershell);
+                command
+                    .args([
+                        "-NoLogo",
+                        "-NoProfile",
+                        "-NonInteractive",
+                        "-Command",
+                        ACL_CHECK,
+                    ])
+                    .env("FIREEMU_SNAPSHOT_ACL_PATH", &path)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null());
+                let mut wrapped = TokioCommandWrap::from(command);
+                wrapped.wrap(JobObject).wrap(KillOnDrop);
+                let mut child = wrapped.spawn().map_err(|_| {
+                    "snapshot ACL validation could not start Windows PowerShell".to_owned()
+                })?;
+                let status =
+                    tokio::time::timeout(Duration::from_secs(5), Box::into_pin(child.wait())).await;
+                match status {
+                    Ok(Ok(status)) if status.success() => Ok(()),
+                    Ok(Ok(_)) => Err(format!(
+                        "snapshot ACL validation refused directory {}",
+                        path.display()
+                    )),
+                    Ok(Err(_)) | Err(_) => {
+                        let _ = child.start_kill();
+                        let _ = tokio::time::timeout(
+                            Duration::from_secs(5),
+                            Box::into_pin(child.wait()),
+                        )
+                        .await;
+                        Err(format!(
+                            "snapshot ACL validation timed out or failed for {}",
+                            path.display()
+                        ))
+                    }
+                }
+            })
+        })
+        .map_err(|_| "snapshot ACL validation could not start its worker".to_owned())?
+        .join()
+        .map_err(|_| "snapshot ACL validation worker failed".to_owned())?
 }
 
 #[cfg(unix)]

@@ -40,7 +40,8 @@ def test_rust_documents_reach_the_real_sdk(profile, auth, monkeypatch):
     monkeypatch.setenv("FIRESTORE_EMULATOR_HOST", "127.0.0.1:1")
     if not firebase_admin._apps:
         firebase_admin.initialize_app(options={"projectId": "demo-proj"})
-    corpus = json.loads(Path(os.environ["FE_FIRESTORE_CORPUS"]).read_text())
+    default_corpus = Path(__file__).resolve().parents[3] / "crates/fireemu-adapter-functions/tests/fixtures/firestore-protobuf.json"
+    corpus = json.loads(Path(os.environ.get("FE_FIRESTORE_CORPUS", default_corpus)).read_text())
     for row in corpus:
         kind = row["kind"].split("-")[0]
         received = []

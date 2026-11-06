@@ -95,7 +95,8 @@ async function start(t, sdkSource, profile) {
 const sdkRoot = fileURLToPath(new URL('../../conformance/functions-events/fixtures/node_modules/firebase-functions', import.meta.url));
 
 
-const corpus = JSON.parse(await readFile(process.env.FE_FIRESTORE_CORPUS, 'utf8'));
+const corpusPath = process.env.FE_FIRESTORE_CORPUS ?? new URL('../../crates/fireemu-adapter-functions/tests/fixtures/firestore-protobuf.json', import.meta.url);
+const corpus = JSON.parse(await readFile(corpusPath, 'utf8'));
 for (const profile of ['strict', 'emulator']) {
   test(`Rust Firestore bytes through the real SDK: ${profile}`, { timeout: 30000 }, async t => {
     assert.equal(JSON.parse(await readFile(join(sdkRoot, 'package.json'), 'utf8')).version, '7.3.2');

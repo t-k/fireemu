@@ -106,6 +106,8 @@ fn all_event_sides_roundtrip_and_export_the_real_sdk_corpus() {
     let before = all_values(41);
     let after = all_values(42);
     let mut rows = Vec::new();
+    let fixtures: Vec<serde_json::Value> =
+        serde_json::from_str(include_str!("fixtures/firestore-protobuf.json")).unwrap();
     for (kind, old, new) in [
         ("created", None, Some(&after)),
         ("deleted", Some(&before), None),
@@ -116,6 +118,16 @@ fn all_event_sides_roundtrip_and_export_the_real_sdk_corpus() {
     ] {
         let binary = firestore_event_data_encoded(old, new, true);
         let decoded = decode(&binary);
+        let fixture = fixtures.iter().find(|row| row["kind"] == kind).unwrap();
+        assert_eq!(
+            decoded,
+            decode(&fixture["protobuf"]),
+            "checked fixture must match the Rust encoder"
+        );
+        assert_eq!(
+            fixture["json"],
+            firestore_event_data_encoded(old, new, false)
+        );
         assert_eq!(decoded.before, old.map(encode_document));
         assert_eq!(decoded.after, new.map(encode_document));
         assert_eq!(decoded.mask.is_some(), old.is_some() && new.is_some());

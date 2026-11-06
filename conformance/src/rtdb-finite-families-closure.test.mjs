@@ -25,8 +25,8 @@ const SDK_SMALL = "spec/compatibility/closure/evidence/RTDB-sdk-small-comparison
 // --locked -p fireemu, RUSTC_WRAPPER empty, a fresh worktree-local target directory). The Rust sources
 // are unchanged between that commit and the commit that carries these records.
 const V043 = {
-  sourceCommit: "d9f5cb906611a358d36a1efea60e0a61bd0bb6cf",
-  binarySha256: "294051dd47fdebbc26b6412ca399f198f867b05c629dd343fa8b7ab81541d7de",
+  sourceCommit: "64cc59b0eed1f0036f9e33bfa589fbd49d7e9c89",
+  binarySha256: "ba7605038dc1aeb91c6da9a5aae1ea83eb8a419d6f7470f6972db023444ec018",
 };
 const SDK_EVENTS = "spec/compatibility/closure/evidence/RTDB-sdk-events-comparison.json";
 const EVENTS_FIXTURE = "tools/sdk-smoke-database/fixtures/production-sdk-events.json";
@@ -653,7 +653,7 @@ test("the forged-token refusals outside the recorded shape are declared with the
   );
 });
 
-test("the 2276 round's jar-only rows, emulator-profile differences and unfollowed shapes are recorded with their fixtures and owner row", () => {
+test("the 2276 round's jar-only rows, emulator-profile differences and claims, query values and frames are recorded with their fixtures and owner row", () => {
   const evidence = condition("RTDB/rules-document-load-diagnostics").evidence;
   for (const key of ["jarOnlyRows", "jarOnlyQueryOrderBy", "jarOnlyRegexDialect"]) {
     const rows = evidence[key];
@@ -684,12 +684,23 @@ test("the 2276 round's jar-only rows, emulator-profile differences and unfollowe
     assert.match(known[key].decisionRef, /\(2276, "RTDB closure older over-refusals"/, key);
     assert.ok(exists(known[key].evidence), key);
   }
-  // The shapes found by pinning are named as unfollowed, with no owner row yet.
-  const unfollowed = known.loneSurrogateClaimsAndQueryValues;
-  assert.match(unfollowed.statement, /not followed/);
-  assert.match(unfollowed.statement, /Constraint index field must be a JSON primitive/);
-  assert.doesNotMatch(unfollowed.decisionRef, /\b2276\b/);
-  assert.ok(exists(unfollowed.evidence));
+  // The shapes the pin of the delta review found are fixed on the emulator profile by owner row 2286.
+  const claims = evidence.jarOnlyClaimsAndQueryValues;
+  assert.equal(claims.productionObserved, false);
+  assert.equal(sha(claims.fixture), claims.fixtureSha256);
+  assert.equal(json(claims.fixture).length, claims.rows);
+  assert.match(claims.statement, /Emulator profile only/);
+  assert.match(claims.statement, /strict profile does not read such a token/);
+  for (const file of claims.tests) assert.ok(exists(file), file);
+  assert.equal(known.loneSurrogateClaimsAndQueryValues, undefined);
+  const fixed = known.loneSurrogateClaimsQueryValuesFramesEmulatorProfile;
+  assert.match(fixed.statement, /no production answer/);
+  assert.match(
+    fixed.decisionRef,
+    /\(2286, "RTDB closure lone surrogates in claims and query values"/,
+  );
+  assert.match(fixed.statement, /Invalid token in path/);
+  assert.ok(exists(fixed.evidence));
   const keys = closure().closureBasis.notClaimedItems.map((i) => i.key);
   for (const key of [
     "notClaimed_emulator_profile_regex_and_body_surrogates",

@@ -13416,14 +13416,16 @@ Add-Type -TypeDefinition $native -ErrorAction Stop
     }
 
     #[cfg(windows)]
-    fn windows_acl_script_with_noop_guard(guard: &str) -> String {
-        let script = super::WINDOWS_SNAPSHOT_ACL_CHECK;
-        assert_eq!(
-            script.matches(guard).count(),
-            1,
-            "guard text must be unique"
-        );
-        let mutant = script.replacen(guard, "", 1);
+    fn windows_acl_script_with_removed_guards(guards: &[&str]) -> String {
+        let mut mutant = super::WINDOWS_SNAPSHOT_ACL_CHECK.to_owned();
+        for guard in guards {
+            assert_eq!(
+                mutant.matches(guard).count(),
+                1,
+                "guard text must be unique: {guard}"
+            );
+            mutant = mutant.replacen(guard, "", 1);
+        }
         let catch_block = "} catch {\n    $exitCode = 1\n} finally {";
         assert_eq!(
             mutant.matches(catch_block).count(),
@@ -13444,6 +13446,35 @@ Add-Type -TypeDefinition $native -ErrorAction Stop
     }
 
     #[cfg(windows)]
+    fn windows_acl_checker_diagnostic_path(path: &std::path::Path) -> std::path::PathBuf {
+        let mut diagnostic = path.as_os_str().to_owned();
+        diagnostic.push(".checker-error");
+        diagnostic.into()
+    }
+
+    #[cfg(windows)]
+    fn run_windows_acl_checker_with_diagnostic(
+        path: &std::path::Path,
+        powershell: &std::path::Path,
+        script: &str,
+        timeout: Duration,
+    ) -> (Result<(), String>, Option<String>) {
+        let diagnostic_path = windows_acl_checker_diagnostic_path(path);
+        match std::fs::remove_file(&diagnostic_path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => panic!("failed to clear checker diagnostic sidecar: {error}"),
+        }
+        let result = super::run_snapshot_acl_checker(path, powershell, script, timeout);
+        let diagnostic = match std::fs::read_to_string(diagnostic_path) {
+            Ok(value) => Some(value),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => panic!("failed to read checker diagnostic sidecar: {error}"),
+        };
+        (result, diagnostic)
+    }
+
+    #[cfg(windows)]
     fn windows_acl_refusal_oracle(result: &Result<(), String>) -> Result<(), &'static str> {
         if result.is_err() {
             Ok(())
@@ -13453,62 +13484,185 @@ Add-Type -TypeDefinition $native -ErrorAction Stop
     }
 
     #[cfg(windows)]
-    fn assert_windows_acl_mutant_detected(
-        guard: &str,
-        unsafe_case: WindowsSnapshotAclCase<'static>,
-        index: usize,
+    fn assert_windows_acl_guard_refusal(
+        label: &str,
+        result: &Result<(), String>,
+        diagnostic: Option<&str>,
+        expected_guard: &str,
     ) {
-        let mutant = windows_acl_script_with_noop_guard(guard);
-        let powershell = super::windows_powershell_path().unwrap();
-        let safe_case = WindowsSnapshotAclCase {
+        let error = result.as_ref().expect_err(label);
+        assert!(
+            error.starts_with("snapshot ACL validation refused directory "),
+            "{label}: refusal must be an ACL policy result, got {error:?}"
+        );
+        assert_eq!(diagnostic, Some(expected_guard), "{label}: checker guard");
+        assert_eq!(windows_acl_refusal_oracle(result), Ok(()), "{label}");
+    }
+
+    #[cfg(windows)]
+    fn windows_acl_safe_case() -> WindowsSnapshotAclCase<'static> {
+        WindowsSnapshotAclCase {
             snapshot_dacl: "Private",
             parent_dacl: "Private",
             ancestor_rights: "ReadTraverse",
             reparse_position: "None",
             checker: "Available",
-        };
-        let safe = WindowsSnapshotAclFixture::new(safe_case, index + 100);
+        }
+    }
+
+    #[cfg(windows)]
+    fn assert_windows_acl_script_accepts_safe_fixture(script: &str, label: &str, index: usize) {
+        let safe_case = windows_acl_safe_case();
+        let safe = WindowsSnapshotAclFixture::new(safe_case, 1000 + index);
         safe.apply_acl(safe_case);
-        let safe_result = super::run_snapshot_acl_checker(
+        let powershell = super::windows_powershell_path().unwrap();
+        let (result, diagnostic) = run_windows_acl_checker_with_diagnostic(
             &safe.leaf,
             &powershell,
-            &mutant,
+            script,
             Duration::from_secs(5),
         );
-        assert!(
-            safe_result.is_ok(),
-            "mutant setup must accept a safe fixture"
-        );
-        drop(safe);
+        assert!(result.is_ok(), "{label}: safe control failed: {result:?}");
+        assert_eq!(diagnostic, None, "{label}: safe control diagnostic");
+    }
 
-        let unsafe_fixture = WindowsSnapshotAclFixture::new(unsafe_case, index + 200);
-        unsafe_fixture.apply_acl(unsafe_case);
-        let baseline = super::run_snapshot_acl_checker(
-            &unsafe_fixture.leaf,
+    #[cfg(windows)]
+    fn assert_windows_acl_singleton_killed(
+        label: &str,
+        guard: &str,
+        unsafe_case: WindowsSnapshotAclCase<'static>,
+        index: usize,
+    ) {
+        let mutant = windows_acl_script_with_removed_guards(&[guard]);
+        assert_windows_acl_script_accepts_safe_fixture(&mutant, label, index);
+
+        let fixture = WindowsSnapshotAclFixture::new(unsafe_case, 2000 + index);
+        fixture.apply_acl(unsafe_case);
+        let powershell = super::windows_powershell_path().unwrap();
+        let baseline = windows_acl_script_with_removed_guards(&[]);
+        let (baseline_result, baseline_diagnostic) = run_windows_acl_checker_with_diagnostic(
+            &fixture.leaf,
             &powershell,
-            super::WINDOWS_SNAPSHOT_ACL_CHECK,
+            &baseline,
             Duration::from_secs(5),
         );
-        assert!(windows_acl_refusal_oracle(&baseline).is_ok());
-        let mutated = super::run_snapshot_acl_checker(
-            &unsafe_fixture.leaf,
+        assert_windows_acl_guard_refusal(
+            &format!("{label}: unchanged baseline"),
+            &baseline_result,
+            baseline_diagnostic.as_deref(),
+            guard,
+        );
+
+        let (mutated, diagnostic) = run_windows_acl_checker_with_diagnostic(
+            &fixture.leaf,
             &powershell,
             &mutant,
             Duration::from_secs(5),
         );
-        let checker_error = unsafe_fixture.leaf.with_file_name(format!(
-            "{}.checker-error",
-            unsafe_fixture.leaf.file_name().unwrap().to_string_lossy()
-        ));
-        let checker_error = std::fs::read_to_string(checker_error).unwrap_or_default();
         assert!(
             mutated.is_ok(),
-            "single guard mutant {guard:?} should admit its unsafe fixture; checker error: {checker_error}; result: {mutated:?}"
+            "{label}: mutant should admit unsafe fixture; diagnostic: {diagnostic:?}; result: {mutated:?}"
         );
+        assert_eq!(diagnostic, None, "{label}: accepted mutant diagnostic");
         assert_eq!(
             windows_acl_refusal_oracle(&mutated),
             Err("unsafe ACL was accepted"),
-            "the same refusal oracle must fail for mutant {guard}"
+            "{label}: same refusal oracle must fail for mutant"
+        );
+    }
+
+    #[cfg(windows)]
+    fn assert_windows_acl_null_overlap_and_compound(index: usize) {
+        const NULL_GUARD: &str = "throw 'null DACL'";
+        const ALLOW_GUARD: &str = "throw 'untrusted allow ACE'";
+        const SURVIVOR_LABEL: &str =
+            "single/null-dacl: observed survivor, blocked by allow-ACE guard";
+        const COMPOUND_LABEL: &str = "compound/null-dacl+allow-ace: killed";
+        let null_case = WindowsSnapshotAclCase {
+            snapshot_dacl: "Null",
+            parent_dacl: "Private",
+            ancestor_rights: "ReadTraverse",
+            reparse_position: "None",
+            checker: "Available",
+        };
+        let fixture = WindowsSnapshotAclFixture::new(null_case, 3000 + index);
+        fixture.apply_acl(null_case);
+        let powershell = super::windows_powershell_path().unwrap();
+        let baseline = windows_acl_script_with_removed_guards(&[]);
+        let (baseline_result, baseline_diagnostic) = run_windows_acl_checker_with_diagnostic(
+            &fixture.leaf,
+            &powershell,
+            &baseline,
+            Duration::from_secs(5),
+        );
+        assert_windows_acl_guard_refusal(
+            "null-DACL unchanged baseline",
+            &baseline_result,
+            baseline_diagnostic.as_deref(),
+            "null DACL",
+        );
+
+        let singleton = windows_acl_script_with_removed_guards(&[NULL_GUARD]);
+        assert_windows_acl_script_accepts_safe_fixture(&singleton, SURVIVOR_LABEL, index);
+        let (singleton_result, singleton_diagnostic) = run_windows_acl_checker_with_diagnostic(
+            &fixture.leaf,
+            &powershell,
+            &singleton,
+            Duration::from_secs(5),
+        );
+        assert_windows_acl_guard_refusal(
+            SURVIVOR_LABEL,
+            &singleton_result,
+            singleton_diagnostic.as_deref(),
+            "untrusted allow ACE",
+        );
+
+        let compound = windows_acl_script_with_removed_guards(&[NULL_GUARD, ALLOW_GUARD]);
+        assert_windows_acl_script_accepts_safe_fixture(&compound, COMPOUND_LABEL, index + 1);
+        let (compound_result, compound_diagnostic) = run_windows_acl_checker_with_diagnostic(
+            &fixture.leaf,
+            &powershell,
+            &compound,
+            Duration::from_secs(5),
+        );
+        assert!(
+            compound_result.is_ok(),
+            "{COMPOUND_LABEL}: compound mutant should admit unsafe fixture; diagnostic: {compound_diagnostic:?}; result: {compound_result:?}"
+        );
+        assert_eq!(compound_diagnostic, None, "{COMPOUND_LABEL}: diagnostic");
+        assert_eq!(
+            windows_acl_refusal_oracle(&compound_result),
+            Err("unsafe ACL was accepted"),
+            "{COMPOUND_LABEL}: same refusal oracle must fail"
+        );
+    }
+
+    #[cfg(windows)]
+    fn assert_windows_acl_noop_control(index: usize) {
+        const LABEL: &str = "unchanged-script no-op control";
+        let script = windows_acl_script_with_removed_guards(&[]);
+        assert_windows_acl_script_accepts_safe_fixture(&script, LABEL, index);
+        let unsafe_case = WindowsSnapshotAclCase {
+            snapshot_dacl: "Permissive",
+            parent_dacl: "Private",
+            ancestor_rights: "ReadTraverse",
+            reparse_position: "None",
+            checker: "Available",
+        };
+        let fixture = WindowsSnapshotAclFixture::new(unsafe_case, 4000 + index);
+        fixture.apply_acl(unsafe_case);
+        let powershell = super::windows_powershell_path().unwrap();
+        let (result, diagnostic) = run_windows_acl_checker_with_diagnostic(
+            &fixture.leaf,
+            &powershell,
+            &script,
+            Duration::from_secs(5),
+        );
+        assert_windows_acl_guard_refusal(
+            LABEL,
+            &result,
+            diagnostic.as_deref(),
+            "untrusted allow ACE",
         );
     }
 
@@ -13635,8 +13789,9 @@ Start-Sleep -Seconds 60
     #[cfg(windows)]
     #[test]
     fn windows_snapshot_acl_guard_mutants_violate_oracle() {
-        let cases = [
+        let singleton_kills = [
             (
+                "single/allow-ACE: killed",
                 "throw 'untrusted allow ACE'",
                 WindowsSnapshotAclCase {
                     snapshot_dacl: "Permissive",
@@ -13647,16 +13802,7 @@ Start-Sleep -Seconds 60
                 },
             ),
             (
-                "throw 'null DACL'",
-                WindowsSnapshotAclCase {
-                    snapshot_dacl: "Null",
-                    parent_dacl: "Private",
-                    ancestor_rights: "ReadTraverse",
-                    reparse_position: "None",
-                    checker: "Available",
-                },
-            ),
-            (
+                "single/ancestor-mutation: killed",
                 "throw 'untrusted ancestor mutation ACE'",
                 WindowsSnapshotAclCase {
                     snapshot_dacl: "Private",
@@ -13667,6 +13813,7 @@ Start-Sleep -Seconds 60
                 },
             ),
             (
+                "single/reparse: killed",
                 "throw 'reparse or non-directory component'",
                 WindowsSnapshotAclCase {
                     snapshot_dacl: "Private",
@@ -13677,39 +13824,11 @@ Start-Sleep -Seconds 60
                 },
             ),
         ];
-        for (index, (guard, case)) in cases.into_iter().enumerate() {
-            assert_windows_acl_mutant_detected(guard, case, index);
+        for (index, (label, guard, case)) in singleton_kills.into_iter().enumerate() {
+            assert_windows_acl_singleton_killed(label, guard, case, index);
         }
-
-        let no_op_case = cases[0].1;
-        let no_op_script = super::WINDOWS_SNAPSHOT_ACL_CHECK;
-        let powershell = super::windows_powershell_path().unwrap();
-        let safe_case = WindowsSnapshotAclCase {
-            snapshot_dacl: "Private",
-            parent_dacl: "Private",
-            ancestor_rights: "ReadTraverse",
-            reparse_position: "None",
-            checker: "Available",
-        };
-        let safe = WindowsSnapshotAclFixture::new(safe_case, 300);
-        safe.apply_acl(safe_case);
-        assert!(super::run_snapshot_acl_checker(
-            &safe.leaf,
-            &powershell,
-            no_op_script,
-            Duration::from_secs(5)
-        )
-        .is_ok());
-        drop(safe);
-        let unsafe_fixture = WindowsSnapshotAclFixture::new(no_op_case, 301);
-        unsafe_fixture.apply_acl(no_op_case);
-        let no_op_result = super::run_snapshot_acl_checker(
-            &unsafe_fixture.leaf,
-            &powershell,
-            no_op_script,
-            Duration::from_secs(5),
-        );
-        assert!(windows_acl_refusal_oracle(&no_op_result).is_ok());
+        assert_windows_acl_null_overlap_and_compound(10);
+        assert_windows_acl_noop_control(20);
     }
 
     #[cfg(windows)]

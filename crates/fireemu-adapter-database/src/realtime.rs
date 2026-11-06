@@ -79,6 +79,7 @@ enum Ready {
         Result<Json, crate::json_parse::ParseError>,
         Vec<String>,
         bool,
+        Option<Json>,
     ),
     /// The connection must close with this code.
     Close(CloseCode),
@@ -267,7 +268,13 @@ impl Session {
                 } else {
                     Vec::new()
                 };
-                Some(Prepared(Ready::Message(parsed, order, replaced)))
+                // The `authvar` of a `gauth` frame keeps a lone surrogate as the official emulator keeps it, in
+                // the claims encoding, which the emulator profile's Rules decode.
+                let authvar = message
+                    .contains("authvar")
+                    .then(|| encoded_authvar(&message))
+                    .flatten();
+                Some(Prepared(Ready::Message(parsed, order, replaced, authvar)))
             }
         }
     }
@@ -285,10 +292,19 @@ impl Session {
                 received.close = Some(code);
                 return received;
             }
-            Ready::Message(parsed, order, replaced) => {
+            Ready::Message(parsed, order, replaced, authvar) => {
                 self.merge_order = order;
                 if replaced && db.options().production_shapes {
                     Err(crate::json_parse::ParseError)
+                } else if let (Ok(mut parsed), Some(authvar), true) = (
+                    parsed.clone(),
+                    authvar,
+                    db.options().credentials.lone_claims(),
+                ) {
+                    if let Some(slot) = authvar_slot(&mut parsed) {
+                        *slot = authvar;
+                    }
+                    Ok(parsed)
                 } else {
                     parsed
                 }
@@ -405,7 +421,9 @@ impl Session {
                         let text = response(r, "ok", &data);
                         // A claim that holds a lone surrogate is written as the escape of it (the emulator
                         // profile's claims encoding, see `fireemu_core_database::lone`).
-                        let text = if action == "auth" && db.options().credentials.lone_claims() {
+                        let text = if matches!(action.as_str(), "auth" | "gauth")
+                            && db.options().credentials.lone_claims()
+                        {
                             fireemu_core_database::lone::json_text(&text)
                         } else {
                             text
@@ -488,10 +506,19 @@ impl Session {
                     Some(auth @ Json::Object(_)) => Access::AdminAsUser(auth.clone()),
                     Some(_) => return Err(Failure::Malformed),
                 };
+                // The emulator profile answers with the `authvar` object it was given, as the official emulator
+                // does (a lone surrogate in it written as the escape); the strict profile answers null.
+                let echo = match (
+                    arguments.get("authvar"),
+                    db.options().credentials.lone_claims(),
+                ) {
+                    (Some(auth @ Json::Object(_)), true) => auth.clone(),
+                    _ => Json::Null,
+                };
                 self.become_(db, access, context.now_millis);
                 let expires = context.now_millis / 1000 + 3600;
                 Ok(Json::object([
-                    ("auth", Json::Null),
+                    ("auth", echo),
                     ("expires", Json::int(expires)),
                 ]))
             }
@@ -795,8 +822,29 @@ impl Session {
             sent
         };
         let mut relative = Vec::with_capacity(entries.len());
+        let emulator = !db.options().production_shapes;
         for key in sent {
-            let parsed = Path::parse(key, &limits).map_err(|_| Failure::Malformed)?;
+            let parsed = match Path::parse(key, &limits) {
+                Ok(parsed) => parsed,
+                // Strict keeps the connection error; the emulator profile answers as the official emulator.
+                Err(_) if !emulator => return Err(Failure::Malformed),
+                Err(err) if err.kind == ErrorKind::PathTooLong => {
+                    return Err(invalid(format!(
+                        "Path specified exceeds the maximum length that can be written ({} bytes).",
+                        limits.max_path_bytes
+                    )))
+                }
+                Err(_) => return Err(invalid("Invalid token in path")),
+            };
+            if emulator && key.is_empty() {
+                return Err(invalid("Empty strings are not valid keys"));
+            }
+            if emulator && path.join(&parsed).depth() > limits.max_depth {
+                return Err(invalid(format!(
+                    "Path specified exceeds the maximum depth that can be written ({}).",
+                    limits.max_depth
+                )));
+            }
             relative.push((key.clone(), parsed));
         }
         refuse_overlap(&relative)?;
@@ -898,6 +946,27 @@ fn with_lone_path(
         }
     }
     Ok(parsed)
+}
+
+/// The member `d.b.authvar` of a frame.
+fn authvar_slot(json: &mut Json) -> Option<&mut Json> {
+    let Json::Object(envelope) = json else {
+        return None;
+    };
+    let Some(Json::Object(data)) = envelope.get_mut("d") else {
+        return None;
+    };
+    let Some(Json::Object(body)) = data.get_mut("b") else {
+        return None;
+    };
+    body.get_mut("authvar")
+}
+
+/// The `authvar` object of a frame read in the claims encoding, if it holds an object.
+fn encoded_authvar(message: &str) -> Option<Json> {
+    let mut encoded = crate::json_parse::parse_claims(message).ok()?;
+    let slot = authvar_slot(&mut encoded)?;
+    matches!(slot, Json::Object(_)).then(|| slot.clone())
 }
 
 fn is_merge(parsed: &Result<Json, crate::json_parse::ParseError>) -> bool {

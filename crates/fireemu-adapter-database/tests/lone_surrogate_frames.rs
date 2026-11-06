@@ -2,7 +2,7 @@
 //! (`docs.local/runs/rtdb-lone-surrogate/probe-ws.mjs`, jar-ws.json; owner row "RTDB closure lone surrogates in claims
 //! and query values", 2026-11-06). On the emulator profile a value stores `?` (a valid pair stays), a path that holds
 //! one is `Invalid token in path`, a data key that holds one is refused as any invalid key is (the connection error;
-//! for a merge entry the official emulator says `Invalid token in path`, which fireemu does for no invalid key), a listen's bound reads `?`, and the claims of an `auth`
+//! for a merge entry `Invalid token in path`, as for any invalid key), a listen's bound reads `?`, and the claims of an `auth`
 //! credential keep the surrogate. The strict profile refuses every such frame as before (production has not answered
 //! them).
 
@@ -89,11 +89,8 @@ fn a_lone_surrogate_in_a_frame_is_read_as_the_official_emulator_reads_it() {
             r#"{"a":"z?"}"#,
         ),
         (
-            // The official emulator answers `invalid_parameters` here, as it does for any invalid merge key
-            // (`b.c`, `b$c`); fireemu answers the connection error for all of them. Older than the surrogate and
-            // not followed.
             r#"{"t":"d","d":{"r":1,"a":"m","b":{"p":"/t","d":{"b\ud83d":1}}}}"#.to_owned(),
-            connection_error,
+            invalid,
             "null",
         ),
         (
@@ -215,4 +212,123 @@ fn a_reply_other_than_the_credential_answer_keeps_a_reserved_character() {
         .join("\n");
         assert!(got.contains(stored), "strict={strict}: {got}");
     }
+}
+
+/// A merge entry whose key is not a valid path is `invalid_parameters` for the official emulator (a lone surrogate
+/// included); the strict profile keeps the connection error and accepts the empty key as before. Jar rows:
+/// jar-ws3.json (probe-ws.mjs).
+#[test]
+fn a_merge_entry_with_an_invalid_key_is_answered_as_the_official_emulator_answers_it() {
+    let long = "k".repeat(800);
+    let deep = vec!["a"; 40].join("/");
+    let token = "Invalid token in path";
+    let rows: Vec<(String, String)> = vec![
+        ("b.c".to_owned(), token.to_owned()),
+        ("b$c".to_owned(), token.to_owned()),
+        ("b#c".to_owned(), token.to_owned()),
+        ("b[c".to_owned(), token.to_owned()),
+        ("a/b.c".to_owned(), token.to_owned()),
+        ("a/.priority/b".to_owned(), token.to_owned()),
+        ("b\\ud83d".to_owned(), token.to_owned()),
+        (String::new(), "Empty strings are not valid keys".to_owned()),
+        (
+            long,
+            "Path specified exceeds the maximum length that can be written (768 bytes).".to_owned(),
+        ),
+        (
+            deep,
+            "Path specified exceeds the maximum depth that can be written (32).".to_owned(),
+        ),
+    ];
+    for (key, message) in rows {
+        let frame =
+            format!(r#"{{"t":"d","d":{{"r":1,"a":"m","b":{{"p":"/t","d":{{"{key}":1}}}}}}}}"#);
+        let mut emulator = database(false);
+        let got = replies(&mut emulator, &[&frame]).join("\n");
+        assert!(
+            got.contains(&format!(r#""s":"invalid_parameters","d":"{message}""#)),
+            "emulator {key:?}: {got}"
+        );
+        assert_eq!(rest(&mut emulator, "GET", "/t.json?ns=c", "").1, "null");
+        let mut strict = database(true);
+        let got = replies(&mut strict, &[&frame]).join("\n");
+        if key.is_empty() {
+            assert!(got.contains(r#""s":"ok""#), "strict {key:?}: {got}");
+        } else {
+            assert!(
+                got.contains(r#""t":"c","d":{"t":"e""#),
+                "strict {key:?}: {got}"
+            );
+        }
+    }
+    // The depth counts the path below `/t`: 31 segments make 32 levels, which is the limit.
+    for (segments, accepted) in [(31, true), (32, false)] {
+        let key = vec!["a"; segments].join("/");
+        let frame =
+            format!(r#"{{"t":"d","d":{{"r":1,"a":"m","b":{{"p":"/t","d":{{"{key}":1}}}}}}}}"#);
+        let mut emulator = database(false);
+        let got = replies(&mut emulator, &[&frame]).join("");
+        assert_eq!(got.contains(r#""s":"ok""#), accepted, "{segments}: {got}");
+    }
+    // A valid key and a `//` key are unchanged.
+    for key in ["a/b", "a//b"] {
+        let frame =
+            format!(r#"{{"t":"d","d":{{"r":1,"a":"m","b":{{"p":"/t","d":{{"{key}":1}}}}}}}}"#);
+        let mut emulator = database(false);
+        assert!(replies(&mut emulator, &[&frame])
+            .join("")
+            .contains(r#""s":"ok""#));
+        assert_eq!(
+            rest(&mut emulator, "GET", "/t.json?ns=c", "").1,
+            r#"{"a":{"b":1}}"#
+        );
+    }
+}
+
+/// The `authvar` of a `gauth` frame: the emulator profile keeps a lone surrogate in it, as the official emulator does,
+/// and answers with the object (the strict profile answers null, and refuses a lone surrogate as before). Jar rows:
+/// jar-ws3.json and jar-ws4.json.
+#[test]
+fn the_authvar_of_a_gauth_frame_keeps_a_lone_surrogate_on_the_emulator_profile() {
+    let rules = r#"{"rules":{"t":{".read":"auth.x == '\\uD83D'"}}}"#;
+    let gauth = |authvar: &str| {
+        format!(
+            r#"{{"t":"d","d":{{"r":1,"a":"gauth","b":{{"cred":"owner","authvar":{authvar}}}}}}}"#
+        )
+    };
+    let listen = r#"{"t":"d","d":{"r":2,"a":"q","b":{"p":"/t","h":""}}}"#;
+    let run = |strict: bool, authvar: &str| {
+        let mut db = database(strict);
+        rest(&mut db, "PUT", "/t.json?ns=c", r#"{"a":1}"#);
+        rest(&mut db, "PUT", "/.settings/rules.json?ns=c", rules);
+        replies(&mut db, &[&gauth(authvar), listen]).join("\n")
+    };
+    // The object is echoed (its members in the order of the map), and the rule sees the surrogate.
+    let lone = run(false, r#"{"uid":"u1","x":"\ud83d"}"#);
+    assert!(
+        lone.contains(r#""x":"\uD83D""#) && lone.contains(r#""uid":"u1""#),
+        "{lone}"
+    );
+    assert!(lone.contains(r#""r":2,"b":{"s":"ok""#), "{lone}");
+    let pair = run(false, r#"{"uid":"u1","x":"😀"}"#);
+    assert!(pair.contains(r#""x":"😀""#), "{pair}");
+    assert!(pair.contains("permission_denied"), "{pair}");
+    let key = run(false, r#"{"uid":"u1","\ud83d":1}"#);
+    assert!(key.contains(r#""\uD83D":1"#), "{key}");
+    let plain = run(false, r#"{"uid":"u1","n":1,"o":{"p":[1,"a"]}}"#);
+    assert!(
+        plain.contains(r#""auth":{"n":1,"o":{"p":[1,"a"]},"uid":"u1"}"#),
+        "{plain}"
+    );
+    // A reserved character stays itself.
+    let reserved = run(false, "{\"uid\":\"u1\",\"x\":\"\u{10F03D}\"}");
+    assert!(reserved.contains("\u{10F03D}"), "{reserved}");
+    // Strict: a null echo; the surrogate is refused as before.
+    let strict_plain = run(true, r#"{"uid":"u1","n":1}"#);
+    assert!(strict_plain.contains(r#""auth":null"#), "{strict_plain}");
+    let strict_lone = run(true, r#"{"uid":"u1","x":"\ud83d"}"#);
+    assert!(
+        strict_lone.contains(r#""t":"c","d":{"t":"e""#),
+        "{strict_lone}"
+    );
 }

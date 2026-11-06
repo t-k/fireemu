@@ -17,12 +17,20 @@ void main() {
     report.record('first', CaseStatus.passed, 'ok');
     report.record('second', CaseStatus.passed, 'ok');
     expect(report.allPassed, isTrue);
-    expect(() => report.record('first', CaseStatus.passed, 'ok'), throwsStateError);
-    expect(() => report.record('unknown', CaseStatus.passed, 'ok'), throwsStateError);
+    expect(
+      () => report.record('first', CaseStatus.passed, 'ok'),
+      throwsStateError,
+    );
+    expect(
+      () => report.record('unknown', CaseStatus.passed, 'ok'),
+      throwsStateError,
+    );
   });
   test('unsafe classifications cannot enter public report', () {
     final report = SmokeReport(['first']);
-    expect(() => report.record('first', CaseStatus.failed, 'raw exception /path'),
-      throwsArgumentError);
+    expect(
+      () => report.record('first', CaseStatus.failed, 'raw exception /path'),
+      throwsArgumentError,
+    );
   });
 }

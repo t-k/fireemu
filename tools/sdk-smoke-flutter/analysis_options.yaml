@@ -1,0 +1,10 @@
+analyzer:
+  exclude:
+    - .toolchain/**
+    - .pub-cache/**
+    - build/**
+    - node_modules/**
+    - .cocoapods/**
+linter:
+  rules:
+    - unawaited_futures

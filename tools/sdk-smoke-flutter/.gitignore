@@ -20,3 +20,6 @@ __pycache__/
 .local-config/
 
 .npm-cache/
+
+.idea/
+*.iml

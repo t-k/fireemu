@@ -217,7 +217,7 @@ fn export_value(tree: &Tree, path: &Path) -> Value {
 fn node_value(node: &Node) -> Value {
     use fireemu_core_database::node::VALUE_KEY;
     use fireemu_core_database::path::PRIORITY_KEY;
-    let priority = node.priority.as_ref().map(priority_value);
+    let priority = node.priority.as_deref().map(priority_value);
     match &node.content {
         Content::Leaf(leaf) => {
             let value = match leaf {

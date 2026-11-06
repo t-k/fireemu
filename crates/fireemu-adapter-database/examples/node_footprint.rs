@@ -6,15 +6,16 @@ use fireemu_adapter_database::rest::{prepare_import, Database, RestOptions};
 use fireemu_core_database::{Content, Node, Priority};
 
 fn memory() -> String {
-    fs::read_to_string("/proc/self/status")
-        .map(|status| {
+    fs::read_to_string("/proc/self/status").map_or_else(
+        |_| "RSS unavailable: use a platform process meter".to_owned(),
+        |status| {
             status
                 .lines()
                 .filter(|line| line.starts_with("VmRSS:") || line.starts_with("VmHWM:"))
                 .collect::<Vec<_>>()
                 .join("; ")
-        })
-        .unwrap_or_else(|_| "RSS unavailable: use a platform process meter".to_owned())
+        },
+    )
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

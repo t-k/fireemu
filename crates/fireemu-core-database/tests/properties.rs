@@ -779,9 +779,13 @@ fn same_form_compares_numbers_by_kind_and_bits() {
 
 /// The retained bytes as documented on `Tree::retained_bytes`, walked independently.
 fn reference_bytes(node: &Node) -> u64 {
-    let mut bytes = std::mem::size_of::<Node>() as u64;
-    if let Some(fireemu_core_database::Priority::String(priority)) = &node.priority {
-        bytes += priority.len() as u64;
+    struct InlineNode {
+        _content: Content,
+        _priority: Option<fireemu_core_database::Priority>,
+    }
+    let mut bytes = std::mem::size_of::<InlineNode>() as u64;
+    if let Some(fireemu_core_database::Priority::String(text)) = node.priority.as_deref() {
+        bytes += text.len() as u64;
     }
     match &node.content {
         Content::Leaf(Leaf::String(text)) => bytes += text.len() as u64,

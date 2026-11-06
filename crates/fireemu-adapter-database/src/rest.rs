@@ -1910,23 +1910,29 @@ pub fn prepare_import(
     text: String,
     limits: &Limits,
 ) -> Result<PreparedImport, String> {
+    prepare_import_as(namespace, text, limits, false)
+}
+
+/// [`prepare_import`], where `lone_surrogate_values` says whether a lone surrogate escape in a value is `?`, as
+/// the official emulator stores it (the emulator profile), or refuses the file before anything is installed (the
+/// strict profile, production has not answered it). A key that holds one is refused either way.
+pub fn prepare_import_as(
+    namespace: &str,
+    text: String,
+    limits: &Limits,
+    lone_surrogate_values: bool,
+) -> Result<PreparedImport, String> {
     let namespace = route(Some(namespace), None, namespace)
         .map_err(|_| "Invalid Firebase database name".to_owned())?;
     if text.is_empty() {
         return Err("No data supplied.".to_owned());
     }
-    let Ok(json) = parse(&text) else {
-        // A lone surrogate escape in a value: the emulator profile stores `?` for it, as the official
-        // emulator does, and the strict profile refuses the file. This function knows no profile, so the
-        // Database that installs the file answers by its own `PUT` path (with `import_text`).
-        if matches!(parse_replacing(&text, '?'), Ok((_, true))) {
-            return Ok(PreparedImport {
-                namespace,
-                content: ImportContent::Deferred(text),
-            });
-        }
-        return Err(PARSE_ERROR.to_owned());
-    };
+    let json = if lone_surrogate_values {
+        parse_replacing(&text, '?').map(|(json, _)| json)
+    } else {
+        parse(&text)
+    }
+    .map_err(|_| PARSE_ERROR.to_owned())?;
     if has_server_value(&json) {
         drop(json);
         let options = RestOptions {

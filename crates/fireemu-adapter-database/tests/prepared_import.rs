@@ -4,7 +4,9 @@
 //! file once and still refuse a bad file before anything is installed.
 
 use fireemu_adapter_database::realtime::Opened;
-use fireemu_adapter_database::rest::{prepare_import, Database, Handled, HttpRequest, RestOptions};
+use fireemu_adapter_database::rest::{
+    prepare_import, prepare_import_as, Database, Handled, HttpRequest, RestOptions,
+};
 use std::fmt::Write as _;
 
 use fireemu_core_database::Limits;
@@ -354,13 +356,12 @@ fn a_built_import_revokes_listeners_using_the_installed_data_and_time() {
 }
 
 /// A lone surrogate escape in a value of an import file is stored as `?` on the emulator profile, as the official
-/// emulator stores it (`PUT /.json`, which is what `--import` sends it; jar-import.json). A key that holds one is
-/// refused. The strict profile refuses the file as before, when it is installed (a prepared file cannot know the
-/// profile).
+/// emulator stores it (`PUT /.json`, which is what `--import` sends it; jar-import.json). The strict profile refuses
+/// the file while it is prepared, before anything is installed. A key that holds one is refused on both.
 #[test]
 fn an_import_with_a_lone_surrogate_in_a_value_is_stored_as_a_question_mark_on_the_emulator_profile_only(
 ) {
-    let text = r#"{"t":{"a":"x\ud83d"},"u":"\ude00","v":"ok😀"}"#;
+    let text = r#"{"t":{"a":"x\ud83d"},"u":"\ude00","v":"ok\ud83d\ude00"}"#;
     let direct = |strict: bool| {
         let mut db = Database::new(
             RestOptions {
@@ -372,15 +373,9 @@ fn an_import_with_a_lone_surrogate_in_a_value_is_stored_as_a_question_mark_on_th
         let answer = db.import_text("p", text, NOW);
         (answer, db.export_texts())
     };
-    let prepared = |strict: bool| {
-        let mut db = Database::new(
-            RestOptions {
-                production_shapes: strict,
-                ..RestOptions::default()
-            },
-            1,
-        );
-        let answer = prepare_import("p", text.to_owned(), &Limits::default())
+    let prepared = |lone: bool| {
+        let mut db = Database::new(RestOptions::default(), 1);
+        let answer = prepare_import_as("p", text.to_owned(), &Limits::default(), lone)
             .and_then(|import| db.install_import(import, NOW));
         (answer, db.export_texts())
     };
@@ -392,10 +387,23 @@ fn an_import_with_a_lone_surrogate_in_a_value_is_stored_as_a_question_mark_on_th
         )],
     );
     assert_eq!(direct(false), emulator);
-    assert_eq!(prepared(false), emulator);
+    assert_eq!(prepared(true), emulator);
     let parse = "Invalid data; couldn't parse JSON object, array, or value.";
     assert_eq!(direct(true), (Err(parse.to_owned()), Vec::new()));
-    assert_eq!(prepared(true), (Err(parse.to_owned()), Vec::new()));
-    // A key that holds one is refused before anything is installed.
-    assert!(prepare_import("p", r#"{"t":{"a\ud83d":1}}"#.to_owned(), &Limits::default()).is_err());
+    // Refused while preparing: nothing reaches the database.
+    assert_eq!(
+        prepare_import("p", text.to_owned(), &Limits::default()).err(),
+        Some(parse.to_owned())
+    );
+    assert_eq!(prepared(false), (Err(parse.to_owned()), Vec::new()));
+    // A key that holds one is refused before anything is installed on both.
+    for lone in [false, true] {
+        assert!(prepare_import_as(
+            "p",
+            r#"{"t":{"a\ud83d":1}}"#.to_owned(),
+            &Limits::default(),
+            lone
+        )
+        .is_err());
+    }
 }

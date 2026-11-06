@@ -893,6 +893,87 @@ fn a_claim_with_a_lone_surrogate_is_read_by_the_emulator_profile_only() {
     }
 }
 
+/// An import file whose value holds a lone surrogate escape: the emulator profile stores `?` as the official emulator
+/// does (firebase-tools sends the file as `PUT /.json`), the strict profile stops the start while the import is
+/// prepared, before anything is installed (owner row 2286 and the coordinator's ruling for the import path).
+#[test]
+fn an_import_with_a_lone_surrogate_follows_the_profile_and_strict_stops_the_start() {
+    let dir = export_parent("database-import-lone-surrogate");
+    let export = dir.path().join("export");
+    let ns = format!("{PROJECT}-default-rtdb");
+    let exec = |profile: &str, extra: &[&str], script: &str| {
+        let config = dir.path().join(format!("{profile}.json"));
+        std::fs::write(
+            &config,
+            format!(r#"{{"schemaVersion":1,"profile":"{profile}"}}"#),
+        )
+        .unwrap();
+        Command::new(env!("CARGO_BIN_EXE_fireemu"))
+            .args(["exec", "--no-config-discovery", "--project", PROJECT])
+            .args(["--config", config.to_str().unwrap()])
+            .args([
+                "--only",
+                "database",
+                "--database-port",
+                "0",
+                "--http-port",
+                "0",
+            ])
+            .args(["--hub-port", "0"])
+            .args(extra)
+            .args(["--", "/bin/sh", "-c", script])
+            .stdin(Stdio::null())
+            .output()
+            .unwrap()
+    };
+    let owner = r#"-H "Authorization: Bearer owner""#;
+    let url = format!(r#""http://$FIREBASE_DATABASE_EMULATOR_HOST/.json?ns={ns}""#);
+    let write = format!(r#"curl -sf -X PUT {owner} {url} -d '{{"k":1}}' >/dev/null"#);
+    let output = exec(
+        "emulator",
+        &["--export-on-exit", export.to_str().unwrap()],
+        &write,
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let file = export.join("database_export").join(format!("{ns}.json"));
+    std::fs::write(&file, r#"{"a":"v\ud83d","b":"\ud83d\ude00","c":"x"}"#).unwrap();
+    // A second namespace that would install first and must not be installed when strict refuses the first.
+    std::fs::write(
+        export.join("database_export").join("aaa.json"),
+        r#"{"z":1}"#,
+    )
+    .unwrap();
+    let read = format!("curl -sf {owner} {url}");
+    let emulator = exec("emulator", &["--import", export.to_str().unwrap()], &read);
+    assert!(
+        emulator.status.success(),
+        "{}",
+        String::from_utf8_lossy(&emulator.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&emulator.stdout)
+            .trim()
+            .ends_with("{\"a\":\"v?\",\"b\":\"\u{1F600}\",\"c\":\"x\"}"),
+        "{}",
+        String::from_utf8_lossy(&emulator.stdout)
+    );
+    let strict = exec("strict", &["--import", export.to_str().unwrap()], "true");
+    assert!(!strict.status.success());
+    let stderr = String::from_utf8_lossy(&strict.stderr);
+    assert!(
+        stderr.contains(&format!("{ns}.json")) && stderr.contains("couldn't parse JSON"),
+        "{stderr}"
+    );
+    // A key that holds one stops the start on the emulator profile too.
+    std::fs::write(&file, r#"{"a\ud83d":1}"#).unwrap();
+    let emulator = exec("emulator", &["--import", export.to_str().unwrap()], "true");
+    assert!(!emulator.status.success());
+}
+
 /// The unsigned ID token `@firebase/rules-unit-testing` mints for `uid` of the test project
 /// (the SDK's `mockUserToken` shape).
 fn mock_token(uid: &str) -> String {

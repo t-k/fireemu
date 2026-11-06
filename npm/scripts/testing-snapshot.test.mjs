@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, rm, symlink, realpath, readdir } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rm, symlink, realpath, readdir, open, chmod, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, delimiter } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import test from 'node:test';
@@ -207,6 +208,147 @@ test('createTestWorld snapshots caller exclusions and cleans failed snapshot dir
   exclusions.push('unused-tool');
   await assert.rejects(pending, /NODE_PATH/);
   assert.deepEqual(await readdir(temporary), []);
+});
+
+test('snapshot timeout names its phase, removes partial input and never starts the daemon', { timeout: 20_000 }, async t => {
+  const f = await fixture(t), temporary = join(f.root, 'temporary');
+  await mkdir(temporary);
+  const source = join(f.root, 'slow-functions');
+  await mkdir(source);
+  const input = join(source, 'large.bin'), inputBytes = 96 * 1024 * 1024;
+  const handle = await open(input, 'w');
+  await handle.truncate(inputBytes);
+  await handle.close();
+  const marker = join(f.root, 'daemon-started');
+  const daemon = join(f.root, 'marker-daemon');
+  await writeFile(daemon, `#!/usr/bin/env node\nrequire('node:fs').writeFileSync(${JSON.stringify(marker)}, 'started');\n`);
+  await chmod(daemon, 0o755);
+
+  await assert.rejects(createTestWorld({
+    cwd: f.root,
+    functionsSource: source,
+    services: ['auth'],
+    env: { ...process.env, NODE_PATH: '' },
+    binaryPath: daemon,
+    tempRoot: temporary,
+    snapshotTimeoutMs: 5,
+  }), /test world snapshot timed out/);
+  await assert.rejects(readFile(marker), { code: 'ENOENT' });
+  assert.deepEqual(await readdir(temporary), []);
+});
+
+test('snapshotTimeoutMs must be a positive safe integer before creating a world directory', async t => {
+  const f = await fixture(t), temporary = join(f.root, 'temporary');
+  await mkdir(temporary);
+  for (const snapshotTimeoutMs of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, NaN]) {
+    await assert.rejects(createTestWorld({
+      ...f.options,
+      binaryPath: process.execPath,
+      tempRoot: temporary,
+      snapshotTimeoutMs,
+    }), /snapshotTimeoutMs must be a positive integer/);
+  }
+  assert.deepEqual(await readdir(temporary), []);
+});
+
+test('external abort during an active file copy settles I/O before removing the world directory', { timeout: 30_000 }, async t => {
+  const f = await fixture(t), temporary = join(f.root, 'temporary');
+  await mkdir(temporary);
+  const source = join(f.root, 'slow-functions');
+  await mkdir(source);
+  const input = join(source, 'large.bin'), inputBytes = 512 * 1024 * 1024;
+  const handle = await open(input, 'w');
+  await handle.truncate(inputBytes);
+  await handle.close();
+  const controller = new AbortController();
+  const pending = createTestWorld({
+    cwd: f.root,
+    functionsSource: source,
+    services: ['auth'],
+    env: { ...process.env, NODE_PATH: '' },
+    binaryPath: process.execPath,
+    tempRoot: temporary,
+    snapshotTimeoutMs: 30_000,
+    signal: controller.signal,
+  });
+  let outcome;
+  pending.then(world => { outcome = { world }; }, error => { outcome = { error }; });
+  let partialCopyObserved = false;
+  const observationDeadline = Date.now() + 20_000;
+  while (Date.now() < observationDeadline && !partialCopyObserved) {
+    if (outcome?.error) assert.fail(`construction finished before cancellation: ${outcome.error.message}`);
+    const [worldName] = await readdir(temporary);
+    if (worldName) {
+      try {
+        const copied = await stat(join(temporary, worldName, 'baseline', 'functions-0', 'large.bin'));
+        partialCopyObserved = copied.size > 0 && copied.size < inputBytes;
+      } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+      }
+    }
+    if (!partialCopyObserved) await delay(2);
+  }
+  if (!partialCopyObserved) {
+    controller.abort(Error('cancelled because no partial copy was observed'));
+    await pending;
+    assert.fail('expected to observe an active partial file copy');
+  }
+
+  const reason = Error('caller cancelled the snapshot');
+  controller.abort(reason);
+  await pending.then(
+    () => assert.fail('expected aborted construction to reject'),
+    error => {
+      assert.match(error.message, /test world snapshot aborted/);
+      assert.equal(error.cause, reason);
+    },
+  );
+  assert.deepEqual(await readdir(temporary), []);
+  await delay(25);
+  assert.deepEqual(await readdir(temporary), []);
+});
+
+test('generation preparation abort removes its partial copy after the stream settles', { timeout: 30_000 }, async t => {
+  const f = await fixture(t), baseline = join(f.root, 'baseline'), generation = join(f.root, 'generation');
+  await mkdir(baseline);
+  const input = join(baseline, 'large.bin'), inputBytes = 512 * 1024 * 1024;
+  const handle = await open(input, 'w');
+  await handle.truncate(inputBytes);
+  await handle.close();
+  const controller = new AbortController();
+  const reason = Error('cancel generation preparation');
+  const pending = prepareGeneration({ baseline, config: { daemon: {} }, nodePaths: [] }, generation, controller.signal);
+  let outcome;
+  pending.then(value => { outcome = { value }; }, error => { outcome = { error }; });
+  let partialCopyObserved = false;
+  const observationDeadline = Date.now() + 20_000;
+  while (Date.now() < observationDeadline && !partialCopyObserved) {
+    if (outcome?.error) assert.fail(`generation preparation finished before cancellation: ${outcome.error.message}`);
+    try {
+      const copied = await stat(join(generation, 'inputs', 'large.bin'));
+      partialCopyObserved = copied.size > 0 && copied.size < inputBytes;
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+    if (!partialCopyObserved) await delay(2);
+  }
+  if (!partialCopyObserved) {
+    controller.abort(Error('cancelled because no partial generation copy was observed'));
+    await pending;
+    assert.fail('expected to observe an active generation file copy');
+  }
+
+  controller.abort(reason);
+  await pending.then(
+    () => assert.fail('expected aborted generation preparation to reject'),
+    error => {
+      assert.equal(error.name, 'AbortError');
+      assert.equal(error.cause, reason);
+    },
+  );
+  await assert.rejects(stat(generation), { code: 'ENOENT' });
+  await delay(25);
+  await assert.rejects(stat(generation), { code: 'ENOENT' });
 });
 
 

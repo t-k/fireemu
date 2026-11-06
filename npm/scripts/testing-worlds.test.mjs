@@ -188,6 +188,78 @@ test('Functions snapshots own dependencies and reset keeps creation bytes', asyn
   }finally{await rm(root,{recursive:true,force:true});}
 });
 
+test('snapshot copying preserves executable files and read-only directory modes', async()=>{
+  const {snapshotInputs,prepareGeneration}=await import('../fireemu/testing-snapshot.mjs');
+  const {mkdir,chmod}=await import('node:fs/promises');
+  const root=await mkdtemp(join(tmpdir(),'fireemu-world-modes-'));
+  const source=join(root,'source'),nested=join(source,'readonly');
+  await mkdir(nested,{recursive:true});
+  const executable=join(nested,'run.cjs');
+  await writeFile(executable,'module.exports=true');
+  await chmod(executable,0o751);
+  await chmod(nested,0o555);
+  const worldRoot=join(root,'world');
+  await mkdir(worldRoot);
+  try{
+    const snapshot=await snapshotInputs({functionsSource:source},worldRoot);
+    const generation=await prepareGeneration(snapshot,join(worldRoot,'generation'));
+    const baselineFile=join(snapshot.config.functions.source,'readonly','run.cjs');
+    const generationFile=join(generation.cwd,'functions-0','readonly','run.cjs');
+    assert.equal((await stat(baselineFile)).mode&0o777,0o751);
+    assert.equal((await stat(join(snapshot.config.functions.source,'readonly'))).mode&0o777,0o555);
+    assert.equal((await stat(generationFile)).mode&0o777,0o751);
+    assert.equal((await stat(join(generation.cwd,'functions-0','readonly'))).mode&0o777,0o555);
+  }finally{
+    await chmod(nested,0o700);
+    const copied=join(worldRoot,'baseline','functions-0','readonly');
+    const generated=join(worldRoot,'generation','inputs','functions-0','readonly');
+    await Promise.all([chmod(copied,0o700).catch(()=>{}),chmod(generated,0o700).catch(()=>{})]);
+    await rm(root,{recursive:true,force:true});
+  }
+});
+
+test('reset applies a fresh snapshot budget and removes an aborted generation copy', native, async t => {
+  const controller = new AbortController();
+  const world = await createTestWorld({ ...options, snapshotTimeoutMs: 30_000, signal: controller.signal });
+  t.after(() => world.dispose());
+  const { open } = await import('node:fs/promises');
+  const input = join(world.directory, 'baseline', 'reset-large.bin'), inputBytes = 512 * 1024 * 1024;
+  const handle = await open(input, 'w');
+  await handle.truncate(inputBytes);
+  await handle.close();
+
+  const pending = world.reset();
+  let outcome;
+  pending.then(value => { outcome = { value }; }, error => { outcome = { error }; });
+  const generationDirectory = join(world.directory, 'generation-2');
+  let partialCopyObserved = false;
+  const observationDeadline = Date.now() + 20_000;
+  while (Date.now() < observationDeadline && !partialCopyObserved) {
+    if (outcome?.error) assert.fail(`reset finished before cancellation: ${outcome.error.message}`);
+    try {
+      const copied = await stat(join(generationDirectory, 'inputs', 'reset-large.bin'));
+      partialCopyObserved = copied.size > 0 && copied.size < inputBytes;
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+    if (!partialCopyObserved) await new Promise(resolve => setTimeout(resolve, 2));
+  }
+  if (!partialCopyObserved) {
+    controller.abort(Error('cancelled because no partial reset copy was observed'));
+    await pending;
+    assert.fail('expected to observe an active reset generation copy');
+  }
+
+  const reason = Error('caller cancelled reset preparation');
+  controller.abort(reason);
+  await assert.rejects(pending, error => {
+    assert.match(error.message, /test world snapshot aborted/);
+    assert.equal(error.cause, reason);
+    return true;
+  });
+  await assert.rejects(stat(generationDirectory), { code: 'ENOENT' });
+});
+
 test('dispose joins a child command and its inherited-pipe grandchild', native, async()=>{
   const world=await createTestWorld(options);
   const command=world.run(process.execPath,['-e',`require('node:child_process').spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'inherit'});console.log('grandchild started');setInterval(()=>{},1000)`]);

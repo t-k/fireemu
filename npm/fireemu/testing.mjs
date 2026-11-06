@@ -52,6 +52,32 @@ function endpoints(descriptor,control){
   return Object.freeze(result);
 }
 
+function snapshotBudget(options,timeout){
+  const controller=new AbortController();
+  const deadline=Date.now()+timeout;
+  const timedOut=()=>{
+    const error=Error('test world snapshot timed out');
+    error.name='TimeoutError';
+    return error;
+  };
+  const relay=()=>{if(!controller.signal.aborted)controller.abort(options.signal.reason);};
+  const timer=setTimeout(()=>{if(!controller.signal.aborted)controller.abort(timedOut());},timeout);
+  options.signal?.addEventListener('abort',relay,{once:true});
+  if(options.signal?.aborted)relay();
+  return {
+    signal:controller.signal,
+    check(){if(Date.now()>=deadline&&!controller.signal.aborted)controller.abort(timedOut());controller.signal.throwIfAborted();},
+    close(){clearTimeout(timer);options.signal?.removeEventListener('abort',relay);},
+  };
+}
+
+function snapshotFailure(error,signal){
+  if(!signal.aborted)return error;
+  const reason=signal.reason;
+  if(reason?.name==='TimeoutError')return Error('test world snapshot timed out',{cause:reason});
+  return Error(`test world snapshot aborted${reason?.message?`: ${reason.message}`:''}`,{cause:reason??error});
+}
+
 /** Create an independent emulator world; no method changes the parent's environment. */
 export async function createTestWorld(options={}){
   options={...options,nodePathExcludes:Array.isArray(options.nodePathExcludes)?[...options.nodePathExcludes]:options.nodePathExcludes,config:typeof options.config==='object'?structuredClone(options.config):options.config,services:options.services?[...options.services]:undefined,env:{...(options.env??{...process.env,NODE_PATH:''})},clock:options.clock?{...options.clock}:undefined};
@@ -61,6 +87,8 @@ export async function createTestWorld(options={}){
   if(!binary)throw Error('fireemu could not start a test world: install the platform package or supply binaryPath');
   const timeout=options.startupTimeoutMs??60_000;
   if(!Number.isSafeInteger(timeout)||timeout<=0)throw TypeError('startupTimeoutMs must be a positive integer');
+  const snapshotTimeout=options.snapshotTimeoutMs??60_000;
+  if(!Number.isSafeInteger(snapshotTimeout)||snapshotTimeout<=0)throw TypeError('snapshotTimeoutMs must be a positive integer');
   let services=options.services;
   if(services&&(!Array.isArray(services)||!services.length||services.some(name=>typeof name!=='string'||! /^(auth|firestore|storage|functions(?::[A-Za-z0-9_-]+)?|pubsub|database|appcheck)$/.test(name))))throw TypeError('services must name supported test-world services');
   const id=randomUUID();
@@ -88,11 +116,9 @@ export async function createTestWorld(options={}){
       throw error;
     }
   };
-  const start=async()=>{
+  const start=async(prepared,generationDirectory)=>{
     options.signal?.throwIfAborted();
     const next=generation+1;
-    const generationDirectory=join(directory,`generation-${next}`);
-    const prepared=await prepareGeneration(snapshot,generationDirectory);
     const readyFile=join(generationDirectory,'ready.json');
     const args=['up','--config',prepared.configPath,'--project',snapshot.config.daemon.authProject,'--only',services.join(','),'--ready-file',readyFile,'--owner-stdin','--log-verbosity','quiet'];
     for(const name of ['firestore','http','storage','functions','eventarc','tasks','pubsub','database','logging'])args.push(`--${name}-port`,'0');
@@ -141,7 +167,17 @@ export async function createTestWorld(options={}){
       advanceTo:instant=>control('POST','/v1/sessions/default/clock:advanceTo',{instant}),
       runDue:(budget=1000)=>control('POST','/v1/sessions/default/clock:runDue',{budget}),
     }),
-    reset:()=>enqueue(async()=>{check();await retire();await start();return world;}),
+    reset:()=>enqueue(async()=>{
+      check();
+      await retire();
+      const next=generation+1,generationDirectory=join(directory,`generation-${next}`),budget=snapshotBudget(options,snapshotTimeout);
+      let prepared;
+      try{prepared=await prepareGeneration(snapshot,generationDirectory,budget.signal);budget.check();}
+      catch(error){if(prepared)await rm(generationDirectory,{recursive:true,force:true});throw snapshotFailure(error,budget.signal);}
+      finally{budget.close();}
+      await start(prepared,generationDirectory);
+      return world;
+    }),
     dispose:()=>{closing=true;return enqueue(async()=>{if(disposed)return;await retire();await rm(directory,{recursive:true,force:true});disposed=true;});},
     async run(command,args=[],runOptions={}){
       await tail;check();
@@ -166,8 +202,22 @@ export async function createTestWorld(options={}){
   };
   Object.defineProperty(world,'id',{value:id,enumerable:true});
   Object.defineProperty(world,'projectId',{get:()=>snapshot?.config.daemon.authProject,enumerable:true});
-  try{snapshot=await snapshotInputs(options,directory);services??=['auth','firestore','storage',...(snapshot.functionsConfigured?['functions']:[])];await start();return Object.freeze(world);}
-  catch(error){await retire();await rm(directory,{recursive:true,force:true});throw error;}
+  const budget=snapshotBudget(options,snapshotTimeout),generationDirectory=join(directory,'generation-1');
+  try{
+    snapshot=await snapshotInputs(options,directory,budget.signal);
+    services??=['auth','firestore','storage',...(snapshot.functionsConfigured?['functions']:[])];
+    const prepared=await prepareGeneration(snapshot,generationDirectory,budget.signal);
+    budget.check();
+    budget.close();
+    await start(prepared,generationDirectory);
+    return Object.freeze(world);
+  }catch(error){
+    const failure=snapshotFailure(error,budget.signal);
+    budget.close();
+    await retire();
+    await rm(directory,{recursive:true,force:true});
+    throw failure;
+  }
 }
 
 /** Always join disposal, including when the test callback rejects. */

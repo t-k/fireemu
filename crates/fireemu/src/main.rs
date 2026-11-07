@@ -51,6 +51,7 @@ mod database_rules;
 mod doctor;
 mod functions;
 mod help;
+mod hosting;
 mod hub;
 mod import_export;
 mod init;
@@ -77,7 +78,7 @@ use process_wrap::tokio::{JobObject, KillOnDrop, TokioChildWrapper, TokioCommand
 
 use crate::config::{RuntimeConfig, Selection};
 
-const OPTIONS_USAGE: &str = "[--config <file>] [--firebase-json <file>] [--no-config-discovery] [--project <id|alias>] [--only auth,firestore,storage,functions,eventarc,tasks,pubsub,database,appcheck] [--firestore-port <n>] [--http-port <n>] [--storage-port <n>] [--functions-port <n>] [--eventarc-port <n>] [--tasks-port <n>] [--pubsub-port <n>] [--database-port <n>] [--functions <dir>] [--ui-port <n|auto>] [--hub-port <n|auto>] [--logging-port <n>] [--inspect-functions [port]] [--log-verbosity quiet|silent|info|debug] [--import <dir>] [--export-on-exit [dir]] [--ready-file <file>]";
+const OPTIONS_USAGE: &str = "[--config <file>] [--firebase-json <file>] [--no-config-discovery] [--project <id|alias>] [--only auth,firestore,storage,functions,eventarc,tasks,pubsub,database,hosting,appcheck] [--firestore-port <n>] [--http-port <n>] [--storage-port <n>] [--functions-port <n>] [--hosting-port <n>] [--eventarc-port <n>] [--tasks-port <n>] [--pubsub-port <n>] [--database-port <n>] [--functions <dir>] [--ui-port <n|auto>] [--hub-port <n|auto>] [--logging-port <n>] [--inspect-functions [port]] [--log-verbosity quiet|silent|info|debug] [--import <dir>] [--export-on-exit [dir]] [--ready-file <file>]";
 
 fn usage() -> ExitCode {
     eprintln!("usage: fireemu init [--profile strict|emulator] [--firebase-json <file>] [--interactive|--yes|--no-interactive] [--force]\n       fireemu up|emulators:start {OPTIONS_USAGE}\n       fireemu exec|emulators:exec {OPTIONS_USAGE} [--ui] \"shell script\"\n       fireemu exec|emulators:exec {OPTIONS_USAGE} [--ui] -- <command...>\n       fireemu emulators:export <dir> [--project <id>] [--force]\n       fireemu doctor\n       fireemu capabilities\n       fireemu --version\n       fireemu --help | fireemu help <command>\n\nrun `fireemu --help` for the commands, or `fireemu <command> --help` for the options of one");
@@ -869,6 +870,7 @@ struct RawOptions {
     http_port: Option<u16>,
     storage_port: Option<u16>,
     functions_port: Option<u16>,
+    hosting_port: Option<u16>,
     eventarc_port: Option<u16>,
     tasks_port: Option<u16>,
     pubsub_port: Option<u16>,
@@ -1002,6 +1004,10 @@ fn parse_raw_options(args: &[String], context: OptionContext) -> Result<RawOptio
             }
             "--functions-port" => {
                 raw.functions_port = Some(port_arg(args, i, "--functions-port")?);
+                i += 2;
+            }
+            "--hosting-port" => {
+                raw.hosting_port = Some(port_arg(args, i, "--hosting-port")?);
                 i += 2;
             }
             "--eventarc-port" => {
@@ -1349,6 +1355,9 @@ fn apply_port_overrides(cfg: &mut RuntimeConfig, raw: &RawOptions) {
     }
     if let Some(p) = raw.storage_port {
         cfg.storage_addr = with_port(&cfg.storage_addr, p);
+    }
+    if let Some(p) = raw.hosting_port {
+        cfg.hosting_addr = with_port(&cfg.hosting_addr, p);
     }
     if let Some(p) = raw.functions_port {
         cfg.functions_addr = with_port(&cfg.functions_addr, p);
@@ -1737,6 +1746,7 @@ fn parse_options(
         || only.auth
         || only.storage
         || only.functions
+        || only.hosting
         || only.pubsub
         || only.database
         || only.appcheck;
@@ -1904,6 +1914,8 @@ struct BoundAddrs {
     storage: Option<std::net::SocketAddr>,
     /// Functions HTTP.
     functions: Option<std::net::SocketAddr>,
+    /// Hosting HTTP.
+    hosting: Option<std::net::SocketAddr>,
     /// Eventarc HTTP, present only as a dependency of a loaded Functions runtime.
     eventarc: Option<std::net::SocketAddr>,
     /// Cloud Tasks HTTP, present only as a dependency of a loaded Functions runtime.
@@ -2879,6 +2891,7 @@ struct Listeners {
     auth_selected: bool,
     storage: Option<tokio::net::TcpListener>,
     functions: Option<tokio::net::TcpListener>,
+    hosting: Option<tokio::net::TcpListener>,
     eventarc: Option<tokio::net::TcpListener>,
     tasks: Option<tokio::net::TcpListener>,
     pubsub: Option<tokio::net::TcpListener>,
@@ -2955,6 +2968,14 @@ async fn bind_listeners(cfg: &RuntimeConfig, only: &Selection) -> Result<Listene
     } else {
         None
     };
+    let hosting = if only.hosting && cfg.hosting.is_some() {
+        Some(bind_listener(&cfg.hosting_addr).await?)
+    } else {
+        None
+    };
+    if only.explicit && only.hosting && cfg.hosting.is_none() {
+        return Err("--only hosting requires hosting.public in firebase.json".to_owned());
+    }
     let functions = if only.functions && cfg.functions_source.is_some() {
         Some(bind_listener(&cfg.functions_addr).await?)
     } else {
@@ -3019,6 +3040,7 @@ async fn bind_listeners(cfg: &RuntimeConfig, only: &Selection) -> Result<Listene
         auth_selected: only.auth,
         storage,
         functions,
+        hosting,
         eventarc,
         tasks,
         pubsub,
@@ -3057,6 +3079,7 @@ fn hub_emulators(addrs: &BoundAddrs) -> Vec<hub::EmulatorInfo> {
         ("auth", addrs.auth),
         ("storage", addrs.storage),
         ("functions", addrs.functions),
+        ("hosting", addrs.hosting),
         ("eventarc", addrs.eventarc),
         ("tasks", addrs.tasks),
         ("pubsub", addrs.pubsub),
@@ -4255,6 +4278,18 @@ mod config_reload_tests {
         }
     }
 
+    proptest::proptest! {
+        #[test]
+        fn hosting_port_override_preserves_configured_host(port in proptest::prelude::any::<u16>()) {
+            for host in ["[::1]", "127.0.0.2", "192.168.1.10"] {
+                let mut cfg = RuntimeConfig { hosting_addr: format!("{host}:5000"), ..RuntimeConfig::default() };
+                let raw = parse_raw_options(&["--hosting-port".to_owned(), port.to_string()], OptionContext::Start).unwrap_or_else(|error| panic!("{}",error.message));
+                apply_port_overrides(&mut cfg, &raw);
+                proptest::prop_assert_eq!(cfg.hosting_addr, format!("{host}:{port}"));
+            }
+        }
+    }
+
     #[test]
     fn support_service_cli_ports_override_configured_addresses() {
         let mut cfg = RuntimeConfig {
@@ -4284,6 +4319,7 @@ mod config_reload_tests {
             firestore: true,
             auth: false,
             storage: false,
+            hosting: false,
             functions: false,
             eventarc: false,
             tasks: false,
@@ -5422,6 +5458,7 @@ mod storage_endpoint_tests {
             auth: loopback(9099),
             storage: loopback(9199),
             functions: None,
+            hosting: None,
             eventarc: None,
             tasks: None,
             pubsub: None,

@@ -1125,7 +1125,6 @@ fn the_control_plane_leaves_the_auth_port_free_when_auth_is_not_selected() {
 #[test]
 fn an_official_service_fireemu_does_not_serve_is_refused_with_its_status() {
     for (service, fragment) in [
-        ("hosting", "deferred"),
         ("apphosting", "deferred"),
         ("dataconnect", "deferred"),
         ("extensions", "not planned"),

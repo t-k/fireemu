@@ -1179,6 +1179,10 @@ pub struct RuntimeConfig {
     pub rules_denial_log: bool,
     /// Functions HTTP bind address.
     pub functions_addr: String,
+    /// Hosting HTTP bind address.
+    pub hosting_addr: String,
+    /// The site configuration loaded from firebase.json.
+    pub hosting: Option<crate::hosting::Config>,
     /// Eventarc HTTP bind address. The pinned official suite starts this dependency only
     /// when a Functions codebase is loaded; its default port is 9299.
     pub eventarc_addr: String,
@@ -1692,6 +1696,8 @@ impl Default for RuntimeConfig {
             rules_enforced: true,
             rules_denial_log: true,
             functions_addr: "127.0.0.1:5001".to_owned(),
+            hosting_addr: "127.0.0.1:5000".to_owned(),
+            hosting: None,
             eventarc_addr: "127.0.0.1:9299".to_owned(),
             eventarc_enabled: false,
             eventarc_addr_explicit: false,
@@ -2012,12 +2018,13 @@ impl RuntimeConfig {
             "daemon.seed" => Some(json!(self.seed)),
             "daemon.authProject" => Some(json!(self.auth_project)),
             "daemon.authProjectNumbers" => Some(json!(self.auth_project_numbers)),
-            "daemon.firestorePort" | "daemon.httpPort" | "daemon.storagePort" | "daemon.functionsPort" | "daemon.eventarcPort" | "daemon.tasksPort" | "daemon.pubsubPort" | "daemon.databasePort" | "daemon.loggingPort" | "daemon.hubPort" | "daemon.uiPort" => {
+            "daemon.firestorePort" | "daemon.httpPort" | "daemon.storagePort" | "daemon.functionsPort" | "daemon.hostingPort" | "daemon.eventarcPort" | "daemon.tasksPort" | "daemon.pubsubPort" | "daemon.databasePort" | "daemon.loggingPort" | "daemon.hubPort" | "daemon.uiPort" => {
                 let addr = match key {
                     "daemon.firestorePort" => &self.firestore_addr,
                     "daemon.httpPort" => &self.http_addr,
                     "daemon.storagePort" => &self.storage_addr,
                     "daemon.functionsPort" => &self.functions_addr,
+                    "daemon.hostingPort" => &self.hosting_addr,
                     "daemon.eventarcPort" => &self.eventarc_addr,
                     "daemon.tasksPort" => &self.tasks_addr,
                     "daemon.pubsubPort" => &self.pubsub_addr,
@@ -2093,11 +2100,12 @@ impl RuntimeConfig {
 }
 
 /// The keys of the `daemon` section (spec/config/fireemu.schema.json).
-pub(crate) const DAEMON_KEYS: [&str; 16] = [
+pub(crate) const DAEMON_KEYS: [&str; 17] = [
     "firestorePort",
     "storagePort",
     "httpPort",
     "functionsPort",
+    "hostingPort",
     "eventarcPort",
     "tasksPort",
     "pubsubPort",
@@ -2182,7 +2190,7 @@ pub(crate) const AUTH_KEYS: [&str; 28] = [
 pub struct ConfigError(pub String);
 
 /// The service emulators fireemu serves, in `--only` spelling.
-pub const SERVED_SERVICES: [&str; 9] = [
+pub const SERVED_SERVICES: [&str; 10] = [
     "auth",
     "firestore",
     "storage",
@@ -2192,6 +2200,7 @@ pub const SERVED_SERVICES: [&str; 9] = [
     "pubsub",
     "database",
     "appcheck",
+    "hosting",
 ];
 
 /// Official Local Emulator Suite service emulators fireemu does not serve, each with the
@@ -2200,11 +2209,7 @@ pub const SERVED_SERVICES: [&str; 9] = [
 ///
 /// `deferred` products have an open compatibility issue and no implementation; `planned`
 /// products are on the active list; `not planned` is a closed product decision.
-pub const UNSERVED_OFFICIAL_SERVICES: [(&str, &str); 4] = [
-    (
-        "hosting",
-        "deferred: the Firebase Hosting emulator is not in the active supported surface",
-    ),
+pub const UNSERVED_OFFICIAL_SERVICES: [(&str, &str); 3] = [
     (
         "apphosting",
         "deferred: the App Hosting emulator is not in the active supported surface",
@@ -2245,6 +2250,8 @@ pub struct Selection {
     pub storage: bool,
     /// The functions codebase is loaded and `FIREEMU_FUNCTIONS_HOST` exported.
     pub functions: bool,
+    /// Serve the configured Hosting public directory.
+    pub hosting: bool,
     /// Whether `--only` named the Eventarc support emulator.
     pub eventarc: bool,
     /// Whether `--only` named the Cloud Tasks support emulator.
@@ -2274,6 +2281,7 @@ impl Default for Selection {
             auth: true,
             storage: true,
             functions: true,
+            hosting: true,
             eventarc: false,
             tasks: false,
             pubsub: true,
@@ -2297,6 +2305,7 @@ impl Selection {
             auth: false,
             storage: false,
             functions: false,
+            hosting: false,
             eventarc: false,
             tasks: false,
             pubsub: false,
@@ -2338,6 +2347,7 @@ impl Selection {
                 "auth" => sel.auth = true,
                 "storage" => sel.storage = true,
                 "functions" => sel.functions = true,
+                "hosting" => sel.hosting = true,
                 // The official controller accepts these names but creates both listeners
                 // only when at least one Functions backend is loaded. They therefore do not
                 // select Functions or carry independent Selection flags.
@@ -3126,6 +3136,12 @@ impl RuntimeConfig {
         self.apply_storage(obj.get("storage"), &file, &mut report)?;
         self.database_rules = Self::apply_database(obj.get("database"), &file)?;
         self.apply_functions(obj.get("functions"), base, only, &mut report)?;
+        if only.hosting {
+            self.hosting = obj
+                .get("hosting")
+                .map(|value| crate::hosting::Config::parse(value, base).map_err(ConfigError))
+                .transpose()?;
+        }
         if let Some(emulators) = obj.get("emulators") {
             let emulators = emulators.as_object().ok_or_else(|| {
                 ConfigError("firebase.json: emulators must be an object".to_owned())
@@ -3161,6 +3177,14 @@ impl RuntimeConfig {
                             entry,
                             name,
                             &self.storage_addr,
+                            self.allow_non_loopback_hosts,
+                        )?;
+                    }
+                    "hosting" if only.hosting => {
+                        self.hosting_addr = emulator_addr(
+                            entry,
+                            name,
+                            &self.hosting_addr,
                             self.allow_non_loopback_hosts,
                         )?;
                     }
@@ -4355,6 +4379,9 @@ impl RuntimeConfig {
         }
         if let Some(port) = d.get("httpPort").and_then(Value::as_u64) {
             cfg.http_addr = format!("127.0.0.1:{port}");
+        }
+        if let Some(port) = d.get("hostingPort").and_then(Value::as_u64) {
+            cfg.hosting_addr = format!("127.0.0.1:{port}");
         }
         if let Some(port) = d.get("functionsPort").and_then(Value::as_u64) {
             cfg.functions_addr = format!("127.0.0.1:{port}");
@@ -9098,7 +9125,7 @@ mod tests {
         assert!(
             Selection::parse("auth,database").is_ok_and(|s| s.auth && s.database && !s.firestore)
         );
-        assert!(Selection::parse("auth,hosting").is_err());
+        assert!(Selection::parse("auth,apphosting").is_err());
         assert_eq!(
             cfg.apply_firebase_json(&json!({"firestore": {"rules": 1}}), base, &only),
             Err(ConfigError(

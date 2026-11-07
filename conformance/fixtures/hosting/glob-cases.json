@@ -1,0 +1,554 @@
+[
+  {
+    "pattern": "/**",
+    "path": "/a/x"
+  },
+  {
+    "pattern": "/**",
+    "path": "/a/y"
+  },
+  {
+    "pattern": "/**",
+    "path": "/a/xx"
+  },
+  {
+    "pattern": "/**",
+    "path": "/a/a"
+  },
+  {
+    "pattern": "/**",
+    "path": "/b/x"
+  },
+  {
+    "pattern": "/**",
+    "path": "/a/"
+  },
+  {
+    "pattern": "/**",
+    "path": "/a/n/x"
+  },
+  {
+    "pattern": "/**",
+    "path": "/a/.hidden"
+  },
+  {
+    "pattern": "/**",
+    "path": "/a/*"
+  },
+  {
+    "pattern": "/a/*",
+    "path": "/a/x"
+  },
+  {
+    "pattern": "/a/*",
+    "path": "/a/y"
+  },
+  {
+    "pattern": "/a/*",
+    "path": "/a/xx"
+  },
+  {
+    "pattern": "/a/*",
+    "path": "/a/a"
+  },
+  {
+    "pattern": "/a/*",
+    "path": "/b/x"
+  },
+  {
+    "pattern": "/a/*",
+    "path": "/a/"
+  },
+  {
+    "pattern": "/a/*",
+    "path": "/a/n/x"
+  },
+  {
+    "pattern": "/a/*",
+    "path": "/a/.hidden"
+  },
+  {
+    "pattern": "/a/*",
+    "path": "/a/*"
+  },
+  {
+    "pattern": "/a/**",
+    "path": "/a/x"
+  },
+  {
+    "pattern": "/a/**",
+    "path": "/a/y"
+  },
+  {
+    "pattern": "/a/**",
+    "path": "/a/xx"
+  },
+  {
+    "pattern": "/a/**",
+    "path": "/a/a"
+  },
+  {
+    "pattern": "/a/**",
+    "path": "/b/x"
+  },
+  {
+    "pattern": "/a/**",
+    "path": "/a/"
+  },
+  {
+    "pattern": "/a/**",
+    "path": "/a/n/x"
+  },
+  {
+    "pattern": "/a/**",
+    "path": "/a/.hidden"
+  },
+  {
+    "pattern": "/a/**",
+    "path": "/a/*"
+  },
+  {
+    "pattern": "/a/?",
+    "path": "/a/x"
+  },
+  {
+    "pattern": "/a/?",
+    "path": "/a/y"
+  },
+  {
+    "pattern": "/a/?",
+    "path": "/a/xx"
+  },
+  {
+    "pattern": "/a/?",
+    "path": "/a/a"
+  },
+  {
+    "pattern": "/a/?",
+    "path": "/b/x"
+  },
+  {
+    "pattern": "/a/?",
+    "path": "/a/"
+  },
+  {
+    "pattern": "/a/?",
+    "path": "/a/n/x"
+  },
+  {
+    "pattern": "/a/?",
+    "path": "/a/.hidden"
+  },
+  {
+    "pattern": "/a/?",
+    "path": "/a/*"
+  },
+  {
+    "pattern": "/{a,b}/x",
+    "path": "/a/x"
+  },
+  {
+    "pattern": "/{a,b}/x",
+    "path": "/a/y"
+  },
+  {
+    "pattern": "/{a,b}/x",
+    "path": "/a/xx"
+  },
+  {
+    "pattern": "/{a,b}/x",
+    "path": "/a/a"
+  },
+  {
+    "pattern": "/{a,b}/x",
+    "path": "/b/x"
+  },
+  {
+    "pattern": "/{a,b}/x",
+    "path": "/a/"
+  },
+  {
+    "pattern": "/{a,b}/x",
+    "path": "/a/n/x"
+  },
+  {
+    "pattern": "/{a,b}/x",
+    "path": "/a/.hidden"
+  },
+  {
+    "pattern": "/{a,b}/x",
+    "path": "/a/*"
+  },
+  {
+    "pattern": "/a/[ab]",
+    "path": "/a/x"
+  },
+  {
+    "pattern": "/a/[ab]",
+    "path": "/a/y"
+  },
+  {
+    "pattern": "/a/[ab]",
+    "path": "/a/xx"
+  },
+  {
+    "pattern": "/a/[ab]",
+    "path": "/a/a"
+  },
+  {
+    "pattern": "/a/[ab]",
+    "path": "/b/x"
+  },
+  {
+    "pattern": "/a/[ab]",
+    "path": "/a/"
+  },
+  {
+    "pattern": "/a/[ab]",
+    "path": "/a/n/x"
+  },
+  {
+    "pattern": "/a/[ab]",
+    "path": "/a/.hidden"
+  },
+  {
+    "pattern": "/a/[ab]",
+    "path": "/a/*"
+  },
+  {
+    "pattern": "/a/!(x)",
+    "path": "/a/x"
+  },
+  {
+    "pattern": "/a/!(x)",
+    "path": "/a/y"
+  },
+  {
+    "pattern": "/a/!(x)",
+    "path": "/a/xx"
+  },
+  {
+    "pattern": "/a/!(x)",
+    "path": "/a/a"
+  },
+  {
+    "pattern": "/a/!(x)",
+    "path": "/b/x"
+  },
+  {
+    "pattern": "/a/!(x)",
+    "path": "/a/"
+  },
+  {
+    "pattern": "/a/!(x)",
+    "path": "/a/n/x"
+  },
+  {
+    "pattern": "/a/!(x)",
+    "path": "/a/.hidden"
+  },
+  {
+    "pattern": "/a/!(x)",
+    "path": "/a/*"
+  },
+  {
+    "pattern": "/a/@(x|y)",
+    "path": "/a/x"
+  },
+  {
+    "pattern": "/a/@(x|y)",
+    "path": "/a/y"
+  },
+  {
+    "pattern": "/a/@(x|y)",
+    "path": "/a/xx"
+  },
+  {
+    "pattern": "/a/@(x|y)",
+    "path": "/a/a"
+  },
+  {
+    "pattern": "/a/@(x|y)",
+    "path": "/b/x"
+  },
+  {
+    "pattern": "/a/@(x|y)",
+    "path": "/a/"
+  },
+  {
+    "pattern": "/a/@(x|y)",
+    "path": "/a/n/x"
+  },
+  {
+    "pattern": "/a/@(x|y)",
+    "path": "/a/.hidden"
+  },
+  {
+    "pattern": "/a/@(x|y)",
+    "path": "/a/*"
+  },
+  {
+    "pattern": "/a/+(x|y)",
+    "path": "/a/x"
+  },
+  {
+    "pattern": "/a/+(x|y)",
+    "path": "/a/y"
+  },
+  {
+    "pattern": "/a/+(x|y)",
+    "path": "/a/xx"
+  },
+  {
+    "pattern": "/a/+(x|y)",
+    "path": "/a/a"
+  },
+  {
+    "pattern": "/a/+(x|y)",
+    "path": "/b/x"
+  },
+  {
+    "pattern": "/a/+(x|y)",
+    "path": "/a/"
+  },
+  {
+    "pattern": "/a/+(x|y)",
+    "path": "/a/n/x"
+  },
+  {
+    "pattern": "/a/+(x|y)",
+    "path": "/a/.hidden"
+  },
+  {
+    "pattern": "/a/+(x|y)",
+    "path": "/a/*"
+  },
+  {
+    "pattern": "/a/?(x)",
+    "path": "/a/x"
+  },
+  {
+    "pattern": "/a/?(x)",
+    "path": "/a/y"
+  },
+  {
+    "pattern": "/a/?(x)",
+    "path": "/a/xx"
+  },
+  {
+    "pattern": "/a/?(x)",
+    "path": "/a/a"
+  },
+  {
+    "pattern": "/a/?(x)",
+    "path": "/b/x"
+  },
+  {
+    "pattern": "/a/?(x)",
+    "path": "/a/"
+  },
+  {
+    "pattern": "/a/?(x)",
+    "path": "/a/n/x"
+  },
+  {
+    "pattern": "/a/?(x)",
+    "path": "/a/.hidden"
+  },
+  {
+    "pattern": "/a/?(x)",
+    "path": "/a/*"
+  },
+  {
+    "pattern": "/a/*(x)",
+    "path": "/a/x"
+  },
+  {
+    "pattern": "/a/*(x)",
+    "path": "/a/y"
+  },
+  {
+    "pattern": "/a/*(x)",
+    "path": "/a/xx"
+  },
+  {
+    "pattern": "/a/*(x)",
+    "path": "/a/a"
+  },
+  {
+    "pattern": "/a/*(x)",
+    "path": "/b/x"
+  },
+  {
+    "pattern": "/a/*(x)",
+    "path": "/a/"
+  },
+  {
+    "pattern": "/a/*(x)",
+    "path": "/a/n/x"
+  },
+  {
+    "pattern": "/a/*(x)",
+    "path": "/a/.hidden"
+  },
+  {
+    "pattern": "/a/*(x)",
+    "path": "/a/*"
+  },
+  {
+    "pattern": "!/a/x",
+    "path": "/a/x"
+  },
+  {
+    "pattern": "!/a/x",
+    "path": "/a/y"
+  },
+  {
+    "pattern": "!/a/x",
+    "path": "/a/xx"
+  },
+  {
+    "pattern": "!/a/x",
+    "path": "/a/a"
+  },
+  {
+    "pattern": "!/a/x",
+    "path": "/b/x"
+  },
+  {
+    "pattern": "!/a/x",
+    "path": "/a/"
+  },
+  {
+    "pattern": "!/a/x",
+    "path": "/a/n/x"
+  },
+  {
+    "pattern": "!/a/x",
+    "path": "/a/.hidden"
+  },
+  {
+    "pattern": "!/a/x",
+    "path": "/a/*"
+  },
+  {
+    "pattern": "/a/\\*",
+    "path": "/a/x"
+  },
+  {
+    "pattern": "/a/\\*",
+    "path": "/a/y"
+  },
+  {
+    "pattern": "/a/\\*",
+    "path": "/a/xx"
+  },
+  {
+    "pattern": "/a/\\*",
+    "path": "/a/a"
+  },
+  {
+    "pattern": "/a/\\*",
+    "path": "/b/x"
+  },
+  {
+    "pattern": "/a/\\*",
+    "path": "/a/"
+  },
+  {
+    "pattern": "/a/\\*",
+    "path": "/a/n/x"
+  },
+  {
+    "pattern": "/a/\\*",
+    "path": "/a/.hidden"
+  },
+  {
+    "pattern": "/a/\\*",
+    "path": "/a/*"
+  },
+  {
+    "pattern": "/a/.hidden",
+    "path": "/a/x"
+  },
+  {
+    "pattern": "/a/.hidden",
+    "path": "/a/y"
+  },
+  {
+    "pattern": "/a/.hidden",
+    "path": "/a/xx"
+  },
+  {
+    "pattern": "/a/.hidden",
+    "path": "/a/a"
+  },
+  {
+    "pattern": "/a/.hidden",
+    "path": "/b/x"
+  },
+  {
+    "pattern": "/a/.hidden",
+    "path": "/a/"
+  },
+  {
+    "pattern": "/a/.hidden",
+    "path": "/a/n/x"
+  },
+  {
+    "pattern": "/a/.hidden",
+    "path": "/a/.hidden"
+  },
+  {
+    "pattern": "/a/.hidden",
+    "path": "/a/*"
+  },
+  {
+    "pattern": "/a/**/x",
+    "path": "/a/x"
+  },
+  {
+    "pattern": "/a/**/x",
+    "path": "/a/y"
+  },
+  {
+    "pattern": "/a/**/x",
+    "path": "/a/xx"
+  },
+  {
+    "pattern": "/a/**/x",
+    "path": "/a/a"
+  },
+  {
+    "pattern": "/a/**/x",
+    "path": "/b/x"
+  },
+  {
+    "pattern": "/a/**/x",
+    "path": "/a/"
+  },
+  {
+    "pattern": "/a/**/x",
+    "path": "/a/n/x"
+  },
+  {
+    "pattern": "/a/**/x",
+    "path": "/a/.hidden"
+  },
+  {
+    "pattern": "/a/**/x",
+    "path": "/a/*"
+  },
+  {
+    "pattern": "/{a,{b,c}}/x",
+    "path": "/b/x"
+  },
+  {
+    "pattern": "/{a,{b,c}}/x",
+    "path": "/c/x"
+  },
+  {
+    "pattern": "/{a,{b,c}}/x",
+    "path": "/d/x"
+  }
+]

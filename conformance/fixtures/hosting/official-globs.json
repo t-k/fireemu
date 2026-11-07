@@ -673,5 +673,20 @@
     "pattern": "/a/**/x",
     "path": "/a/*",
     "matches": false
+  },
+  {
+    "pattern": "/{a,{b,c}}/x",
+    "path": "/b/x",
+    "matches": true
+  },
+  {
+    "pattern": "/{a,{b,c}}/x",
+    "path": "/c/x",
+    "matches": true
+  },
+  {
+    "pattern": "/{a,{b,c}}/x",
+    "path": "/d/x",
+    "matches": false
   }
 ]

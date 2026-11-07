@@ -538,5 +538,17 @@
   {
     "pattern": "/a/**/x",
     "path": "/a/*"
+  },
+  {
+    "pattern": "/{a,{b,c}}/x",
+    "path": "/b/x"
+  },
+  {
+    "pattern": "/{a,{b,c}}/x",
+    "path": "/c/x"
+  },
+  {
+    "pattern": "/{a,{b,c}}/x",
+    "path": "/d/x"
   }
 ]

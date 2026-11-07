@@ -44,7 +44,9 @@
       "fixtureCaseIds": [
         "redirect-first",
         "redirect-capture",
-        "query"
+        "query",
+        "redirect-capture-prefix",
+        "redirect-capture-literal"
       ],
       "officialFixture": "conformance/fixtures/hosting/official.json"
     },
@@ -73,7 +75,7 @@
       "fixture": "conformance/fixtures/hosting/glob-cases.json",
       "productionEvidence": [],
       "officialFixture": "conformance/fixtures/hosting/official-globs.json",
-      "fixtureSelection": "All 135 pattern/path pairs"
+      "fixtureSelection": "All 138 pattern/path pairs"
     },
     {
       "conditionId": "HOSTING/headers-cache",
@@ -246,7 +248,7 @@
     "status": "OFFLINE_PASS",
     "suite": "conformance/src/hosting/run.mjs",
     "matrix": "conformance/HOSTING-MATRIX.md",
-    "scope": "80 HTTP cases and 135 glob pairs; no production evidence"
+    "scope": "82 HTTP cases and 138 glob pairs; no production evidence"
   },
   "productionProposal": "spec/compatibility/hosting-production-packet.md",
   "outOfScope": [

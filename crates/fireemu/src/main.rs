@@ -1357,7 +1357,7 @@ fn apply_port_overrides(cfg: &mut RuntimeConfig, raw: &RawOptions) {
         cfg.storage_addr = with_port(&cfg.storage_addr, p);
     }
     if let Some(p) = raw.hosting_port {
-        cfg.hosting_addr = format!("127.0.0.1:{p}");
+        cfg.hosting_addr = with_port(&cfg.hosting_addr, p);
     }
     if let Some(p) = raw.functions_port {
         cfg.functions_addr = with_port(&cfg.functions_addr, p);
@@ -4274,6 +4274,18 @@ mod config_reload_tests {
                     proptest::prop_assert!(cfg.hub_addr_explicit);
                     proptest::prop_assert_eq!(cfg.hub_addr.rsplit_once(':').unwrap().1, expected_port.to_string());
                 }
+            }
+        }
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn hosting_port_override_preserves_configured_host(port in proptest::prelude::any::<u16>()) {
+            for host in ["[::1]", "127.0.0.2", "192.168.1.10"] {
+                let mut cfg = RuntimeConfig { hosting_addr: format!("{host}:5000"), ..RuntimeConfig::default() };
+                let raw = parse_raw_options(&["--hosting-port".to_owned(), port.to_string()], OptionContext::Start).unwrap_or_else(|error| panic!("{}",error.message));
+                apply_port_overrides(&mut cfg, &raw);
+                proptest::prop_assert_eq!(cfg.hosting_addr, format!("{host}:{port}"));
             }
         }
     }

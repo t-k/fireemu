@@ -177,6 +177,31 @@ fn path_match(pattern: &[&str], path: &[&str]) -> bool {
     }
 }
 
+fn comma_alternatives(content: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut start = 0;
+    let mut depth = 0usize;
+    let mut escaped = false;
+    for (offset, ch) in content.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match ch {
+            '\\' => escaped = true,
+            '{' => depth += 1,
+            '}' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                parts.push(content[start..offset].to_owned());
+                start = offset + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(content[start..].to_owned());
+    parts
+}
+
 fn alternatives(pattern: &str) -> Vec<String> {
     let Some(start) = pattern.find('{') else {
         return vec![pattern.to_owned()];
@@ -208,10 +233,10 @@ fn alternatives(pattern: &str) -> Vec<String> {
                     (b..=a).rev().map(|n| n.to_string()).collect()
                 }
             }
-            _ => content.split(',').map(str::to_owned).collect(),
+            _ => comma_alternatives(content),
         }
     } else {
-        content.split(',').map(str::to_owned).collect()
+        comma_alternatives(content)
     };
     if parts.len() < 2 {
         return vec![pattern.to_owned()];

@@ -591,15 +591,27 @@ fn redirect_destination(rule: &Value, path: &str) -> Option<String> {
             if source.len() != path.len() {
                 return None;
             }
-            let mut result = destination.to_owned();
+            let mut captures = std::collections::BTreeMap::new();
             for (pattern, part) in source.iter().zip(path) {
                 if let Some(name) = pattern.strip_prefix(':') {
-                    result = result.replace(&format!(":{name}"), part);
+                    captures.insert(name, part);
                 } else if *pattern != part {
                     return None;
                 }
             }
-            return Some(result);
+            // Expand original destination tokens once; captured text is never reparsed.
+            let tokens = regex::Regex::new(r":([A-Za-z0-9_]+)").expect("constant capture token");
+            return Some(
+                tokens
+                    .replace_all(destination, |token: &regex::Captures<'_>| {
+                        captures
+                            .get(&token[1])
+                            .copied()
+                            .unwrap_or(&token[0])
+                            .to_owned()
+                    })
+                    .into_owned(),
+            );
         }
     }
     matcher::matches(rule, path).then(|| destination.to_owned())

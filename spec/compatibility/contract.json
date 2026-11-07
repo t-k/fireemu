@@ -2834,7 +2834,33 @@
       "prohibitedClaimTerms": [
         "Firebase Hosting"
       ],
-      "claims": []
+      "claims": [
+        {
+          "id": "HOSTING-CLAIM-LOCAL",
+          "statement": "The IMPLEMENTING Hosting parent serves one local public site with the routing shapes exercised by the pinned offline fixture corpus, through normal CLI and Hub lifecycle integration. Production parity is unverified. Functions and Run rewrites resolve only to registered local Functions targets, without production fallback.",
+          "capabilities": [
+            {
+              "id": "HOSTING-LOCAL-1",
+              "status": "partial"
+            }
+          ],
+          "evidence": {
+            "tests": [
+              "hosting_cli_serves_shared_fixture_and_withdraws_readiness_on_shutdown",
+              "failed_hosting_startup_never_publishes_readiness"
+            ],
+            "integration": [
+              "crates/fireemu/tests/hosting.rs",
+              "conformance/src/hosting/run.mjs"
+            ],
+            "conformance": []
+          },
+          "officialLimitations": [],
+          "fireemuOnly": [],
+          "productionOnly": [],
+          "preview": []
+        }
+      ]
     },
     {
       "id": "apphosting",

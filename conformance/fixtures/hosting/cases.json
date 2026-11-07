@@ -18,6 +18,11 @@
           "source": "/capture/:name",
           "destination": "/new/:name",
           "type": 301
+        },
+        {
+          "source": "/capture/:id/:id2",
+          "destination": "/new/:id2/:id",
+          "type": 301
         }
       ],
       "rewrites": [
@@ -2455,6 +2460,18 @@
       "id": "default-404",
       "config": "default404",
       "path": "/not-found",
+      "method": "GET"
+    },
+    {
+      "id": "redirect-capture-prefix",
+      "config": "default",
+      "path": "/capture/one/two",
+      "method": "GET"
+    },
+    {
+      "id": "redirect-capture-literal",
+      "config": "default",
+      "path": "/capture/:id2/two",
       "method": "GET"
     }
   ]

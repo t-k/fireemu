@@ -7,6 +7,7 @@ dict (`firestore_fn.py:108-131`). The adapter therefore builds the production fo
 (`functions_framework/__init__.py:174-188`).
 """
 
+import base64
 import json
 import os
 import re
@@ -167,6 +168,13 @@ def firestore_request(event: dict, raw_data: str | None = None) -> Delivery:
     if is_strict():
         headers.setdefault("ce-dataschema", _FIRESTORE_DATASCHEMA)
     data = event.get("data")
+    if event.get("datacontenttype") == "application/protobuf":
+        # Binary IPC data is base64; preserve Rust's protobuf bytes for the real SDK.
+        if not isinstance(data, str):
+            raise ValueError("Firestore protobuf IPC data must be base64 text")
+        body = base64.b64decode(data, validate=True)
+        headers["content-type"] = "application/protobuf"
+        return Delivery(headers, body, body)
     message = firestore_events.DocumentEventData.from_json(json.dumps(data if isinstance(data, dict) else {}))
     headers["content-type"] = "application/protobuf"
     body = firestore_events.DocumentEventData.serialize(message)

@@ -2301,6 +2301,126 @@ mod refresh_tests {
         }
     }
 
+    /// Measures delivery through the real producer channel, without retaining received rows.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "release Listen delivery and external RSS measurement"]
+    #[allow(clippy::too_many_lines)]
+    async fn measure_listen_initial_snapshot_delivery() {
+        let count = std::env::var("FIREEMU_LISTEN_MEASURE_DOCUMENTS")
+            .ok()
+            .map_or(100_000, |value| value.parse::<usize>().unwrap());
+        assert!(count > 0);
+        let setup_start = std::time::Instant::now();
+        let fixture = generation_fixture();
+        for start in (0..count).step_by(500) {
+            let writes = (start..(start + 500).min(count))
+                .map(|index| {
+                    let mut write = set(&format!("measured/d{index:06}"));
+                    let WriteOp::Set { fields, .. } = &mut write.op else {
+                        unreachable!()
+                    };
+                    fields.insert("payload".to_owned(), Value::String("x".repeat(1024)));
+                    write
+                })
+                .collect::<Vec<_>>();
+            fixture
+                .context
+                .local
+                .commit_writes(fixture.parent.as_ref().unwrap(), &writes, &|_, _, _| Ok(()))
+                .unwrap();
+        }
+        eprintln!(
+            "listen_delivery_setup_done {}",
+            serde_json::json!({
+                "pid": std::process::id(), "documents": count, "payload_bytes_per_document": 1024,
+                "setup_micros": setup_start.elapsed().as_micros(), "runtime_workers": 2,
+                "response_channel_capacity": 256,
+            })
+        );
+        let (requests, inbound) = mpsc::channel(1);
+        let (responses, mut outbound) = mpsc::channel(256);
+        let stream = tokio::spawn(listen_stream(
+            fixture.context,
+            tokio_stream::wrappers::ReceiverStream::new(inbound),
+            responses,
+        ));
+        let start = std::time::Instant::now();
+        requests
+            .send(Ok(query_request(1, "measured")))
+            .await
+            .unwrap();
+        let mut first_add_micros = None;
+        let mut first_document_micros = None;
+        let mut received = 0;
+        let mut current_boundary = None;
+        loop {
+            let response = tokio::time::timeout(Duration::from_secs(60), outbound.recv())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            let elapsed = start.elapsed().as_micros();
+            match response.response_type.unwrap() {
+                pb::listen_response::ResponseType::DocumentChange(change) => {
+                    assert!(first_add_micros.is_some());
+                    assert!(current_boundary.is_none());
+                    assert_eq!(change.target_ids, [1]);
+                    assert!(change.removed_target_ids.is_empty());
+                    let document = change.document.unwrap();
+                    assert!(document.name.contains("/documents/measured/d"));
+                    first_document_micros.get_or_insert(elapsed);
+                    received += 1;
+                }
+                pb::listen_response::ResponseType::TargetChange(change) => {
+                    use pb::target_change::TargetChangeType as Kind;
+                    match Kind::try_from(change.target_change_type).unwrap() {
+                        Kind::Add => {
+                            assert!(first_add_micros.replace(elapsed).is_none());
+                            assert_eq!(change.target_ids, [1]);
+                            assert_eq!(received, 0);
+                        }
+                        Kind::Current => {
+                            assert_eq!(received, count);
+                            assert_eq!(change.target_ids, [1]);
+                            assert!(current_boundary
+                                .replace((change.resume_token, change.read_time))
+                                .is_none());
+                        }
+                        Kind::NoChange => {
+                            assert!(change.target_ids.is_empty());
+                            assert_eq!(
+                                current_boundary,
+                                Some((change.resume_token, change.read_time))
+                            );
+                            break;
+                        }
+                        other => panic!("unexpected target change: {other:?}"),
+                    }
+                }
+                other => panic!("unexpected response: {other:?}"),
+            }
+        }
+        assert_eq!(received, count);
+        assert!(first_document_micros.is_some());
+        let complete_micros = start.elapsed().as_micros();
+        drop(outbound);
+        drop(requests);
+        tokio::time::timeout(Duration::from_secs(5), stream)
+            .await
+            .unwrap()
+            .unwrap();
+        eprintln!(
+            "listen_delivery_measure {}",
+            serde_json::json!({
+                "documents": received, "payload_bytes_per_document": 1024,
+                "runtime_workers": 2, "response_channel_capacity": 256,
+                "first_add_micros": first_add_micros, "first_document_micros": first_document_micros,
+                "complete_micros": complete_micros, "transport": "in-process mpsc receiver",
+                "retained_memory_bound": "O(N) immutable handles and retained payloads",
+            })
+        );
+    }
+
     #[test]
     #[ignore = "bounded initial snapshot encoding measurement"]
     fn measure_listen_initial_snapshot_encoding() {

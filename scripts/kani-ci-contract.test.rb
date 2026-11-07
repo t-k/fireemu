@@ -15,6 +15,9 @@ class KaniCiContractTest < Minitest::Test
       workflow_dispatch: {}
     permissions:
       contents: read
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}
+      cancel-in-progress: true
     jobs:
       kani:
         runs-on: ubuntu-24.04

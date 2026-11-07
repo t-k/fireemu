@@ -1272,6 +1272,39 @@ fn str_field<'a>(body: &'a Value, key: &str) -> Option<&'a str> {
     body.get(key).and_then(Value::as_str)
 }
 
+/// Whether a Secure Token refresh body is read in the Android SDK's camelCase spelling
+/// (`grantType`, `refreshToken`): only when it carries neither `snake_case` field. The server
+/// drops the camelCase keys of a form body, so a form and a body mixing the spellings are read
+/// as `snake_case` only, as they were before the SDK's JSON shape was added.
+fn refresh_body_is_camel_case(body: &Value) -> bool {
+    body.get("grant_type").is_none() && body.get("refresh_token").is_none()
+}
+
+/// The refresh token a request carries, in the one spelling its body is read in: the store
+/// selection, the tenant checks and the exchange all call this, so they agree.
+fn request_refresh_token(body: &Value) -> Option<&str> {
+    str_field(
+        body,
+        if refresh_body_is_camel_case(body) {
+            "refreshToken"
+        } else {
+            "refresh_token"
+        },
+    )
+}
+
+/// The grant type a refresh request carries, read in the same spelling as its token.
+fn request_grant_type(body: &Value) -> Option<&str> {
+    str_field(
+        body,
+        if refresh_body_is_camel_case(body) {
+            "grantType"
+        } else {
+            "grant_type"
+        },
+    )
+}
+
 fn issue_tokens(
     store: &mut AuthStore,
     uid: &LocalId,
@@ -3721,8 +3754,7 @@ fn token_tenant_disagreement(
 
 /// What the request's refresh token (`refresh_token`, or `refreshToken`) says about its tenant.
 fn request_refresh_token_tenant(body: &Value) -> Option<RefreshTokenTenant> {
-    str_field(body, "refresh_token")
-        .or_else(|| str_field(body, "refreshToken"))
+    request_refresh_token(body)
         .filter(|token| !token.is_empty())
         .map(|token| {
             match fireemu_core_auth::store::AuthRegistry::decode_refresh_token_tenant(token) {
@@ -4261,8 +4293,7 @@ fn strict_refreshed_tenant(
     project: &str,
     body: &Value,
 ) -> Result<Option<Value>, JsonResponse> {
-    if let Some((token_project, tenant)) = str_field(body, "refresh_token")
-        .or_else(|| str_field(body, "refreshToken"))
+    if let Some((token_project, tenant)) = request_refresh_token(body)
         .and_then(fireemu_core_auth::store::AuthRegistry::refresh_token_tenant)
     {
         if token_project == project && registry.tenant_store(project, &tenant).is_none() {
@@ -9585,7 +9616,7 @@ fn select_store(
             .unwrap_or_else(|| state.store.clone()));
     }
     if exchanges_refresh_token && query_tenant.is_some() {
-        if let Some(token) = str_field(body, "refresh_token") {
+        if let Some(token) = request_refresh_token(body) {
             use fireemu_core_auth::store::RefreshTokenStoreMatch;
 
             if let RefreshTokenStoreMatch::Unique(store) = registry.store_for_refresh_token(token) {
@@ -9695,6 +9726,8 @@ fn select_store(
             return Ok(store);
         }
     }
+    // Any route: the camelCase spelling is the Secure Token exchange's alone, so a
+    // `refreshToken` member of another route's body never selects a store.
     if let Some(token) = str_field(body, "refresh_token") {
         use fireemu_core_auth::store::RefreshTokenStoreMatch;
 
@@ -9747,7 +9780,7 @@ fn tenant_store_issuing_refresh_token(
 ) -> Result<Option<Arc<Mutex<AuthStore>>>, JsonResponse> {
     use fireemu_core_auth::store::RefreshTokenStoreMatch;
 
-    let Some(token) = str_field(body, "refresh_token") else {
+    let Some(token) = request_refresh_token(body) else {
         return Ok(None);
     };
     let store = match registry.store_for_refresh_token(token) {
@@ -13371,18 +13404,13 @@ fn refresh(
     at: LogicalInstant,
     stateless_refresh_tokens: bool,
 ) -> JsonResponse {
-    // An empty field is an absent one, as proto3 reads it (sandbox recording 2026-09-24). The
-    // Android SDK posts camelCase JSON members (`grantType`, `refreshToken`) and the official
-    // emulator camel-cases every body key, so both spellings are read; snake_case wins.
-    match str_field(body, "grant_type").or_else(|| str_field(body, "grantType")) {
+    // An empty field is an absent one, as proto3 reads it (sandbox recording 2026-09-24).
+    match request_grant_type(body) {
         None | Some("") => return error(400, "MISSING_GRANT_TYPE"),
         Some("refresh_token") => {}
         Some(_) => return error(400, "INVALID_GRANT_TYPE"),
     }
-    let Some(token) = str_field(body, "refresh_token")
-        .or_else(|| str_field(body, "refreshToken"))
-        .filter(|token| !token.is_empty())
-    else {
+    let Some(token) = request_refresh_token(body).filter(|token| !token.is_empty()) else {
         return error(400, "MISSING_REFRESH_TOKEN");
     };
     let session = match if stateless_refresh_tokens {

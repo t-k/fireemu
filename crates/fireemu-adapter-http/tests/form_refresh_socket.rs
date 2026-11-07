@@ -362,18 +362,106 @@ async fn android_sdk_camel_case_json_refresh_returns_an_id_token_in_both_profile
             "stateless={stateless}"
         );
         assert!(body["user_id"].is_string(), "{body}");
-
-        // A form with camelCase keys reads the same (the official emulator camel-cases them too).
-        let (status, body) = server
-            .post_form(
-                REFRESH,
-                format!("grantType=refresh_token&refreshToken={refresh}"),
-            )
-            .await;
-        assert_id_token(status, &body);
     }
 }
 
+/// Which spelling of the refresh fields is read, by body kind. camelCase is read only from a
+/// JSON body that uses it alone (the Android SDK's recorded shape); a form keeps `snake_case`
+/// only, and a body that mixes the spellings is read as `snake_case` only, as before.
+#[tokio::test]
+async fn refresh_field_spelling_table_by_body_kind_in_both_profiles() {
+    const OK: &str = "";
+    for stateless in [true, false] {
+        let server = Server::start_with(stateless).await;
+        let t = server.sign_up("table@example.com", "password1").await;
+        let json_cases: Vec<(&str, Value, &str)> = vec![
+            (
+                "json snake",
+                json!({"grant_type": "refresh_token", "refresh_token": t}),
+                OK,
+            ),
+            (
+                "json camel",
+                json!({"grantType": "refresh_token", "refreshToken": t}),
+                OK,
+            ),
+            (
+                "json mixed grant snake, token camel",
+                json!({"grant_type": "refresh_token", "refreshToken": t}),
+                "MISSING_REFRESH_TOKEN",
+            ),
+            (
+                "json mixed grant camel, token snake",
+                json!({"grantType": "refresh_token", "refresh_token": t}),
+                "MISSING_GRANT_TYPE",
+            ),
+            (
+                "json empty snake token hides the camel one",
+                json!({"grant_type": "refresh_token", "refresh_token": "", "refreshToken": t}),
+                "MISSING_REFRESH_TOKEN",
+            ),
+            (
+                "json snake grant type wins",
+                json!({"grant_type": "password", "grantType": "refresh_token", "refresh_token": t}),
+                "INVALID_GRANT_TYPE",
+            ),
+            (
+                "json snake token wins over a bad camel one",
+                json!({"grant_type": "refresh_token", "refresh_token": t, "refreshToken": "bogus"}),
+                OK,
+            ),
+            (
+                "json bad snake token is not rescued by camel",
+                json!({"grant_type": "refresh_token", "refresh_token": "bogus", "refreshToken": t}),
+                "INVALID_REFRESH_TOKEN",
+            ),
+        ];
+        for (name, body, expected) in json_cases {
+            let (status, got) = server.post_json(REFRESH, &body).await;
+            check_refresh_outcome(name, stateless, status, &got, expected);
+        }
+        let form_cases: Vec<(&str, String, &str)> = vec![
+            (
+                "form snake",
+                format!("grant_type=refresh_token&refresh_token={t}"),
+                OK,
+            ),
+            (
+                "form camel",
+                format!("grantType=refresh_token&refreshToken={t}"),
+                "MISSING_GRANT_TYPE",
+            ),
+            (
+                "form mixed grant snake, token camel",
+                format!("grant_type=refresh_token&refreshToken={t}"),
+                "MISSING_REFRESH_TOKEN",
+            ),
+            (
+                "form mixed grant camel, token snake",
+                format!("grantType=refresh_token&refresh_token={t}"),
+                "MISSING_GRANT_TYPE",
+            ),
+        ];
+        for (name, body, expected) in form_cases {
+            let (status, got) = server.post_form(REFRESH, body).await;
+            check_refresh_outcome(name, stateless, status, &got, expected);
+        }
+    }
+}
+
+fn check_refresh_outcome(name: &str, stateless: bool, status: u16, body: &Value, expected: &str) {
+    if expected.is_empty() {
+        assert_id_token(status, body);
+    } else {
+        assert_eq!(status, 400, "{name} stateless={stateless}: {body}");
+        assert!(
+            body["error"]["message"]
+                .as_str()
+                .is_some_and(|m| m.starts_with(expected)),
+            "{name} stateless={stateless}: expected {expected}: {body}"
+        );
+    }
+}
 /// The camelCase reading adds no leniency: a wrong grant type or an empty token is still refused
 /// with the Secure Token's own messages.
 #[tokio::test]

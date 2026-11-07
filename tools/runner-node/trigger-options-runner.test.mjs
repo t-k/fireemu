@@ -182,7 +182,7 @@ test('v2 Storage and Pub/Sub: real runtime bucket and topic, not parameter strin
 });
 
 test('v2 Eventarc: a custom channel subscription keeps its channel for the Remote Config type',async t=>{
-  const f=await start(t,`exports.subject=eventarc.onCustomEventPublished({eventType:'google.firebase.remoteconfig.remoteConfig.v1.updated',channel:'locations/us-central1/channels/custom',filters:{source:'catalog'}},()=>null);`);
+  const f=await start(t,`define('subject','gcfv2',{eventTrigger:{eventType:'google.firebase.remoteconfig.remoteConfig.v1.updated',channel:'locations/us-central1/channels/custom',eventFilters:{source:'catalog'}}});`);
   const trigger=f.spec('subject')?.trigger;assert.equal(trigger?.type,'eventarc');
   assert.equal(trigger.channel,'locations/us-central1/channels/custom');assert.deepEqual(trigger.filters,{source:'catalog'});
 });

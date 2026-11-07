@@ -1708,7 +1708,7 @@
         "Data Connect triggers are deferred; Firebase AI Logic blocking triggers are not planned",
         "Dart codebases and Python runtimes outside python310 through python314 are not supported",
         "Python source changes are not reloaded; restart fireemu. Python handlers run in real time in one process per codebase on macOS and Linux, without the Node virtual clock or per-function process isolation",
-        "general protobuf CloudEvents ingress is not supported; Firestore events reach the Python SDK as protobuf DocumentEventData, and Node 2nd-gen functions as protobuf under strict",
+        "general protobuf CloudEvents ingress is not supported; Python Firestore events reach the SDK as protobuf DocumentEventData, and Node 2nd-gen Firestore events arrive as protobuf under strict",
         "Python callable App Check uses the SDK key verifier rather than the Node project-epoch and app-state checks; limited-use consumption and explicitly enabled App Check configuration with Python remain unsupported",
         "Storage archive event payload parity remains unobserved; local delivery does not establish the production payload shape"
       ],

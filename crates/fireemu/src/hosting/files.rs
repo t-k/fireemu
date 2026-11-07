@@ -231,12 +231,12 @@ mod tests {
     fn a_fifo_does_not_block_before_the_regular_file_check() {
         let fixture = Fixture::new();
         let root = fixture.root();
-        rustix::fs::mkfifoat(
-            rustix::fs::CWD,
-            fixture.0.join("public/pipe"),
-            rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
-        )
-        .unwrap();
+        let status = std::process::Command::new("mkfifo")
+            .args(["-m", "600"])
+            .arg(fixture.0.join("public/pipe"))
+            .status()
+            .expect("the Unix mkfifo utility must be available");
+        assert!(status.success(), "FIFO fixture creation must succeed");
         assert!(open(&root, "/pipe").is_none());
     }
     #[cfg(windows)]

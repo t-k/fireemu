@@ -6,10 +6,7 @@ import re
 import sys
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "tools"))
-from public_evidence import public_json
 sys.path.insert(0, str(ROOT / "tools" / "auth-basic"))
 from contract import CASES, complete, require
 from recorder import digest, inputs
@@ -235,7 +232,7 @@ if __name__ == "__main__":
         }
         validate(value)
         BUNDLE.parent.mkdir(parents=True, exist_ok=True)
-        BUNDLE.write_text(public_json(value, indent=2, sort_keys=True))
+        BUNDLE.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
     page = render()
     if args.check:
         require(PAGE.read_text() == page)

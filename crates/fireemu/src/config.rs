@@ -2018,7 +2018,7 @@ impl RuntimeConfig {
             "daemon.seed" => Some(json!(self.seed)),
             "daemon.authProject" => Some(json!(self.auth_project)),
             "daemon.authProjectNumbers" => Some(json!(self.auth_project_numbers)),
-            "daemon.firestorePort" | "daemon.httpPort" | "daemon.storagePort" | "daemon.functionsPort" | "daemon.eventarcPort" | "daemon.tasksPort" | "daemon.pubsubPort" | "daemon.databasePort" | "daemon.loggingPort" | "daemon.hubPort" | "daemon.uiPort" => {
+            "daemon.firestorePort" | "daemon.httpPort" | "daemon.storagePort" | "daemon.functionsPort" | "daemon.hostingPort" | "daemon.eventarcPort" | "daemon.tasksPort" | "daemon.pubsubPort" | "daemon.databasePort" | "daemon.loggingPort" | "daemon.hubPort" | "daemon.uiPort" => {
                 let addr = match key {
                     "daemon.firestorePort" => &self.firestore_addr,
                     "daemon.httpPort" => &self.http_addr,

@@ -1,0 +1,5 @@
+{
+  "name": "fireemu-flutter-official-comparison",
+  "private": true,
+  "dependencies": {"firebase-tools": "15.28.2"}
+}

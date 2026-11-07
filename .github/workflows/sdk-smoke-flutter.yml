@@ -1,0 +1,84 @@
+name: sdk-smoke-flutter
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sdk-smoke-flutter-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  macos-flutterfire:
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      PUB_CACHE: ${{ github.workspace }}/tools/sdk-smoke-flutter/.pub-cache
+      FLUTTER_SUPPRESS_ANALYTICS: 'true'
+      CP_HOME_DIR: ${{ github.workspace }}/tools/sdk-smoke-flutter/.cocoapods
+      CP_CACHE_DIR: ${{ github.workspace }}/tools/sdk-smoke-flutter/.cocoapods/cache
+      FLUTTER_XCODE_CODE_SIGN_ENTITLEMENTS: Runner/DebugProfile.entitlements
+      CARGO_BUILD_JOBS: '2'
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22.22.0'
+      - uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
+        with:
+          distribution: temurin
+          java-version: '21.0.10+7'
+      - name: Verify native toolchain
+        run: |
+          test "$(uname -m)" = arm64
+          xcodebuild -version
+          test "$(xcodebuild -version | tail -1)" = 'Build version 17F113'
+      - name: Install checksum-pinned Flutter SDK
+        working-directory: tools/sdk-smoke-flutter
+        run: |
+          set -eu
+          mkdir -p .toolchain
+          curl --fail --location --retry 2 --max-time 600 \
+            https://storage.googleapis.com/flutter_infra_release/releases/stable/macos/flutter_macos_arm64_3.41.5-stable.zip \
+            --output .toolchain/flutter.zip
+          echo '90d8e7d7e6c2c27ce8634a6c99eb8a218ea63ba29781b61eb9db72c62d027546  .toolchain/flutter.zip' | shasum -a 256 -c -
+          unzip -q .toolchain/flutter.zip -d .toolchain
+          rm .toolchain/flutter.zip
+          echo "$PWD/.toolchain/flutter/bin" >> "$GITHUB_PATH"
+      - name: Install owned locked dependencies
+        working-directory: tools/sdk-smoke-flutter
+        run: |
+          set -eu
+          flutter --version
+          flutter precache --macos --no-android --no-ios --no-web --no-linux --no-windows --no-fuchsia
+          flutter pub get --enforce-lockfile
+          test "$(pod --version)" = '1.16.2'
+          npm ci --ignore-scripts
+      - name: Analyze and test helpers
+        working-directory: tools/sdk-smoke-flutter
+        run: |
+          dart format --output=none --set-exit-if-changed lib test integration_test
+          flutter analyze
+          flutter test test
+          python3 -m unittest discover -s test -p '*_test.py'
+      - name: Build this checkout's fireemu
+        run: cargo build --locked -p fireemu --jobs 2
+      - name: Build the native integration target with two compiler jobs
+        working-directory: tools/sdk-smoke-flutter
+        run: PATH="$PWD/scripts:$PATH" flutter build macos --debug --target integration_test/smoke_test.dart
+      - name: Run native SDK cases against both local backends
+        working-directory: tools/sdk-smoke-flutter
+        run: python3 run.py --backend both --fireemu ../../target/debug/fireemu
+      - name: Upload sanitized case summaries
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: flutterfire-case-summaries
+          path: tools/sdk-smoke-flutter/reports/*.json
+          if-no-files-found: warn
+          retention-days: 7

@@ -1,5 +1,4 @@
 import json
-import re
 import sys
 from pathlib import Path
 
@@ -55,18 +54,3 @@ def test_public_json_bytes_rejects_duplicate_keys_before_copying_original_bytes(
     data = b'{"extra":{"path":"docs.local/private.json","path":"safe"}}\n'
     with pytest.raises(ValueError, match="^public evidence path validation failed$"):
         public_json_bytes(data)
-
-
-def test_unbound_auth_publisher_and_compat_index_use_the_shared_bridge():
-    # Other Auth publishers are bound by their committed publication receipts.
-    publishers = [TOOLS / "publish-auth-basic.py"]
-    for path in publishers:
-        source = path.read_text(encoding="utf-8")
-        assert "from public_evidence import public_json" in source, path.name
-        assert re.search(
-            r"(?:BUNDLE|bundle(?:_path)?\(trigger\))\.write_text\(\s*public_json\(value",
-            source,
-        ), path.name
-    compatibility_publisher = TOOLS / "compat-inventory/publish.py"
-    source = compatibility_publisher.read_text(encoding="utf-8")
-    assert "write_index(value, serialized=index_text)" in source

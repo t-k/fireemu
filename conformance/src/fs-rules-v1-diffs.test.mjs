@@ -520,3 +520,144 @@ test("the official answers cover every row of the corpus, and a row without one 
   assert.equal(rowsByName["fn-top#publishes"].verdict, "no-claim");
   assert.equal(rowsByName["fn-top#fn-top-false"].verdict, "unknown");
 });
+
+// ---- pins found by the mutation pass ---------------------------------------------------------
+
+test("the two function rulesets are exactly these sources", () => {
+  assert.equal(
+    rulesetSource("diffs-fn-top"),
+    "rules_version = '2';\nfunction topTrue() {\n  return true;\n}\nfunction topFalse() {\n  return false;\n}\nservice cloud.firestore {\n  match /databases/{database}/documents {\n    match /fsr-marker/{label} {\n      allow write: if label == 'diffs-fn-top-469a71701793';\n    }\n\n    match /fsr9-fn-top-true/{id} {\n      allow get: if topTrue();\n    }\n    match /fsr9-fn-top-false/{id} {\n      allow get: if topFalse();\n    }\n  }\n}\n",
+  );
+  assert.equal(
+    rulesetSource("diffs-fn-inner"),
+    "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{database}/documents {\n    match /fsr-marker/{label} {\n      allow write: if label == 'diffs-fn-inner-74491fe85c56';\n    }\n\n    function innerTrue() {\n      return true;\n    }\n    function innerFalse() {\n      return false;\n    }\n    match /fsr9-fn-inner-true/{id} {\n      allow get: if innerTrue();\n    }\n    match /fsr9-fn-inner-false/{id} {\n      allow get: if innerFalse();\n    }\n  }\n}\n",
+  );
+});
+
+test("every ruleset is version 2 with balanced braces, and every row and seed names a collection that has a rule", () => {
+  for (const p of DIFFS_PROGRAMS) {
+    const source = rulesetSource(p.ruleset);
+    assert.ok(source.startsWith("rules_version = '2';\n"), p.ruleset);
+    assert.equal(source.split("{").length, source.split("}").length, `${p.ruleset}: braces`);
+    const collections = [
+      ...rowsOf(p).map((s) => s.body?.structuredQuery.from[0].collectionId ?? s.doc.split("/")[0]),
+      ...p.seed.map((d) => d.doc.split("/")[0]),
+    ];
+    for (const collection of collections)
+      assert.ok(source.includes(`match /${collection}/{id} {`), `${p.id}: ${collection}`);
+  }
+});
+
+test("the seed and the queries' collections are exactly these", () => {
+  const queries = program("queries");
+  assert.deepEqual(
+    rowsOf(queries).map((s) => [s.id, s.body.structuredQuery.from[0].collectionId]),
+    [
+      ["owner-alone", "fsr9-owner"],
+      ["owner-and-name-missing", "fsr9-owner"],
+      ["owner-and-name-foreign", "fsr9-owner"],
+      ["owner-and-name-own", "fsr9-owner"],
+      ["name-missing-alone", "fsr9-owner"],
+      ["name-foreign-alone", "fsr9-owner"],
+      ["members-guarded-in", "fsr9-m-guarded"],
+      ["members-guarded-in-viewer", "fsr9-m-guarded"],
+      ["members-unguarded-in", "fsr9-m-unguarded"],
+      ["members-bare-nofilter", "fsr9-m-bare"],
+      ["blocked-nofilter", "fsr9-blocked"],
+      ["has-owner-nofilter", "fsr9-has-owner"],
+      ["has-owner-filtered", "fsr9-has-owner"],
+    ],
+  );
+  const role = (r) => ({
+    members: {
+      mapValue: { fields: { "UID(anon)": { mapValue: { fields: { role: { stringValue: r } } } } } },
+    },
+  });
+  assert.deepEqual(queries.seed, [
+    { doc: "fsr9-owner/mine", fields: { owner: { stringValue: "UID(anon)" } } },
+    { doc: "fsr9-owner/foreign", fields: { owner: { stringValue: "other-owner" } } },
+    { doc: "fsr9-m-guarded/g1", fields: role("ADMIN") },
+    { doc: "fsr9-m-unguarded/u1", fields: role("ADMIN") },
+    { doc: "fsr9-m-bare/b1", fields: role("ADMIN") },
+    { doc: "fsr9-blocked/p1", fields: { n: { integerValue: "1" } } },
+    { doc: "fsr9-has-owner/h1", fields: { owner: { stringValue: "o1" } } },
+  ]);
+  assert.deepEqual(step("queries", "has-owner-filtered").body.structuredQuery.where, {
+    fieldFilter: { field: { fieldPath: "owner" }, op: "EQUAL", value: { stringValue: "o1" } },
+  });
+  for (const other of DIFFS_PROGRAMS.filter((p) => p !== queries)) assert.deepEqual(other.seed, []);
+});
+
+test("the ledger task is named FS-RULES-DIFFS", () => {
+  assert.equal(TASK_ID_DIFFS, "FS-RULES-DIFFS");
+});
+
+test("the recorded shapes are two get shapes and three runQuery shapes, each described", () => {
+  assert.deepEqual(
+    RECORDED_SHAPES.map((s) => `${s.rpc} ${s.kind}`),
+    ["get allowed", "get denied", "runQuery allowed", "runQuery allowed", "runQuery denied"],
+  );
+  for (const shape of RECORDED_SHAPES)
+    assert.ok(shape.note.length > 10 && shape.source.includes("#"));
+});
+
+test("a one-document query result is an allow, and an absent recording is unknown with a reason", () => {
+  const document = { name: "n", fields: {} };
+  assert.deepEqual(
+    classifyAnswer("runQuery", { status: 200, body: [{ document, readTime: "t" }] }),
+    { kind: "allowed", documents: 1 },
+  );
+  assert.deepEqual(classifyAnswer("get", undefined), { kind: "unknown", detail: "no recording" });
+  assert.deepEqual(classifyAnswer("get", { status: 500, body: {} }), {
+    kind: "unknown",
+    detail: "status 500, not a recorded shape",
+  });
+});
+
+test("report rows carry the document count, the reason and the claim, and only when there is one", () => {
+  const document = { name: "n", fields: {} };
+  const fixture = {
+    programs: {
+      "fs-rules-v1/diffs/queries": programRecord({
+        publishes: { compiled: true },
+        "owner-alone": { status: 200, body: [{ document, readTime: "t" }] },
+        "owner-and-name-missing": { status: 403, body: [{ error: DENIED_BODY.error }] },
+        "name-foreign-alone": { status: 500, body: {} },
+      }),
+      "fs-rules-v1/diffs/string-index": programRecord({ publishes: { status: 500 } }),
+      "fs-rules-v1/diffs/string-escape": programRecord({ publishes: { compiled: false } }),
+    },
+  };
+  const rows = Object.fromEntries(diffsReport(fixture).map((r) => [r.row, r]));
+  assert.deepEqual(rows["queries#owner-alone"], {
+    row: "queries#owner-alone",
+    claim: "allowed",
+    answer: "allowed",
+    documents: 1,
+    verdict: "agrees",
+  });
+  assert.deepEqual(rows["queries#owner-and-name-missing"], {
+    row: "queries#owner-and-name-missing",
+    claim: "denied",
+    answer: "denied",
+    verdict: "agrees",
+  });
+  assert.deepEqual(rows["queries#name-foreign-alone"], {
+    row: "queries#name-foreign-alone",
+    claim: "denied",
+    answer: "unknown",
+    detail: "status 500, not a recorded shape",
+    verdict: "unknown",
+  });
+  assert.deepEqual(rows["queries#members-bare-nofilter"], {
+    row: "queries#members-bare-nofilter",
+    claim: "allowed",
+    answer: "missing",
+    detail: "not recorded",
+    verdict: "unknown",
+  });
+  assert.equal(rows["string-index#publishes"].answer, "unknown");
+  assert.equal(rows["string-index#publishes"].detail, "no publication answer");
+  assert.equal(rows["string-escape#publishes"].answer, "refused");
+  assert.equal(rows["string-escape#publishes"].verdict, "differs");
+});

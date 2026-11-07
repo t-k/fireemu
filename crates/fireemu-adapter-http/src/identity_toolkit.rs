@@ -13371,12 +13371,15 @@ fn refresh(
     stateless_refresh_tokens: bool,
 ) -> JsonResponse {
     // An empty field is an absent one, as proto3 reads it (sandbox recording 2026-09-24).
-    match str_field(body, "grant_type") {
+    match str_field(body, "grant_type").or_else(|| str_field(body, "grantType")) {
         None | Some("") => return error(400, "MISSING_GRANT_TYPE"),
         Some("refresh_token") => {}
         Some(_) => return error(400, "INVALID_GRANT_TYPE"),
     }
-    let Some(token) = str_field(body, "refresh_token").filter(|token| !token.is_empty()) else {
+    let Some(token) = str_field(body, "refresh_token")
+        .or_else(|| str_field(body, "refreshToken"))
+        .filter(|token| !token.is_empty())
+    else {
         return error(400, "MISSING_REFRESH_TOKEN");
     };
     let session = match if stateless_refresh_tokens {

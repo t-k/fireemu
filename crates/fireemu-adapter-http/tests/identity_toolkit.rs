@@ -2499,6 +2499,91 @@ fn anonymous_id_tokens_carry_a_top_level_provider_id() {
     assert_eq!(claim(&password["idToken"]), None);
 }
 
+/// Android Auth 25 sends camelCase JSON fields; REST callers also use snake_case.
+/// This is local SDK/emulator compatibility coverage, not a production observation.
+#[test]
+fn secure_token_accepts_android_json_field_spellings() {
+    for strict in [false, true] {
+        for grant_field in ["grant_type", "grantType"] {
+            for token_field in ["refresh_token", "refreshToken"] {
+                let s = if strict { strict_state() } else { state() };
+                let (status, account) = post(
+                    &s,
+                    &format!("{V1}/accounts:signUp"),
+                    &json!({"email": "android-refresh@example.test", "password": "local-password", "returnSecureToken": true}),
+                );
+                assert_eq!(status, 200);
+                let (status, refreshed) = post(
+                    &s,
+                    "/securetoken.googleapis.com/v1/token",
+                    &json!({(grant_field): "refresh_token", (token_field): account["refreshToken"]}),
+                );
+                assert_eq!(
+                    status, 200,
+                    "strict={strict}, grant={grant_field}, token={token_field}, error={}",
+                    refreshed["error"]["message"]
+                );
+                assert_eq!(refreshed["user_id"], account["localId"]);
+                assert_eq!(refreshed["refresh_token"], account["refreshToken"]);
+                assert_eq!(refreshed["access_token"], refreshed["id_token"]);
+            }
+        }
+    }
+}
+
+#[test]
+fn secure_token_android_json_fields_keep_missing_and_invalid_errors() {
+    for strict in [false, true] {
+        for (grant_field, token_field) in [
+            ("grant_type", "refresh_token"),
+            ("grantType", "refreshToken"),
+        ] {
+            let s = if strict { strict_state() } else { state() };
+            for invalid in [
+                Value::Null,
+                json!(false),
+                json!(7),
+                json!([]),
+                json!({}),
+                json!(""),
+            ] {
+                let (status, response) = post(
+                    &s,
+                    "/securetoken.googleapis.com/v1/token",
+                    &json!({(grant_field): invalid, (token_field): "fixture-token"}),
+                );
+                assert_eq!(status, 400);
+                assert_eq!(response["error"]["message"], "MISSING_GRANT_TYPE");
+                let (status, response) = post(
+                    &s,
+                    "/securetoken.googleapis.com/v1/token",
+                    &json!({(grant_field): "refresh_token", (token_field): invalid}),
+                );
+                assert_eq!(status, 400);
+                assert_eq!(response["error"]["message"], "MISSING_REFRESH_TOKEN");
+            }
+            for (body, expected) in [
+                (
+                    json!({(token_field): "fixture-token"}),
+                    "MISSING_GRANT_TYPE",
+                ),
+                (
+                    json!({(grant_field): "refresh_token"}),
+                    "MISSING_REFRESH_TOKEN",
+                ),
+                (
+                    json!({(grant_field): "password", (token_field): "fixture-token"}),
+                    "INVALID_GRANT_TYPE",
+                ),
+            ] {
+                let (status, response) = post(&s, "/securetoken.googleapis.com/v1/token", &body);
+                assert_eq!(status, 400);
+                assert_eq!(response["error"]["message"], expected);
+            }
+        }
+    }
+}
+
 /// Secure Token treats an absent or empty `grant_type` or `refresh_token` as missing, and its
 /// front end refuses a caller without identity without an `errors` list (sandbox recording
 /// 2026-09-24, auth-credential/refresh/refusals).

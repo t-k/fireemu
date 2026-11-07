@@ -254,19 +254,27 @@ impl Site {
         let Some(decoded) = files::decode_uri(&path) else {
             return response(400, "Malformed URL", None);
         };
-        for rule in self.rules("redirects") {
+        // The published Hosting priority gives supported reserved routes precedence.
+        // The pinned local middleware instead inserts init handling after redirects.
+        let reserved = path == "/__/firebase/init.json"
+            || path == "/__/firebase/init.js"
+            || (path.starts_with("/__/firebase/") && path.split('/').count() >= 5);
+        for rule in self.rules("redirects").iter().filter(|_| !reserved) {
             let destination = redirect_destination(rule, &decoded);
             if let Some(mut destination) = destination {
                 if !query.is_empty() {
                     destination.push(if destination.contains('?') { '&' } else { '?' });
-                    destination.push_str(&query[1..]);
+                    let Some(decoded_query) = files::decode_uri(&query[1..]) else {
+                        return response(400, "Malformed URL", None);
+                    };
+                    destination.push_str(&decoded_query);
                 }
                 let status = rule
                     .get("type")
                     .and_then(Value::as_u64)
                     .and_then(|v| u16::try_from(v).ok())
                     .unwrap_or(301);
-                return Self::redirect(&destination, status, head);
+                return Self::redirect(&encode_redirect_uri(&destination), status, head);
             }
         }
         let result = self
@@ -361,6 +369,10 @@ impl Site {
         }
         None
     }
+    fn init_config(&self) -> Value {
+        // This nonsecret key only enables local SDK initialization; it is not a cloud credential.
+        serde_json::json!({"projectId": self.project, "apiKey": "fireemu-local-only"})
+    }
     async fn after_redirects(
         self: Arc<Self>,
         request: Request<Incoming>,
@@ -374,7 +386,7 @@ impl Site {
                 if head {
                     String::new()
                 } else {
-                    serde_json::json!({"projectId":self.project}).to_string()
+                    self.init_config().to_string()
                 },
                 Some("application/json"),
             );
@@ -388,7 +400,7 @@ impl Site {
             } else {
                 Value::Null
             };
-            let script=format!("if(typeof firebase==='undefined')throw new Error('Firebase SDK not detected');var config={};firebase.initializeApp(config);var endpoints={};if(endpoints)Object.keys(endpoints).forEach(function(name){{if(typeof firebase[name]==='function'){{var endpoint=endpoints[name];if(name==='auth')firebase[name]().useEmulator('http://'+endpoint.hostAndPort);else firebase[name]().useEmulator(endpoint.host,endpoint.port);}}}});",serde_json::json!({"projectId":self.project}),emulators);
+            let script=format!("if(typeof firebase==='undefined')throw new Error('Firebase SDK not detected');var config={};firebase.initializeApp(config);var endpoints={};if(endpoints)Object.keys(endpoints).forEach(function(name){{if(typeof firebase[name]==='function'){{var endpoint=endpoints[name];if(name==='auth')firebase[name]().useEmulator('http://'+endpoint.hostAndPort);else firebase[name]().useEmulator(endpoint.host,endpoint.port);}}}});",self.init_config(),emulators);
             return response(
                 200,
                 if head { String::new() } else { script },
@@ -580,6 +592,23 @@ impl Site {
             _ => response(502, "Local Hosting rewrite failed", None),
         }
     }
+}
+
+// Match encodeURI for an already decoded configured redirect. Canonical asset
+// redirects retain their original encoded path and must not pass this boundary.
+fn encode_redirect_uri(value: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || b";/?:@&=+$,#-_.!~*'()".contains(&byte) {
+            encoded.push(char::from(byte));
+        } else {
+            encoded.push('%');
+            encoded.push(char::from(HEX[usize::from(byte >> 4)]));
+            encoded.push(char::from(HEX[usize::from(byte & 15)]));
+        }
+    }
+    encoded
 }
 
 fn redirect_destination(rule: &Value, path: &str) -> Option<String> {

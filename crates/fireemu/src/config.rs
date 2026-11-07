@@ -3180,7 +3180,7 @@ impl RuntimeConfig {
                             self.allow_non_loopback_hosts,
                         )?;
                     }
-                    "hosting" => {
+                    "hosting" if only.hosting => {
                         self.hosting_addr = emulator_addr(
                             entry,
                             name,

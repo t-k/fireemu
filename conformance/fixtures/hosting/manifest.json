@@ -17,7 +17,8 @@
     "security.json",
     "public-empty/index.html",
     "functions/package.json",
-    "functions/index.cjs"
+    "functions/index.cjs",
+    "redirect-edges.json"
   ],
   "generatedEvidence": [
     "official.json",

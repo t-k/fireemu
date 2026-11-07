@@ -677,6 +677,8 @@ impl Default for TaskRateLimits {
 /// What invokes a function.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Trigger {
+    /// A caller-supplied Remote Config version update on the local control surface.
+    RemoteConfig,
     /// A Realtime Database reference change, scoped to an instance pattern.
     Database {
         /// Mutation family.

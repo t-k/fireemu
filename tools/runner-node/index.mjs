@@ -724,14 +724,14 @@ function ignoredBlocking(base, eventType) {
   return ignored(base, "blocking", "unsupported", `blocking identity event ${eventType} is not served`);
 }
 
-// Products the official emulator has a trigger service for and fireemu does not serve.
+// Trigger families outside the served surface; exact supported types are handled first.
 // The event-type substring is matched the way `getServiceFromEventType` matches it.
 const DEFERRED_TRIGGER_PRODUCTS = [
   {
     match: (type) => type.includes("remoteconfig"),
     triggerType: "remoteConfig",
     scope: "deferred",
-    reason: "deferred: Remote Config has no emulator in the active supported surface",
+    reason: "deferred: only Remote Config update triggers are served by the local injection action",
   },
   {
     match: (type) => type.includes("dataconnect"),
@@ -768,6 +768,12 @@ function deferredProduct(type) {
 // firebase-functions v1 triggers: legacy event types and a resource pattern.
 function describeV1Event(base, type, resource, schedule, retry) {
   const v1 = { v1: true };
+  if (type === "google.firebase.remoteconfig.update") {
+    if (resource !== `projects/${process.env.GCLOUD_PROJECT}`) {
+      return ignored(base, "remoteConfig", "unsupported", "Remote Config resource must name the runtime project");
+    }
+    return { ...base, ...v1, retry, trigger: { type: "remoteConfig" } };
+  }
   const dbMatch = type.match(/^providers\/google\.firebase\.database\/eventTypes\/ref\.(create|update|delete|write)$/);
   if (dbMatch) {
     resource = triggerString(resource, "eventTrigger.resource", { optional: true, allowEmpty: true }) ?? "";
@@ -1020,6 +1026,9 @@ function describe(name, fn, instrumentation) {
           },
         };
       }
+      if (type === "google.firebase.remoteconfig.remoteConfig.v1.updated" && et.channel === undefined) {
+        return { ...base, trigger: { type: "remoteConfig" } };
+      }
       if (type === "google.cloud.pubsub.topic.v1.messagePublished") {
         const topic = triggerString(triggerRecord(et.eventFilters, "eventFilters").topic, "eventFilters.topic");
         const projectedTopic = topic.replace(/^.*\/topics\//, "");
@@ -1155,6 +1164,8 @@ const strictProfile = () => process.env.FIREEMU_HTTP_PROFILE === "strict";
 function v1Context(msg) {
   const event = msg.event;
   switch (msg.trigger) {
+    case "remoteConfig":
+      return event.context;
     case "database": {
       const operation = {created:"create",updated:"update",deleted:"delete",written:"write"}[event.type.split(".").at(-1)];
       const context = {
@@ -1548,7 +1559,7 @@ async function invoke(functions, manifest, msg) {
     throw new Error("entry point does not match the function manifest");
   }
   if (msg.trigger !== spec.trigger?.type ||
-      !["schedule", "database", "firestore", "storage", "pubsub", "eventarc", "auth"].includes(msg.trigger)) {
+      !["schedule", "database", "firestore", "storage", "pubsub", "eventarc", "auth", "remoteConfig"].includes(msg.trigger)) {
     throw new Error("trigger does not match the function manifest");
   }
   const fn = functions.get(spec.entryPoint);
@@ -1591,6 +1602,7 @@ async function invoke(functions, manifest, msg) {
         case "storage":
           await fn({ ...msg.event, data: storageObjectInRecordedOrder(msg.event.data) });
           return;
+        case "remoteConfig":
         case "pubsub":
           await fn(msg.event);
           return;

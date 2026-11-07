@@ -142,6 +142,17 @@ async fn respond(
             .collect(),
         peer_ip,
     };
+    if let Some(refusal) = control
+        .as_ref()
+        .and_then(|control| control::remote_config_guard(control, &method, &path, &headers))
+    {
+        return Ok(finish(
+            refusal.status,
+            &refusal.body,
+            origin.as_deref(),
+            true,
+        ));
+    }
     // Bound the body before reading it (spec 33.3): oversized payloads never allocate fully.
     let collected =
         fireemu_adapter_support::body::collect_limited(req.into_body(), MAX_BODY_BYTES).await;

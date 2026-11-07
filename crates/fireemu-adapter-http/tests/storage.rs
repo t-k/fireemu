@@ -6468,6 +6468,9 @@ impl fireemu_core_auth::jwt::IdTokenSigner for CountingStorageSigner {
         self.0.fetch_add(1, Ordering::SeqCst);
         self.sign(input) == signature
     }
+    fn signature_verification_is_immutable(&self) -> bool {
+        true
+    }
     fn public_jwk_json(&self) -> String {
         "{}".to_owned()
     }
@@ -6635,6 +6638,62 @@ fn storage_signed_token_refusal_order_and_bodies_are_stable() {
                 "{acceptance:?}/{fault}"
             );
         }
+    }
+}
+
+struct CountingRsaStorageSigner {
+    inner: Arc<dyn fireemu_core_auth::jwt::IdTokenSigner>,
+    calls: Arc<AtomicUsize>,
+}
+
+impl fireemu_core_auth::jwt::IdTokenSigner for CountingRsaStorageSigner {
+    fn alg(&self) -> &'static str {
+        self.inner.alg()
+    }
+    fn kid(&self) -> &str {
+        self.inner.kid()
+    }
+    fn sign(&self, input: &[u8]) -> Vec<u8> {
+        self.inner.sign(input)
+    }
+    fn verify(&self, input: &[u8], signature: &[u8]) -> bool {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.inner.verify(input, signature)
+    }
+    fn signature_verification_is_immutable(&self) -> bool {
+        self.inner.signature_verification_is_immutable()
+    }
+    fn public_jwk_json(&self) -> String {
+        self.inner.public_jwk_json()
+    }
+}
+
+#[test]
+fn storage_reuses_the_real_session_rsa_signature() {
+    let signer = fireemu_adapter_http::signing::RsaSigner::from_seed(19).unwrap();
+    for acceptance in BOTH_PROFILES {
+        let s = state_with(Some(ALLOW_ALL_RULES), acceptance);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let token = {
+            let shared = s.auth.default_store();
+            let mut store = shared.lock().unwrap();
+            store.set_signer(Arc::new(CountingRsaStorageSigner {
+                inner: signer.clone(),
+                calls: calls.clone(),
+            }));
+            let uid = store
+                .create_user(NewUser::email("rsa-count@example.test"), START)
+                .unwrap();
+            fireemu_core_auth::jwt::encode_with(
+                &store.id_token_claims(&uid, None, START).unwrap(),
+                store.signer(),
+            )
+        };
+        assert_eq!(
+            upload_as(&s, "rsa-count.txt", &format!("Firebase {token}")),
+            200
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "{acceptance:?}");
     }
 }
 

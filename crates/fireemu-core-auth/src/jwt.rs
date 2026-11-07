@@ -305,6 +305,12 @@ pub trait IdTokenSigner: Send + Sync {
     fn sign(&self, signing_input: &[u8]) -> Vec<u8>;
     /// Whether `signature` is valid for `signing_input`.
     fn verify(&self, signing_input: &[u8], signature: &[u8]) -> bool;
+
+    /// Opts into signature reuse only when this instance's algorithm, key ID and verification result for fixed signing-input and signature bytes remain unchanged for its entire lifetime. Mutable and existing custom signers retain full verification by default.
+    fn signature_verification_is_immutable(&self) -> bool {
+        false
+    }
+
     /// The public key as a JWK (JSON text), for the JWKS endpoint.
     fn public_jwk_json(&self) -> String;
     /// Cached public-key fields, when the signer exposes a structured representation.
@@ -588,11 +594,13 @@ pub struct SignatureCheckedToken {
     token: String,
     decoded: DecodedToken,
     signer: Option<Arc<dyn IdTokenSigner>>,
+    reusable: bool,
 }
 
 impl fmt::Debug for SignatureCheckedToken {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SignatureCheckedToken").finish_non_exhaustive()
+        f.debug_struct("SignatureCheckedToken")
+            .finish_non_exhaustive()
     }
 }
 
@@ -600,11 +608,15 @@ impl SignatureCheckedToken {
     /// Checks the signature and decodes claims without authenticating the account.
     pub fn decode(token: &str, store: &AuthStore) -> Result<Self, JwtError> {
         let signer = store.signer_arc();
+        let reusable = signer
+            .as_ref()
+            .is_none_or(|signer| signer.signature_verification_is_immutable());
         let decoded = decode_token(token, signer.as_deref())?;
         Ok(Self {
             token: token.to_owned(),
             decoded,
             signer,
+            reusable,
         })
     }
 
@@ -614,7 +626,7 @@ impl SignatureCheckedToken {
         &self.decoded
     }
 
-    /// Validates Rules claims against the current store, reusing the signature check only when the installed signer is still the same object. A replaced signer is verified normally, including when it advertises the same algorithm and key ID.
+    /// Validates Rules claims against the current store, reusing the signature check only when the installed signer is still the same object and explicitly guarantees immutable verification. Mutable, unclassified and replaced signers are verified normally, including when they advertise the same algorithm and key ID.
     pub fn verify_for_project(
         &self,
         store: &AuthStore,
@@ -631,7 +643,7 @@ impl SignatureCheckedToken {
             (Some(captured), Some(selected)) => Arc::ptr_eq(captured, selected),
             _ => false,
         };
-        if !same_signer {
+        if !same_signer || !self.reusable {
             return verify_rules_token_with_expected_project(
                 &self.token,
                 store,

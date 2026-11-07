@@ -450,6 +450,9 @@ impl fireemu_core_auth::jwt::IdTokenSigner for ReuseSigner {
         self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.sign(input) == signature
     }
+    fn signature_verification_is_immutable(&self) -> bool {
+        true
+    }
     fn public_jwk_json(&self) -> String {
         "{}".to_owned()
     }
@@ -700,4 +703,63 @@ fn signature_reuse_observes_session_reset_after_capture() {
             "demo-session"
         )
     );
+}
+
+struct MutableReuseSigner {
+    key: Arc<std::sync::atomic::AtomicU8>,
+    calls: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl fireemu_core_auth::jwt::IdTokenSigner for MutableReuseSigner {
+    fn alg(&self) -> &'static str {
+        "RS256"
+    }
+    fn kid(&self) -> &'static str {
+        "mutable-reuse-test"
+    }
+    fn sign(&self, input: &[u8]) -> Vec<u8> {
+        let key = self.key.load(std::sync::atomic::Ordering::SeqCst);
+        input.iter().rev().map(|byte| byte ^ key).collect()
+    }
+    fn verify(&self, input: &[u8], signature: &[u8]) -> bool {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.sign(input) == signature
+    }
+    fn public_jwk_json(&self) -> String {
+        "{}".to_owned()
+    }
+}
+
+#[test]
+fn same_arc_signature_reuse_observes_in_place_key_rotation() {
+    use fireemu_core_auth::jwt::{SignatureCheckedToken, encode_with};
+    use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
+    let key = Arc::new(AtomicU8::new(7));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut store = AuthStore::new("demo-app", SplitMix64::new(1), TotpPolicy::default());
+    store.set_signer(Arc::new(MutableReuseSigner {
+        key: key.clone(),
+        calls: calls.clone(),
+    }));
+    let uid = store
+        .create_user(NewUser::email("rotation@example.test"), t0())
+        .unwrap();
+    let token = encode_with(
+        &store.id_token_claims(&uid, None, t0()).unwrap(),
+        store.signer(),
+    );
+    let checked = SignatureCheckedToken::decode(&token, &store).unwrap();
+    // The same signer allocation, algorithm and key ID remain installed.
+    key.store(9, Ordering::SeqCst);
+    let legacy =
+        verify_rules_token_for_project(&token, &store, t0(), TokenAcceptance::Verified, "demo-app");
+    assert_eq!(legacy, Err(JwtError::BadSignature));
+    let reused = checked.verify_for_project(&store, t0(), TokenAcceptance::Verified, "demo-app");
+    assert_eq!(
+        reused.is_ok(),
+        legacy.is_ok(),
+        "continuation must reject after in-place key rotation"
+    );
+    assert_eq!(reused, legacy);
+    assert_eq!(calls.load(Ordering::SeqCst), 3);
 }

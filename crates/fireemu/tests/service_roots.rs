@@ -311,8 +311,7 @@ fn large_firestore_queries_do_not_stall_auth_or_another_database() {
 
 #[test]
 fn large_storage_uploads_leave_real_services_responsive() {
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::{Arc, mpsc};
+    use std::sync::Arc;
 
     let hub_port = free_port();
     let child = Command::new(env!("CARGO_BIN_EXE_fireemu"))
@@ -353,12 +352,16 @@ fn large_storage_uploads_leave_real_services_responsive() {
     let firestore = port("firestore");
     let storage = port("storage");
     let payload = Arc::new(vec![7_u8; 64 * 1024 * 1024]);
-    let completed = Arc::new((0..4).map(|_| AtomicBool::new(false)).collect::<Vec<_>>());
-    let (written_tx, written_rx) = mpsc::channel();
+    let fault_path = "/v1/sessions/default/faultPlan";
+    assert_eq!(
+        json_request(auth, "PUT", fault_path, r#"{"rules":[]}"#)
+            .unwrap()
+            .0,
+        200
+    );
+
     let clients = (0..4).map(|index| {
         let payload = payload.clone();
-        let completed = completed.clone();
-        let written_tx = written_tx.clone();
         std::thread::spawn(move || {
             let mut stream = TcpStream::connect(("127.0.0.1", storage)).unwrap();
             stream.set_read_timeout(Some(PROBE_PATIENCE)).unwrap();
@@ -367,15 +370,26 @@ fn large_storage_uploads_leave_real_services_responsive() {
                 "POST /v0/b/demo-storage-responsive.appspot.com/o?name=load-{index}.bin HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer owner\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                 payload.len()).unwrap();
             stream.write_all(&payload).unwrap();
-            written_tx.send(()).unwrap();
-            let response = read_response(stream).unwrap();
-            completed[index].store(true, Ordering::Release);
-            response
+            read_response(stream).unwrap()
         })
     }).collect::<Vec<_>>();
-    drop(written_tx);
-    // The socket buffers cannot contain these bodies: completed writes witness actual body consumption by the daemon. Handler lock contention is covered separately.
-    let admitted = (0..2).all(|_| written_rx.recv_timeout(PROBE_PATIENCE).is_ok());
+    // Empty fault plans count dispatches inside the handler without injecting a fault.
+    let deadline = Instant::now() + PROBE_PATIENCE;
+    let admitted = loop {
+        let response = request_within(auth, "GET", fault_path, None, PROBE_PATIENCE);
+        let count = response
+            .and_then(|(status, body)| {
+                (status == 200)
+                    .then(|| serde_json::from_str::<serde_json::Value>(&body).ok())
+                    .flatten()
+            })
+            .and_then(|body| body["counters"]["storage.upload"].as_u64())
+            .unwrap_or(0);
+        if count == 4 || Instant::now() >= deadline {
+            break count;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    };
     let probes = [
         ("Auth", auth, "/"),
         ("control", auth, "/health/live"),
@@ -392,20 +406,37 @@ fn large_storage_uploads_leave_real_services_responsive() {
         } else {
             request_within(port, "GET", path, None, PROBE_PATIENCE)
         };
-        let active = completed.iter().any(|done| !done.load(Ordering::Acquire));
-        (name, result, active)
+        (name, result)
     });
+    // All admitted requests have unique names and eventually succeed. Fewer than four visible objects after the probes proves admitted work remained unfinished throughout them.
+    let listed = json_request(
+        storage,
+        "GET",
+        "/v0/b/demo-storage-responsive.appspot.com/o",
+        "",
+    );
     // Join before asserting so a failed probe never leaves upload threads behind.
     let responses = clients
         .into_iter()
         .map(|client| client.join())
         .collect::<Vec<_>>();
     drop(daemon);
-    assert!(admitted, "large upload bodies did not reach the daemon");
+    assert_eq!(
+        admitted, 4,
+        "all four uploads must enter the server handler before probing"
+    );
+    let (status, body) = listed.unwrap();
+    assert_eq!(status, 200, "{body}");
+    let listing: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let committed = listing["items"].as_array().map_or(0, Vec::len);
+    assert!(
+        committed < 4,
+        "all four admitted uploads had committed before the server-side completion observation"
+    );
     for response in responses {
         assert_eq!(response.unwrap().0, 200);
     }
-    for (name, response, active) in probes {
+    for (name, response) in probes {
         assert_eq!(
             response.unwrap().0,
             if name == "Firestore GetDocument" {
@@ -415,6 +446,5 @@ fn large_storage_uploads_leave_real_services_responsive() {
             },
             "{name}"
         );
-        assert!(active, "{name} answered only after all uploads completed");
     }
 }

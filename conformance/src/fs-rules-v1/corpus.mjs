@@ -36,10 +36,12 @@ export const RULESETS = {
 export const RULESET_IDS = Object.keys(RULESETS);
 
 function compose(rulesetId, label) {
-  const ruleset = RULESETS[rulesetId] ?? BAD_PATH_RULESETS[rulesetId];
+  const ruleset = RULESETS[rulesetId] ?? BAD_PATH_RULESETS[rulesetId] ?? DIFFS_RULESETS[rulesetId];
   if (!ruleset) throw new Error(`unknown ruleset ${rulesetId}`);
   return [
     ...(ruleset.version === 2 ? ["rules_version = '2';"] : []),
+    // Declarations outside `service` (FS-RULES differences, case 4).
+    ...(ruleset.preamble ?? []),
     "service cloud.firestore {",
     "  match /databases/{database}/documents {",
     // The marker is a write rule: the recursive read rule would allow any marker read.
@@ -175,7 +177,11 @@ export function validateCorpus(programs, principals = PRINCIPALS) {
     if (!/^fs-rules-v1\/[a-z-]+\/[a-z0-9-]+$/.test(p.id)) throw new Error(`bad program id ${p.id}`);
     if (ids.has(p.id)) throw new Error(`duplicate program ${p.id}`);
     ids.add(p.id);
-    if (!RULESET_IDS.includes(p.ruleset) && !BAD_PATH_RULESET_IDS.includes(p.ruleset))
+    if (
+      !RULESET_IDS.includes(p.ruleset) &&
+      !BAD_PATH_RULESET_IDS.includes(p.ruleset) &&
+      !DIFFS_RULESET_IDS.includes(p.ruleset)
+    )
       throw new Error(`${p.id}: unknown ruleset ${p.ruleset}`);
     const stepIds = new Set();
     p.steps.forEach((step, index) => {
@@ -287,3 +293,190 @@ export const BAD_PATH_PROGRAMS = BAD_PATH_RULESET_IDS.map((ruleset) => ({
     })),
   ],
 }));
+
+// ---- FS-RULES: five differences from the official emulator -------------------------------------
+//
+// Five Rules behaviours on which fireemu and the official Firestore emulator are claimed to differ
+// (the rules-diffs lane report). Each case is the smallest set of rows with an allowed and a
+// refused control, so one answer separates "the rule raised" from "the rule was false". Rows are
+// REST reads: a get of a missing document (allowed: 404, refused: 403) or a runQuery (allowed: 200,
+// refused: 403). The rulesets whose syntax is uncertain (a top-level function, a lone-surrogate
+// escape, string indexing) are alone in their program, because production accepts or refuses a
+// ruleset as a whole and a refusal is recorded as such. One anonymous principal makes the queries;
+// `UID(anon)` is its uid in a seed or a request, resolved by the run.
+
+const FIRE = "é\u{1F525}x"; // e-acute, fire (a surrogate pair in UTF-16), x
+
+const rule = (kind, collection, condition) => [
+  `    match /${collection}/{id} {`,
+  `      allow ${kind}: if ${condition};`,
+  "    }",
+];
+
+/** String-indexing cases: id, expression (a `get` of `fsr9-s-<id>/x`). */
+const STRING_INDEX_CASES = [
+  ["ascii-ctl", '"abc"[1] == "b"'],
+  ["idx0", `"${FIRE}"[0] == "é"`],
+  ["idx1-fire", `"${FIRE}"[1] == "\u{1F525}"`],
+  ["idx2-x", `"${FIRE}"[2] == "x"`],
+  ["idx3-x", `"${FIRE}"[3] == "x"`],
+  ["idx4-eq-x", `"${FIRE}"[4] == "x"`],
+  ["idx4-not-eq", `!("${FIRE}"[4] == "x")`],
+  ["size-4", `"${FIRE}".size() == 4`],
+  ["size-3", `"${FIRE}".size() == 3`],
+];
+/** Escapes written in the rule source itself (a lone high surrogate), alone in case production refuses. */
+const STRING_ESCAPE_CASES = [
+  ["esc-high", `"${FIRE}"[1] == "\\ud83d"`],
+  ["esc-ctl", `"\\u00e9" == "é"`],
+];
+
+const ROLES = '["ADMIN","MEMBER"]';
+const functionRules = (prefix, names) =>
+  names.flatMap((name, i) =>
+    rule("get", `fsr9-${prefix}-${i === 0 ? "true" : "false"}`, `${name}()`),
+  );
+const functionDeclarations = (indent, functions) =>
+  functions.flatMap(([name, value]) => [
+    `${indent}function ${name}() {`,
+    `${indent}  return ${value};`,
+    `${indent}}`,
+  ]);
+
+export const DIFFS_RULESETS = {
+  "diffs-queries": {
+    version: 2,
+    body: [
+      ...rule("list", "fsr9-owner", "resource.data.owner == request.auth.uid"),
+      ...rule(
+        "list",
+        "fsr9-m-guarded",
+        `resource != null && resource.data.members[request.auth.uid].role in ${ROLES}`,
+      ),
+      ...rule(
+        "list",
+        "fsr9-m-unguarded",
+        `resource.data.members[request.auth.uid].role in ${ROLES}`,
+      ),
+      ...rule("list", "fsr9-m-bare", "resource != null"),
+      ...rule("list", "fsr9-blocked", '!("blocked" in resource.data)'),
+      ...rule("list", "fsr9-has-owner", '"owner" in resource.data'),
+    ],
+  },
+  "diffs-string-index": {
+    version: 2,
+    body: STRING_INDEX_CASES.flatMap(([id, expr]) => rule("get", `fsr9-s-${id}`, expr)),
+  },
+  "diffs-string-escape": {
+    version: 2,
+    body: STRING_ESCAPE_CASES.flatMap(([id, expr]) => rule("get", `fsr9-s-${id}`, expr)),
+  },
+  // The functions are declared after rules_version and before service.
+  "diffs-fn-top": {
+    version: 2,
+    preamble: functionDeclarations("", [
+      ["topTrue", "true"],
+      ["topFalse", "false"],
+    ]),
+    body: functionRules("fn-top", ["topTrue", "topFalse"]),
+  },
+  // Control: the same functions inside the match.
+  "diffs-fn-inner": {
+    version: 2,
+    body: [
+      ...functionDeclarations("    ", [
+        ["innerTrue", "true"],
+        ["innerFalse", "false"],
+      ]),
+      ...functionRules("fn-inner", ["innerTrue", "innerFalse"]),
+    ],
+  },
+};
+export const DIFFS_RULESET_IDS = Object.keys(DIFFS_RULESETS);
+
+const field = (fieldPath, op, value) => ({ fieldFilter: { field: { fieldPath }, op, value } });
+const both = (...filters) => ({ compositeFilter: { op: "AND", filters } });
+const OWNER_IS_ME = field("owner", "EQUAL", { stringValue: "UID(anon)" });
+const NAME = (doc) => field("__name__", "EQUAL", { referenceValue: `{docs}/fsr9-owner/${doc}` });
+const roleIn = (...roles) =>
+  field("members.`UID(anon)`.role", "IN", {
+    arrayValue: { values: roles.map((stringValue) => ({ stringValue })) },
+  });
+
+const listRow = (id, collection, where) => ({
+  id,
+  as: "anon",
+  rpc: "runQuery",
+  body: { structuredQuery: { from: [{ collectionId: collection }], ...(where ? { where } : {}) } },
+});
+const getRow = (collection, id) => ({ id, as: "none", rpc: "get", doc: `${collection}/x` });
+
+const member = (role) => ({
+  members: {
+    mapValue: {
+      fields: { "UID(anon)": { mapValue: { fields: { role: { stringValue: role } } } } },
+    },
+  },
+});
+
+const diffsProgram = (name, steps, seed = []) => ({
+  id: `fs-rules-v1/diffs/${name}`,
+  ruleset: `diffs-${name}`,
+  seed,
+  steps: [{ id: "publishes", publish: true }, ...steps],
+});
+
+export const DIFFS_PROGRAMS = [
+  diffsProgram(
+    "queries",
+    [
+      // Case 1: a query constrained by owner and by documentId().
+      listRow("owner-alone", "fsr9-owner", OWNER_IS_ME),
+      listRow("owner-and-name-missing", "fsr9-owner", both(OWNER_IS_ME, NAME("missing"))),
+      listRow("owner-and-name-foreign", "fsr9-owner", both(OWNER_IS_ME, NAME("foreign"))),
+      listRow("owner-and-name-own", "fsr9-owner", both(OWNER_IS_ME, NAME("mine"))),
+      listRow("name-missing-alone", "fsr9-owner", NAME("missing")),
+      listRow("name-foreign-alone", "fsr9-owner", NAME("foreign")),
+      // Case 2: a map-keyed role test, with and without the `resource != null` guard.
+      listRow("members-guarded-in", "fsr9-m-guarded", roleIn("ADMIN", "MEMBER")),
+      listRow("members-guarded-in-viewer", "fsr9-m-guarded", roleIn("VIEWER")),
+      listRow("members-unguarded-in", "fsr9-m-unguarded", roleIn("ADMIN", "MEMBER")),
+      listRow("members-bare-nofilter", "fsr9-m-bare"),
+      // Case 5: a negated `in` over resource.data, and the plain `in` as controls.
+      listRow("blocked-nofilter", "fsr9-blocked"),
+      listRow("has-owner-nofilter", "fsr9-has-owner"),
+      listRow(
+        "has-owner-filtered",
+        "fsr9-has-owner",
+        field("owner", "EQUAL", { stringValue: "o1" }),
+      ),
+    ],
+    [
+      { doc: "fsr9-owner/mine", fields: { owner: { stringValue: "UID(anon)" } } },
+      { doc: "fsr9-owner/foreign", fields: { owner: { stringValue: "other-owner" } } },
+      { doc: "fsr9-m-guarded/g1", fields: member("ADMIN") },
+      { doc: "fsr9-m-unguarded/u1", fields: member("ADMIN") },
+      { doc: "fsr9-m-bare/b1", fields: member("ADMIN") },
+      { doc: "fsr9-blocked/p1", fields: { n: { integerValue: "1" } } },
+      { doc: "fsr9-has-owner/h1", fields: { owner: { stringValue: "o1" } } },
+    ],
+  ),
+  // Case 3: string indexing by UTF-16 code unit or by scalar.
+  diffsProgram(
+    "string-index",
+    STRING_INDEX_CASES.map(([id]) => getRow(`fsr9-s-${id}`, id)),
+  ),
+  diffsProgram(
+    "string-escape",
+    STRING_ESCAPE_CASES.map(([id]) => getRow(`fsr9-s-${id}`, id)),
+  ),
+  // Case 4: functions declared at top level, outside `service`; then the control inside it.
+  diffsProgram("fn-top", [
+    getRow("fsr9-fn-top-true", "fn-top-true"),
+    getRow("fsr9-fn-top-false", "fn-top-false"),
+  ]),
+  diffsProgram("fn-inner", [
+    getRow("fsr9-fn-inner-true", "fn-inner-true"),
+    getRow("fsr9-fn-inner-false", "fn-inner-false"),
+  ]),
+];

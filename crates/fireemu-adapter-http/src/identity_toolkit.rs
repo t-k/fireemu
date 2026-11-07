@@ -3719,10 +3719,14 @@ fn token_tenant_disagreement(
     }
 }
 
+/// Read the same effective credential before routing and before session validation.
+fn request_refresh_token(body: &Value) -> Option<&str> {
+    str_field(body, "refresh_token").or_else(|| str_field(body, "refreshToken"))
+}
+
 /// What the request's refresh token (`refresh_token`, or `refreshToken`) says about its tenant.
 fn request_refresh_token_tenant(body: &Value) -> Option<RefreshTokenTenant> {
-    str_field(body, "refresh_token")
-        .or_else(|| str_field(body, "refreshToken"))
+    request_refresh_token(body)
         .filter(|token| !token.is_empty())
         .map(|token| {
             match fireemu_core_auth::store::AuthRegistry::decode_refresh_token_tenant(token) {
@@ -4261,7 +4265,7 @@ fn strict_refreshed_tenant(
     project: &str,
     body: &Value,
 ) -> Result<Option<Value>, JsonResponse> {
-    if let Some((token_project, tenant)) = str_field(body, "refresh_token")
+    if let Some((token_project, tenant)) = request_refresh_token(body)
         .and_then(fireemu_core_auth::store::AuthRegistry::refresh_token_tenant)
     {
         if token_project == project && registry.tenant_store(project, &tenant).is_none() {
@@ -9584,7 +9588,7 @@ fn select_store(
             .unwrap_or_else(|| state.store.clone()));
     }
     if exchanges_refresh_token && query_tenant.is_some() {
-        if let Some(token) = str_field(body, "refresh_token") {
+        if let Some(token) = request_refresh_token(body) {
             use fireemu_core_auth::store::RefreshTokenStoreMatch;
 
             if let RefreshTokenStoreMatch::Unique(store) = registry.store_for_refresh_token(token) {
@@ -9694,7 +9698,7 @@ fn select_store(
             return Ok(store);
         }
     }
-    if let Some(token) = str_field(body, "refresh_token") {
+    if let Some(token) = request_refresh_token(body) {
         use fireemu_core_auth::store::RefreshTokenStoreMatch;
 
         match registry.store_for_refresh_token(token) {
@@ -9746,7 +9750,7 @@ fn tenant_store_issuing_refresh_token(
 ) -> Result<Option<Arc<Mutex<AuthStore>>>, JsonResponse> {
     use fireemu_core_auth::store::RefreshTokenStoreMatch;
 
-    let Some(token) = str_field(body, "refresh_token") else {
+    let Some(token) = request_refresh_token(body) else {
         return Ok(None);
     };
     let store = match registry.store_for_refresh_token(token) {
@@ -13376,10 +13380,7 @@ fn refresh(
         Some("refresh_token") => {}
         Some(_) => return error(400, "INVALID_GRANT_TYPE"),
     }
-    let Some(token) = str_field(body, "refresh_token")
-        .or_else(|| str_field(body, "refreshToken"))
-        .filter(|token| !token.is_empty())
-    else {
+    let Some(token) = request_refresh_token(body).filter(|token| !token.is_empty()) else {
         return error(400, "MISSING_REFRESH_TOKEN");
     };
     let session = match if stateless_refresh_tokens {

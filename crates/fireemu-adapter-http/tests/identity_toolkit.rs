@@ -2584,6 +2584,150 @@ fn secure_token_android_json_fields_keep_missing_and_invalid_errors() {
     }
 }
 
+fn assert_android_refresh_tenant(body: &Value, tenant: &str, uid: &str) {
+    use fireemu_core_types::json::JsonValue as CoreJsonValue;
+    let claims = fireemu_core_auth::jwt::decode_unsigned(body["id_token"].as_str().unwrap())
+        .unwrap()
+        .payload;
+    assert_eq!(
+        claims
+            .get("firebase")
+            .and_then(|value| value.get("tenant"))
+            .and_then(CoreJsonValue::as_str),
+        Some(tenant)
+    );
+    assert_eq!(claims.get("sub").and_then(CoreJsonValue::as_str), Some(uid));
+}
+
+fn android_refresh_tenant_fixture(strict: bool) -> (AuthState, Value, String, String) {
+    let s = with_registry(if strict { strict_state() } else { state() });
+    enable_tenants(&s);
+    let mut tenants = Vec::new();
+    for display_name in ["android-a", "android-b"] {
+        let (status, tenant) = admin(
+            &s,
+            "POST",
+            &format!("{V2}/projects/demo-app/tenants"),
+            &json!({"displayName": display_name, "allowPasswordSignup": true}),
+        );
+        assert_eq!(status, 200);
+        tenants.push(
+            tenant["name"]
+                .as_str()
+                .unwrap()
+                .rsplit('/')
+                .next()
+                .unwrap()
+                .to_owned(),
+        );
+    }
+    let (status, account) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"tenantId": tenants[0], "email": "android-tenant@example.test", "password": "local-password", "returnSecureToken": true}),
+    );
+    assert_eq!(
+        status, 200,
+        "tenant fixture signup: {}",
+        account["error"]["message"]
+    );
+    (s, account, tenants[0].clone(), tenants[1].clone())
+}
+
+#[test]
+fn secure_token_android_alias_selects_the_registered_issuer_tenant() {
+    for strict in [false, true] {
+        let (s, account, tenant, _) = android_refresh_tenant_fixture(strict);
+        for (grant, token) in [
+            ("grant_type", "refresh_token"),
+            ("grantType", "refreshToken"),
+        ] {
+            let (status, response) = post(
+                &s,
+                "/securetoken.googleapis.com/v1/token?key=fake-api-key",
+                &json!({(grant): "refresh_token", (token): account["refreshToken"]}),
+            );
+            assert_eq!(
+                status, 200,
+                "strict={strict}, token={token}, error={}",
+                response["error"]["message"]
+            );
+            assert_eq!(response["user_id"], account["localId"]);
+            assert_android_refresh_tenant(&response, &tenant, account["localId"].as_str().unwrap());
+        }
+    }
+}
+
+#[test]
+fn secure_token_android_alias_preserves_tenant_refusals_and_query_selection() {
+    for strict in [false, true] {
+        for scenario in [
+            "same-query",
+            "wrong-query",
+            "wrong-body",
+            "deleted",
+            "no-key",
+        ] {
+            let (s, account, tenant, other) = android_refresh_tenant_fixture(strict);
+            let mut path = "/securetoken.googleapis.com/v1/token?key=fake-api-key".to_owned();
+            if scenario == "same-query" {
+                path.push_str(&format!("&tenantId={tenant}"));
+            }
+            if scenario == "wrong-query" {
+                path.push_str(&format!("&tenantId={other}"));
+            }
+            if scenario == "no-key" {
+                path = "/securetoken.googleapis.com/v1/token".to_owned();
+            }
+            if scenario == "deleted" {
+                assert!(s
+                    .registry
+                    .as_ref()
+                    .unwrap()
+                    .delete_tenant("demo-app", &tenant));
+            }
+            let mut expected = None;
+            for (grant, token) in [
+                ("grant_type", "refresh_token"),
+                ("grantType", "refreshToken"),
+            ] {
+                let mut body = json!({(grant): "refresh_token", (token): account["refreshToken"]});
+                if scenario == "wrong-body" {
+                    body["tenantId"] = json!(other);
+                }
+                // Do not use `post`: the no-key scenario must remain keyless.
+                let response = handle(&s, "POST", &path, &body);
+                let outcome = (response.status, response.body.get("error").cloned());
+                if let Some(expected) = &expected {
+                    assert_eq!(&outcome, expected, "strict={strict}, scenario={scenario}");
+                } else {
+                    expected = Some(outcome);
+                }
+                if response.status == 200 {
+                    assert_eq!(response.body["user_id"], account["localId"]);
+                    assert_android_refresh_tenant(
+                        &response.body,
+                        &tenant,
+                        account["localId"].as_str().unwrap(),
+                    );
+                }
+                assert_eq!(s.store.lock().unwrap().user_count(), 0);
+                assert_eq!(
+                    s.registry
+                        .as_ref()
+                        .unwrap()
+                        .tenant_store("demo-app", &other)
+                        .unwrap()
+                        .lock()
+                        .unwrap()
+                        .user_count(),
+                    0
+                );
+            }
+        }
+    }
+}
+
 /// Secure Token treats an absent or empty `grant_type` or `refresh_token` as missing, and its
 /// front end refuses a caller without identity without an `errors` list (sandbox recording
 /// 2026-09-24, auth-credential/refresh/refusals).

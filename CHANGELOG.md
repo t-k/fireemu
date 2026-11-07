@@ -8,6 +8,10 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Fixed
+
+- Authentication: the Secure Token refresh accepts the JSON body with `grantType` and `refreshToken` that the Firebase Android SDK sends, as the official emulator does; before, it answered `400 MISSING_GRANT_TYPE`. A form body still uses the snake_case fields, and a body mixing both spellings is read as snake_case. Production has not been recorded for this body.
+
 ## [0.44.0] - 2026-11-07
 
 ### Added

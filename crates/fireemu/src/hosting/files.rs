@@ -244,9 +244,10 @@ mod tests {
     fn an_outside_directory_junction_is_not_a_serving_capability() {
         let fixture = Fixture::new();
         let root = fixture.root();
+        let junction = fixture.0.join("public").join("junction");
         let status = std::process::Command::new("cmd")
             .args(["/C", "mklink", "/J"])
-            .arg(fixture.0.join("public/junction"))
+            .arg(&junction)
             .arg(&fixture.0)
             .status()
             .unwrap();
@@ -256,7 +257,7 @@ mod tests {
         );
         assert!(open(&root, "/junction/outside.txt").is_none());
         drop(root);
-        std::fs::remove_dir(fixture.0.join("public/junction")).unwrap();
+        std::fs::remove_dir(junction).unwrap();
     }
 }
 

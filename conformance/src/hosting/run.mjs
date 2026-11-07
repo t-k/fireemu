@@ -18,7 +18,7 @@ const firebasePackage = require.resolve("firebase-tools/package.json");
 const officialRequire = createRequire(firebasePackage);
 const officialRoot = dirname(firebasePackage);
 const initTemplate = await readFile(resolve(officialRoot, "templates/hosting/init.js"), "utf8");
-const initJson = JSON.stringify({ projectId: "demo-hosting", apiKey: "fireemu-local-only" });
+const initJson = JSON.stringify({ apiKey: "fireemu-local-only", projectId: "demo-hosting" });
 const initScript = (emulators) =>
   initTemplate
     .replace("/*--CONFIG--*/", `var firebaseConfig = ${initJson};`)

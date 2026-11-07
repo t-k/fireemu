@@ -2665,6 +2665,7 @@ fn secure_token_android_alias_preserves_tenant_refusals_and_query_selection() {
             "same-query",
             "wrong-query",
             "wrong-body",
+            "missing-body",
             "deleted",
             "no-key",
         ] {
@@ -2695,6 +2696,9 @@ fn secure_token_android_alias_preserves_tenant_refusals_and_query_selection() {
                 if scenario == "wrong-body" {
                     body["tenantId"] = json!(other);
                 }
+                if scenario == "missing-body" {
+                    body["tenantId"] = json!("unserved-android");
+                }
                 // Do not use `post`: the no-key scenario must remain keyless.
                 let response = handle(&s, "POST", &path, &body);
                 let outcome = (response.status, response.body.get("error").cloned());
@@ -2711,6 +2715,12 @@ fn secure_token_android_alias_preserves_tenant_refusals_and_query_selection() {
                         account["localId"].as_str().unwrap(),
                     );
                 }
+                assert!(s
+                    .registry
+                    .as_ref()
+                    .unwrap()
+                    .tenant_store("demo-app", "unserved-android")
+                    .is_none());
                 assert_eq!(s.store.lock().unwrap().user_count(), 0);
                 assert_eq!(
                     s.registry

@@ -2,6 +2,12 @@
   "pin": "firebase-tools@15.28.2",
   "rows": [
     {
+      "path": "/go/",
+      "destination": "/:name",
+      "status": 404,
+      "authority": null
+    },
+    {
       "path": "/go/%5cevil.example",
       "destination": "/:name",
       "status": 302,
@@ -126,6 +132,12 @@
       "status": 302,
       "location": "/a:b?x=%5C",
       "authority": "127.0.0.1"
+    },
+    {
+      "path": "/go/",
+      "destination": "/next/:name",
+      "status": 404,
+      "authority": null
     },
     {
       "path": "/go/%5cevil.example",
@@ -259,6 +271,12 @@
       "status": 302,
       "location": "/next/a%25b?x=%5C",
       "authority": "127.0.0.1"
+    },
+    {
+      "path": "/go/",
+      "destination": "https://example.test/:name",
+      "status": 404,
+      "authority": null
     },
     {
       "path": "/go/%5cevil.example",
@@ -408,6 +426,12 @@
       "authority": "example.test"
     },
     {
+      "path": "/go/",
+      "destination": "/:name/evil.example",
+      "status": 404,
+      "authority": null
+    },
+    {
       "path": "/go/%5cevil.example",
       "destination": "/:name/evil.example",
       "status": 302,
@@ -528,6 +552,180 @@
       "path": "/__/firebase/init.js?useEmulator=true",
       "status": 302,
       "location": "/maintenance?useEmulator=true"
+    },
+    {
+      "source": "/go/:locale/:page",
+      "destination": "/:locale/:page",
+      "path": "/go//evil.example",
+      "status": 404,
+      "origin": "http://127.0.0.1"
+    },
+    {
+      "source": "/go/:locale/:page",
+      "destination": "/:locale/:page",
+      "path": "/go/en/",
+      "status": 404,
+      "origin": "http://127.0.0.1"
+    },
+    {
+      "source": "/go/:locale/:page",
+      "destination": "/:locale/:page",
+      "path": "/go/en/page",
+      "status": 302,
+      "location": "/en/page",
+      "origin": "http://127.0.0.1"
+    },
+    {
+      "source": "/go/:a/:b/:c",
+      "destination": "/:a/:b/:c",
+      "path": "/go/en//page",
+      "status": 404,
+      "origin": "http://127.0.0.1"
+    },
+    {
+      "source": "/go/:a/:b/:c",
+      "destination": "/:a/:b/:c",
+      "path": "/go/en/ok/page",
+      "status": 302,
+      "location": "/en/ok/page",
+      "origin": "http://127.0.0.1"
+    },
+    {
+      "source": "/go/:1234/:name",
+      "destination": "https://example.test:1234/:name",
+      "path": "/go/80@evil.example/plain",
+      "status": 302,
+      "location": "https://example.test80@evil.example/plain",
+      "origin": "https://evil.example",
+      "fireemuDecision": "Keep configured authority fixed; do not allow capture-driven authority or scheme selection.",
+      "fireemuLocation": "https://example.test:1234/plain",
+      "fireemuStatus": 302
+    },
+    {
+      "source": "/go/:1234/:name",
+      "destination": "https://example.test:1234/:name",
+      "path": "/go/ok/plain",
+      "status": 302,
+      "location": "https://example.testok/plain",
+      "origin": "https://example.testok",
+      "fireemuDecision": "Keep configured authority fixed; do not allow capture-driven authority or scheme selection.",
+      "fireemuLocation": "https://example.test:1234/plain",
+      "fireemuStatus": 302
+    },
+    {
+      "source": "/go/:1234/:name",
+      "destination": "//example.test:1234/:name",
+      "path": "/go/80@evil.example/plain",
+      "status": 302,
+      "location": "//example.test80@evil.example/plain",
+      "origin": "http://evil.example",
+      "fireemuDecision": "Keep configured authority fixed; do not allow capture-driven authority or scheme selection.",
+      "fireemuLocation": "//example.test:1234/plain",
+      "fireemuStatus": 302
+    },
+    {
+      "source": "/go/:name",
+      "destination": "http://[::1]/:name",
+      "path": "/go/plain",
+      "status": 404,
+      "origin": "http://127.0.0.1",
+      "fireemuDecision": "Keep configured authority fixed; do not allow capture-driven authority or scheme selection.",
+      "fireemuLocation": "http://[::1]/plain",
+      "fireemuStatus": 302
+    },
+    {
+      "source": "/go/:name",
+      "destination": "https://:name/path",
+      "path": "/go/evil.example",
+      "status": 302,
+      "location": "https://evil.example/path",
+      "origin": "https://evil.example",
+      "fireemuDecision": "Keep configured authority fixed; do not allow capture-driven authority or scheme selection.",
+      "fireemuLocation": null,
+      "fireemuStatus": 404
+    },
+    {
+      "source": "/go/:name",
+      "destination": ":name",
+      "path": "/go/javascript:alert(1)",
+      "status": 302,
+      "location": "javascript:alert(1)",
+      "origin": "null",
+      "fireemuDecision": "Keep configured authority fixed; do not allow capture-driven authority or scheme selection.",
+      "fireemuLocation": null,
+      "fireemuStatus": 404
+    },
+    {
+      "source": "/fixed",
+      "destination": "http://[::1]/fixed",
+      "path": "/fixed",
+      "status": 302,
+      "location": "http://%5B::1%5D/fixed",
+      "origin": "invalid URL",
+      "fireemuLocation": "http://[::1]/fixed",
+      "fireemuStatus": 302,
+      "fireemuDecision": "Preserve valid literal IPv6 authority rather than encode its brackets."
+    },
+    {
+      "source": "/go/:name",
+      "destination": "https:/:name/path",
+      "path": "/go/evil.example",
+      "status": 302,
+      "location": "https:/evil.example/path",
+      "origin": "https://evil.example",
+      "fireemuStatus": 404,
+      "fireemuLocation": null,
+      "fireemuDecision": "Reject capture-dependent scheme-shaped templates without a fixed HTTP(S) authority."
+    },
+    {
+      "source": "/go/:name",
+      "destination": "https::name",
+      "path": "/go/evil.example",
+      "status": 404,
+      "origin": "http://127.0.0.1",
+      "fireemuStatus": 404,
+      "fireemuLocation": null,
+      "fireemuDecision": "Reject capture-dependent scheme-shaped templates without a fixed HTTP(S) authority."
+    },
+    {
+      "source": "/go/:name",
+      "destination": "HTTPS://example.test:444/:name",
+      "path": "/go/plain",
+      "status": 404,
+      "origin": "http://127.0.0.1",
+      "fireemuStatus": 302,
+      "fireemuLocation": "HTTPS://example.test:444/plain",
+      "fireemuDecision": "Preserve original case-insensitive HTTP(S) scheme and literal port."
+    },
+    {
+      "source": "/go/:name",
+      "destination": "folder/:name",
+      "path": "/go/plain",
+      "status": 302,
+      "location": "folder/plain",
+      "origin": "http://127.0.0.1"
+    },
+    {
+      "source": "/fixed",
+      "destination": "next-page",
+      "path": "/fixed",
+      "status": 302,
+      "location": "next-page",
+      "origin": "http://127.0.0.1"
+    },
+    {
+      "source": "/go/:name",
+      "destination": "https://example.test/fixed",
+      "path": "/go/plain",
+      "status": 404,
+      "origin": "http://127.0.0.1"
+    },
+    {
+      "source": "/go/:name",
+      "destination": "/fixed",
+      "path": "/go/plain",
+      "status": 404,
+      "origin": "http://127.0.0.1"
     }
   ],
   "malformedQuery": {
@@ -536,7 +734,10 @@
     "fireemuExpectedStatus": 400
   },
   "inputs": {
-    "observerSha256": "3b13936418620869e7d39d68367f3c74f0bcdc0899ee49f4aff8422d51ee5329",
-    "lockSha256": "f197c15da81d633ed4d96665886ef8a10153cf105213e27fd0e4c6526bb1d821"
+    "observerSha256": "5931c349b00cafa463c0c7133f6b75b24e8ffd7339971bd75f40fdf631c60448",
+    "lockSha256": "f197c15da81d633ed4d96665886ef8a10153cf105213e27fd0e4c6526bb1d821",
+    "emptyObserverSha256": "aa850d0bfbd7f1bb827fdf471f8ef3526daae66f1cd9e6fc5b4e2df753ab9c34",
+    "authorityObserverSha256": "4d9ba874b98012f516654e9108f7d8d89d3444f7898d593b0275ac7778b4df43",
+    "controlsObserverSha256": "b00b0ee232b11f448d260ba7c08c8188052386b835a7950fc24ec0beca87a289"
   }
 }

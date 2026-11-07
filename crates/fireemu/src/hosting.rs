@@ -261,7 +261,7 @@ impl Site {
             || (path.starts_with("/__/firebase/") && path.split('/').count() >= 5);
         for rule in self.rules("redirects").iter().filter(|_| !reserved) {
             let destination = redirect_destination(rule, &decoded);
-            if let Some(mut destination) = destination {
+            if let Some((authority, mut destination)) = destination {
                 if !query.is_empty() {
                     destination.push(if destination.contains('?') { '&' } else { '?' });
                     let Some(decoded_query) = files::decode_uri(&query[1..]) else {
@@ -274,7 +274,11 @@ impl Site {
                     .and_then(Value::as_u64)
                     .and_then(|v| u16::try_from(v).ok())
                     .unwrap_or(301);
-                return Self::redirect(&encode_redirect_uri(&destination), status, head);
+                return Self::redirect(
+                    &format!("{authority}{}", encode_redirect_uri(&destination)),
+                    status,
+                    head,
+                );
             }
         }
         let result = self
@@ -611,8 +615,74 @@ fn encode_redirect_uri(value: &str) -> String {
     encoded
 }
 
-fn redirect_destination(rule: &Value, path: &str) -> Option<String> {
+fn redirect_parts<'a>(destination: &'a str, source: Option<&str>) -> Option<(&'a str, &'a str)> {
+    let capture_names: Vec<_> = source
+        .into_iter()
+        .flat_map(|value| value.split('/'))
+        .filter_map(|part| part.strip_prefix(':'))
+        .collect();
+    let tokens = regex::Regex::new(r":([A-Za-z0-9_]+)").expect("constant capture token");
+    let has_capture = |value: &str| {
+        tokens
+            .captures_iter(value)
+            .any(|token| capture_names.contains(&&token[1]))
+    };
+    let start = if destination
+        .get(..8)
+        .is_some_and(|s| s.eq_ignore_ascii_case("https://"))
+    {
+        Some(8)
+    } else if destination
+        .get(..7)
+        .is_some_and(|s| s.eq_ignore_ascii_case("http://"))
+    {
+        Some(7)
+    } else if destination.starts_with("//") {
+        Some(2)
+    } else {
+        None
+    };
+    if let Some(start) = start {
+        let end = destination[start..]
+            .find(['/', '?', '#'])
+            .map_or(destination.len(), |n| start + n);
+        let authority = &destination[start..end];
+        let uri = format!("http://{authority}/").parse::<hyper::Uri>().ok()?;
+        let parsed = uri.authority()?;
+        if parsed.host().is_empty() {
+            return None;
+        }
+        let host_port = authority.rsplit('@').next()?;
+        let port = &host_port[parsed.host().len()..];
+        if !port.is_empty() {
+            let port = port.strip_prefix(':')?;
+            if port.is_empty()
+                || !port.bytes().all(|b| b.is_ascii_digit())
+                || port.parse::<u16>().is_err()
+            {
+                return None;
+            }
+        }
+        if authority
+            .rsplit_once('@')
+            .is_some_and(|(userinfo, _)| has_capture(userinfo))
+        {
+            return None;
+        }
+        // Keep the original literal authority: ports and IPv6 colons are not capture tokens.
+        return Some((&destination[..end], &destination[end..]));
+    }
+    let first_segment = destination.split('/').next()?;
+    if has_capture(first_segment) || (first_segment.contains(':') && has_capture(destination)) {
+        return None;
+    }
+    Some(("", destination))
+}
+
+fn redirect_destination(rule: &Value, path: &str) -> Option<(String, String)> {
     let destination = rule.get("destination")?.as_str()?;
+    let (authority, destination) =
+        redirect_parts(destination, rule.get("source").and_then(Value::as_str))?;
     if let Some(source) = rule.get("source").and_then(Value::as_str) {
         if source.contains(':') && destination.contains(':') {
             let source: Vec<_> = source.split('/').collect();
@@ -623,6 +693,9 @@ fn redirect_destination(rule: &Value, path: &str) -> Option<String> {
             let mut captures = std::collections::BTreeMap::new();
             for (pattern, part) in source.iter().zip(path) {
                 if let Some(name) = pattern.strip_prefix(':') {
+                    if part.is_empty() {
+                        return None;
+                    }
                     captures.insert(name, part);
                 } else if *pattern != part {
                     return None;
@@ -630,7 +703,8 @@ fn redirect_destination(rule: &Value, path: &str) -> Option<String> {
             }
             // Expand original destination tokens once; captured text is never reparsed.
             let tokens = regex::Regex::new(r":([A-Za-z0-9_]+)").expect("constant capture token");
-            return Some(
+            return Some((
+                authority.to_owned(),
                 tokens
                     .replace_all(destination, |token: &regex::Captures<'_>| {
                         captures
@@ -640,10 +714,10 @@ fn redirect_destination(rule: &Value, path: &str) -> Option<String> {
                             .to_owned()
                     })
                     .into_owned(),
-            );
+            ));
         }
     }
-    matcher::matches(rule, path).then(|| destination.to_owned())
+    matcher::matches(rule, path).then(|| (authority.to_owned(), destination.to_owned()))
 }
 
 /// A site whose configured root has been acquired before readiness publication.

@@ -100,29 +100,108 @@ async function suite(only, hosting, hostingHost, run) {
   }
 }
 console.log(JSON.stringify({ noEgress: await noEgressProof() }));
-for (const destination of [
-  ...new Set(edges.rows.filter((r) => r.destination).map((r) => r.destination)),
-]) {
+for (const serialized of new Set(
+  edges.rows
+    .filter((r) => r.destination)
+    .map((r) => JSON.stringify({ source: r.source ?? "/go/:name", destination: r.destination })),
+)) {
+  const { source, destination } = JSON.parse(serialized);
   await check(`redirect ${destination}`, () =>
     suite(
       "hosting",
-      { redirects: [{ source: "/go/:name", destination, type: 302 }] },
+      { redirects: [{ source, destination, type: 302 }] },
       "127.0.0.1",
       async (descriptor) => {
         const port = Number(new URL(descriptor.hostingUrl).port);
-        for (const expected of edges.rows.filter((r) => r.destination === destination)) {
+        for (const expected of edges.rows.filter(
+          (r) => r.destination === destination && (r.source ?? "/go/:name") === source,
+        )) {
           const actual = await request(port, { id: expected.path, path: expected.path });
           console.log(JSON.stringify({ wireTarget: expected.path, actual }));
-          assert.equal(actual.headers.location, expected.location, expected.path);
+          assert.equal(actual.status, expected.fireemuStatus ?? expected.status, expected.path);
+          const expectedLocation = Object.hasOwn(expected, "fireemuLocation")
+            ? (expected.fireemuLocation ?? undefined)
+            : expected.location;
+          assert.equal(actual.headers.location, expectedLocation, expected.path);
+          if (!expectedLocation) continue;
           assert.equal(
             new URL(actual.headers.location, "http://127.0.0.1").host,
-            expected.authority,
+            new URL(expectedLocation, "http://127.0.0.1").host,
           );
         }
+        if (
+          source !== "/go/:name" ||
+          !["/:name", "/next/:name", "https://example.test/:name", "/:name/evil.example"].includes(
+            destination,
+          )
+        )
+          return;
         const malformed = await request(port, { path: edges.malformedQuery.path });
         assert.equal(malformed.status, 400);
         const alive = await request(port, { path: "/go/alive" });
         assert.equal(alive.status, 302);
+      },
+    ),
+  );
+}
+// A deterministic generator makes failing raw targets reproducible without a second encoder oracle.
+let randomState = 0x1302026;
+const random = () => {
+  randomState ^= randomState << 13;
+  randomState ^= randomState >>> 17;
+  randomState ^= randomState << 5;
+  return randomState >>> 0;
+};
+const segments = ["", "\t", "\\evil.example", "%2f"];
+const special = ["\\", "\t", "\r", "\n", "%", "/", ":", "?", "#", "@", " ", "a", "日"];
+while (segments.length < 128) {
+  let value = "";
+  const length = 1 + (random() % 12);
+  for (let i = 0; i < length; i++) {
+    let point = random() % 0x110000;
+    if (point >= 0xd800 && point <= 0xdfff) point = 0x61;
+    value += random() % 3 ? special[random() % special.length] : String.fromCodePoint(point);
+  }
+  segments.push(value);
+}
+for (const destination of [
+  "/:name",
+  "/next/:name",
+  "https://example.test/:name",
+  "/:name/evil.example",
+  "http://[::1]/:name",
+  "HTTPS://example.test:444/:name",
+  "//example.test:1234/:name",
+  "folder/:name",
+]) {
+  await check(`redirect origin property ${destination}`, () =>
+    suite(
+      "hosting",
+      {
+        redirects: [{ source: "/go/:name", destination, type: 302 }],
+      },
+      "127.0.0.1",
+      async (descriptor) => {
+        const port = Number(new URL(descriptor.hostingUrl).port);
+        const origin = new URL(destination, "http://127.0.0.1").origin;
+        for (const segment of segments) {
+          const path = `/go/${encodeURIComponent(segment)}`;
+          const actual = await request(port, { path });
+          if (segment === "") {
+            assert.equal(actual.status, 404, "required capture must not be empty");
+            continue;
+          }
+          assert.equal(actual.status, 302, path);
+          assert.equal(new URL(actual.headers.location, "http://127.0.0.1").origin, origin, path);
+        }
+        console.log(
+          JSON.stringify({
+            property: "redirect origin",
+            seed: "0x1302026",
+            destination,
+            cases: segments.length,
+          }),
+        );
       },
     ),
   );

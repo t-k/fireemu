@@ -157,9 +157,11 @@ const isSelector = (key, value) =>
           selectorCharacter.test(character),
       ) &&
       !/(?:^|\/)\.\.(?:\/|$)/.test(value) &&
-      [...value.matchAll(/(?:^|[,;\s])\/([A-Za-z][A-Za-z0-9_-]*)/g)].every((match) =>
-        JSON_SELECTOR_ROOTS.has(match[1]),
-      )));
+      value
+        .split(/[,;\s]+/)
+        .every((component) =>
+          JSON_SELECTOR_ROOTS.has(component.match(/^\/([A-Za-z][A-Za-z0-9_-]*)(?:\/|$)/)?.[1]),
+        )));
 const isPubsubCoordinate = (key, value) =>
   key === "coordinate" && /^\/conditions\/\d+\/cases\/\d+$/.test(value);
 const isKnownDifferencePointer = (key, value) =>
@@ -194,6 +196,16 @@ export function publicEvidence(value) {
   const walk = (current, key = "") => {
     if (typeof current === "string") {
       if (hasPrivatePath(current)) fail("PRIVATE_MARKER");
+      if (/selector|pointer/i.test(key) && current.includes("%")) {
+        let decoded;
+        try {
+          decoded = decodeURIComponent(current);
+        } catch {
+          fail("INVALID_SELECTOR");
+        }
+        walk(decoded, key);
+        return;
+      }
       if (/bytesValue$/i.test(key) && isCanonicalBase64(current)) {
         const decoded = Buffer.from(current, "base64");
         const text = decoded.toString("utf8");

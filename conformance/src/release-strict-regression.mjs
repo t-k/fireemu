@@ -1144,7 +1144,15 @@ export async function collectHistoricalReplay(runDir, outDir) {
   const rawPath = join(runDir, "fireemu-historical-production.json");
   const comparisonBytes = existsSync(summaryPath) ? await readFile(summaryPath) : undefined;
   const rawBytes = existsSync(rawPath) ? await readFile(rawPath) : undefined;
-  if (comparisonBytes) publicEvidence(parseUniqueJson(comparisonBytes.toString("utf8")));
+  if (comparisonBytes) {
+    const comparison = parseUniqueJson(comparisonBytes.toString("utf8"));
+    // The historical judge requires absolute paths in this root binding only.
+    publicEvidence(
+      comparison && typeof comparison === "object" && !Array.isArray(comparison)
+        ? { ...comparison, profileBinding: undefined }
+        : comparison,
+    );
+  }
   if (rawBytes) publicEvidence(parseUniqueJson(rawBytes.toString("utf8")));
   if (comparisonBytes)
     await writeFile(join(outDir, "R11-historical-production-comparison.json"), comparisonBytes);

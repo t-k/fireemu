@@ -135,6 +135,61 @@ test("the guard keeps contextual URLs, API routes, RPC identifiers and JSON sele
   assert.throws(() => publicEvidence({ artifactPath: "/v1/projects/demo" }));
 });
 
+test("the guard validates every selector component and percent-encoded paths", () => {
+  const path = "/" + ["Users", "alice", "private.json"].join("/");
+  for (const selector of [
+    `/rows/0; /${path}`,
+    `/rows/0; C:${path}`,
+    encodeURIComponent(`/${path}`),
+    `/rows/0; ${encodeURIComponent(`/${path}`)}`,
+    "/rows/0, /arbitrary/private.json",
+    "/rows/0 /arbitrary/private.json",
+  ]) {
+    assert.throws(() => publicEvidence({ selector }));
+  }
+  const safe = { selector: "%2Frows%2F0; %2Fgroups%2F0" };
+  assert.equal(publicEvidence(safe), safe);
+});
+
+test("only the historical comparison root profileBinding bypasses the guard", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "public-evidence-binding-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const output = join(directory, "out");
+  mkdirSync(output);
+  const summaryPath = join(directory, "historical-production-comparison.json");
+  const rawPath = join(directory, "fireemu-historical-production.json");
+  const profileBinding = {
+    cwd: "/repo/conformance",
+    config: { path: "/repo/config.json" },
+    indexes: { path: "/repo/indexes.json" },
+    argv: ["/repo/fireemu", "--config", "/repo/config.json"],
+  };
+  const comparison = { profileBinding, rows: [] };
+  assert.throws(() => publicEvidence(comparison));
+  const bytes = Buffer.from(JSON.stringify(comparison));
+  writeFileSync(summaryPath, bytes);
+  writeFileSync(rawPath, '{"rows":[]}');
+  const collected = await collectHistoricalReplay(directory, output);
+  assert.deepEqual(collected.result, comparison);
+  assert.deepEqual(readFileSync(join(output, "R11-historical-production-comparison.json")), bytes);
+
+  for (const extra of [
+    { nested: { profileBinding } },
+    { rows: [{ profileBinding }] },
+    { path: "/repo/private.json" },
+  ]) {
+    writeFileSync(summaryPath, JSON.stringify({ ...comparison, ...extra }));
+    await assert.rejects(collectHistoricalReplay(directory, output));
+  }
+  for (const comparison of ["/repo/private.json", [{ profileBinding }]]) {
+    writeFileSync(summaryPath, JSON.stringify(comparison));
+    await assert.rejects(collectHistoricalReplay(directory, output));
+  }
+  writeFileSync(summaryPath, bytes);
+  writeFileSync(rawPath, JSON.stringify({ profileBinding }));
+  await assert.rejects(collectHistoricalReplay(directory, output));
+});
+
 test("the API exception preserves finite EVENTARC channel query shapes and refuses unsafe queries", () => {
   const safe = {
     pageSize: { path: "/v1/projects/demo/locations/global/channels?pageSize=1" },

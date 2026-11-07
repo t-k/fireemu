@@ -4262,6 +4262,7 @@ fn strict_refreshed_tenant(
     body: &Value,
 ) -> Result<Option<Value>, JsonResponse> {
     if let Some((token_project, tenant)) = str_field(body, "refresh_token")
+        .or_else(|| str_field(body, "refreshToken"))
         .and_then(fireemu_core_auth::store::AuthRegistry::refresh_token_tenant)
     {
         if token_project == project && registry.tenant_store(project, &tenant).is_none() {
@@ -13370,13 +13371,18 @@ fn refresh(
     at: LogicalInstant,
     stateless_refresh_tokens: bool,
 ) -> JsonResponse {
-    // An empty field is an absent one, as proto3 reads it (sandbox recording 2026-09-24).
-    match str_field(body, "grant_type") {
+    // An empty field is an absent one, as proto3 reads it (sandbox recording 2026-09-24). The
+    // Android SDK posts camelCase JSON members (`grantType`, `refreshToken`) and the official
+    // emulator camel-cases every body key, so both spellings are read; snake_case wins.
+    match str_field(body, "grant_type").or_else(|| str_field(body, "grantType")) {
         None | Some("") => return error(400, "MISSING_GRANT_TYPE"),
         Some("refresh_token") => {}
         Some(_) => return error(400, "INVALID_GRANT_TYPE"),
     }
-    let Some(token) = str_field(body, "refresh_token").filter(|token| !token.is_empty()) else {
+    let Some(token) = str_field(body, "refresh_token")
+        .or_else(|| str_field(body, "refreshToken"))
+        .filter(|token| !token.is_empty())
+    else {
         return error(400, "MISSING_REFRESH_TOKEN");
     };
     let session = match if stateless_refresh_tokens {

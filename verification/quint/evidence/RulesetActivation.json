@@ -88,7 +88,7 @@
   ],
   "digests": {
     ".github/workflows/quint.yml": "2e641886ee0d832f95e570f33eead54964a6151bf14c2fc54d5fe10cb8d4cc53",
-    "crates/fireemu-adapter-grpc/tests/rules.rs": "1fc6433c18785898b7540151808ddff6b3c8be5768efb70543b1829c8278bde1",
+    "crates/fireemu-adapter-grpc/tests/rules.rs": "b0eee35f4db2c60dce856f5c1b0d9a231aa965e8ac74b62bf5c0c2cd6b434947",
     "crates/fireemu-core-limits/Cargo.toml": "26c07b6923b236f8c92e0f6667d972c125468d7dbb6b0aaa515ad7d0f376c468",
     "crates/fireemu-core-limits/src/evaluate.rs": "594ac12bcc4f043f6c4602fe2a88dbb23030f251e224d0dc823be10eab8da9f0",
     "crates/fireemu-core-limits/src/generated/firebase_auth_2026_08_30.rs": "f95cd29f095c1ef81d49b59f5a3682d8aa7f88dd59708b5a6db5035df2a438c6",

@@ -181,6 +181,14 @@ test("only the historical comparison root profileBinding bypasses the guard", as
     writeFileSync(summaryPath, JSON.stringify({ ...comparison, ...extra }));
     await assert.rejects(collectHistoricalReplay(directory, output));
   }
+  for (const binding of [
+    { ...profileBinding, unexpected: { path: "/repo/private.json" } },
+    { ...profileBinding, config: { ...profileBinding.config, extra: "/repo/private.json" } },
+    { ...profileBinding, argv: [{ path: "/repo/private.json" }] },
+  ]) {
+    writeFileSync(summaryPath, JSON.stringify({ profileBinding: binding, rows: [] }));
+    await assert.rejects(collectHistoricalReplay(directory, output));
+  }
   for (const comparison of ["/repo/private.json", [{ profileBinding }]]) {
     writeFileSync(summaryPath, JSON.stringify(comparison));
     await assert.rejects(collectHistoricalReplay(directory, output));

@@ -1139,6 +1139,33 @@ function parseUniqueJson(text) {
   return value;
 }
 
+const isPlainObject = (value) =>
+  value !== null && typeof value === "object" && !Array.isArray(value);
+
+/**
+ * The historical judge requires absolute paths at these root binding fields, so only they leave
+ * the public evidence check. Everything else in the binding is still checked.
+ */
+function withoutHistoricalBindingPaths(comparison) {
+  if (!isPlainObject(comparison) || !isPlainObject(comparison.profileBinding)) return comparison;
+  const { cwd, argv, binary, config, indexes, ...binding } = comparison.profileBinding;
+  const withoutPaths = (value, ...names) =>
+    isPlainObject(value)
+      ? Object.fromEntries(Object.entries(value).filter(([name]) => !names.includes(name)))
+      : value;
+  return {
+    ...comparison,
+    profileBinding: {
+      ...binding,
+      cwd: typeof cwd === "string" ? undefined : cwd,
+      argv: Array.isArray(argv) ? argv.filter((item) => typeof item !== "string") : argv,
+      binary: withoutPaths(binary, "path"),
+      config: withoutPaths(config, "path", "sourcePath"),
+      indexes: withoutPaths(indexes, "path", "sourcePath"),
+    },
+  };
+}
+
 export async function collectHistoricalReplay(runDir, outDir) {
   const summaryPath = join(runDir, "historical-production-comparison.json");
   const rawPath = join(runDir, "fireemu-historical-production.json");
@@ -1146,12 +1173,7 @@ export async function collectHistoricalReplay(runDir, outDir) {
   const rawBytes = existsSync(rawPath) ? await readFile(rawPath) : undefined;
   if (comparisonBytes) {
     const comparison = parseUniqueJson(comparisonBytes.toString("utf8"));
-    // The historical judge requires absolute paths in this root binding only.
-    publicEvidence(
-      comparison && typeof comparison === "object" && !Array.isArray(comparison)
-        ? { ...comparison, profileBinding: undefined }
-        : comparison,
-    );
+    publicEvidence(withoutHistoricalBindingPaths(comparison));
   }
   if (rawBytes) publicEvidence(parseUniqueJson(rawBytes.toString("utf8")));
   if (comparisonBytes)

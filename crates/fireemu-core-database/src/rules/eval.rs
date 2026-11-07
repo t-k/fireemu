@@ -1025,26 +1025,21 @@ fn snapshot_call<'a>(
             if !snapshot.is_valid_location() {
                 return None;
             }
-            Some(match &located {
+            let priority = match &located {
+                Located::Node(node) => node.priority.as_deref(),
+                _ => None,
+            };
+            Some(match priority {
                 // A priority written through a `.priority` path keeps an integer's type: the
                 // official emulator holds it as a `Long`, equal to its number but no number to
                 // `<`, `+` or `-` (review r11 M40). One inside an object body is a double.
-                Located::Node(Node {
-                    priority: Some(Priority::Number(crate::number::Number::Int(n))),
-                    ..
-                }) => Value::Long(*n),
-                Located::Node(Node {
-                    priority: Some(Priority::Number(n)),
-                    ..
-                }) => Value::Num(n.as_f64()),
-                Located::Node(Node {
-                    priority: Some(Priority::String(s)),
-                    ..
-                }) => {
+                Some(Priority::Number(crate::number::Number::Int(n))) => Value::Long(*n),
+                Some(Priority::Number(n)) => Value::Num(n.as_f64()),
+                Some(Priority::String(s)) => {
                     charge(ctx.work, s.len())?;
                     Value::Str(s.clone())
                 }
-                _ => Value::Null,
+                None => Value::Null,
             })
         }
         "isNumber" | "isString" | "isBoolean" => {

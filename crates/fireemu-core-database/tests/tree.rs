@@ -554,7 +554,8 @@ fn priorities_inside_data_are_doubles_and_written_ones_keep_their_type() {
     use fireemu_core_database::{Number, Priority};
     let mut tree =
         tree_with(json!({"a": {".value": 1, ".priority": 2}, "b": {"x": 1, ".priority": 3}}));
-    let priority = |tree: &Tree, path: &str| tree.get(&p(path)).unwrap().priority.clone();
+    let priority =
+        |tree: &Tree, path: &str| tree.get(&p(path)).unwrap().priority.as_deref().cloned();
     assert!(
         matches!(priority(&tree, "/a"), Some(Priority::Number(Number::Double(d))) if d.to_bits() == 2.0f64.to_bits())
     );
@@ -614,7 +615,7 @@ fn rewriting_an_equal_value_keeps_the_stored_form() {
 #[test]
 fn the_retained_bytes_count_nodes_keys_strings_and_priorities() {
     use fireemu_core_database::Node;
-    let node = std::mem::size_of::<Node>() as u64;
+    let node = Node::leaf(fireemu_core_database::Leaf::Bool(true)).retained_bytes();
     let key = std::mem::size_of::<String>() as u64;
     assert_eq!(Tree::new(Limits::default()).retained_bytes(), 0);
     assert_eq!(tree_with(json!(true)).retained_bytes(), node);

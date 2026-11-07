@@ -1,0 +1,49 @@
+query ListItems @auth(level: PUBLIC, insecureReason: "Offline synthetic fixture; never deploy.") {
+  items(orderBy: [{ title: ASC }, { id: ASC }]) {
+    id
+    title
+    note
+    parent {
+      id
+      name
+    }
+  }
+}
+
+query GetItem($id: UUID!)
+@auth(level: PUBLIC, insecureReason: "Offline synthetic fixture; never deploy.") {
+  item(id: $id) {
+    id
+    title
+    note
+  }
+}
+
+query ProtectedItems
+@auth(level: USER, insecureReason: "Offline unauthenticated-denial fixture; never deploy.") {
+  items {
+    id
+  }
+}
+
+mutation SetParent($id: UUID!, $name: String!)
+@auth(level: PUBLIC, insecureReason: "Offline synthetic fixture; never deploy.") {
+  parent_upsert(data: { id: $id, name: $name })
+}
+
+mutation SetItem($id: UUID!, $title: String!, $note: String, $parentId: UUID)
+@auth(level: PUBLIC, insecureReason: "Offline synthetic fixture; never deploy.") {
+  item_upsert(data: { id: $id, title: $title, note: $note, parentId: $parentId })
+}
+
+mutation DeleteItem($id: UUID!)
+@auth(level: PUBLIC, insecureReason: "Offline synthetic fixture; never deploy.") {
+  item_delete(id: $id)
+}
+
+mutation Rollback($id: UUID!)
+@auth(level: PUBLIC, insecureReason: "Offline synthetic fixture; never deploy.")
+@transaction {
+  first: item_insert(data: { id: $id, title: "must-roll-back" })
+  duplicate: item_insert(data: { id: $id, title: "duplicate-key" })
+}

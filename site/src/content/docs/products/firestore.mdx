@@ -249,11 +249,13 @@ The local `fireemu-lexical-v1` engine uses deterministic Unicode normalization a
 
 ## Query limits
 
-Under the `strict` profile, the Standard edition query limits are enforced as production enforces them. Setting `firestore.enforceLimits` to `false` lets queries pass that production refuses, so leave it on unless you have a specific reason. Under `strict` the key switches only these query limits (at most 30 disjunctions, 10 `not-in` values, and so on): the limits on writes, transactions and indexes, and the wire shapes of the REST and WebChannel surfaces, stay production's. Under the `emulator` profile, `true` also asks for those production limits.
+Under the `strict` profile, the Standard edition query limits are enforced as production enforces them. Setting `firestore.enforceLimits` to `false` lets queries pass that production refuses, so leave it on unless you have a specific reason. Under `strict` the key switches only these query limits (at most 30 disjunctions, 10 `not-in` values, and so on): the limits on writes, transactions and indexes, and REST and WebChannel behavior, are unaffected by this switch. Under the `emulator` profile, `true` also asks for those production limits.
 
 ## Listen streams
 
 Production ends an end user's native gRPC `Listen` stream with `INTERNAL` an hour after it opened. By default Fireemu keeps the stream open however long it is held (`firestore.listenStreamLifetime: "unlimited"`). To test a client's reconnect, either set it to `"oneHour"` (the default with `productionExact`), or call `POST /v1/firestore/listen:expire` on the control API to end every held end-user stream at once with production's status.
+
+A WebChannel Listen or Write opening refused for credentials or [App Check](../app-check/) completes HTTP transport negotiation with 200 and then delivers a terminal `UNAUTHENTICATED` or `PERMISSION_DENIED` protocol error that the Web SDK can read. An invalid or different-app App Check replacement receives only its terminal error, without replaying retained documents. Refused openings do not consume admitted-session capacity. This transport behavior follows the SDK protocol; it is not a recorded production-parity claim.
 
 ## Transactions and history
 

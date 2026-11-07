@@ -36,7 +36,7 @@ impl ChangeSink for Watching {
     fn capture_references_within(
         &self,
         _namespace: &str,
-        _before: &Tree,
+        _before: fireemu_adapter_database::changes::ScopeView<'_>,
         _after: &Tree,
         scope: &Path,
     ) -> Result<Option<Vec<Path>>, EventAdmissionError> {

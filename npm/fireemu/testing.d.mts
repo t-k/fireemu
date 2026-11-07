@@ -20,6 +20,8 @@ export interface TestWorldOptions {
   readonly ui?: boolean;
   readonly seed?: number;
   readonly startupTimeoutMs?: number;
+  /** Time budget for the initial input snapshot and each generation copy. */
+  readonly snapshotTimeoutMs?: number;
   readonly shutdownTimeoutMs?: number;
   readonly requestTimeoutMs?: number;
   readonly signal?: AbortSignal;

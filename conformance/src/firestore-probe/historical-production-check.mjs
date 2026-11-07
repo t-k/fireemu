@@ -1,10 +1,12 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
+import { existsSync, realpathSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { relative } from "node:path";
+import { relative, resolve } from "node:path";
 import { promisify } from "node:util";
 
 import { REPO_ROOT } from "../config.mjs";
+import { publicEvidence } from "../evidence.mjs";
 import { compareProductionToFireemu } from "./run.mjs";
 
 /** Compare only recipes known to be identical to the saved production recording. */
@@ -84,8 +86,22 @@ export function historicalArtifactIdentity({ root = REPO_ROOT, binary, before, a
     if (!/^[0-9a-f]{64}$/.test(digest)) throw new Error("artifact digest must be a SHA-256");
   }
   if (before !== after) throw new Error("fireemu changed during the historical check");
+  const artifactExists = existsSync(binary);
+  const realRoot = artifactExists && existsSync(root) ? realpathSync(root) : resolve(root);
+  const realBinary = artifactExists ? realpathSync(binary) : resolve(binary);
+  const artifactPath = relative(realRoot, realBinary).replaceAll("\\", "/");
+  if (artifactPath === ".." || artifactPath.startsWith("../")) {
+    return {
+      path: null,
+      outsideRepository: true,
+      sha256Before: before,
+      sha256After: after,
+      version: version.trim(),
+    };
+  }
+  publicEvidence({ path: artifactPath });
   return {
-    path: relative(root, binary),
+    path: artifactPath,
     sha256Before: before,
     sha256After: after,
     version: version.trim(),

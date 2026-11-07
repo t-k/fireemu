@@ -1527,7 +1527,7 @@ fn decide(
         let trace_enabled = sink.traces();
         let sink = sink.diagnostics;
         let trace = trace_enabled.then(|| {
-            let expressions: Vec<CoverageEntry> = coverage.entries().into_iter().cloned().collect();
+            let expressions = coverage.trace_entries();
             let path = path.relative();
             let reason = denial.clone().unwrap_or_default();
             (expressions, path, uid, reason)

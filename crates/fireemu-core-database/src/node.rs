@@ -54,7 +54,14 @@ pub struct Node {
     /// The value.
     pub content: Content,
     /// The priority, if one is set.
-    pub priority: Option<Priority>,
+    pub priority: Option<Box<Priority>>,
+}
+
+// Keep snapshot admission's logical charge independent of the compact storage layout.
+// These are the fields of the original inline-priority node, with the same Rust layout.
+struct InlineNodeAccounting {
+    _content: Content,
+    _priority: Option<Priority>,
 }
 
 /// Where a node being built sits: keys above it and the byte length of its path.
@@ -273,14 +280,14 @@ impl Node {
         }
         Ok(Some(Self {
             content: Content::Children(children),
-            priority,
+            priority: priority.map(Box::new),
         }))
     }
 
     /// This node with `priority` instead of its own.
     #[must_use]
     pub fn with_priority(mut self, priority: Option<Priority>) -> Self {
-        self.priority = priority;
+        self.priority = priority.map(Box::new);
         self
     }
 
@@ -361,13 +368,14 @@ impl Node {
         Some(node)
     }
 
-    /// A cheap, saturating estimate of the heap bytes this node retains: the node itself, each
-    /// child's key (with its `String`) and node, and the bytes of string values and string
-    /// priorities. Numbers and booleans live inside the node.
+    /// The saturating logical byte charge used by snapshot admission: each node is charged
+    /// at the original inline-priority layout, plus child keys (including their `String`)
+    /// and string value/priority bytes. This preserves admission limits across storage
+    /// optimizations; it is not a measurement of the current allocator footprint.
     pub fn retained_bytes(&self) -> u64 {
-        let mut bytes = size_of::<Self>() as u64;
-        if let Some(Priority::String(priority)) = &self.priority {
-            bytes = bytes.saturating_add(priority.len() as u64);
+        let mut bytes = size_of::<InlineNodeAccounting>() as u64;
+        if let Some(Priority::String(text)) = self.priority.as_deref() {
+            bytes = bytes.saturating_add(text.len() as u64);
         }
         match &self.content {
             Content::Leaf(Leaf::String(text)) => bytes = bytes.saturating_add(text.len() as u64),

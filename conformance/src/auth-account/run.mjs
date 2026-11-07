@@ -13,6 +13,7 @@
 // replace their previous entries and the others are kept. `check` uses FIREEMU_BIN (or the
 // workspace build) and writes .runs/auth-account/comparison.json.
 
+import { publicEvidence } from "../evidence.mjs";
 import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
@@ -489,7 +490,7 @@ async function exportComparison(out) {
         : { row, status },
     ),
   };
-  await writeFile(out, `${JSON.stringify(evidence, null, 2)}\n`);
+  await writeFile(out, `${JSON.stringify(publicEvidence(evidence), null, 2)}\n`);
   console.log(JSON.stringify({ out, summary: evidence.summary, fixtureSha256 }, null, 2));
 }
 

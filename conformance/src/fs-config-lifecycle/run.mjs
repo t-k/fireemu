@@ -15,6 +15,7 @@
 // whose id starts with one of its comma-separated prefixes; recorded programs replace their
 // previous entries and the others are kept. `check` uses FIREEMU_BIN (or the workspace build).
 
+import { publicEvidence } from "../evidence.mjs";
 import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
@@ -636,7 +637,7 @@ async function exportComparison(out) {
         : { row, status, ...(matched ? { matched } : {}) },
     ),
   };
-  await writeFile(out, `${JSON.stringify(evidence, null, 2)}\n`);
+  await writeFile(out, `${JSON.stringify(publicEvidence(evidence), null, 2)}\n`);
   console.log(
     JSON.stringify(
       { out, summary: evidence.summary, fixtureSha256: evidence.fixtureSha256 },

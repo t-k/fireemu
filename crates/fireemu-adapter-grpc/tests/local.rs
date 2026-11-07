@@ -6367,6 +6367,574 @@ fn pipeline_offset(value: i64) -> pb::pipeline::Stage {
     pipeline_stage("offset", i(value))
 }
 
+fn filtered_correlated_scalar_request() -> pb::ExecutePipelineRequest {
+    use pb::value::ValueType as V;
+    let nested = pb::Pipeline {
+        stages: vec![
+            pipeline_stage_args(
+                "collection_group",
+                vec![
+                    pb::Value {
+                        value_type: Some(V::ReferenceValue(String::new())),
+                    },
+                    s("kids"),
+                ],
+            ),
+            pipeline_stage(
+                "where",
+                pipeline_function(
+                    "equal",
+                    vec![
+                        pipeline_field("parentKey"),
+                        pb::Value {
+                            value_type: Some(V::VariableReferenceValue("parent_key".to_owned())),
+                        },
+                    ],
+                ),
+            ),
+            pipeline_stage(
+                "where",
+                pipeline_function("equal", vec![pipeline_field("value"), s("child-a")]),
+            ),
+            pipeline_stage(
+                "select",
+                pb::Value {
+                    value_type: Some(V::MapValue(pb::MapValue {
+                        fields: [("value".to_owned(), pipeline_field("value"))]
+                            .into_iter()
+                            .collect(),
+                    })),
+                },
+            ),
+        ],
+    };
+    let scalar = pipeline_function(
+        "scalar",
+        vec![pb::Value {
+            value_type: Some(V::PipelineValue(nested)),
+        }],
+    );
+    pipeline_request(vec![
+        pipeline_stage("collection", collection_ref("parents")),
+        pipeline_stage(
+            "let",
+            pb::Value {
+                value_type: Some(V::MapValue(pb::MapValue {
+                    fields: [("parent_key".to_owned(), pipeline_field("f"))]
+                        .into_iter()
+                        .collect(),
+                })),
+            },
+        ),
+        pipeline_stage(
+            "select",
+            pb::Value {
+                value_type: Some(V::MapValue(pb::MapValue {
+                    fields: [
+                        ("f".to_owned(), pipeline_field("f")),
+                        ("child".to_owned(), scalar),
+                    ]
+                    .into_iter()
+                    .collect(),
+                })),
+            },
+        ),
+    ])
+}
+
+fn filtered_scalar_nested_mut(request: &mut pb::ExecutePipelineRequest) -> &mut pb::Pipeline {
+    use pb::value::ValueType as V;
+    let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(structured)) =
+        request.pipeline_type.as_mut()
+    else {
+        panic!("expected structured pipeline");
+    };
+    let Some(V::MapValue(select)) = structured.pipeline.as_mut().unwrap().stages[2].args[0]
+        .value_type
+        .as_mut()
+    else {
+        panic!("expected outer select");
+    };
+    let Some(V::FunctionValue(scalar)) =
+        select.fields.get_mut("child").unwrap().value_type.as_mut()
+    else {
+        panic!("expected scalar expression");
+    };
+    let Some(V::PipelineValue(nested)) = scalar.args[0].value_type.as_mut() else {
+        panic!("expected nested pipeline");
+    };
+    nested
+}
+
+#[allow(clippy::too_many_lines)]
+async fn execute_filtered_correlated_case(
+    strict: bool,
+    parent_count: usize,
+    matching_children: usize,
+    filter_type: &str,
+    matched_last: bool,
+) -> Result<Vec<pb::Document>, tonic::Status> {
+    use pb::value::ValueType as V;
+    let policy = if strict {
+        IndexValidationPolicy::Production
+    } else {
+        IndexValidationPolicy::Emulator
+    };
+    let (mut client, _, handle) =
+        start_with_edition_and_policy(FirestoreEdition::Enterprise, policy).await;
+    let mut writes = Vec::new();
+    for index in 0..parent_count {
+        let parent_key = if parent_count > 1 && matching_children == 2 {
+            if index == 0 {
+                "B"
+            } else {
+                "A"
+            }
+        } else if index == 0 {
+            "A"
+        } else {
+            "B"
+        };
+        writes.push(update_write(
+            &format!("parents/p{index}"),
+            &[("f", s(parent_key))],
+        ));
+        let parent_matches = match (parent_count, matching_children, index) {
+            (2, 2, 0) => 2,
+            (2, 2, 1) => 1,
+            (_, n, 1) => n.saturating_sub(1),
+            _ => matching_children,
+        };
+        let count = if filter_type == "string" {
+            parent_matches + 1
+        } else {
+            1
+        };
+        for child in 0..count {
+            let mut fields = vec![("parentKey", s(parent_key))];
+            match filter_type {
+                "string" => {
+                    let matching = if matched_last && parent_matches == 1 {
+                        child != 0
+                    } else {
+                        child < parent_matches
+                    };
+                    fields.push(("value", s(if matching { "child-a" } else { "child-b" })));
+                }
+                "missing" => {}
+                "null" => fields.push((
+                    "value",
+                    pb::Value {
+                        value_type: Some(V::NullValue(0)),
+                    },
+                )),
+                "non_string" => fields.push(("value", i(7))),
+                _ => panic!("unexpected PICT filter type"),
+            }
+            writes.push(update_write(
+                &format!("parents/p{index}/kids/c{child}"),
+                &fields,
+            ));
+        }
+    }
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let result = match client
+        .execute_pipeline(filtered_correlated_scalar_request())
+        .await
+    {
+        Err(error) => Err(error),
+        Ok(response) => {
+            let mut stream = response.into_inner();
+            let mut documents = Vec::new();
+            let mut result = Ok(());
+            while let Some(response) = stream.next().await {
+                match response {
+                    Ok(response) => documents.extend(response.results),
+                    Err(error) => {
+                        assert!(
+                            documents.is_empty(),
+                            "a failed scalar result must not expose partial documents"
+                        );
+                        result = Err(error);
+                        break;
+                    }
+                }
+            }
+            result.map(|()| documents)
+        }
+    };
+    handle.abort();
+    assert!(handle.await.unwrap_err().is_cancelled());
+    result
+}
+
+#[tokio::test]
+async fn execute_pipeline_filtered_correlated_scalar_matches_recorded_shape_over_grpc() {
+    use pb::value::ValueType as V;
+    for policy in [
+        IndexValidationPolicy::Production,
+        IndexValidationPolicy::Emulator,
+    ] {
+        let (mut client, _, handle) =
+            start_with_edition_and_policy(FirestoreEdition::Enterprise, policy).await;
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![
+                    update_write("parents/p1", &[("f", s("A"))]),
+                    update_write(
+                        "parents/p1/kids/one",
+                        &[("parentKey", s("A")), ("value", s("child-a"))],
+                    ),
+                    update_write(
+                        "parents/p1/kids/two",
+                        &[("parentKey", s("A")), ("value", s("child-b"))],
+                    ),
+                ],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let stream = client
+            .execute_pipeline(filtered_correlated_scalar_request())
+            .await
+            .unwrap()
+            .into_inner();
+        let documents = drain_pipeline(stream, 1).await;
+        assert_eq!(documents.len(), 1, "{policy:?}");
+        assert_eq!(
+            documents[0].fields["f"].value_type,
+            Some(V::StringValue("A".to_owned()))
+        );
+        assert_eq!(
+            documents[0].fields["child"].value_type,
+            Some(V::StringValue("child-a".to_owned())),
+            "{policy:?}"
+        );
+        handle.abort();
+        assert!(handle.await.unwrap_err().is_cancelled());
+    }
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config::with_cases(12))]
+    #[test]
+    fn filtered_correlated_scalar_property_counts_independent_parents_and_order(
+        matching_children in 0usize..3,
+        parent_count in 1usize..3,
+        matched_last in proptest::prelude::any::<bool>()
+    ) {
+            use pb::value::ValueType as V;
+            let runtime = tokio::runtime::Runtime::new().unwrap();
+            let result = runtime.block_on(execute_filtered_correlated_case(
+                true,
+                parent_count,
+                matching_children,
+                "string",
+                matched_last,
+            ));
+            if matching_children > 1 {
+                let error = result.expect_err("two matching children must preserve scalar-many refusal");
+                proptest::prop_assert_eq!(error.code(), tonic::Code::InvalidArgument);
+                proptest::prop_assert_eq!(error.message(), "Subpipeline returned multiple results.");
+            } else {
+                let documents = result.unwrap();
+                proptest::prop_assert_eq!(documents.len(), parent_count);
+                let mut actual = std::collections::BTreeMap::new();
+                for document in documents {
+                    let Some(V::StringValue(parent_key)) = document.fields["f"].value_type.as_ref() else {
+                        proptest::prop_assert!(false, "parent binding must remain a string");
+                        continue;
+                    };
+                    let child = document.fields["child"]
+                        .value_type
+                        .clone()
+                        .expect("selected scalar child has a value type");
+                    proptest::prop_assert!(actual.insert(parent_key.clone(), child).is_none());
+                }
+                let expected = if parent_count == 1 {
+                    std::collections::BTreeMap::from([(
+                        "A".to_owned(),
+                        if matching_children == 0 { V::NullValue(0) } else { V::StringValue("child-a".to_owned()) },
+                    )])
+                } else {
+                    std::collections::BTreeMap::from([
+                        (
+                            "A".to_owned(),
+                            if matching_children == 0 { V::NullValue(0) } else { V::StringValue("child-a".to_owned()) },
+                        ),
+                        ("B".to_owned(), V::NullValue(0)),
+                    ])
+                };
+                proptest::prop_assert_eq!(actual, expected);
+            }
+    }
+}
+
+#[tokio::test]
+async fn filtered_correlated_scalar_generated_pict_rows_cover_profiles_types_and_parent_counts() {
+    use pb::value::ValueType as V;
+    let rows = r"Profile	MatchCount	FilterValueType	ParentCount	FilterOrder
+strict	one	string	one	matched_first
+emulator	one	null	several	matched_first
+strict	one	missing	several	matched_first
+emulator	zero	string	one	matched_last
+strict	one	null	one	matched_first
+emulator	one	missing	one	matched_first
+emulator	two	string	several	matched_first
+strict	zero	string	several	matched_first
+emulator	one	non_string	one	matched_first
+strict	two	string	one	matched_last
+strict	one	string	several	matched_last
+strict	one	non_string	several	matched_first
+";
+    for line in rows.lines().skip(1) {
+        let columns = line.split('\t').collect::<Vec<_>>();
+        let [profile, match_count, filter_type, parent_count, filter_order] = columns.as_slice()
+        else {
+            panic!("bad generated PICT row: {line}");
+        };
+        let matching_children = match *match_count {
+            "zero" => 0,
+            "one" => 1,
+            "two" => 2,
+            _ => panic!("bad PICT match count: {line}"),
+        };
+        let parent_count = match *parent_count {
+            "one" => 1,
+            "several" => 2,
+            _ => panic!("bad PICT parent count: {line}"),
+        };
+        let result = execute_filtered_correlated_case(
+            *profile == "strict",
+            parent_count,
+            matching_children,
+            filter_type,
+            *filter_order == "matched_last",
+        )
+        .await;
+        if *filter_type != "string" {
+            assert_eq!(
+                result.unwrap_err().code(),
+                tonic::Code::Unimplemented,
+                "{line}"
+            );
+        } else if matching_children > 1 {
+            let error = result.unwrap_err();
+            assert_eq!(error.code(), tonic::Code::InvalidArgument, "{line}");
+            assert_eq!(
+                error.message(),
+                "Subpipeline returned multiple results.",
+                "{line}"
+            );
+        } else {
+            let documents = result.unwrap();
+            assert_eq!(documents.len(), parent_count, "{line}");
+            let mut actual = std::collections::BTreeMap::new();
+            for document in documents {
+                let Some(V::StringValue(parent_key)) = document.fields["f"].value_type.as_ref()
+                else {
+                    panic!("parent binding must remain a string: {line}");
+                };
+                let child = document.fields["child"]
+                    .value_type
+                    .clone()
+                    .expect("selected scalar child has a value type");
+                assert!(actual.insert(parent_key.clone(), child).is_none(), "{line}");
+            }
+            let expected = if parent_count == 1 {
+                std::collections::BTreeMap::from([(
+                    "A".to_owned(),
+                    if matching_children == 0 {
+                        V::NullValue(0)
+                    } else {
+                        V::StringValue("child-a".to_owned())
+                    },
+                )])
+            } else {
+                std::collections::BTreeMap::from([
+                    (
+                        "A".to_owned(),
+                        if matching_children == 0 {
+                            V::NullValue(0)
+                        } else {
+                            V::StringValue("child-a".to_owned())
+                        },
+                    ),
+                    ("B".to_owned(), V::NullValue(0)),
+                ])
+            };
+            assert_eq!(actual, expected, "{line}");
+        }
+    }
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn filtered_correlated_scalar_grpc_near_misses_remain_rejected() {
+    use pb::value::ValueType as V;
+    for policy in [
+        IndexValidationPolicy::Production,
+        IndexValidationPolicy::Emulator,
+    ] {
+        let (mut client, _, handle) =
+            start_with_edition_and_policy(FirestoreEdition::Enterprise, policy).await;
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![update_write("parents/p1", &[("f", s("A"))])],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        for near_miss in [
+            "unknown-function",
+            "reversed",
+            "reversed-stages",
+            "extra-filter",
+            "malformed-arity",
+            "malformed-field-path",
+            "non-string-literal",
+            "function-options",
+            "stage-options",
+            "unknown-variable",
+            "invalid-reference",
+            "read-selector",
+            "read-time-selector",
+        ] {
+            let mut request = filtered_correlated_scalar_request();
+            match near_miss {
+                "unknown-function" => {
+                    let nested = filtered_scalar_nested_mut(&mut request);
+                    let Some(V::FunctionValue(filter)) =
+                        nested.stages[2].args[0].value_type.as_mut()
+                    else {
+                        panic!("expected child filter");
+                    };
+                    filter.name = "unregistered_filter".to_owned();
+                }
+                "reversed" => {
+                    let nested = filtered_scalar_nested_mut(&mut request);
+                    let Some(V::FunctionValue(filter)) =
+                        nested.stages[2].args[0].value_type.as_mut()
+                    else {
+                        panic!("expected child filter");
+                    };
+                    filter.args.swap(0, 1);
+                }
+                "reversed-stages" => {
+                    filtered_scalar_nested_mut(&mut request).stages.swap(1, 2);
+                }
+                "extra-filter" => {
+                    let nested = filtered_scalar_nested_mut(&mut request);
+                    let duplicate = nested.stages[2].clone();
+                    nested.stages.insert(3, duplicate);
+                }
+                "malformed-arity" => {
+                    let nested = filtered_scalar_nested_mut(&mut request);
+                    let Some(V::FunctionValue(filter)) =
+                        nested.stages[2].args[0].value_type.as_mut()
+                    else {
+                        panic!("expected child filter");
+                    };
+                    filter.args.pop();
+                }
+                "malformed-field-path" => {
+                    let nested = filtered_scalar_nested_mut(&mut request);
+                    let Some(V::FunctionValue(filter)) =
+                        nested.stages[2].args[0].value_type.as_mut()
+                    else {
+                        panic!("expected child filter");
+                    };
+                    filter.args[0].value_type =
+                        Some(V::FieldReferenceValue("bad..field".to_owned()));
+                }
+                "non-string-literal" => {
+                    let nested = filtered_scalar_nested_mut(&mut request);
+                    let Some(V::FunctionValue(filter)) =
+                        nested.stages[2].args[0].value_type.as_mut()
+                    else {
+                        panic!("expected child filter");
+                    };
+                    filter.args[1] = i(1);
+                }
+                "function-options" => {
+                    let nested = filtered_scalar_nested_mut(&mut request);
+                    let Some(V::FunctionValue(filter)) =
+                        nested.stages[2].args[0].value_type.as_mut()
+                    else {
+                        panic!("expected child filter");
+                    };
+                    filter.options.insert("x".to_owned(), i(1));
+                }
+                "stage-options" => {
+                    filtered_scalar_nested_mut(&mut request).stages[2]
+                        .options
+                        .insert("x".to_owned(), i(1));
+                }
+                "unknown-variable" => {
+                    let nested = filtered_scalar_nested_mut(&mut request);
+                    let Some(V::FunctionValue(binding_filter)) =
+                        nested.stages[1].args[0].value_type.as_mut()
+                    else {
+                        panic!("expected binding filter");
+                    };
+                    binding_filter.args[1].value_type =
+                        Some(V::VariableReferenceValue("other".to_owned()));
+                }
+                "invalid-reference" => {
+                    filtered_scalar_nested_mut(&mut request).stages[0].args[0].value_type =
+                        Some(V::ReferenceValue(
+                            "projects/foreign/databases/(default)/documents/roots/r".to_owned(),
+                        ));
+                }
+                "read-selector" => {
+                    request.consistency_selector = Some(
+                        pb::execute_pipeline_request::ConsistencySelector::Transaction(vec![1]),
+                    );
+                }
+                "read-time-selector" => {
+                    request.consistency_selector =
+                        Some(pb::execute_pipeline_request::ConsistencySelector::ReadTime(
+                            prost_types::Timestamp {
+                                seconds: 1_788_004_860,
+                                nanos: 0,
+                            },
+                        ));
+                }
+                _ => unreachable!(),
+            }
+            let error = match client.execute_pipeline(request).await {
+                Err(error) => error,
+                Ok(response) => {
+                    let mut stream = response.into_inner();
+                    match stream.next().await {
+                        Some(Err(error)) => error,
+                        Some(Ok(response)) => {
+                            panic!("{near_miss}: unexpected response {response:?}");
+                        }
+                        None => panic!("{near_miss}: request succeeded without output"),
+                    }
+                }
+            };
+            assert_eq!(
+                error.code(),
+                tonic::Code::Unimplemented,
+                "{near_miss}/{policy:?}: {error}"
+            );
+        }
+        handle.abort();
+        assert!(handle.await.unwrap_err().is_cancelled());
+    }
+}
+
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn execute_pipeline_where_equal_executes_scalar_matrix_and_rejects_missing_fields() {
@@ -13566,11 +14134,8 @@ async fn execute_pipeline_new_stages_refuse_and_take_what_the_profiles_say() {
                 "The function 'exists(value: any?): boolean' takes [1..1] argument(s), but 0 were provided.",
             ),
         ] {
-            let err = pipeline_error(
-                &mut client,
-                vec![collection(), stage("where", vec![call])],
-            )
-            .await;
+            let err =
+                pipeline_error(&mut client, vec![collection(), stage("where", vec![call])]).await;
             if strict {
                 assert_eq!(err.code(), tonic::Code::Unimplemented, "{name}: {err}");
             } else {

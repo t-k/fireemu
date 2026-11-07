@@ -4748,6 +4748,87 @@ fn request_traces_can_be_kept_from_the_first_request_and_across_a_reload() {
     }
 }
 
+#[test]
+fn request_traces_keep_the_omitted_function_values_without_changing_decisions() {
+    use fireemu_core_firestore::store::{FirestoreState, Write, WriteOp};
+    use fireemu_core_rules::coverage::COVERAGE_VALUES_PER_EXPRESSION;
+
+    for expected_allow in [true, false] {
+        let calls = (0..=COVERAGE_VALUES_PER_EXPRESSION)
+            .map(|index| format!("identity(request.resource.data.v{index}) == 'never'"))
+            .collect::<Vec<_>>()
+            .join(" || ");
+        let source = format!(
+            "rules_version = '2'; service cloud.firestore {{ function identity(value) {{ return value; }} match /databases/{{database}}/documents {{ match /items/{{id}} {{ allow create: if {calls} || {expected_allow}; }} }} }}"
+        );
+        let mut outcomes = Vec::new();
+        let mut traced_values = None;
+
+        for record_traces in [false, true] {
+            let clock = Arc::new(Mutex::new(VirtualClock::new(START)));
+            let auth = Arc::new(Mutex::new(AuthStore::new(
+                "demo-app",
+                SplitMix64::new(3),
+                TotpPolicy::default(),
+            )));
+            let slot = Arc::new(RulesetSlot::new(LoadedRules::from_source(&source).unwrap()));
+            let enforcer =
+                RulesEnforcer::new(slot.clone(), auth, clock).with_request_traces(record_traces);
+            let project = ProjectId::try_new("demo-app").unwrap();
+            let database = DatabaseId::default_database();
+            let parent = Parent {
+                project: project.clone(),
+                database,
+                document: None,
+            };
+            let path =
+                DocumentPath::parse(&project, &DatabaseId::default_database(), "items/a").unwrap();
+            let fields = (0..=COVERAGE_VALUES_PER_EXPRESSION)
+                .map(|index| (format!("v{index}"), Value::String(format!("value-{index}"))))
+                .collect();
+            let write = Write {
+                op: WriteOp::Set {
+                    path,
+                    fields,
+                    update_mask: None,
+                },
+                precondition: None,
+                transforms: Vec::new(),
+            };
+            let result = enforcer.authorize_writes_in(
+                &Principal::Anonymous,
+                &parent,
+                &FirestoreState::default(),
+                &[write],
+                START,
+            );
+            let allowed = result.is_ok();
+            assert_eq!(allowed, expected_allow, "tracing enabled: {record_traces}");
+            outcomes.push(allowed);
+
+            let active = slot.snapshot().unwrap();
+            let diagnostics = active.diagnostics.lock().unwrap();
+            if record_traces {
+                let trace = diagnostics.requests().into_iter().next().unwrap();
+                let body_offset = source.find("return value").unwrap() + "return ".len();
+                let body = trace
+                    .expressions
+                    .iter()
+                    .find(|entry| entry.span.offset == body_offset)
+                    .expect("the shared function body is traced");
+                assert_eq!(body.values.len(), COVERAGE_VALUES_PER_EXPRESSION);
+                assert_eq!(body.omitted, 1);
+                traced_values = Some(body.values.clone());
+            } else {
+                assert!(diagnostics.requests().is_empty());
+            }
+        }
+
+        assert_eq!(outcomes, [expected_allow, expected_allow]);
+        assert_eq!(traced_values.unwrap().len(), COVERAGE_VALUES_PER_EXPRESSION);
+    }
+}
+
 /// A refusal decided outside the evaluator (an end user's read-write transaction) reaches the
 /// denial log too, with the user.
 #[test]

@@ -551,6 +551,17 @@ const fn jwks(path: &'static str) -> Route {
     }
 }
 
+/// The three Apple SDK account aliases that inherit the modern named-tenant checks.
+/// The pre-existing custom-token alias retains its separate compatibility policy.
+pub(super) fn apple_legacy_account_path(path: &str) -> bool {
+    matches!(
+        path,
+        "/www.googleapis.com/identitytoolkit/v3/relyingparty/signupNewUser"
+            | "/www.googleapis.com/identitytoolkit/v3/relyingparty/verifyPassword"
+            | "/www.googleapis.com/identitytoolkit/v3/relyingparty/getAccountInfo"
+    )
+}
+
 /// The table. Order matters only for readability: patterns are disjoint.
 pub(crate) const ROUTES: &[Route] = &[
     jwks("/.well-known/jwks.json"),
@@ -573,6 +584,24 @@ pub(crate) const ROUTES: &[Route] = &[
         concat_v1!("accounts:signInWithCustomToken"),
         "accounts:signInWithCustomToken",
         Handler::SignInWithCustomToken,
+    ),
+    end_user(
+        "POST",
+        "/www.googleapis.com/identitytoolkit/v3/relyingparty/signupNewUser",
+        "accounts:signUp",
+        Handler::SignUp,
+    ),
+    end_user(
+        "POST",
+        "/www.googleapis.com/identitytoolkit/v3/relyingparty/verifyPassword",
+        "accounts:signInWithPassword",
+        Handler::SignInWithPassword,
+    ),
+    end_user(
+        "POST",
+        "/www.googleapis.com/identitytoolkit/v3/relyingparty/getAccountInfo",
+        "accounts:lookup",
+        Handler::Lookup,
     ),
     end_user(
         "POST",
@@ -1351,6 +1380,91 @@ mod tests {
         }
     }
 
+    proptest::proptest! {
+        #[test]
+        fn apple_legacy_classifier_rejects_arbitrary_prefixes_and_suffixes(extra in "[a-zA-Z/]{1,24}") {
+            for name in ["signupNewUser", "verifyPassword", "getAccountInfo"] {
+                let path = format!("/www.googleapis.com/identitytoolkit/v3/relyingparty/{name}");
+                proptest::prop_assert!(super::apple_legacy_account_path(&path));
+                let prefixed = format!("{extra}{path}");
+                let suffixed = format!("{path}{extra}");
+                proptest::prop_assert!(!super::apple_legacy_account_path(&prefixed));
+                proptest::prop_assert!(!super::apple_legacy_account_path(&suffixed));
+            }
+        }
+    }
+
+    #[test]
+    fn apple_legacy_tenant_classifier_excludes_other_legacy_operations() {
+        for path in [
+            "/www.googleapis.com/identitytoolkit/v3/relyingparty/verifyCustomToken",
+            "/www.googleapis.com/identitytoolkit/v3/relyingparty/signupNewUser/",
+            "/www.googleapis.com/identitytoolkit/v3/relyingparty/SignupNewUser",
+            "/extra/www.googleapis.com/identitytoolkit/v3/relyingparty/getAccountInfo",
+        ] {
+            assert!(!super::apple_legacy_account_path(path));
+        }
+    }
+
+    #[test]
+    fn apple_legacy_routes_preserve_canonical_dispatch_and_refuse_near_misses() {
+        for (legacy, canonical) in [
+            ("signupNewUser", "accounts:signUp"),
+            ("verifyPassword", "accounts:signInWithPassword"),
+            ("getAccountInfo", "accounts:lookup"),
+        ] {
+            let path = format!("/www.googleapis.com/identitytoolkit/v3/relyingparty/{legacy}");
+            let canonical_path = format!("/identitytoolkit.googleapis.com/v1/{canonical}");
+            let Resolution::Matched {
+                route: expected,
+                project: None,
+                tenant: None,
+                ..
+            } = resolve("POST", &canonical_path)
+            else {
+                panic!("canonical route missing");
+            };
+            for method in ["POST", "GET", "PUT"] {
+                for shape in ["exact", "prefix", "suffix"] {
+                    let candidate = match shape {
+                        "prefix" => format!("/extra{path}"),
+                        "suffix" => format!("{path}/extra"),
+                        _ => path.clone(),
+                    };
+                    eprintln!("apple-route-row:{legacy}:{method}:{shape}");
+                    let result = resolve(method, &candidate);
+                    if shape != "exact" {
+                        assert_eq!(result, Resolution::NotFound);
+                    } else if method != "POST" {
+                        assert!(matches!(
+                            result,
+                            Resolution::MethodNotAllowed {
+                                class: RouteClass::EndUser,
+                                project: None,
+                                tenant: None,
+                                ..
+                            }
+                        ));
+                    } else {
+                        let Resolution::Matched {
+                            route,
+                            project: None,
+                            tenant: None,
+                            ..
+                        } = result
+                        else {
+                            panic!("legacy route missing: {legacy}");
+                        };
+                        assert_eq!(route.handler, expected.handler);
+                        assert_eq!(route.operation, expected.operation);
+                        assert_eq!(route.class, expected.class);
+                        assert_eq!(operation_of(&path), canonical);
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn end_user_labels_are_the_published_canonical_operation_names() {
         for route in ROUTES.iter().filter(|r| r.class == RouteClass::EndUser) {
@@ -1361,9 +1475,22 @@ mod tests {
             assert!(
                 route.operation == tail
                     || route.operation == "securetoken:token"
-                    || (path
-                        == "/www.googleapis.com/identitytoolkit/v3/relyingparty/verifyCustomToken"
-                        && route.operation == "accounts:signInWithCustomToken")
+                    || matches!(
+                        (path, route.operation),
+                        (
+                            "/www.googleapis.com/identitytoolkit/v3/relyingparty/verifyCustomToken",
+                            "accounts:signInWithCustomToken"
+                        ) | (
+                            "/www.googleapis.com/identitytoolkit/v3/relyingparty/signupNewUser",
+                            "accounts:signUp"
+                        ) | (
+                            "/www.googleapis.com/identitytoolkit/v3/relyingparty/verifyPassword",
+                            "accounts:signInWithPassword"
+                        ) | (
+                            "/www.googleapis.com/identitytoolkit/v3/relyingparty/getAccountInfo",
+                            "accounts:lookup"
+                        )
+                    )
                     || path.contains("/v2/accounts/"),
                 "label {} does not name {path}",
                 route.operation

@@ -1,0 +1,11 @@
+type Parent @table {
+  id: UUID!
+  name: String!
+}
+
+type Item @table {
+  id: UUID!
+  title: String!
+  note: String
+  parent: Parent
+}

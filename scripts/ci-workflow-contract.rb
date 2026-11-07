@@ -35,6 +35,30 @@ pr_runs = pr.fetch("steps").map { |step| step["run"] }.compact.join("\n")
 assert(pr_runs.include?("ruby scripts/ci-workflow-contract.rb"), "the minimal pr job must check its workflow contract")
 assert(pr_runs.include?("cargo fmt --all --check"), "the minimal pr job must check formatting")
 assert(pr_runs.include?("cargo check --workspace --all-targets"), "the minimal pr job must compile every target")
+pr_steps = pr.fetch("steps")
+release_ui_steps = load_workflow("release.yml").dig("jobs", "ui", "steps")
+release_pnpm_setup = release_ui_steps.find { |step| step["uses"]&.start_with?("pnpm/action-setup@") }
+release_node_setup = release_ui_steps.find { |step| step["uses"]&.start_with?("actions/setup-node@") }
+pnpm_setup_index = pr_steps.index { |step| step["uses"]&.start_with?("pnpm/action-setup@") }
+node_setup_index = pr_steps.index { |step| step["uses"]&.start_with?("actions/setup-node@") }
+dependency_install_index = pr_steps.index { |step| step["run"] == "pnpm -C conformance install --frozen-lockfile" }
+selftest_index = pr_steps.index { |step| step["run"] == "pnpm -C conformance selftest" }
+dependency_install_step = pr_steps[dependency_install_index] if dependency_install_index
+selftest_step = pr_steps[selftest_index] if selftest_index
+assert(release_pnpm_setup, "release must pin the pnpm setup used by the conformance selftest")
+assert(release_node_setup, "release must pin the Node setup used by the conformance selftest")
+assert(pr_steps.count { |step| step["uses"]&.start_with?("pnpm/action-setup@") } == 1, "the minimal pr job must set up pnpm exactly once")
+assert(pr_steps.count { |step| step["uses"]&.start_with?("actions/setup-node@") } == 1, "the minimal pr job must set up Node exactly once")
+assert(pr_steps.count { |step| step["run"] == "pnpm -C conformance install --frozen-lockfile" } == 1, "the minimal pr job must install conformance dependencies exactly once")
+assert(pr_steps.count { |step| step["run"] == "pnpm -C conformance selftest" } == 1, "the minimal pr job must run selftest exactly once")
+assert(pnpm_setup_index && pr_steps[pnpm_setup_index] == release_pnpm_setup, "the minimal pr job must use the pinned pnpm action and version from release")
+assert(node_setup_index && pr_steps[node_setup_index]["uses"] == release_node_setup["uses"] && pr_steps[node_setup_index].dig("with", "node-version") == 24, "the minimal pr job must use the pinned Node 24 setup from release")
+assert(node_setup_index && pr_steps[node_setup_index].keys.sort == %w[uses with] && pr_steps[node_setup_index]["with"] == { "node-version" => 24 }, "the minimal pr job must not add setup-node caching or other options")
+assert(dependency_install_index && selftest_index, "the minimal pr job must install frozen conformance dependencies and run selftest")
+assert(pnpm_setup_index < node_setup_index && node_setup_index < dependency_install_index && dependency_install_index < selftest_index, "the minimal pr job must set up pnpm and Node, install frozen conformance dependencies, then run selftest")
+assert(dependency_install_step == { "name" => "install frozen conformance dependencies", "run" => "pnpm -C conformance install --frozen-lockfile" }, "the minimal pr job must install only frozen conformance dependencies")
+assert(selftest_step == { "name" => "conformance selftest", "run" => "pnpm -C conformance selftest" }, "the minimal pr job must run the exact selftest as a required step")
+assert(pr_steps.none? { |step| step["uses"].to_s.match?(%r{\Apnpm/action-setup@}) && step.fetch("with", {}).key?("cache") }, "the minimal pr job must not use a pnpm cache")
 %w[nextest clippy cargo\ doc cargo\ deny proto-gen fireemu-verification-loom].each do |expensive|
   assert(!pr_runs.include?(expensive), "the automatic pr job must not run #{expensive}")
 end

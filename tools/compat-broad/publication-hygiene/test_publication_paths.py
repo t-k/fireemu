@@ -21,6 +21,11 @@ _PREFIX_PARTS = (("Users",), ("home",), ("private", "tmp"), ("var", "folders"))
 FORBIDDEN_PREFIXES = tuple("/" + "/".join(parts) + "/" for parts in _PREFIX_PARTS)
 
 ALLOWLIST = {
+    "conformance/dataconnect/run.mjs": (
+        "Digest-bound: its sha256 is pinned in "
+        "conformance/dataconnect/fixtures/provenance.json. The match is the "
+        "container-internal XDG_CONFIG_HOME under /work, not a personal path."
+    ),
     "tools/compat-explain-reference/test_evaluate.py": (
         "Digest-bound: its sha256 is pinned in "
         "spec/compatibility/broad-runs/query-explain-reference-evaluator-v2.json "

@@ -1,0 +1,210 @@
+[
+  {
+    "id": "empty",
+    "data": {
+      "items": []
+    }
+  },
+  {
+    "id": "parent",
+    "data": {
+      "parent_upsert": {
+        "id": "00000000000040008000000000000002"
+      }
+    }
+  },
+  {
+    "id": "insert",
+    "data": {
+      "item_upsert": {
+        "id": "00000000000040008000000000000001"
+      }
+    }
+  },
+  {
+    "id": "read",
+    "data": {
+      "item": {
+        "id": "00000000000040008000000000000001",
+        "note": "café",
+        "title": "Alpha"
+      }
+    }
+  },
+  {
+    "id": "nullable",
+    "data": {
+      "item_upsert": {
+        "id": "00000000000040008000000000000001"
+      }
+    }
+  },
+  {
+    "id": "relationship",
+    "data": {
+      "items": [
+        {
+          "id": "00000000000040008000000000000001",
+          "note": null,
+          "parent": {
+            "id": "00000000000040008000000000000002",
+            "name": "Fixture parent"
+          },
+          "title": "Alpha"
+        }
+      ]
+    }
+  },
+  {
+    "id": "second-item",
+    "data": {
+      "item_upsert": {
+        "id": "00000000000040008000000000000004"
+      }
+    }
+  },
+  {
+    "id": "ordering",
+    "data": {
+      "items": [
+        {
+          "id": "00000000000040008000000000000001",
+          "note": null,
+          "parent": {
+            "id": "00000000000040008000000000000002",
+            "name": "Fixture parent"
+          },
+          "title": "Alpha"
+        },
+        {
+          "id": "00000000000040008000000000000004",
+          "note": null,
+          "parent": null,
+          "title": "Beta"
+        }
+      ]
+    }
+  },
+  {
+    "id": "wrong-type",
+    "error": {
+      "code": "partial-error",
+      "message": "DataConnect error while performing request: [{\"message\":\"$title is invalid String: unexpected value: map[invalid:true] with type: map[string]interface {}\",\"locations\":[],\"path\":null,\"extensions\":{\"file\":\"\",\"code\":\"INVALID_ARGUMENT\",\"debugDetails\":\"\",\"resource\":\"\",\"warningLevel\":\"WARNING_LEVEL_UNKNOWN\",\"workarounds\":[]}}]"
+    }
+  },
+  {
+    "id": "auth-denied",
+    "error": {
+      "code": "unauthorized",
+      "message": "unauthenticated: this operation requires a signed-in user"
+    }
+  },
+  {
+    "id": "unknown-operation",
+    "error": {
+      "code": "other",
+      "message": "operation \"DoesNotExist\" not found"
+    }
+  },
+  {
+    "id": "matrix-query-valid",
+    "data": {
+      "item": {
+        "id": "00000000000040008000000000000001",
+        "note": null,
+        "title": "Alpha"
+      }
+    }
+  },
+  {
+    "id": "matrix-query-missing",
+    "error": {
+      "code": "partial-error",
+      "message": "DataConnect error while performing request: [{\"message\":\"$id (UUID) is missing\",\"locations\":[],\"path\":null,\"extensions\":{\"file\":\"\",\"code\":\"INVALID_ARGUMENT\",\"debugDetails\":\"\",\"resource\":\"\",\"warningLevel\":\"WARNING_LEVEL_UNKNOWN\",\"workarounds\":[]}}]"
+    }
+  },
+  {
+    "id": "matrix-query-null",
+    "error": {
+      "code": "partial-error",
+      "message": "DataConnect error while performing request: [{\"message\":\"$id (UUID) is null\",\"locations\":[],\"path\":null,\"extensions\":{\"file\":\"\",\"code\":\"INVALID_ARGUMENT\",\"debugDetails\":\"\",\"resource\":\"\",\"warningLevel\":\"WARNING_LEVEL_UNKNOWN\",\"workarounds\":[]}}]"
+    }
+  },
+  {
+    "id": "matrix-mutation-valid",
+    "data": {
+      "item_upsert": {
+        "id": "00000000000040008000000000000001"
+      }
+    }
+  },
+  {
+    "id": "matrix-mutation-missing",
+    "error": {
+      "code": "partial-error",
+      "message": "DataConnect error while performing request: [{\"message\":\"$title (String) is missing\",\"locations\":[],\"path\":null,\"extensions\":{\"file\":\"\",\"code\":\"INVALID_ARGUMENT\",\"debugDetails\":\"\",\"resource\":\"\",\"warningLevel\":\"WARNING_LEVEL_UNKNOWN\",\"workarounds\":[]}}]"
+    }
+  },
+  {
+    "id": "matrix-mutation-null",
+    "error": {
+      "code": "partial-error",
+      "message": "DataConnect error while performing request: [{\"message\":\"$title (String) is null\",\"locations\":[],\"path\":null,\"extensions\":{\"file\":\"\",\"code\":\"INVALID_ARGUMENT\",\"debugDetails\":\"\",\"resource\":\"\",\"warningLevel\":\"WARNING_LEVEL_UNKNOWN\",\"workarounds\":[]}}]"
+    }
+  },
+  {
+    "id": "rollback",
+    "error": {
+      "code": "partial-error",
+      "message": "DataConnect error while performing request: [{\"message\":\"violates SQL unique constraint: item_pkey\",\"locations\":[],\"path\":[\"first\"],\"extensions\":{\"file\":\"\",\"code\":\"ALREADY_EXISTS\",\"debugDetails\":\"PostgreSQL runtime error (err_code: 23505): pq: duplicate key value violates unique constraint \\\"item_pkey\\\"\\nWITH \\\"first_temp\\\" AS (INSERT INTO \\\"public\\\".\\\"item\\\" (\\\"id\\\",\\\"title\\\") VALUES ( $1 ::uuid,'must-roll-back') RETURNING jsonb_build_object('id', REPLACE(CAST((\\\"id\\\") AS text), '-', '')) AS j), \\\"duplicate_temp\\\" AS (INSERT INTO \\\"public\\\".\\\"item\\\" (\\\"id\\\",\\\"title\\\") VALUES ( $2 ::uuid,'duplicate-key') RETURNING jsonb_build_object('id', REPLACE(CAST((\\\"id\\\") AS text), '-', '')) AS j) SELECT jsonb_build_object('first', (SELECT * FROM \\\"first_temp\\\"), 'duplicate', (SELECT * FROM \\\"duplicate_temp\\\"))\\nParams: [00000000-0000-4000-8000-000000000003 00000000-0000-4000-8000-000000000003]\",\"resource\":\"\",\"warningLevel\":\"WARNING_LEVEL_UNKNOWN\",\"workarounds\":[]}},{\"message\":\"(aborted)\",\"locations\":[],\"path\":[\"duplicate\"],\"extensions\":{\"file\":\"\",\"code\":\"ABORTED\",\"debugDetails\":\"\",\"resource\":\"\",\"warningLevel\":\"WARNING_LEVEL_UNKNOWN\",\"workarounds\":[]}}]"
+    }
+  },
+  {
+    "id": "rollback-readback",
+    "data": {
+      "item": null
+    }
+  },
+  {
+    "id": "delete",
+    "data": {
+      "item_delete": {
+        "id": "00000000000040008000000000000001"
+      }
+    }
+  },
+  {
+    "id": "delete-readback",
+    "data": {
+      "item": null
+    }
+  },
+  {
+    "id": "persistence-seed",
+    "data": {
+      "item_upsert": {
+        "id": "00000000000040008000000000000001"
+      }
+    }
+  },
+  {
+    "id": "persistence-before",
+    "data": {
+      "item": {
+        "id": "00000000000040008000000000000001",
+        "note": null,
+        "title": "Persisted"
+      }
+    }
+  },
+  {
+    "id": "export-import",
+    "data": {
+      "item": {
+        "id": "00000000000040008000000000000001",
+        "note": null,
+        "title": "Persisted"
+      }
+    }
+  }
+]

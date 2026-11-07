@@ -154,6 +154,9 @@ jobs:
       CARGO_TARGET_DIR: target/minimal
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # The selftest verifies harness lineage, which needs the history.
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           components: rustfmt
@@ -162,6 +165,26 @@ jobs:
           shared-key: pr-minimal
           workspaces: . -> target/minimal
           cache-bin: "false"
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 10.32.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.13'
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+      - name: install frozen conformance dependencies
+        run: pnpm -C conformance install --frozen-lockfile
+      # The federation fixtures' tests need the req validity flags of OpenSSL 3.4.
+      - name: pinned OpenSSL for the frozen federation certificate fixtures
+        run: |
+          sh npm/scripts/install-federation-openssl.sh "$RUNNER_TEMP/fireemu-federation-openssl"
+          echo "$RUNNER_TEMP/fireemu-federation-openssl/bin" >> "$GITHUB_PATH"
+          echo "FIREEMU_FEDERATION_OPENSSL_DIR=$RUNNER_TEMP/fireemu-federation-openssl/bin" >> "$GITHUB_ENV"
+      - name: conformance selftest
+        run: pnpm -C conformance selftest
       - name: CI workflow cost contract
         run: ruby scripts/ci-workflow-contract.rb
       - name: fmt

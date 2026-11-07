@@ -196,7 +196,16 @@ async fn respond(
                 Some(serde_json::Value::Object(serde_json::Map::new()))
             } else if is_form {
                 // The Firebase SDKs post the token refresh as a form (RFC 6749 style).
-                Some(form_to_json(&String::from_utf8_lossy(&bytes)))
+                let mut form = form_to_json(&String::from_utf8_lossy(&bytes));
+                // The Android SDK's camelCase refresh is a JSON shape; a form keeps the
+                // snake_case fields only.
+                if path.starts_with("/securetoken.googleapis.com/") {
+                    if let Some(fields) = form.as_object_mut() {
+                        fields.remove("grantType");
+                        fields.remove("refreshToken");
+                    }
+                }
+                Some(form)
             } else {
                 serde_json::from_slice(&bytes).ok()
             };

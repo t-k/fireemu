@@ -1,4 +1,5 @@
 //! Differential coverage for inherited index overrides and complete write accounting.
+//! Generated small documents cover successful accounting; explicit witnesses cover entry-count and individual-entry-byte refusals. Other refusal families are outside this generator.
 
 use std::collections::BTreeMap;
 use std::hint::black_box;
@@ -149,7 +150,7 @@ fn paths() -> [FieldPath; 6] {
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(192))]
     #[test]
-    fn generated_catalog_changes_preserve_complete_usage_and_errors(
+    fn generated_catalog_changes_preserve_complete_usage(
         operations in proptest::collection::vec((0u8..5, any::<bool>(), 0usize..6, 0u8..7), 1..40),
         seed in -100i64..100,
     ) {
@@ -326,7 +327,7 @@ fn seeded_pairwise_override_cases_match_scan() {
             "builtin" => {}
             "wildcard" => indexes.set_default_single_field_indexes(&group(), modes(mode)),
             "parent" => {
-                indexes.set_default_single_field_indexes(&group(), modes(mode));
+                indexes.set_default_single_field_indexes(&group(), modes((mode + 1) % 7));
                 indexes.set_single_field_indexes(&group(), &field(&["map"]), modes(mode));
             }
             "exact" => {
@@ -448,25 +449,25 @@ exact	empty	nested	production	retain
 parent	group	dotted	emulator	clear
 wildcard	mixed	star	production	replace
 exact	contains	escaped	emulator	replace
-exact	group	star	emulator	retain
-builtin	ascending	star	emulator	clear
-parent	empty	dotted	production	replace
-exact	mixed	nested	emulator	clear
-builtin	mixed	escaped	production	retain
-builtin	empty	escaped	emulator	clear
-parent	descending	dotted	emulator	retain
-builtin	group	nested	production	replace
-exact	descending	escaped	production	clear
-wildcard	descending	nested	emulator	clear
-wildcard	contains	dotted	production	retain
-builtin	descending	dotted	emulator	replace
-parent	ascending	escaped	emulator	replace
-parent	contains	nested	emulator	clear
-wildcard	group	escaped	production	replace
-builtin	contains	star	production	replace
-parent	descending	star	production	clear
-exact	ascending	dotted	production	clear
-wildcard	ascending	nested	emulator	clear
-wildcard	empty	star	production	replace
-parent	mixed	dotted	emulator	retain
+parent	group	nested	production	retain
+parent	contains	star	production	retain
+builtin	mixed	star	emulator	clear
+parent	descending	escaped	production	replace
+parent	ascending	escaped	emulator	clear
+exact	descending	star	emulator	clear
+parent	empty	dotted	production	clear
+exact	group	dotted	emulator	replace
+wildcard	ascending	dotted	emulator	retain
+builtin	descending	dotted	production	retain
+wildcard	descending	nested	emulator	replace
+parent	mixed	nested	emulator	clear
+exact	mixed	dotted	emulator	retain
+builtin	empty	star	emulator	replace
+builtin	mixed	escaped	emulator	retain
+exact	ascending	star	emulator	replace
+builtin	group	escaped	production	retain
+wildcard	contains	nested	production	clear
+wildcard	group	star	production	clear
+wildcard	empty	escaped	production	retain
+builtin	contains	dotted	production	retain
 ";

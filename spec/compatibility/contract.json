@@ -134,7 +134,7 @@
     "upgradePolicy": "Bumping the pin in conformance/package.json and re-recording turns every newly detected difference into a debt row in conformance/DEBT.md, because a row can only become a documented divergence once a human writes it into conformance/divergences.json. Any surface the new baseline adds is absent from this contract, so compat-check fails until it is enumerated with a scope; until then the claim sentence names the old version and is therefore false, which is the intended fail-closed behaviour."
   },
   "claim": {
-    "sentence": "Fireemu is compatible with the listed Local Emulator Suite products as shipped by firebase-tools 15.28.2 -- Cloud Firestore, Firebase Authentication, Cloud Storage for Firebase, Cloud Functions, Cloud Pub/Sub and Eventarc, with Security Rules on the Firestore and Storage surfaces -- under the `emulator` compatibility profile and the evidence recorded in `spec/compatibility/contract.json`; it makes no complete-suite and no unqualified superset claim while the Realtime Database is served without a parity claim (an open gap), Firebase Hosting, App Hosting and Data Connect are deferred and Firebase Extensions is not planned.",
+    "sentence": "Fireemu is compatible with the listed Local Emulator Suite products as shipped by firebase-tools 15.28.2 -- Cloud Firestore, Firebase Authentication, Cloud Storage for Firebase, Cloud Functions, Cloud Pub/Sub and Eventarc, with Security Rules on the Firestore and Storage surfaces -- under the `emulator` compatibility profile and the evidence recorded in `spec/compatibility/contract.json`; it makes no complete-suite and no unqualified superset claim while the Realtime Database is served without a parity claim (an open gap), Firebase Hosting is served as an open gap without a parity claim, App Hosting and Data Connect are deferred and Firebase Extensions is not planned.",
     "documents": [
       "README.md"
     ],
@@ -1821,7 +1821,7 @@
           "productionOnly": [
             "Cloud Tasks applies maxDispatchesPerSecond to every first or retry attempt; fireemu follows that production contract while the pinned Tasks emulator only consumes a token for the first attempt",
             "Observed in one production Firestore create delivery on 2026-09-30: a 2nd gen event's id is a UUID, its time carries a six-digit fraction (the microsecond commit time), and a 1st gen handler's context.eventId is that id followed by -0. Inferred, not observed: the zero, three and nine digit fractions (the protobuf JSON Timestamp mapping prints the shortest of 0, 3, 6 or 9 digits) and the same id, time and -0 forms for updated, deleted and written events. fireemu follows both, with the UUID derived from the session and the event counter so that a run replays",
-            "One production Storage onFinalize delivery on 2026-10-01 (a 1st gen and a 2nd gen handler, one object create) showed: both event ids are decimal strings of seventeen digits (unrelated between the generations, without a suffix); a 2nd gen event's time with a six-digit fraction (`2026-10-01T08:49:26.486927Z`) whose millisecond prefix equals the object's `timeCreated` (`.486Z`), which makes it the creation instant to the microsecond and shows that the object times are cut, not rounded; object resource times with exactly three fraction digits; and a 1st gen context.timestamp with three fraction digits, 91 ms after `timeCreated` (read here as the notification instant; the delay is not modelled). Inferred, not observed: the zero and three digit time forms (carried over from the protobuf JSON Timestamp rule; only six digits were seen), the time of a deleted or metadata-updated event (it keeps the instant the runtime admitted the event, in the same form) and ids of other lengths. fireemu follows these in both profiles. The id is derived from the session and the event counter so that a run replays; two events of one session whose counters are fewer than 9·10^16 apart never share an id, while a seed that is not of the session form is hashed and may collide; a 1st gen timestamp is the admission instant cut to the millisecond, where production's is later than the creation by a delay the runtime does not model"
+            "One production Storage onFinalize delivery on 2026-10-01 (a 1st gen and a 2nd gen handler, one object create) showed: both event ids are decimal strings of seventeen digits (unrelated between the generations, without a suffix); a 2nd gen event's time with a six-digit fraction (`2026-10-01T08:49:26.486927Z`) whose millisecond prefix equals the object's `timeCreated` (`.486Z`), which makes it the creation instant to the microsecond and shows that the object times are cut, not rounded; object resource times with exactly three fraction digits; and a 1st gen context.timestamp with three fraction digits, 91 ms after `timeCreated` (read here as the notification instant; the delay is not modelled). Inferred, not observed: the zero and three digit time forms (carried over from the protobuf JSON Timestamp rule; only six digits were seen), the time of a deleted or metadata-updated event (it keeps the instant the runtime admitted the event, in the same form) and ids of other lengths. fireemu follows these in both profiles. The id is derived from the session and the event counter so that a run replays; two events of one session whose counters are fewer than 9\u00b710^16 apart never share an id, while a seed that is not of the session form is hashed and may collide; a 1st gen timestamp is the admission instant cut to the millisecond, where production's is later than the creation by a delay the runtime does not model"
           ],
           "preview": []
         },
@@ -2807,23 +2807,30 @@
     {
       "id": "hosting",
       "title": "Firebase Hosting",
-      "scope": "deferred",
+      "scope": "active",
       "official": true,
       "officialEmulator": "hosting",
       "officialDefaultPort": 5000,
       "officialTraits": [
         "service"
       ],
-      "state": "none",
-      "decision": "Deferred for low expected near-term demand (2026-08-30 scope policy). It stays in the pinned baseline.",
+      "state": "gap",
+      "decision": "Served as an open gap with no production parity claim. A single firebase.json Hosting site provides local static routing, headers, URL canonicalization, localization and registered local Functions/Run rewrites. The finite offline corpus is compared against firebase-tools 15.28.2. The HOSTING parent is IMPLEMENTING and every production condition remains unverified.",
       "docs": [
         "https://firebase.google.com/docs/emulator-suite/connect_hosting"
       ],
       "issues": [
         "docs.local/issues/open/implement-firebase-hosting-emulator-compatibility.md"
       ],
-      "notes": [],
-      "gaps": [],
+      "notes": [
+        "Public files are opened through a retained capability. Relative in-root links are supported; absolute and escaping links are refused. This is a local containment policy, not a measured production equivalence.",
+        "External Firebase SDK downloads and live Functions/Cloud Run fallback are never attempted. Missing local upstreams return an explicit local error."
+      ],
+      "gaps": [
+        "Production observations are pending.",
+        "Multi-site Hosting arrays and deploy target resolution are not implemented.",
+        "External reserved SDK resources, complete regex/capture forms and unrecorded routing combinations remain outside the finite comparison."
+      ],
       "prohibitedClaimTerms": [
         "Firebase Hosting"
       ],

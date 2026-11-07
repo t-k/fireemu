@@ -558,6 +558,7 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
         auth_selected,
         storage: storage_listener,
         functions: functions_listener,
+        hosting: hosting_listener,
         eventarc: eventarc_listener,
         tasks: tasks_listener,
         pubsub: pubsub_listener,
@@ -945,6 +946,7 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
             auth_selected,
             storage: storage_listener,
             functions: functions_listener,
+            hosting: hosting_listener,
             eventarc: eventarc_listener,
             tasks: tasks_listener,
             pubsub: pubsub_listener,
@@ -1480,6 +1482,7 @@ async fn serve_suite(
         auth_selected: _,
         storage: storage_listener,
         functions: functions_listener,
+        hosting: hosting_listener,
         eventarc: eventarc_listener,
         tasks: tasks_listener,
         pubsub: pubsub_listener,
@@ -1532,6 +1535,12 @@ async fn serve_suite(
     }
     if let Some(listener) = hub_listener {
         spawn_server!("Emulator Hub", hub::serve(listener, hub_state.clone()));
+    }
+    if let (Some(listener), Some(config)) = (hosting_listener, cfg.hosting.clone()) {
+        let emulators = serde_json::Value::Object(hub_emulators(&addrs).into_iter().filter(|entry| matches!(entry.name, "auth"|"firestore"|"functions"|"storage"|"database")).map(|entry| (entry.name.to_owned(), serde_json::json!({"host":entry.addr.ip().to_string(),"port":entry.addr.port(),"hostAndPort":entry.addr.to_string()}))).collect());
+        let prepared =
+            crate::hosting::prepare(config, cfg.auth_project.clone(), addrs.functions, emulators)?;
+        spawn_server!("Hosting", crate::hosting::serve(listener, prepared));
     }
     let functions_http_admission = fireemu_adapter_functions::http::HttpAdmission::new();
     let functions_http_profile = match cfg.profile {
@@ -1731,6 +1740,7 @@ async fn serve_suite(
         &storage_admin_capability,
     );
     let descriptor = serde_json::json!({"schemaVersion":1,"pid":std::process::id(),"projectId":cfg.auth_project,
+        "hostingUrl":addrs.hosting.map(|addr| format!("http://{addr}/")),
         "uiUrl":addrs.ui.map(|addr| format!("http://{addr}/ui/")),
         "controlUrl":format!("http://{}",addrs.control),"controlToken":control_token,
         "environment":environment.iter().cloned().collect::<std::collections::BTreeMap<_,_>>()});
@@ -2274,6 +2284,7 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             auth_selected,
             storage: storage_listener,
             functions: functions_listener,
+        hosting: hosting_listener,
             eventarc: eventarc_listener,
             tasks: tasks_listener,
             pubsub: pubsub_listener,
@@ -2315,6 +2326,7 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                 ("auth", auth_selected.then_some(http_addr)),
                 ("storage", storage_addr),
                 ("functions", functions_addr),
+                ("hosting", hosting_listener.as_ref().and_then(|l| l.local_addr().ok())),
                 ("eventarc", eventarc_addr),
                 ("tasks", tasks_addr),
                 ("pubsub", pubsub_addr),
@@ -2336,6 +2348,7 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             auth: auth_selected.then_some(http_addr),
             storage: storage_addr,
             functions: connectable(functions_addr),
+            hosting: connectable(hosting_listener.as_ref().and_then(|l| l.local_addr().ok())),
             eventarc: connectable(eventarc_addr),
             tasks: connectable(tasks_addr),
             pubsub: connectable(pubsub_addr),
@@ -2462,6 +2475,7 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                     auth_selected,
                     storage: storage_listener,
                     functions: functions_listener,
+        hosting: hosting_listener,
                     eventarc: eventarc_listener,
                     tasks: tasks_listener,
                     pubsub: pubsub_listener,

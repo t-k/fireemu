@@ -20,7 +20,17 @@
         "hosting/static-files"
       ],
       "fixture": "conformance/fixtures/hosting/cases.json",
-      "productionEvidence": []
+      "productionEvidence": [],
+      "fixtureCaseIds": [
+        "root",
+        "static",
+        "directory",
+        "index",
+        "head",
+        "static-post",
+        "range"
+      ],
+      "officialFixture": "conformance/fixtures/hosting/official.json"
     },
     {
       "conditionId": "HOSTING/redirects",
@@ -30,7 +40,13 @@
         "hosting/redirects"
       ],
       "fixture": "conformance/fixtures/hosting/cases.json",
-      "productionEvidence": []
+      "productionEvidence": [],
+      "fixtureCaseIds": [
+        "redirect-first",
+        "redirect-capture",
+        "query"
+      ],
+      "officialFixture": "conformance/fixtures/hosting/official.json"
     },
     {
       "conditionId": "HOSTING/rewrites",
@@ -40,7 +56,12 @@
         "hosting/rewrites"
       ],
       "fixture": "conformance/fixtures/hosting/cases.json",
-      "productionEvidence": []
+      "productionEvidence": [],
+      "fixtureCaseIds": [
+        "rewrite-first",
+        "static"
+      ],
+      "officialFixture": "conformance/fixtures/hosting/official.json"
     },
     {
       "conditionId": "HOSTING/glob-matching",
@@ -49,8 +70,10 @@
       "recipeIds": [
         "hosting/glob-matching"
       ],
-      "fixture": "conformance/fixtures/hosting/cases.json",
-      "productionEvidence": []
+      "fixture": "conformance/fixtures/hosting/glob-cases.json",
+      "productionEvidence": [],
+      "officialFixture": "conformance/fixtures/hosting/official-globs.json",
+      "fixtureSelection": "All 135 pattern/path pairs"
     },
     {
       "conditionId": "HOSTING/headers-cache",
@@ -60,7 +83,15 @@
         "hosting/headers-cache"
       ],
       "fixture": "conformance/fixtures/hosting/cases.json",
-      "productionEvidence": []
+      "productionEvidence": [],
+      "fixtureCaseIds": [
+        "static",
+        "conditional-static",
+        "conditional-rewrite",
+        "modified-static",
+        "modified-rewrite"
+      ],
+      "officialFixture": "conformance/fixtures/hosting/official.json"
     },
     {
       "conditionId": "HOSTING/clean-urls",
@@ -70,7 +101,28 @@
         "hosting/clean-urls"
       ],
       "fixture": "conformance/fixtures/hosting/cases.json",
-      "productionEvidence": []
+      "productionEvidence": [],
+      "fixtureCaseIds": [
+        "clean-_page",
+        "clean-_page_",
+        "clean-_page.html",
+        "clean-_dir",
+        "clean-_dir_",
+        "clean-_dir_index.html",
+        "clean-slash-_page",
+        "clean-slash-_page_",
+        "clean-slash-_page.html",
+        "clean-slash-_dir",
+        "clean-slash-_dir_",
+        "clean-slash-_dir_index.html",
+        "clean-noslash-_page",
+        "clean-noslash-_page_",
+        "clean-noslash-_page.html",
+        "clean-noslash-_dir",
+        "clean-noslash-_dir_",
+        "clean-noslash-_dir_index.html"
+      ],
+      "officialFixture": "conformance/fixtures/hosting/official.json"
     },
     {
       "conditionId": "HOSTING/trailing-slash",
@@ -80,7 +132,34 @@
         "hosting/trailing-slash"
       ],
       "fixture": "conformance/fixtures/hosting/cases.json",
-      "productionEvidence": []
+      "productionEvidence": [],
+      "fixtureCaseIds": [
+        "slash-_page",
+        "slash-_page_",
+        "slash-_page.html",
+        "slash-_dir",
+        "slash-_dir_",
+        "slash-_dir_index.html",
+        "noslash-_page",
+        "noslash-_page_",
+        "noslash-_page.html",
+        "noslash-_dir",
+        "noslash-_dir_",
+        "noslash-_dir_index.html",
+        "clean-slash-_page",
+        "clean-slash-_page_",
+        "clean-slash-_page.html",
+        "clean-slash-_dir",
+        "clean-slash-_dir_",
+        "clean-slash-_dir_index.html",
+        "clean-noslash-_page",
+        "clean-noslash-_page_",
+        "clean-noslash-_page.html",
+        "clean-noslash-_dir",
+        "clean-noslash-_dir_",
+        "clean-noslash-_dir_index.html"
+      ],
+      "officialFixture": "conformance/fixtures/hosting/official.json"
     },
     {
       "conditionId": "HOSTING/i18n",
@@ -90,7 +169,15 @@
         "hosting/i18n"
       ],
       "fixture": "conformance/fixtures/hosting/cases.json",
-      "productionEvidence": []
+      "productionEvidence": [],
+      "fixtureCaseIds": [
+        "i18n-language",
+        "i18n-country",
+        "i18n-country-fallback",
+        "i18n-language-cookie",
+        "i18n-fallback"
+      ],
+      "officialFixture": "conformance/fixtures/hosting/official.json"
     },
     {
       "conditionId": "HOSTING/reserved-paths",
@@ -100,7 +187,14 @@
         "hosting/reserved-paths"
       ],
       "fixture": "conformance/fixtures/hosting/cases.json",
-      "productionEvidence": []
+      "productionEvidence": [],
+      "fixtureCaseIds": [
+        "reserved-json",
+        "reserved-js",
+        "reserved-emulator-js",
+        "reserved-unknown"
+      ],
+      "officialFixture": "conformance/fixtures/hosting/official.json"
     },
     {
       "conditionId": "HOSTING/not-found",
@@ -110,7 +204,13 @@
         "hosting/not-found"
       ],
       "fixture": "conformance/fixtures/hosting/cases.json",
-      "productionEvidence": []
+      "productionEvidence": [],
+      "fixtureCaseIds": [
+        "missing",
+        "404-direct",
+        "default-404"
+      ],
+      "officialFixture": "conformance/fixtures/hosting/official.json"
     },
     {
       "conditionId": "HOSTING/function-rewrites",
@@ -120,7 +220,12 @@
         "hosting/function-rewrites"
       ],
       "fixture": "conformance/fixtures/hosting/cases.json",
-      "productionEvidence": []
+      "productionEvidence": [],
+      "fixtureCaseIds": [
+        "function",
+        "function-post"
+      ],
+      "officialFixture": "conformance/fixtures/hosting/official.json"
     },
     {
       "conditionId": "HOSTING/run-rewrites",
@@ -130,13 +235,18 @@
         "hosting/run-rewrites"
       ],
       "fixture": "conformance/fixtures/hosting/cases.json",
-      "productionEvidence": []
+      "productionEvidence": [],
+      "fixtureCaseIds": [
+        "run"
+      ],
+      "officialFixture": "conformance/fixtures/hosting/official.json"
     }
   ],
   "integratedRegression": {
-    "status": "NOT_RUN",
+    "status": "OFFLINE_PASS",
     "suite": "conformance/src/hosting/run.mjs",
-    "matrix": "conformance/HOSTING-MATRIX.md"
+    "matrix": "conformance/HOSTING-MATRIX.md",
+    "scope": "80 HTTP cases and 135 glob pairs; no production evidence"
   },
   "productionProposal": "spec/compatibility/hosting-production-packet.md",
   "outOfScope": [

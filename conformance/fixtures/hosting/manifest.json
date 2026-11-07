@@ -15,7 +15,9 @@
     "public/locales/ALL_CA/page.html",
     "public/locales/en_ALL/page.html",
     "security.json",
-    "public-empty/index.html"
+    "public-empty/index.html",
+    "functions/package.json",
+    "functions/index.cjs"
   ],
   "generatedEvidence": [
     "official.json",

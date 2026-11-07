@@ -87,8 +87,8 @@ async function fireemu(binary) {
     const temp=await mkdtemp(resolve(tmpdir(),'hosting-'));
     await mkdir(resolve(temp,'home'));
     const ready=resolve(temp,'ready.json');
-    await writeFile(resolve(temp,'firebase.json'),JSON.stringify({hosting:{...config,public:resolve(fixtureRoot,config.public)},emulators:{hosting:{port:0},ui:{enabled:false},logging:{port:0},hub:{port:0}}}));
-    const child=spawn(binary,['up','--only','hosting','--project','demo-hosting','--firebase-json',resolve(temp,'firebase.json'),'--ready-file',ready,'--owner-stdin','--quiet'],{env:{PATH:process.env.PATH,HOME:resolve(temp,'home')},stdio:['pipe','pipe','pipe']});
+    await writeFile(resolve(temp,'firebase.json'),JSON.stringify({hosting:{...config,public:resolve(fixtureRoot,config.public)},...(name==='default'?{functions:{source:resolve(fixtureRoot,'functions')}}:{}),emulators:{functions:{port:0},hosting:{port:0},ui:{enabled:false},logging:{port:0},hub:{port:0}}}));
+    const child=spawn(binary,['up','--only',name==='default'?'hosting,functions':'hosting','--project','demo-hosting','--firebase-json',resolve(temp,'firebase.json'),'--ready-file',ready,'--owner-stdin','--log-verbosity','quiet'],{env:{PATH:process.env.PATH,HOME:resolve(temp,'home')},stdio:['pipe','pipe','pipe']});
     let stderr=''; child.stderr.on('data',c=>stderr+=c); child.stdout.resume();
     try {
       let descriptor;
@@ -100,9 +100,7 @@ async function fireemu(binary) {
       assert.ok(descriptor,'Hosting readiness deadline');
       const port=Number(new URL(descriptor.hostingUrl).port);
       for(const test of corpus.cases.filter(c=>c.config===name)) {
-        // Local Functions integration has a separate fixture runtime; no external fallback is allowed.
-        if(['function','run','function-post'].includes(test.id))continue;
-        rows.push(await request(port,test));
+        const row=await request(port,test);rows.push(row);console.log(JSON.stringify({actual:row}));
       }
     } finally {
       child.stdin.end();

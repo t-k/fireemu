@@ -87,6 +87,11 @@ pub const DAEMON_OPTIONS: &[OptionSpec] = &[
         "Functions port, used when a codebase is loaded. Default: 5001 (0 picks a free port).",
     ),
     opt(
+        &["--hosting-port"],
+        Value::Required("<n>"),
+        "Hosting port, used when a codebase is loaded. Default: 5000 (0 picks a free port).",
+    ),
+    opt(
         &["--eventarc-port"],
         Value::Required("<n>"),
         "Eventarc port. Eventarc starts exactly when a Functions backend is loaded; this option only sets the port. Default: 9299.",

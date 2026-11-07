@@ -36,7 +36,7 @@
     "conformance/src/fs-ent-text-refusal-evidence.test.mjs": "142b80fd6a7ee87c85efdb32d3a99fd7a0b00619cc31178ed9f73daa288ba03e",
     "conformance/src/fs-pipeline-closure.test.mjs": "824ce14c2f3047c61233b6bdaf456caeae718da8c7fd9c78b9d9b4f7c8fa17ae",
     "conformance/src/fs-query-index/run.mjs": "de7ed8ecccb95d9d69fdf4be3dca891a6bd5ebb0791c1db5e5391470fac05a4d",
-    "conformance/src/release-strict-regression.test.mjs": "122a94d1320fd3cdeeb31941a6bf2a426027c58ce9bf6b7a1197e833ee4b5898",
+    "conformance/src/release-strict-regression.test.mjs": "2ddbbc715cdb0d0b3871f11df1d46cf0bad73522a084ae48be8bd10586dd7853",
     "conformance/src/rtdb-finite-families-closure.test.mjs": "421d09488a2b55c0e555a2ad382f1a376abe43242cfd9ba50852f991d34bb5b6",
     "conformance/src/rtdb-functions/breadth-compare.test.mjs": "5fcac52df61d08ceb9297081aa98c12ef6c0bc91ecff537e52122e0cde46e8dc",
     "conformance/src/rtdb-functions/breadth-judge.mjs": "57bf34e08d09184e7ba5895c69f39e58f34921c703cd8a22e27622bb48b599ac",

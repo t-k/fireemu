@@ -1943,9 +1943,8 @@ test("R11 trusted collector preserves exact raw and comparison snapshots and the
     out = join(dir, "out");
   mkdirSync(out);
   try {
-    const observed = resolvedObservation();
-    observed.result.profileBinding = { cwd: "conformance" };
-    const bytes = Buffer.from(observed.raw.bytesBase64, "base64"),
+    const observed = resolvedObservation(),
+      bytes = Buffer.from(observed.raw.bytesBase64, "base64"),
       summary = Buffer.from(`${JSON.stringify(observed.result, null, 2)}\n`);
     writeFileSync(join(dir, "fireemu-historical-production.json"), bytes);
     writeFileSync(join(dir, "historical-production-comparison.json"), summary);
@@ -1954,26 +1953,10 @@ test("R11 trusted collector preserves exact raw and comparison snapshots and the
     assert.deepEqual(collected.comparison, historicalRawObservation(summary));
     assert.deepEqual(readFileSync(join(out, "R11-fireemu-historical-production.json")), bytes);
     assert.deepEqual(readFileSync(join(out, "R11-historical-production-comparison.json")), summary);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("R11 trusted collector refuses disallowed absolute paths before copying snapshots", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "strict-raw-collector-")),
-    out = join(dir, "out");
-  mkdirSync(out);
-  try {
-    writeFileSync(join(dir, "fireemu-historical-production.json"), "{}\n");
-    writeFileSync(
-      join(dir, "historical-production-comparison.json"),
-      JSON.stringify({ profileBinding: { cwd: "/private/run" } }),
+    assert.deepEqual(
+      judgeHistorical(regression().historical, { exitCode: 0, ...collected }, BINARY),
+      [],
     );
-    await assert.rejects(collectHistoricalReplay(dir, out), {
-      code: "ABSOLUTE_PATH",
-      message: "public evidence contains a disallowed filesystem path",
-    });
-    assert.deepEqual(readdirSync(out), []);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

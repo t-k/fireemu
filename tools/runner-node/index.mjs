@@ -1026,7 +1026,7 @@ function describe(name, fn, instrumentation) {
           },
         };
       }
-      if (type === "google.firebase.remoteconfig.remoteConfig.v1.updated") {
+      if (type === "google.firebase.remoteconfig.remoteConfig.v1.updated" && et.channel === undefined) {
         return { ...base, trigger: { type: "remoteConfig" } };
       }
       if (type === "google.cloud.pubsub.topic.v1.messagePublished") {

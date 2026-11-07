@@ -30,7 +30,7 @@ use std::sync::{Arc, Mutex};
 use fireemu_core_app_check::admission::{AdmissionRequest, PrivilegedBypass, ServiceAdmission};
 use fireemu_core_app_check::header::classify_app_check_header;
 use fireemu_core_app_check::verify::BaselineMode;
-use fireemu_core_auth::jwt::{verify_rules_token_for_project, RulesTokenPolicy, TokenAcceptance};
+use fireemu_core_auth::jwt::{RulesTokenPolicy, SignatureCheckedToken, TokenAcceptance};
 use fireemu_core_rules::eval::{
     evaluate_request_with, Decision, DocumentAccess, Method, RequestContext, RulesService,
     ABSTRACT_PREFIX, ABSTRACT_SEGMENT,
@@ -2478,9 +2478,8 @@ impl StorageState {
         let parent = store_arc
             .lock()
             .map_err(|_| "auth store poisoned".to_owned())?;
-        // The audience is checked before the signature so a token of another session
-        // says so, instead of failing as an unknown user of this one.
-        let decoded = fireemu_core_auth::jwt::decode_token(token, parent.signer());
+        // Check the signature before routing; audience and tenant routing still precede the selected store's claim and account checks.
+        let decoded = SignatureCheckedToken::decode(token, &parent);
         // Under strict only the recorded shape is an anonymous caller: `Firebase ` followed by a
         // non-empty value without a dot (stage 3 v9, `token-malformed`: the recorded value is 32
         // base64url characters, answered exactly as no credential is, 403 from the rules and the
@@ -2492,7 +2491,7 @@ impl StorageState {
         // without a dot, with two or with four segments as unauthenticated, but admits a
         // decodable three-segment value as its user, which this profile has never done; a
         // published divergence of the compatibility contract).
-        let decoded_token = match decoded {
+        let checked_token = match decoded {
             Ok(decoded_token) => decoded_token,
             Err(error) => {
                 let recorded_shape = firebase_scheme && !token.is_empty() && !token.contains('.');
@@ -2502,6 +2501,7 @@ impl StorageState {
                 return Ok(Principal::Anonymous);
             }
         };
+        let decoded_token = checked_token.decoded();
         let aud = decoded_token
             .payload
             .get("aud")
@@ -2541,8 +2541,7 @@ impl StorageState {
         let store = store_arc
             .lock()
             .map_err(|_| "auth store poisoned".to_owned())?;
-        let decoded = match verify_rules_token_for_project(
-            token,
+        let decoded = match checked_token.verify_for_project(
             &store,
             self.now(),
             RulesTokenPolicy::new(self.token_acceptance, self.allow_unsigned_id_tokens),
@@ -2552,7 +2551,7 @@ impl StorageState {
             // Storage honours an ID token whose refresh tokens were revoked (production, stage 3
             // v9, `token-revoked`: the read is allowed). Revocation is the last check of the
             // verification, so the signature, expiry, audience and account have all passed.
-            Err(fireemu_core_auth::jwt::JwtError::Revoked) => decoded_token,
+            Err(fireemu_core_auth::jwt::JwtError::Revoked) => decoded_token.clone(),
             Err(e) => return Err(format!("invalid ID token: {e}").into()),
         };
         drop(store);

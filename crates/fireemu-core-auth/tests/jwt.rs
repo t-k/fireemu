@@ -430,3 +430,274 @@ fn a_removed_tenants_future_dated_token_follows_the_acceptance() {
         Some("tenant-a")
     );
 }
+
+struct ReuseSigner {
+    key: u8,
+    calls: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl fireemu_core_auth::jwt::IdTokenSigner for ReuseSigner {
+    fn alg(&self) -> &'static str {
+        "RS256"
+    }
+    fn kid(&self) -> &'static str {
+        "reuse-test"
+    }
+    fn sign(&self, input: &[u8]) -> Vec<u8> {
+        input.iter().rev().map(|byte| byte ^ self.key).collect()
+    }
+    fn verify(&self, input: &[u8], signature: &[u8]) -> bool {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.sign(input) == signature
+    }
+    fn public_jwk_json(&self) -> String {
+        "{}".to_owned()
+    }
+}
+
+fn assert_signature_reuse_equivalent(
+    emulator: bool,
+    signer: u8,
+    tenant: u8,
+    fault: u8,
+    account: u8,
+    clock_offset: i64,
+) {
+    use fireemu_core_auth::jwt::{SignatureCheckedToken, encode_with};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let mut store = if tenant == 1 {
+        AuthStore::new_tenant(
+            "demo-app",
+            "customer",
+            SplitMix64::new(1),
+            TotpPolicy::default(),
+        )
+    } else {
+        AuthStore::new("demo-app", SplitMix64::new(1), TotpPolicy::default())
+    };
+    let calls = Arc::new(AtomicUsize::new(0));
+    if signer != 0 {
+        store.set_signer(Arc::new(ReuseSigner {
+            key: 7,
+            calls: calls.clone(),
+        }));
+    }
+    let uid = store
+        .create_user(NewUser::email("reuse@example.test"), t0())
+        .unwrap();
+    let mut claims = store.id_token_claims(&uid, None, t0()).unwrap();
+    if tenant == 2 {
+        claims.firebase.tenant = Some("missing".to_owned());
+    }
+    match fault {
+        1 => claims.exp = claims.iat - 1,
+        2 => claims.aud = "demo-other".to_owned(),
+        4 => claims.iat += 7200,
+        _ => (),
+    }
+    let token = encode_with(&claims, store.signer());
+    let checked = SignatureCheckedToken::decode(&token, &store).unwrap();
+    // Mutations happen after capture, as they can between the two Storage locks.
+    if signer == 2 {
+        store.set_signer(Arc::new(ReuseSigner {
+            key: 9,
+            calls: calls.clone(),
+        }));
+    }
+    if fault == 3 {
+        store
+            .revoke_tokens(
+                &uid,
+                LogicalInstant::from_unix_seconds(claims.auth_time + 1),
+            )
+            .unwrap();
+    }
+    match account {
+        1 => store.user_mut(&uid).unwrap().disabled = true,
+        2 => store.delete_user_by_id(uid.as_str()).unwrap(),
+        _ => (),
+    }
+    let now = LogicalInstant::from_unix_seconds(claims.auth_time + clock_offset);
+    let policy = if emulator {
+        TokenAcceptance::EmulatorMock
+    } else {
+        TokenAcceptance::Verified
+    };
+    let before = calls.load(Ordering::SeqCst);
+    let reused = checked.verify_for_project(&store, now, policy, "demo-app");
+    assert_eq!(
+        calls.load(Ordering::SeqCst) - before,
+        usize::from(signer == 2)
+    );
+    let legacy = verify_rules_token_for_project(&token, &store, now, policy, "demo-app");
+    assert_eq!(
+        reused, legacy,
+        "emulator={emulator}, signer={signer}, tenant={tenant}, fault={fault}, account={account}, offset={clock_offset}"
+    );
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config::with_cases(128))]
+    #[test]
+    fn signature_reuse_matches_full_verification(
+        emulator in proptest::bool::ANY,
+        signer in 0_u8..3,
+        tenant in 0_u8..3,
+        fault in 0_u8..5,
+        account in 0_u8..3,
+        clock_offset in -2_i64..7202,
+    ) {
+        assert_signature_reuse_equivalent(emulator, signer, tenant, fault, account, clock_offset);
+    }
+}
+
+#[test]
+fn signature_reuse_replays_combinatorial_rows() {
+    if let Ok(path) = std::env::var("FIREEMU_STORAGE_PICT_ROWS") {
+        let rows = std::fs::read_to_string(path).unwrap();
+        let mut count = 0;
+        for row in rows.lines().skip(1) {
+            let values = row.split('\t').collect::<Vec<_>>();
+            assert_eq!(values.len(), 5);
+            let value = |column: usize, choices: &[&str]| {
+                choices
+                    .iter()
+                    .position(|choice| *choice == values[column])
+                    .unwrap() as u8
+            };
+            assert_signature_reuse_equivalent(
+                values[0] == "Emulator",
+                value(1, &["None", "Same", "Changed"]),
+                value(2, &["None", "Known", "Unknown"]),
+                value(3, &["Valid", "Expired", "Foreign", "Revoked", "Future"]),
+                value(4, &["Present", "Disabled", "Missing"]),
+                0,
+            );
+            count += 1;
+        }
+        assert!(count > 0);
+    } else {
+        // The ordinary suite covers the complete bounded partition; a PICT run can replay its generated rows through the same independent comparison.
+        for emulator in [false, true] {
+            for signer in 0..3 {
+                for tenant in 0..3 {
+                    for fault in 0..5 {
+                        for account in 0..3 {
+                            assert_signature_reuse_equivalent(
+                                emulator, signer, tenant, fault, account, 0,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn signature_reuse_rechecks_a_distinct_signer_with_the_same_key() {
+    use fireemu_core_auth::jwt::{SignatureCheckedToken, encode_with};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let mut store = AuthStore::new("demo-app", SplitMix64::new(1), TotpPolicy::default());
+    let calls = Arc::new(AtomicUsize::new(0));
+    store.set_signer(Arc::new(ReuseSigner {
+        key: 7,
+        calls: calls.clone(),
+    }));
+    let uid = store
+        .create_user(NewUser::email("same-key@example.test"), t0())
+        .unwrap();
+    let token = encode_with(
+        &store.id_token_claims(&uid, None, t0()).unwrap(),
+        store.signer(),
+    );
+    let checked = SignatureCheckedToken::decode(&token, &store).unwrap();
+    store.set_signer(Arc::new(ReuseSigner {
+        key: 7,
+        calls: calls.clone(),
+    }));
+    assert!(
+        checked
+            .verify_for_project(&store, t0(), TokenAcceptance::Verified, "demo-app")
+            .is_ok()
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn unsigned_signature_proof_cannot_bypass_a_newly_installed_signer() {
+    use fireemu_core_auth::jwt::{SignatureCheckedToken, encode_with};
+    let mut store = AuthStore::new("demo-app", SplitMix64::new(1), TotpPolicy::default());
+    let uid = store
+        .create_user(NewUser::email("install@example.test"), t0())
+        .unwrap();
+    let token = encode_with(&store.id_token_claims(&uid, None, t0()).unwrap(), None);
+    let checked = SignatureCheckedToken::decode(&token, &store).unwrap();
+    store.set_signer(Arc::new(ReuseSigner {
+        key: 7,
+        calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+    }));
+    for policy in [TokenAcceptance::Verified, TokenAcceptance::EmulatorMock] {
+        assert_eq!(
+            checked.verify_for_project(&store, t0(), policy, "demo-app"),
+            Err(JwtError::UnsupportedAlgorithm("none".to_owned()))
+        );
+    }
+}
+
+#[test]
+fn signature_reuse_observes_session_reset_after_capture() {
+    use fireemu_core_auth::jwt::{SignatureCheckedToken, encode_with};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let registry = AuthRegistry::with_project_numbers_and_lifecycle_incarnation(
+        "demo-default",
+        Arc::new(Mutex::new(AuthStore::new(
+            "demo-default",
+            SplitMix64::new(1),
+            TotpPolicy::default(),
+        ))),
+        std::collections::BTreeMap::new(),
+        17,
+    );
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut store = AuthStore::new("demo-session", SplitMix64::new(2), TotpPolicy::default());
+    store.set_signer(Arc::new(ReuseSigner {
+        key: 7,
+        calls: calls.clone(),
+    }));
+    assert!(registry.register_session("demo-session", store));
+    assert!(registry.commit_session("demo-session"));
+    let selected = registry.store_for("demo-session").unwrap();
+    let (token, checked) = {
+        let mut store = selected.lock().unwrap();
+        let uid = store
+            .create_user(NewUser::email("reset@example.test"), t0())
+            .unwrap();
+        let token = encode_with(
+            &store.id_token_claims(&uid, None, t0()).unwrap(),
+            store.signer(),
+        );
+        let checked = SignatureCheckedToken::decode(&token, &store).unwrap();
+        (token, checked)
+    };
+    let reset = registry
+        .prepare_project_reset("demo-session")
+        .unwrap()
+        .unwrap();
+    registry.apply_project_reset(&reset).unwrap();
+    let store = selected.lock().unwrap();
+    let reused =
+        checked.verify_for_project(&store, t0(), TokenAcceptance::Verified, "demo-session");
+    assert!(matches!(reused, Err(JwtError::WrongSessionEpoch { .. })));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        reused,
+        verify_rules_token_for_project(
+            &token,
+            &store,
+            t0(),
+            TokenAcceptance::Verified,
+            "demo-session"
+        )
+    );
+}

@@ -308,3 +308,113 @@ fn large_firestore_queries_do_not_stall_auth_or_another_database() {
 
     queries.finish();
 }
+
+#[test]
+fn large_storage_uploads_leave_real_services_responsive() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, mpsc};
+
+    let hub_port = free_port();
+    let child = Command::new(env!("CARGO_BIN_EXE_fireemu"))
+        .env("FIREEMU_WORKER_THREADS", "2")
+        .env("FIREEMU_MAX_BLOCKING_THREADS", "16")
+        .args([
+            "up",
+            "--project",
+            "demo-storage-responsive",
+            "--only",
+            "auth,firestore,storage",
+            "--http-port",
+            "0",
+            "--firestore-port",
+            "0",
+            "--storage-port",
+            "0",
+            "--functions-port",
+            "0",
+            "--pubsub-port",
+            "0",
+            "--ui-port",
+            "0",
+            "--logging-port",
+            "0",
+            "--hub-port",
+        ])
+        .arg(hub_port.to_string())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let daemon = Daemon(child, "demo-storage-responsive");
+    let emulators = discover(hub_port);
+    let port = |name: &str| u16::try_from(emulators[name]["port"].as_u64().unwrap()).unwrap();
+    let auth = port("auth");
+    let firestore = port("firestore");
+    let storage = port("storage");
+    let payload = Arc::new(vec![7_u8; 64 * 1024 * 1024]);
+    let completed = Arc::new((0..4).map(|_| AtomicBool::new(false)).collect::<Vec<_>>());
+    let (written_tx, written_rx) = mpsc::channel();
+    let clients = (0..4).map(|index| {
+        let payload = payload.clone();
+        let completed = completed.clone();
+        let written_tx = written_tx.clone();
+        std::thread::spawn(move || {
+            let mut stream = TcpStream::connect(("127.0.0.1", storage)).unwrap();
+            stream.set_read_timeout(Some(PROBE_PATIENCE)).unwrap();
+            stream.set_write_timeout(Some(PROBE_PATIENCE)).unwrap();
+            write!(stream,
+                "POST /v0/b/demo-storage-responsive.appspot.com/o?name=load-{index}.bin HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer owner\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                payload.len()).unwrap();
+            stream.write_all(&payload).unwrap();
+            written_tx.send(()).unwrap();
+            let response = read_response(stream).unwrap();
+            completed[index].store(true, Ordering::Release);
+            response
+        })
+    }).collect::<Vec<_>>();
+    drop(written_tx);
+    // The socket buffers cannot contain these bodies: completed writes witness actual body consumption by the daemon. Handler lock contention is covered separately.
+    let admitted = (0..2).all(|_| written_rx.recv_timeout(PROBE_PATIENCE).is_ok());
+    let probes = [
+        ("Auth", auth, "/"),
+        ("control", auth, "/health/live"),
+        ("Hub", hub_port, "/emulators"),
+        (
+            "Firestore GetDocument",
+            firestore,
+            "/v1/projects/demo-storage-responsive/databases/other/documents/items/missing",
+        ),
+    ]
+    .map(|(name, port, path)| {
+        let result = if name == "Firestore GetDocument" {
+            write_json_request(port, "GET", path, "").and_then(read_response)
+        } else {
+            request_within(port, "GET", path, None, PROBE_PATIENCE)
+        };
+        let active = completed.iter().any(|done| !done.load(Ordering::Acquire));
+        (name, result, active)
+    });
+    // Join before asserting so a failed probe never leaves upload threads behind.
+    let responses = clients
+        .into_iter()
+        .map(|client| client.join())
+        .collect::<Vec<_>>();
+    drop(daemon);
+    assert!(admitted, "large upload bodies did not reach the daemon");
+    for response in responses {
+        assert_eq!(response.unwrap().0, 200);
+    }
+    for (name, response, active) in probes {
+        assert_eq!(
+            response.unwrap().0,
+            if name == "Firestore GetDocument" {
+                404
+            } else {
+                200
+            },
+            "{name}"
+        );
+        assert!(active, "{name} answered only after all uploads completed");
+    }
+}

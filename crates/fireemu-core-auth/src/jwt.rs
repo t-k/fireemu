@@ -11,6 +11,7 @@ use fireemu_core_types::json::{parse, JsonValue};
 use fireemu_core_types::time::LogicalInstant;
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use crate::claims::{ClaimValue, IdTokenClaims};
 use crate::store::AuthStore;
@@ -580,6 +581,88 @@ pub fn decode_token(
     })
 }
 
+/// An immutable token whose signature was checked against one installed signer.
+///
+/// This is not an authenticated principal: account, tenant, epoch and temporal checks must still run against the selected store. Keeping the original signer alive makes identity comparison safe across routing and signer replacement.
+pub struct SignatureCheckedToken {
+    token: String,
+    decoded: DecodedToken,
+    signer: Option<Arc<dyn IdTokenSigner>>,
+}
+
+impl fmt::Debug for SignatureCheckedToken {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SignatureCheckedToken").finish_non_exhaustive()
+    }
+}
+
+impl SignatureCheckedToken {
+    /// Checks the signature and decodes claims without authenticating the account.
+    pub fn decode(token: &str, store: &AuthStore) -> Result<Self, JwtError> {
+        let signer = store.signer_arc();
+        let decoded = decode_token(token, signer.as_deref())?;
+        Ok(Self {
+            token: token.to_owned(),
+            decoded,
+            signer,
+        })
+    }
+
+    /// Claims for routing only; they have not passed the selected store's checks.
+    #[must_use]
+    pub fn decoded(&self) -> &DecodedToken {
+        &self.decoded
+    }
+
+    /// Validates Rules claims against the current store, reusing the signature check only when the installed signer is still the same object. A replaced signer is verified normally, including when it advertises the same algorithm and key ID.
+    pub fn verify_for_project(
+        &self,
+        store: &AuthStore,
+        now: LogicalInstant,
+        policy: impl Into<RulesTokenPolicy>,
+        expected_project: &str,
+    ) -> Result<DecodedToken, JwtError> {
+        let expected_project =
+            ProjectId::try_new(expected_project.to_owned()).map_err(|_| JwtError::Malformed)?;
+        let policy = policy.into();
+        let selected_signer = store.signer_arc();
+        let same_signer = match (&self.signer, &selected_signer) {
+            (None, None) => true,
+            (Some(captured), Some(selected)) => Arc::ptr_eq(captured, selected),
+            _ => false,
+        };
+        if !same_signer {
+            return verify_rules_token_with_expected_project(
+                &self.token,
+                store,
+                now,
+                policy,
+                expected_project.as_str(),
+            );
+        }
+        let verified = validate_token_claims(
+            self.decoded.clone(),
+            store,
+            now,
+            0,
+            TenantRule::Store,
+            store.lifecycle_epoch_claim(),
+            policy.acceptance().future_claims(),
+        )
+        .and_then(|decoded| {
+            verify_id_token_account(decoded, store, now, policy.acceptance().future_claims())
+        })
+        .map(|(_, decoded)| decoded);
+        mock_fallback(
+            &self.token,
+            store,
+            policy,
+            expected_project.as_str(),
+            verified,
+        )
+    }
+}
+
 /// Result of a successful verification.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TokenVerification {
@@ -921,6 +1004,15 @@ fn verify_id_token_with(
         store.lifecycle_epoch_claim(),
         future,
     )?;
+    verify_id_token_account(decoded, store, now, future)
+}
+
+fn verify_id_token_account(
+    decoded: DecodedToken,
+    store: &AuthStore,
+    now: LogicalInstant,
+    future: FutureClaims,
+) -> Result<(TokenVerification, DecodedToken), JwtError> {
     let sub = decoded.sub().ok_or(JwtError::Malformed)?;
     let user = store.user_by_id(sub).ok_or(JwtError::UnknownUser)?;
     let auth_time = check_auth_time(&decoded, now, future)?;
@@ -1048,7 +1140,26 @@ fn verify_token_claims(
     expected_epoch: Option<String>,
     future: FutureClaims,
 ) -> Result<DecodedToken, JwtError> {
-    let decoded = decode_token(token, store.signer())?;
+    validate_token_claims(
+        decode_token(token, store.signer())?,
+        store,
+        now,
+        leeway_seconds,
+        tenant_rule,
+        expected_epoch,
+        future,
+    )
+}
+
+fn validate_token_claims(
+    decoded: DecodedToken,
+    store: &AuthStore,
+    now: LogicalInstant,
+    leeway_seconds: i64,
+    tenant_rule: TenantRule,
+    expected_epoch: Option<String>,
+    future: FutureClaims,
+) -> Result<DecodedToken, JwtError> {
     let expected_iss = format!("https://securetoken.google.com/{}", store.project_id());
     let iss = decoded.string("iss").ok_or(JwtError::Malformed)?;
     if iss != expected_iss {

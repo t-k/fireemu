@@ -36,7 +36,7 @@ impl ChangeSink for Sink {
     fn capture_references(
         &self,
         _: &str,
-        before: &Tree,
+        before: fireemu_adapter_database::changes::ScopeView<'_>,
         _: &Tree,
     ) -> Result<Option<Vec<Path>>, EventAdmissionError> {
         let limits = before.limits();
@@ -144,7 +144,7 @@ fn an_accepted_branch_write_publishes_the_same_bytes_and_tree() {
         ..Sink::default()
     };
     let scope = path(&tree, "/items/k000042");
-    let (written, prepared) = prepare_within(&tree, &scope, context(), Some(&sink), |tree| {
+    let (written, prepared) = prepare_within(&mut tree, &scope, context(), Some(&sink), |tree| {
         tree.set(
             &scope,
             &Json::object([
@@ -156,9 +156,9 @@ fn an_accepted_branch_write_publishes_the_same_bytes_and_tree() {
     })
     .unwrap();
     assert!(written.is_some());
-    // Preparing leaves the visible tree as it was.
-    assert_eq!(tree, original);
-    prepared.commit(&mut tree);
+    // Successful preparation applies source data before publication.
+    assert_ne!(tree, original);
+    prepared.commit();
 
     let captured = sink.captured.lock().unwrap();
     assert_eq!(captured.len(), 1);
@@ -189,7 +189,7 @@ fn an_accepted_branch_write_publishes_the_same_bytes_and_tree() {
 
 #[test]
 fn an_admission_rejected_branch_write_leaves_the_tree_and_publishes_nothing() {
-    let tree = large_tree();
+    let mut tree = large_tree();
     let before = tree.clone();
     let sink = Sink {
         references: vec!["/items/k000042"],
@@ -197,7 +197,7 @@ fn an_admission_rejected_branch_write_leaves_the_tree_and_publishes_nothing() {
         ..Sink::default()
     };
     let scope = path(&tree, "/items/k000042");
-    let result = prepare_within(&tree, &scope, context(), Some(&sink), |tree| {
+    let result = prepare_within(&mut tree, &scope, context(), Some(&sink), |tree| {
         tree.set(&scope, &Json::string("replaced"), NOW)
     });
     assert!(matches!(result, Err(ChangeError::Admission(_))));
@@ -211,7 +211,7 @@ fn an_admission_rejected_branch_write_leaves_the_tree_and_publishes_nothing() {
 
 #[test]
 fn a_database_rejected_branch_write_leaves_the_tree_and_publishes_nothing() {
-    let tree = large_tree();
+    let mut tree = large_tree();
     let before = tree.clone();
     let sink = Sink {
         references: vec!["/items/k000042"],
@@ -219,7 +219,7 @@ fn a_database_rejected_branch_write_leaves_the_tree_and_publishes_nothing() {
     };
     let scope = path(&tree, "/items/k000042");
     // Overlapping update paths are refused before any entry is applied.
-    let result = prepare_within(&tree, &scope, context(), Some(&sink), |tree| {
+    let result = prepare_within(&mut tree, &scope, context(), Some(&sink), |tree| {
         tree.update(
             &scope,
             &[
@@ -246,12 +246,12 @@ fn write_then_fail(tree: &mut Tree, at: &Path) -> Result<(), DatabaseError> {
 
 #[test]
 fn a_rejected_write_deep_under_the_scope_rolls_back() {
-    let tree = large_tree();
+    let mut tree = large_tree();
     let before = tree.clone();
     let sink = Sink::default();
     let scope = path(&tree, "/items/k000042");
     let deep = path(&tree, "/items/k000042/nested/deeper/leaf");
-    let result = prepare_within(&tree, &scope, context(), Some(&sink), |tree| {
+    let result = prepare_within(&mut tree, &scope, context(), Some(&sink), |tree| {
         write_then_fail(tree, &deep)
     });
     assert!(matches!(result, Err(ChangeError::Database(_))));
@@ -261,7 +261,7 @@ fn a_rejected_write_deep_under_the_scope_rolls_back() {
 
 #[test]
 fn a_rejected_write_to_an_absent_scope_rolls_back() {
-    let tree = large_tree();
+    let mut tree = large_tree();
     let before = tree.clone();
     let sink = Sink::default();
     // Neither the scope nor its parent exists before the write.
@@ -269,7 +269,7 @@ fn a_rejected_write_to_an_absent_scope_rolls_back() {
     assert!(tree.get(&scope).is_none());
     assert!(tree.get(&path(&tree, "/absent")).is_none());
     let deep = path(&tree, "/absent/branch/child");
-    let result = prepare_within(&tree, &scope, context(), Some(&sink), |tree| {
+    let result = prepare_within(&mut tree, &scope, context(), Some(&sink), |tree| {
         write_then_fail(tree, &deep)
     });
     assert!(matches!(result, Err(ChangeError::Database(_))));
@@ -287,7 +287,7 @@ fn a_rejected_write_through_a_leaf_ancestor_rolls_back() {
         .unwrap();
     let before = tree.clone();
     let sink = Sink::default();
-    let result = prepare_within(&tree, &scope, context(), Some(&sink), |tree| {
+    let result = prepare_within(&mut tree, &scope, context(), Some(&sink), |tree| {
         write_then_fail(tree, &scope)
     });
     assert!(matches!(result, Err(ChangeError::Database(_))));
@@ -304,7 +304,7 @@ fn a_rejected_write_through_a_leaf_ancestor_rolls_back() {
 #[test]
 #[ignore = "timing evidence, not a check"]
 fn time_prepare_within_on_a_seven_megabyte_branch() {
-    let tree = large_tree();
+    let mut tree = large_tree();
     let bytes = export(&tree, "/items").len();
     let sink = Sink {
         references: vec!["/items/k000042"],
@@ -315,7 +315,7 @@ fn time_prepare_within_on_a_seven_megabyte_branch() {
     let mut total = std::time::Duration::ZERO;
     for round in 0..rounds {
         let started = Instant::now();
-        let prepared = prepare_within(&tree, &scope, context(), Some(&sink), |tree| {
+        let prepared = prepare_within(&mut tree, &scope, context(), Some(&sink), |tree| {
             tree.set(&scope, &Json::int(i64::from(round)), NOW)
         })
         .unwrap();
@@ -326,4 +326,151 @@ fn time_prepare_within_on_a_seven_megabyte_branch() {
         "prepare_within: {bytes} bytes under /items, {:?} per call over {rounds} calls",
         total / rounds
     );
+}
+
+/// Separates unrelated namespace size from the saved branch size. Each sample
+/// alternates real writes and drains captured events outside the timed interval.
+#[test]
+#[ignore = "release timing evidence; run under an enforced memory limit"]
+fn time_preparation_by_unrelated_and_written_branch_size() {
+    for (unrelated, branch) in [
+        (1_000, 16),
+        (10_000, 16),
+        (130_000, 16),
+        (1_000, 1),
+        (1_000, 256),
+    ] {
+        let mut tree = Tree::default();
+        tree.set(
+            &Path::root(),
+            &Json::object([
+                (
+                    "items",
+                    Json::object((0..unrelated).map(|i| (format!("k{i:06}"), item(i)))),
+                ),
+                ("changed", Json::int(0)),
+            ]),
+            NOW,
+        )
+        .unwrap();
+        let scope = path(&tree, "/changed");
+        let sink = Sink {
+            references: vec!["/changed"],
+            ..Sink::default()
+        };
+        let values = [0, 1]
+            .map(|value| Json::object((0..branch).map(|i| (format!("k{i:04}"), Json::int(value)))));
+        tree.set(&scope, &values[0], NOW).unwrap();
+        for sample in 0..3 {
+            let rounds = 50;
+            let mut total = std::time::Duration::ZERO;
+            for round in 0..rounds {
+                let next = &values[(round + 1) % 2];
+                let start = Instant::now();
+                let (_, publication) =
+                    prepare_within(&mut tree, &scope, context(), Some(&sink), |tree| {
+                        tree.set(&scope, next, NOW)
+                    })
+                    .unwrap();
+                publication.commit();
+                total += start.elapsed();
+                sink.captured.lock().unwrap().clear();
+            }
+            println!("scoped timing: unrelated={unrelated} branch={branch} sample={sample} rounds={rounds} ns_per_write={}", total.as_nanos() / rounds as u128);
+        }
+    }
+}
+
+/// Keeps the changed path at depth two inside the wide sibling map. This catches
+/// work proportional to an ancestor's child count that a root-sibling case misses.
+#[test]
+#[ignore = "release nested-ancestor timing; run under an enforced memory limit"]
+fn time_preparation_inside_a_wide_ancestor() {
+    for siblings in [1_000, 10_000, 130_000] {
+        let mut tree = Tree::default();
+        tree.set(
+            &Path::root(),
+            &Json::object([
+                (
+                    "items",
+                    Json::object((0..siblings).map(|i| (format!("k{i:06}"), item(i)))),
+                ),
+                ("config", Json::Bool(true)),
+            ]),
+            NOW,
+        )
+        .unwrap();
+        let scope = path(&tree, "/items/k000042");
+        let sink = Sink {
+            references: vec!["/items/k000042"],
+            ..Sink::default()
+        };
+        let values = [0, 1]
+            .map(|value| Json::object((0..16).map(|i| (format!("k{i:04}"), Json::int(value)))));
+        tree.set(&scope, &values[0], NOW).unwrap();
+        for sample in 0..3 {
+            let rounds = 1_000;
+            let mut total = std::time::Duration::ZERO;
+            for round in 0..rounds {
+                let next = &values[(round + 1) % 2];
+                let started = Instant::now();
+                let (_, publication) =
+                    prepare_within(&mut tree, &scope, context(), Some(&sink), |tree| {
+                        tree.set(&scope, next, NOW)
+                    })
+                    .unwrap();
+                publication.commit();
+                total += started.elapsed();
+                sink.captured.lock().unwrap().clear();
+            }
+            println!("nested scoped timing: siblings={siblings} branch=16 depth=2 sample={sample} rounds={rounds} ns_per_write={}", total.as_nanos() / rounds as u128);
+        }
+    }
+}
+
+/// Generic sinks may return a large unchanged reference alongside the write.
+/// Filtering that reference must not recursively compare its borrowed subtree.
+#[test]
+#[ignore = "release unrelated-reference timing; run under an enforced memory limit"]
+fn time_preparation_with_an_unrelated_reference() {
+    for unrelated in [1_000, 10_000, 130_000] {
+        let mut tree = Tree::default();
+        tree.set(
+            &Path::root(),
+            &Json::object([
+                (
+                    "items",
+                    Json::object((0..unrelated).map(|i| (format!("k{i:06}"), item(i)))),
+                ),
+                ("changed", Json::int(0)),
+            ]),
+            NOW,
+        )
+        .unwrap();
+        let scope = path(&tree, "/changed");
+        let sink = Sink {
+            references: vec!["/changed", "/items"],
+            ..Sink::default()
+        };
+        let values = [0, 1]
+            .map(|value| Json::object((0..16).map(|i| (format!("k{i:04}"), Json::int(value)))));
+        tree.set(&scope, &values[0], NOW).unwrap();
+        for sample in 0..3 {
+            let rounds = 1_000;
+            let mut total = std::time::Duration::ZERO;
+            for round in 0..rounds {
+                let next = &values[(round + 1) % 2];
+                let started = Instant::now();
+                let (_, publication) =
+                    prepare_within(&mut tree, &scope, context(), Some(&sink), |tree| {
+                        tree.set(&scope, next, NOW)
+                    })
+                    .unwrap();
+                publication.commit();
+                total += started.elapsed();
+                sink.captured.lock().unwrap().clear();
+            }
+            println!("unrelated-reference timing: unrelated={unrelated} branch=16 sample={sample} rounds={rounds} ns_per_write={}", total.as_nanos() / rounds as u128);
+        }
+    }
 }

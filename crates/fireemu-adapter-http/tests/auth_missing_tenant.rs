@@ -569,15 +569,30 @@ fn the_tenant_is_made_in_the_project_the_request_names() {
 #[test]
 fn an_empty_body_tenant_leaves_the_path_tenant_as_the_target() {
     let (state, registry) = emulator();
-    // (The answer to the request itself is a separate matter: the account API still reads a path
-    // tenant beside an empty body tenant as a mismatch.)
-    let _ = admin(
+    let (status, _) = admin(
         &state,
         "POST",
         &format!("{V1}/projects/demo-app/tenants/t-empty/accounts"),
         &json!({"tenantId": "", "email": "a@example.com", "password": "hunter22"}),
     );
+    assert!(
+        status == 200,
+        "empty body tenant with path tenant: unexpected status"
+    );
     assert!(registry.tenant_store("demo-app", "t-empty").is_some());
+    assert!(registry
+        .tenant_store("demo-app", "t-empty")
+        .unwrap()
+        .lock()
+        .unwrap()
+        .user_by_email("a@example.com")
+        .is_some());
+    assert!(state
+        .store
+        .lock()
+        .unwrap()
+        .user_by_email("a@example.com")
+        .is_none());
 }
 
 /// The tenant made on the way holds the official default multi-factor config in its own store, and

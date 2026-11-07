@@ -203,10 +203,15 @@ export const subscribe = (
         const parsed = parseSse(buffer);
         buffer = parsed.rest;
         for (const event of parsed.events) {
+          if (controller.signal.aborted) {
+            break;
+          }
           onEvent(event);
         }
       }
-      onClose();
+      if (!controller.signal.aborted) {
+        onClose();
+      }
     } catch (e) {
       if (!controller.signal.aborted) {
         onClose(e instanceof Error ? e.message : String(e));

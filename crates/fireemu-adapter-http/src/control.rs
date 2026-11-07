@@ -946,11 +946,12 @@ fn rules_requests_route(state: &ControlState, method: &str, is_default: bool) ->
         ExprValue::Bool(b) => json!({"kind": "bool", "bool": b}),
         ExprValue::Int(i) => json!({"kind": "int", "int": i.to_string()}),
         ExprValue::Float(f) => json!({"kind": "float", "float": f}),
-        ExprValue::String(s) | ExprValue::TruncatedString(s) => {
-            json!({"kind": "string", "string": s})
+        ExprValue::String(s) => json!({"kind": "string", "string": s}),
+        ExprValue::TruncatedString(s) => {
+            json!({"kind": "string", "string": s, "truncated": true})
         }
         ExprValue::Composite(t) => json!({"kind": "composite", "type": t}),
-        ExprValue::Undefined(cause) | ExprValue::TruncatedUndefined(cause) => json!({
+        ExprValue::Undefined(cause) => json!({
             "kind": "undefined",
             "cause": {
                 "line": cause.span.line,
@@ -959,6 +960,17 @@ fn rules_requests_route(state: &ControlState, method: &str, is_default: bool) ->
                 "endOffset": cause.end,
                 "message": cause.message,
             },
+        }),
+        ExprValue::TruncatedUndefined(cause) => json!({
+            "kind": "undefined",
+            "cause": {
+                "line": cause.span.line,
+                "column": cause.span.column,
+                "currentOffset": cause.span.offset,
+                "endOffset": cause.end,
+                "message": cause.message,
+            },
+            "truncated": true,
         }),
     };
     let requests: Vec<Value> = diagnostics
@@ -974,16 +986,23 @@ fn rules_requests_route(state: &ControlState, method: &str, is_default: bool) ->
                 "allowed": trace.allowed,
                 "reason": trace.reason,
                 "uid": trace.uid,
-                "expressions": trace.expressions.iter().map(|e| json!({
-                    "line": e.span.line,
-                    "column": e.span.column,
-                    "currentOffset": e.span.offset,
-                    "endOffset": e.end,
-                    "values": e.values.iter().map(|(v, count)| json!({
-                        "value": value(v),
-                        "count": count,
-                    })).collect::<Vec<_>>(),
-                })).collect::<Vec<_>>(),
+                "expressions": trace.expressions.iter().map(|e| {
+                    let mut expression = json!({
+                        "line": e.span.line,
+                        "column": e.span.column,
+                        "currentOffset": e.span.offset,
+                        "endOffset": e.end,
+                        "values": e.values.iter().map(|(v, count)| json!({
+                            "value": value(v),
+                            "count": count,
+                        })).collect::<Vec<_>>(),
+                    });
+                    if e.omitted > 0 {
+                        expression["valuesOmitted"] = json!(e.omitted);
+                        expression["valuesCountMayBeLower"] = json!(true);
+                    }
+                    expression
+                }).collect::<Vec<_>>(),
             })
         })
         .collect();

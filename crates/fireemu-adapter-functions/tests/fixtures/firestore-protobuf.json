@@ -1,0 +1,778 @@
+[
+  {
+    "json": {
+      "value": {
+        "createTime": "1970-01-01T00:00:01Z",
+        "fields": {
+          "array": {
+            "arrayValue": {
+              "values": [
+                {
+                  "integerValue": "42"
+                },
+                {
+                  "mapValue": {
+                    "fields": {
+                      "nested": {
+                        "stringValue": "value"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "boolean": {
+            "booleanValue": true
+          },
+          "bytes": {
+            "bytesValue": "AAH/"
+          },
+          "double": {
+            "doubleValue": 1.5
+          },
+          "geo": {
+            "geoPointValue": {
+              "latitude": -90.0,
+              "longitude": 180.0
+            }
+          },
+          "integer": {
+            "integerValue": "42"
+          },
+          "map": {
+            "mapValue": {
+              "fields": {
+                "a.b": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "booleanValue": false
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "null": {
+            "nullValue": null
+          },
+          "reference": {
+            "referenceValue": "projects/demo-proj/databases/(default)/documents/items/ref"
+          },
+          "string": {
+            "stringValue": "é snow 雪"
+          },
+          "timestamp": {
+            "timestampValue": "1969-12-31T23:59:59.123456789Z"
+          },
+          "vector": {
+            "mapValue": {
+              "fields": {
+                "__type__": {
+                  "stringValue": "__vector__"
+                },
+                "value": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "doubleValue": 1.0
+                      },
+                      {
+                        "doubleValue": -2.5
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "name": "projects/demo-proj/databases/(default)/documents/items/a",
+        "updateTime": "1970-01-01T00:00:02.123456Z"
+      }
+    },
+    "kind": "created",
+    "protobuf": "CskDCjhwcm9qZWN0cy9kZW1vLXByb2ovZGF0YWJhc2VzLyhkZWZhdWx0KS9kb2N1bWVudHMvaXRlbXMvYRINCgdib29sZWFuEgIIARINCgdpbnRlZ2VyEgIQKhIPCgVieXRlcxIGkgEDAAH/EhMKBmRvdWJsZRIJGQAAAAAAAPg/EhgKA21hcBIRMg8KDQoDYS5iEgZKBAoCCAASCgoEbnVsbBICWAASHwoJdGltZXN0YW1wEhJSEAj///////////8BEJWa7zoSGwoDZ2VvEhRCEgkAAAAAAIBWwBEAAAAAAIBmQBJJCglyZWZlcmVuY2USPCo6cHJvamVjdHMvZGVtby1wcm9qL2RhdGFiYXNlcy8oZGVmYXVsdCkvZG9jdW1lbnRzL2l0ZW1zL3JlZhInCgVhcnJheRIeShwKAhAqChYyFAoSCgZuZXN0ZWQSCIoBBXZhbHVlEhgKBnN0cmluZxIOigELw6kgc25vdyDpm6oSSgoGdmVjdG9yEkAyPgohCgV2YWx1ZRIYShYKCRkAAAAAAADwPwoJGQAAAAAAAATAChkKCF9fdHlwZV9fEg2KAQpfX3ZlY3Rvcl9fGgIIASIHCAIQgJTvOg=="
+  },
+  {
+    "json": {
+      "oldValue": {
+        "createTime": "1970-01-01T00:00:01Z",
+        "fields": {
+          "array": {
+            "arrayValue": {
+              "values": [
+                {
+                  "integerValue": "41"
+                },
+                {
+                  "mapValue": {
+                    "fields": {
+                      "nested": {
+                        "stringValue": "value"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "boolean": {
+            "booleanValue": true
+          },
+          "bytes": {
+            "bytesValue": "AAH/"
+          },
+          "double": {
+            "doubleValue": 1.5
+          },
+          "geo": {
+            "geoPointValue": {
+              "latitude": -90.0,
+              "longitude": 180.0
+            }
+          },
+          "integer": {
+            "integerValue": "41"
+          },
+          "map": {
+            "mapValue": {
+              "fields": {
+                "a.b": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "booleanValue": false
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "null": {
+            "nullValue": null
+          },
+          "reference": {
+            "referenceValue": "projects/demo-proj/databases/(default)/documents/items/ref"
+          },
+          "string": {
+            "stringValue": "é snow 雪"
+          },
+          "timestamp": {
+            "timestampValue": "1969-12-31T23:59:59.123456789Z"
+          },
+          "vector": {
+            "mapValue": {
+              "fields": {
+                "__type__": {
+                  "stringValue": "__vector__"
+                },
+                "value": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "doubleValue": 1.0
+                      },
+                      {
+                        "doubleValue": -2.5
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "name": "projects/demo-proj/databases/(default)/documents/items/a",
+        "updateTime": "1970-01-01T00:00:02.123456Z"
+      }
+    },
+    "kind": "deleted",
+    "protobuf": "EskDCjhwcm9qZWN0cy9kZW1vLXByb2ovZGF0YWJhc2VzLyhkZWZhdWx0KS9kb2N1bWVudHMvaXRlbXMvYRIKCgRudWxsEgJYABINCgdpbnRlZ2VyEgIQKRITCgZkb3VibGUSCRkAAAAAAAD4PxJJCglyZWZlcmVuY2USPCo6cHJvamVjdHMvZGVtby1wcm9qL2RhdGFiYXNlcy8oZGVmYXVsdCkvZG9jdW1lbnRzL2l0ZW1zL3JlZhINCgdib29sZWFuEgIIARIbCgNnZW8SFEISCQAAAAAAgFbAEQAAAAAAgGZAEhgKBnN0cmluZxIOigELw6kgc25vdyDpm6oSHwoJdGltZXN0YW1wEhJSEAj///////////8BEJWa7zoSSgoGdmVjdG9yEkAyPgoZCghfX3R5cGVfXxINigEKX192ZWN0b3JfXwohCgV2YWx1ZRIYShYKCRkAAAAAAADwPwoJGQAAAAAAAATAEg8KBWJ5dGVzEgaSAQMAAf8SJwoFYXJyYXkSHkocCgIQKQoWMhQKEgoGbmVzdGVkEgiKAQV2YWx1ZRIYCgNtYXASETIPCg0KA2EuYhIGSgQKAggAGgIIASIHCAIQgJTvOg=="
+  },
+  {
+    "json": {
+      "oldValue": {
+        "createTime": "1970-01-01T00:00:01Z",
+        "fields": {
+          "array": {
+            "arrayValue": {
+              "values": [
+                {
+                  "integerValue": "41"
+                },
+                {
+                  "mapValue": {
+                    "fields": {
+                      "nested": {
+                        "stringValue": "value"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "boolean": {
+            "booleanValue": true
+          },
+          "bytes": {
+            "bytesValue": "AAH/"
+          },
+          "double": {
+            "doubleValue": 1.5
+          },
+          "geo": {
+            "geoPointValue": {
+              "latitude": -90.0,
+              "longitude": 180.0
+            }
+          },
+          "integer": {
+            "integerValue": "41"
+          },
+          "map": {
+            "mapValue": {
+              "fields": {
+                "a.b": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "booleanValue": false
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "null": {
+            "nullValue": null
+          },
+          "reference": {
+            "referenceValue": "projects/demo-proj/databases/(default)/documents/items/ref"
+          },
+          "string": {
+            "stringValue": "é snow 雪"
+          },
+          "timestamp": {
+            "timestampValue": "1969-12-31T23:59:59.123456789Z"
+          },
+          "vector": {
+            "mapValue": {
+              "fields": {
+                "__type__": {
+                  "stringValue": "__vector__"
+                },
+                "value": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "doubleValue": 1.0
+                      },
+                      {
+                        "doubleValue": -2.5
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "name": "projects/demo-proj/databases/(default)/documents/items/a",
+        "updateTime": "1970-01-01T00:00:02.123456Z"
+      },
+      "updateMask": {
+        "fieldPaths": [
+          "array",
+          "integer"
+        ]
+      },
+      "value": {
+        "createTime": "1970-01-01T00:00:01Z",
+        "fields": {
+          "array": {
+            "arrayValue": {
+              "values": [
+                {
+                  "integerValue": "42"
+                },
+                {
+                  "mapValue": {
+                    "fields": {
+                      "nested": {
+                        "stringValue": "value"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "boolean": {
+            "booleanValue": true
+          },
+          "bytes": {
+            "bytesValue": "AAH/"
+          },
+          "double": {
+            "doubleValue": 1.5
+          },
+          "geo": {
+            "geoPointValue": {
+              "latitude": -90.0,
+              "longitude": 180.0
+            }
+          },
+          "integer": {
+            "integerValue": "42"
+          },
+          "map": {
+            "mapValue": {
+              "fields": {
+                "a.b": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "booleanValue": false
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "null": {
+            "nullValue": null
+          },
+          "reference": {
+            "referenceValue": "projects/demo-proj/databases/(default)/documents/items/ref"
+          },
+          "string": {
+            "stringValue": "é snow 雪"
+          },
+          "timestamp": {
+            "timestampValue": "1969-12-31T23:59:59.123456789Z"
+          },
+          "vector": {
+            "mapValue": {
+              "fields": {
+                "__type__": {
+                  "stringValue": "__vector__"
+                },
+                "value": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "doubleValue": 1.0
+                      },
+                      {
+                        "doubleValue": -2.5
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "name": "projects/demo-proj/databases/(default)/documents/items/a",
+        "updateTime": "1970-01-01T00:00:02.123456Z"
+      }
+    },
+    "kind": "updated",
+    "protobuf": "CskDCjhwcm9qZWN0cy9kZW1vLXByb2ovZGF0YWJhc2VzLyhkZWZhdWx0KS9kb2N1bWVudHMvaXRlbXMvYRINCgdpbnRlZ2VyEgIQKhIYCgZzdHJpbmcSDooBC8OpIHNub3cg6ZuqEhsKA2dlbxIUQhIJAAAAAACAVsARAAAAAACAZkASSQoJcmVmZXJlbmNlEjwqOnByb2plY3RzL2RlbW8tcHJvai9kYXRhYmFzZXMvKGRlZmF1bHQpL2RvY3VtZW50cy9pdGVtcy9yZWYSHwoJdGltZXN0YW1wEhJSEAj///////////8BEJWa7zoSEwoGZG91YmxlEgkZAAAAAAAA+D8SSgoGdmVjdG9yEkAyPgohCgV2YWx1ZRIYShYKCRkAAAAAAADwPwoJGQAAAAAAAATAChkKCF9fdHlwZV9fEg2KAQpfX3ZlY3Rvcl9fEg0KB2Jvb2xlYW4SAggBEicKBWFycmF5Eh5KHAoCECoKFjIUChIKBm5lc3RlZBIIigEFdmFsdWUSGAoDbWFwEhEyDwoNCgNhLmISBkoECgIIABIKCgRudWxsEgJYABIPCgVieXRlcxIGkgEDAAH/GgIIASIHCAIQgJTvOhLJAwo4cHJvamVjdHMvZGVtby1wcm9qL2RhdGFiYXNlcy8oZGVmYXVsdCkvZG9jdW1lbnRzL2l0ZW1zL2ESDwoFYnl0ZXMSBpIBAwAB/xINCgdib29sZWFuEgIIARITCgZkb3VibGUSCRkAAAAAAAD4PxIKCgRudWxsEgJYABIYCgNtYXASETIPCg0KA2EuYhIGSgQKAggAEkoKBnZlY3RvchJAMj4KGQoIX190eXBlX18SDYoBCl9fdmVjdG9yX18KIQoFdmFsdWUSGEoWCgkZAAAAAAAA8D8KCRkAAAAAAAAEwBIbCgNnZW8SFEISCQAAAAAAgFbAEQAAAAAAgGZAEhgKBnN0cmluZxIOigELw6kgc25vdyDpm6oSDQoHaW50ZWdlchICECkSSQoJcmVmZXJlbmNlEjwqOnByb2plY3RzL2RlbW8tcHJvai9kYXRhYmFzZXMvKGRlZmF1bHQpL2RvY3VtZW50cy9pdGVtcy9yZWYSHwoJdGltZXN0YW1wEhJSEAj///////////8BEJWa7zoSJwoFYXJyYXkSHkocCgIQKQoWMhQKEgoGbmVzdGVkEgiKAQV2YWx1ZRoCCAEiBwgCEICU7zoaEAoFYXJyYXkKB2ludGVnZXI="
+  },
+  {
+    "json": {
+      "value": {
+        "createTime": "1970-01-01T00:00:01Z",
+        "fields": {
+          "array": {
+            "arrayValue": {
+              "values": [
+                {
+                  "integerValue": "42"
+                },
+                {
+                  "mapValue": {
+                    "fields": {
+                      "nested": {
+                        "stringValue": "value"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "boolean": {
+            "booleanValue": true
+          },
+          "bytes": {
+            "bytesValue": "AAH/"
+          },
+          "double": {
+            "doubleValue": 1.5
+          },
+          "geo": {
+            "geoPointValue": {
+              "latitude": -90.0,
+              "longitude": 180.0
+            }
+          },
+          "integer": {
+            "integerValue": "42"
+          },
+          "map": {
+            "mapValue": {
+              "fields": {
+                "a.b": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "booleanValue": false
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "null": {
+            "nullValue": null
+          },
+          "reference": {
+            "referenceValue": "projects/demo-proj/databases/(default)/documents/items/ref"
+          },
+          "string": {
+            "stringValue": "é snow 雪"
+          },
+          "timestamp": {
+            "timestampValue": "1969-12-31T23:59:59.123456789Z"
+          },
+          "vector": {
+            "mapValue": {
+              "fields": {
+                "__type__": {
+                  "stringValue": "__vector__"
+                },
+                "value": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "doubleValue": 1.0
+                      },
+                      {
+                        "doubleValue": -2.5
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "name": "projects/demo-proj/databases/(default)/documents/items/a",
+        "updateTime": "1970-01-01T00:00:02.123456Z"
+      }
+    },
+    "kind": "written-create",
+    "protobuf": "CskDCjhwcm9qZWN0cy9kZW1vLXByb2ovZGF0YWJhc2VzLyhkZWZhdWx0KS9kb2N1bWVudHMvaXRlbXMvYRINCgdib29sZWFuEgIIARIfCgl0aW1lc3RhbXASElIQCP///////////wEQlZrvOhJJCglyZWZlcmVuY2USPCo6cHJvamVjdHMvZGVtby1wcm9qL2RhdGFiYXNlcy8oZGVmYXVsdCkvZG9jdW1lbnRzL2l0ZW1zL3JlZhIYCgNtYXASETIPCg0KA2EuYhIGSgQKAggAEg0KB2ludGVnZXISAhAqEhsKA2dlbxIUQhIJAAAAAACAVsARAAAAAACAZkASJwoFYXJyYXkSHkocCgIQKgoWMhQKEgoGbmVzdGVkEgiKAQV2YWx1ZRIKCgRudWxsEgJYABITCgZkb3VibGUSCRkAAAAAAAD4PxIYCgZzdHJpbmcSDooBC8OpIHNub3cg6ZuqEkoKBnZlY3RvchJAMj4KIQoFdmFsdWUSGEoWCgkZAAAAAAAA8D8KCRkAAAAAAAAEwAoZCghfX3R5cGVfXxINigEKX192ZWN0b3JfXxIPCgVieXRlcxIGkgEDAAH/GgIIASIHCAIQgJTvOg=="
+  },
+  {
+    "json": {
+      "oldValue": {
+        "createTime": "1970-01-01T00:00:01Z",
+        "fields": {
+          "array": {
+            "arrayValue": {
+              "values": [
+                {
+                  "integerValue": "41"
+                },
+                {
+                  "mapValue": {
+                    "fields": {
+                      "nested": {
+                        "stringValue": "value"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "boolean": {
+            "booleanValue": true
+          },
+          "bytes": {
+            "bytesValue": "AAH/"
+          },
+          "double": {
+            "doubleValue": 1.5
+          },
+          "geo": {
+            "geoPointValue": {
+              "latitude": -90.0,
+              "longitude": 180.0
+            }
+          },
+          "integer": {
+            "integerValue": "41"
+          },
+          "map": {
+            "mapValue": {
+              "fields": {
+                "a.b": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "booleanValue": false
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "null": {
+            "nullValue": null
+          },
+          "reference": {
+            "referenceValue": "projects/demo-proj/databases/(default)/documents/items/ref"
+          },
+          "string": {
+            "stringValue": "é snow 雪"
+          },
+          "timestamp": {
+            "timestampValue": "1969-12-31T23:59:59.123456789Z"
+          },
+          "vector": {
+            "mapValue": {
+              "fields": {
+                "__type__": {
+                  "stringValue": "__vector__"
+                },
+                "value": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "doubleValue": 1.0
+                      },
+                      {
+                        "doubleValue": -2.5
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "name": "projects/demo-proj/databases/(default)/documents/items/a",
+        "updateTime": "1970-01-01T00:00:02.123456Z"
+      },
+      "updateMask": {
+        "fieldPaths": [
+          "array",
+          "integer"
+        ]
+      },
+      "value": {
+        "createTime": "1970-01-01T00:00:01Z",
+        "fields": {
+          "array": {
+            "arrayValue": {
+              "values": [
+                {
+                  "integerValue": "42"
+                },
+                {
+                  "mapValue": {
+                    "fields": {
+                      "nested": {
+                        "stringValue": "value"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "boolean": {
+            "booleanValue": true
+          },
+          "bytes": {
+            "bytesValue": "AAH/"
+          },
+          "double": {
+            "doubleValue": 1.5
+          },
+          "geo": {
+            "geoPointValue": {
+              "latitude": -90.0,
+              "longitude": 180.0
+            }
+          },
+          "integer": {
+            "integerValue": "42"
+          },
+          "map": {
+            "mapValue": {
+              "fields": {
+                "a.b": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "booleanValue": false
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "null": {
+            "nullValue": null
+          },
+          "reference": {
+            "referenceValue": "projects/demo-proj/databases/(default)/documents/items/ref"
+          },
+          "string": {
+            "stringValue": "é snow 雪"
+          },
+          "timestamp": {
+            "timestampValue": "1969-12-31T23:59:59.123456789Z"
+          },
+          "vector": {
+            "mapValue": {
+              "fields": {
+                "__type__": {
+                  "stringValue": "__vector__"
+                },
+                "value": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "doubleValue": 1.0
+                      },
+                      {
+                        "doubleValue": -2.5
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "name": "projects/demo-proj/databases/(default)/documents/items/a",
+        "updateTime": "1970-01-01T00:00:02.123456Z"
+      }
+    },
+    "kind": "written-update",
+    "protobuf": "CskDCjhwcm9qZWN0cy9kZW1vLXByb2ovZGF0YWJhc2VzLyhkZWZhdWx0KS9kb2N1bWVudHMvaXRlbXMvYRIfCgl0aW1lc3RhbXASElIQCP///////////wEQlZrvOhINCgdib29sZWFuEgIIARITCgZkb3VibGUSCRkAAAAAAAD4PxINCgdpbnRlZ2VyEgIQKhIYCgZzdHJpbmcSDooBC8OpIHNub3cg6ZuqEicKBWFycmF5Eh5KHAoCECoKFjIUChIKBm5lc3RlZBIIigEFdmFsdWUSSgoGdmVjdG9yEkAyPgoZCghfX3R5cGVfXxINigEKX192ZWN0b3JfXwohCgV2YWx1ZRIYShYKCRkAAAAAAADwPwoJGQAAAAAAAATAEhsKA2dlbxIUQhIJAAAAAACAVsARAAAAAACAZkASDwoFYnl0ZXMSBpIBAwAB/xIKCgRudWxsEgJYABIYCgNtYXASETIPCg0KA2EuYhIGSgQKAggAEkkKCXJlZmVyZW5jZRI8Kjpwcm9qZWN0cy9kZW1vLXByb2ovZGF0YWJhc2VzLyhkZWZhdWx0KS9kb2N1bWVudHMvaXRlbXMvcmVmGgIIASIHCAIQgJTvOhLJAwo4cHJvamVjdHMvZGVtby1wcm9qL2RhdGFiYXNlcy8oZGVmYXVsdCkvZG9jdW1lbnRzL2l0ZW1zL2ESEwoGZG91YmxlEgkZAAAAAAAA+D8SCgoEbnVsbBICWAASJwoFYXJyYXkSHkocCgIQKQoWMhQKEgoGbmVzdGVkEgiKAQV2YWx1ZRINCgdib29sZWFuEgIIARIPCgVieXRlcxIGkgEDAAH/Eg0KB2ludGVnZXISAhApEkkKCXJlZmVyZW5jZRI8Kjpwcm9qZWN0cy9kZW1vLXByb2ovZGF0YWJhc2VzLyhkZWZhdWx0KS9kb2N1bWVudHMvaXRlbXMvcmVmEhgKA21hcBIRMg8KDQoDYS5iEgZKBAoCCAASSgoGdmVjdG9yEkAyPgoZCghfX3R5cGVfXxINigEKX192ZWN0b3JfXwohCgV2YWx1ZRIYShYKCRkAAAAAAADwPwoJGQAAAAAAAATAEhsKA2dlbxIUQhIJAAAAAACAVsARAAAAAACAZkASGAoGc3RyaW5nEg6KAQvDqSBzbm93IOmbqhIfCgl0aW1lc3RhbXASElIQCP///////////wEQlZrvOhoCCAEiBwgCEICU7zoaEAoFYXJyYXkKB2ludGVnZXI="
+  },
+  {
+    "json": {
+      "oldValue": {
+        "createTime": "1970-01-01T00:00:01Z",
+        "fields": {
+          "array": {
+            "arrayValue": {
+              "values": [
+                {
+                  "integerValue": "41"
+                },
+                {
+                  "mapValue": {
+                    "fields": {
+                      "nested": {
+                        "stringValue": "value"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "boolean": {
+            "booleanValue": true
+          },
+          "bytes": {
+            "bytesValue": "AAH/"
+          },
+          "double": {
+            "doubleValue": 1.5
+          },
+          "geo": {
+            "geoPointValue": {
+              "latitude": -90.0,
+              "longitude": 180.0
+            }
+          },
+          "integer": {
+            "integerValue": "41"
+          },
+          "map": {
+            "mapValue": {
+              "fields": {
+                "a.b": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "booleanValue": false
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "null": {
+            "nullValue": null
+          },
+          "reference": {
+            "referenceValue": "projects/demo-proj/databases/(default)/documents/items/ref"
+          },
+          "string": {
+            "stringValue": "é snow 雪"
+          },
+          "timestamp": {
+            "timestampValue": "1969-12-31T23:59:59.123456789Z"
+          },
+          "vector": {
+            "mapValue": {
+              "fields": {
+                "__type__": {
+                  "stringValue": "__vector__"
+                },
+                "value": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "doubleValue": 1.0
+                      },
+                      {
+                        "doubleValue": -2.5
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "name": "projects/demo-proj/databases/(default)/documents/items/a",
+        "updateTime": "1970-01-01T00:00:02.123456Z"
+      }
+    },
+    "kind": "written-delete",
+    "protobuf": "EskDCjhwcm9qZWN0cy9kZW1vLXByb2ovZGF0YWJhc2VzLyhkZWZhdWx0KS9kb2N1bWVudHMvaXRlbXMvYRJJCglyZWZlcmVuY2USPCo6cHJvamVjdHMvZGVtby1wcm9qL2RhdGFiYXNlcy8oZGVmYXVsdCkvZG9jdW1lbnRzL2l0ZW1zL3JlZhIYCgNtYXASETIPCg0KA2EuYhIGSgQKAggAEhsKA2dlbxIUQhIJAAAAAACAVsARAAAAAACAZkASDQoHaW50ZWdlchICECkSCgoEbnVsbBICWAASDQoHYm9vbGVhbhICCAESJwoFYXJyYXkSHkocCgIQKQoWMhQKEgoGbmVzdGVkEgiKAQV2YWx1ZRITCgZkb3VibGUSCRkAAAAAAAD4PxJKCgZ2ZWN0b3ISQDI+ChkKCF9fdHlwZV9fEg2KAQpfX3ZlY3Rvcl9fCiEKBXZhbHVlEhhKFgoJGQAAAAAAAPA/CgkZAAAAAAAABMASGAoGc3RyaW5nEg6KAQvDqSBzbm93IOmbqhIfCgl0aW1lc3RhbXASElIQCP///////////wEQlZrvOhIPCgVieXRlcxIGkgEDAAH/GgIIASIHCAIQgJTvOg=="
+  }
+]

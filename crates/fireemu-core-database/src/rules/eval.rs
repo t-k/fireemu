@@ -1567,7 +1567,10 @@ mod bound_tests {
                 if c == '%' {
                     let hex = &rest[1..3];
                     proptest::prop_assert_eq!(hex, hex.to_ascii_uppercase());
-                    bytes.push(u8::from_str_radix(hex, 16).unwrap());
+                    bytes.extend(fireemu_core_types::codec::percent_decode_bytes(
+                        &rest[..3],
+                        fireemu_core_types::codec::PlusMode::Literal,
+                    ));
                     rest = &rest[3..];
                 } else {
                     proptest::prop_assert!(c.is_ascii_alphanumeric() || ".-*_".contains(c), "{c:?} kept");

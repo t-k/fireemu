@@ -3,9 +3,11 @@ import contextlib
 import io
 import json
 import os
+import signal
 from pathlib import Path
 import subprocess
 import tempfile
+import time
 import unittest
 from unittest.mock import patch, Mock
 import run
@@ -91,7 +93,7 @@ class RunnerContractTest(unittest.TestCase):
                 port = int(bounds.split("-")[0])
                 return json.dumps({"port": port, "token": "owned-" + str(port)})
             args = argparse.Namespace(sdk="/fixture/sdk", portctl="/fixture/portctl.py", case=None, backend="official")
-            with patch.object(run, "TOOL", tool), patch.object(run, "checked", side_effect=checked), patch.object(run, "cleanup", side_effect=lambda _owned, children, _leases, _registry, _work, temporary, _observe, _primary: ([stream.close() for _, stream in children], temporary.cleanup())), patch.object(run.subprocess, "Popen", side_effect=OSError("fixture stop")) as launch, contextlib.redirect_stdout(io.StringIO()):
+            with patch.object(run, "TOOL", tool), patch.object(run, "checked", side_effect=checked), patch.object(run, "cleanup", side_effect=lambda _owned, children, _leases, _registry, _work, temporary, _observe, _primary, groups=None: ([stream.close() for _, stream in children], temporary.cleanup())), patch.object(run.subprocess, "Popen", side_effect=OSError("fixture stop")) as launch, contextlib.redirect_stdout(io.StringIO()):
                 with self.assertRaisesRegex(OSError, "fixture stop"):
                     run.run(args)
                 self.assertEqual(launch.call_count, 1)
@@ -114,7 +116,7 @@ class RunnerContractTest(unittest.TestCase):
             apk.parent.mkdir(parents=True)
             apk.touch()
             args = argparse.Namespace(sdk="/fixture/sdk", portctl=None, case=None, backend="official")
-            with patch.object(run, "TOOL", tool), patch.dict(os.environ, {"CI": "true", "ADB_VENDOR_KEYS": "/synthetic/never-read-key"}, clear=True), patch.object(run, "claim_emulator_pair", return_value=5556), patch.object(run.socket, "socket") as sock, patch.object(run, "checked", return_value="/fixture/node"), patch.object(run, "cleanup", side_effect=lambda _owned, children, _leases, _registry, _work, temporary, _observe, _primary: ([stream.close() for _, stream in children], temporary.cleanup())), patch.object(run.subprocess, "Popen", side_effect=OSError("fixture stop")) as launch:
+            with patch.object(run, "TOOL", tool), patch.dict(os.environ, {"CI": "true", "ADB_VENDOR_KEYS": "/synthetic/never-read-key"}, clear=True), patch.object(run, "claim_emulator_pair", return_value=5556), patch.object(run.socket, "socket") as sock, patch.object(run, "checked", return_value="/fixture/node"), patch.object(run, "cleanup", side_effect=lambda _owned, children, _leases, _registry, _work, temporary, _observe, _primary, groups=None: ([stream.close() for _, stream in children], temporary.cleanup())), patch.object(run.subprocess, "Popen", side_effect=OSError("fixture stop")) as launch:
                 sock.return_value.__enter__.return_value.getsockname.return_value = ("127.0.0.1", 10000)
                 with self.assertRaises(OSError):
                     run.run(args)
@@ -145,10 +147,20 @@ class RunnerContractTest(unittest.TestCase):
 
     def test_cleanup_attempts_every_finalizer_after_failures(self):
         expected = {"observe", "stop-1", "stop-2", "wait-first", "wait-second", "close-first", "close-second", "glob", "copy", "temporary", "release-one", "release-two"}
-        for failure in ["stop-2", "wait-first", "copy", "release-two"]:
+        for failure in ["wait-first", "copy", "release-two"]:
             with self.subTest(failure=failure):
                 events, error = self.cleanup_fixture(failure)
                 self.assertEqual(set(events), expected)
+                self.assertIsInstance(error, RuntimeError)
+                self.assertNotIn("synthetic private text", str(error))
+
+    def test_failed_stop_or_observe_keeps_every_lease_but_finishes_the_rest(self):
+        expected = {"observe", "stop-1", "stop-2", "wait-first", "wait-second", "close-first", "close-second", "glob", "copy", "temporary"}
+        for failure in ["stop-1", "stop-2", "observe"]:
+            with self.subTest(failure=failure):
+                events, error = self.cleanup_fixture(failure)
+                self.assertEqual(set(events), expected)
+                self.assertFalse([event for event in events if event.startswith("release-")])
                 self.assertIsInstance(error, RuntimeError)
                 self.assertNotIn("synthetic private text", str(error))
 
@@ -169,10 +181,13 @@ class RunnerContractTest(unittest.TestCase):
 
     def test_cleanup_aggregates_multiple_failures(self):
         primary = ValueError("primary")
-        events, error = self.cleanup_fixture({"stop-2", "copy", "release-two"}, primary)
+        events, error = self.cleanup_fixture({"wait-first", "copy", "release-two"}, primary)
         self.assertIsNone(error)
         self.assertEqual(len(primary.cleanup_failures), 3)
         self.assertIn("release-one", events)
+        events, error = self.cleanup_fixture({"stop-2", "copy"}, primary)
+        self.assertEqual(len(primary.cleanup_failures), 2)
+        self.assertFalse([event for event in events if event.startswith("release-")])
 
     def client_result(self, output, unsafe=False):
         with tempfile.TemporaryDirectory() as temp:
@@ -210,6 +225,157 @@ class RunnerContractTest(unittest.TestCase):
                 except ProcessLookupError:
                     pass
 
+    def test_observed_separate_group_stops_before_release(self):
+        # The parent stays alive until the scan, then exits; its child has its own session
+        # (as fireemu's client does) and outlives it, so only the recorded pgid can reach it.
+        with tempfile.TemporaryDirectory() as temp:
+            work = Path(temp)
+            marker, go = work / "child", work / "go"
+            child_code = "import os,subprocess,sys,time; os.setsid(); open(sys.argv[1], 'w').write(str(os.getpid())); [time.sleep(0.02) for _ in range(500) if not os.path.exists(sys.argv[1] + '.go')]; subprocess.Popen([sys.executable, '-c', 'import os,sys,time; open(sys.argv[1], \\'w\\').write(str(os.getpid())); time.sleep(60)', sys.argv[1] + '.grand']); time.sleep(60)"
+            parent_code = "import os,subprocess,sys,time; subprocess.Popen([sys.executable, '-c', sys.argv[3], sys.argv[1]]); [time.sleep(0.02) for _ in range(500) if not os.path.exists(sys.argv[2])]"
+            parent = subprocess.Popen(["python3", "-c", parent_code, str(marker), str(go), child_code], start_new_session=True)
+            child = None
+            try:
+                for _ in range(250):
+                    if marker.exists() and marker.read_text():
+                        break
+                    time.sleep(0.02)
+                child = int(marker.read_text())
+                self.assertEqual(os.getpgid(child), child)
+                groups = {parent.pid}
+                owned = run.descendants(parent.pid, groups)
+                self.assertEqual(groups, {parent.pid, child})
+                # A process the child forks after the scan is in the child's group but not in `owned`.
+                Path(str(marker) + ".go").touch()
+                grand_marker = Path(str(marker) + ".grand")
+                for _ in range(250):
+                    if grand_marker.exists() and grand_marker.read_text():
+                        break
+                    time.sleep(0.02)
+                grandchild = int(grand_marker.read_text())
+                self.assertNotIn(grandchild, owned)
+                self.assertEqual(os.getpgid(grandchild), child)
+                go.touch()
+                parent.wait(timeout=5)
+                self.assertEqual(os.getpgid(child), child)
+                alive_at_release = []
+                def release(_command):
+                    try:
+                        os.killpg(child, 0)
+                        alive_at_release.append(True)
+                    except ProcessLookupError:
+                        alive_at_release.append(False)
+                with patch.object(run, "TOOL", work), patch.object(run, "checked", side_effect=release), contextlib.redirect_stdout(io.StringIO()):
+                    run.cleanup(owned, [(parent, io.StringIO())], [{"token": "fixture"}], ["registry"], work, Mock(), lambda: None, groups=groups)
+                self.assertEqual(alive_at_release, [False])
+                with self.assertRaises(ProcessLookupError):
+                    os.kill(grandchild, 0)
+            finally:
+                for pid in [parent.pid, child]:
+                    if pid is not None:
+                        try:
+                            os.killpg(pid, signal.SIGKILL)
+                        except (ProcessLookupError, PermissionError):
+                            pass
+
+    def test_descendant_scan_records_every_group_it_sees(self):
+        with tempfile.TemporaryDirectory() as temp:
+            marker = Path(temp) / "child"
+            code = "import os,subprocess,sys,time; subprocess.Popen([sys.executable, '-c', 'import os,sys,time; os.setsid(); open(sys.argv[1], \\'w\\').write(str(os.getpid())); time.sleep(60)', sys.argv[1]]); time.sleep(60)"
+            parent = subprocess.Popen(["python3", "-c", code, str(marker)], start_new_session=True)
+            try:
+                for _ in range(250):
+                    if marker.exists() and marker.read_text():
+                        break
+                    time.sleep(0.02)
+                child = int(marker.read_text())
+                groups = set()
+                owned = run.descendants(parent.pid, groups)
+                self.assertIn(child, owned)
+                self.assertEqual(groups, {child})
+                without = run.descendants(parent.pid)
+                self.assertIn(child, without)
+            finally:
+                for pid in [parent.pid, int(marker.read_text() or 0) if marker.exists() else None]:
+                    if pid:
+                        try:
+                            os.killpg(pid, signal.SIGKILL)
+                        except (ProcessLookupError, PermissionError):
+                            pass
+                parent.wait()
+
+    def test_sigterm_ignoring_group_is_killed_and_verified(self):
+        with tempfile.TemporaryDirectory() as temp:
+            work = Path(temp)
+            marker = work / "ready"
+            process = subprocess.Popen(["python3", "-c", "import signal,sys,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); open(sys.argv[1], 'w').close(); time.sleep(60)", str(marker)], start_new_session=True)
+            try:
+                for _ in range(250):
+                    if marker.exists():
+                        break
+                    time.sleep(0.02)
+                self.assertTrue(marker.exists())
+                released = []
+                with patch.object(run, "TOOL", work), patch.object(run, "checked", side_effect=lambda command: released.append(command)), contextlib.redirect_stdout(io.StringIO()):
+                    run.cleanup({}, [(process, io.StringIO())], [{"token": "fixture"}], ["registry"], work, Mock(), lambda: None)
+                self.assertIsNotNone(process.poll())
+                self.assertLess(process.returncode, 0)
+                with self.assertRaises(ProcessLookupError):
+                    os.killpg(process.pid, 0)
+                self.assertEqual(len(released), 1)
+            finally:
+                if process.poll() is None:
+                    os.killpg(process.pid, signal.SIGKILL)
+                    process.wait()
+
+    def test_stop_kills_a_sigterm_ignoring_pid_and_verifies_it_is_gone(self):
+        process = subprocess.Popen(["python3", "-c", "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); print('ready', flush=True); time.sleep(60)"], stdout=subprocess.PIPE, text=True)
+        try:
+            self.assertEqual(process.stdout.readline().strip(), "ready")
+            command = subprocess.run(["ps", "-p", str(process.pid), "-o", "comm=,args="], capture_output=True, text=True).stdout.strip()
+            run.stop(process.pid, command)
+            process.wait(timeout=5)
+            self.assertLess(process.returncode, 0)
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait()
+            process.stdout.close()
+
+    def test_stop_reports_a_pid_that_survives_sigkill(self):
+        ps = subprocess.CompletedProcess([], 0, "owned command\n")
+        with patch.object(run.subprocess, "run", return_value=ps), patch.object(run.os, "kill") as kill, patch.object(run.time, "sleep"):
+            with self.assertRaisesRegex(RuntimeError, "survived"):
+                run.stop(12345, "owned command")
+        self.assertEqual([call.args[1] for call in kill.call_args_list], [signal.SIGTERM, signal.SIGKILL])
+
+    def test_unverifiable_group_keeps_leases(self):
+        process = Mock(pid=12345)
+        with tempfile.TemporaryDirectory() as temp, patch.object(run, "TOOL", Path(temp)), patch.object(run.os, "killpg"), patch.object(run.time, "sleep"), patch.object(run, "checked") as checked, contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(RuntimeError, "stop-group"):
+                run.cleanup({}, [(process, io.StringIO())], [{"token": "fixture"}], ["registry"], Path(temp), Mock(), lambda: None)
+            checked.assert_not_called()
+
+    def test_group_that_only_reports_permission_denied_is_not_treated_as_gone(self):
+        process = Mock(pid=12345)
+        with tempfile.TemporaryDirectory() as temp, patch.object(run, "TOOL", Path(temp)), patch.object(run.os, "killpg", side_effect=lambda _group, number: (_ for _ in ()).throw(PermissionError) if number == 0 else None), patch.object(run.time, "sleep"), patch.object(run, "checked") as checked, contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(RuntimeError, "stop-group"):
+                run.cleanup({}, [(process, io.StringIO())], [{"token": "fixture"}], ["registry"], Path(temp), Mock(), lambda: None)
+            checked.assert_not_called()
+
+    def test_unstoppable_owned_pid_keeps_leases(self):
+        ps = subprocess.CompletedProcess([], 0, "owned command\n")
+        with tempfile.TemporaryDirectory() as temp, patch.object(run, "TOOL", Path(temp)), patch.object(run.subprocess, "run", return_value=ps), patch.object(run.os, "kill"), patch.object(run.time, "sleep"), patch.object(run, "checked") as checked, contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(RuntimeError, "stop"):
+                run.cleanup({12345: "owned command"}, [], [{"token": "fixture"}], ["registry"], Path(temp), Mock(), lambda: None)
+            checked.assert_not_called()
+
+    def test_runner_never_signals_its_own_process_group(self):
+        process = Mock(pid=os.getpgrp())
+        with tempfile.TemporaryDirectory() as temp, patch.object(run, "TOOL", Path(temp)), patch.object(run.os, "killpg") as killpg, patch.object(run, "checked"), contextlib.redirect_stdout(io.StringIO()):
+            run.cleanup({}, [(process, io.StringIO())], [], ["registry"], Path(temp), Mock(), lambda: None, groups={os.getpgrp(), 0, 1})
+            killpg.assert_not_called()
+
     def backend_result(self, report):
         with tempfile.TemporaryDirectory() as temp:
             tool = Path(temp)
@@ -227,7 +393,7 @@ class RunnerContractTest(unittest.TestCase):
                         raise FileNotFoundError()
                     return json.dumps(report)
                 return original_read(path, *args, **kwargs)
-            with patch.object(Path, "read_text", read), patch.object(run, "TOOL", tool), patch.dict(os.environ, {"CI": "true"}), patch.object(run, "checked", return_value="/fixture/node"), patch.object(run, "claim_emulator_pair", return_value=5556), patch.object(run.socket, "socket") as sock, patch.object(run.subprocess, "Popen", return_value=process), patch.object(run.subprocess, "run", return_value=boot), patch.object(run, "cleanup", side_effect=lambda _owned, children, _leases, _registry, _work, temporary, _observe, _primary: ([stream.close() for _, stream in children], temporary.cleanup())), contextlib.redirect_stdout(io.StringIO()):
+            with patch.object(Path, "read_text", read), patch.object(run, "TOOL", tool), patch.dict(os.environ, {"CI": "true"}), patch.object(run, "checked", return_value="/fixture/node"), patch.object(run, "claim_emulator_pair", return_value=5556), patch.object(run.socket, "socket") as sock, patch.object(run.subprocess, "Popen", return_value=process), patch.object(run.subprocess, "run", return_value=boot), patch.object(run, "cleanup", side_effect=lambda _owned, children, _leases, _registry, _work, temporary, _observe, _primary, groups=None: ([stream.close() for _, stream in children], temporary.cleanup())), contextlib.redirect_stdout(io.StringIO()):
                 sock.return_value.__enter__.return_value.getsockname.side_effect = [("127.0.0.1", port) for port in range(10000, 10008)]
                 return run.run(args)
 

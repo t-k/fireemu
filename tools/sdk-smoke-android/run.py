@@ -48,9 +48,15 @@ def stop(pid, command):
                 os.kill(pid, signal.SIGKILL)
             except ProcessLookupError:
                 return
+            for _ in range(30):
+                current = subprocess.run(["ps", "-p", str(pid), "-o", "comm=,args="], capture_output=True, text=True).stdout.strip()
+                if current != command:
+                    return
+                time.sleep(0.1)
+            raise RuntimeError("process survived cleanup")
 
 
-def descendants(pid):
+def descendants(pid, groups=None):
     result = {}
     todo = [pid]
     while todo and len(result) < 100:
@@ -59,9 +65,26 @@ def descendants(pid):
         for child in map(int, children):
             command = subprocess.run(["ps", "-p", str(child), "-o", "comm=,args="], capture_output=True, text=True).stdout.strip()
             if command and child not in result:
+                if groups is not None:
+                    try:
+                        groups.add(os.getpgid(child))
+                    except ProcessLookupError:
+                        continue
                 result[child] = command
                 todo.append(child)
     return result
+
+
+def group_alive(group):
+    try:
+        os.killpg(group, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # macOS answers EPERM for a group that holds only unreaped zombies
+        # (and for a group we do not own); treat it as alive and keep polling.
+        return True
+    return True
 
 
 def client(args):
@@ -93,7 +116,7 @@ def client(args):
     return 0 if result.returncode == 0 and summary["instrumentation_ok"] and len(cases) == 23 and len({x['id'] for x in cases}) == 23 and all(x["status"] == "passed" for x in cases) else 1
 
 
-def cleanup(owned, children, leases, registry, work, temporary, observe, primary=None):
+def cleanup(owned, children, leases, registry, work, temporary, observe, primary=None, groups=None):
     failures = []
 
     def attempt(stage, action):
@@ -103,36 +126,46 @@ def cleanup(owned, children, leases, registry, work, temporary, observe, primary
             failures.append((stage, type(error).__name__))
             return None
 
+    observe_failures = len(failures)
     attempt("observe", observe)
-    groups_stopped = True
-    for process, _ in children:
-        try:
-            os.killpg(process.pid, signal.SIGTERM)
-            for _ in range(30):
+    # An unobserved descendant tree cannot be proven stopped.
+    owned_stopped = len(failures) == observe_failures
+    pgids = {process.pid for process, _ in children} | set(groups or ())
+    pgids = sorted(group for group in pgids if group > 1 and group != os.getpgrp())
+
+    def settle(pending, deadline_ticks):
+        for _ in range(deadline_ticks):
+            for process, _ in children:
                 process.poll()
-                try:
-                    os.killpg(process.pid, 0)
-                except ProcessLookupError:
-                    break
-                time.sleep(0.1)
-            else:
-                os.killpg(process.pid, signal.SIGKILL)
-                for _ in range(30):
-                    process.poll()
-                    try:
-                        os.killpg(process.pid, 0)
-                    except ProcessLookupError:
-                        break
-                    time.sleep(0.1)
-                else:
-                    raise RuntimeError("process group survived cleanup")
-        except ProcessLookupError:
-            pass
-        except BaseException as error:
-            groups_stopped = False
-            failures.append(("stop-group", type(error).__name__))
+            pending = [group for group in pending if group_alive(group)]
+            if not pending:
+                break
+            time.sleep(0.1)
+        return pending
+
+    def signal_groups(pending, number):
+        for group in pending:
+            try:
+                os.killpg(group, number)
+            except ProcessLookupError:
+                pass
+
+    try:
+        signal_groups(pgids, signal.SIGTERM)
+        remaining = settle(pgids, 30)
+        if remaining:
+            signal_groups(remaining, signal.SIGKILL)
+            remaining = settle(remaining, 30)
+        if remaining:
+            raise RuntimeError("process group survived cleanup")
+    except BaseException as error:
+        owned_stopped = False
+        failures.append(("stop-group", type(error).__name__))
     for pid, command in reversed(list(owned.items())):
+        before = len(failures)
         attempt("stop", lambda: stop(pid, command))
+        if len(failures) != before:
+            owned_stopped = False
     for process, stream in children:
         attempt("wait", lambda: process.wait(timeout=5))
         attempt("stream-close", stream.close)
@@ -142,7 +175,7 @@ def cleanup(owned, children, leases, registry, work, temporary, observe, primary
     for file in files:
         attempt("diagnostics-copy", lambda: shutil.copy2(file, diagnostics / file.name))
     attempt("temporary-cleanup", temporary.cleanup)
-    for lease in reversed(leases) if groups_stopped else []:
+    for lease in reversed(leases) if owned_stopped else []:
         attempt("lease-release", lambda: checked(registry + ["release", "--token", lease["token"]]))
     attempt("diagnostics-report", lambda: print("Private diagnostics:", diagnostics))
     if failures:
@@ -187,6 +220,7 @@ def run(args):
     leases = []
     allocated = set()
     owned = {}
+    groups = set()
     children = []
     temporary = tempfile.TemporaryDirectory(prefix="android-run-", dir=TOOL / "build")
     work = Path(temporary.name)
@@ -253,6 +287,7 @@ def run(args):
             stream.close()
             raise
         children.append((process, stream))
+        groups.add(process.pid)
         return process
 
     def observe():
@@ -261,7 +296,7 @@ def run(args):
                 command = subprocess.run(["ps", "-p", str(process.pid), "-o", "comm=,args="], capture_output=True, text=True).stdout.strip()
                 if command:
                     owned[process.pid] = command
-                owned.update(descendants(process.pid))
+                owned.update(descendants(process.pid, groups))
         if owned:
             rss = subprocess.run(["ps", "-p", ",".join(map(str, owned)), "-o", "rss="], capture_output=True, text=True).stdout.split()
             if sum(map(int, rss)) > 8 * 1024 * 1024:
@@ -324,7 +359,7 @@ def run(args):
             pass
         return 1
     finally:
-        cleanup(owned, children, leases, registry, work, temporary, observe, sys.exc_info()[1])
+        cleanup(owned, children, leases, registry, work, temporary, observe, sys.exc_info()[1], groups=groups)
 
 
 def main():

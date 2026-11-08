@@ -12045,6 +12045,15 @@ mod hosting_selection_tests {
     }
 
     #[test]
+    fn a_daemon_hosting_port_is_explicit() {
+        let cfg =
+            RuntimeConfig::from_json(&json!({"schemaVersion": 1, "daemon": {"hostingPort": 5050}}))
+                .unwrap();
+        assert_eq!(cfg.hosting_addr, "127.0.0.1:5050");
+        assert!(cfg.hosting_addr_explicit);
+    }
+
+    #[test]
     fn the_default_hosting_port_is_relocatable_and_a_configured_one_is_not() {
         let (cfg, result) = apply(
             &json!({"hosting": {"public": "public"}, "emulators": {"hosting": {"host": "127.0.0.1"}}}),

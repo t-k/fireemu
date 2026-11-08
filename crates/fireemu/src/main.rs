@@ -4304,6 +4304,7 @@ mod config_reload_tests {
                 let raw = parse_raw_options(&["--hosting-port".to_owned(), port.to_string()], OptionContext::Start).unwrap_or_else(|error| panic!("{}",error.message));
                 apply_port_overrides(&mut cfg, &raw);
                 proptest::prop_assert_eq!(cfg.hosting_addr, format!("{host}:{port}"));
+                proptest::prop_assert!(cfg.hosting_addr_explicit);
             }
         }
     }
@@ -5676,6 +5677,17 @@ mod hosting_bind_tests {
         .await
         .unwrap();
         assert!(avoided.local_addr().unwrap().port() > 5001);
+    }
+
+    // Holding 5000 (or finding it already held, as macOS AirPlay does) forces the search.
+    #[tokio::test]
+    async fn the_default_hosting_search_never_takes_5001() {
+        let _held = std::net::TcpListener::bind("127.0.0.1:5000");
+        let cfg = hosting_only("127.0.0.1:5000".to_owned(), false);
+        let only = Selection::parse("hosting").unwrap();
+        let listener = bind_hosting(&cfg, &only).await.unwrap().unwrap();
+        assert_ne!(listener.local_addr().unwrap().port(), 5000);
+        assert_ne!(listener.local_addr().unwrap().port(), 5001);
     }
 
     #[tokio::test]

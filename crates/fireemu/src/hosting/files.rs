@@ -49,15 +49,11 @@ pub(super) fn open(root: &cap_std::fs::Dir, path: &str, ignore: &[String]) -> Op
         return None;
     }
     let ignored = |path: &std::path::Path| {
-        path.ancestors()
-            .filter(|p| !p.as_os_str().is_empty())
-            .any(|p| {
-                p.to_str().is_none_or(|p| {
-                    ignore.iter().any(|pattern| {
-                        super::matcher::glob_with_dot(pattern, &p.replace('\\', "/"), true)
-                    })
-                })
-            })
+        path.to_str().is_none_or(|p| {
+            ignore
+                .iter()
+                .any(|pattern| super::matcher::deploy_ignore(pattern, &p.replace('\\', "/")))
+        })
     };
     let relative = std::path::Path::new(relative);
     if ignored(relative) {
@@ -204,6 +200,39 @@ mod tests {
     }
     use std::path::Path;
     #[test]
+    fn deploy_ignore_matches_glob_minimatch_options() {
+        let fixture = Fixture::new();
+        let root = fixture.root();
+        // Expected values were obtained from glob's minimatch ignore options.
+        for (pattern, path, ignored) in [
+            ("./private.json", "private.json", true),
+            ("{a..c}.json", "b.json", true),
+            ("{a,b}.json", "b.json", true),
+            ("#private.json", "#private.json", true),
+            ("*.json", ".secret.json", true),
+            ("**/node_modules/**", "node_modules/x", true),
+            ("**/node_modules/**", "a/node_modules/x", true),
+            ("!private.json", "private.json", false),
+            ("!private.json", "!private.json", true),
+            ("!(private).json", "public.json", true),
+            ("!(private).json", "private.json", false),
+            ("**/x", "x", true),
+            ("*.json", "a/x.json", false),
+            ("{3..1}.json", "2.json", true),
+            ("{a..a}.json", "a.json", true),
+            ("dir", "dir/x", false),
+        ] {
+            let file = fixture.0.join("public").join(path);
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(file, "fixture").unwrap();
+            assert_eq!(
+                open(&root, &format!("/{path}"), &[pattern.to_owned()]).is_none(),
+                ignored,
+                "pattern={pattern:?} path={path:?}"
+            );
+        }
+    }
+    #[test]
     fn fixture_paths_cannot_escape_the_retained_public_directory() {
         let fixture = Fixture::new();
         let root = fixture.root();
@@ -249,7 +278,7 @@ mod tests {
         assert!(open(&root, "/alias.txt", &[]).is_some());
         std::fs::create_dir(fixture.0.join("public/.hidden")).unwrap();
         std::fs::write(fixture.0.join("public/.hidden/file"), "hidden").unwrap();
-        assert!(open(&root, "/.hidden/file", &["**/.*".to_owned()]).is_none());
+        assert!(open(&root, "/.hidden/file", &["**/.*".to_owned()]).is_some());
         assert!(open(&root, "/.hidden/file", &[]).is_some());
         std::fs::create_dir_all(fixture.0.join("public/nested/node_modules/pkg")).unwrap();
         std::fs::write(

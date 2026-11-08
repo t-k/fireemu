@@ -203,7 +203,7 @@ fn comma_alternatives(content: &str) -> Vec<String> {
     parts
 }
 
-fn alternatives(pattern: &str) -> Vec<String> {
+fn alternatives(pattern: &str, deploy_ignore: bool) -> Vec<String> {
     let Some(start) = pattern.find('{') else {
         return vec![pattern.to_owned()];
     };
@@ -234,23 +234,34 @@ fn alternatives(pattern: &str) -> Vec<String> {
                     (b..=a).rev().map(|n| n.to_string()).collect()
                 }
             }
+            _ if deploy_ignore
+                && a.len() == 1
+                && b.len() == 1
+                && a.as_bytes()[0].is_ascii_alphabetic()
+                && b.as_bytes()[0].is_ascii_alphabetic() =>
+            {
+                let (a, b) = (a.as_bytes()[0], b.as_bytes()[0]);
+                if a <= b {
+                    (a..=b).map(|c| char::from(c).to_string()).collect()
+                } else {
+                    (b..=a).rev().map(|c| char::from(c).to_string()).collect()
+                }
+            }
             _ => comma_alternatives(content),
         }
     } else {
         comma_alternatives(content)
     };
-    if parts.len() < 2 {
+    if parts.len() < 2 && !(deploy_ignore && content.contains("..") && parts[0] != content) {
         return vec![pattern.to_owned()];
     }
     parts
         .into_iter()
         .flat_map(|part| {
-            alternatives(&format!(
-                "{}{}{}",
-                &pattern[..start],
-                part,
-                &pattern[end + 1..]
-            ))
+            alternatives(
+                &format!("{}{}{}", &pattern[..start], part, &pattern[end + 1..]),
+                deploy_ignore,
+            )
         })
         .collect()
 }
@@ -265,12 +276,24 @@ pub(super) fn glob_with_dot(pattern: &str, path: &str, dot: bool) -> bool {
     }
     let negative = pattern.chars().take_while(|ch| *ch == '!').count();
     let pattern = &pattern[negative..];
-    let matched = alternatives(pattern).iter().any(|pattern| {
+    let matched = alternatives(pattern, false).iter().any(|pattern| {
         let pattern: Vec<_> = pattern.split('/').collect();
         let path: Vec<_> = path.split('/').collect();
         path_match(&pattern, &path, dot)
     });
     matched != (negative % 2 == 1)
+}
+
+pub(super) fn deploy_ignore(pattern: &str, path: &str) -> bool {
+    let mut pattern = pattern;
+    while let Some(rest) = pattern.strip_prefix("./") {
+        pattern = rest;
+    }
+    alternatives(pattern, true).iter().any(|pattern| {
+        let pattern: Vec<_> = pattern.split('/').collect();
+        let path: Vec<_> = path.split('/').collect();
+        path_match(&pattern, &path, true)
+    })
 }
 
 pub(super) fn matches(rule: &serde_json::Value, path: &str) -> bool {

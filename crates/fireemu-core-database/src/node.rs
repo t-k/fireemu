@@ -484,8 +484,8 @@ impl Assembly {
     /// are read at the object's own place, where [`Node::from_json_owned`] builds a `.value`.
     pub fn member(&self, key: &str, limits: &Limits) -> Option<(usize, usize)> {
         match key {
-            SERVER_VALUE_KEY => None,
             PRIORITY_KEY | VALUE_KEY => Some((self.depth, self.bytes)),
+            // `.sv` holds a dot, which no key may, so it is declined here too.
             _ => self.position(key, limits),
         }
     }

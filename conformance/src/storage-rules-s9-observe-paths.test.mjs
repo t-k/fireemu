@@ -1467,7 +1467,9 @@ describe("storage rules s9 cleanup order and labels", () => {
   });
 
   it("keeps an object that it created although the create answered with a body it could not read", async () => {
-    const stale = nthRootList(2, reply(200, { kind: "storage#objects" }));
+    const staleList = () => nthRootList(2, reply(200, { kind: "storage#objects" }));
+    const staleA = staleList();
+    const staleB = staleList();
     const unreadable = await go({
       recordings: 1,
       intercept: async (req, inner) => {
@@ -1479,7 +1481,7 @@ describe("storage rules s9 cleanup order and labels", () => {
           await inner(req);
           return reply(200, "{}");
         }
-        return stale(req);
+        return staleA(req);
       },
     });
     assert.match(unreadable.report.stopped, /create of mkB answered 200 with an unrecorded body/);
@@ -1498,7 +1500,7 @@ describe("storage rules s9 cleanup order and labels", () => {
           delete body.metadata;
           return { ...res, body: Buffer.from(JSON.stringify(body)) };
         }
-        return stale(req);
+        return staleB(req);
       },
     });
     assert.match(dropped.report.stopped, /did not keep the custom metadata/);
@@ -1593,3 +1595,53 @@ function nthRootList(n, answer) {
   return (req) =>
     isGcsList(req) && prefixOf(req) === rootPrefix && (seen += 1) === n ? answer : undefined;
 }
+
+describe("storage rules s9 one request at a time, locally and after an unrelated unknown", () => {
+  it("sends one local request at a time and waits for each rules load", async () => {
+    const fake = createWorld({
+      project: "demo-storage-s9",
+      bucket: LOCAL_BUCKET,
+      baseline: null,
+      lag: 0,
+    });
+    let inflight = 0;
+    let max = 0;
+    const net = async (req) => {
+      inflight += 1;
+      max = Math.max(max, inflight);
+      try {
+        await new Promise((resolve) => setImmediate(resolve));
+        return await fake.net(req);
+      } finally {
+        inflight -= 1;
+      }
+    };
+    const { report } = await observe({
+      target: { name: "local", bucket: LOCAL_BUCKET, origin: "http://127.0.0.1:9199" },
+      runId,
+      baseline: "local",
+      deps: { net, adminHeaders: () => ({ authorization: "Bearer owner" }), sleep: async () => {} },
+      out: sinks(),
+      recordings: 2,
+    });
+    assert.equal(report.closureReady, true, JSON.stringify(report.problems));
+    assert.equal(max, 1);
+    assert.equal(fake.world.local.rulesSource, LOCAL_BASELINE_RULES);
+  });
+
+  it("still deletes the release at the restore after an unknown answer to some other delete", async () => {
+    const n = await requestNumber("rec1/load/s7-lone-surrogate/delete", {
+      baseline: "absent",
+      recordings: 1,
+    });
+    const { report, world } = await go({
+      baseline: "absent",
+      recordings: 1,
+      intercept: atRequest(n, "transport"),
+    });
+    assert.deepEqual(report.unknowns, ["rec1/load/s7-lone-surrogate/delete"]);
+    assert.equal(world.release, null, "the release was deleted at the restore");
+    assert.equal(world.calls.filter((c) => c.method === "DELETE" && releaseUrl(c)).length, 1);
+    assert.ok(!report.problems.some((p) => /not re-sent/.test(p)));
+  });
+});

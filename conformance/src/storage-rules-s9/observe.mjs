@@ -435,7 +435,7 @@ export async function observe({
   async function runProgram(recording, P, program, previous, masks) {
     const label = `rec${recording}/${program.id}`;
     const rows = rowsOf(program.id).filter((row) => rowFilter === null || rowFilter.has(row.id));
-    if (rows.length === 0) return { published: false, skipped: true };
+    if (rows.length === 0) return null;
     const source = program.source(P);
     let rulesetName = null;
     if (production) {
@@ -444,7 +444,7 @@ export async function observe({
         const record = compileRecord({ recording, id: program.id, response: made.res, masks });
         loads.push({ ...record, stage: "released-program" });
         for (const row of rows) skippedRow(recording, row, "ruleset refused at create");
-        return { published: false };
+        return null;
       }
       rulesetName = made.name;
       const wrote = await writeRelease(`${label}/release`, rulesetName);
@@ -457,7 +457,7 @@ export async function observe({
           status: wrote.status,
         });
         for (const row of rows) skippedRow(recording, row, "release refused");
-        return { published: false };
+        return null;
       }
       const after = await readRelease(`${label}/release-readback`);
       if (after?.state !== "present" || after.rulesetName !== rulesetName)
@@ -473,16 +473,15 @@ export async function observe({
           status: res.status,
         });
         for (const row of rows) skippedRow(recording, row, `setRules answered ${res.status}`);
-        return { published: false };
+        return null;
       }
     }
     lastMarker = program.marker;
     const settled = await settle(label, P, program.marker, previous);
-    const read = [];
     for (const row of rows) {
       if (row.object && refusedCreates.has(objectName(row.object, P)))
         skippedRow(recording, row, "the object could not be created");
-      else read.push(await readRow(recording, P, row, masks));
+      else await readRow(recording, P, row, masks);
     }
     let inForce = true;
     if (production) {
@@ -493,7 +492,7 @@ export async function observe({
       if (!inForce) problem(`${label}: the marker stopped answering 200 while the rows were read`);
     }
     publications.push({ recording, program: program.id, polls: settled.polls, inForce });
-    return { published: true, marker: program.marker, rows: read.length };
+    return program.marker;
   }
 
   async function loadOnly(recording, P, masks) {
@@ -550,7 +549,7 @@ export async function observe({
     let current = await readRelease(`${label}/read`, true);
     if (!isBaseline(current)) {
       if (baseline === "absent") {
-        if (unknownLabels.some((l) => l.includes("restore") && l.endsWith("/delete"))) {
+        if (unknownLabels.some((l) => l.endsWith("/restore/delete"))) {
           problem(`${label}: the release delete was unknown and is not re-sent`);
         } else {
           const res = await wire(
@@ -724,8 +723,9 @@ export async function observe({
       for (const program of PROGRAMS) {
         if (stopped !== null) break;
         await guardedStep(`rec${recording}/${program.id}`, async () => {
-          const result = await runProgram(recording, P, program, previous, masks);
-          if (result.published) previous = result.marker;
+          // The marker of a program that was released, or null when none was.
+          const marker = await runProgram(recording, P, program, previous, masks);
+          if (marker !== null) previous = marker;
         });
       }
       if (stopped === null)

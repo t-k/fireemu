@@ -394,3 +394,84 @@ test("the journal holds metadata only", async () => {
     journal.map((_, i) => i + 1),
   );
 });
+
+test("a refused tenant create stops the recording without looking for a tenant", async () => {
+  const { session, journal } = fakeSession({
+    world: {
+      tenancy: true,
+      faults: [
+        (req) =>
+          req.method === "POST" && req.path.endsWith("tenants")
+            ? { status: 400, json: { error: { code: 400, message: "MULTI_TENANCY_REQUIRED" } } }
+            : undefined,
+      ],
+    },
+  });
+  const recording = await session.runRecording();
+  assert.match(recording.failure, /tenant create was refused \(HTTP 400\)/);
+  assert.equal(journal.filter((e) => e.id === "create-account").length, 0);
+  assert.equal(journal.filter((e) => e.id === "get-tenant").length, 0);
+  assert.equal(recording.closureReady, true);
+  assert.equal(recording.ownership.unknownAnswers.length, 0);
+});
+
+test("a configuration change is settled after its read-back, in production only", async () => {
+  const waits = [];
+  const sleep = async (ms) => waits.push(ms);
+  const prod = fakeSession({
+    world: { tenancy: false },
+    session: { sleep, settleMs: 5000, pollMs: 2000 },
+  });
+  await prod.session.runRecording();
+  // One settle after the switch on and one after the switch off; the first read-back already shows it.
+  assert.deepEqual(waits, [5000, 5000]);
+  waits.length = 0;
+  const local = fakeSession({ world: { tenancy: false }, session: { sleep } });
+  await local.session.runRecording();
+  assert.deepEqual(waits, []);
+});
+
+test("a read-back that lags is polled at the poll interval before the settle", async () => {
+  const waits = [];
+  let lag = 2;
+  const { session } = fakeSession({
+    world: {
+      tenancy: false,
+      lateFaults: [
+        (req, res) => {
+          if (
+            req.method === "GET" &&
+            req.path.startsWith("admin/v2") &&
+            res.json?.multiTenant?.allowTenants === true &&
+            lag > 0
+          ) {
+            lag -= 1;
+            return { status: 200, json: { multiTenant: {} } };
+          }
+          return undefined;
+        },
+      ],
+    },
+    session: { sleep: async (ms) => waits.push(ms), settleMs: 5000, pollMs: 2000 },
+  });
+  const recording = await session.runRecording();
+  assert.equal(recording.closureReady, true);
+  assert.deepEqual(waits.slice(0, 3), [2000, 2000, 5000]);
+});
+
+test("an unreadable 200 from the owner API stops the recording instead of reading as empty", async () => {
+  const { session } = fakeSession({
+    world: {
+      tenancy: true,
+      lateFaults: [
+        (req) =>
+          req.method === "GET" && req.path.startsWith("admin/v2")
+            ? { status: 200, text: "not json" }
+            : undefined,
+      ],
+    },
+  });
+  const recording = await session.runRecording();
+  assert.match(recording.failure, /unreadable body/);
+  assert.equal(recording.fatal, true);
+});

@@ -52,6 +52,9 @@ export function createSession(ctx, options = {}) {
     sleep = defaultSleep,
     pollMs = 2000,
     pollLimit = 30,
+    // Production applies an accepted configuration change before the read-back shows it
+    // (AUTH-TENANT-BLOCKING exploration, 2026-09-24): wait this long after it does.
+    settleMs = ctx.target.kind === "production" ? 5000 : 0,
     log = () => {},
     shouldStop = () => false,
     rows = ROWS,
@@ -125,6 +128,9 @@ export function createSession(ctx, options = {}) {
       throw fatal(
         `harness ${spec.method ?? "POST"} ${spec.path}: ${res.status === 0 ? res.transport : `HTTP ${res.status}`}`,
       );
+    // A 200 whose body cannot be read says nothing: reading it as "off" or "empty" would be a guess.
+    if (res.json === null)
+      throw fatal(`harness ${spec.method ?? "POST"} ${spec.path}: unreadable body`);
     return res.json;
   }
 
@@ -145,7 +151,10 @@ export function createSession(ctx, options = {}) {
     await admin(R.writeTenancy(allow));
     for (let attempt = 0; attempt < pollLimit; attempt += 1) {
       const config = await admin(R.readConfig());
-      if (tenancyIs(config, allow)) return;
+      if (tenancyIs(config, allow)) {
+        if (settleMs) await sleep(settleMs);
+        return;
+      }
       await sleep(pollMs);
     }
     throw fatal(`multi-tenancy did not read back as ${allow}`);
@@ -188,6 +197,9 @@ export function createSession(ctx, options = {}) {
       ctx.tenantId = id;
       return;
     }
+    // A refusal made no tenant: nothing to look for, and nothing to delete.
+    if (res.status >= 400 && res.status < 500 && res.status !== 408)
+      throw fatal(`the tenant create was refused (HTTP ${res.status})`);
     // Unknown (or malformed) answer: look for the tenant by its display name, then read it.
     const settled = await settleTenant(name);
     if (!settled) throw fatal(`the answer to the tenant create is unknown and no read shows it`);

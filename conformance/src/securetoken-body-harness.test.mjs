@@ -255,10 +255,9 @@ test("preflight reads config, the account count and (tenancy on) the tenant list
     return response;
   };
   const { report, problems } = await preflight(ctx, "", { fetchImpl });
-  assert.deepEqual(
-    problems.filter((p) => !/email\/password/.test(p)),
-    [],
-  );
+  assert.deepEqual(problems, []);
+  assert.equal(report.passwordEnabled, true);
+  assert.equal(report.multiTenancy, true);
   assert.equal(report.projectAccounts, 0);
   assert.equal(report.tenantsListed, true);
   assert.ok(seen.every((s) => s.startsWith("GET") || s.endsWith("accounts:query")));

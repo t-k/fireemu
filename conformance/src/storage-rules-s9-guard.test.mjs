@@ -5,6 +5,7 @@ import { describe, it } from "node:test";
 
 import {
   GuardError,
+  RequestBudget,
   classifyRequest,
   isUnknownStatus,
   ownedName,
@@ -428,5 +429,23 @@ describe("storage rules s9 request guard", () => {
       assert.equal(isUnknownStatus(status), true, `${status}`);
     for (const status of [200, 204, 400, 403, 404, 412, 429])
       assert.equal(isUnknownStatus(status), false, `${status}`);
+  });
+
+  it("counts requests against a main cap and, in cleanup, a total cap", () => {
+    const budget = new RequestBudget(3, 5);
+    assert.deepEqual([budget.take(), budget.take(), budget.take()], [1, 2, 3]);
+    assert.throws(() => budget.take(), GuardError);
+    assert.equal(budget.count, 3, "a refused request is not counted");
+    budget.cleanup = true;
+    assert.deepEqual([budget.take(), budget.take()], [4, 5]);
+    assert.throws(() => budget.take(), /request budget exhausted/);
+    assert.equal(budget.count, 5);
+    // The cap is exactly the number of requests that may be sent.
+    const exact = new RequestBudget(1, 1);
+    assert.equal(exact.take(), 1);
+    assert.throws(() => exact.take(), GuardError);
+    assert.equal(new RequestBudget(2, 9).cleanup, false);
+    assert.equal(new RequestBudget(2, 9).totalCap, 9);
+    assert.equal(new RequestBudget(2, 9).mainCap, 2);
   });
 });

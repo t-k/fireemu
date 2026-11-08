@@ -493,6 +493,37 @@ describe("storage rules s9 observation in the fake world", () => {
     }
   });
 
+  it("sends the rule sources and object names to production as UTF-8, with the escape left as text", async () => {
+    const { world } = await run({ recordings: 1 });
+    const created = world.calls.filter((c) => c.method === "POST" && c.url.endsWith("/rulesets"));
+    assert.equal(created.length, 6);
+    const sources = created.map(
+      (c) => JSON.parse(Buffer.from(c.body).toString("utf8")).source.files[0].content,
+    );
+    // U+00E9 and U+1F525 reach the service as their UTF-8 bytes.
+    const units = created.find((c) => Buffer.from(c.body).includes(Buffer.from([0xc3, 0xa9])));
+    assert.ok(units && Buffer.from(units.body).includes(Buffer.from([0xf0, 0x9f, 0x94, 0xa5])));
+    // The lone surrogate stays a six-character escape in the source text.
+    const s7 = sources.find((source) => source.includes("ud83d"));
+    assert.ok(s7.includes('"\\ud83d".size() == 1'));
+    assert.ok(
+      !sources.some((source) =>
+        /[\ud800-\udfff]/.test(source.replace(/[\ud800-\udbff][\udc00-\udfff]/g, "")),
+      ),
+      "no lone surrogate in any source",
+    );
+    // Object names are percent-encoded UTF-8 in every URL, and the empty segments survive.
+    const gets = world.calls.filter(
+      (c) => c.method === "GET" && c.url.includes("/v0/") && c.url.includes("%2F%2Fx"),
+    );
+    assert.ok(gets.some((c) => c.url.includes("pub%2F%2Fx")));
+    assert.ok(world.calls.some((c) => c.url.includes("s1a%2F%C3%A9%F0%9F%94%A5x")));
+    assert.ok(
+      world.calls.some((c) => c.url.includes("/o/%2Fstorage-rules-s9%2F")),
+      "the leading slash is encoded, not dropped",
+    );
+  });
+
   it("reads only the filtered rows (dry runs)", async () => {
     const { report } = await run({
       rowFilter: new Set(["pub-plain-meta", "c1-true"]),
@@ -528,6 +559,221 @@ describe("storage rules s9 observation in the fake world", () => {
       0,
       "nothing was written",
     );
+  });
+});
+
+describe("storage rules s9 observation details", () => {
+  const deps = (fake) => ({ net: fake.net, adminHeaders: () => owner, sleep: noSleep });
+
+  it("refuses a baseline that is not a ruleset name before sending anything", async () => {
+    const fake = createWorld({ project, bucket, baseline: baselineName, lag: 0 });
+    await assert.rejects(
+      observe({ target, runId, baseline: "present", deps: deps(fake), out: memoryOut() }),
+      /baseline is neither/,
+    );
+    assert.equal(fake.world.calls.length, 0);
+  });
+
+  it("reports a failing journal or save sink instead of ending the run, keeping at most twenty notes", async () => {
+    const fake = createWorld({ project, bucket, baseline: baselineName, lag: 0 });
+    const out = {
+      journal() {
+        throw new Error("disk full");
+      },
+      save() {
+        throw new Error("read-only");
+      },
+    };
+    const { report } = await observe({
+      target,
+      runId,
+      baseline: baselineName,
+      deps: deps(fake),
+      out,
+    });
+    assert.equal(report.complete, true, "the run itself went on");
+    assert.equal(
+      report.reportingErrors.length,
+      3,
+      "one note per distinct failure, not one per call",
+    );
+    assert.deepEqual(report.reportingErrors.sort(), [
+      "entry.json: read-only",
+      "journal: disk full",
+      "results.json: read-only",
+    ]);
+    assert.equal(report.closureReady, false);
+    assert.equal(fake.world.objects.size, 0);
+    // Each failing call with a new message adds a note, up to twenty.
+    let n = 0;
+    const noisy = {
+      journal() {
+        throw new Error(`journal ${n++}`);
+      },
+      save() {
+        throw new Error("save");
+      },
+    };
+    const second = createWorld({ project, bucket, baseline: baselineName, lag: 0 });
+    const result = await observe({
+      target,
+      runId,
+      baseline: baselineName,
+      deps: deps(second),
+      out: noisy,
+    });
+    assert.equal(result.report.reportingErrors.length, 20);
+    assert.equal(result.report.reportingErrors[0], "journal: journal 0");
+  });
+
+  it("keeps each problem once and at most sixty", async () => {
+    const fake = createWorld({ project, bucket, baseline: baselineName, lag: 0 });
+    // Every object create is refused with its own status text; the same problem text appears for both recordings.
+    const inner = fake.net;
+    const net = async (req) => {
+      if (req.method === "POST" && req.url.includes("/upload/"))
+        return { status: 400, headers: {}, body: Buffer.from("{}") };
+      return inner(req);
+    };
+    const { report } = await observe({
+      target,
+      runId,
+      baseline: baselineName,
+      deps: { net, adminHeaders: () => owner, sleep: noSleep },
+      out: memoryOut(),
+    });
+    const creates = report.problems.filter((p) => p.startsWith("create of "));
+    assert.equal(
+      creates.length,
+      27,
+      "27 objects, each noted once although two recordings refuse it",
+    );
+    assert.equal(new Set(report.problems).size, report.problems.length);
+    assert.ok(report.problems.length <= 60);
+  });
+
+  it("sends the content types of the recorded requests", async () => {
+    const { world } = await run({ recordings: 1 });
+    const types = (test) =>
+      world.calls
+        .filter(test)
+        .map(
+          (c) =>
+            Object.fromEntries(
+              Object.entries(c.headers ?? {}).map(([k, v]) => [k.toLowerCase(), v]),
+            )["content-type"],
+        );
+    assert.ok(
+      types((c) => c.method === "POST" && c.url.includes("uploadType=media")).every(
+        (t) => t === "text/plain",
+      ),
+    );
+    assert.ok(
+      types((c) => c.method === "POST" && c.url.includes("uploadType=multipart")).every((t) =>
+        /^multipart\/related; boundary=s9boundary0123$/.test(t),
+      ),
+    );
+    assert.ok(
+      types((c) => c.method === "POST" && c.url.endsWith("/rulesets")).every(
+        (t) => t === "application/json",
+      ),
+    );
+    assert.ok(types((c) => c.method === "PATCH").every((t) => t === "application/json"));
+    assert.equal(
+      types((c) => c.method === "GET").every((t) => t === undefined),
+      true,
+    );
+  });
+
+  it("stops and later deletes an object whose create answered 200 with a body it does not know", async () => {
+    const fake = createWorld({ project, bucket, baseline: baselineName, lag: 0 });
+    const inner = fake.net;
+    const net = async (req) => {
+      const res = await inner(req);
+      if (
+        req.method === "POST" &&
+        req.url.includes("/upload/") &&
+        new URL(req.url).searchParams.get("name") === objectName("mkB", P1)
+      )
+        return { ...res, body: Buffer.from("{}") };
+      return res;
+    };
+    const { report } = await observe({
+      target,
+      runId,
+      baseline: baselineName,
+      deps: { net, adminHeaders: () => owner, sleep: noSleep },
+      out: memoryOut(),
+    });
+    assert.match(report.stopped, /create of mkB answered 200 with an unrecorded body/);
+    assert.equal(fake.world.objects.size, 0, "the object is found by the cleanup list and deleted");
+    assert.equal(report.closureReady, false);
+  });
+
+  it("keeps an object it stored under another name in the cleanup", async () => {
+    const fake = createWorld({ project, bucket, baseline: baselineName, lag: 0 });
+    const inner = fake.net;
+    const leading = objectName("pubLeading", P1);
+    const net = async (req) => {
+      const url = new URL(req.url);
+      if (req.method === "POST" && url.searchParams.get("name") === leading) {
+        const res = await inner({
+          ...req,
+          url: req.url.replace(
+            encodeURIComponent(leading),
+            encodeURIComponent("renamed-by-server"),
+          ),
+        });
+        const body = JSON.parse(res.body.toString("utf8"));
+        // The server reports a name outside the run root; the cleanup list (by prefix) cannot see it.
+        body.name = objectName("pubPlain", P1) + "-stored";
+        fake.world.objects.set(body.name, fake.world.objects.get("renamed-by-server"));
+        fake.world.objects.delete("renamed-by-server");
+        return { ...res, body: Buffer.from(JSON.stringify(body)) };
+      }
+      return inner(req);
+    };
+    const { report } = await observe({
+      target,
+      runId,
+      baseline: baselineName,
+      deps: { net, adminHeaders: () => owner, sleep: noSleep },
+      out: memoryOut(),
+      recordings: 1,
+    });
+    assert.ok(report.problems.some((p) => /stored under another name/.test(p)));
+    assert.equal(fake.world.objects.size, 0, "the reported name is deleted by its generation");
+  });
+
+  it("reads the markers as reads: a lost answer does not end the run", async () => {
+    const fake = createWorld({ project, bucket, baseline: baselineName, lag: 0 });
+    const inner = fake.net;
+    let lost = 0;
+    const net = async (req) => {
+      const path = decodeURIComponent(new URL(req.url).pathname);
+      if (
+        req.method === "GET" &&
+        path.includes("/v0/") &&
+        path.endsWith(`${P1}/mk/a`) &&
+        lost < 1
+      ) {
+        lost += 1;
+        throw new Error("reset");
+      }
+      return inner(req);
+    };
+    const { report } = await observe({
+      target,
+      runId,
+      baseline: baselineName,
+      deps: { net, adminHeaders: () => owner, sleep: noSleep },
+      out: memoryOut(),
+      recordings: 1,
+    });
+    // The setup pre-read was lost: not a 200, so the run goes on and the program settles later.
+    assert.equal(report.stopped, null);
+    assert.equal(report.unknownReads, 1);
+    assert.deepEqual(report.unknowns, []);
   });
 });
 

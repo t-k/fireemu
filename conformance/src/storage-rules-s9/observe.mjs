@@ -72,21 +72,22 @@ export async function observe({
   const bounds = staticBounds(recordings);
   const budget = new RequestBudget(caps?.main ?? bounds.main, caps?.total ?? bounds.total);
   const reportingErrors = [];
+  const noteReportingError = (text) => {
+    if (reportingErrors.length < 20 && !reportingErrors.includes(text)) reportingErrors.push(text);
+  };
   const out = {
     journal(entry) {
       try {
         rawOut.journal(entry);
       } catch (error) {
-        if (reportingErrors.length < 20)
-          reportingErrors.push(`journal: ${error?.message ?? error}`);
+        noteReportingError(`journal: ${error?.message ?? error}`);
       }
     },
     save(name, data) {
       try {
         rawOut.save(name, data);
       } catch (error) {
-        if (reportingErrors.length < 20)
-          reportingErrors.push(`${name}: ${error?.message ?? error}`);
+        noteReportingError(`${name}: ${error?.message ?? error}`);
       }
     },
   };

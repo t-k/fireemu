@@ -345,6 +345,15 @@ impl CompatibilityProfile {
     pub const fn end_user_transactions(self) -> bool {
         matches!(self, Self::Emulator)
     }
+
+    /// Whether a Firestore query authorization also gives the official emulator's answers to
+    /// shapes production has not been recorded answering: an `OR` mixing a branch that names a
+    /// document with one that names none (production asked for a composite index first,
+    /// FS-RULES-SHAPES 2026-11-08). `strict` refuses them until production is recorded.
+    #[must_use]
+    pub const fn official_query_answers(self) -> bool {
+        matches!(self, Self::Emulator)
+    }
 }
 
 /// The Emulator Hub's official default port (`firebase-tools` `Constants.getDefaultPort`).
@@ -7360,6 +7369,7 @@ mod tests {
         assert!(emulator.implicit_database_creation);
         assert!(!emulator.refuse_without_ruleset);
         assert!(emulator.end_user_transactions);
+        assert!(emulator.profile.official_query_answers());
         assert!(!emulator.listen_stream_lifetime);
 
         // strict: every one of those becomes production's refusal, including a missing
@@ -7371,6 +7381,7 @@ mod tests {
         assert!(!strict.implicit_database_creation);
         assert!(strict.refuse_without_ruleset);
         assert!(!strict.end_user_transactions);
+        assert!(!strict.profile.official_query_answers());
         // The one-hour Listen lifetime is a development default (owner decision 2026-10-13).
         assert!(!strict.listen_stream_lifetime);
     }

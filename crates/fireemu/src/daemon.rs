@@ -1144,6 +1144,7 @@ fn firestore_profile_settings(
         ))
         .with_refusal_without_ruleset(cfg.refuse_without_ruleset)
         .with_end_user_transactions(cfg.end_user_transactions)
+        .with_official_query_answers(cfg.profile.official_query_answers())
         .with_listen_stream_lifetime(cfg.listen_stream_lifetime)
 }
 

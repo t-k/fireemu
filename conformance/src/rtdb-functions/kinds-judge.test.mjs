@@ -161,6 +161,32 @@ test("members beyond the recorded shapes make the run need review", () => {
   assert.deepEqual(judge(frames), ["frames carry unnamed members: domain"]);
 });
 
+test("the user-write context of the SDK is accepted on 2nd gen handlers in exactly the recorded key set", () => {
+  const keys = ["auth", "authType", "eventId", "eventType", "params", "resource", "timestamp"];
+  const frames = frameSet();
+  const v2 = frames.find((f) => f.handler === "k9CreatedV2");
+  v2.event.eventKeys = [...NAMED_EVENT_MEMBERS, "context"];
+  v2.event.extras = { context: { type: "object", keys } };
+  assert.deepEqual(judge(frames), []);
+  // one key more, one key less, another order and the wrong type are not the recorded shape
+  for (const shape of [
+    { type: "object", keys: [...keys, "extra"] },
+    { type: "object", keys: keys.slice(1) },
+    { type: "object", keys: [...keys].reverse() },
+    { type: "array", keys },
+  ]) {
+    v2.event.extras = { context: shape };
+    assert.deepEqual(judge(frames), ["frames carry unnamed members: context"]);
+  }
+  // a 1st gen handler has no such member
+  const v1 = frames.find((f) => f.handler === "k9CreatedV1");
+  v2.event.extras = {};
+  v2.event.eventKeys = [...NAMED_EVENT_MEMBERS];
+  v1.event.context.contextKeys = [...NAMED_CONTEXT_MEMBERS, "context"];
+  v1.event.context.extras = { context: { type: "object", keys } };
+  assert.deepEqual(judge(frames), ["frames carry unnamed members: context"]);
+});
+
 test("replays the CV14 production frames: every member is a recorded shape for its kind", () => {
   const recording = JSON.parse(
     readFileSync(new URL("./recorded/production-rtdb-triggers.json", import.meta.url), "utf8"),

@@ -182,17 +182,23 @@ export async function runLocal({ fireemu, profile, out }) {
       password,
       returnSecureToken: true,
     });
+    let sdkCounts = null;
+    const runner = browserRunner({
+      modules: path.resolve(here, "../../node_modules"),
+      pageFile: KINDS_SCENARIO.sdk.pageFile,
+      ids: KINDS_SCENARIO.sdk.ids,
+      caps: { http: 400, ws: 4 },
+      allowHost: (host) =>
+        [ports.http, ports.database].some(
+          (port) => host === `127.0.0.1:${port}` || host === `localhost:${port}`,
+        ),
+    });
     const sdk = openSdk(
-      browserRunner({
-        modules: path.resolve(here, "../../node_modules"),
-        pageFile: KINDS_SCENARIO.sdk.pageFile,
-        ids: KINDS_SCENARIO.sdk.ids,
-        caps: { http: 400, ws: 4 },
-        allowHost: (host) =>
-          [ports.http, ports.database].some(
-            (port) => host === `127.0.0.1:${port}` || host === `localhost:${port}`,
-          ),
-      }),
+      async (...args) => {
+        const done = await runner(...args);
+        sdkCounts = done.counts;
+        return done;
+      },
       {
         apiKey: "fake-api-key",
         projectId: "demo-cv14",
@@ -251,6 +257,8 @@ export async function runLocal({ fireemu, profile, out }) {
       return { frames, writes, profile };
     } finally {
       await sdk.close();
+      // the browser's HTTP and WebSocket requests, counted against the run's caps (local hosts only)
+      writeFileSync(path.join(out, "sdk-counts.json"), `${JSON.stringify(sdkCounts)}\n`);
     }
   } finally {
     await stop();

@@ -42,6 +42,23 @@ export const FIXTURE_HANDLERS = [
   Object.freeze({ name, generation, event, level, required }),
 );
 
+/**
+ * The 2nd gen `context` member of an event written by a signed-in user: the SDK adds the compatibility
+ * context with `authType` and `auth` when the event's auth type is `app_user`
+ * (lib/v2/providers/database.js makeV1Context, independent of the event type). Production recorded it on
+ * the `written` handlers of RTDB-TRIGGERS-BREADTH-20261105-02 (recorded/production-rtdb-breadth.json,
+ * user writes); nothing recorded it on a created, updated or deleted handler, so it is accepted there
+ * only in exactly that key set.
+ */
+const USER_CONTEXT_KEYS = Object.freeze([
+  "auth",
+  "authType",
+  "eventId",
+  "eventType",
+  "params",
+  "resource",
+  "timestamp",
+]);
 const CV14_NAME = { create: "Created", update: "Updated", delete: "Deleted", write: "Written" };
 const BY_NAME = new Map(FIXTURE_HANDLERS.map((handler) => [handler.name, handler]));
 
@@ -52,5 +69,14 @@ const BY_NAME = new Map(FIXTURE_HANDLERS.map((handler) => [handler.name, handler
 export function isRecordedMember(handler, generation, member, value) {
   const entry = BY_NAME.get(handler);
   if (!entry || entry.generation !== generation) return false;
+  if (
+    generation === 2 &&
+    member === "context" &&
+    value?.type === "object" &&
+    Array.isArray(value.keys) &&
+    value.keys.length === USER_CONTEXT_KEYS.length &&
+    USER_CONTEXT_KEYS.every((key, index) => value.keys[index] === key)
+  )
+    return true;
   return cv14Member(`rtdb${CV14_NAME[entry.event]}V${generation}`, generation, member, value);
 }

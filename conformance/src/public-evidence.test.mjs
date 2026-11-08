@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
+import { gunzipSync } from "node:zlib";
 
 import * as evidence from "./evidence.mjs";
 import { collectHistoricalReplay } from "./release-strict-regression.mjs";
@@ -248,6 +250,38 @@ test("the historical daemonLog may name only the binding's own paths", async (t)
   // A daemonLog outside the root profileBinding gets no allowance.
   writeFileSync(summaryPath, JSON.stringify({ profileBinding, rows: [{ daemonLog }] }));
   await assert.rejects(collectHistoricalReplay(directory, output));
+});
+
+test("the committed EVENTARC comparison, which R20's export copy reproduces, passes the guard", () => {
+  // R20 copies its export to EVENTARC-comparison.json; the v0.45.0 release job refused that copy.
+  const committed = join(
+    dirname(fileURLToPath(import.meta.url)),
+    "../../spec/compatibility/closure/evidence/EVENTARC-comparison.json.gz",
+  );
+  const bytes = gunzipSync(readFileSync(committed));
+  assert.doesNotThrow(() => evidence.publicEvidenceBytes(bytes));
+});
+
+test("only the EVENTARC recorder's event source and loopback SDK base are exempt", () => {
+  const safe = {
+    sdk: { base: "http://127.0.0.1:64260" },
+    events: [{ source: "//fireemu/recorder/43a83839852f" }],
+  };
+  assert.equal(publicEvidence(safe), safe);
+  for (const unsafe of [
+    { base: "http://127.0.0.1:64260/v1" },
+    { base: "http://localhost:64260" },
+    { base: "https://127.0.0.1:64260" },
+    { base: "http://127.0.0.1:642601" },
+    { endpoint: "http://127.0.0.1:64260" },
+    { source: "//fireemu/recorder/43a83839852" },
+    { source: "//fireemu/recorder/43A83839852F" },
+    { source: "//fireemu/recorder/43a83839852f/x" },
+    { source: "//fireemu/recorder/../../tmp" },
+    { source: `//${"Users"}/someone/secret.json` },
+    { path: "//fireemu/recorder/43a83839852f" },
+  ])
+    assert.throws(() => publicEvidence(unsafe), undefined, JSON.stringify(unsafe));
 });
 
 test("the API exception preserves finite EVENTARC channel query shapes and refuses unsafe queries", () => {

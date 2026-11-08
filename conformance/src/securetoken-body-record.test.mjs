@@ -275,10 +275,7 @@ function slowly(d) {
   let running = null;
   const slow = {};
   for (const [name, fn] of Object.entries(d)) {
-    if (
-      typeof fn !== "function" ||
-      ["recordOnce", "warn", "log", "now", "installSignals"].includes(name)
-    ) {
+    if (typeof fn !== "function" || ["recordOnce", "warn", "log", "now"].includes(name)) {
       slow[name] = fn;
       continue;
     }
@@ -304,7 +301,7 @@ test("the effects run one at a time, in the order that makes every refusal come 
     events.filter((e) => e.startsWith("OVERLAP")),
     [],
   );
-  const head = events.slice(0, events.indexOf("appendLedger") + 1);
+  const head = events.slice(0, events.indexOf("installSignals") + 1);
   assert.deepEqual(head, [
     "assertCleanTree",
     "readLedger",
@@ -317,6 +314,7 @@ test("the effects run one at a time, in the order that makes every refusal come 
     "assertIgnored",
     "makeRunDir",
     "appendLedger",
+    "installSignals",
   ]);
   // Then each recording is scanned before it is written, then the meta, the scan and write of the fixture, and the closing line.
   assert.deepEqual(events.slice(head.length), [
@@ -528,4 +526,62 @@ test("a recording releases its ownership ledger, so the same directory can be us
   };
   await recordWith(target, dir, 2, failing);
   assert.ok(!existsSync(join(dir, "issued-2.jsonl.lock")));
+});
+
+test("it records exactly twice, numbered 1 and 2, and says what it recorded", async () => {
+  const d = deps();
+  const logs = [];
+  d.log = (text) => logs.push(text);
+  const original = d.recordOnce;
+  const numbers = [];
+  d.recordOnce = async (n, web, options) => {
+    numbers.push(n);
+    if (numbers.length > 2) throw new Error("a third recording was started");
+    return original(n, web, options);
+  };
+  const result = await recordProduction(ENV, d);
+  assert.deepEqual(result, { outcome: "recorded", exitCode: 0 });
+  assert.deepEqual(numbers, [1, 2]);
+  assert.equal(logs.length, 1);
+  assert.equal(logs[0], JSON.stringify({ rows: ROWS.length, requests: 2 * (24 + 23) }, null, 2));
+});
+
+test("the closing ledger line carries unknowns, cleanup errors and an error only when there are some", async () => {
+  const clean = deps();
+  await recordProduction(ENV, clean);
+  const end = clean.ledger.at(-1);
+  for (const key of ["unknowns", "cleanupErrors", "error"]) assert.equal(key in end, false, key);
+  assert.deepEqual(Object.keys(end).toSorted(), [
+    "closureReady",
+    "corpusDigest",
+    "estimatedUsd",
+    "gitSha",
+    "outcome",
+    "project",
+    "recordings",
+    "requests",
+    "rows",
+    "taskId",
+    "ts",
+  ]);
+  const only = (extra) => {
+    const d = deps();
+    d.recordOnce = async () => stub(extra);
+    return d;
+  };
+  const withUnknown = only({
+    unknowns: [{ call: "delete x", answer: "server-error" }],
+    closureReady: false,
+  });
+  await recordProduction(ENV, withUnknown);
+  assert.deepEqual(withUnknown.ledger.at(-1).unknowns, [
+    { call: "delete x", answer: "server-error" },
+    { call: "delete x", answer: "server-error" },
+  ]);
+  assert.equal("cleanupErrors" in withUnknown.ledger.at(-1), false);
+  const withCleanup = only({ cleanupErrors: ["tenant: x"], closureReady: false });
+  await recordProduction(ENV, withCleanup);
+  assert.deepEqual(withCleanup.ledger.at(-1).cleanupErrors, ["tenant: x", "tenant: x"]);
+  assert.equal("unknowns" in withCleanup.ledger.at(-1), false);
+  assert.equal("error" in withCleanup.ledger.at(-1), false);
 });

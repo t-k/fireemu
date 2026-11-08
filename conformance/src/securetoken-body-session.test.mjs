@@ -349,7 +349,7 @@ test("the request ceiling stops the rows; cleanup has its own budget", async () 
 test("a switch that does not read back stops the recording before any write beyond it", async () => {
   const { session, world, journal } = fakeSession({
     world: { faults: [(req) => (req.method === "PATCH" ? { status: 200, json: {} } : undefined)] },
-    session: { pollLimit: 3 },
+    session: { pollLimit: 3, sleep: boundedSleep() },
   });
   const recording = await session.runRecording();
   assert.match(recording.failure, /did not read back/);
@@ -515,7 +515,7 @@ test("the defaults: a minute per request, 30 polls of 2 s before giving up", asy
         ],
       },
       // `undefined` leaves the session's own defaults in place.
-      session: { pollMs: undefined, pollLimit: undefined, sleep: async (ms) => waits.push(ms) },
+      session: { pollMs: undefined, pollLimit: undefined, sleep: boundedSleep(waits) },
     });
     const recording = await session.runRecording();
     assert.match(recording.failure, /did not read back/);
@@ -1111,6 +1111,14 @@ test("a run that never asked for a tenant does not audit for one", async () => {
 
 // ---- finding a tenant whose create answer was lost --------------------------------------------
 
+/** A sleep that records its waits and fails loudly instead of letting a poll loop run for ever. */
+function boundedSleep(waits = []) {
+  return async (ms) => {
+    waits.push(ms);
+    if (waits.length > 200) throw new Error("the poll loop does not end");
+  };
+}
+
 const ledgerRows = (path) =>
   readFileSync(path, "utf8")
     .split("\n")
@@ -1562,4 +1570,58 @@ test("the project id never appears in a message the record keeps", async () => {
   const recording = await session.runRecording();
   assert.equal(recording.failure, "broke while talking to <project>");
   assert.ok(!JSON.stringify(recording).includes(SANDBOX_PROJECT));
+});
+
+// ---- a tenant create that answers wrongly in ways that look like success --------------------------
+
+test("a failed status carrying a tenant's name is still a lost answer: the tenant is found by a read", async () => {
+  const { session, ledgerPath, journal } = fakeSession({
+    world: {
+      lateFaults: [
+        (req, res) =>
+          req.method === "POST" && req.path.endsWith("tenants") && res.status === 200
+            ? { status: 503, json: res.json }
+            : undefined,
+      ],
+    },
+  });
+  const recording = await session.runRecording();
+  assert.equal(recording.failure, undefined);
+  assert.equal(recording.closureReady, true);
+  const rows = ledgerRows(ledgerPath).filter((r) => r.name === "tenant:stb-1794000000");
+  const answer = rows.find((r) => r.phase === "answer" && r.action === "create");
+  assert.equal(answer.class, "unknown");
+  assert.equal(answer.status, 503);
+  assert.equal(answer.reason, "server-error");
+  // Settled by a read (the search), then read back once more after its own delete.
+  assert.equal(rows.filter((r) => r.phase === "read").length, 2);
+  assert.equal(recording.ownership.unknownAnswers[0].settled, true);
+  assert.ok(journal.filter((e) => e.id === "get-tenant").length >= 2);
+});
+
+test("a 200 that names the wrong display name, or no tenant, is read back before it is trusted", async () => {
+  for (const [name, change] of [
+    ["another display name", (json) => ({ ...json, displayName: "someone-else" })],
+    ["no name", (json) => ({ displayName: json.displayName })],
+  ]) {
+    const { session, ledgerPath } = fakeSession({
+      world: {
+        lateFaults: [
+          (req, res) =>
+            req.method === "POST" && req.path.endsWith("tenants") && res.status === 200
+              ? { status: 200, json: change(res.json) }
+              : undefined,
+        ],
+      },
+    });
+    const recording = await session.runRecording();
+    assert.equal(recording.closureReady, true, name);
+    const rows = ledgerRows(ledgerPath).filter((r) => r.name === "tenant:stb-1794000000");
+    const answer = rows.find((r) => r.phase === "answer" && r.action === "create");
+    // Another display name: the id was readable, so the answer is a create; no name: it is unreadable.
+    assert.equal(answer.status, 200, name);
+    assert.equal(answer.class, name === "no name" ? "unknown" : "ok", name);
+    // Either way the tenant is looked up and read before the run goes on, and read back after its delete.
+    assert.equal(rows.filter((r) => r.phase === "read").length, 2, name);
+  }
 });

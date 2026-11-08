@@ -606,3 +606,32 @@ test("a preflight read waits a minute at most", async () => {
     timeouts.mock.restore();
   }
 });
+
+test("a failed tenant list is a failed read, and a count of tenants is a problem", async () => {
+  const fetchFor = (fake) => (url, init) => {
+    const parsed = new URL(url);
+    return fake.fetch(`http://127.0.0.1:1${parsed.pathname}${parsed.search}`, init);
+  };
+  const broken = createWorld({
+    project: SANDBOX_PROJECT,
+    number: NUMBER,
+    tenancy: true,
+    faults: [(r) => (r.path.endsWith("/tenants") ? { status: 500, json: {} } : undefined)],
+  });
+  const a = await preflight(production(), "", { fetchImpl: fetchFor(broken) });
+  assert.deepEqual(a.report.failedReads, ["tenants (HTTP 500)"]);
+  assert.deepEqual(a.problems, ["preflight read failed: tenants (HTTP 500)"]);
+  const crowded = createWorld({ project: SANDBOX_PROJECT, number: NUMBER, tenancy: true });
+  crowded.world.tenants.set("a", { id: "a", name: "projects/1/tenants/a", displayName: "one-one" });
+  crowded.world.tenants.set("b", { id: "b", name: "projects/1/tenants/b", displayName: "two-two" });
+  const b = await preflight(production(), "", { fetchImpl: fetchFor(crowded) });
+  assert.equal(b.report.tenants, 2);
+  assert.deepEqual(b.problems, ["2 tenant(s) exist"]);
+  // With tenancy off nothing is listed and no tenant is counted.
+  const off = createWorld({ project: SANDBOX_PROJECT, number: NUMBER, tenancy: false });
+  off.world.tenants.set("a", { id: "a", name: "projects/1/tenants/a", displayName: "one-one" });
+  const c = await preflight(production(), "", { fetchImpl: fetchFor(off) });
+  assert.equal(c.report.tenants, 0);
+  assert.equal(c.report.tenantsListed, false);
+  assert.deepEqual(c.problems, []);
+});

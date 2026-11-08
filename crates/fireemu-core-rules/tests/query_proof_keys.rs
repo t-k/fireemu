@@ -92,24 +92,6 @@ fn constrained_data() -> impl Strategy<Value = BTreeMap<String, RulesValue>> {
         .prop_map(|m| m.into_iter().map(|(k, v)| (k.to_owned(), v)).collect())
 }
 
-/// The test's own reading of "holds a value the query does not determine anywhere".
-fn holds_unknown(value: &RulesValue) -> bool {
-    match value {
-        RulesValue::Unknown => true,
-        RulesValue::List(items)
-        | RulesValue::Set(items)
-        | RulesValue::PartialList(items)
-        | RulesValue::PartialListAny(items)
-        | RulesValue::OneOf(items)
-        | RulesValue::NotOneOf(items) => items.iter().any(holds_unknown),
-        RulesValue::Map(fields) | RulesValue::PartialMap(fields) => {
-            fields.values().any(holds_unknown)
-        }
-        RulesValue::PartialMapExcluding { fields, .. } => fields.values().any(holds_unknown),
-        _ => false,
-    }
-}
-
 proptest! {
     #![proptest_config(ProptestConfig { cases: 256, ..ProptestConfig::default() })]
 
@@ -137,16 +119,19 @@ proptest! {
         prop_assert!(!allows("null == resource", &query));
     }
 
-    /// A container built from a value the query does not determine is not provably non-null:
-    /// building it from the stored document may fail on a missing field (review 2026-11-08:
-    /// `[resource.data.secret] != null`). Built from constrained values it cannot fail.
+    /// A container built from a value the query does not determine exactly is not provably
+    /// non-null: building it from the stored document may fail on a missing field (reviews
+    /// 2026-11-08: `[resource.data.secret] != null`), and a container holding any undetermined
+    /// value is undetermined as a whole (r4). Built from exact values it cannot fail.
     #[test]
     fn a_container_of_an_undetermined_read_is_not_provably_non_null(
         data in constrained_data(),
         key in prop::sample::select(KEYS.to_vec()),
     ) {
         let constrained = data.contains_key(key);
-        let unknown_value = data.get(key).is_some_and(holds_unknown);
+        let exact = data.get(key).is_some_and(|value| {
+            matches!(value, RulesValue::Null | RulesValue::Int(_) | RulesValue::String(_))
+        });
         let query = ctx(data, true);
         for condition in [
             format!("[resource.data.{key}] != null"),
@@ -154,7 +139,7 @@ proptest! {
             format!("[[resource.data.{key}]] != null"),
             format!("null != [1, resource.data.{key}]"),
         ] {
-            let expected = constrained && !unknown_value;
+            let expected = constrained && exact;
             prop_assert_eq!(allows(&condition, &query), expected, "{}", condition);
         }
         for condition in ["[resource.id] != null", "{'r': resource.id} != null", "{'r': resource} != null"] {

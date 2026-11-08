@@ -1606,6 +1606,34 @@ fn shape_operations_on_built_containers_keep_failing_reads_undetermined() {
     ] {
         assert!(!allows(&rules(cond), &query), "{cond} must not be provable");
     }
+    // Every other operation on such a container is undetermined too: a type test, a member
+    // or index projection (of another, determined member), equality, a ternary over it, or
+    // passing it to a function (review 2026-11-08 r4).
+    for cond in [
+        "{'k': resource.data.secret} is map",
+        "[resource.data.secret] is list",
+        "!({'k': resource.data.secret} is string)",
+        "{'bad': resource.data.secret, 'ok': true}.ok",
+        "{'bad': resource.data.secret, 'ok': true}['ok']",
+        "[resource.data.secret, true][1]",
+        "[resource.data.secret, 1][0:1] == [resource.data.secret]",
+        "{'k': resource.data.secret} != {'k': 1}",
+        "[resource.data.secret] != [1]",
+        "{'bad': resource.data.role, 'ok': true}.ok",
+    ] {
+        assert!(!allows(&rules(cond), &query), "{cond} must not be provable");
+    }
+    // Only the key set of a map holding undetermined values is known: not its values.
+    assert!(!allows(&rules("resource.values().size() == 3"), &query));
+    assert!(!allows(&rules("request.values().size() > 0"), &query));
+    // A container of determined values answers as before.
+    for cond in [
+        "{'k': resource.data.a} is map",
+        "{'k': resource.data.a, 'ok': true}.ok",
+        "[resource.data.a, true][1]",
+    ] {
+        assert!(allows(&rules(cond), &query), "{cond} must hold");
+    }
     // A binding named `resource` is not the query's resource.
     let shadowed = "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { function count(resource) { return resource.keys().size() == 1; } match /notes/{id} { allow list: if count({'k': resource.data.secret}); } } }";
     assert!(!allows(shadowed, &query));

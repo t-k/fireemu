@@ -6,3 +6,4 @@
 # everyone who runs the test benefits from these saved cases.
 cc fb814a4e9ba82cf6f60d6ff0f1fe7726eb804a232995aa25f75cd7a381848d1e # shrinks to data = {}, key = "a"
 cc be4597c7a15466618458d105401bd3b76e6ee105bc4f1daf7cb4bb0b2c41b727 # shrinks to inner = {}, key = "a"
+cc 660d48d218834bfd6521c0f55edf6e4b51a949eb6667bb6cf6ad3f60c900bf5c # shrinks to data = {"a": OneOf([String("x"), Int(1)])}, key = "a"

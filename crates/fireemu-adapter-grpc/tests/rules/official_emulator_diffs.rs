@@ -849,9 +849,9 @@ service cloud.firestore {
     }
 }
 
-/// The review's case (2026-11-08 r3): a map or list the rule builds from a field the query does
-/// not constrain may fail to build on a stored document lacking it, so no shape operation on
-/// it is proven, in either profile. Shape reads of `request` and `resource` stay proven.
+/// The reviews' cases (2026-11-08 r3 and r4): a map or list the rule builds from a field the
+/// query does not constrain may fail to build on a stored document lacking it, so no operation
+/// on it (a shape read, a type test, a member of it) is proven, in either profile. Shape reads of `request` and `resource` stay proven.
 #[tokio::test]
 async fn shape_operations_on_a_built_container_do_not_hide_a_missing_field() {
     const SHAPE_RULES: &str = r"rules_version = '2';
@@ -860,6 +860,9 @@ service cloud.firestore {
     match /map-size/{id} { allow list: if {'k': resource.data.secret}.size() == 1; }
     match /map-keys/{id} { allow list: if {'k': resource.data.secret}.keys().hasOnly(['k']); }
     match /list-size/{id} { allow list: if [resource.data.secret].size() == 1; }
+    match /map-is/{id} { allow list: if {'k': resource.data.secret} is map; }
+    match /list-is/{id} { allow list: if [resource.data.secret] is list; }
+    match /map-member/{id} { allow list: if {'bad': resource.data.secret, 'ok': true}.ok; }
     match /request-keys/{id} { allow list: if request.keys().hasAll(['auth', 'path']); }
     match /resource-keys/{id} { allow list: if resource.keys().hasAll(['data', 'id']); }
   }
@@ -873,6 +876,9 @@ service cloud.firestore {
                     a1("map-size/d"),
                     a1("map-keys/d"),
                     a1("list-size/d"),
+                    a1("map-is/d"),
+                    a1("list-is/d"),
+                    a1("map-member/d"),
                     a1("request-keys/d"),
                     a1("resource-keys/d"),
                 ]),
@@ -894,6 +900,9 @@ service cloud.firestore {
             ("map-size", false),
             ("map-keys", false),
             ("list-size", false),
+            ("map-is", false),
+            ("list-is", false),
+            ("map-member", false),
             ("request-keys", true),
             ("resource-keys", true),
         ];

@@ -1626,26 +1626,6 @@ fn truthy(v: &RulesValue) -> Result<bool, EvalError> {
 /// Values whose identity is not determined (query proofs) make most operations undecidable.
 /// Undetermined at any depth: a container holding an undetermined member cannot be compared,
 /// searched or iterated with a definite result.
-/// Whether `value` holds `Unknown` anywhere: a read the query does not determine, which may
-/// be a missing-field error for a stored document.
-fn holds_unknown(value: &RulesValue) -> bool {
-    match value {
-        RulesValue::Unknown => true,
-        RulesValue::List(items)
-        | RulesValue::Set(items)
-        | RulesValue::PartialList(items)
-        | RulesValue::PartialListAny(items)
-        | RulesValue::OneOf(items)
-        | RulesValue::NotOneOf(items) => items.iter().any(holds_unknown),
-        RulesValue::Map(fields) | RulesValue::PartialMap(fields) => {
-            fields.values().any(holds_unknown)
-        }
-        // Its excluded maps are concrete filter values.
-        RulesValue::PartialMapExcluding { fields, .. } => fields.values().any(holds_unknown),
-        _ => false,
-    }
-}
-
 fn undetermined(v: &RulesValue) -> bool {
     match v {
         RulesValue::Unknown
@@ -1759,9 +1739,10 @@ impl<'a> Evaluator<'a> {
 
     /// Whether `expr` is the query's resource in a query proof: the identifier `resource`
     /// unshadowed, or a binding (a function parameter, a `let`) bound to it. It is recognized
-    /// by where the value comes from rather than by its value, which a map literal could
-    /// reproduce (review 2026-11-08 r2); FS-RULES-SHAPES-TWO (2026-11-08) recorded
-    /// `f(resource)` with `f(r) = r != null` allowed.
+    /// by where the value comes from rather than by its value (review 2026-11-08 r2), so that
+    /// only `resource.data` itself answers its key set (`Self::closed_query_data_call`), also
+    /// through `f(resource)` (FS-RULES-SHAPES-TWO 2026-11-08 recorded `f(resource)` with
+    /// `f(r) = r != null` allowed).
     fn is_query_resource_expr(&self, expr: &Expr) -> bool {
         if !self.query_proof {
             return false;
@@ -1778,14 +1759,6 @@ impl<'a> Evaluator<'a> {
             Some(index) => self.scope.bindings[index].query_resource,
             None => name == "resource",
         }
-    }
-
-    /// Whether `expr` is the identifier `request` or `resource`, unshadowed by a binding: a
-    /// map that exists rather than one the rule builds. (Every map read from them holds only
-    /// values the query determines or concrete ones.)
-    fn is_request_or_resource_ident(&self, expr: &Expr) -> bool {
-        matches!(expr.kind(), ExprKind::Ident(name)
-            if matches!(name.as_str(), "request" | "resource") && !self.has_binding(name))
     }
 
     /// Whether `expr` is `resource.data` of a query proof (see
@@ -4443,16 +4416,28 @@ impl<'a> Evaluator<'a> {
                     self.eval(otherwise)
                 }
             }
-            ExprKind::List(items) => Ok(RulesValue::List(
-                items
+            // In a query proof, a list or map the rule builds from a value the query leaves
+            // undetermined is undetermined as a whole: building it from a stored document can
+            // fail (an unconstrained field may be missing), so no operation on it (a type
+            // test, a member, a shape read, a comparison) can be proven (reviews 2026-11-08 r3
+            // and r4).
+            ExprKind::List(items) => {
+                let values = items
                     .iter()
                     .map(|i| self.eval(i))
-                    .collect::<Result<_, _>>()?,
-            )),
+                    .collect::<Result<Vec<_>, _>>()?;
+                if self.query_proof && values.iter().any(undetermined) {
+                    return Err(EvalError::Unknown);
+                }
+                Ok(RulesValue::List(values))
+            }
             ExprKind::Map(entries) => {
                 let mut m = BTreeMap::new();
                 for (k, v) in entries {
                     m.insert(k.clone(), self.eval(v)?);
+                }
+                if self.query_proof && m.values().any(undetermined) {
+                    return Err(EvalError::Unknown);
                 }
                 Ok(RulesValue::Map(m))
             }
@@ -4856,18 +4841,13 @@ impl<'a> Evaluator<'a> {
                     return Err(EvalError::Unknown);
                 }
             }
-            // The query `resource` is a document, never null (FS-RULES-DIFFS 2026-11-08,
-            // `resource != null` allowed), and so is a map or list built only from values the
-            // query determines. A container holding `Unknown` stays undetermined: building it
-            // from a stored document may fail on a missing field.
-            (BinaryOp::Eq | BinaryOp::Ne, c @ (V::Map(_) | V::List(_) | V::Set(_)), V::Null)
-                if self.is_query_resource_expr(left) || !holds_unknown(c) =>
-            {
-                V::Bool(op == BinaryOp::Ne)
-            }
-            (BinaryOp::Eq | BinaryOp::Ne, V::Null, c @ (V::Map(_) | V::List(_) | V::Set(_)))
-                if self.is_query_resource_expr(right) || !holds_unknown(c) =>
-            {
+            // A map, list or set is never null, whatever undetermined members it holds: the
+            // query `resource` is a document (FS-RULES-DIFFS 2026-11-08, `resource != null`
+            // allowed). Such a container is always one that exists (`request`, `resource`,
+            // a binding of them): one the rule builds from an undetermined value is
+            // undetermined as a whole (see `ExprKind::List` in `eval_inner`).
+            (BinaryOp::Eq | BinaryOp::Ne, V::Map(_) | V::List(_) | V::Set(_), V::Null)
+            | (BinaryOp::Eq | BinaryOp::Ne, V::Null, V::Map(_) | V::List(_) | V::Set(_)) => {
                 V::Bool(op == BinaryOp::Ne)
             }
             (_, a, b) if undetermined(a) || undetermined(b) => return Err(EvalError::Unknown),
@@ -5155,7 +5135,6 @@ impl<'a> Evaluator<'a> {
                         &values,
                         query_derived,
                         query_join_stringification_sensitive,
-                        self.is_request_or_resource_ident(object),
                     )
                 }
             }
@@ -5671,21 +5650,18 @@ fn method_call(
     args: &[RulesValue],
     query_derived: bool,
     query_join_stringification_sensitive: bool,
-    receiver_exists: bool,
 ) -> Result<RulesValue, EvalError> {
     use RulesValue as V;
     // An exact list / map holding an undetermined member, or an undetermined argument,
     // cannot be searched, joined or compared with a definite result (query proofs). The
     // partially known containers have their own arms below.
     //
-    // `keys()` and `size()` of `request` and `resource` are the exception
-    // (`receiver_exists`): both read the key set, which an undetermined *value*
-    // leaves fully known, and such a map always exists. `request.keys()` depends on it,
-    // because `request.path` is undetermined while a query is being proven. A map the rule
-    // builds from an undetermined value is not: building it from a stored document can fail
-    // on a missing field (review 2026-11-08 r3).
-    let shape_only =
-        receiver_exists && matches!(receiver, V::Map(_)) && matches!(name, "keys" | "size");
+    // `keys()` and `size()` of a map are the exception: both read the key set, which an
+    // undetermined *value* leaves fully known. `request.keys()` depends on it, because
+    // `request.path` is undetermined while a query is being proven. Such a map always exists
+    // (`request`, `resource`): one the rule builds from an undetermined value is undetermined
+    // as a whole (see `ExprKind::List` in `eval_inner`).
+    let shape_only = matches!(receiver, V::Map(_)) && matches!(name, "keys" | "size");
     if (!shape_only
         && matches!(receiver, V::List(_) | V::Set(_) | V::Map(_))
         && undetermined(receiver))

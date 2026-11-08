@@ -233,3 +233,53 @@ def test_dependency_info_with_exactly_one_hundred_files_is_too_few(tmp_path):
     # build.py required more than 100 listed files; 100 is the near miss
     exactly = " ".join(str(tmp_path / f"crates/x/src/m{i}.rs") for i in range(100))
     assert replay.dependency_info_problems(f"target/debug/fireemu: {exactly}\n", tmp_path)
+
+
+def release_inputs():
+    return json.loads(RELEASE_INPUTS.read_bytes())
+
+
+def test_expectations_refuse_a_record_with_fewer_cases_even_when_its_digests_agree():
+    value = record()
+    value["cases"].pop()
+    projection = {row["caseId"]: {k: v for k, v in row.items() if k != "caseId"} for row in value["cases"]}
+    for row in value["recordings"]:
+        row["projectionDigest"] = digest(projection)
+    inputs = release_inputs()
+    for entry in inputs["special"]["e04"]["recordings"]:
+        entry["projection"]["projection"] = projection
+    with pytest.raises(ValueError, match="case inventory"):
+        replay.expectations(value, inputs)
+
+
+def test_expectations_refuse_a_record_that_does_not_bind_exactly_two_recordings():
+    value = record()
+    value["recordings"].append(copy.deepcopy(value["recordings"][0]))
+    with pytest.raises(ValueError, match="two recordings"):
+        replay.expectations(value, release_inputs())
+
+
+def test_expectations_refuse_release_post_states_that_disagree_with_the_record():
+    inputs = release_inputs()
+    states = inputs["special"]["e04"]["recordings"][0]["projection"]["postStates"]
+    states.pop(sorted(states)[0])
+    with pytest.raises(ValueError, match="release replay inputs"):
+        replay.expectations(record(), inputs)
+
+
+def test_expectations_refuse_a_superseded_case_outside_the_campaign_or_without_commit_after_idle():
+    value = record()
+    value["supersededForStrict"]["cases"].append("idle-expiry/not-a-case")
+    with pytest.raises(ValueError, match="superseded"):
+        replay.expectations(value, release_inputs())
+    value = record()
+    value["supersededForStrict"]["cases"].remove("idle-expiry/commit-after-idle")
+    with pytest.raises(ValueError, match="superseded"):
+        replay.expectations(value, release_inputs())
+
+
+def test_strict_fails_when_a_superseded_case_is_missing_from_the_replay():
+    # the superseded cases are exempt from equality, not from being answered at all
+    local = strict_as_published()
+    local["projection"].pop("idle-expiry/rollback-after-idle")
+    assert any("case inventory" in p for p in replay.judge_profile("strict", production(), local))

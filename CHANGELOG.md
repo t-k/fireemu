@@ -8,6 +8,8 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+## [0.45.0] - 2026-11-09
+
 ### Changed
 
 - `find_nearest` with the cosine measure no longer builds a normalized copy of each candidate vector or of the query. The normalization is kept as two numbers and the components are formed from them inline, with the same operations in the same order, so every distance, ranking, threshold and refusal is unchanged (checked bit for bit against the previous implementation). Measured with `cargo bench -p fireemu-core-firestore --bench vector_distance` on a release build, the median `find_nearest` over 4,000 vectors of 768 dimensions fell from 15 to 22 ms to 8 to 9 ms; with 16 dimensions it fell from about 1.8 to 2.2 ms to about 1.1 to 1.3 ms. Euclidean did not change in this release.
@@ -1210,7 +1212,8 @@ Security Rules (FS-RULES): behavior below was measured against a real Firestore 
 - The `strict` and `firebase` compatibility profiles, the Capability Manifest, and the Compatibility Contract pinned to firebase-tools 15.28.2.
 - `fireemu init`, `up`, `exec`, `emulators:export`, `doctor`, and `capabilities` commands, with the official `emulators:start` and `emulators:exec` spellings as aliases.
 
-[Unreleased]: https://github.com/t-k/fireemu/compare/v0.44.0...HEAD
+[Unreleased]: https://github.com/t-k/fireemu/compare/v0.45.0...HEAD
+[0.45.0]: https://github.com/t-k/fireemu/compare/v0.44.0...v0.45.0
 [0.44.0]: https://github.com/t-k/fireemu/compare/v0.43.0...v0.44.0
 [0.43.0]: https://github.com/t-k/fireemu/compare/v0.42.0...v0.43.0
 [0.42.0]: https://github.com/t-k/fireemu/compare/v0.41.0...v0.42.0

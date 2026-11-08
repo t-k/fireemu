@@ -48,6 +48,16 @@ Firestore and Storage Rules diagnostics keep at most 64 distinct values per expr
 
 `get()` and `exists()` take a path to a document of the database the request runs in. A path to a collection (`/databases/$(database)/documents/users`, an odd number of segments after `documents`), to another database (`/databases/other/documents/users/u1`) or without `documents` (`/databases/$(database)/users/u1`) names no document, so the call is an evaluation error. Like any Rules error, it makes the condition fail: the request is refused unless the other side of an `||` or `&&` decides the result (`exists(<such a path>) || true` allows; production's answer for such a mix was not recorded). `!exists(...)` and `get(...) == null` do not read the path as "missing" and allow; production refuses them, and so does the official emulator. A path to a document that does not exist stays a missing document: `exists()` is `false` and `get()` is `null`. A missing document id from a mistyped path is the usual cause, so the denial log's line `was an error` points at the call.
 
+## Queries and the stored documents
+
+A Firestore query is authorized from its filters, not from the documents it would return, as in production. One exception: a query branch with a single `documentId() ==` filter is decided by that document as stored, whatever other filters, limit, offset or cursor it has, as production and the official emulator decide it. In the proof, `resource.data` holds exactly the fields the query filters on or orders by, so `keys()`, `size()`, `in` and `get(key, default)` answer from those fields only.
+
+An `OR` query that mixes a branch naming one document with a branch naming none differs by profile. The `emulator` profile authorizes it branch by branch, as the official emulator does. The `strict` profile proves every branch from its filters, because production answered that query with a missing-index error and its Rules answer is not recorded.
+
+## Strings in rules
+
+Firestore and Storage Rules index and measure a string by UTF-16 code unit, as production does: `"é🔥x".size()` is 4 and `"é🔥x"[3] == "x"`. `lower()` and `upper()` change ASCII letters only, and strings are never normalized. Half of a surrogate pair differs by profile. Under `strict` it is a fragment that equals only itself, and a `split()`, `replace()` or `matches()` pattern that holds a lone surrogate fails the rule, as production answered. The `emulator` profile keeps the lone unit, as the official emulator does. Regular expressions still treat a supplementary character as one character.
+
 ## Unit testing with mock tokens
 
 `@firebase/rules-unit-testing`'s `authenticatedContext()` and the client SDKs' `mockUserToken` option send an unsigned mock ID token. Fireemu accepts it by default, also under `strict`, and builds `request.auth` from its claims as the official emulator does. Under `strict` only that exact token shape is accepted; every other token is verified, expiry included.

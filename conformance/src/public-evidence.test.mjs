@@ -216,6 +216,11 @@ test("the historical daemonLog may name only the binding's own paths", async (t)
     `  config:           ${config} (--config); ${cwd}/firebase.json in a parent directory is not loaded`,
     "  control API:      http://127.0.0.1:64251/v1/  (health: /health/live)",
     "  profile: strict (behaves like production Firebase where the official emulators do not)",
+    // Every other exempt path, including one with spaces and regex metacharacters.
+    "  binary: /tmp/fireemu-verify.x/fireemu try ✓/bin/fireemu",
+    `  source: ${cwd}/firestore-probe.fireemu.json`,
+    `  indexes: ${cwd}/.runs/firestore-probe/strict-indexes-1.json`,
+    `  cwd: ${cwd}`,
     "",
   ].join("\n");
   const profileBinding = {
@@ -239,6 +244,13 @@ test("the historical daemonLog may name only the binding's own paths", async (t)
     `\n  logging: /${"home"}/runner/private.log\n`,
     `\n  note: /${"Users"}/someone/secret.json\n`,
     `\n  note: ${cwd}-other/secret.json\n`,
+    // A descendant, a traversal or punctuation after an exempt path is not that path.
+    `\n  note: ${cwd}/private-secret.json\n`,
+    `\n  note: ${cwd}/../secret.json\n`,
+    `\n  note: ${cwd}(other)/secret.json\n`,
+    `\n  note: ${cwd}:other/secret.json\n`,
+    `\n  note: ${config}/secret.json\n`,
+    `\n  note: ${cwd}/firebase.json.bak\n`,
     "\n  note: C:\\Users\\someone\\secret.json\n",
     // Only the exact exempt path is masked: a dot in it matches no other character.
     "\n  binary: /tmp/fireemu-verifyXx/fireemu try ✓/bin/fireemu\n",

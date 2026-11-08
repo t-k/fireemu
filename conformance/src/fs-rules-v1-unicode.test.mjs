@@ -622,6 +622,44 @@ test("the controls behave as named in both measured tables", () => {
   }
 });
 
+test("the measured tables: the official emulator maps case by code point and fireemu with the full mapping, and they agree on everything else", () => {
+  const refusedByBoth = [
+    "units#ctl-false",
+    "units#hfish-1",
+    "units#zwj-5",
+    "units#e-eq",
+    "units#ga-eq",
+    "case#ctl-false",
+    "regex#ctl-false",
+    "regex#fire-dotdot",
+    "regex#fire-two",
+    "regex#e-nfd-dot",
+    "regex#zwj-dot",
+    "stored#ctl-false",
+    "stored#nfd-nfc-lit-eq",
+    "stored#nfd-nfc-field-eq",
+    "stored#lq-nfc",
+  ];
+  const caseMapping = [
+    "case#sharp-eq",
+    "case#sharp-size",
+    "case#dotted-size",
+    "case#fi-size",
+    "case#sigma",
+    "stored#sharp-upper-size",
+    "stored#dotted-lower-size",
+  ];
+  const expected = (denied) =>
+    Object.fromEntries(
+      ALL_ROWS.map((row) => [
+        row,
+        row.endsWith("#publishes") ? "compiled" : denied.includes(row) ? "denied" : "allowed",
+      ]),
+    );
+  assert.deepEqual(OFFICIAL, expected([...refusedByBoth, ...caseMapping]));
+  assert.deepEqual(FIXES, expected(refusedByBoth));
+});
+
 test("the report compares each answer with the official emulator and with fireemu", () => {
   const allowed = {
     status: 404,

@@ -3,6 +3,7 @@
   "ignorePatterns": [
     "node_modules",
     "fixtures",
+    "hosting-fixtures",
     ".runs",
     "pnpm-lock.yaml",
     "*-matrix.json",

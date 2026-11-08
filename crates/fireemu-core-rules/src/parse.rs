@@ -281,9 +281,9 @@ fn parse_ruleset_on_this_thread(src: &str) -> Result<Ruleset, ParseError> {
         expr_depth: 0,
         index: SourceIndex::new(src),
     };
-    let mut ruleset = p.ruleset()?;
+    let (mut ruleset, top_level_functions) = p.ruleset()?;
     check_expression_tree_depth(&ruleset)?;
-    check_duplicate_functions(&ruleset)?;
+    check_duplicate_functions(&ruleset, top_level_functions)?;
     ruleset.value_dependencies = analyze_value_dependencies(&ruleset);
     ruleset.function_scopes = ruleset
         .services
@@ -428,12 +428,19 @@ fn check_expression_tree_depth(ruleset: &Ruleset) -> Result<(), ParseError> {
 
 /// A scope may define a function name once, whatever the parameters ("Function d is already
 /// defined."); an inner scope may shadow an outer one.
-fn check_duplicate_functions(ruleset: &Ruleset) -> Result<(), ParseError> {
-    let mut scopes: Vec<&[Item]> = ruleset
-        .services
-        .iter()
-        .map(|service| service.items.as_slice())
-        .collect();
+///
+/// The first `top_level_functions` items of every service are the functions declared outside
+/// `service`: they form one scope of their own, outside the service's.
+fn check_duplicate_functions(
+    ruleset: &Ruleset,
+    top_level_functions: usize,
+) -> Result<(), ParseError> {
+    let mut scopes: Vec<&[Item]> = Vec::new();
+    for service in &ruleset.services {
+        let (outer, inner) = service.items.split_at(top_level_functions);
+        scopes.push(outer);
+        scopes.push(inner);
+    }
     while let Some(items) = scopes.pop() {
         let mut names = std::collections::BTreeSet::new();
         for item in items {
@@ -666,10 +673,40 @@ impl<'a> Parser<'a> {
                 None => return Err(self.error(format!("`\\{kind}` needs {width} hex digits"))),
             }
         }
-        u32::from_str_radix(&digits, 16)
-            .ok()
-            .and_then(char::from_u32)
-            .ok_or_else(|| self.error(format!("`\\{kind}{digits}` names no character")))
+        let value = u32::from_str_radix(&digits, 16).ok();
+        // A surrogate cannot be a Rust `char`. The runtime reads rule strings as UTF-16, so
+        // `\ud83d\ude00` is one character and a surrogate written alone is a lone unit
+        // (recorded in production: `string-escape#publishes` compiles `"\ud83d"`); it is held
+        // as U+FFFD, as the Realtime Database rules reader holds one.
+        if let Some(high) = value.filter(|v| (0xD800..0xDC00).contains(v) && kind == 'u') {
+            if let Some(low) = self.low_surrogate_escape() {
+                return Ok(
+                    char::from_u32(0x10000 + ((high - 0xD800) << 10) + (low - 0xDC00))
+                        .unwrap_or(char::REPLACEMENT_CHARACTER),
+                );
+            }
+        }
+        match value {
+            Some(v) if (0xD800..0xE000).contains(&v) => Ok(char::REPLACEMENT_CHARACTER),
+            Some(v) => char::from_u32(v)
+                .ok_or_else(|| self.error(format!("`\\{kind}{digits}` names no character"))),
+            None => Err(self.error(format!("`\\{kind}{digits}` names no character"))),
+        }
+    }
+
+    /// Consumes `\uDC00`..`\uDFFF` when the source continues with one, and returns its value.
+    fn low_surrogate_escape(&mut self) -> Option<u32> {
+        let rest = self.rest();
+        let digits = rest.strip_prefix("\\u")?.get(..4)?;
+        if !digits.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return None;
+        }
+        let low = u32::from_str_radix(digits, 16).ok()?;
+        if !(0xDC00..0xE000).contains(&low) {
+            return None;
+        }
+        self.pos += 6;
+        Some(low)
     }
 
     fn expect_punct(&mut self, p: &'static str) -> Result<(), ParseError> {
@@ -707,7 +744,10 @@ impl<'a> Parser<'a> {
         Ok(false)
     }
 
-    fn ruleset(&mut self) -> Result<Ruleset, ParseError> {
+    /// The ruleset, and how many functions it declares outside every `service`. Those lead the
+    /// items of each service, where the service's own functions of the same name come later
+    /// and shadow them (function lookup takes the last declaration of a scope).
+    fn ruleset(&mut self) -> Result<(Ruleset, usize), ParseError> {
         let mut version = None;
         if self.eat_ident("rules_version")? {
             self.expect_punct("=")?;
@@ -725,12 +765,20 @@ impl<'a> Parser<'a> {
             }
         }
         let mut services = Vec::new();
+        let mut top_level = Vec::new();
         loop {
             self.skip_trivia()?;
             if self.pos >= self.src.len() {
                 break;
             }
             let at = self.pos;
+            // Recorded in production: `function` declared after `rules_version` and before
+            // `service` compiles and is called from inside the service (fs-rules-v1 `fn-top`).
+            // After a service is not recorded; it is accepted the same way.
+            if self.eat_ident("function")? {
+                top_level.push(Item::Function(self.function(at)?));
+                continue;
+            }
             if !self.eat_ident("service")? {
                 return Err(self.error("expected `service`"));
             }
@@ -761,12 +809,19 @@ impl<'a> Parser<'a> {
         if services.is_empty() {
             return Err(self.error("expected at least one `service` block"));
         }
-        Ok(Ruleset {
-            version,
-            services,
-            value_dependencies: crate::ast::ValueDependencies::default(),
-            function_scopes: Vec::new(),
-        })
+        let top_level_functions = top_level.len();
+        for service in &mut services {
+            service.items.splice(0..0, top_level.iter().cloned());
+        }
+        Ok((
+            Ruleset {
+                version,
+                services,
+                value_dependencies: crate::ast::ValueDependencies::default(),
+                function_scopes: Vec::new(),
+            },
+            top_level_functions,
+        ))
     }
 
     /// Parses items until the closing `}` (consumed).

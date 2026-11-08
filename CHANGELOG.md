@@ -10,6 +10,8 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ### Fixed
 
+- Security Rules index and size a string by UTF-16 code unit, as production does when it was recorded on 2026-11-08 and as the official emulator does: in `"é🔥x"`, `s[3] == "x"` is true, `s[1] == "🔥"` and `s[2] == "x"` are false, and `s.size()` is 4; before, fireemu counted Unicode scalars (3). Half of a surrogate pair reads as U+FFFD, so it equals no whole character. A `\ud83d` escape in a rule string now compiles (before: "names no character"), and `\ud83d\ude00` is one character. Range indexing (`s[a:b]`) is not recorded and still counts scalars. Known divergence, strict profile only: production answered 403 for `s[1] == "\ud83d"` where the official emulator allows it, and fireemu allows it in both profiles for now.
+- Security Rules accept a function declared outside `service`, after `rules_version`, as production and the official emulator do; the service's `match` blocks call it, and a function of the same name inside the service shadows it. Before, such a ruleset failed with `expected service`.
 - Authentication: the Secure Token refresh accepts the JSON body with `grantType` and `refreshToken` that the Firebase Android SDK sends, as the official emulator does; before, it answered `400 MISSING_GRANT_TYPE`. A form body still uses the snake_case fields, and a body mixing both spellings is read as snake_case. Production has not been recorded for this body.
 
 ## [0.44.0] - 2026-11-07

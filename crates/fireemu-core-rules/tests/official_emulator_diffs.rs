@@ -109,20 +109,17 @@ fn members_role_in_query_with_the_resource_not_null_guard_is_allowed() {
 // ----------------------------------------------------------------------------------------
 
 #[test]
-#[ignore = "official indexes strings by UTF-16 code unit; fireemu by Unicode scalar, so index 3 is out of range: rules-string-index-by-utf16-unit.md"]
 fn string_index_counts_utf16_units_the_last_unit_is_index_three() {
     assert!(string_index_allowed(r#""é🔥x"[3] == "x""#));
 }
 
 /// Index 1 is a lone high surrogate in the official runtime, which never equals the emoji.
 #[test]
-#[ignore = "official indexes strings by UTF-16 code unit; fireemu returns the whole emoji at index 1: rules-string-index-by-utf16-unit.md"]
 fn string_index_one_is_half_an_emoji_and_not_equal_to_it() {
     assert!(!string_index_allowed(r#""é🔥x"[1] == "🔥""#));
 }
 
 #[test]
-#[ignore = "official indexes strings by UTF-16 code unit; fireemu returns x at index 2: rules-string-index-by-utf16-unit.md"]
 fn string_index_two_is_a_low_surrogate_and_not_x() {
     assert!(!string_index_allowed(r#""é🔥x"[2] == "x""#));
 }
@@ -132,7 +129,6 @@ fn string_index_two_is_a_low_surrogate_and_not_x() {
 // ----------------------------------------------------------------------------------------
 
 #[test]
-#[ignore = "official accepts and evaluates a top-level function after rules_version; fireemu fails to parse with `expected service`: rules-top-level-function-declaration.md"]
 fn top_level_function_outside_the_service_is_accepted_and_evaluated() {
     let source = "rules_version = '2';\nfunction isAlice() { return request.auth.uid == 'alice'; }\nservice cloud.firestore { match /databases/{d}/documents { match /notes/{id} { allow get: if isAlice(); } } }";
     let ruleset = parse_ruleset(source).expect("a top-level function must parse");

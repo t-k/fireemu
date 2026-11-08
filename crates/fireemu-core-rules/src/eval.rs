@@ -4270,8 +4270,8 @@ impl<'a> Evaluator<'a> {
                         .ok_or_else(|| soft("path index out of range")),
                     (RulesValue::String(s), RulesValue::Int(i)) => usize::try_from(i)
                         .ok()
-                        .and_then(|i| s.chars().nth(i))
-                        .map(|c| RulesValue::String(c.to_string()))
+                        .and_then(|i| utf16_unit_at(&s, i))
+                        .map(RulesValue::String)
                         .ok_or_else(|| soft("string index out of range")),
                     (o, i) => Err(soft(format!(
                         "cannot index {} with {}",
@@ -5624,7 +5624,7 @@ fn method_call(
         ) => return Err(EvalError::Unknown),
         (V::String(s), "size") => {
             arity(0)?;
-            V::Int(i64::try_from(s.chars().count()).unwrap_or(i64::MAX))
+            V::Int(i64::try_from(utf16_len(s)).unwrap_or(i64::MAX))
         }
         (V::String(s), "lower") => {
             arity(0)?;
@@ -6012,6 +6012,8 @@ fn slice(
     };
     let len = match receiver {
         V::List(items) => items.len(),
+        // Not recorded: whether production ranges over a string by UTF-16 unit as it indexes
+        // and sizes it. Left at Unicode scalars until a row says.
         V::String(s) => s.chars().count(),
         other => {
             return Err(soft(format!(
@@ -6033,6 +6035,24 @@ fn slice(
         V::String(s) => V::String(s.chars().skip(lo).take(hi - lo).collect()),
         _ => unreachable!("the length arm already rejected every other receiver"),
     })
+}
+
+/// The length of `s` in UTF-16 code units, which is what the Rules runtime counts
+/// (`string-index#size-4`: `"é🔥x".size() == 4`, recorded in production).
+fn utf16_len(s: &str) -> usize {
+    s.encode_utf16().count()
+}
+
+/// The code unit at `index` as a string, or `None` past the end (`string-index#idx0` to
+/// `idx4-*`). Half of a surrogate pair cannot be a Rust `String`; it is held as U+FFFD, which
+/// equals no whole character, as production answers for `"é🔥x"[1] == "🔥"`.
+fn utf16_unit_at(s: &str, index: usize) -> Option<String> {
+    let unit = s.encode_utf16().nth(index)?;
+    let character = char::decode_utf16([unit])
+        .next()
+        .and_then(Result::ok)
+        .unwrap_or(char::REPLACEMENT_CHARACTER);
+    Some(character.to_string())
 }
 
 /// Nanoseconds per day.

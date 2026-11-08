@@ -483,10 +483,16 @@ export function compareRecordings(first, second) {
       JSON.stringify(second.observations.map((r) => r.condition)),
     "same family inventory required",
   );
-  const canonical = (value, key = "") => {
+  const canonical = (value, path = []) => {
     if (Array.isArray(value)) {
-      const items = value.map((v) => canonical(v));
-      return ["frames", "sdkCases", "headerNames"].includes(key)
+      const items = value.map((v, i) => canonical(v, [...path, i]));
+      const unordered =
+        (path.length === 1 && ["frames", "sdkCases"].includes(path[0])) ||
+        (path.length === 4 &&
+          path[0] === "frames" &&
+          path[2] === "request" &&
+          path[3] === "headerNames");
+      return unordered
         ? items.sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))
         : items;
     }
@@ -494,7 +500,7 @@ export function compareRecordings(first, second) {
       return Object.fromEntries(
         Object.keys(value)
           .sort()
-          .map((k) => [k, canonical(value[k], k)]),
+          .map((k) => [k, canonical(value[k], [...path, k])]),
       );
     return value;
   };

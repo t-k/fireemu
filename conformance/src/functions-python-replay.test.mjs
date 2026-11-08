@@ -400,3 +400,22 @@ test("same original frame identities cannot become independent by changing journ
   );
   assert.throws(() => extractPair(first, second), /same original recording/);
 });
+
+test("frame and case arrival normalization never sorts a semantic payload array with the same key", async () => {
+  const { compareRecordings } = await import("./functions-python/recordings.mjs");
+  const first = {
+    recording: { alias: "pass-1" },
+    observations: [
+      {
+        condition: "firestore-events",
+        coverage: "RECORDED",
+        frames: [],
+        sdkCases: [{ expected: { frames: [1, 2] } }],
+      },
+    ],
+  };
+  const second = structuredClone(first);
+  second.recording.alias = "pass-2";
+  second.observations[0].sdkCases[0].expected.frames.reverse();
+  assert.equal(compareRecordings(first, second)[0].status, "DIFF");
+});

@@ -39,13 +39,35 @@ pub(super) fn decode_uri(value: &str) -> Option<String> {
     String::from_utf8(output).ok()
 }
 
-pub(super) fn open(root: &cap_std::fs::Dir, path: &str) -> Option<Asset> {
+pub(super) fn open(root: &cap_std::fs::Dir, path: &str, ignore: &[String]) -> Option<Asset> {
     let decoded = decode_uri(path)?;
     let relative = decoded.strip_prefix('/')?;
     if relative.is_empty()
         || relative.contains(['\0', '\\', ':'])
         || relative.split('/').any(|p| p == "..")
     {
+        return None;
+    }
+    let ignored = |path: &std::path::Path| {
+        path.ancestors()
+            .filter(|p| !p.as_os_str().is_empty())
+            .any(|p| {
+                p.to_str().is_none_or(|p| {
+                    ignore.iter().any(|pattern| {
+                        super::matcher::glob_with_dot(pattern, &p.replace('\\', "/"), true)
+                    })
+                })
+            })
+    };
+    let relative = std::path::Path::new(relative);
+    if ignored(relative) {
+        return None;
+    }
+    if !root.metadata(relative).ok()?.is_file() {
+        return None;
+    }
+    let resolved = root.canonicalize(relative).ok()?;
+    if ignored(&resolved) {
         return None;
     }
     let mut options = cap_std::fs::OpenOptions::new();
@@ -55,7 +77,7 @@ pub(super) fn open(root: &cap_std::fs::Dir, path: &str) -> Option<Asset> {
         use cap_std::fs::OpenOptionsExt;
         options.custom_flags(libc::O_NONBLOCK);
     }
-    let mut file = root.open_with(relative, &options).ok()?.into_std();
+    let mut file = root.open_with(&resolved, &options).ok()?.into_std();
     let metadata = file.metadata().ok()?;
     if !metadata.is_file() {
         return None;
@@ -81,12 +103,13 @@ pub(super) fn open(root: &cap_std::fs::Dir, path: &str) -> Option<Asset> {
 pub(super) async fn find(
     root: Option<Arc<cap_std::fs::Dir>>,
     paths: Vec<String>,
+    ignore: Vec<String>,
 ) -> Option<(String, Asset)> {
     let root = root?;
     tokio::task::spawn_blocking(move || {
         paths
             .into_iter()
-            .find_map(|path| open(&root, &path).map(|asset| (path, asset)))
+            .find_map(|path| open(&root, &path, &ignore).map(|asset| (path, asset)))
     })
     .await
     .ok()
@@ -191,7 +214,7 @@ mod tests {
         symlink("../outside.txt", &fixture.0.join("public/outside-link.txt"));
         for case in cases["cases"].as_array().unwrap() {
             assert!(
-                open(&root, case["path"].as_str().unwrap()).is_none(),
+                open(&root, case["path"].as_str().unwrap(), &[]).is_none(),
                 "{}",
                 case["id"]
             );
@@ -202,28 +225,58 @@ mod tests {
             "/\\\\server\\outside.txt",
             "/safe.txt:stream",
         ] {
-            assert!(open(&root, path).is_none(), "{path}");
+            assert!(open(&root, path, &[]).is_none(), "{path}");
         }
         symlink("safe.txt", &fixture.0.join("public/inside-link.txt"));
-        assert!(open(&root, "/inside-link.txt").is_some());
+        assert!(open(&root, "/inside-link.txt", &[]).is_some());
         symlink("cycle-b", &fixture.0.join("public/cycle-a"));
         symlink("cycle-a", &fixture.0.join("public/cycle-b"));
-        assert!(open(&root, "/cycle-a").is_none());
+        assert!(open(&root, "/cycle-a", &[]).is_none());
         std::fs::write(fixture.0.join("public/%2e%2e"), "literal percent").unwrap();
-        assert!(open(&root, "/%252e%252e").is_some(), "decode exactly once");
+        assert!(
+            open(&root, "/%252e%252e", &[]).is_some(),
+            "decode exactly once"
+        );
+    }
+    #[test]
+    fn ignored_paths_and_symlink_targets_are_absent() {
+        let fixture = Fixture::new();
+        let root = fixture.root();
+        symlink("safe.txt", &fixture.0.join("public/alias.txt"));
+        let ignore = vec!["safe.txt".to_owned()];
+        assert!(open(&root, "/safe.txt", &ignore).is_none());
+        assert!(open(&root, "/alias.txt", &ignore).is_none());
+        assert!(open(&root, "/alias.txt", &[]).is_some());
+        std::fs::create_dir(fixture.0.join("public/.hidden")).unwrap();
+        std::fs::write(fixture.0.join("public/.hidden/file"), "hidden").unwrap();
+        assert!(open(&root, "/.hidden/file", &["**/.*".to_owned()]).is_none());
+        assert!(open(&root, "/.hidden/file", &[]).is_some());
+        std::fs::create_dir_all(fixture.0.join("public/nested/node_modules/pkg")).unwrap();
+        std::fs::write(
+            fixture.0.join("public/nested/node_modules/pkg/file.js"),
+            "module",
+        )
+        .unwrap();
+        assert!(open(
+            &root,
+            "/nested/node_modules/pkg/file.js",
+            &["**/node_modules/**".to_owned()]
+        )
+        .is_none());
+        assert!(open(&root, "/safe.txt", &["*.json".to_owned()]).is_some());
     }
     #[test]
     fn replacement_after_open_cannot_change_the_object_used_for_the_body() {
         let fixture = Fixture::new();
         let root = fixture.root();
-        let mut asset = open(&root, "/safe.txt").unwrap();
+        let mut asset = open(&root, "/safe.txt", &[]).unwrap();
         let replaced = std::fs::rename(
             fixture.0.join("public/safe.txt"),
             fixture.0.join("public/old.txt"),
         );
         if replaced.is_ok() {
             symlink("../outside.txt", &fixture.0.join("public/safe.txt"));
-            assert!(open(&root, "/safe.txt").is_none());
+            assert!(open(&root, "/safe.txt", &[]).is_none());
         }
         let mut text = String::new();
         asset.file.read_to_string(&mut text).unwrap();
@@ -241,7 +294,7 @@ mod tests {
             .status()
             .expect("the Unix mkfifo utility must be available");
         assert!(status.success(), "FIFO fixture creation must succeed");
-        assert!(open(&root, "/pipe").is_none());
+        assert!(open(&root, "/pipe", &[]).is_none());
     }
     #[cfg(windows)]
     #[test]
@@ -259,7 +312,7 @@ mod tests {
             status.success(),
             "native junction setup must succeed before this test can pass"
         );
-        assert!(open(&root, "/junction/outside.txt").is_none());
+        assert!(open(&root, "/junction/outside.txt", &[]).is_none());
         drop(root);
         std::fs::remove_dir(junction).unwrap();
     }
@@ -324,7 +377,7 @@ mod streaming_tests {
         file.set_len(16 * 1024 * 1024).unwrap();
         drop(file);
         let root = cap_std::fs::Dir::open_ambient_dir(&path, cap_std::ambient_authority()).unwrap();
-        let asset = open(&root, "/large.bin").unwrap();
+        let asset = open(&root, "/large.bin", &[]).unwrap();
         assert_eq!(asset.bytes, 16 * 1024 * 1024);
         let mut body = FileBody::new(asset.file, asset.bytes);
         for _ in 0..2 {

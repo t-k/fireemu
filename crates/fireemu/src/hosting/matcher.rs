@@ -145,8 +145,8 @@ fn ends(sequence: &[Token], input: &[char], start: usize) -> BTreeSet<usize> {
     positions
 }
 
-fn segment(pattern: &str, value: &str) -> bool {
-    if value.starts_with('.') && !pattern.starts_with('.') && !pattern.starts_with("\\.") {
+fn segment(pattern: &str, value: &str, dot: bool) -> bool {
+    if !dot && value.starts_with('.') && !pattern.starts_with('.') && !pattern.starts_with("\\.") {
         return false;
     }
     if value.is_empty() {
@@ -157,23 +157,24 @@ fn segment(pattern: &str, value: &str) -> bool {
     ends(&tokens(&chars, &mut 0, false), &value, 0).contains(&value.len())
 }
 
-fn path_match(pattern: &[&str], path: &[&str]) -> bool {
+fn path_match(pattern: &[&str], path: &[&str], dot: bool) -> bool {
     let Some(first) = pattern.first() else {
         return path.is_empty();
     };
     if *first == "**" {
         for take in 0..=path.len() {
-            if path[..take].iter().any(|part| part.starts_with('.')) {
+            if !dot && path[..take].iter().any(|part| part.starts_with('.')) {
                 break;
             }
-            if path_match(&pattern[1..], &path[take..]) {
+            if path_match(&pattern[1..], &path[take..], dot) {
                 return true;
             }
         }
         false
     } else {
-        path.first()
-            .is_some_and(|part| segment(first, part) && path_match(&pattern[1..], &path[1..]))
+        path.first().is_some_and(|part| {
+            segment(first, part, dot) && path_match(&pattern[1..], &path[1..], dot)
+        })
     }
 }
 
@@ -255,6 +256,10 @@ fn alternatives(pattern: &str) -> Vec<String> {
 }
 
 pub(super) fn glob(pattern: &str, path: &str) -> bool {
+    glob_with_dot(pattern, path, false)
+}
+
+pub(super) fn glob_with_dot(pattern: &str, path: &str, dot: bool) -> bool {
     if pattern.starts_with('#') {
         return false;
     }
@@ -263,7 +268,7 @@ pub(super) fn glob(pattern: &str, path: &str) -> bool {
     let matched = alternatives(pattern).iter().any(|pattern| {
         let pattern: Vec<_> = pattern.split('/').collect();
         let path: Vec<_> = path.split('/').collect();
-        path_match(&pattern, &path)
+        path_match(&pattern, &path, dot)
     });
     matched != (negative % 2 == 1)
 }

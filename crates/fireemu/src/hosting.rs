@@ -191,7 +191,16 @@ impl Site {
         path: &str,
         headers: &hyper::HeaderMap,
     ) -> Option<(String, files::Asset)> {
-        files::find(self.root.clone(), self.candidates(path, headers)).await
+        files::find(
+            self.root.clone(),
+            self.candidates(path, headers),
+            self.rules("ignore")
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect(),
+        )
+        .await
     }
     fn file_response(path: &str, asset: files::Asset, status: u16, head: bool) -> Response<Body> {
         let mime = match path.rsplit('.').next().unwrap_or("") {
@@ -423,8 +432,7 @@ impl Site {
             .find(|rule| matcher::matches(rule, path))
         {
             if let Some(destination) = rule["destination"].as_str() {
-                if let Some((file, asset)) =
-                    files::find(self.root.clone(), vec![destination.to_owned()]).await
+                if let Some((file, asset)) = self.asset(destination, &hyper::HeaderMap::new()).await
                 {
                     let etag_match = request
                         .headers()

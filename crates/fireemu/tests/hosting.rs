@@ -305,7 +305,11 @@ fn hosting_ignored_assets_are_absent_from_every_route() {
         }
     }
     let mut stream = TcpStream::connect(&address).unwrap();
-    write!(stream, "GET /page.html HTTP/1.1\r\nHost: {address}\r\nAccept-Language: en\r\nConnection: close\r\n\r\n").unwrap();
+    write!(
+        stream,
+        "GET /page HTTP/1.1\r\nHost: {address}\r\nAccept-Language: en\r\nConnection: close\r\n\r\n"
+    )
+    .unwrap();
     let mut reply = String::new();
     stream.read_to_string(&mut reply).unwrap();
     if !reply.ends_with("ordinary") {

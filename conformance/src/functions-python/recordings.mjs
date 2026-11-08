@@ -537,7 +537,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
 
 /**
  * True when every difference is a masked task value length and the remaining body bytes
- * (keys, punctuation, whitespace, quotes) are equal in both recordings.
+ * (keys, punctuation, whitespace, quotes) are equal in both recordings. A bodyText difference
+ * fails the path pattern, so the masked texts are already equal here.
  */
 function valueLengthsOnly(a, b, differences) {
   const pattern = /^frames\.(\d+)\.(originalBodyBytes|originalValueBytes\.(run|label))$/;
@@ -549,7 +550,6 @@ function valueLengthsOnly(a, b, differences) {
     const x = a.frames[i],
       y = b.frames[i];
     return (
-      x.bodyText === y.bodyText &&
       Object.keys(x.originalValueBytes).toSorted().join() === "label,run" &&
       Object.keys(y.originalValueBytes).toSorted().join() === "label,run" &&
       layout(x) === layout(y)

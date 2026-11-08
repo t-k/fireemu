@@ -596,6 +596,9 @@ test("a Tasks pass compares only Tasks with pass 1, by masked bytes and recorded
     alter(changed.observations[0].frames.find((x) => x.bodyText));
     assert.equal(compareRecordings(first.fixture, changed)[0].status, "DIFF");
   }
+  const unknown = structuredClone(tasks.fixture);
+  unknown.recording.profile = "storage";
+  assert.throws(() => compareRecordings(first.fixture, unknown), /known recording profile/);
   const extra = structuredClone(tasks.fixture);
   extra.observations.push(structuredClone(first.fixture.observations[0]));
   assert.throws(() => compareRecordings(first.fixture, extra), /same family inventory/);
@@ -642,6 +645,10 @@ test("masked task values keep their recorded byte lengths, and only those may ex
       f.bodyText = f.bodyText.replace(":", ": ");
     },
     (f) => {
+      delete f.originalValueBytes.run;
+    },
+    (f) => {
+      f.originalBodyBytes -= f.originalValueBytes.run;
       delete f.originalValueBytes.run;
     },
   ]) {

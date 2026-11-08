@@ -265,6 +265,14 @@ test("the Tasks pass cannot be fabricated or widened by rehashing", () => {
     assert.throws(() => validate(r, c, bytes(), secondBytes(), tasksBytes()));
   }
   assert.throws(() => validate(record(), corpus(), bytes(), secondBytes()), /fixture required/);
+  const four = record(),
+    fourCorpus = corpus();
+  four.recordings.push({ ...four.recordings[2], alias: "tasks-pass-3" });
+  fourCorpus.recordings.push({ ...fourCorpus.recordings[2], alias: "tasks-pass-3" });
+  assert.throws(
+    () => validate(four, fourCorpus, bytes(), secondBytes(), tasksBytes()),
+    /optional Tasks pass/,
+  );
 });
 
 test("without the Tasks pass, Tasks and the policy fall back to one pass", () => {
@@ -274,6 +282,7 @@ test("without the Tasks pass, Tasks and the policy fall back to one pass", () =>
   r.recordings.pop();
   r.conditions[5].observedPasses = 1;
   r.conditions[5].recordingAliases = ["pass-1"];
+  assert.throws(() => validate(r, c, bytes(), secondBytes()), /pass comparison/);
   delete r.conditions[5].passComparison;
   assert.throws(() => validate(r, c, bytes(), secondBytes()), /independent recordings/);
   r.recordingPolicy.observedPasses = 1;

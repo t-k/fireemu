@@ -321,8 +321,7 @@ export function createWorld({
       if (!leaveSubscriptions) w.subscriptions.delete(`eventarc-${REGION}-${fn}-123-sub-000`);
     }
     for (const id of JOB_IDS) if (!leaveOnDelete.includes("job:" + id)) w.jobs.delete(id);
-    for (const id of QUEUE_IDS)
-      if (!leaveOnDelete.includes("queue:" + id) && w.queues.delete(id)) queueTombstones.add(id);
+    for (const id of QUEUE_IDS) if (!leaveOnDelete.includes("queue:" + id)) w.queues.delete(id);
   };
 
   /** The fake CLI: returns what `runCli` returns. */

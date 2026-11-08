@@ -10,6 +10,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
 import { parseFramesFromText } from "../record/logs.mjs";
+import { FIXTURE_DIR } from "../record/plan.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -31,7 +32,7 @@ export async function dryRun({
 }) {
   const root = mkdtempSync(join(tmpdir(), "pycheck-dry-"));
   const source = join(root, "source");
-  cpSync(join(here, "..", "fixture"), source, { recursive: true });
+  cpSync(join(here, "..", FIXTURE_DIR), source, { recursive: true });
   symlinkSync(venv, join(source, "venv"));
   const project = "demo-pycheck";
   writeFileSync(

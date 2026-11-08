@@ -2,7 +2,7 @@
 // production URLs of record/script.mjs mapped to the emulator hosts, then waits for the deliveries. The frames
 // themselves reach the parent (dry-run.mjs) through fireemu's own output, as Cloud Logging carries them in production.
 import { operations, undoOperations } from "../record/script.mjs";
-import { PROJECT, REGION, TOPIC, ALL_FUNCTIONS } from "../record/plan.mjs";
+import { PROJECT, REGION, TOPIC, ALL_FUNCTIONS, isSelected } from "../record/plan.mjs";
 
 const [runId, localProject, settleSeconds = "25"] = process.argv.slice(2);
 const host = (name) => {
@@ -59,13 +59,15 @@ const all = operations({
   ),
 });
 // The topic must exist before the first publish (the recorder creates it the same way).
-await send(
-  "topic",
-  "PUT",
-  localUrl(`https://pubsub.googleapis.com/v1/projects/${PROJECT}/topics/${TOPIC}`),
-  {},
-);
-await sleep(1000);
+if (isSelected("pubsub")) {
+  await send(
+    "topic",
+    "PUT",
+    localUrl(`https://pubsub.googleapis.com/v1/projects/${PROJECT}/topics/${TOPIC}`),
+    {},
+  );
+  await sleep(1000);
+}
 for (const op of all) {
   const { method, url, json } = op.request;
   if (url.startsWith("https://cloudscheduler.googleapis.com/")) {

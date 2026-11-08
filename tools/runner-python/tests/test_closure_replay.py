@@ -21,7 +21,9 @@ from fireemu_runner.serve import RunnerRouter
 
 ROOT = Path(__file__).resolve().parents[3]
 OBSERVATIONS = json.loads((ROOT / "conformance/functions-python/fixtures/observations.json").read_text())["observations"]
-CASES = [(r["condition"], i, c) for r in OBSERVATIONS for i, c in enumerate(r["sdkCases"])]
+SECOND = json.loads((ROOT / "conformance/functions-python/fixtures/observations-pass2.json").read_text())["observations"]
+RECORDINGS = [OBSERVATIONS, SECOND]
+CASES = [(f"pass-{n + 1}/{r['condition']}", i, c) for n, rows in enumerate(RECORDINGS) for r in rows for i, c in enumerate(r["sdkCases"])]
 
 
 class _Anonymous(credentials.Base):
@@ -121,11 +123,12 @@ RECORD = json.loads((ROOT / "spec/compatibility/closure/FUNCTIONS-PYTHON.json").
 INFRASTRUCTURE_HEADERS = ("authorization", "forwarded", "x-forwarded-for", "function-execution-id", "x-cloud-trace-context", "from", "accept")
 
 
-def actual_replay_differences(profile, monkeypatch):
+def actual_replay_differences(profile, monkeypatch, observations=None):
     """Derive paths from recorded-versus-current output, never from declared fields."""
     monkeypatch.setenv("FIREEMU_HTTP_PROFILE", profile)
+    observations = OBSERVATIONS if observations is None else observations
     differences = set()
-    for row in OBSERVATIONS:
+    for row in observations:
         family = row["condition"]
         if family not in {"firestore-events", "pubsub-events", "storage-events", "eventarc-custom-events", "scheduler-events"}:
             continue
@@ -153,12 +156,12 @@ def actual_replay_differences(profile, monkeypatch):
                 if profile == "emulator" and key == "dataschema":
                     assert key not in actual["attributes"], "declared dataschema difference is absence only"
                 differences.add(family + "." + key)
-    scheduler = next(r for r in OBSERVATIONS if r["condition"] == "scheduler-events")["sdkCases"][0]
+    scheduler = next(r for r in observations if r["condition"] == "scheduler-events")["sdkCases"][0]
     actual = replay(scheduler, profile, monkeypatch)[0]
     for key, value in scheduler["expected"].items():
         if actual.get(key) != value:
             differences.add("scheduler-events." + key)
-    eventarc = next(r for r in OBSERVATIONS if r["condition"] == "eventarc-custom-events")
+    eventarc = next(r for r in observations if r["condition"] == "eventarc-custom-events")
     case = {**eventarc["sdkCases"][0], "event": eventarc["wholeSecondInput"]}
     try:
         count = len(replay(case, profile, monkeypatch))
@@ -259,3 +262,28 @@ def test_declared_dataschema_absence_does_not_accept_a_wrong_schema(monkeypatch)
             actual_replay_differences("emulator", monkeypatch)
     finally:
         del case["event"]["dataschema"]
+
+
+@pytest.mark.parametrize("profile", ["strict", "emulator"])
+def test_second_recording_actual_differences_bind_the_same_declarations(profile, monkeypatch):
+    assert_declared_replay(profile, actual_replay_differences(profile, monkeypatch, SECOND), RECORD)
+    tasks = next(r for r in SECOND if r["condition"] == "tasks-events")
+    assert tasks["coverage"] == "UNOBSERVED"
+    assert tasks["sdkCases"] == [] and tasks["frames"] == []
+
+
+def test_two_recording_replay_inventory_keeps_tasks_single_pass():
+    assert len(CASES) == 15
+    assert sum(family.startswith("pass-1/") for family, _, _ in CASES) == 8
+    assert sum(family.startswith("pass-2/") for family, _, _ in CASES) == 7
+    assert [family for family, _, _ in CASES if family.endswith("/tasks-events")] == ["pass-1/tasks-events"]
+
+
+@pytest.mark.parametrize("profile", ["strict", "emulator"])
+def test_second_recording_request_change_is_rejected_by_actual_dispatch(profile, monkeypatch):
+    changed = json.loads(json.dumps(SECOND))
+    scheduler = next(row for row in changed if row["condition"] == "scheduler-events")
+    frame = next(f for f in scheduler["frames"] if f["kind"] == "raw-request")
+    frame["request"]["headers"]["user-agent"] = "changed-observation"
+    with pytest.raises(AssertionError, match="actual replay differences"):
+        assert_declared_replay(profile, actual_replay_differences(profile, monkeypatch, changed), RECORD)

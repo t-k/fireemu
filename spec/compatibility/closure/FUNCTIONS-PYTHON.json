@@ -5,7 +5,7 @@
   "inventoryStatus": "PROPOSED",
   "oracleTrack": "masked-recorded-observations",
   "recordingPolicy": {
-    "observedPasses": 1,
+    "observedPasses": 2,
     "requiredPasses": 2,
     "waiver": null
   },
@@ -59,7 +59,12 @@
         "emulator": "NO_PRODUCTION_CLAIM"
       },
       "fixturePath": "conformance/functions-python/fixtures/observations.json",
-      "fixtureSha256": "cfcfac41f70adf9523b63856d2260de2f963fb66bccae91425b5bf05a7f96155"
+      "fixtureSha256": "856d8d8dcef774a41da6e8319072d87d0fc37d474df07bb968f904d6995541bd",
+      "observedPasses": 2,
+      "recordingAliases": [
+        "pass-1",
+        "pass-2"
+      ]
     },
     {
       "conditionId": "FUNCTIONS-PYTHON/pubsub-events",
@@ -81,7 +86,12 @@
         "emulator": "NO_PRODUCTION_CLAIM"
       },
       "fixturePath": "conformance/functions-python/fixtures/observations.json",
-      "fixtureSha256": "cfcfac41f70adf9523b63856d2260de2f963fb66bccae91425b5bf05a7f96155"
+      "fixtureSha256": "856d8d8dcef774a41da6e8319072d87d0fc37d474df07bb968f904d6995541bd",
+      "observedPasses": 2,
+      "recordingAliases": [
+        "pass-1",
+        "pass-2"
+      ]
     },
     {
       "conditionId": "FUNCTIONS-PYTHON/storage-events",
@@ -103,7 +113,12 @@
         "emulator": "NO_PRODUCTION_CLAIM"
       },
       "fixturePath": "conformance/functions-python/fixtures/observations.json",
-      "fixtureSha256": "cfcfac41f70adf9523b63856d2260de2f963fb66bccae91425b5bf05a7f96155"
+      "fixtureSha256": "856d8d8dcef774a41da6e8319072d87d0fc37d474df07bb968f904d6995541bd",
+      "observedPasses": 2,
+      "recordingAliases": [
+        "pass-1",
+        "pass-2"
+      ]
     },
     {
       "conditionId": "FUNCTIONS-PYTHON/eventarc-custom-events",
@@ -125,7 +140,12 @@
         "emulator": "NO_PRODUCTION_CLAIM"
       },
       "fixturePath": "conformance/functions-python/fixtures/observations.json",
-      "fixtureSha256": "cfcfac41f70adf9523b63856d2260de2f963fb66bccae91425b5bf05a7f96155"
+      "fixtureSha256": "856d8d8dcef774a41da6e8319072d87d0fc37d474df07bb968f904d6995541bd",
+      "observedPasses": 2,
+      "recordingAliases": [
+        "pass-1",
+        "pass-2"
+      ]
     },
     {
       "conditionId": "FUNCTIONS-PYTHON/scheduler-events",
@@ -147,7 +167,12 @@
         "emulator": "NO_PRODUCTION_CLAIM"
       },
       "fixturePath": "conformance/functions-python/fixtures/observations.json",
-      "fixtureSha256": "cfcfac41f70adf9523b63856d2260de2f963fb66bccae91425b5bf05a7f96155"
+      "fixtureSha256": "856d8d8dcef774a41da6e8319072d87d0fc37d474df07bb968f904d6995541bd",
+      "observedPasses": 2,
+      "recordingAliases": [
+        "pass-1",
+        "pass-2"
+      ]
     },
     {
       "conditionId": "FUNCTIONS-PYTHON/tasks-events",
@@ -163,13 +188,17 @@
       "generations": [
         2
       ],
-      "note": "SDK data without auth/app context and masked raw body order. Replay exercises HTTP pass-through, not daemon task-name/header generation or retries.",
+      "note": "SDK data without auth/app context and masked raw body order. Replay exercises HTTP pass-through, not daemon task-name/header generation or retries. Pass 2 is UNOBSERVED for Tasks: no task delivery frame was recorded; this does not establish correct no-delivery behavior.",
       "profiles": {
         "strict": "LIMITED_TO_RECORDED_CASES",
         "emulator": "NO_PRODUCTION_CLAIM"
       },
       "fixturePath": "conformance/functions-python/fixtures/observations.json",
-      "fixtureSha256": "cfcfac41f70adf9523b63856d2260de2f963fb66bccae91425b5bf05a7f96155"
+      "fixtureSha256": "856d8d8dcef774a41da6e8319072d87d0fc37d474df07bb968f904d6995541bd",
+      "observedPasses": 1,
+      "recordingAliases": [
+        "pass-1"
+      ]
     },
     {
       "conditionId": "FUNCTIONS-PYTHON/auth-blocking",
@@ -189,7 +218,7 @@
         "emulator": "NO_PRODUCTION_CLAIM"
       },
       "fixturePath": "conformance/functions-python/fixtures/observations.json",
-      "fixtureSha256": "cfcfac41f70adf9523b63856d2260de2f963fb66bccae91425b5bf05a7f96155"
+      "fixtureSha256": "856d8d8dcef774a41da6e8319072d87d0fc37d474df07bb968f904d6995541bd"
     },
     {
       "conditionId": "FUNCTIONS-PYTHON/deployment",
@@ -209,7 +238,7 @@
         "emulator": "NO_PRODUCTION_CLAIM"
       },
       "fixturePath": "conformance/functions-python/fixtures/observations.json",
-      "fixtureSha256": "cfcfac41f70adf9523b63856d2260de2f963fb66bccae91425b5bf05a7f96155"
+      "fixtureSha256": "856d8d8dcef774a41da6e8319072d87d0fc37d474df07bb968f904d6995541bd"
     }
   ],
   "releaseRegressions": [
@@ -315,7 +344,7 @@
     }
   ],
   "corpusPath": "conformance/functions-python/corpus.json",
-  "corpusSha256": "7b75cbb504d56d699663a0770aabf3daea49e7a60b0a3cefb7763496bdeb4da0",
+  "corpusSha256": "c0db98e91f1acd766361efdff435eca17655d1344bfeaff4246287bc3df80db0",
   "uncomparedObligations": [
     {
       "id": "task-delivery",
@@ -350,6 +379,18 @@
         "request.host"
       ],
       "reason": "Original host identity is not retained; replay does not establish equality or a measured value difference."
+    }
+  ],
+  "recordings": [
+    {
+      "alias": "pass-1",
+      "fixturePath": "conformance/functions-python/fixtures/observations.json",
+      "fixtureSha256": "856d8d8dcef774a41da6e8319072d87d0fc37d474df07bb968f904d6995541bd"
+    },
+    {
+      "alias": "pass-2",
+      "fixturePath": "conformance/functions-python/fixtures/observations-pass2.json",
+      "fixtureSha256": "cbba2bcc5b0e6802e03306579983c4dd711c2446bb938d6f4c0be66b80936940"
     }
   ]
 }

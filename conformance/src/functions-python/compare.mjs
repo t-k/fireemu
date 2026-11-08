@@ -16,13 +16,13 @@ const sdkCounts = [2, 2, 1, 1, 1, 1, 0, 0];
 export const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
 /** A candidate inventory, never a promotion operation or an acceptance of differences. */
-export function validate(record, corpus, fixtureBytes) {
+export function validate(record, corpus, fixtureBytes, secondBytes) {
   assert.equal(record.parent, "FUNCTIONS-PYTHON");
   assert.equal(record.parentStatus, "IMPLEMENTING", "parent must remain pending");
   assert.deepEqual(
     record.recordingPolicy,
-    { observedPasses: 1, requiredPasses: 2, waiver: null },
-    "one pass is not a waiver",
+    { observedPasses: corpus.recordings.length, requiredPasses: 2, waiver: null },
+    "independent recordings are not a waiver",
   );
   assert.equal(record.closureReview.decision, "PENDING");
   assert.deepEqual(
@@ -48,6 +48,76 @@ export function validate(record, corpus, fixtureBytes) {
     record.conditions.map((c) => c.conditionId),
   );
   assert.equal(corpus.fixtureSha256, digest(fixtureBytes), "fixture digest");
+  assert.deepEqual(record.recordings, corpus.recordings, "recording provenance inventory");
+  assert.ok([1, 2].includes(corpus.recordings.length), "one or two independent recordings");
+  assert.deepEqual(
+    corpus.recordings.map((r) => r.alias),
+    ["pass-1", "pass-2"].slice(0, corpus.recordings.length),
+  );
+  const allBytes = corpus.recordings.length === 2 ? [fixtureBytes, secondBytes] : [fixtureBytes];
+  for (const [index, item] of corpus.recordings.entries()) {
+    assert.equal(
+      item.fixturePath,
+      `conformance/functions-python/fixtures/observations${index ? "-pass2" : ""}.json`,
+    );
+    assert.ok(allBytes[index], "recording fixture required");
+    assert.equal(item.fixtureSha256, digest(allBytes[index]), "recording fixture digest");
+    const observed = JSON.parse(allBytes[index]);
+    assert.deepEqual(
+      observed.recording,
+      {
+        alias: item.alias,
+        accounting: index
+          ? {
+              recorderRequests: 172,
+              cliWriteRows: 26,
+              cliWriteAttempts: 42,
+              accountedRequests: 214,
+            }
+          : {
+              recorderRequests: 160,
+              cliWriteRows: 28,
+              cliWriteAttempts: 44,
+              accountedRequests: 204,
+            },
+        eventFrames: index ? 14 : 16,
+        functionFrameCategories: index ? 11 : 13,
+      },
+      "recorded accounting and frame inventory",
+    );
+    assert.deepEqual(
+      observed.observations.map((r) => r.condition),
+      index ? families.slice(0, 6) : families,
+    );
+    for (let i = 0; i < 6; i += 1) {
+      const row = observed.observations[i],
+        present = !(index === 1 && i === 5);
+      assert.equal(row.coverage, present ? "RECORDED" : "UNOBSERVED");
+      assert.equal(row.observedPasses, present ? 1 : 0);
+      assert.equal(row.frames.length, present ? frameCounts[i] : 0);
+      assert.equal(row.sdkCases.length, present ? sdkCounts[i] : 0);
+      assert.equal(row.origin, "masked-production-projection");
+      if (!present) assert.ok(row.reason);
+      for (const frame of row.frames)
+        if (frame.request) {
+          assert.equal(frame.request.method, "POST");
+          assert.equal(frame.request.path, "/");
+          assert.ok(frame.request.headerNames.includes("authorization"));
+          assert.equal(frame.request.headers.authorization, undefined);
+        }
+      for (const c of row.sdkCases) {
+        assert.equal(c.origin, "observed-sdk-projection");
+        assert.equal(c.inputIdentity, "synthetic");
+        assert.ok(Object.keys(c.expected).length);
+      }
+    }
+    assert.equal(observed.observations[3].wholeSecondSdkFrames, 0);
+  }
+  for (let i = 0; i < 6; i += 1) {
+    const aliases = i === 5 ? ["pass-1"] : corpus.recordings.map((r) => r.alias);
+    assert.deepEqual(record.conditions[i].recordingAliases, aliases, "family recording provenance");
+    assert.equal(record.conditions[i].observedPasses, aliases.length, "family recording count");
+  }
   const fixture = JSON.parse(fixtureBytes);
   assert.deepEqual(
     fixture.observations.map((r) => r.condition),

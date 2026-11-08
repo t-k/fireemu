@@ -41,7 +41,8 @@ function compose(rulesetId, label) {
     BAD_PATH_RULESETS[rulesetId] ??
     DIFFS_RULESETS[rulesetId] ??
     SHAPES_RULESETS[rulesetId] ??
-    SHAPES_TWO_RULESETS[rulesetId];
+    SHAPES_TWO_RULESETS[rulesetId] ??
+    UNICODE_RULESETS[rulesetId];
   if (!ruleset) throw new Error(`unknown ruleset ${rulesetId}`);
   return [
     ...(ruleset.version === 2 ? ["rules_version = '2';"] : []),
@@ -189,7 +190,8 @@ export function validateCorpus(programs, principals = PRINCIPALS) {
       !BAD_PATH_RULESET_IDS.includes(p.ruleset) &&
       !DIFFS_RULESET_IDS.includes(p.ruleset) &&
       !SHAPES_RULESET_IDS.includes(p.ruleset) &&
-      !SHAPES_TWO_RULESET_IDS.includes(p.ruleset)
+      !SHAPES_TWO_RULESET_IDS.includes(p.ruleset) &&
+      !UNICODE_RULESET_IDS.includes(p.ruleset)
     )
       throw new Error(`${p.id}: unknown ruleset ${p.ruleset}`);
     const stepIds = new Set();
@@ -905,6 +907,166 @@ export const SHAPES_TWO_PROGRAMS = [
       { doc: "fsr9-p-fn-resource/d1", fields: A1 },
       { doc: "fsr9-p-fn-null/d1", fields: A1 },
       { doc: "fsr9-p-fn-arg/d1", fields: A1 },
+    ],
+  ),
+];
+
+// ---- FS-RULES: Unicode strings --------------------------------------------------------------------
+//
+// Production already showed that size() and indexing of a string count UTF-16 code units (e-acute, fire and
+// `x` is 4 long). This family records what else a string function counts or rewrites: a
+// supplementary-plane ideograph, a base letter followed by a combining mark, an ideograph followed
+// by a variation selector from the supplementary plane, a joined (ZWJ) family and a skin-tone
+// emoji; whether a precomposed letter equals its decomposed spelling, in a literal and in a stored
+// field; the full case mapping where the length changes (sharp s, dotted capital I, the ligature
+// fi) and the locale-sensitive ones (capital I, final sigma); and whether `.` of matches() stands
+// for one UTF-16 unit, one code point or one grapheme.
+//
+// Every case is a Rules expression in an `allow get` rule of its own collection, read with a REST
+// get of a document that does not exist: allowed is 404, refused is 403 (the shapes the differences
+// judge accepts). Each ruleset has a true and a false control. The same strings are also stored in
+// one document (`fsr9-us-data/d1`, written by the REST commit with the exact code points, never
+// normalized by the recorder) and read by the Rules function get() of that path, which yields the
+// stored value; a direct `get` of that document would answer 200 with a body, a shape no judge
+// accepts. Two list rows read the stored field through resource.data (the query fixes the string),
+// and two list rows only ask Firestore itself whether it matches the decomposed spelling.
+//
+// The source of this section is ASCII: every code point is written as an escape, so that no editor
+// or formatter can normalize it. The Rules text it builds holds the raw characters.
+
+const U_E_NFC = "\u00e9"; // e with acute, precomposed
+const U_E_NFD = "e\u0301"; // e, combining acute accent
+const U_GA_NFC = "\u304c"; // hiragana ga
+const U_GA_NFD = "\u304b\u3099"; // hiragana ka, combining voiced sound mark
+const U_KA_MARK = "\u304b\u309a"; // hiragana ka, combining semi-voiced sound mark (no precomposed form)
+const U_HFISH = "\u{29e3d}"; // a supplementary-plane ideograph (two UTF-16 units)
+const U_IVS = "\u8fbb\u{e0100}"; // a BMP ideograph, then a variation selector (U+E0100, two units)
+const U_ZWJ = "\u{1f468}\u200d\u{1f469}\u200d\u{1f467}"; // man, ZWJ, woman, ZWJ, girl (8 units)
+const U_SKIN = "\u{1f44d}\u{1f3fd}"; // thumbs up, medium skin tone (4 units)
+const U_FIRE = "\u{1f525}";
+const U_SHARP = "\u00df";
+const U_DOTTED = "\u0130";
+const U_FI = "\ufb01";
+const U_SIGMA_UP = "\u0391\u03a3"; // Greek capital alpha, capital sigma
+const U_SIGMA_LOW = "\u03b1\u03c2"; // alpha, final sigma
+
+const q = (text) => `"${text}"`;
+const UNICODE_UNITS_CASES = [
+  ["ctl-true", `${q("abc")}.size() == 3`],
+  ["ctl-false", `${q("abc")}.size() == 4`],
+  ["hfish-2", `${q(U_HFISH)}.size() == 2`],
+  ["hfish-1", `${q(U_HFISH)}.size() == 1`],
+  ["kana-2", `${q(U_KA_MARK)}.size() == 2`],
+  ["ivs-3", `${q(U_IVS)}.size() == 3`],
+  ["zwj-8", `${q(U_ZWJ)}.size() == 8`],
+  ["zwj-5", `${q(U_ZWJ)}.size() == 5`],
+  ["skin-4", `${q(U_SKIN)}.size() == 4`],
+  ["e-eq", `${q(U_E_NFC)} == ${q(U_E_NFD)}`],
+  ["e-nfd-size", `${q(U_E_NFD)}.size() == 2`],
+  ["ga-eq", `${q(U_GA_NFC)} == ${q(U_GA_NFD)}`],
+];
+const UNICODE_CASE_CASES = [
+  ["ctl-true", `${q("abc")}.upper() == ${q("ABC")}`],
+  ["ctl-false", `${q("abc")}.upper() == ${q("abc")}`],
+  ["sharp-eq", `${q(U_SHARP)}.upper() == ${q("SS")}`],
+  ["sharp-size", `${q(U_SHARP)}.upper().size() == 2`],
+  ["dotted-size", `${q(U_DOTTED)}.lower().size() == 2`],
+  ["fi-size", `${q(U_FI)}.upper().size() == 2`],
+  ["lower-i", `${q("I")}.lower() == ${q("i")}`],
+  ["sigma", `${q(U_SIGMA_UP)}.lower() == ${q(U_SIGMA_LOW)}`],
+];
+const UNICODE_REGEX_CASES = [
+  ["ctl-true", `${q("abc")}.matches(${q("a.c")})`],
+  ["ctl-false", `${q("abc")}.matches(${q("a.")})`],
+  ["fire-dot", `${q(U_FIRE)}.matches(${q(".")})`],
+  ["fire-dotdot", `${q(U_FIRE)}.matches(${q("..")})`],
+  ["fire-two", `${q(U_FIRE)}.matches(${q("^.{2}$")})`],
+  ["e-nfd-dot", `${q(U_E_NFD)}.matches(${q(".")})`],
+  ["zwj-dot", `${q(U_ZWJ)}.matches(${q(".")})`],
+  ["zwj-five", `${q(U_ZWJ)}.matches(${q("^.{5}$")})`],
+];
+
+/** The stored document, read by get() inside a rule. */
+const U_DATA = "get(/databases/$(database)/documents/fsr9-us-data/d1).data";
+const UNICODE_STORED_CASES = [
+  ["ctl-true", `${U_DATA}.ctl == ${q("abc")}`],
+  ["ctl-false", `${U_DATA}.ctl == ${q("abd")}`],
+  ["nfc-size", `${U_DATA}.nfc.size() == 1`],
+  ["nfd-size", `${U_DATA}.nfd.size() == 2`],
+  ["nfd-lit-eq", `${U_DATA}.nfd == ${q(U_E_NFD)}`],
+  ["nfd-nfc-lit-eq", `${U_DATA}.nfd == ${q(U_E_NFC)}`],
+  ["nfd-nfc-field-eq", `${U_DATA}.nfd == ${U_DATA}.nfc`],
+  ["hfish-size", `${U_DATA}.hfish.size() == 2`],
+  ["ivs-size", `${U_DATA}.ivs.size() == 3`],
+  ["zwj-size", `${U_DATA}.zwj.size() == 8`],
+  ["skin-size", `${U_DATA}.skin.size() == 4`],
+  ["sharp-upper-size", `${U_DATA}.sharp.upper().size() == 2`],
+  ["dotted-lower-size", `${U_DATA}.dotted.lower().size() == 2`],
+];
+
+const unicodeRules = (prefix, cases) =>
+  cases.flatMap(([id, expr]) => rule("get", `${prefix}${id}`, expr));
+
+export const UNICODE_RULESETS = {
+  "unicode-units": { version: 2, body: unicodeRules("fsr9-un-", UNICODE_UNITS_CASES) },
+  "unicode-case": { version: 2, body: unicodeRules("fsr9-uc-", UNICODE_CASE_CASES) },
+  "unicode-regex": { version: 2, body: unicodeRules("fsr9-ur-", UNICODE_REGEX_CASES) },
+  "unicode-stored": {
+    version: 2,
+    body: [
+      ...unicodeRules("fsr9-us-", UNICODE_STORED_CASES),
+      // Firestore alone: the rule is true, only the filter decides what comes back.
+      ...rule("list", "fsr9-us-q", "true"),
+      // The stored field through resource.data; the query fixes the string.
+      ...rule("list", "fsr9-us-lq", "resource.data.s.size() == 2"),
+    ],
+  },
+};
+export const UNICODE_RULESET_IDS = Object.keys(UNICODE_RULESETS);
+
+const unicodeProgram = (name, steps, seed = []) => ({
+  id: `fs-rules-v1/unicode/${name}`,
+  ruleset: `unicode-${name}`,
+  seed,
+  steps: [{ id: "publishes", publish: true }, ...steps],
+});
+const unicodeGetRows = (prefix, cases) => cases.map(([id]) => getRow(`${prefix}${id}`, id));
+const stringIs = (value) => field("s", "EQUAL", { stringValue: value });
+const uQuery = (id, collection, value) =>
+  queryRow(id, { collectionId: collection }, stringIs(value));
+
+export const UNICODE_PROGRAMS = [
+  unicodeProgram("units", unicodeGetRows("fsr9-un-", UNICODE_UNITS_CASES)),
+  unicodeProgram("case", unicodeGetRows("fsr9-uc-", UNICODE_CASE_CASES)),
+  unicodeProgram("regex", unicodeGetRows("fsr9-ur-", UNICODE_REGEX_CASES)),
+  unicodeProgram(
+    "stored",
+    [
+      ...unicodeGetRows("fsr9-us-", UNICODE_STORED_CASES),
+      uQuery("q-nfd", "fsr9-us-q", U_E_NFD),
+      uQuery("q-nfc", "fsr9-us-q", U_E_NFC),
+      uQuery("lq-nfd", "fsr9-us-lq", U_E_NFD),
+      uQuery("lq-nfc", "fsr9-us-lq", U_E_NFC),
+    ],
+    [
+      {
+        doc: "fsr9-us-data/d1",
+        fields: Object.fromEntries(
+          [
+            ["ctl", "abc"],
+            ["nfc", U_E_NFC],
+            ["nfd", U_E_NFD],
+            ["hfish", U_HFISH],
+            ["ivs", U_IVS],
+            ["zwj", U_ZWJ],
+            ["skin", U_SKIN],
+            ["sharp", U_SHARP],
+            ["dotted", U_DOTTED],
+          ].map(([key, value]) => [key, { stringValue: value }]),
+        ),
+      },
+      { doc: "fsr9-us-q/d1", fields: { s: { stringValue: U_E_NFD } } },
+      { doc: "fsr9-us-lq/d1", fields: { s: { stringValue: U_E_NFD } } },
     ],
   ),
 ];

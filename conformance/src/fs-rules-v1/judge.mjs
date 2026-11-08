@@ -22,6 +22,7 @@ import {
   programDigest,
   SHAPES_PROGRAMS,
   SHAPES_TWO_PROGRAMS,
+  UNICODE_PROGRAMS,
 } from "./corpus.mjs";
 
 export const TASK_ID = "FS-3-V1-RULES";
@@ -37,11 +38,15 @@ export const TASK_ID_SHAPES = "FS-RULES-SHAPES";
 /** The ledger task of the second shapes family (stored keys, key sets, a function over resource, an offset). */
 export const TASK_ID_SHAPES_TWO = "FS-RULES-SHAPES-TWO";
 
+/** The ledger task of the Unicode family (string size, normalization, case mapping and regular expressions). */
+export const TASK_ID_UNICODE = "FS-RULES-UNICODE";
+
 const TASKS = [
   ["fs-rules-v1/bad-path/", TASK_ID_BAD_PATH],
   ["fs-rules-v1/diffs/", TASK_ID_DIFFS],
   ["fs-rules-v1/shapes/", TASK_ID_SHAPES],
   ["fs-rules-v1/shapes-two/", TASK_ID_SHAPES_TWO],
+  ["fs-rules-v1/unicode/", TASK_ID_UNICODE],
 ];
 const taskOf = (program) => TASKS.find(([prefix]) => program.id.startsWith(prefix))?.[1] ?? TASK_ID;
 
@@ -165,7 +170,7 @@ export function confirmedNoAuthRecording(env = process.env, now = Date.now()) {
   return new Date(at).toISOString();
 }
 
-/** The corpus family of FS3_CORPUS: `v1` (FS-3, the default), `bad-path` (FS-8), `diffs`, `shapes` or `shapes2`. */
+/** The corpus family of FS3_CORPUS: `v1` (FS-3, the default), `bad-path` (FS-8), `diffs`, `shapes`, `shapes2` or `unicode`. */
 export function corpusFor(env = process.env) {
   const family = env.FS3_CORPUS ?? "v1";
   if (family === "v1") return PROGRAMS;
@@ -173,7 +178,10 @@ export function corpusFor(env = process.env) {
   if (family === "diffs") return DIFFS_PROGRAMS;
   if (family === "shapes") return SHAPES_PROGRAMS;
   if (family === "shapes2") return SHAPES_TWO_PROGRAMS;
-  throw new Error(`FS3_CORPUS must be v1, bad-path, diffs, shapes or shapes2, not ${family}`);
+  if (family === "unicode") return UNICODE_PROGRAMS;
+  throw new Error(
+    `FS3_CORPUS must be v1, bad-path, diffs, shapes, shapes2 or unicode, not ${family}`,
+  );
 }
 
 /** Programs selected by id prefix in FS3_PROGRAMS (all of the chosen corpus when unset). */

@@ -101,7 +101,7 @@ test("preflight names the corpus family before it asks for the web config", () =
   assert.notEqual(result.status, 0);
   assert.match(
     result.stderr,
-    /FS3_CORPUS must be v1, bad-path, diffs, shapes or shapes2, not nonsense/,
+    /FS3_CORPUS must be v1, bad-path, diffs, shapes, shapes2 or unicode, not nonsense/,
   );
   assert.doesNotMatch(result.stderr, /FIREEMU_AUTH_SANDBOX_WEB_CONFIG/);
   const mixed = run(["preflight"], { FS3_CORPUS: "bad-path", FS3_PROGRAMS: "fs-rules-v1/path" });
@@ -187,7 +187,10 @@ test("shapes-report prints one line per shapes row from the checked-in fixture, 
     lines.at(-1),
     /^.* fn-after#fn-after-false +missing \(official: denied, fixes: denied\)/,
   );
-  assert.match(run(["nope"]).stderr, /\|diffs-report\|shapes-report\|shapes2-report$/m);
+  assert.match(
+    run(["nope"]).stderr,
+    /\|diffs-report\|shapes-report\|shapes2-report\|unicode-report$/m,
+  );
 });
 
 test("shapes2-report prints one line per row of the second shapes family, none recorded yet", () => {
@@ -203,8 +206,21 @@ test("shapes2-report prints one line per row of the second shapes family, none r
   assert.match(lines.at(-1), /^.* fn#fn-arg-allow +missing \(official: allowed, fixes: allowed\)/);
 });
 
+test("unicode-report prints one line per row of the Unicode family, none recorded yet", () => {
+  const result = run(["unicode-report"]);
+  assert.equal(result.status, 0, result.stderr);
+  const lines = result.stdout.trimEnd().split("\n");
+  assert.equal(lines.length, 49);
+  assert.match(
+    lines[0],
+    /^unknown {8}unknown {8}units#publishes {20}missing \(official: compiled, fixes: compiled\) \[not recorded\]$/,
+  );
+  assert.ok(lines.every((line) => line.startsWith("unknown        unknown        ")));
+  assert.match(lines.at(-1), /^.* stored#lq-nfc +missing \(official: denied, fixes: denied\)/);
+});
+
 test("check runs the local side and refuses without a fireemu binary", () => {
-  for (const corpus of ["shapes", "shapes2"]) {
+  for (const corpus of ["shapes", "shapes2", "unicode"]) {
     const result = run(["check"], { FIREEMU_BIN: "/nonexistent/fireemu", FS3_CORPUS: corpus });
     assert.notEqual(result.status, 0, corpus);
     assert.match(result.stderr, /fireemu is not built/, corpus);

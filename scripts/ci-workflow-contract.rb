@@ -24,6 +24,10 @@ workflow = load_workflow("ci.yml")
 jobs = workflow.fetch("jobs")
 trigger = workflow["on"] || workflow[true]
 assert(trigger.key?("workflow_dispatch"), "CI must retain a manual full-suite trigger")
+lint_runs = jobs.fetch("lint").fetch("steps").map { |step| step["run"] }.compact
+assert(lint_runs.include?("ruby scripts/txn04-replay-contract.test.rb"), "the lint job must check the txn04-replay job contract")
+lint_conditional = jobs.fetch("lint").fetch("steps").select { |step| step["run"] == "ruby scripts/txn04-replay-contract.test.rb" && (step.key?("if") || step.key?("continue-on-error")) }
+assert(lint_conditional.empty?, "the txn04-replay contract step must be unconditional")
 
 assert(trigger.key?("pull_request"), "CI must run on pull requests")
 assert(trigger.dig("push", "branches") == ["main"], "CI must run on pushes to main")

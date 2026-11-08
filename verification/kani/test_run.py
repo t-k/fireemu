@@ -291,9 +291,12 @@ sys.exit(int(os.environ.get("FAKE_EXIT", "0")))
                 failures = []
                 observed_timeouts = []
                 cleanup_waits = []
+                proof_groups = []
 
                 def observed_process(*args, **kwargs):
                     process = original_popen(*args, **kwargs)
+                    if "--version" not in args[0]:
+                        proof_groups.append(process.pid)
                     communicate, wait = process.communicate, process.wait
 
                     def observe_communicate(*args, **kwargs):
@@ -313,7 +316,7 @@ sys.exit(int(os.environ.get("FAKE_EXIT", "0")))
 
                 def controlled_signal(pgid, requested_signal):
                     calls.append(requested_signal)
-                    if requested_signal == failed_signal and self.child_path.exists() and not failures:
+                    if requested_signal == failed_signal and pgid in proof_groups and not failures:
                         error = PermissionError(1, "controlled owned-group EPERM")
                         failures.append((error, len(calls)))
                         raise error

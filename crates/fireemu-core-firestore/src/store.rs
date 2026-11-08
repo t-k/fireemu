@@ -7403,13 +7403,19 @@ fn scaled_norm(values: impl IntoIterator<Item = f64>) -> Option<f64> {
     norm.is_finite().then_some(norm)
 }
 
-fn normalized_components(values: &[f64]) -> Option<Vec<f64>> {
+/// The scale and norm that a vector is divided by to be normalized. Computing them needs no
+/// buffer: the components are formed from these two numbers inline, with the same operations
+/// and order as the component-buffer form they replace, so every result keeps its bits.
+fn normalization_factors(values: &[f64]) -> Option<(f64, f64)> {
     #[cfg(test)]
     NORMALIZATION_CALLS.with(|calls| calls.set(calls.get() + 1));
-    if values.iter().any(|value| !value.is_finite()) {
-        return None;
+    let mut scale = 0.0_f64;
+    for value in values {
+        if !value.is_finite() {
+            return None;
+        }
+        scale = f64::max(scale, value.abs());
     }
-    let scale = values.iter().map(|value| value.abs()).fold(0.0, f64::max);
     if scale == 0.0 {
         return None;
     }
@@ -7424,13 +7430,40 @@ fn normalized_components(values: &[f64]) -> Option<Vec<f64>> {
     if !norm.is_finite() || norm == 0.0 {
         return None;
     }
-    values
-        .iter()
-        .map(|value| {
-            let component = (value / scale) / norm;
-            component.is_finite().then_some(component)
-        })
-        .collect()
+    Some((scale, norm))
+}
+
+fn normalized_component(value: f64, (scale, norm): (f64, f64)) -> Option<f64> {
+    let component = (value / scale) / norm;
+    component.is_finite().then_some(component)
+}
+
+/// Cosine similarity of two equal-length vectors from their normalization factors. The
+/// checks and the accumulation order are those of normalizing both into buffers and taking
+/// their checked dot product.
+fn cosine_similarity(
+    left: &[f64],
+    left_factors: (f64, f64),
+    right: &[f64],
+    right_factors: (f64, f64),
+) -> Option<f64> {
+    if left.len() != right.len() {
+        return None;
+    }
+    let mut dot = 0.0;
+    for (left, right) in left.iter().zip(right) {
+        let left = normalized_component(*left, left_factors)?;
+        let right = normalized_component(*right, right_factors)?;
+        let product = left * right;
+        if !product.is_finite() {
+            return None;
+        }
+        dot += product;
+        if !dot.is_finite() {
+            return None;
+        }
+    }
+    Some(dot)
 }
 
 fn checked_dot(left: &[f64], right: &[f64]) -> Option<f64> {
@@ -7454,7 +7487,7 @@ fn checked_dot(left: &[f64], right: &[f64]) -> Option<f64> {
 struct PreparedVectorDistance<'a> {
     query: &'a [f64],
     measure: DistanceMeasure,
-    normalized_query: Option<Vec<f64>>,
+    query_factors: Option<(f64, f64)>,
 }
 
 impl<'a> PreparedVectorDistance<'a> {
@@ -7462,8 +7495,8 @@ impl<'a> PreparedVectorDistance<'a> {
         Self {
             query,
             measure,
-            normalized_query: if measure == DistanceMeasure::Cosine {
-                normalized_components(query)
+            query_factors: if measure == DistanceMeasure::Cosine {
+                normalization_factors(query)
             } else {
                 None
             },
@@ -7477,8 +7510,8 @@ impl<'a> PreparedVectorDistance<'a> {
         if vector.len() != self.query.len() {
             return None;
         }
-        let left = normalized_components(vector)?;
-        let similarity = checked_dot(&left, self.normalized_query.as_ref()?)?;
+        let left_factors = normalization_factors(vector)?;
+        let similarity = cosine_similarity(vector, left_factors, self.query, self.query_factors?)?;
         Some((1.0 - similarity.clamp(-1.0, 1.0)).clamp(0.0, 2.0))
     }
 }
@@ -7500,9 +7533,9 @@ pub fn vector_distance(vector: &[f64], query: &[f64], measure: DistanceMeasure) 
             scaled_norm(vector.iter().zip(query).map(|(left, right)| left - right))
         }
         DistanceMeasure::Cosine => {
-            let left = normalized_components(vector)?;
-            let right = normalized_components(query)?;
-            let similarity = checked_dot(&left, &right)?;
+            let left_factors = normalization_factors(vector)?;
+            let right_factors = normalization_factors(query)?;
+            let similarity = cosine_similarity(vector, left_factors, query, right_factors)?;
             Some((1.0 - similarity.clamp(-1.0, 1.0)).clamp(0.0, 2.0))
         }
         DistanceMeasure::DotProduct => checked_dot(vector, query),

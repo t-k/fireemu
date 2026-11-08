@@ -176,6 +176,34 @@ fn a_file_with_server_values_is_checked_against_the_given_limits() {
 }
 
 #[test]
+fn a_file_beyond_the_given_limits_is_refused_when_it_is_prepared() {
+    let limits = Limits {
+        max_depth: 2,
+        max_path_bytes: 8,
+        max_string_bytes: 4,
+    };
+    for text in [
+        r#"{"a":{"b":1}}"#,
+        r#"{"a":{"b":{"c":1}}}"#,
+        r#"{"a":{"b":{"c":null}}}"#,
+        r#"{"abcdefgh":1}"#,
+        r#"{"abcdefghi":1}"#,
+        r#"{"abcd":{"efgh":1}}"#,
+        r#"{"a":"abcd"}"#,
+        r#"{"a":"abcde"}"#,
+        "[[[1]]]",
+    ] {
+        let options = RestOptions {
+            limits,
+            ..RestOptions::default()
+        };
+        let direct = Database::new(options, 1).import_text("p", text, NOW);
+        let prepared = prepare_import("p", text.to_owned(), &limits).map(|_| ());
+        assert_eq!(prepared, direct, "{text}");
+    }
+}
+
+#[test]
 fn an_import_checked_against_other_limits_is_not_installed() {
     let limits = Limits {
         max_depth: 3,

@@ -3269,6 +3269,24 @@ impl StorageState {
         after: Option<&str>,
         max: usize,
     ) -> ListPage {
+        self.list_after_where(bucket, prefix, delimiter, after, max, &|_, _| true)
+    }
+
+    /// [`Self::list_after`] over the entries `accept` takes (`accept(entry, is_prefix)`): an entry
+    /// it refuses is skipped as if it were not there, so it takes no place in a page, never
+    /// becomes the continuation point and is never the reason a page is reported to have more.
+    /// A caller that hides entries from the answer uses this instead of dropping them from a
+    /// finished page, where the continuation point could still name one.
+    #[must_use]
+    pub fn list_after_where(
+        &self,
+        bucket: &BucketName,
+        prefix: &str,
+        delimiter: Option<&str>,
+        after: Option<&str>,
+        max: usize,
+        accept: &dyn Fn(&str, bool) -> bool,
+    ) -> ListPage {
         let delimiter = delimiter.filter(|delimiter| !delimiter.is_empty());
         // A name below `after` can only fold to an entry that is also at most `after`, so the scan
         // starts at the later of the prefix and `after` instead of walking the prefix from its
@@ -3290,6 +3308,9 @@ impl StorageState {
             if after.is_some_and(|after| entry.as_str() <= after)
                 || last.as_deref() == Some(entry.as_str())
             {
+                continue;
+            }
+            if !accept(&entry, folded.is_some()) {
                 continue;
             }
             if items.len() + prefixes.len() == max {

@@ -649,7 +649,15 @@ fn a_prefix_with_a_leading_slash_or_consecutive_slashes_is_refused_in_both_profi
     for profile in [Profile::Strict, Profile::Emulator] {
         let s = state(profile, ALLOW_ALL);
         put(&s, "p/pub/x", "body");
-        for prefix in ["/p/pub/", "p//pub/", "/p/", "//", "p/pub//x/"] {
+        for prefix in [
+            "/p/pub/",
+            "p//pub/",
+            "/p/",
+            "/",
+            "//",
+            "p/pub//",
+            "p/pub//x/",
+        ] {
             for delimiter in [None, Some("/")] {
                 assert_path_refusal(
                     &v0_list(&s, prefix, delimiter),
@@ -657,8 +665,8 @@ fn a_prefix_with_a_leading_slash_or_consecutive_slashes_is_refused_in_both_profi
                 );
             }
         }
-        // Near misses: the single trailing slash every prefix ends with, the empty prefix and
-        // the root slash are not this refusal.
+        // Near misses: the single trailing slash every prefix ends with and the empty prefix
+        // are not this refusal.
         for prefix in ["p/pub/", "p/", ""] {
             assert_eq!(
                 v0_list(&s, prefix, None).status,
@@ -666,7 +674,6 @@ fn a_prefix_with_a_leading_slash_or_consecutive_slashes_is_refused_in_both_profi
                 "{profile:?} {prefix:?}"
             );
         }
-        assert_ne!(v0_list(&s, "/", None).body.len(), 116);
     }
 }
 
@@ -1047,6 +1054,203 @@ fn the_v0_write_routes_still_serve_a_well_formed_name() {
                 && serde_json::from_slice::<Value>(&r.body)
                     .is_ok_and(|b| b["error"]["message"] == PATH_MESSAGE);
             assert!(!refusal, "{label}: {}", String::from_utf8_lossy(&r.body));
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Review round 2 (Sol, 2026-11-09): the list prefix is validated as it was sent, and a name the
+// answer hides never reaches it through a page token.
+// ---------------------------------------------------------------------------------------------
+
+const LIST_ALL: &str = "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow list: if true; } } }";
+
+fn list_page(
+    s: &StorageState,
+    prefix: &str,
+    delimiter: Option<&str>,
+    max: usize,
+    token: Option<&str>,
+) -> Value {
+    let mut q = format!("prefix={}&maxResults={max}", enc(prefix));
+    if let Some(d) = delimiter {
+        write!(q, "&delimiter={}", enc(d)).unwrap();
+    }
+    if let Some(t) = token {
+        write!(q, "&pageToken={}", enc(t)).unwrap();
+    }
+    let r = handle(
+        s,
+        request("GET", &format!("/v0/b/{BUCKET}/o?{q}"), &[], b""),
+    );
+    assert_eq!(r.status, 200, "{q}: {}", String::from_utf8_lossy(&r.body));
+    serde_json::from_slice(&r.body).unwrap()
+}
+
+fn page_entries(page: &Value) -> Vec<String> {
+    let mut entries: Vec<String> = page["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["name"].as_str().unwrap().to_owned())
+        .chain(
+            page["prefixes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|p| p.as_str().unwrap().to_owned()),
+        )
+        .collect();
+    entries.sort();
+    entries
+}
+
+#[test]
+fn a_prefix_with_a_double_or_a_lone_slash_is_refused_with_the_listing_behind_it() {
+    for profile in [Profile::Strict, Profile::Emulator] {
+        let s = state(profile, LIST_ALL);
+        put(&s, "public//a", "a");
+        put(&s, "public//b", "b");
+        put(&s, "public/c", "c");
+        for prefix in ["public//", "/", "//", "public///", "a//b/", "/public/"] {
+            for max in [1, 5] {
+                let r = handle(
+                    &s,
+                    request(
+                        "GET",
+                        &format!("/v0/b/{BUCKET}/o?prefix={}&maxResults={max}", enc(prefix)),
+                        &[],
+                        b"",
+                    ),
+                );
+                assert_path_refusal(&r, &format!("{profile:?} {prefix:?} max={max}"));
+            }
+        }
+        // The prefixes that stay valid: empty, and a single terminal slash.
+        for prefix in ["", "public/"] {
+            assert_eq!(
+                list_page(&s, prefix, None, 5, None)["items"]
+                    .as_array()
+                    .is_some(),
+                true
+            );
+        }
+    }
+}
+
+#[test]
+fn a_page_never_names_an_entry_it_hides() {
+    for profile in [Profile::Strict, Profile::Emulator] {
+        let s = state(profile, LIST_ALL);
+        // `p//a` and `p/x/` are hidden (an empty segment); `p/b` and `p/c` are listed.
+        for name in ["p//a", "p/b", "p/c", "p/x/"] {
+            put(&s, name, "body");
+        }
+        let first = list_page(&s, "p/", None, 1, None);
+        assert_eq!(page_entries(&first), ["p/b"], "{profile:?}");
+        let token = first["nextPageToken"].as_str().unwrap().to_owned();
+        assert_eq!(
+            token,
+            fireemu_core_storage::hash::base64(b"p/b"),
+            "{profile:?}"
+        );
+        let second = list_page(&s, "p/", None, 1, Some(&token));
+        assert_eq!(page_entries(&second), ["p/c"], "{profile:?}");
+        // Only hidden entries follow `p/c`: no continuation.
+        assert!(
+            second.get("nextPageToken").is_none(),
+            "{profile:?}: {second}"
+        );
+        // A page that starts at a hidden entry returns the first listed one.
+        let once = list_page(&s, "p/", None, 5, None);
+        assert_eq!(page_entries(&once), ["p/b", "p/c"], "{profile:?}");
+        assert!(once.get("nextPageToken").is_none(), "{profile:?}");
+    }
+}
+
+#[test]
+fn maxresults_zero_does_not_name_a_hidden_entry_in_the_emulator_profile() {
+    let s = state(Profile::Emulator, LIST_ALL);
+    put(&s, "p//a", "body");
+    put(&s, "p/b", "body");
+    let r = handle(
+        &s,
+        request(
+            "GET",
+            &format!("/v0/b/{BUCKET}/o?prefix=p%2F&maxResults=0"),
+            &[],
+            b"",
+        ),
+    );
+    assert_eq!(r.status, 200);
+    let body: Value = serde_json::from_slice(&r.body).unwrap();
+    assert!(!body.to_string().contains("p//a"), "{body}");
+}
+
+mod listing_properties {
+    use super::*;
+    use proptest::prelude::*;
+
+    fn hidden(entry: &str) -> bool {
+        entry.is_empty() || entry.split('/').any(str::is_empty)
+    }
+
+    proptest! {
+        /// Model: the pages, followed by their tokens, return exactly the listed entries once, in
+        /// order, within the page size, and every token names the last entry of its page; nothing
+        /// hidden appears in a body.
+        #[test]
+        fn paging_returns_the_listed_entries_and_names_no_hidden_one(
+            names in proptest::collection::btree_set("[ab/]{1,5}", 1..8),
+            prefix in prop_oneof![Just(""), Just("a/"), Just("b/")],
+            delimited in any::<bool>(),
+            max in 1usize..4,
+        ) {
+            let s = state(Profile::Strict, LIST_ALL);
+            for name in &names {
+                if name != "." {
+                    put(&s, name, "body");
+                }
+            }
+            let delimiter = delimited.then_some("/");
+            let mut expected: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+            for name in names.iter().filter(|n| n.starts_with(prefix)) {
+                let rest = &name[prefix.len()..];
+                match (delimited, rest.find('/')) {
+                    (true, Some(i)) => {
+                        let entry = format!("{prefix}{}/", &rest[..i]);
+                        if !hidden(entry.strip_suffix('/').unwrap()) {
+                            expected.insert(entry);
+                        }
+                    }
+                    _ => {
+                        if !hidden(name) {
+                            expected.insert(name.clone());
+                        }
+                    }
+                }
+            }
+            let mut seen = Vec::new();
+            let mut token: Option<String> = None;
+            for _ in 0..40 {
+                let page = list_page(&s, prefix, delimiter, max, token.as_deref());
+                let entries = page_entries(&page);
+                prop_assert!(entries.len() <= max, "{entries:?}");
+                for entry in &entries {
+                    prop_assert!(!hidden(entry.strip_suffix('/').unwrap_or(entry)), "{entry}");
+                }
+                seen.extend(entries.clone());
+                match page["nextPageToken"].as_str() {
+                    Some(t) => {
+                        let last = entries.last().expect("a token follows a non-empty page");
+                        prop_assert_eq!(t, fireemu_core_storage::hash::base64(last.as_bytes()));
+                        token = Some(t.to_owned());
+                    }
+                    None => break,
+                }
+            }
+            prop_assert!(token.is_none() || seen.len() >= expected.len());
+            prop_assert_eq!(seen, expected.into_iter().collect::<Vec<_>>());
         }
     }
 }

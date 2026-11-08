@@ -4151,10 +4151,11 @@ fn fb_list(
             "The prefix parameter is required to be empty or ends with a single / character.",
         ));
     }
-    // The recorded refusal covers a leading slash and two consecutive slashes in the prefix; the
-    // one trailing slash a prefix ends with is not part of the check.
-    let listed = prefix.strip_suffix('/').unwrap_or(&prefix);
-    if listed.starts_with('/') || listed.contains("//") {
+    // The refusal covers a leading slash (recorded) and two consecutive slashes anywhere in the
+    // prefix as it was sent, so `public//` and `/` are refused too; the one terminal slash every
+    // prefix ends with is the only slash that may end it. Authorization and the store both see
+    // only a prefix that passed this.
+    if prefix.starts_with('/') || prefix.contains("//") {
         return Err(fb_empty_path_segment());
     }
     let delimiter = params.get("delimiter").cloned().unwrap_or_default();
@@ -4202,17 +4203,32 @@ fn fb_list(
             "Expect maxResults to be a positive number.",
         ));
     }
+    // The official Firebase list filters malformed names out of the answer, and production does
+    // too: the prefix `P/pub//` an object `P/pub//x` leaves is not listed (recorded, S9). A name
+    // the answer hides is hidden from the paging as well: it takes no place in a page and never
+    // becomes the continuation point.
+    let is_valid = |name: &str| !name.is_empty() && name.split('/').all(|s| !s.is_empty());
+    let is_listed = |entry: &str, is_prefix: bool| {
+        is_valid(if is_prefix {
+            entry.strip_suffix('/').unwrap_or(entry)
+        } else {
+            entry
+        })
+    };
     let store = state.store()?;
     let page = if max_results == Some(0) {
         // Only the emulator profile reaches here (strict refused above): the official emulator's
-        // empty page.
-        store.list(
+        // empty page, whose token names the first object after the page; a hidden one is not
+        // named.
+        let mut page = store.list(
             &b,
             &prefix,
             Some(delimiter.as_str()),
             page_token.as_deref(),
             max_results,
-        )
+        );
+        page.next_page_token = page.next_page_token.filter(|name| is_valid(name));
+        page
     } else {
         // Paging as production answers it (recorded, lean-v5): `maxResults` counts items and
         // prefixes together in one merged name order, and the page token is the standard
@@ -4224,16 +4240,19 @@ fn fb_list(
             .as_deref()
             .and_then(|token| base64_decode(token).ok())
             .and_then(|bytes| String::from_utf8(bytes).ok());
-        let mut page =
-            store.list_after(&b, &prefix, Some(delimiter.as_str()), after.as_deref(), max);
+        let mut page = store.list_after_where(
+            &b,
+            &prefix,
+            Some(delimiter.as_str()),
+            after.as_deref(),
+            max,
+            &is_listed,
+        );
         page.next_page_token = page
             .next_page_token
             .map(|last| fireemu_core_storage::hash::base64(last.as_bytes()));
         page
     };
-    // The official Firebase list filters malformed names out of the answer, and production does
-    // too: the prefix `P/pub//` an object `P/pub//x` leaves is not listed (recorded, S9).
-    let is_valid = |name: &str| !name.is_empty() && name.split('/').all(|s| !s.is_empty());
     let mut body = json!({
         "prefixes": page
             .prefixes

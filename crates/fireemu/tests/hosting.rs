@@ -270,6 +270,9 @@ fn hosting_ignored_assets_are_absent_from_every_route() {
         ("public/page.html", "ordinary"),
         ("public/rewrite.html", "rewrite"),
         ("public/404.html", "custom404"),
+        ("public/firebase-debug.log", "debug"),
+        ("public/logs/firebase-debug.1.log", "debug"),
+        ("public/.firebase/cache", "cache"),
     ] {
         let file = dir.join(path);
         std::fs::create_dir_all(file.parent().unwrap()).unwrap();
@@ -291,6 +294,9 @@ fn hosting_ignored_assets_are_absent_from_every_route() {
         "/folder/",
         "/rewritten",
         "/missing",
+        "/firebase-debug.log",
+        "/logs/firebase-debug.1.log",
+        "/.firebase/cache",
     ] {
         let reply = request(&address, path);
         if !reply.starts_with("HTTP/1.1 404") || reply.contains("custom404") {

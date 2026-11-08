@@ -203,13 +203,97 @@ fn comma_alternatives(content: &str) -> Vec<String> {
     parts
 }
 
+/// One `{a..b}` or `{a..b..step}` range as the brace-expansion library expands it for minimatch:
+/// numeric (with zero padding when a bound is padded) or single ASCII letters. `None` when the
+/// content is not such a range or spans more than 1000 values.
+fn brace_range(content: &str) -> Option<Vec<String>> {
+    let bounds: Vec<&str> = content.split("..").collect();
+    if !(2..=3).contains(&bounds.len()) {
+        return None;
+    }
+    let step = match bounds.get(2) {
+        Some(text) => text.parse::<i64>().ok()?.unsigned_abs().max(1),
+        None => 1,
+    };
+    let values = |a: i64, b: i64| -> Option<Vec<i64>> {
+        let span = a.abs_diff(b);
+        if span > 1000 {
+            return None;
+        }
+        let direction = if a <= b { 1 } else { -1 };
+        (0..=span / step)
+            .map(|i| {
+                i64::try_from(i * step)
+                    .ok()
+                    .map(|offset| a + direction * offset)
+            })
+            .collect()
+    };
+    if let (Ok(a), Ok(b)) = (bounds[0].parse::<i32>(), bounds[1].parse::<i32>()) {
+        let width = bounds[0].len().max(bounds[1].len());
+        let padded = bounds[..2].iter().any(|s| {
+            let digits = s.trim_start_matches('-');
+            digits.len() > 1 && digits.starts_with('0')
+        });
+        let numbers = values(i64::from(a), i64::from(b))?;
+        return Some(
+            numbers
+                .into_iter()
+                .map(|n| match (padded, n < 0) {
+                    (true, true) => format!("-{:0width$}", -n, width = width - 1),
+                    (true, false) => format!("{n:0width$}"),
+                    (false, _) => n.to_string(),
+                })
+                .collect(),
+        );
+    }
+    let letter = |s: &str| match s.as_bytes() {
+        [byte] if byte.is_ascii_alphabetic() => Some(i64::from(*byte)),
+        _ => None,
+    };
+    let letters = values(letter(bounds[0])?, letter(bounds[1])?)?;
+    letters
+        .into_iter()
+        .map(|code| {
+            u8::try_from(code)
+                .ok()
+                .map(|byte| char::from(byte).to_string())
+        })
+        .collect()
+}
+
 fn alternatives(pattern: &str, deploy_ignore: bool) -> Vec<String> {
-    let Some(start) = pattern.find('{') else {
+    let start = if deploy_ignore {
+        let mut escaped = false;
+        pattern.char_indices().find_map(|(i, ch)| {
+            if escaped {
+                escaped = false;
+                None
+            } else if ch == '\\' {
+                escaped = true;
+                None
+            } else {
+                (ch == '{').then_some(i)
+            }
+        })
+    } else {
+        pattern.find('{')
+    };
+    let Some(start) = start else {
         return vec![pattern.to_owned()];
     };
     let mut depth = 0;
     let mut end = None;
+    let mut escaped = false;
     for (offset, ch) in pattern[start..].char_indices() {
+        if deploy_ignore && escaped {
+            escaped = false;
+            continue;
+        }
+        if deploy_ignore && ch == '\\' {
+            escaped = true;
+            continue;
+        }
         if ch == '{' {
             depth += 1;
         }
@@ -225,7 +309,9 @@ fn alternatives(pattern: &str, deploy_ignore: bool) -> Vec<String> {
         return vec![pattern.to_owned()];
     };
     let content = &pattern[start + 1..end];
-    let parts: Vec<String> = if let Some((a, b)) = content.split_once("..") {
+    let parts: Vec<String> = if deploy_ignore && content.contains("..") && !content.contains(',') {
+        brace_range(content).unwrap_or_else(|| comma_alternatives(content))
+    } else if let Some((a, b)) = content.split_once("..") {
         match (a.parse::<i32>(), b.parse::<i32>()) {
             (Ok(a), Ok(b)) if (i64::from(a) - i64::from(b)).abs() <= 1000 => {
                 if a <= b {
@@ -314,6 +400,25 @@ pub(super) fn matches(rule: &serde_json::Value, path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn deploy_ignore_agrees_with_minimatch_fixture() {
+        // Regenerate expected values offline: node -e 'const fs=require("fs"),m=require("./conformance/node_modules/minimatch").minimatch,p="crates/fireemu/src/hosting/deploy-ignore-fixture.json",r=JSON.parse(fs.readFileSync(p));for(const x of r)x.expected=m(x.path,x.pattern.replace(/^(\.\/)+/,""),{dot:true,nocomment:true,nonegate:true,optimizationLevel:2});fs.writeFileSync(p,JSON.stringify(r,null,2)+"\n")'
+        let rows: Vec<serde_json::Value> =
+            serde_json::from_str(include_str!("deploy-ignore-fixture.json")).unwrap();
+        let mut failures = Vec::new();
+        for row in rows {
+            let pattern = row["pattern"].as_str().unwrap();
+            let path = row["path"].as_str().unwrap();
+            if deploy_ignore(pattern, path) != row["expected"].as_bool().unwrap() {
+                failures.push(row);
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "{} mismatches: {failures:?}",
+            failures.len()
+        );
+    }
     fn corpus() -> Vec<serde_json::Value> {
         serde_json::from_str(include_str!(
             "../../../../conformance/hosting-fixtures/official-globs.json"

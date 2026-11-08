@@ -108,6 +108,15 @@ struct Site {
     upstream: Option<std::net::SocketAddr>,
     emulators: Value,
 }
+
+/// Files firebase-tools never uploads whatever the configuration says (`listFiles` in
+/// firebase-tools 15.28.2), so production serves them as absent.
+const DEPLOY_ALWAYS_IGNORED: [&str; 3] = [
+    "**/firebase-debug.log",
+    "**/firebase-debug.*.log",
+    ".firebase/*",
+];
+
 impl Site {
     fn rules(&self, name: &str) -> &[Value] {
         self.data
@@ -194,10 +203,15 @@ impl Site {
         files::find(
             self.root.clone(),
             self.candidates(path, headers),
-            self.rules("ignore")
+            DEPLOY_ALWAYS_IGNORED
                 .iter()
-                .filter_map(Value::as_str)
-                .map(str::to_owned)
+                .map(|pattern| (*pattern).to_owned())
+                .chain(
+                    self.rules("ignore")
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_owned),
+                )
                 .collect(),
         )
         .await

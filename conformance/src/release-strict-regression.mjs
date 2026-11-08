@@ -206,6 +206,7 @@ export const RUNS = [
   rtdbRun("R32", "sdk-tokens", ["RTDB-sdk-tokens-comparison.json"]),
   rtdbRun("R33", "sdk-rules-load", ["RTDB-sdk-rules-load-comparison.json"]),
   rtdbRun("R34", "breadth", ["RTDB-breadth-comparison.json"]),
+  rtdbRun("R35", "sdk-rules-syntax", ["RTDB-sdk-rules-syntax-comparison.json"]),
   laneRun(
     "R1",
     "fs-query-index-comparison-v1",
@@ -1574,6 +1575,7 @@ export function judge(comparison, observations, context) {
       R32: "sdk-tokens",
       R33: "sdk-rules-load",
       R34: "breadth",
+      R35: "sdk-rules-syntax",
     };
     return judgeRtdbExport(
       comparison.runIds[0] === "R22" &&

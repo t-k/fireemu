@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { adcVerdict, checkApproval, createAdmin, writeAll, createCounter, createJournal, mintToken, scriptManifest, sha256, targetUrls } from './lib.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-export const READBACK_SUITES = ['events', 'admin', 'events+admin', 'rest', 'rules', 'tokens', 'rules-load'];
+export const READBACK_SUITES = ['events', 'admin', 'events+admin', 'rest', 'rules', 'tokens', 'rules-load', 'rules-syntax'];
 export const WAIT_MS = 10 * 60 * 1000;
 
 /** The admin REST of the run, narrowed to GET: any other method is refused before it reaches the network. */
@@ -22,7 +22,7 @@ function finishedRun(runDir) {
   try { result = JSON.parse(readFileSync(path.join(runDir, 'result.json'), 'utf8')); } catch (error) { throw new Error(`run directory: result.json unreadable (${error.code ?? error.name})`); }
   const bad = reason => new Error(`run directory: ${reason}`);
   if (result?.target !== 'production') throw bad('not a production run');
-  if (!READBACK_SUITES.includes(result.suite)) throw bad('not an events, admin, rest, rules or tokens suite run');
+  if (!READBACK_SUITES.includes(result.suite)) throw bad('not an events, admin, rest, rules, tokens, rules-load or rules-syntax suite run');
   if (typeof result.runId !== 'string' || !/^[A-Za-z0-9-]{4,64}$/.test(result.runId)) throw bad('run id');
   if (typeof result.prefix !== 'string' || !/^\/[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*$/.test(result.prefix)) throw bad('prefix is not recorded');
   if (typeof result.endedAt !== 'string' || !Number.isFinite(Date.parse(result.endedAt))) throw bad('endedAt is not recorded');

@@ -54,11 +54,11 @@
     },
     {
       "path": "tools/sdk-smoke-database/sdk-observer/lib.mjs",
-      "sha256": "6459e3ecae58a36f0b2037dab03c2490f96d93c707de681cb7e585822d89a7ab"
+      "sha256": "b571298d32823530a06456a87489cd3090ac3b7a4111418316664fb86e7edcbf"
     },
     {
       "path": "tools/sdk-smoke-database/sdk-observer/observer.mjs",
-      "sha256": "4a071f4e19c36e5f528a939cc9a19e7ea57ebdf38fbb89818029b8a89c2e2765"
+      "sha256": "fd1fbacd829502e9aad657a928ce61d1d2b62752000a6d55823ea5b01af353ee"
     }
   ],
   "observerManifestSha256": "9c2cb8b9d9a25e56e1458e04cddfa2f09e963a464cee4d958300687c2d52ebf2",
@@ -256,7 +256,7 @@
     "tool": [
       {
         "path": "tools/sdk-smoke-database/rtdb-sdk-jar.mjs",
-        "sha256": "6a90a1cef5dec0dd7a2d9d164b1ed71c08cd4c8fa854604c15637b63dd7f614d"
+        "sha256": "066127cfd0336aadbf7519da8d24969a84f086ef9920c9c1ef358e04608967a4"
       },
       {
         "path": "tools/sdk-smoke-database/jar.mjs",

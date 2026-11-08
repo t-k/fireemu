@@ -403,6 +403,193 @@ impl Node {
     }
 }
 
+/// What one value of a file built while the file was read: the node it describes (none for `null`, an empty
+/// object or an empty array) and whether it was an object or an array, which `.value` and `.priority` refuse.
+#[derive(Debug)]
+pub struct Built {
+    node: Option<Node>,
+    container: bool,
+}
+
+impl Built {
+    /// `null`.
+    pub fn null() -> Self {
+        Self {
+            node: None,
+            container: false,
+        }
+    }
+
+    /// A leaf, or `None` when [`Node::from_json_owned`] would refuse it: a string beyond the limit.
+    pub fn leaf(leaf: Leaf, limits: &Limits) -> Option<Self> {
+        if matches!(&leaf, Leaf::String(text) if text.len() > limits.max_string_bytes) {
+            return None;
+        }
+        Some(Self {
+            node: Some(Node::leaf(leaf)),
+            container: false,
+        })
+    }
+
+    /// The node, or none for a location that holds nothing.
+    pub fn into_node(self) -> Option<Node> {
+        self.node
+    }
+}
+
+/// The members of an object or array of a file, assembled into a node as the file is read, so the file is
+/// never held as a parsed value next to the tree. It builds what [`Node::from_json_owned`] builds from the
+/// parsed value, and declines (answers `None`) wherever that would refuse the value or leave it to the server
+/// values: a file read this way that is declined is read again the long way, which reports the refusal.
+#[derive(Debug)]
+pub struct Assembly {
+    depth: usize,
+    bytes: usize,
+    array: bool,
+    /// The items of an array read so far, `null` ones included.
+    items: usize,
+    children: BTreeMap<String, Node>,
+    /// Whether a member besides `.priority` and `.value` was read, a `null` one included.
+    others: bool,
+    priority: Option<Built>,
+    value: Option<Built>,
+}
+
+impl Assembly {
+    /// The members of an object at `depth` keys below the root, whose path is `bytes` bytes long.
+    pub fn object(depth: usize, bytes: usize) -> Self {
+        Self::new(depth, bytes, false)
+    }
+
+    /// The items of an array at `depth` keys below the root, whose path is `bytes` bytes long.
+    pub fn array(depth: usize, bytes: usize) -> Self {
+        Self::new(depth, bytes, true)
+    }
+
+    fn new(depth: usize, bytes: usize, array: bool) -> Self {
+        Self {
+            depth,
+            bytes,
+            array,
+            items: 0,
+            children: BTreeMap::new(),
+            others: false,
+            priority: None,
+            value: None,
+        }
+    }
+
+    /// The depth and path length of the member `key` of an object, or `None` where the member is declined:
+    /// a key the tree refuses, a path or depth beyond the limits, a server value. `.priority` and `.value`
+    /// are read at the object's own place, where [`Node::from_json_owned`] builds a `.value`.
+    pub fn member(&self, key: &str, limits: &Limits) -> Option<(usize, usize)> {
+        match key {
+            SERVER_VALUE_KEY => None,
+            PRIORITY_KEY | VALUE_KEY => Some((self.depth, self.bytes)),
+            _ => self.position(key, limits),
+        }
+    }
+
+    /// The depth and path length of the next item of an array, or `None` where it is declined.
+    pub fn item(&self, limits: &Limits) -> Option<(usize, usize)> {
+        self.position(&self.items.to_string(), limits)
+    }
+
+    fn position(&self, key: &str, limits: &Limits) -> Option<(usize, usize)> {
+        validate_key(key).ok()?;
+        let depth = self.depth + 1;
+        let bytes = self.bytes + usize::from(self.depth > 0) + key.len();
+        (depth <= limits.max_depth && bytes <= limits.max_path_bytes).then_some((depth, bytes))
+    }
+
+    /// Adds the member `key` of an object (the last of a repeated key stands).
+    pub fn put(&mut self, key: String, built: Built) {
+        match key.as_str() {
+            PRIORITY_KEY => self.priority = Some(built),
+            VALUE_KEY => self.value = Some(built),
+            _ => {
+                self.others = true;
+                match built.node {
+                    Some(node) => {
+                        self.children.insert(key, node);
+                    }
+                    None => {
+                        self.children.remove(&key);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Adds the next item of an array. A `null` item takes an index and holds nothing.
+    pub fn push(&mut self, built: Built) {
+        if let Some(node) = built.node {
+            self.children.insert(self.items.to_string(), node);
+        }
+        self.items += 1;
+    }
+
+    /// The node the members describe, or `None` where it is declined.
+    pub fn finish(self) -> Option<Built> {
+        if self.array {
+            return Some(Built {
+                node: (!self.children.is_empty()).then_some(Node {
+                    content: Content::Children(self.children),
+                    priority: None,
+                }),
+                container: true,
+            });
+        }
+        let priority = match self.priority {
+            None
+            | Some(Built {
+                node: None,
+                container: false,
+            }) => None,
+            Some(Built {
+                node:
+                    Some(Node {
+                        content: Content::Leaf(leaf),
+                        priority: None,
+                    }),
+                container: false,
+            }) => match leaf {
+                // The official emulator stores a `.priority` member's number as a double.
+                Leaf::Number(n) => Some(Priority::Number(Number::Double(n.as_f64()))),
+                Leaf::String(text) => Some(Priority::String(text)),
+                Leaf::Bool(_) => return None,
+            },
+            Some(_) => return None,
+        };
+        if let Some(value) = self.value {
+            // `.value` holds a leaf, with only `.priority` beside it.
+            if self.others || value.container {
+                return None;
+            }
+            if value.node.is_none() && priority.is_some() {
+                return None;
+            }
+            return Some(Built {
+                node: value.node.map(|node| node.with_priority(priority)),
+                container: true,
+            });
+        }
+        if self.children.is_empty() {
+            return priority.is_none().then_some(Built {
+                node: None,
+                container: true,
+            });
+        }
+        Some(Built {
+            node: Some(Node {
+                content: Content::Children(self.children),
+                priority: priority.map(Box::new),
+            }),
+            container: true,
+        })
+    }
+}
+
 /// The error for data nested deeper than the limit.
 pub(crate) fn too_deep(limits: &Limits) -> DatabaseError {
     DatabaseError::new(

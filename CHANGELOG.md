@@ -12,6 +12,10 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 - Authentication: the Secure Token refresh accepts the JSON body with `grantType` and `refreshToken` that the Firebase Android SDK sends, as the official emulator does; before, it answered `400 MISSING_GRANT_TYPE`. A form body still uses the snake_case fields, and a body mixing both spellings is read as snake_case. Production has not been recorded for this body.
 
+### Changed
+
+- Realtime Database `--import` reads each file straight into its tree instead of parsing it to a value first and building the tree from that, so the value is no longer held next to the tree. Importing a 63 MB export now peaks at about 0.7 GB (RSS and footprint) instead of 1.15 GB (RSS) and 0.9 GB (footprint). The stored data, the export bytes and every refusal (its text and which comes first) are unchanged, and the strict profile still refuses a lone surrogate in a value that the emulator profile replaces with `?`. A file with server values, or one the tree refuses, is read again the long way as before.
+
 ## [0.44.0] - 2026-11-07
 
 ### Added

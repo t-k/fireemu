@@ -6,7 +6,8 @@
 
 use std::collections::BTreeMap;
 
-use fireemu_core_database::{Json, Number};
+use fireemu_core_database::node::{Assembly, Built};
+use fireemu_core_database::{Json, Leaf, Limits, Node, Number};
 
 /// A body that is not one JSON value.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -117,6 +118,59 @@ pub fn parse_prefix_replacing(text: &str, with: char) -> Result<(Json, usize), P
     parser.skip_whitespace();
     let value = parser.value(0)?;
     Ok((value, parser.at))
+}
+
+/// What [`parse_node`] made of a file.
+#[derive(Debug, PartialEq)]
+pub enum Read {
+    /// The tree the file describes (none for a file that describes nothing).
+    Tree(Option<Node>),
+    /// A file to read the long way: with server values, or one the tree may refuse. Nothing is said of
+    /// whether it parses.
+    Declined,
+}
+
+/// Reads a file straight into the tree [`Node::from_json_owned`] builds from the parsed value (against
+/// `limits`, at the root), so no parsed value is held next to the tree. A lone surrogate escape in a string
+/// value is read as `lone_surrogate` where given and refuses the file otherwise (a key that holds one is
+/// refused either way), as [`parse_replacing`] and [`parse`] read it.
+///
+/// A file that does not parse is an error, unless the file is declined first: the reading stops at the first
+/// member it would not build the same way, and the caller reads the file again as a value.
+pub fn parse_node(
+    text: &str,
+    limits: &Limits,
+    lone_surrogate: Option<char>,
+) -> Result<Read, ParseError> {
+    let mut parser = Parser::new(text, false);
+    if let Some(with) = lone_surrogate {
+        parser.lone = Lone::Replace(with);
+    }
+    parser.skip_whitespace();
+    let built = match parser.node(0, 0, limits) {
+        Ok(built) => built,
+        Err(Halt::Declined) => return Ok(Read::Declined),
+        Err(Halt::Syntax) => return Err(ParseError),
+    };
+    parser.skip_whitespace();
+    if parser.at != text.len() {
+        return Err(ParseError);
+    }
+    Ok(Read::Tree(built.into_node()))
+}
+
+/// Why [`Parser::node`] stopped.
+enum Halt {
+    /// The text is not JSON.
+    Syntax,
+    /// The tree may not be built from what was read so far.
+    Declined,
+}
+
+impl From<ParseError> for Halt {
+    fn from(_: ParseError) -> Self {
+        Self::Syntax
+    }
 }
 
 /// Parses one JSON value without recording key positions (the common path).
@@ -321,6 +375,100 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// [`Parser::value`] building the node of the value at `depth` keys below the root, whose path is
+    /// `bytes` bytes long, as [`Node::from_json_owned`] would. The syntax it accepts is `value`'s.
+    fn node(&mut self, depth: usize, bytes: usize, limits: &Limits) -> Result<Built, Halt> {
+        // The tree holds even a `null` to the depth limit.
+        if depth > limits.max_depth {
+            return Err(Halt::Declined);
+        }
+        match self.peek().ok_or(Halt::Syntax)? {
+            b'n' => self
+                .expect("null")
+                .map(|()| Built::null())
+                .map_err(Halt::from),
+            b't' => self
+                .expect("true")
+                .map_err(Halt::from)
+                .and_then(|()| leaf(Leaf::Bool(true), limits)),
+            b'f' => self
+                .expect("false")
+                .map_err(Halt::from)
+                .and_then(|()| leaf(Leaf::Bool(false), limits)),
+            b'"' => {
+                let text = self.string(false)?;
+                leaf(Leaf::String(text), limits)
+            }
+            b'[' => self.node_array(depth, bytes, limits),
+            b'{' => self.node_object(depth, bytes, limits),
+            b'-' | b'0'..=b'9' => match self.number()? {
+                Json::Number(number) => leaf(Leaf::Number(number), limits),
+                Json::String(text) => leaf(Leaf::String(text), limits),
+                _ => Err(Halt::Syntax),
+            },
+            _ => Err(Halt::Syntax),
+        }
+    }
+
+    fn node_array(&mut self, depth: usize, bytes: usize, limits: &Limits) -> Result<Built, Halt> {
+        self.at += 1;
+        let mut items = Assembly::array(depth, bytes);
+        self.skip_whitespace();
+        if self.peek() == Some(b']') {
+            self.at += 1;
+            return items.finish().ok_or(Halt::Declined);
+        }
+        loop {
+            self.skip_whitespace();
+            let (item_depth, item_bytes) = items.item(limits).ok_or(Halt::Declined)?;
+            let item = self.node(item_depth, item_bytes, limits)?;
+            items.push(item);
+            self.skip_whitespace();
+            match self.peek() {
+                Some(b',') => self.at += 1,
+                Some(b']') => {
+                    self.at += 1;
+                    return items.finish().ok_or(Halt::Declined);
+                }
+                _ => return Err(Halt::Syntax),
+            }
+        }
+    }
+
+    fn node_object(&mut self, depth: usize, bytes: usize, limits: &Limits) -> Result<Built, Halt> {
+        self.at += 1;
+        let mut members = Assembly::object(depth, bytes);
+        self.skip_whitespace();
+        if self.peek() == Some(b'}') {
+            self.at += 1;
+            return members.finish().ok_or(Halt::Declined);
+        }
+        loop {
+            self.skip_whitespace();
+            if self.peek() != Some(b'"') {
+                return Err(Halt::Syntax);
+            }
+            let key = self.string(true)?;
+            self.skip_whitespace();
+            self.expect(":")?;
+            self.skip_whitespace();
+            let (member_depth, member_bytes) =
+                members.member(&key, limits).ok_or(Halt::Declined)?;
+            let value = self.node(member_depth, member_bytes, limits)?;
+            // A repeated key keeps its last value.
+            members.put(key, value);
+            self.skip_whitespace();
+            match self.peek() {
+                Some(b',') => self.at += 1,
+                Some(b'}') => {
+                    self.at += 1;
+                    return members.finish().ok_or(Halt::Declined);
+                }
+                _ => return Err(Halt::Syntax),
+            }
+        }
+    }
+
     fn position(&mut self) -> (usize, usize) {
         let (from, mut line, mut column) = self.mark;
         for c in self.text[from..self.at].chars() {
@@ -485,6 +633,10 @@ impl<'a> Parser<'a> {
             self.at += 1;
         }
     }
+}
+
+fn leaf(leaf: Leaf, limits: &Limits) -> Result<Built, Halt> {
+    Built::leaf(leaf, limits).ok_or(Halt::Declined)
 }
 
 /// What a character or an escape of a string stands for.

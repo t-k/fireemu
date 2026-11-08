@@ -519,6 +519,62 @@ if (process.env.PYCHECK_PROFILE !== "tasks") {
     assert.equal(sent.filter((c) => c.startsWith("DELETE cloudscheduler")).length, 0);
   });
 
+  // What the 15.28.2 CLI did in the first pass (r1-20261104T103214Z, result file cli.deploy.cliWrites): one POST to the functions
+  // collection and one to the queues collection per function, so the shared parser counts each collection URL as retried.
+  const REAL_WRITES = [
+    {
+      method: "POST",
+      url: `cloudfunctions.googleapis.com/v2/projects/fireemu-oracle-events/locations/us-central1/functions`,
+      requests: 2,
+      statuses: [200, 200],
+      class: "retried",
+    },
+    {
+      method: "POST",
+      url: `cloudtasks.googleapis.com/v2/projects/fireemu-oracle-events/locations/us-central1/queues`,
+      requests: 2,
+      statuses: [200, 200],
+      class: "retried",
+    },
+  ];
+
+  test("the CLI's repeated collection writes leave the run needing the read-back, and the read-back closes it", async () => {
+    const { world, result } = await go({ ...CLI_LEAVES_QUEUES, cliWrites: REAL_WRITES });
+    assert.equal(result.outcome, "pycheck-needs-review");
+    assert.equal(result.closureReady, false);
+    assert.equal(result.readBackRequired, true);
+    assert.equal(result.cleanup.verified, true);
+    // (The fake CLI returns the same writes for its dry run, deploy and delete, so each appears once per action.)
+    assert.deepEqual(
+      [...new Set(result.unknownMutationList.map((m) => m.request))],
+      [
+        "POST cloudfunctions.googleapis.com/v2/projects/fireemu-oracle-events/locations/us-central1/functions",
+        "POST cloudtasks.googleapis.com/v2/projects/fireemu-oracle-events/locations/us-central1/queues",
+      ],
+    );
+    assert.deepEqual(
+      result.unconfirmedCreates,
+      [],
+      "every name was shown by an own read, so none stays unconfirmed",
+    );
+    const back = await readbackRun({
+      runId: RUN,
+      projectNumber: NUMBER,
+      bucket: result.bucket,
+      uploadObjects: [],
+      baseline: result.inventory.before,
+      enabled: [],
+      channel: result.cleanup.channel,
+      carried: [],
+      accessToken: "test-token-abcdefgh",
+      save: async () => {},
+      send: world.send,
+    });
+    assert.equal(back.allAbsent, true);
+    assert.equal(back.unknown, 0);
+    assert.equal(back.inventory.baseline, true);
+  });
+
   test("the profile's request count is the one the packet states, inside the ceilings", async () => {
     const { result } = await go(CLI_LEAVES_QUEUES);
     assert.equal(result.attempted, 82, "the packet states 82 requests in the fake world");

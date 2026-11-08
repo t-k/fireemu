@@ -91,7 +91,7 @@ class RunnerContractTest(unittest.TestCase):
                 port = int(bounds.split("-")[0])
                 return json.dumps({"port": port, "token": "owned-" + str(port)})
             args = argparse.Namespace(sdk="/fixture/sdk", portctl="/fixture/portctl.py", case=None, backend="official")
-            with patch.object(run, "TOOL", tool), patch.object(run, "checked", side_effect=checked), patch.object(run, "cleanup", side_effect=lambda _owned, _children, _leases, _registry, _work, temporary, _observe, _primary: temporary.cleanup()), patch.object(run.subprocess, "Popen", side_effect=OSError("fixture stop")) as launch, contextlib.redirect_stdout(io.StringIO()):
+            with patch.object(run, "TOOL", tool), patch.object(run, "checked", side_effect=checked), patch.object(run, "cleanup", side_effect=lambda _owned, children, _leases, _registry, _work, temporary, _observe, _primary: ([stream.close() for _, stream in children], temporary.cleanup())), patch.object(run.subprocess, "Popen", side_effect=OSError("fixture stop")) as launch, contextlib.redirect_stdout(io.StringIO()):
                 with self.assertRaisesRegex(OSError, "fixture stop"):
                     run.run(args)
                 self.assertEqual(launch.call_count, 1)
@@ -114,7 +114,8 @@ class RunnerContractTest(unittest.TestCase):
             apk.parent.mkdir(parents=True)
             apk.touch()
             args = argparse.Namespace(sdk="/fixture/sdk", portctl=None, case=None, backend="official")
-            with patch.object(run, "TOOL", tool), patch.dict(os.environ, {"CI": "true", "ADB_VENDOR_KEYS": "/synthetic/never-read-key"}, clear=True), patch.object(run, "checked", return_value="/fixture/node"), patch.object(run, "cleanup", side_effect=lambda _owned, _children, _leases, _registry, _work, temporary, _observe, _primary: temporary.cleanup()), patch.object(run.subprocess, "Popen", side_effect=OSError("fixture stop")) as launch:
+            with patch.object(run, "TOOL", tool), patch.dict(os.environ, {"CI": "true", "ADB_VENDOR_KEYS": "/synthetic/never-read-key"}, clear=True), patch.object(run, "claim_emulator_pair", return_value=5556), patch.object(run.socket, "socket") as sock, patch.object(run, "checked", return_value="/fixture/node"), patch.object(run, "cleanup", side_effect=lambda _owned, children, _leases, _registry, _work, temporary, _observe, _primary: ([stream.close() for _, stream in children], temporary.cleanup())), patch.object(run.subprocess, "Popen", side_effect=OSError("fixture stop")) as launch:
+                sock.return_value.__enter__.return_value.getsockname.return_value = ("127.0.0.1", 10000)
                 with self.assertRaises(OSError):
                     run.run(args)
                 self.assertNotIn("ADB_VENDOR_KEYS", launch.call_args.kwargs["env"])
@@ -129,13 +130,13 @@ class RunnerContractTest(unittest.TestCase):
                     raise OSError("synthetic private text")
                 return result
             return invoke
-        first = Mock(wait=action("wait-first"))
-        second = Mock(wait=action("wait-second"))
+        first = Mock(pid=101, wait=action("wait-first"))
+        second = Mock(pid=102, wait=action("wait-second"))
         stream1 = Mock(close=action("close-first"))
         stream2 = Mock(close=action("close-second"))
         temporary = Mock(cleanup=action("temporary"))
         work = Mock(glob=action("glob", [Path("fixture.log")]))
-        with tempfile.TemporaryDirectory() as temp, patch.object(run, "TOOL", Path(temp)), patch.object(run, "stop", side_effect=lambda pid, command: action("stop-" + str(pid))()), patch.object(run.shutil, "copy2", side_effect=action("copy")), patch.object(run, "checked", side_effect=lambda command: action("release-" + command[-1])()), contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        with tempfile.TemporaryDirectory() as temp, patch.object(run, "TOOL", Path(temp)), patch.object(run.os, "killpg", side_effect=ProcessLookupError), patch.object(run, "stop", side_effect=lambda pid, command: action("stop-" + str(pid))()), patch.object(run.shutil, "copy2", side_effect=action("copy")), patch.object(run, "checked", side_effect=lambda command: action("release-" + command[-1])()), contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             try:
                 run.cleanup({1: "one", 2: "two"}, [(first, stream1), (second, stream2)], [{"token": "one"}, {"token": "two"}], ["registry"], work, temporary, action("observe"), primary)
             except BaseException as error:
@@ -190,6 +191,61 @@ class RunnerContractTest(unittest.TestCase):
                 result = run.client(args)
                 self.assertNotIn("ADB_VENDOR_KEYS", invoke.call_args.kwargs["env"])
                 return result
+
+    def test_exited_parent_child_is_stopped_before_release(self):
+        with tempfile.TemporaryDirectory() as temp:
+            work = Path(temp)
+            marker = work / "child"
+            parent = subprocess.Popen(["python3", "-c", "import subprocess,sys; subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); open(sys.argv[1], 'w').close()", str(marker)], start_new_session=True)
+            try:
+                parent.wait(timeout=5)
+                self.assertTrue(marker.exists())
+                with patch.object(run, "TOOL", work), contextlib.redirect_stdout(io.StringIO()):
+                    run.cleanup({}, [(parent, io.StringIO())], [], None, work, Mock(), lambda: None)
+                with self.assertRaises(ProcessLookupError):
+                    os.killpg(parent.pid, 0)
+            finally:
+                try:
+                    os.killpg(parent.pid, 9)
+                except ProcessLookupError:
+                    pass
+
+    def backend_result(self, report):
+        with tempfile.TemporaryDirectory() as temp:
+            tool = Path(temp)
+            apk = tool / "build/outputs/apk/androidTest/debug/sdk-smoke-android-debug-androidTest.apk"
+            apk.parent.mkdir(parents=True)
+            apk.touch()
+            (tool / "firebase.json").write_text(json.dumps({"emulators": {}, "firestore": {}, "storage": {}, "database": {}}))
+            process = Mock(pid=123, returncode=0, poll=Mock(side_effect=[None, None, None, None, 0, 0]))
+            boot = subprocess.CompletedProcess([], 0, "1\n", "")
+            args = argparse.Namespace(sdk="/fixture/sdk", portctl=None, case=None, backend="official", arch="x86_64")
+            original_read = Path.read_text
+            def read(path, *args, **kwargs):
+                if path.parent.name == "reports":
+                    if report is None:
+                        raise FileNotFoundError()
+                    return json.dumps(report)
+                return original_read(path, *args, **kwargs)
+            with patch.object(Path, "read_text", read), patch.object(run, "TOOL", tool), patch.dict(os.environ, {"CI": "true"}), patch.object(run, "checked", return_value="/fixture/node"), patch.object(run, "claim_emulator_pair", return_value=5556), patch.object(run.socket, "socket") as sock, patch.object(run.subprocess, "Popen", return_value=process), patch.object(run.subprocess, "run", return_value=boot), patch.object(run, "cleanup", side_effect=lambda _owned, children, _leases, _registry, _work, temporary, _observe, _primary: ([stream.close() for _, stream in children], temporary.cleanup())), contextlib.redirect_stdout(io.StringIO()):
+                sock.return_value.__enter__.return_value.getsockname.side_effect = [("127.0.0.1", port) for port in range(10000, 10008)]
+                return run.run(args)
+
+    def test_backend_success_without_client_report_fails(self):
+        self.assertNotEqual(self.backend_result(None), 0)
+
+    def test_backend_requires_exact_passing_cases_and_instrumentation(self):
+        cases = [{"id": case, "status": "passed"} for case in sorted(run.REQUIRED_CASES)]
+        self.assertEqual(self.backend_result({"cases": cases, "instrumentation_ok": True}), 0)
+        for report in [
+            {"cases": cases[:-1], "instrumentation_ok": True},
+            {"cases": cases[:-1] + [{"id": "unexpected", "status": "passed"}], "instrumentation_ok": True},
+            {"cases": cases[:-1] + [cases[0]], "instrumentation_ok": True},
+            {"cases": cases[:-1] + [{"id": cases[-1]["id"], "status": "failed"}], "instrumentation_ok": True},
+            {"cases": cases, "instrumentation_ok": False},
+        ]:
+            with self.subTest(report=report):
+                self.assertNotEqual(self.backend_result(report), 0)
 
     def test_unsafe_endpoint_prevents_device_command(self):
         self.client_result("", unsafe=True)

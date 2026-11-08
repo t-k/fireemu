@@ -55,6 +55,7 @@ jobs:
         id: build
         working-directory: tools/sdk-smoke-android
         run: |
+          python3 -m unittest test_run
           ./gradle.sh testDebugUnitTest --tests dev.fireemu.smoke.GuardTest --tests dev.fireemu.smoke.CaseReportTest assembleDebugAndroidTest
           npm ci --ignore-scripts --no-audit --no-fund
       - name: Official emulator comparison

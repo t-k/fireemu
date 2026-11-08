@@ -17,6 +17,15 @@ import time
 
 TOOL = Path(__file__).resolve().parent
 
+REQUIRED_CASES = {
+    "firestore.write-read", "firestore.transforms", "firestore.query", "firestore.listener",
+    "firestore.transaction", "firestore.offline-resume", "firestore.batch-delete",
+    "firestore.rules-anonymous-denied", "firestore.rules-owner", "firestore.rules-signout",
+    "auth.signup", "auth.signin", "auth.refresh", "storage.upload-download", "storage.metadata",
+    "storage.resumable", "storage.download-url", "storage.list-delete", "storage.rules-denied",
+    "database.set-read", "database.listener", "database.transaction", "database.on-disconnect",
+}
+
 
 def checked(args, **kwargs):
     return subprocess.run(args, check=True, text=True, capture_output=True, timeout=60, **kwargs).stdout
@@ -95,6 +104,33 @@ def cleanup(owned, children, leases, registry, work, temporary, observe, primary
             return None
 
     attempt("observe", observe)
+    groups_stopped = True
+    for process, _ in children:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+            for _ in range(30):
+                process.poll()
+                try:
+                    os.killpg(process.pid, 0)
+                except ProcessLookupError:
+                    break
+                time.sleep(0.1)
+            else:
+                os.killpg(process.pid, signal.SIGKILL)
+                for _ in range(30):
+                    process.poll()
+                    try:
+                        os.killpg(process.pid, 0)
+                    except ProcessLookupError:
+                        break
+                    time.sleep(0.1)
+                else:
+                    raise RuntimeError("process group survived cleanup")
+        except ProcessLookupError:
+            pass
+        except BaseException as error:
+            groups_stopped = False
+            failures.append(("stop-group", type(error).__name__))
     for pid, command in reversed(list(owned.items())):
         attempt("stop", lambda: stop(pid, command))
     for process, stream in children:
@@ -106,7 +142,7 @@ def cleanup(owned, children, leases, registry, work, temporary, observe, primary
     for file in files:
         attempt("diagnostics-copy", lambda: shutil.copy2(file, diagnostics / file.name))
     attempt("temporary-cleanup", temporary.cleanup)
-    for lease in reversed(leases):
+    for lease in reversed(leases) if groups_stopped else []:
         attempt("lease-release", lambda: checked(registry + ["release", "--token", lease["token"]]))
     attempt("diagnostics-report", lambda: print("Private diagnostics:", diagnostics))
     if failures:
@@ -273,9 +309,20 @@ def run(args):
             time.sleep(1)
         if backend.poll() is None:
             raise TimeoutError("backend deadline")
-        if report.exists():
-            print(report.read_text())
-        return backend.returncode
+        if backend.returncode != 0:
+            return backend.returncode
+        try:
+            summary = json.loads(report.read_text())
+            print(json.dumps(summary))
+            cases = summary["cases"]
+            if (summary["instrumentation_ok"] is True and isinstance(cases, list)
+                    and len(cases) == len(REQUIRED_CASES)
+                    and {case["id"] for case in cases} == REQUIRED_CASES
+                    and all(case["status"] == "passed" for case in cases)):
+                return 0
+        except (OSError, ValueError, TypeError, KeyError):
+            pass
+        return 1
     finally:
         cleanup(owned, children, leases, registry, work, temporary, observe, sys.exc_info()[1])
 

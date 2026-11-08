@@ -4,12 +4,14 @@
 //!
 //! - `resource != null` holds for a query: its `resource` is a map, never null
 //!   (`#members-bare-nofilter`, `#members-guarded-in`).
-//! - A key the query does not constrain is not in the top-level `resource.data`
+//! - A key the query does not constrain is not in `resource.data`
 //!   (`#blocked-nofilter` allowed `!("blocked" in resource.data)`, `#has-owner-nofilter`
 //!   refused `"owner" in resource.data`, `#has-owner-filtered` allowed it).
 //!
-//! Everything else about the map's shape stays undetermined, so these properties also check
-//! that no other shape condition becomes provable.
+//! FS-RULES-SHAPES (2026-11-08) extended this: `keys()`, `size()` and `get()` with a default
+//! of `resource.data` answer from the constrained keys, `in` also on a map the query
+//! constrains in part, and a list or map built from an unconstrained field is not provably
+//! non-null. Equality of the map and its values stay undetermined.
 
 use std::collections::BTreeMap;
 
@@ -77,12 +79,34 @@ fn constraint() -> impl Strategy<Value = RulesValue> {
             "role".to_owned(),
             RulesValue::String("ADMIN".to_owned()),
         )]))),
+        Just(RulesValue::PartialMapExcluding {
+            fields: BTreeMap::from([("role".to_owned(), RulesValue::Unknown)]),
+            excluded: vec![RulesValue::Map(BTreeMap::new())],
+        }),
     ]
 }
 
 fn constrained_data() -> impl Strategy<Value = BTreeMap<String, RulesValue>> {
     prop::collection::btree_map(prop::sample::select(KEYS.to_vec()), constraint(), 0..=4)
         .prop_map(|m| m.into_iter().map(|(k, v)| (k.to_owned(), v)).collect())
+}
+
+/// The test's own reading of "holds a value the query does not determine anywhere".
+fn holds_unknown(value: &RulesValue) -> bool {
+    match value {
+        RulesValue::Unknown => true,
+        RulesValue::List(items)
+        | RulesValue::Set(items)
+        | RulesValue::PartialList(items)
+        | RulesValue::PartialListAny(items)
+        | RulesValue::OneOf(items)
+        | RulesValue::NotOneOf(items) => items.iter().any(holds_unknown),
+        RulesValue::Map(fields) | RulesValue::PartialMap(fields) => {
+            fields.values().any(holds_unknown)
+        }
+        RulesValue::PartialMapExcluding { fields, .. } => fields.values().any(holds_unknown),
+        _ => false,
+    }
 }
 
 proptest! {
@@ -110,59 +134,96 @@ proptest! {
         prop_assert!(allows("null != resource", &query));
         prop_assert!(!allows("resource == null", &query));
         prop_assert!(!allows("null == resource", &query));
-        prop_assert!(allows("{'r': resource.id} != null", &query), "a map literal is not null");
-        prop_assert!(allows("[resource.id] != null", &query));
     }
 
-    /// No other shape of the query data becomes provable: its key set, size, equality to a
-    /// concrete map, a nested map's other keys, and an unconstrained field's value.
+    /// A container built from a value the query does not determine is not provably non-null:
+    /// building it from the stored document may fail on a missing field (review 2026-11-08:
+    /// `[resource.data.secret] != null`). Built from constrained values it cannot fail.
     #[test]
-    fn nothing_else_about_the_query_data_is_provable(
+    fn a_container_of_an_undetermined_read_is_not_provably_non_null(
         data in constrained_data(),
         key in prop::sample::select(KEYS.to_vec()),
     ) {
         let constrained = data.contains_key(key);
+        let unknown_value = data.get(key).is_some_and(holds_unknown);
+        let query = ctx(data, true);
+        for condition in [
+            format!("[resource.data.{key}] != null"),
+            format!("{{'k': resource.data.{key}}} != null"),
+            format!("[[resource.data.{key}]] != null"),
+            format!("null != [1, resource.data.{key}]"),
+        ] {
+            let expected = constrained && !unknown_value;
+            prop_assert_eq!(allows(&condition, &query), expected, "{}", condition);
+        }
+        for condition in ["[resource.id] != null", "{'r': resource.id} != null", "{'r': resource} != null"] {
+            prop_assert!(!allows(condition, &query), "{} must not be provable", condition);
+        }
+    }
+
+    /// The key set of the query data is exactly the constrained keys for `keys()`, `size()`
+    /// and `get()` with a default (FS-RULES-SHAPES 2026-11-08); its equality to a concrete map
+    /// and `diff()` stay undetermined.
+    #[test]
+    fn the_query_data_key_set_is_the_constrained_keys(data in constrained_data()) {
         let keys: Vec<String> = data.keys().map(|k| format!("'{k}'")).collect();
         let size = data.len();
         let query = ctx(data, true);
         for condition in [
             format!("resource.data.keys().hasOnly([{}])", keys.join(", ")),
+            format!("resource.data.keys().hasAll([{}])", keys.join(", ")),
             format!("resource.data.keys().size() == {size}"),
             format!("resource.data.size() == {size}"),
-            "resource.data == {}".to_owned(),
-            "resource.data.keys().hasAny(['zz'])".to_owned(),
             "!resource.data.keys().hasAny(['zz'])".to_owned(),
-            "resource.data.get('zz', 0) == 0".to_owned(),
+            "resource.data.get('zz', 7) == 7".to_owned(),
+        ] {
+            prop_assert!(allows(&condition, &query), "{} must hold", condition);
+        }
+        for condition in [
+            format!("resource.data.size() == {}", size + 1),
+            "resource.data.keys().hasAny(['zz'])".to_owned(),
+            "resource.data == {}".to_owned(),
             "!('zz' in resource.data.diff({}).affectedKeys())".to_owned(),
         ] {
             prop_assert!(!allows(&condition, &query), "{} must not be provable", condition);
         }
-        if !constrained {
-            for condition in [
-                format!("resource.data.{key} == null"),
-                format!("resource.data.{key} != null"),
-                format!("resource.data.{key} is string"),
-            ] {
-                prop_assert!(!allows(&condition, &query), "{} must not be provable", condition);
-            }
+    }
+
+    /// A key's value is what the query determines: `get()` of an unconstrained key answers
+    /// the default, of a key held as `Unknown` stays undetermined.
+    #[test]
+    fn get_answers_the_default_only_for_an_unconstrained_key(
+        data in constrained_data(),
+        key in prop::sample::select(KEYS.to_vec()),
+    ) {
+        let unconstrained = !data.contains_key(key);
+        let unknown = matches!(data.get(key), Some(RulesValue::Unknown));
+        let query = ctx(data, true);
+        let condition = format!("resource.data.get('{key}', 'zz-default') == 'zz-default'");
+        prop_assert_eq!(allows(&condition, &query), unconstrained);
+        if unknown {
+            let either = format!("resource.data.get('{key}', 0) != 0");
+            prop_assert!(!allows(&either, &query), "{} must not be provable", either);
         }
     }
 
-    /// A nested map the query constrains in part: its constrained keys are in it, the others
-    /// stay undetermined (the recording decided only the top-level `resource.data`).
+    /// A nested map the query constrains in part holds its constrained keys for `in` (the
+    /// recorded `nested-neg-filtered`); its other key-set reads stay undetermined.
     #[test]
-    fn a_nested_partial_map_keeps_its_other_keys_undetermined(
+    fn a_nested_partial_map_answers_membership_from_its_constrained_keys(
         inner in constrained_data(),
         key in prop::sample::select(KEYS.to_vec()),
     ) {
         let constrained = inner.contains_key(key);
+        let size = inner.len();
         let query = ctx(
             BTreeMap::from([("meta".to_owned(), RulesValue::PartialMap(inner))]),
             true,
         );
         prop_assert_eq!(allows(&format!("'{key}' in resource.data.meta"), &query), constrained);
-        let negated = format!("!('{key}' in resource.data.meta)");
-        prop_assert!(!allows(&negated, &query), "{} must not be provable", negated);
+        prop_assert_eq!(allows(&format!("!('{key}' in resource.data.meta)"), &query), !constrained);
+        let sized = format!("resource.data.meta.size() == {size}");
+        prop_assert!(!allows(&sized, &query), "{} must not be provable", sized);
     }
 
     /// A single-document request evaluates the stored map as it is.

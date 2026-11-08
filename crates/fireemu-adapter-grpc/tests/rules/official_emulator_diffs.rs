@@ -183,121 +183,143 @@ async fn a_query_naming_a_document_is_checked_against_that_document() {
     }
 }
 
-/// Naming a document never widens what the filters alone prove: a query naming the caller's
-/// own document but filtering on another owner stays refused, as it was before the named
-/// document was checked (production did not record this shape; refusing it keeps the
-/// decision at least as strict as either check alone). An `OR` whose every branch names a
-/// document checks each named document.
+fn or(filters: Vec<sq::Filter>) -> sq::Filter {
+    sq::Filter {
+        filter_type: Some(sq::filter::FilterType::CompositeFilter(
+            sq::CompositeFilter {
+                op: sq::composite_filter::Operator::Or as i32,
+                filters,
+            },
+        )),
+    }
+}
+
+fn n_is_1() -> sq::Filter {
+    field_filter("n", sq::field_filter::Operator::Equal, integer(1))
+}
+
+/// Rows `fs-rules-v1/shapes/queries#name-own-alone`, `#two-names-own`, `#two-names-mixed`,
+/// `#or-foreign-unnamed`, `#own-plus-unproven`, `#name-own-range`, `#name-own-limit` and
+/// `#name-own-cursor` (FS-RULES-SHAPES, 2026-11-08; the official emulator answered the same): a
+/// branch that names one document is decided by that document, whatever else it filters on and
+/// also with a limit or a cursor; two names in one branch are refused even when both
+/// documents pass; a range on the name names no document.
 #[tokio::test]
-async fn naming_a_document_adds_a_check_and_never_replaces_the_filter_proof() {
+#[allow(clippy::too_many_lines)]
+async fn one_named_document_decides_its_branch() {
+    use sq::field_filter::Operator as Op;
+    let cursor = |request: &mut pb::RunQueryRequest| {
+        let q = query_mut(request);
+        q.order_by = vec![sq::Order {
+            field: Some(sq::FieldReference {
+                field_path: "__name__".to_owned(),
+            }),
+            direction: sq::Direction::Ascending as i32,
+        }];
+        q.start_at = Some(pb::Cursor {
+            values: vec![reference("tasks/mine")],
+            before: true,
+        });
+    };
     for (profile, mut h) in start_profiles().await {
         let (alice, token) = seed_tasks(&mut h).await;
-        let other_owner_and_mine = tasks_where(Some(and(vec![
-            owner_filter("other-owner"),
-            name_filter("mine"),
+        h.client
+            .commit(with_bearer(
+                commit(vec![
+                    set_write("tasks/mine", &[("owner", s(&alice)), ("n", integer(1))]),
+                    set_write("tasks/mine2", &[("owner", s(&alice)), ("n", integer(1))]),
+                ]),
+                "owner",
+            ))
+            .await
+            .unwrap();
+        let mine = || Ok(vec![doc_name("tasks/mine")]);
+        let denied = || Err(tonic::Code::PermissionDenied);
+        let mut limited = tasks_where(Some(name_filter("mine")));
+        query_mut(&mut limited).limit = Some(1);
+        let mut cursored = tasks_where(Some(name_filter("mine")));
+        cursor(&mut cursored);
+        let range = tasks_where(Some(and(vec![
+            field_filter("__name__", Op::GreaterThanOrEqual, reference("tasks/mine")),
+            field_filter("__name__", Op::LessThanOrEqual, reference("tasks/mine")),
         ])));
-        assert_eq!(
-            run(&mut h, other_owner_and_mine, &token).await,
-            Err(tonic::Code::PermissionDenied),
-            "{profile}"
-        );
-        let either = |second: &str| {
-            tasks_where(Some(sq::Filter {
-                filter_type: Some(sq::filter::FilterType::CompositeFilter(
-                    sq::CompositeFilter {
-                        op: sq::composite_filter::Operator::Or as i32,
-                        filters: vec![
-                            and(vec![owner_filter(&alice), name_filter("mine")]),
-                            and(vec![owner_filter(&alice), name_filter(second)]),
-                        ],
-                    },
-                )),
-            }))
-        };
-        assert_eq!(
-            run(&mut h, either("mine"), &token).await,
-            Ok(vec![doc_name("tasks/mine")]),
-            "{profile}"
-        );
-        assert_eq!(
-            run(&mut h, either("theirs"), &token).await,
-            Err(tonic::Code::PermissionDenied),
-            "{profile}"
-        );
-        assert_eq!(
-            run(&mut h, either("missing"), &token).await,
-            Err(tonic::Code::PermissionDenied),
-            "{profile}"
-        );
-        // One branch names the document alone, the other also filters on another owner: the
-        // filtered branch still needs its constraint proof.
-        let mixed = tasks_where(Some(sq::Filter {
-            filter_type: Some(sq::filter::FilterType::CompositeFilter(
-                sq::CompositeFilter {
-                    op: sq::composite_filter::Operator::Or as i32,
-                    filters: vec![
-                        name_filter("mine"),
-                        and(vec![owner_filter("other-owner"), name_filter("mine")]),
-                    ],
-                },
-            )),
-        }));
-        assert_eq!(
-            run(&mut h, mixed, &token).await,
-            Err(tonic::Code::PermissionDenied),
-            "{profile}"
-        );
-        // A branch that names no document keeps the constraint proof for the whole query.
-        let unnamed_branch = tasks_where(Some(sq::Filter {
-            filter_type: Some(sq::filter::FilterType::CompositeFilter(
-                sq::CompositeFilter {
-                    op: sq::composite_filter::Operator::Or as i32,
-                    filters: vec![name_filter("mine"), owner_filter("other-owner")],
-                },
-            )),
-        }));
-        assert_eq!(
-            run(&mut h, unnamed_branch, &token).await,
-            Err(tonic::Code::PermissionDenied),
-            "{profile}"
-        );
-        // A reference-valued filter on another field names no document: the constraint proof
-        // alone decides, so a reference to a missing document does not refuse.
-        let link_missing = tasks_where(Some(and(vec![
-            owner_filter(&alice),
-            field_filter(
-                "link",
-                sq::field_filter::Operator::Equal,
-                reference("tasks/missing"),
+        let cases = [
+            (
+                "name-own-alone",
+                tasks_where(Some(name_filter("mine"))),
+                mine(),
             ),
-        ])));
+            (
+                "two-names-own",
+                tasks_where(Some(and(vec![name_filter("mine"), name_filter("mine2")]))),
+                denied(),
+            ),
+            (
+                "two-names-mixed",
+                tasks_where(Some(and(vec![name_filter("mine"), name_filter("theirs")]))),
+                denied(),
+            ),
+            (
+                "or-foreign-unnamed",
+                tasks_where(Some(or(vec![name_filter("theirs"), owner_filter(&alice)]))),
+                denied(),
+            ),
+            (
+                "own-plus-unproven",
+                tasks_where(Some(and(vec![name_filter("mine"), n_is_1()]))),
+                mine(),
+            ),
+            ("name-own-range", range, denied()),
+            ("name-own-limit", limited, mine()),
+            ("name-own-cursor", cursored, mine()),
+        ];
+        for (row, request, expected) in cases {
+            assert_eq!(
+                run(&mut h, request, &token).await,
+                expected,
+                "{profile} {row}"
+            );
+        }
+        h.handle.abort();
+    }
+}
+
+/// Row `fs-rules-v1/shapes/queries#or-named-unnamed` (`documentId() == <own> OR owner == uid`):
+/// production answered 400 for a missing composite index (`FAILED_PRECONDITION`), so its Rules
+/// answer is not recorded; the official emulator allows it. Each branch is authorized on its
+/// own (the named branch by its document, the other by its constraint proof), so both profiles
+/// allow it as the official emulator does; a branch neither check proves refuses.
+#[tokio::test]
+async fn each_branch_of_an_or_is_authorized_on_its_own() {
+    for (profile, mut h) in start_profiles().await {
+        let (alice, token) = seed_tasks(&mut h).await;
+        let either = |second: sq::Filter| tasks_where(Some(or(vec![name_filter("mine"), second])));
         assert_eq!(
-            run(&mut h, link_missing, &token).await,
-            Ok(vec![]),
-            "{profile}"
+            run(&mut h, either(owner_filter(&alice)), &token).await,
+            Ok(vec![doc_name("tasks/mine")]),
+            "{profile} or-named-unnamed"
         );
-        // Two names in one branch: each named document is checked.
-        let two_names = tasks_where(Some(and(vec![
-            owner_filter(&alice),
-            name_filter("theirs"),
-            name_filter("mine"),
-        ])));
         assert_eq!(
-            run(&mut h, two_names, &token).await,
+            run(&mut h, either(owner_filter("other-owner")), &token).await,
             Err(tonic::Code::PermissionDenied),
-            "{profile}"
+            "{profile} a branch the filters do not prove"
+        );
+        assert_eq!(
+            run(&mut h, either(name_filter("missing")), &token).await,
+            Err(tonic::Code::PermissionDenied),
+            "{profile} a branch naming a missing document"
         );
         h.handle.abort();
     }
 }
 
 /// Every combination of which document is named (none, the caller's, someone else's, a
-/// missing one) and which owner is filtered on (none, the caller, someone else): the query is
-/// allowed exactly when the owner filter proves the rule (if there is one) and the named
-/// document exists and passes the rule (if one is named). With neither filter the rule
-/// cannot be proven.
+/// missing one) and which owner is filtered on (none, the caller, someone else): a named
+/// document decides alone (`own-plus-unproven`); without one the owner filter must prove the
+/// rule. A reference-valued filter on another field names nothing, and an offset (not
+/// recorded) keeps the constraint proof beside the named document.
 #[tokio::test]
-async fn named_documents_and_owner_filters_combine_as_a_conjunction() {
+async fn a_named_document_decides_and_otherwise_the_filters_must_prove() {
     for (profile, mut h) in start_profiles().await {
         let (alice, token) = seed_tasks(&mut h).await;
         for named in [None, Some("mine"), Some("theirs"), Some("missing")] {
@@ -310,15 +332,11 @@ async fn named_documents_and_owner_filters_combine_as_a_conjunction() {
                     1 => filters.pop(),
                     _ => Some(and(filters)),
                 };
-                let named_passes = named.map(|id| id == "mine");
-                let owner_proves = owner.map(|uid| uid == alice);
-                let allowed = match (named_passes, owner_proves) {
-                    (None, None) => false,
-                    (Some(n), None) => n,
-                    (None, Some(o)) => o,
-                    (Some(n), Some(o)) => n && o,
+                let allowed = match named {
+                    Some(id) => id == "mine",
+                    None => owner == Some(alice.as_str()),
                 };
-                let answer = run(&mut h, tasks_where(filter), &token).await;
+                let answer = run(&mut h, tasks_where(filter.clone()), &token).await;
                 assert_eq!(
                     answer.is_ok(),
                     allowed,
@@ -327,8 +345,30 @@ async fn named_documents_and_owner_filters_combine_as_a_conjunction() {
                 if !allowed {
                     assert_eq!(answer, Err(tonic::Code::PermissionDenied));
                 }
+                // With an offset the constraint proof is also required.
+                let mut offset = tasks_where(filter);
+                query_mut(&mut offset).offset = 1;
+                let with_offset = allowed && (named.is_none() || owner == Some(alice.as_str()));
+                assert_eq!(
+                    run(&mut h, offset, &token).await.is_ok(),
+                    with_offset,
+                    "{profile} offset named={named:?} owner={owner:?}"
+                );
             }
         }
+        let link_missing = tasks_where(Some(and(vec![
+            owner_filter(&alice),
+            field_filter(
+                "link",
+                sq::field_filter::Operator::Equal,
+                reference("tasks/missing"),
+            ),
+        ])));
+        assert_eq!(
+            run(&mut h, link_missing, &token).await,
+            Ok(vec![]),
+            "{profile} link"
+        );
         h.handle.abort();
     }
 }
@@ -437,5 +477,291 @@ async fn a_key_the_query_does_not_constrain_is_not_in_the_query_resource_data() 
             assert_eq!(answer, expected, "{profile} {row}");
         }
         h.handle.abort();
+    }
+}
+
+fn unary_filter(field: &str, op: sq::unary_filter::Operator) -> sq::Filter {
+    sq::Filter {
+        filter_type: Some(sq::filter::FilterType::UnaryFilter(sq::UnaryFilter {
+            op: op as i32,
+            operand_type: Some(sq::unary_filter::OperandType::Field(sq::FieldReference {
+                field_path: field.to_owned(),
+            })),
+        })),
+    }
+}
+
+fn array(values: Vec<pb::Value>) -> pb::Value {
+    pb::Value {
+        value_type: Some(pb::value::ValueType::ArrayValue(pb::ArrayValue { values })),
+    }
+}
+
+/// Every filter, ordering or cursor that only matches documents holding `x` makes `x` a key of
+/// the query's `resource.data`, so `!("x" in resource.data)` is never proven for it (review
+/// 2026-11-08: `where("x", "!=", null)` was authorized). Only the unfiltered query and a query
+/// on another field stay allowed.
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn a_constraint_that_implies_the_key_keeps_it_in_the_query_resource_data() {
+    use sq::field_filter::Operator as Op;
+    use sq::unary_filter::Operator as Unary;
+    const ABSENT_RULES: &str = r#"rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /absent/{id} { allow list: if !("x" in resource.data); }
+  }
+}"#;
+    let query = |filter: Option<sq::Filter>, order: Option<&str>, cursor: bool| {
+        let mut request = list("absent");
+        let q = query_mut(&mut request);
+        q.r#where = filter;
+        if let Some(field) = order {
+            q.order_by = vec![sq::Order {
+                field: Some(sq::FieldReference {
+                    field_path: field.to_owned(),
+                }),
+                direction: sq::Direction::Ascending as i32,
+            }];
+            if cursor {
+                q.start_at = Some(pb::Cursor {
+                    values: vec![integer(0)],
+                    before: true,
+                });
+            }
+        }
+        request
+    };
+    let x = |op: Op, value: pb::Value| Some(field_filter("x", op, value));
+    for (profile, mut h) in start_profiles().await {
+        let (_alice, token) = h.user("alice@example.com");
+        h.rules.replace_source(ABSENT_RULES).unwrap();
+        let allowed = [
+            ("unfiltered", query(None, None, false)),
+            ("other field", query(Some(owner_filter("o1")), None, false)),
+        ];
+        for (case, request) in allowed {
+            assert_eq!(
+                run(&mut h, request, &token).await,
+                Ok(vec![]),
+                "{profile} {case}"
+            );
+        }
+        let refused = [
+            (
+                "is not null",
+                query(Some(unary_filter("x", Unary::IsNotNull)), None, false),
+            ),
+            (
+                "is nan",
+                query(Some(unary_filter("x", Unary::IsNan)), None, false),
+            ),
+            (
+                "is not nan",
+                query(Some(unary_filter("x", Unary::IsNotNan)), None, false),
+            ),
+            (
+                "is null",
+                query(Some(unary_filter("x", Unary::IsNull)), None, false),
+            ),
+            ("equal", query(x(Op::Equal, integer(1)), None, false)),
+            ("not equal", query(x(Op::NotEqual, integer(1)), None, false)),
+            (
+                "not in",
+                query(x(Op::NotIn, array(vec![integer(1)])), None, false),
+            ),
+            ("in", query(x(Op::In, array(vec![integer(1)])), None, false)),
+            (
+                "greater than",
+                query(x(Op::GreaterThan, integer(0)), None, false),
+            ),
+            (
+                "array contains",
+                query(x(Op::ArrayContains, integer(1)), None, false),
+            ),
+            (
+                "array contains any",
+                query(
+                    x(Op::ArrayContainsAny, array(vec![integer(1)])),
+                    None,
+                    false,
+                ),
+            ),
+            (
+                "nested field",
+                query(
+                    Some(field_filter("x.y", Op::Equal, integer(1))),
+                    None,
+                    false,
+                ),
+            ),
+            ("order by", query(None, Some("x"), false)),
+            ("order by with a cursor", query(None, Some("x"), true)),
+        ];
+        for (case, request) in refused {
+            assert_eq!(
+                run(&mut h, request, &token).await,
+                Err(tonic::Code::PermissionDenied),
+                "{profile} {case}"
+            );
+        }
+        h.handle.abort();
+    }
+}
+
+const SHAPES_RULES: &str = r#"rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /nested-neg/{id} { allow list: if !("blocked" in resource.data.meta); }
+    match /nested-pos/{id} { allow list: if "a" in resource.data.meta; }
+    match /keys-neg/{id} { allow list: if !resource.data.keys().hasAny(["blocked"]); }
+    match /keys-pos/{id} { allow list: if resource.data.keys().hasAll(["a"]); }
+    match /size/{id} { allow list: if resource.data.size() > 0; }
+    match /get-neg/{id} { allow list: if resource.data.get("blocked", false) == false; }
+    match /get-pos/{id} { allow list: if resource.data.get("a", 0) == 1; }
+    match /{path=**}/cg/{id} { allow list: if !("blocked" in resource.data); }
+    match /{path=**}/cg-has/{id} { allow list: if "blocked" in resource.data; }
+    match /{path=**}/blk/{id} { allow list: if !("blocked" in resource.data); }
+    match /sec-list/{id} { allow list: if [resource.data.secret] != null; }
+    match /sec-map/{id} { allow list: if {"k": resource.data.secret} != null; }
+    match /sec-bare/{id} { allow list: if resource.data.secret != null; }
+    match /sec-owner/{id} { allow list: if [resource.data.owner] != null; }
+  }
+}"#;
+
+/// The query rows of FS-RULES-SHAPES (2026-11-08, two identical recordings; the official
+/// emulator answered the same on each), seeded as production was: in a query proof
+/// `resource.data` holds the keys the query constrains and only those, for `in` (also of a
+/// map the query constrains in part), `keys()`, `size()` and `get()` with a default, whatever
+/// the stored documents hold; a filter that implies a key makes it present; a list or map
+/// built from a field the query does not constrain is not provably non-null.
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn the_query_resource_data_holds_the_constrained_keys_only() {
+    use sq::field_filter::Operator as Op;
+    let from = |collection: &str, group: bool, filter: Option<sq::Filter>| {
+        let mut request = list(collection);
+        let q = query_mut(&mut request);
+        q.from[0].all_descendants = group;
+        q.r#where = filter;
+        request
+    };
+    let a_is_1 = || Some(field_filter("a", Op::Equal, integer(1)));
+    let meta_a_is_1 = || Some(field_filter("meta.a", Op::Equal, integer(1)));
+    for (profile, mut h) in start_profiles().await {
+        let (alice, token) = h.user("alice@example.com");
+        let mine = |collection: &str| {
+            set_write(
+                &format!("{collection}/s1"),
+                &[("owner", s(&alice)), ("n", integer(1))],
+            )
+        };
+        let a1 = |path: &str| set_write(path, &[("a", integer(1))]);
+        h.client
+            .commit(with_bearer(
+                commit(vec![
+                    set_write("nested-neg/d1", &[("meta", map(&[("a", integer(1))]))]),
+                    set_write("nested-pos/d1", &[("meta", map(&[("a", integer(1))]))]),
+                    a1("keys-neg/d1"),
+                    a1("keys-pos/d1"),
+                    a1("size/d1"),
+                    a1("get-neg/d1"),
+                    a1("get-pos/d1"),
+                    set_write("cg/c1", &[("n", integer(1))]),
+                    set_write("x/y/cg/c2", &[("n", integer(1))]),
+                    set_write("cg-has/c1", &[("n", integer(1))]),
+                    set_write("blk/b1", &[("blocked", bool_value(true))]),
+                    set_write("x/y/blk/b2", &[("blocked", bool_value(true))]),
+                    mine("sec-list"),
+                    mine("sec-map"),
+                    mine("sec-bare"),
+                    mine("sec-owner"),
+                ]),
+                "owner",
+            ))
+            .await
+            .unwrap();
+        h.rules.replace_source(SHAPES_RULES).unwrap();
+        let me = || Some(owner_filter(&alice));
+        let rows = [
+            (
+                "nested-neg-nofilter",
+                from("nested-neg", false, None),
+                false,
+            ),
+            (
+                "nested-neg-filtered",
+                from("nested-neg", false, meta_a_is_1()),
+                true,
+            ),
+            (
+                "nested-pos-nofilter",
+                from("nested-pos", false, None),
+                false,
+            ),
+            (
+                "nested-pos-filtered",
+                from("nested-pos", false, meta_a_is_1()),
+                true,
+            ),
+            ("keys-neg-nofilter", from("keys-neg", false, None), true),
+            ("keys-neg-filtered", from("keys-neg", false, a_is_1()), true),
+            ("keys-pos-nofilter", from("keys-pos", false, None), false),
+            ("keys-pos-filtered", from("keys-pos", false, a_is_1()), true),
+            ("size-nofilter", from("size", false, None), false),
+            ("size-filtered", from("size", false, a_is_1()), true),
+            ("get-neg-nofilter", from("get-neg", false, None), true),
+            ("get-neg-filtered", from("get-neg", false, a_is_1()), true),
+            ("get-pos-nofilter", from("get-pos", false, None), false),
+            ("get-pos-filtered", from("get-pos", false, a_is_1()), true),
+            ("cg-blocked-group", from("cg", true, None), true),
+            ("cg-has-group", from("cg-has", true, None), false),
+            ("cg-blocked-single", from("cg", false, None), true),
+            ("blk-stored-nofilter", from("blk", false, None), true),
+            (
+                "blk-not-null",
+                from(
+                    "blk",
+                    false,
+                    Some(unary_filter(
+                        "blocked",
+                        sq::unary_filter::Operator::IsNotNull,
+                    )),
+                ),
+                false,
+            ),
+            ("blk-stored-group", from("blk", true, None), true),
+            (
+                "blk-eq-true",
+                from(
+                    "blk",
+                    false,
+                    Some(field_filter("blocked", Op::Equal, bool_value(true))),
+                ),
+                false,
+            ),
+            ("sec-list-owner", from("sec-list", false, me()), false),
+            ("sec-map-owner", from("sec-map", false, me()), false),
+            ("sec-bare-owner", from("sec-bare", false, me()), false),
+            ("sec-owner-owner", from("sec-owner", false, me()), true),
+        ];
+        for (row, request, allowed) in rows {
+            let answer = run(&mut h, request, &token).await;
+            assert_eq!(answer.is_ok(), allowed, "{profile} {row}: {answer:?}");
+            if !allowed {
+                assert_eq!(
+                    answer,
+                    Err(tonic::Code::PermissionDenied),
+                    "{profile} {row}"
+                );
+            }
+        }
+        h.handle.abort();
+    }
+}
+
+fn bool_value(value: bool) -> pb::Value {
+    pb::Value {
+        value_type: Some(pb::value::ValueType::BooleanValue(value)),
     }
 }

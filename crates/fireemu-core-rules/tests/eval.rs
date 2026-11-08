@@ -1350,6 +1350,7 @@ fn allows(rules: &str, ctx: &RequestContext) -> bool {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn undetermined_values_never_prove_a_condition() {
     let rules = |cond: &str| {
         format!("rules_version = '2';\nservice cloud.firestore {{ match /databases/{{d}}/documents {{ match /notes/{{id}} {{ allow list: if {cond}; }} }} }}")
@@ -1365,9 +1366,10 @@ fn undetermined_values_never_prove_a_condition() {
     for cond in [
         "resource.data.secret == null",
         "'blocked' in resource.data",
-        "resource.data.keys().hasOnly(['owner'])",
-        "resource.data.size() == 1",
-        "resource.data.get('flag', false) == false",
+        "resource.data.keys().hasOnly(['other'])",
+        "resource.data.size() == 2",
+        "resource.data.get('flag', true) == false",
+        "resource.data == {'owner': 'u1'}",
         "id != 'secret'",
         "resource.id != 'secret'",
         "request.path[3] == 'notes'",
@@ -1380,8 +1382,19 @@ fn undetermined_values_never_prove_a_condition() {
     // recording 2026-11-08, `fs-rules-v1/diffs/queries#blocked-nofilter`); a constrained one is.
     assert!(allows(&rules("!('blocked' in resource.data)"), &known));
     assert!(allows(&rules("'owner' in resource.data"), &known));
-    // Only the top-level `resource.data` map: a nested map the query constrains in part
-    // keeps its other keys undetermined (no production recording decides them).
+    // Its key set is the constrained keys (FS-RULES-SHAPES 2026-11-08: keys(), size() and
+    // get() with a default answer from them).
+    assert!(allows(
+        &rules("resource.data.keys().hasOnly(['owner'])"),
+        &known
+    ));
+    assert!(allows(&rules("resource.data.size() == 1"), &known));
+    assert!(allows(
+        &rules("resource.data.get('flag', false) == false"),
+        &known
+    ));
+    // A nested map the query constrains in part holds its constrained keys only for `in`
+    // (`nested-neg-filtered` allowed); its other key-set reads stay undetermined.
     let nested = abstract_ctx(
         "/databases/(default)/documents/notes/fireemu-placeholder",
         vec![(
@@ -1393,8 +1406,17 @@ fn undetermined_values_never_prove_a_condition() {
         )],
     );
     assert!(allows(&rules("'owner' in resource.data.meta"), &nested));
-    assert!(!allows(
+    assert!(allows(
         &rules("!('blocked' in resource.data.meta)"),
+        &nested
+    ));
+    assert!(!allows(&rules("resource.data.meta.size() == 1"), &nested));
+    assert!(!allows(
+        &rules("resource.data.meta.keys().hasOnly(['owner'])"),
+        &nested
+    ));
+    assert!(!allows(
+        &rules("resource.data.meta.get('flag', false) == false"),
         &nested
     ));
     // Left to right: a deciding operand ends the evaluation, an undetermined one (which may
@@ -1421,8 +1443,16 @@ fn undetermined_values_never_prove_a_condition() {
         &rules("resource.data.secret == 1 ? true : true"),
         &known
     ));
-    // Containers holding an undetermined member are undetermined too.
+    // Containers holding an undetermined member are undetermined too, also against null:
+    // building one from the stored document may fail on the missing field.
     assert!(!allows(&rules("[resource.data.secret] != [null]"), &known));
+    assert!(!allows(&rules("[resource.data.secret] != null"), &known));
+    assert!(!allows(
+        &rules("{'k': resource.data.secret} != null"),
+        &known
+    ));
+    assert!(allows(&rules("[resource.data.owner] != null"), &known));
+    assert!(allows(&rules("resource != null"), &known));
     assert!(!allows(
         &rules("{'k': resource.data.secret} == {'k': 1}"),
         &known
@@ -1448,6 +1478,29 @@ fn undetermined_values_never_prove_a_condition() {
     ] {
         assert!(!allows(&rules(cond), &tags), "{cond} must not be provable");
     }
+}
+
+/// `keys()` is the only method whose result is read as its receiver's for the numeric
+/// stringification guard (a map's keys are field names); any other method with a
+/// query-derived number in its arguments stays representation-sensitive.
+#[test]
+fn only_keys_looks_through_to_its_receiver_for_stringified_numbers() {
+    let rules = |cond: &str| {
+        format!("rules_version = '2';\nservice cloud.firestore {{ match /databases/{{d}}/documents {{ match /notes/{{id}} {{ allow list: if {cond}; }} }} }}")
+    };
+    let query = abstract_ctx(
+        "/databases/(default)/documents/notes/fireemu-placeholder",
+        vec![("n", RulesValue::Int(1)), ("a", RulesValue::Int(1))],
+    );
+    // A stored 1.0 also matches `n == 1` and splits "a1.0b" differently.
+    assert!(!allows(
+        &rules("'a1b'.split(string(resource.data.n)).size() == 2"),
+        &query
+    ));
+    assert!(allows(
+        &rules("resource.data.keys().hasAll(['a', 'n'])"),
+        &query
+    ));
 }
 
 #[test]

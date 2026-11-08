@@ -1622,6 +1622,26 @@ fn truthy(v: &RulesValue) -> Result<bool, EvalError> {
 /// Values whose identity is not determined (query proofs) make most operations undecidable.
 /// Undetermined at any depth: a container holding an undetermined member cannot be compared,
 /// searched or iterated with a definite result.
+/// Whether `value` holds `Unknown` anywhere: a read the query does not determine, which may
+/// be a missing-field error for a stored document.
+fn holds_unknown(value: &RulesValue) -> bool {
+    match value {
+        RulesValue::Unknown => true,
+        RulesValue::List(items)
+        | RulesValue::Set(items)
+        | RulesValue::PartialList(items)
+        | RulesValue::PartialListAny(items)
+        | RulesValue::OneOf(items)
+        | RulesValue::NotOneOf(items) => items.iter().any(holds_unknown),
+        RulesValue::Map(fields) | RulesValue::PartialMap(fields) => {
+            fields.values().any(holds_unknown)
+        }
+        // Its excluded maps are concrete filter values.
+        RulesValue::PartialMapExcluding { fields, .. } => fields.values().any(holds_unknown),
+        _ => false,
+    }
+}
+
 fn undetermined(v: &RulesValue) -> bool {
     match v {
         RulesValue::Unknown
@@ -1692,6 +1712,46 @@ impl<'a> Evaluator<'a> {
             .iter()
             .rev()
             .any(|binding| binding.name == name)
+    }
+
+    /// `keys()`, `size()` and `get(key, default)` of a query proof's top-level `resource.data`,
+    /// which production answers from the keys the query constrains alone (FS-RULES-SHAPES
+    /// 2026-11-08: `!keys().hasAny(["blocked"])`, `get("blocked", false) == false` allowed
+    /// without a filter; `keys().hasAll(["a"])`, `size() > 0`, `get("a", 0) == 1` refused
+    /// without a filter and allowed with `a == 1`). `None` for every other call, which keeps
+    /// its ordinary answer (a nested map's key set stays undetermined).
+    fn closed_query_data_call(
+        &self,
+        receiver: &RulesValue,
+        name: &str,
+        args: &[RulesValue],
+    ) -> Option<Result<RulesValue, EvalError>> {
+        let RulesValue::PartialMap(fields) = receiver else {
+            return None;
+        };
+        if !matches!(name, "keys" | "size" | "get") || !self.is_query_resource_data(receiver) {
+            return None;
+        }
+        if args.iter().any(undetermined) {
+            return Some(Err(EvalError::Unknown));
+        }
+        Some(match (name, args) {
+            ("keys", []) => Ok(RulesValue::List(
+                fields.keys().cloned().map(RulesValue::String).collect(),
+            )),
+            ("size", []) => Ok(RulesValue::Int(
+                i64::try_from(fields.len()).unwrap_or(i64::MAX),
+            )),
+            ("get", [RulesValue::String(key), default]) => {
+                Ok(fields.get(key).cloned().unwrap_or_else(|| default.clone()))
+            }
+            _ => Err(EvalError::Unknown),
+        })
+    }
+
+    /// Whether `value` is a query proof's `resource` itself (a document that exists).
+    fn is_query_resource(&self, value: &RulesValue) -> bool {
+        self.query_proof && self.resource.as_ref() == value
     }
 
     /// Whether `value` is the top-level `data` map of a query proof's `resource`. Every
@@ -3084,6 +3144,10 @@ impl<'a> Evaluator<'a> {
                 // representation-sensitive. Collection shape remains independent of element
                 // values, so list/map literals are handled conservatively by their caller.
                 ExprKind::Member { object, name } if name == "size" => {
+                    self.query_numeric_stringification_sensitive_with(object)
+                }
+                // A map's keys are field names, never a stringified value.
+                ExprKind::Member { object, name } if name == "keys" => {
                     self.query_numeric_stringification_sensitive_with(object)
                 }
                 ExprKind::Member { object, name } if name == "join" => {
@@ -4593,11 +4657,15 @@ impl<'a> Evaluator<'a> {
             (BinaryOp::In, V::String(k), V::PartialMap(m)) => {
                 if m.contains_key(k) {
                     V::Bool(true)
-                } else if self.is_query_resource_data(&r) {
+                } else if self.query_proof {
                     // Production answers a key the query does not constrain as absent from
-                    // `resource.data` (FS-RULES-DIFFS 2026-11-08: `!("blocked" in
-                    // resource.data)` allowed and `"owner" in resource.data` refused for an
-                    // unfiltered query). Nested maps keep their other keys undetermined.
+                    // `resource.data` and from a map of it the query constrains in part
+                    // (FS-RULES-DIFFS and FS-RULES-SHAPES 2026-11-08: `!("blocked" in
+                    // resource.data)` allowed also when stored documents hold `blocked`,
+                    // `"owner" in resource.data` refused without a filter, `!("blocked" in
+                    // resource.data.meta)` allowed with a `meta.a` filter). Every partial map
+                    // of a list proof comes from the query resource, and every field a result
+                    // must hold is one of its keys.
                     V::Bool(false)
                 } else {
                     return Err(EvalError::Unknown);
@@ -4757,10 +4825,14 @@ impl<'a> Evaluator<'a> {
                     return Err(EvalError::Unknown);
                 }
             }
-            // A map or a list is never null, whatever members it holds undetermined: the query
-            // `resource` is a document (FS-RULES-DIFFS 2026-11-08, `resource != null` allowed).
-            (BinaryOp::Eq | BinaryOp::Ne, V::Map(_) | V::List(_) | V::Set(_), V::Null)
-            | (BinaryOp::Eq | BinaryOp::Ne, V::Null, V::Map(_) | V::List(_) | V::Set(_)) => {
+            // The query `resource` is a document, never null (FS-RULES-DIFFS 2026-11-08,
+            // `resource != null` allowed), and so is a map or list built only from values the
+            // query determines. A container holding `Unknown` stays undetermined: building it
+            // from a stored document may fail on a missing field.
+            (BinaryOp::Eq | BinaryOp::Ne, c @ (V::Map(_) | V::List(_) | V::Set(_)), V::Null)
+            | (BinaryOp::Eq | BinaryOp::Ne, V::Null, c @ (V::Map(_) | V::List(_) | V::Set(_)))
+                if self.is_query_resource(c) || !holds_unknown(c) =>
+            {
                 V::Bool(op == BinaryOp::Ne)
             }
             (_, a, b) if undetermined(a) || undetermined(b) => return Err(EvalError::Unknown),
@@ -5021,6 +5093,8 @@ impl<'a> Evaluator<'a> {
                     && matches!(name.as_str(), "matches" | "replace")
                 {
                     self.string_regex_call(&receiver, name, &values, compiled_regex)
+                } else if let Some(answer) = self.closed_query_data_call(&receiver, name, &values) {
+                    answer
                 } else {
                     let query_derived_receiver = self.query_derived_expression(object);
                     let query_derived = query_derived_receiver

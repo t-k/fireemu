@@ -954,7 +954,7 @@ async fn query_proofs_are_sound_for_shapes_arrays_and_collection_groups() {
 service cloud.firestore {
   match /databases/{database}/documents {
     match /shape/{id} { allow read: if !('blocked' in resource.data); }
-    match /keyed/{id} { allow read: if resource.data.keys().hasOnly(['a']); }
+    match /keyed/{id} { allow read: if resource.data.size() > 0; }
     match /tagged/{id} { allow read: if resource.data.tags.hasAny(['x']); }
     match /sized/{id} { allow read: if resource.data.tags.size() == 1; }
     match /reviews/{id} { allow read: if true; }
@@ -971,7 +971,8 @@ service cloud.firestore {
         .run_query(with_bearer(list("shape"), &alice_token))
         .await
         .is_ok());
-    // ...but the rest of the map's shape cannot be proven for an unfiltered query.
+    // ...and it holds no other key: an unfiltered query's data is empty (FS-RULES-SHAPES
+    // 2026-11-08, `size-nofilter` refused).
     denied(
         h.client
             .run_query(with_bearer(list("keyed"), &alice_token))

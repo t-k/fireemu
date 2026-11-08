@@ -482,26 +482,52 @@ class RunnerContractTest(unittest.TestCase):
         finally:
             self.kill_all([process.pid])
 
-    def test_group_whose_leader_pid_was_reused_is_not_signaled(self):
-        # The recorded member's start time no longer matches: the group id now belongs to
-        # an unrelated process, which cleanup must leave alone without failing.
+    def test_group_whose_leader_pid_was_reused_is_not_signaled_and_keeps_leases(self):
+        # The recorded member's start time no longer matches: the group id now belongs to an
+        # unrelated process, which cleanup must leave alone; the group is unresolved, so the leases stay.
         stranger = subprocess.Popen(["python3", "-c", "import time; time.sleep(60)"], start_new_session=True)
         try:
-            real = None
-            for _ in range(100):
-                real = run.process_start(stranger.pid)
-                if real:
-                    break
-                time.sleep(0.02)
-            released = []
-            with tempfile.TemporaryDirectory() as temp, patch.object(run, "TOOL", Path(temp)), patch.object(run, "checked", side_effect=lambda _command: released.append(1)), contextlib.redirect_stdout(io.StringIO()):
-                run.cleanup({stranger.pid: "Mon Jan  1 00:00:00 2001"}, [], [{"token": "fixture"}], ["registry"], Path(temp), Mock(), lambda: None, groups={stranger.pid: {stranger.pid: "Mon Jan  1 00:00:00 2001"}})
+            with tempfile.TemporaryDirectory() as temp, patch.object(run, "TOOL", Path(temp)), patch.object(run, "checked") as checked, contextlib.redirect_stdout(io.StringIO()):
+                with self.assertRaisesRegex(RuntimeError, "stop-group"):
+                    run.cleanup({stranger.pid: "Mon Jan  1 00:00:00 2001"}, [], [{"token": "fixture"}], ["registry"], Path(temp), Mock(), lambda: None, groups={stranger.pid: {stranger.pid: "Mon Jan  1 00:00:00 2001"}})
+                checked.assert_not_called()
             time.sleep(0.3)
             self.assertIsNone(stranger.poll())
-            self.assertEqual(released, [1])
         finally:
             stranger.kill()
             stranger.wait()
+
+    def test_unresolved_group_with_a_live_unrelated_member_keeps_leases_while_another_group_is_killed(self):
+        # D (observed, non-launch leader) forked C into its group G and exited; B, an observed
+        # child of D, moved to its own session and ignores SIGTERM. Nothing validates membership
+        # of G, but B is alive, so G is not "all members gone". G must not be signalled and the
+        # leases must stay; B's own group is still killed. Real processes: C leads G, D is a dead pid.
+        # B is detached (reparented to init) so that nothing here has to reap it after SIGKILL.
+        c = subprocess.Popen(["python3", "-c", "import time; time.sleep(60)"], start_new_session=True)
+        with tempfile.TemporaryDirectory() as ready_dir:
+            ready = Path(ready_dir) / "ready"
+            spawner = "import subprocess,sys; print(subprocess.Popen([sys.executable, '-c', \"import signal,sys,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); open(sys.argv[1], 'w').close(); time.sleep(60)\", sys.argv[1]], start_new_session=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).pid)"
+            b_pid = int(subprocess.run(["python3", "-c", spawner, str(ready)], capture_output=True, text=True).stdout)
+            try:
+                for _ in range(250):
+                    if ready.exists():
+                        break
+                    time.sleep(0.02)
+                self.assertTrue(ready.exists())
+                started_b = run.process_start(b_pid)
+                dead_d = 2 ** 22 + 4242
+                # B was recorded in G while it still shared D's group, then moved to its own session.
+                groups = {c.pid: {dead_d: "Mon Jan  1 00:00:00 2001", b_pid: started_b}, b_pid: {b_pid: started_b}}
+                with tempfile.TemporaryDirectory() as temp, patch.object(run, "TOOL", Path(temp)), patch.object(run, "checked") as checked, contextlib.redirect_stdout(io.StringIO()):
+                    with self.assertRaisesRegex(RuntimeError, "stop-group") as raised:
+                        run.cleanup({b_pid: started_b}, [], [{"token": "fixture"}], ["registry"], Path(temp), Mock(), lambda: None, groups=groups)
+                    self.assertEqual(json.loads(str(raised.exception).split("failures: ", 1)[1]), [["stop-group", "RuntimeError"]])
+                    checked.assert_not_called()
+                self.assertFalse(self.alive(b_pid))
+                self.assertIsNone(c.poll())
+            finally:
+                self.kill_all([c.pid, b_pid])
+                c.wait()
 
     def test_live_group_whose_recorded_members_are_all_gone_is_unproven_and_keeps_leases(self):
         stranger = subprocess.Popen(["python3", "-c", "import time; time.sleep(60)"], start_new_session=True)
@@ -534,7 +560,8 @@ class RunnerContractTest(unittest.TestCase):
         kill.assert_not_called()
 
     def test_member_that_moved_to_another_group_does_not_prove_the_old_group(self):
-        # S leads a live group. B is recorded as a member of S's group but sits in its own session.
+        # S leads a live group. B is recorded as a member of S's group but sits in its own session:
+        # S is never signalled, and being unresolved it keeps the leases.
         leader = subprocess.Popen(["python3", "-c", "import time; time.sleep(60)"], start_new_session=True)
         mover = subprocess.Popen(["python3", "-c", "import time; time.sleep(60)"], start_new_session=True)
         try:
@@ -543,12 +570,13 @@ class RunnerContractTest(unittest.TestCase):
                 if started and run.process_start(leader.pid):
                     break
                 time.sleep(0.02)
-            released = []
-            with tempfile.TemporaryDirectory() as temp, patch.object(run, "TOOL", Path(temp)), patch.object(run, "checked", side_effect=lambda _command: released.append(1)), contextlib.redirect_stdout(io.StringIO()):
-                run.cleanup({}, [], [{"token": "fixture"}], ["registry"], Path(temp), Mock(), lambda: None, groups={leader.pid: {mover.pid: started}})
+            with tempfile.TemporaryDirectory() as temp, patch.object(run, "TOOL", Path(temp)), patch.object(run, "checked") as checked, contextlib.redirect_stdout(io.StringIO()):
+                with self.assertRaisesRegex(RuntimeError, "stop-group"):
+                    run.cleanup({}, [], [{"token": "fixture"}], ["registry"], Path(temp), Mock(), lambda: None, groups={leader.pid: {mover.pid: started}})
+                checked.assert_not_called()
             time.sleep(0.3)
             self.assertIsNone(leader.poll())
-            self.assertEqual(released, [1])
+            self.assertIsNone(mover.poll())
         finally:
             self.kill_all([leader.pid, mover.pid])
             leader.wait()

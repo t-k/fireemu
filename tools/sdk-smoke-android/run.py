@@ -215,9 +215,10 @@ def cleanup(owned, children, leases, registry, work, temporary, observe, primary
                 continue
             if any(member_of(group, pid, started) for pid, started in list(members.items())):
                 proven.add(group)
-            elif all(process_start(pid) is None for pid in members) and group_alive(group):
-                # Every recorded member is gone but the group lives: it may hold
-                # stragglers of ours, yet the id may also have been reused.
+            elif group_alive(group):
+                # No recorded member validates, yet the group lives. It may hold
+                # stragglers of ours or the id may have been reused: never signal
+                # it, and never release the leases while it is alive.
                 unproven.add(group)
 
     def settle(pending, deadline_ticks):

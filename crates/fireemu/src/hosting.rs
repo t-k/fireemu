@@ -104,6 +104,7 @@ struct Site {
     data: Value,
     /// `None` when the public directory does not exist: every asset lookup misses.
     root: Option<Arc<cap_std::fs::Dir>>,
+    public_root: String,
     project: String,
     upstream: Option<std::net::SocketAddr>,
     emulators: Value,
@@ -213,6 +214,7 @@ impl Site {
                         .map(str::to_owned),
                 )
                 .collect(),
+            self.public_root.clone(),
         )
         .await
     }
@@ -768,7 +770,18 @@ pub fn prepare(
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
             Err(error) => return Err(format!("hosting.public: {error}")),
         };
+    let absolute =
+        std::path::absolute(&config.public).map_err(|error| format!("hosting.public: {error}"))?;
+    let mut public_root = PathBuf::new();
+    for component in absolute.components() {
+        if component == std::path::Component::ParentDir {
+            public_root.pop();
+        } else {
+            public_root.push(component.as_os_str());
+        }
+    }
     Ok(PreparedSite(Arc::new(Site {
+        public_root: public_root.to_string_lossy().replace('\\', "/"),
         data: config.data,
         root,
         project,

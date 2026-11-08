@@ -2,7 +2,8 @@
   {
     "pattern": "./private.json",
     "path": "private.json",
-    "expected": true
+    "expected": true,
+    "generated_on": "darwin"
   },
   {
     "pattern": "./private.json",
@@ -2737,95 +2738,95 @@
   {
     "pattern": "\\{a,b\\}.json",
     "path": "a.json",
-    "expected": false
-  },
-  {
-    "pattern": "\\{a,b\\}.json",
-    "path": "b.json",
-    "expected": false
-  },
-  {
-    "pattern": "\\{a,b\\}.json",
-    "path": "c.json",
-    "expected": false
-  },
-  {
-    "pattern": "\\{a,b\\}.json",
-    "path": "d.json",
-    "expected": false
-  },
-  {
-    "pattern": "\\{a,b\\}.json",
-    "path": "e.json",
-    "expected": false
-  },
-  {
-    "pattern": "\\{a,b\\}.json",
-    "path": "01.json",
-    "expected": false
-  },
-  {
-    "pattern": "\\{a,b\\}.json",
-    "path": "02.json",
-    "expected": false
-  },
-  {
-    "pattern": "\\{a,b\\}.json",
-    "path": "03.json",
-    "expected": false
-  },
-  {
-    "pattern": "\\{a,b\\}.json",
-    "path": "05.json",
-    "expected": false
-  },
-  {
-    "pattern": "\\{a,b\\}.json",
-    "path": "-02.json",
-    "expected": false
-  },
-  {
-    "pattern": "\\{a,b\\}.json",
-    "path": "00.json",
-    "expected": false
-  },
-  {
-    "pattern": "\\{a,b\\}.json",
-    "path": "2.json",
-    "expected": false
-  },
-  {
-    "pattern": "\\{a,b\\}.json",
-    "path": "3.json",
-    "expected": false
-  },
-  {
-    "pattern": "\\{a,b\\}.json",
-    "path": "5.json",
-    "expected": false
-  },
-  {
-    "pattern": "\\{a,b\\}.json",
-    "path": ".secret.json",
-    "expected": false
-  },
-  {
-    "pattern": "\\{a,b\\}.json",
-    "path": "#private.json",
-    "expected": false
-  },
-  {
-    "pattern": "\\{a,b\\}.json",
-    "path": "!private.json",
-    "expected": false
-  },
-  {
-    "pattern": "\\{a,b\\}.json",
-    "path": "{a,b}.json",
     "expected": true
   },
   {
     "pattern": "\\{a,b\\}.json",
+    "path": "b.json",
+    "expected": true
+  },
+  {
+    "pattern": "\\{a,b\\}.json",
+    "path": "c.json",
+    "expected": false
+  },
+  {
+    "pattern": "\\{a,b\\}.json",
+    "path": "d.json",
+    "expected": false
+  },
+  {
+    "pattern": "\\{a,b\\}.json",
+    "path": "e.json",
+    "expected": false
+  },
+  {
+    "pattern": "\\{a,b\\}.json",
+    "path": "01.json",
+    "expected": false
+  },
+  {
+    "pattern": "\\{a,b\\}.json",
+    "path": "02.json",
+    "expected": false
+  },
+  {
+    "pattern": "\\{a,b\\}.json",
+    "path": "03.json",
+    "expected": false
+  },
+  {
+    "pattern": "\\{a,b\\}.json",
+    "path": "05.json",
+    "expected": false
+  },
+  {
+    "pattern": "\\{a,b\\}.json",
+    "path": "-02.json",
+    "expected": false
+  },
+  {
+    "pattern": "\\{a,b\\}.json",
+    "path": "00.json",
+    "expected": false
+  },
+  {
+    "pattern": "\\{a,b\\}.json",
+    "path": "2.json",
+    "expected": false
+  },
+  {
+    "pattern": "\\{a,b\\}.json",
+    "path": "3.json",
+    "expected": false
+  },
+  {
+    "pattern": "\\{a,b\\}.json",
+    "path": "5.json",
+    "expected": false
+  },
+  {
+    "pattern": "\\{a,b\\}.json",
+    "path": ".secret.json",
+    "expected": false
+  },
+  {
+    "pattern": "\\{a,b\\}.json",
+    "path": "#private.json",
+    "expected": false
+  },
+  {
+    "pattern": "\\{a,b\\}.json",
+    "path": "!private.json",
+    "expected": false
+  },
+  {
+    "pattern": "\\{a,b\\}.json",
+    "path": "{a,b}.json",
+    "expected": false
+  },
+  {
+    "pattern": "\\{a,b\\}.json",
     "path": "ab.json",
     "expected": false
   },
@@ -15328,5 +15329,31 @@
     "pattern": "a!(b|c)d",
     "path": "a/b/x",
     "expected": false
+  },
+  {
+    "pattern": "private.json/**",
+    "path": "private.json",
+    "expected": true
+  },
+  {
+    "pattern": "private.json/",
+    "path": "private.json",
+    "expected": true
+  },
+  {
+    "pattern": "{./private.json,public.json}",
+    "path": "private.json",
+    "expected": true
+  },
+  {
+    "pattern": "{PUBLIC_ROOT}/private.json",
+    "path": "private.json",
+    "expected": true
+  },
+  {
+    "pattern": "PRIVATE.JSON",
+    "path": "private.json",
+    "nocase": true,
+    "expected": true
   }
 ]

@@ -370,15 +370,35 @@ pub(super) fn glob_with_dot(pattern: &str, path: &str, dot: bool) -> bool {
     matched != (negative % 2 == 1)
 }
 
-pub(super) fn deploy_ignore(pattern: &str, path: &str) -> bool {
-    let mut pattern = pattern;
-    while let Some(rest) = pattern.strip_prefix("./") {
-        pattern = rest;
-    }
-    alternatives(pattern, true).iter().any(|pattern| {
-        let pattern: Vec<_> = pattern.split('/').collect();
-        let path: Vec<_> = path.split('/').collect();
-        path_match(&pattern, &path, true)
+pub(super) fn deploy_ignore(pattern: &str, path: &str, public_root: &str) -> bool {
+    let absolute_path = format!("{}/{}", public_root.trim_end_matches('/'), path);
+    alternatives(pattern, true).iter().any(|expanded| {
+        let expanded = expanded.trim_start_matches("./");
+        // Ignore reconstructs globParts and parses them again; escaped braces lose their escape.
+        let expanded = expanded.replace("\\{", "{").replace("\\}", "}");
+        alternatives(&expanded, true).iter().any(|pattern| {
+            let path = if pattern.starts_with('/')
+                || (cfg!(windows) && pattern.as_bytes().get(1) == Some(&b':'))
+            {
+                &absolute_path
+            } else {
+                path
+            };
+            let pattern = if cfg!(any(target_os = "macos", windows)) {
+                pattern.to_lowercase()
+            } else {
+                pattern.to_owned()
+            };
+            let path = if cfg!(any(target_os = "macos", windows)) {
+                path.to_lowercase()
+            } else {
+                path.to_owned()
+            };
+            let pattern: Vec<_> = pattern.split('/').collect();
+            let slash_path = format!("{path}/");
+            path_match(&pattern, &path.split('/').collect::<Vec<_>>(), true)
+                || path_match(&pattern, &slash_path.split('/').collect::<Vec<_>>(), true)
+        })
     })
 }
 
@@ -402,14 +422,22 @@ mod tests {
     use super::*;
     #[test]
     fn deploy_ignore_agrees_with_minimatch_fixture() {
-        // Regenerate expected values offline: node -e 'const fs=require("fs"),m=require("./conformance/node_modules/minimatch").minimatch,p="crates/fireemu/src/hosting/deploy-ignore-fixture.json",r=JSON.parse(fs.readFileSync(p));for(const x of r)x.expected=m(x.path,x.pattern.replace(/^(\.\/)+/,""),{dot:true,nocomment:true,nonegate:true,optimizationLevel:2});fs.writeFileSync(p,JSON.stringify(r,null,2)+"\n")'
+        // Generated on macOS with generate-deploy-ignore-fixture.mjs and firebase-tools listFiles.
         let rows: Vec<serde_json::Value> =
             serde_json::from_str(include_str!("deploy-ignore-fixture.json")).unwrap();
         let mut failures = Vec::new();
         for row in rows {
-            let pattern = row["pattern"].as_str().unwrap();
+            let pattern = row["pattern"]
+                .as_str()
+                .unwrap()
+                .replace("{PUBLIC_ROOT}", "/public/root");
             let path = row["path"].as_str().unwrap();
-            if deploy_ignore(pattern, path) != row["expected"].as_bool().unwrap() {
+            let expected = if row["nocase"] == true {
+                cfg!(any(target_os = "macos", windows))
+            } else {
+                row["expected"].as_bool().unwrap()
+            };
+            if deploy_ignore(&pattern, path, "/public/root") != expected {
                 failures.push(row);
             }
         }

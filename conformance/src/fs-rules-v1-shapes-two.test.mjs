@@ -4,6 +4,7 @@
 // offset. The facts the fake production uses are the test's choice, not claims about production.
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import { createContext, SANDBOX_PROJECT } from "./fs-rules/harness.mjs";
@@ -29,7 +30,7 @@ import {
   taskIdFor,
 } from "./fs-rules-v1/judge.mjs";
 import { FIXES, OFFICIAL, shapesTwoReport } from "./fs-rules-v1/shapes-two.mjs";
-import { shapesReportLine } from "./fs-rules-v1/shapes.mjs";
+import { classifyShapesAnswer, shapesReportLine } from "./fs-rules-v1/shapes.mjs";
 import { runCorpus } from "./fs-rules-v1/session.mjs";
 import { createClock, createWorld } from "./fs-rules-v1/test-world.mjs";
 
@@ -459,6 +460,189 @@ test("a step that one of the two recordings lacks is unknown, never the other re
   assert.deepEqual(build(out, lacking).programs[id].second, { "get-stored": { absent: true } });
   // Recorded the same twice, a step has no `second` entry at all.
   assert.equal(build(out, out).programs[id].second, undefined);
+});
+
+// ---- the offset form of a production answer ---------------------------------------------------
+
+// Recorded: fs-rules-production.json fs-rules/query/constraints#offset-1-le-1 (`[{readTime,
+// skippedResults}]`, an allowed list whose matches were all skipped) and fs-query-index-production
+// .json fs-query-index/cursors/values#cursor-with-offset and
+// fs-query-index/collection-group/queries#limit-and-offset (the same first entry, then
+// `{document, readTime}` entries).
+const SKIPPED = (n = 1) => ({ readTime: "<run-time>", skippedResults: n });
+const DOC = (name = "d1") => ({
+  document: {
+    name: `projects/demo-fs-rules/databases/(default)/documents/fsr9-p-own/${name}`,
+    fields: { n: { integerValue: "1" } },
+    createTime: "t",
+    updateTime: "t",
+  },
+  readTime: "<run-time>",
+});
+const query200 = (...body) => ({ status: 200, body });
+const classify = (recorded) => classifyShapesAnswer("runQuery", recorded);
+
+test("an offset query answer is allowed when its first entry is exactly the recorded skipped form", () => {
+  assert.deepEqual(classify(query200(SKIPPED(1))), { kind: "allowed", documents: 0 });
+  assert.deepEqual(classify(query200(SKIPPED(2), DOC("d1"))), { kind: "allowed", documents: 1 });
+  assert.deepEqual(classify(query200(SKIPPED(1), DOC("d1"), DOC("d2"), DOC("d3"))), {
+    kind: "allowed",
+    documents: 3,
+  });
+  // The plain recorded forms are unchanged.
+  assert.deepEqual(classify(query200({ readTime: "t" })), { kind: "allowed", documents: 0 });
+  assert.deepEqual(classify(query200(DOC())), { kind: "allowed", documents: 1 });
+});
+
+test("the recorded production offset answers of this repository classify as allowed", () => {
+  const read = (file) => JSON.parse(readFileSync(new URL(`../${file}`, import.meta.url), "utf8"));
+  const rules = read("fs-rules-production.json");
+  const index = read("fs-query-index-production.json");
+  const rows = [
+    [rules.programs["fs-rules/query/constraints"].steps["offset-1-le-1"], 0],
+    [index.programs["fs-query-index/cursors/values"].steps["cursor-with-offset"], 2],
+    [
+      index.programs["fs-query-index/collection-group/queries"].steps["limit-and-offset"],
+      undefined,
+    ],
+  ];
+  for (const [recorded, documents] of rows) {
+    assert.ok(recorded.body[0].skippedResults >= 1);
+    const answer = classify({ status: recorded.status, body: recorded.body });
+    assert.equal(answer.kind, "allowed");
+    assert.equal(answer.documents, documents ?? recorded.body.length - 1);
+  }
+});
+
+test("near misses of the offset form are unknown, never an allow", () => {
+  const unknown = (recorded, why) =>
+    assert.equal(classify(recorded).kind, "unknown", `${why}: ${JSON.stringify(recorded)}`);
+  for (const n of [0, -1, 1.5, "1", null, undefined, true, [1], {}, Number.NaN])
+    unknown(query200({ readTime: "t", skippedResults: n }), `skippedResults ${String(n)}`);
+  unknown(query200({ readTime: "t" }, DOC()), "no skippedResults and a document");
+  unknown(query200({ skippedResults: 1 }), "no readTime");
+  unknown(query200({ readTime: 5, skippedResults: 1 }), "readTime not a string");
+  unknown(query200({ ...SKIPPED(), extra: 1 }), "an extra key on the first entry");
+  unknown(query200({ ...SKIPPED(), done: true }), "done on the first entry");
+  unknown(query200({ ...SKIPPED(), document: DOC().document }), "a document in the first entry");
+  unknown(query200(SKIPPED(), { ...DOC(), skippedResults: 1 }), "skippedResults on a document");
+  unknown(query200(DOC(), SKIPPED()), "the skipped entry is not first");
+  unknown(query200(SKIPPED(), SKIPPED()), "two skipped entries");
+  unknown(query200(SKIPPED(), { readTime: "t" }), "a bare readTime entry after the skipped one");
+  unknown(query200(SKIPPED(), { done: true }), "done after the skipped entry");
+  unknown(query200(SKIPPED(), {}), "an empty entry");
+  unknown(query200(SKIPPED(), DOC(), { ...DOC(), extra: 1 }), "an extra key on a document");
+  unknown(
+    query200(SKIPPED(), { ...DOC(), document: { name: 5 } }),
+    "a document name that is not text",
+  );
+  unknown(query200(SKIPPED(), { ...DOC(), document: { fields: {} } }), "a document without a name");
+  unknown(
+    query200(SKIPPED(), { ...DOC(), document: { ...DOC().document, extra: 1 } }),
+    "an extra key in a document",
+  );
+  unknown(query200(SKIPPED(), "x"), "a non-object entry");
+  unknown(query200(SKIPPED(), null), "a null entry");
+  unknown({ status: 200, body: [] }, "an empty body");
+  unknown({ status: 200, body: { readTime: "t", skippedResults: 1 } }, "a body that is not a list");
+  for (const status of [0, 199, 201, 204, 302, 400, 403, 404, 500, 503])
+    unknown({ status, body: [SKIPPED(1), DOC()] }, `status ${status}`);
+  unknown({ status: 200, body: [SKIPPED(1)], publication: "unsettled" }, "an annotated answer");
+  unknown({ status: 200, body: [SKIPPED(1)], transport: "reset" }, "a transport key");
+  unknown({ status: 200 }, "no body");
+  assert.equal(classifyShapesAnswer("get", query200(SKIPPED())).kind, "unknown", "a get");
+});
+
+test("the offset form of a refusal or a skipped-looking error is not an allow", () => {
+  const denied = {
+    status: 403,
+    body: [
+      {
+        error: {
+          code: 403,
+          message: "Missing or insufficient permissions.",
+          status: "PERMISSION_DENIED",
+        },
+      },
+    ],
+  };
+  assert.equal(classify(denied).kind, "denied");
+  assert.equal(
+    classify({ status: 403, body: [SKIPPED(1), ...denied.body] }).kind,
+    "unknown",
+    "a skipped entry before an error",
+  );
+  assert.equal(
+    classify({ status: 200, unresolved: "ruleset did not compile" }).kind,
+    "not-evaluated",
+  );
+});
+
+test("the fake production answers an offset the production way, so the offset rows read through the new form", async () => {
+  const { out } = await record();
+  const steps = out.results["fs-rules-v1/shapes-two/queries"].steps;
+  // fsr9-p-own holds three documents; the fake ignores filters, so an offset of 1 skips one.
+  for (const id of ["name-offset", "owner-offset"]) {
+    const body = steps[id].body;
+    assert.deepEqual(Object.keys(body[0]).toSorted(), ["readTime", "skippedResults"], id);
+    assert.equal(body[0].skippedResults, 1, id);
+    assert.equal(body.length, 3, id);
+    assert.deepEqual(
+      classifyShapesAnswer("runQuery", steps[id]),
+      { kind: "allowed", documents: 2 },
+      id,
+    );
+  }
+  // Rows without an offset keep the plain forms.
+  assert.deepEqual(Object.keys(steps["ctl-allow"].body[0]).toSorted(), ["document", "readTime"]);
+  const rows = Object.fromEntries(
+    shapesTwoReport({
+      programs: Object.fromEntries(Object.entries(out.results)),
+    }).map((r) => [r.row, r]),
+  );
+  assert.equal(rows["queries#name-offset"].answer, "allowed");
+  assert.equal(rows["queries#name-offset"].documents, 2);
+  assert.equal(rows["queries#owner-offset"].answer, "allowed");
+  assert.equal(
+    rows["queries#foreign-offset"].answer,
+    "allowed",
+    "the fake allows whatever has a rule",
+  );
+});
+
+test("without an offset the fake answers a query that matches nothing with the bare readTime entry", async () => {
+  const programs = [{ ...SHAPES_TWO_PROGRAMS[0], seed: [] }];
+  const { out } = await record({ programs });
+  const steps = out.results["fs-rules-v1/shapes-two/queries"].steps;
+  assert.deepEqual(steps["ctl-allow"].body, [{ readTime: "2026-01-01T00:00:00Z" }]);
+  assert.deepEqual(classifyShapesAnswer("runQuery", steps["ctl-allow"]), {
+    kind: "allowed",
+    documents: 0,
+  });
+});
+
+test("the fake skips only what exists: an offset beyond the matches answers the skipped form alone", async () => {
+  const base = step("queries", "name-offset");
+  const skipRow = (n) => ({
+    ...base,
+    id: `skip-${n}`,
+    body: { structuredQuery: { ...base.body.structuredQuery, offset: n } },
+  });
+  const programs = [
+    {
+      ...SHAPES_TWO_PROGRAMS[0],
+      steps: [SHAPES_TWO_PROGRAMS[0].steps[0], skipRow(1), skipRow(3), skipRow(9)],
+    },
+  ];
+  const { out } = await record({ programs });
+  const steps = out.results["fs-rules-v1/shapes-two/queries"].steps;
+  assert.equal(steps["skip-1"].body.length, 3);
+  assert.deepEqual(
+    steps["skip-3"].body.map((e) => Object.keys(e).toSorted()),
+    [["readTime", "skippedResults"]],
+  );
+  assert.equal(steps["skip-3"].body[0].skippedResults, 3);
+  assert.equal(steps["skip-9"].body[0].skippedResults, 3, "only three documents exist");
 });
 
 // ---- the report ------------------------------------------------------------------------------

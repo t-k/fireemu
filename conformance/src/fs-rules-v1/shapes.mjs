@@ -19,14 +19,42 @@ const hasExactKeys = (value, keys) =>
   !Array.isArray(value) &&
   Object.keys(value).toSorted().join() === keys.toSorted().join();
 
+/**
+ * The one runQuery 200 form beyond the differences judge's: the answer to a query with an offset
+ * that skipped something. Recorded in fs-rules-production.json
+ * fs-rules/query/constraints#offset-1-le-1 (`[{readTime, skippedResults: 1}]`) and in
+ * fs-query-index-production.json fs-query-index/cursors/values#cursor-with-offset and
+ * fs-query-index/collection-group/queries#limit-and-offset (the same first entry, then
+ * `{document, readTime}` entries). The first entry has exactly `readTime` (a string) and
+ * `skippedResults` (a positive integer); everything after it is a document entry. Anything else
+ * is not this form.
+ */
+function classifySkippedAnswer(recorded) {
+  const { status, body } = recorded;
+  if (status !== 200 || !Array.isArray(body) || body.length === 0) return undefined;
+  const [first, ...documents] = body;
+  if (
+    !hasExactKeys(first, ["readTime", "skippedResults"]) ||
+    typeof first.readTime !== "string" ||
+    !Number.isInteger(first.skippedResults) ||
+    first.skippedResults < 1
+  )
+    return undefined;
+  if (documents.length === 0) return { kind: "allowed", documents: 0 };
+  if (!documents.every((entry) => hasExactKeys(entry, ["document", "readTime"]))) return undefined;
+  const tail = classifyAnswer("runQuery", { status, body: documents });
+  return tail.kind === "allowed" ? { kind: "allowed", documents: documents.length } : undefined;
+}
+
 /** What a recorded row answer says: `allowed`, `denied`, `not-evaluated` or `unknown`. */
 export function classifyShapesAnswer(rpc, recorded) {
   if (recorded === undefined) return { kind: "unknown", detail: "no recording" };
-  if (
-    hasExactKeys(recorded, ["status", "body"]) ||
-    hasExactKeys(recorded, ["status", "unresolved"])
-  )
+  if (hasExactKeys(recorded, ["status", "body"])) {
+    const skipped = rpc === "runQuery" ? classifySkippedAnswer(recorded) : undefined;
+    if (skipped) return skipped;
     return classifyAnswer(rpc, recorded);
+  }
+  if (hasExactKeys(recorded, ["status", "unresolved"])) return classifyAnswer(rpc, recorded);
   const keys =
     recorded !== null && typeof recorded === "object" ? Object.keys(recorded).toSorted() : [];
   return { kind: "unknown", detail: `the answer is not bare (${keys.join(", ")})` };

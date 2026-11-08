@@ -255,6 +255,14 @@ test("the historical daemonLog may name only the binding's own paths", async (t)
     `\n  note: /tmp${cwd}\n`,
     `\n  note: /work${cwd}/firebase.json\n`,
     `\n  note: /tmp${config}: x\n`,
+    // A path the generic prose check does not know, before or after an exempt path.
+    `\n  note: ${cwd} /srv/private.json\n`,
+    `\n  note: ${cwd}\n/srv/private.json\n`,
+    `\n  note: ${cwd}: /srv/private.json\n`,
+    `\n  note: /srv/private.json ${cwd}\n`,
+    `\n  note: (/srv/private.json)\n`,
+    `\n  note: x=/srv/private.json\n`,
+    `\n  note: ${cwd}:/srv/private.json\n`,
     "\n  note: C:\\Users\\someone\\secret.json\n",
     // Only the exact exempt path is masked: a dot in it matches no other character.
     "\n  binary: /tmp/fireemu-verifyXx/fireemu try ✓/bin/fireemu\n",

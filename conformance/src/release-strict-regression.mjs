@@ -1143,6 +1143,9 @@ function parseUniqueJson(text) {
 const isPlainObject = (value) =>
   value !== null && typeof value === "object" && !Array.isArray(value);
 
+/** The slash-led words the strict `fireemu exec` banner of the historical replay prints. */
+const DAEMON_LOG_ROUTES = new Set(["/", "/health/live", "/v1/rules"]);
+
 const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /**
@@ -1150,7 +1153,8 @@ const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
  * the public evidence check. Everything else in the binding is still checked. The judge also
  * requires the daemon's banner (`daemonLog`), which names the config file and `<cwd>/firebase.json`;
  * only those exempt paths, matched whole (longest first), preceded by a line start or whitespace
- * and followed by the end of the log, whitespace or a colon that ends a word, are masked there before it is checked.
+ * and followed by the end of the log, whitespace or a colon that ends a word, are masked there; any
+ * other slash-led word left in the banner must be one of its routes.
  */
 function withoutHistoricalBindingPaths(comparison) {
   if (!isPlainObject(comparison) || !isPlainObject(comparison.profileBinding)) return comparison;
@@ -1181,6 +1185,15 @@ function withoutHistoricalBindingPaths(comparison) {
           "<binding-path>",
         )
       : daemonLog;
+  if (typeof maskedLog === "string") {
+    // The generic guard recognises only some roots inside prose, so the banner fails closed: after
+    // masking, every slash that starts a token (not one inside a URL) must be a banner route.
+    for (const [token] of maskedLog.matchAll(/(?<![\w.:/~-])\/[^\s)]*/g)) {
+      if (!DAEMON_LOG_ROUTES.has(token.replace(/[.,;:]+$/, ""))) {
+        throw new Error("public evidence contains a disallowed filesystem path in daemonLog");
+      }
+    }
+  }
   return {
     ...comparison,
     profileBinding: {

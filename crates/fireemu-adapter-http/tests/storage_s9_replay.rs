@@ -1128,12 +1128,9 @@ fn a_prefix_with_a_double_or_a_lone_slash_is_refused_with_the_listing_behind_it(
         }
         // The prefixes that stay valid: empty, and a single terminal slash.
         for prefix in ["", "public/"] {
-            assert_eq!(
-                list_page(&s, prefix, None, 5, None)["items"]
-                    .as_array()
-                    .is_some(),
-                true
-            );
+            assert!(list_page(&s, prefix, None, 5, None)["items"]
+                .as_array()
+                .is_some());
         }
     }
 }

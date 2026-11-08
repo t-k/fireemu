@@ -396,7 +396,7 @@
     "crates/fireemu-adapter-http/src/saml.rs": "1c5350c0cc076e77354c3b2308ca8fa6cfa661e8514585a28160ed93e51dd064",
     "crates/fireemu-adapter-http/src/server.rs": "6c8845e83c5796afc2a3777a67a443d788d048fd6828e37d6ca91b4e8ddb50b1",
     "crates/fireemu-adapter-http/src/signing.rs": "f3ffd0d7dcf3dd93bb047d96808e89ebcff974eb2a47dfad57c41c722ca70a4a",
-    "crates/fireemu-adapter-http/src/storage.rs": "e0b9957d605a15496f621cc8e89a0ae87baa4e2507d05cbec81e9adc59a40f9b",
+    "crates/fireemu-adapter-http/src/storage.rs": "a188031152e1fb72a4938df8338081d60f5d915d4eb27a7882ce689b6b9fe31c",
     "crates/fireemu-adapter-http/src/storage_production.rs": "2fcd4d9dffedd412d3d5a1cfa04f5461306626515889d0a0c09317a3cf554772",
     "crates/fireemu-adapter-http/src/storage_server.rs": "5cf6b673db45eb09c113131e86fb17e7d3c446dfe7dfe10f6143b03be4253c90",
     "crates/fireemu-adapter-http/src/storage_xml.rs": "21eaa7f152a2358741e69e5830a985ef4a1555592d54d43cd4711e6d8d420e18",

@@ -4137,6 +4137,24 @@ fn google_error_layout(body: &[u8]) -> Option<String> {
 // Firebase dialect
 // ------------------------------------------------------------------------------------------
 
+/// Whether the Firebase list shows a name: no empty segment. The official Firebase list filters
+/// malformed names out of the answer, and production does too: the prefix `P/pub//` an object
+/// `P/pub//x` leaves is not listed (recorded, S9).
+fn is_listed_name(name: &str) -> bool {
+    !name.is_empty() && name.split('/').all(|segment| !segment.is_empty())
+}
+
+/// [`is_listed_name`] for a list entry; a common prefix is judged without its terminal `/`. A name
+/// the answer hides is hidden from the paging as well: it takes no place in a page and never
+/// becomes the continuation point.
+fn is_listed_entry(entry: &str, is_prefix: bool) -> bool {
+    is_listed_name(if is_prefix {
+        entry.strip_suffix('/').unwrap_or(entry)
+    } else {
+        entry
+    })
+}
+
 fn fb_list(
     state: &StorageState,
     principal: &Principal,
@@ -4203,18 +4221,6 @@ fn fb_list(
             "Expect maxResults to be a positive number.",
         ));
     }
-    // The official Firebase list filters malformed names out of the answer, and production does
-    // too: the prefix `P/pub//` an object `P/pub//x` leaves is not listed (recorded, S9). A name
-    // the answer hides is hidden from the paging as well: it takes no place in a page and never
-    // becomes the continuation point.
-    let is_valid = |name: &str| !name.is_empty() && name.split('/').all(|s| !s.is_empty());
-    let is_listed = |entry: &str, is_prefix: bool| {
-        is_valid(if is_prefix {
-            entry.strip_suffix('/').unwrap_or(entry)
-        } else {
-            entry
-        })
-    };
     let store = state.store()?;
     let page = if max_results == Some(0) {
         // Only the emulator profile reaches here (strict refused above): the official emulator's
@@ -4227,7 +4233,7 @@ fn fb_list(
             page_token.as_deref(),
             max_results,
         );
-        page.next_page_token = page.next_page_token.filter(|name| is_valid(name));
+        page.next_page_token = page.next_page_token.filter(|name| is_listed_name(name));
         page
     } else {
         // Paging as production answers it (recorded, lean-v5): `maxResults` counts items and
@@ -4246,7 +4252,7 @@ fn fb_list(
             Some(delimiter.as_str()),
             after.as_deref(),
             max,
-            &is_listed,
+            &is_listed_entry,
         );
         page.next_page_token = page
             .next_page_token
@@ -4257,12 +4263,12 @@ fn fb_list(
         "prefixes": page
             .prefixes
             .iter()
-            .filter(|p| is_valid(p.strip_suffix('/').unwrap_or(p)))
+            .filter(|p| is_listed_entry(p, true))
             .collect::<Vec<_>>(),
         "items": page
             .items
             .iter()
-            .filter(|m| is_valid(m.name.as_str()))
+            .filter(|m| is_listed_entry(m.name.as_str(), false))
             .map(|m| json!({"name": m.name.as_str(), "bucket": m.bucket.as_str()}))
             .collect::<Vec<_>>(),
     });

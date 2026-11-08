@@ -849,6 +849,76 @@ service cloud.firestore {
     }
 }
 
+/// A signed-in user whose ID token carries `admin: true`.
+fn admin_token(h: &Harness) -> String {
+    let mut store = h.auth.lock().unwrap();
+    let uid = store
+        .create_user(NewUser::email("admin@example.com"), START)
+        .unwrap();
+    let claims =
+        fireemu_core_auth::claims::CustomClaims::parse_attributes(r#"{"admin":true}"#).unwrap();
+    store.set_custom_claims(&uid, claims).unwrap();
+    encode_unsigned(&store.id_token_claims(&uid, None, START).unwrap())
+}
+
+/// The review's cases (2026-11-08 r6): an admin-override helper called with a value that
+/// exists but is undetermined (`resource.id`, a field the query orders by) is decided by the
+/// helper, in both profiles; the same helper with an unconstrained field is not.
+#[tokio::test]
+async fn a_helper_called_with_a_present_undetermined_value_decides() {
+    const HELPER_RULES: &str = r"rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function canRead(id) { return request.auth.token.admin == true || id == request.auth.uid; }
+    function isPublished(createdAt) { return request.auth.token.admin == true || createdAt <= request.time; }
+    match /byId/{id} { allow list: if canRead(resource.id); }
+    match /posts/{id} { allow list: if isPublished(resource.data.createdAt); }
+    match /secret/{id} { allow list: if isPublished(resource.data.secret); }
+  }
+}";
+    for (profile, mut h) in start_profiles().await {
+        let token = admin_token(&h);
+        h.client
+            .commit(with_bearer(
+                commit(vec![
+                    set_write("byId/d", &[("a", integer(1))]),
+                    set_write("posts/p", &[("createdAt", integer(1))]),
+                    set_write("secret/s", &[("a", integer(1))]),
+                ]),
+                "owner",
+            ))
+            .await
+            .unwrap();
+        h.rules.replace_source(HELPER_RULES).unwrap();
+        let mut by_id = list("byId");
+        query_mut(&mut by_id).r#where = Some(field_filter(
+            "a",
+            sq::field_filter::Operator::Equal,
+            integer(1),
+        ));
+        let ordered = |collection: &str, field: &str| {
+            let mut request = list(collection);
+            query_mut(&mut request).order_by = vec![sq::Order {
+                field: Some(sq::FieldReference {
+                    field_path: field.to_owned(),
+                }),
+                direction: sq::Direction::Ascending as i32,
+            }];
+            request
+        };
+        let rows = [
+            ("byId", by_id, true),
+            ("posts", ordered("posts", "createdAt"), true),
+            ("secret", ordered("secret", "a"), false),
+        ];
+        for (row, request, allowed) in rows {
+            let answer = run(&mut h, request, &token).await;
+            assert_eq!(answer.is_ok(), allowed, "{profile} {row}: {answer:?}");
+        }
+        h.handle.abort();
+    }
+}
+
 /// The reviews' cases (2026-11-08 r3 and r4): a map or list the rule builds from a field the
 /// query does not constrain may fail to build on a stored document lacking it, so no operation
 /// on it (a shape read, a type test, a member of it) is proven, in either profile. Shape reads of `request` and `resource` stay proven.

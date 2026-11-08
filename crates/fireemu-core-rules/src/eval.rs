@@ -377,6 +377,9 @@ struct Binding<'a> {
     query_numeric_stringification_sensitive: bool,
     /// The binding holds the query's resource itself (see `is_query_resource_expr`).
     query_resource: bool,
+    /// Resolving the binding read a key the query does not constrain (see
+    /// `Evaluator::absent_reads`); every later read of it counts as such a read again.
+    absent_read: bool,
     state: BindingState<'a>,
 }
 
@@ -401,6 +404,7 @@ impl Binding<'_> {
             query_float_zero_ambiguous: false,
             query_numeric_stringification_sensitive: false,
             query_resource: false,
+            absent_read: false,
             state: BindingState::Value(value),
         }
     }
@@ -424,6 +428,7 @@ impl Binding<'_> {
             query_float_zero_ambiguous,
             query_numeric_stringification_sensitive,
             query_resource: false,
+            absent_read: false,
             state: BindingState::Value(value),
         }
     }
@@ -488,6 +493,11 @@ struct Evaluator<'a> {
     /// [`REGEX_EXHAUSTIONS_PER_REQUEST_MAX`]).
     regex_exhaustions: u64,
     projected_member_reads: u64,
+    /// Reads in a query proof of a key the query does not constrain (a member or index of a
+    /// partial map that lacks it): such a read may be a missing-field error for a stored
+    /// document, unlike an undetermined value that exists (`resource.id`, a field the query
+    /// orders by). A call whose argument is undetermined because of one is undetermined.
+    absent_reads: u64,
     doc_reads_max: u64,
     /// `rules_version = '2'`: `**` matches zero or more segments.
     wildcard_zero_or_more: bool,
@@ -698,6 +708,7 @@ fn evaluate_prepared(
             regex_exhaustions: 0,
             regex_diagnostics: RegexEvaluationDiagnostics::default(),
             projected_member_reads: 0,
+            absent_reads: 0,
             doc_reads_max: limit_max(match ctx.service {
                 // A query's rule may read as many documents as a multi-document request
                 // (20: production and the official emulator allow 20 and refuse 21, FS-RULES).
@@ -1734,6 +1745,15 @@ impl<'a> Evaluator<'a> {
                 Ok(fields.get(key).cloned().unwrap_or_else(|| default.clone()))
             }
             _ => Err(EvalError::Unknown),
+        })
+    }
+
+    /// A member or index read of a partial map: the value of a constrained key, or `Unknown`
+    /// for a key the query does not constrain, which is counted (see `absent_reads`).
+    fn partial_read(&mut self, value: Option<&RulesValue>) -> RulesValue {
+        value.cloned().unwrap_or_else(|| {
+            self.absent_reads += 1;
+            RulesValue::Unknown
         })
     }
 
@@ -3895,6 +3915,9 @@ impl<'a> Evaluator<'a> {
             }
             BindingState::Resolved { result, cause } => {
                 self.cause.clone_from(&cause);
+                if self.scope.bindings[index].absent_read {
+                    self.absent_reads += 1;
+                }
                 self.scope.bindings[index].state = BindingState::Resolved {
                     result: result.clone(),
                     cause,
@@ -3908,7 +3931,9 @@ impl<'a> Evaluator<'a> {
             BindingState::Lazy(expr) => {
                 let visible_before = self.scope.bindings[index].visible_before;
                 let mut hidden = self.scope.bindings.split_off(visible_before);
+                let absent_before = self.absent_reads;
                 let result = self.eval(expr);
+                hidden[index - visible_before].absent_read = self.absent_reads > absent_before;
                 hidden[index - visible_before].state = BindingState::Resolved {
                     result: result.clone(),
                     cause: self.cause.clone(),
@@ -4301,11 +4326,9 @@ impl<'a> Evaluator<'a> {
                         .cloned()
                         .ok_or_else(|| soft(format!("missing member {name}"))),
                     // A key the query does not constrain may or may not exist.
-                    RulesValue::PartialMap(m) => {
-                        Ok(m.get(name).cloned().unwrap_or(RulesValue::Unknown))
-                    }
+                    RulesValue::PartialMap(m) => Ok(self.partial_read(m.get(name))),
                     RulesValue::PartialMapExcluding { fields, .. } => {
-                        Ok(fields.get(name).cloned().unwrap_or(RulesValue::Unknown))
+                        Ok(self.partial_read(fields.get(name)))
                     }
                     RulesValue::Unknown => Err(EvalError::Unknown),
                     RulesValue::Null => Err(soft(format!("member {name} of null"))),
@@ -4333,10 +4356,10 @@ impl<'a> Evaluator<'a> {
                         .cloned()
                         .ok_or_else(|| soft(format!("missing key {k}"))),
                     (RulesValue::PartialMap(m), RulesValue::String(k)) => {
-                        Ok(m.get(&k).cloned().unwrap_or(RulesValue::Unknown))
+                        Ok(self.partial_read(m.get(&k)))
                     }
                     (RulesValue::PartialMapExcluding { fields, .. }, RulesValue::String(k)) => {
-                        Ok(fields.get(&k).cloned().unwrap_or(RulesValue::Unknown))
+                        Ok(self.partial_read(fields.get(&k)))
                     }
                     (o, i) if undetermined(&o) || undetermined(&i) => Err(EvalError::Unknown),
                     (RulesValue::List(items), RulesValue::Int(i)) => usize::try_from(i)
@@ -4934,17 +4957,23 @@ impl<'a> Evaluator<'a> {
         match callee.kind() {
             ExprKind::Ident(name) => {
                 if let Some(f) = self.function(name) {
-                    let values = args
-                        .iter()
-                        .map(|a| self.eval(a))
-                        .collect::<Result<Vec<_>, _>>()?;
-                    // Arguments are evaluated before the call: an argument read from a field the
-                    // query does not constrain may be a missing-field error for a stored
-                    // document, whatever the function does with it (review 2026-11-08 r5).
-                    // `resource` and other existing values carry undetermined members, not an
-                    // undetermined whole, and pass (`f(resource)`, FS-RULES-SHAPES-TWO).
-                    if self.query_proof && values.iter().any(|v| matches!(v, RulesValue::Unknown)) {
-                        return Err(EvalError::Unknown);
+                    // Arguments are evaluated before the call: an argument undetermined because
+                    // it read a field the query does not constrain may be a missing-field
+                    // error for a stored document, whatever the function does with it (review
+                    // 2026-11-08 r5). An undetermined value that exists (`resource.id`, a field
+                    // the query orders by) and `resource` itself pass (review r6;
+                    // `f(resource)`, FS-RULES-SHAPES-TWO).
+                    let mut values = Vec::with_capacity(args.len());
+                    for argument in args {
+                        let absent_before = self.absent_reads;
+                        let value = self.eval(argument)?;
+                        if self.query_proof
+                            && matches!(value, RulesValue::Unknown)
+                            && self.absent_reads > absent_before
+                        {
+                            return Err(EvalError::Unknown);
+                        }
+                        values.push(value);
                     }
                     let query_provenance = args
                         .iter()
@@ -5323,6 +5352,7 @@ impl<'a> Evaluator<'a> {
                     query_float_zero_ambiguous,
                     query_numeric_stringification_sensitive,
                     query_resource,
+                    absent_read: false,
                     state: BindingState::Lazy(&l.value),
                 });
             }

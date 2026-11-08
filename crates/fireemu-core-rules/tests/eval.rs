@@ -1574,6 +1574,7 @@ fn undetermined_values_never_prove_a_condition() {
 /// any shape operation (review 2026-11-08 r3). Only `request` and `resource` themselves, which
 /// always exist, answer `keys()` and `size()` with undetermined values inside.
 #[test]
+#[allow(clippy::too_many_lines)]
 fn shape_operations_on_built_containers_keep_failing_reads_undetermined() {
     let rules = |cond: &str| {
         format!("rules_version = '2';\nservice cloud.firestore {{ match /databases/{{d}}/documents {{ match /notes/{{id}} {{ allow list: if {cond}; }} }} }}")
@@ -1655,6 +1656,46 @@ fn shape_operations_on_built_containers_keep_failing_reads_undetermined() {
     ] {
         assert!(allows(&with_functions(call), &query), "{call} must hold");
     }
+    // A value that exists but is undetermined (`resource.id`, a field the query only orders
+    // by) is no failing read: the helper's own answer decides (review 2026-11-08 r6). A
+    // missing-field read reached through a `let` is still one, also when the binding was
+    // already resolved.
+    let present = abstract_ctx(
+        "/databases/(default)/documents/notes/fireemu-placeholder",
+        vec![("createdAt", RulesValue::Unknown)],
+    );
+    for call in [
+        "ignore(resource.id)",
+        "ignore(resource.data.createdAt)",
+        "helper(resource.data.createdAt).ok",
+    ] {
+        assert!(allows(&with_functions(call), &present), "{call} must hold");
+    }
+    let through_let = |body: &str| {
+        format!("rules_version = '2';\nservice cloud.firestore {{ match /databases/{{d}}/documents {{ function ignore(x) {{ return true; }} function g(r) {{ {body} }} match /notes/{{id}} {{ allow list: if g(resource.data); }} }} }}")
+    };
+    for body in [
+        "let s = r.secret; return ignore(s);",
+        "let s = r.secret; return s == s || ignore(s);",
+        "let s = r.secret; return ignore(s) && ignore(s);",
+    ] {
+        assert!(
+            !allows(&through_let(body), &present),
+            "{body} must not be provable"
+        );
+    }
+    for body in [
+        "let s = r.createdAt; return ignore(s);",
+        "let s = r.createdAt; return ignore(s) && ignore(s);",
+    ] {
+        assert!(allows(&through_let(body), &present), "{body} must hold");
+    }
+    // An argument whose absent read is absorbed (`error || true` is true) is no failing
+    // argument.
+    assert!(allows(
+        &with_functions("ignore(resource.data.secret || true)"),
+        &query
+    ));
     // Only the key set of a map holding undetermined values is known: not its values.
     assert!(!allows(&rules("resource.values().size() == 3"), &query));
     assert!(!allows(&rules("request.values().size() > 0"), &query));

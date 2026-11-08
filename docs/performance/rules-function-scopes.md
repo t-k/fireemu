@@ -39,7 +39,7 @@ The executable suffix above is the one reported by this build; use the executabl
 
 ## Existing regression coverage
 
-The full Rules crate test run passed: 284 tests passed and four were skipped by the existing configuration. This was a baseline replay, not a failing-first test for a new implementation. Relevant passing tests included:
+The 2026-11-07 baseline Rules crate test run passed: 284 tests passed and four were skipped by the existing configuration. This was a baseline replay, not a failing-first test for a new implementation. Relevant passing tests included:
 
 - `unrelated_blocks_add_no_per_request_scope_setup_to_an_early_allow`: at 0, 100 and 1,000 unrelated blocks, three literal-allow evaluations perform zero agreement walks, capture-table builds or plan builds. Three function-allow evaluations perform three agreement walks, zero capture-table builds and zero plan builds in that test's fixture.
 - `static_function_plans_do_not_rebuild_per_request_or_share_captures`: alternating captured path values retain the expected allow/deny decisions without rebuilding plans.
@@ -47,10 +47,70 @@ The full Rules crate test run passed: 284 tests passed and four were skipped by 
 - `lexical_evaluation_matches_preoptimization_reference_after_ast_mutations` and `parsed_scopes_are_shared_but_mutated_items_are_replanned`: preserve lexical lookup and public AST mutation behavior.
 - `evaluation_snapshot_remains_on_v1_after_v2_activation` and `clear_and_restore_publish_fresh_generations`: retain old snapshots and publish fresh generation identifiers.
 
-## Limits and disposition
+### Generation and capture follow-up
 
-The proposed whole-service reconstruction optimization is already present, so this change stops at measurement and documentation. The residual agreement walk and capture creation remain potential optimization targets. The function/literal timing difference includes function execution and other work; it is not an isolated measurement of the agreement walk. No allocation profile or percentage attribution was measured, and the data do not establish whether further scope optimization is worthwhile.
+On 2026-11-08, three new unit tests closed the build-count and function-bearing reload gaps:
 
-The setup tests demonstrate zero plan rebuilding during repeated evaluation. They do not count exactly one build across every possible generation publication path. The activation tests above use function-free fixtures, so they do not independently establish function-capture behavior during hot reload. No new production observation was performed.
+- `scope_build_observation_crosses_parser_thread_and_counts_services` checks one plan per service in a fresh parse, including a two-service source, and zero additional builds for publication of an existing parsed tree or clearing the slot. Its first execution failed with zero observed parser builds instead of one, after the same-thread control passed. Test-only propagation of the observation into the parser thread made the test pass.
+- `scope_build_observers_are_scoped_and_isolated` checks nested observations, restoration after a panic and independent concurrent observers.
+- `function_captures_and_scope_plans_stay_with_retained_generations` checks retained and newly published function-bearing rules, lexical shadowing, Firestore and Storage, restoration and clearing, and concurrent requests with different captured values. Decisions and complete traced reports match eager and legacy evaluation references. Repeated evaluations build no additional plans.
 
-No runtime code or tests changed. Mutation testing, new PICT combinations and a new TLA+ model are therefore not applicable to this documentation change. No checked-in verification evidence becomes stale.
+A fresh parse builds once per service; a fresh publication generation does not necessarily build anything. Restoring an already compiled `Arc` reuses its metadata. The tests keep those cases distinct.
+
+The updated full suite passed 287 tests with six skipped, including two new opt-in measurement tests. All-target/all-feature clippy passed. A no-op control passed, and four hand mutants were detected: missing parser observation propagation, per-request rebuilding, discarded captures and publication of stale rules. No compile failure was counted as a killed mutant. The reload test uses seven pairwise-generated cases, including six mandatory combinations; a bounded two-request generation model explored 208 distinct states without invariant violations. The model supplements the native tests and does not prove the evaluator correct for all programs.
+
+## Residual setup measurements under concurrent load
+
+The follow-up at `342022267e06141060576898d3064e2e5d75999a` used the same Linux/arm64 runtime, compiler and 6GiB/no-swap, four-CPU container limits. The host had 18 logical CPUs and concurrent Rust mutation, Python mutation and nextest jobs. Heavy-slot holders and host load averages were recorded before and after each measurement process. The observed one-minute load average ranged from 10.62 to 20.40. This was deliberately a loaded-host measurement, not a quiet comparison with the previous day.
+
+Five runs of the unchanged release benchmark produced these medians and ranges, in µs/evaluation:
+
+| Allow condition | Unrelated blocks | Median | Range |
+| --- | ---: | ---: | ---: |
+| Literal | 0 | 3.65 | 3.39–3.92 |
+| Literal | 100 | 4.20 | 3.94–4.57 |
+| Literal | 1,000 | 12.12 | 11.14–12.84 |
+| Function | 0 | 3.92 | 3.74–4.42 |
+| Function | 100 | 5.40 | 5.07–5.56 |
+| Function | 1,000 | 20.77 | 20.02–22.33 |
+
+The opt-in `measure_residual_scope_resolution` test separately times complete evaluation, resolution of a fresh `FunctionScopes` wrapper, direct `agrees` traversal and access to an already resolved wrapper. Parsing and assertions stay outside timing. A bounded pilot selects iterations for approximately 200ms batches, capped at 1,048,576 iterations, followed by five samples. The cached-wrapper control reaches that cap before 200ms; its optimized subnanosecond loop floor is not a production function-lookup latency estimate.
+
+For the function-allow fixture, the release test binary produced the following µs/operation medians and ranges:
+
+| Unrelated blocks | Complete evaluation | First plan resolution | Direct agreement walk |
+| ---: | ---: | ---: | ---: |
+| 0 | 3.762 (3.452–5.068) | 0.0195 (0.0189–0.0198) | 0.0082 (0.0081–0.0082) |
+| 100 | 5.387 (5.209–6.244) | 0.294 (0.259–0.318) | 0.271 (0.231–0.299) |
+| 1,000 | 17.065 (16.941–18.874) | 6.264 (6.233–6.411) | 6.651 (6.429–6.888) |
+
+These operations run in separate batches and the test binary contains observation hooks. First resolution includes an agreement walk, yet the separately timed walk sometimes takes longer: the batches cannot be subtracted or divided to obtain an isolated end-to-end contribution. Growth with the number of blocks is visible, and the results do not establish that the remaining agreement walk is negligible. A literal-allow evaluation does not perform this walk; directly invoking it on that fixture is a measurement control, not its request path.
+
+`measure_unused_declaration_capture_setup` compares identical literal-allow requests with and without an unused function in the entered block. It checks equal full traced reports and zero versus one capture-table construction, then alternates pair order over five samples. The difference includes declaration registration and capture setup together. Results are µs/evaluation; byte length is per wildcard value:
+
+| Entered match depth | Value bytes | No declaration: median (range) | Unused declaration: median (range) |
+| ---: | ---: | ---: | ---: |
+| 1 | 1 | 1.179 (0.971–1.215) | 1.284 (1.211–1.314) |
+| 1 | 256 | 1.909 (0.969–2.947) | 1.516 (1.079–2.755) |
+| 4 | 1 | 17.213 (11.516–19.861) | 18.397 (7.850–30.332) |
+| 4 | 256 | 18.248 (8.937–23.346) | 20.427 (11.950–22.110) |
+
+The broad ranges and reversed ordering for the shallow 256-byte case prevent attributing a reliable capture cost or improvement percentage. No quiet retry was used to select a more favorable result.
+
+The two measurement commands were run separately, after release compilation:
+
+```sh
+cargo test -p fireemu-core-rules --release --lib --locked --offline --no-run
+cargo test -p fireemu-core-rules --release --lib --locked --offline scope::scope_plan_tests::measure_residual_scope_resolution -- --exact --ignored --nocapture
+cargo test -p fireemu-core-rules --release --lib --locked --offline eval::tests::measure_unused_declaration_capture_setup -- --exact --ignored --nocapture
+```
+
+The ordinary benchmark used the earlier `cargo bench` command and five executions at the follow-up source revision. Its binary SHA-256 was `0895154ec4dff253419a070be2ee4cfeb70d5644691c463d1302c132b5448725`.
+
+## Limits and next step
+
+The original whole-service reconstruction optimization is already present. The measured residual agreement walk warrants further investigation while preserving public AST mutation semantics. This report does not justify stopping on a claim that setup cost is negligible, and it does not establish a speedup or an isolated contribution percentage. Capture creation remains inconclusive under the observed load. No allocation profile was measured.
+
+The generation follow-up now covers function captures across retained snapshots, fresh parsing and reuse of existing plans. Its finite cases do not cover every possible program or publication sequence. No new production observation was performed.
+
+The follow-up adds tests, test-only observation and opt-in measurements. It does not change production evaluator behavior or claim a performance improvement.

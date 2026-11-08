@@ -218,6 +218,8 @@ export const HARNESS_FILES = Object.freeze([
   "securetoken-body/judge.mjs",
   "securetoken-body/session.mjs",
   "securetoken-body/record.mjs",
+  "securetoken-body/recording.mjs",
+  "securetoken-body/preflight.mjs",
   "auth-account/harness.mjs",
   "auth-credential/tokens.mjs",
   "shared/ownership.mjs",

@@ -15,7 +15,7 @@
 // production sequence in record.mjs, the requests in harness.mjs and session.mjs.
 
 import { execFile } from "node:child_process";
-import { appendFileSync, existsSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { appendFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -24,12 +24,11 @@ import { SANDBOX_PROJECT, createContext } from "../auth-account/harness.mjs";
 import { scanFixture } from "../auth-account/fixture-scan.mjs";
 import { CONFORMANCE_DIR } from "../config.mjs";
 import { resolveFireemuBinary } from "../evidence.mjs";
-import { ROWS, validateCorpus } from "./corpus.mjs";
+import { validateCorpus } from "./corpus.mjs";
 import { buildReport, estimatedUsd, harnessDigest } from "./judge.mjs";
 import { preflight } from "./preflight.mjs";
 import { fixtureText, recordProduction } from "./record.mjs";
-import { createSession } from "./session.mjs";
-import { closeOwnership, openOwnership } from "../shared/ownership.mjs";
+import { nextRun, recordWith } from "./recording.mjs";
 import { runSupervised } from "../fs-rules-v1/supervise.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -38,12 +37,6 @@ const RUN_DIR = join(CONFORMANCE_DIR, ".runs", "securetoken-body");
 const SESSION_SCRIPT = join(CONFORMANCE_DIR, "src/securetoken-body/run.mjs");
 const LOCAL_PROJECT_NUMBER = "123456789012";
 export const RECORDING_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"];
-
-/** Request ceilings per recording: the rows, and a separate budget for setup, polls and cleanup. */
-export const ceilings = (rows = ROWS) => ({
-  maxRequests: rows.length,
-  maxHarnessRequests: 160,
-});
 
 // ---- production -----------------------------------------------------------------------------
 
@@ -105,34 +98,6 @@ async function assertIgnored(path) {
     await execFileAsync("git", ["-C", path, "check-ignore", "-q", path]);
   } catch {
     throw new Error(`${path} is not ignored by git; private recordings must not be committable`);
-  }
-}
-
-/** Unique run ids, one per recording: seconds since the epoch, never reused within a process. */
-let lastRun = 0;
-export function nextRun(now = Date.now()) {
-  lastRun = Math.max(Math.floor(now / 1000), lastRun + 1);
-  return String(lastRun);
-}
-
-/** One recording against a target: its own run id, ownership ledger and journal. */
-export async function recordWith(target, dir, n, options = {}) {
-  const ctx = createContext({ run: nextRun(), project: SANDBOX_PROJECT, target });
-  const ownership = openOwnership({
-    path: join(dir, `issued-${n}.jsonl`),
-    runId: `stb-${ctx.run}`,
-  });
-  const journalPath = join(dir, `journal-${n}.jsonl`);
-  try {
-    const session = createSession(ctx, {
-      ...ceilings(),
-      ownership,
-      journal: (entry) => appendFileSync(journalPath, `${JSON.stringify(entry)}\n`),
-      ...options,
-    });
-    return await session.runRecording();
-  } finally {
-    closeOwnership(ownership);
   }
 }
 

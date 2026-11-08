@@ -7,7 +7,7 @@ import { test } from "node:test";
 import { scanFixture } from "./auth-account/fixture-scan.mjs";
 import { ROWS, corpusDigest } from "./securetoken-body/corpus.mjs";
 import { fixtureText, publicRecording, recordProduction } from "./securetoken-body/record.mjs";
-import { recordWith } from "./securetoken-body/run.mjs";
+import { recordWith } from "./securetoken-body/recording.mjs";
 import { NUMBER } from "./securetoken-body/test-support.mjs";
 import { createWorld } from "./securetoken-body/test-world.mjs";
 import { tempDir } from "./test-tmpdir.mjs";

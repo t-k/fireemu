@@ -8,6 +8,10 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Changed
+
+- Firestore Listen: a full refresh queues the selected change rows of a target as one run of shared document handles instead of one response-sized entry per row, which lowered the peak memory of a 100,000-document initial snapshot by about 33 MB (about 9 percent) in a release measurement. The frames a client receives, their order, the resume tokens, read times and existence filters are unchanged.
+
 ### Fixed
 
 - Authentication: the Secure Token refresh accepts the JSON body with `grantType` and `refreshToken` that the Firebase Android SDK sends, as the official emulator does; before, it answered `400 MISSING_GRANT_TYPE`. A form body still uses the snake_case fields, and a body mixing both spellings is read as snake_case. Production has not been recorded for this body.

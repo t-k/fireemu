@@ -1,6 +1,8 @@
 # Listen full-refresh delivery and snapshot retention
 
-The full-refresh implementation selects immutable document handles before sending responses. It encodes a document only after reserving an outbound channel slot. This bounds queued encoded responses, but the selected immutable handles and the payloads they keep alive remain proportional to the result size. There is no new paging implementation in this change.
+The full-refresh implementation selects immutable document handles before sending responses. It encodes a document only after reserving an outbound channel slot. This bounds queued encoded responses, but the selected immutable handles and the payloads they keep alive remain proportional to the result size.
+
+Consecutive change rows of one target are queued as one run of handles, a pointer per row, instead of one response-sized entry (168 bytes on aarch64) per row. The send loop expands a run one frame at a time. The selected handles are still the refresh's pinned snapshot, so the frames, their order, the CURRENT and NO_CHANGE boundaries, the resume tokens and the existence filters are unchanged. The [run-queue measurement](#run-queue-measurement) below compares the two queues.
 
 ## Reproducing the baseline
 
@@ -26,11 +28,15 @@ The older `measure_listen_initial_snapshot_encoding` benchmark uses 20 KiB paylo
 
 For example, a refresh can select documents A and B, send A, then pause for a slow receiver. If writes compact B's selected version, or a restore replaces the database, looking B up later by path and version cannot reproduce its selected payload. The existing immutable handle can. Restarting, skipping B, emitting RESET, or failing that already selected refresh would change its frame sequence.
 
-Adding a history pin would require an explicit decision about history limits, write admission and restore. It could also retain the entire old result while a receiver is stalled. Holding a read lock across sends would block writers. Neither is implemented here, and this report makes no claim of bounded snapshot payload memory or a performance improvement.
+Adding a history pin would require an explicit decision about history limits, write admission and restore. It could also retain the entire old result while a receiver is stalled. Holding a read lock across sends would block writers, and a client that writes before it reads would wait on itself. Re-running the query per page from a cursor would let later pages see later writes. None of these is implemented.
+
+The handles are the smallest pinned snapshot available without those changes: a handle shares its document with the store and costs one pointer, less than a selected path. A payload is retained beyond the store only when a write replaces a selected document before it is delivered, which any pinned snapshot must also retain. The target's known-document map, which every Listen target keeps for later diffs, remains proportional to the result in every design.
 
 ## Existing semantic checks
 
-The adapter's stream tests include `deferred_snapshot_rows_and_boundaries_survive_writes_deletes_and_restore`, `deferred_stream_keeps_snapshot_rows_before_current_during_writes`, and `slow_receiver_bounds_encoding_and_releases_snapshot_handles_on_drop`. They cover selected content and boundaries across changes, row ordering during writes, encoding backpressure, and cancellation cleanup. The measurement test complements these checks; it does not establish new production behavior.
+`streams::frame_identity_tests::listen_frames_match_the_recorded_transcripts` drives the real producer through 160 generated scenarios in each profile: query and document targets, `once` targets, removes, resumes with and without an expected count, foreign tokens, and commits landing while a snapshot is partly read. It hashes every frame and client action and compares the digests with `crates/fireemu-adapter-grpc/tests/fixtures/listen_frame_identity.txt`, recorded from the producer before the run queue. Map field order and the random bytes of strict tokens are canonicalized; which frames share a token is still compared. `full_refresh_queues_a_handle_per_snapshot_row` bounds the queue, `slow_client_mid_run_bounds_encoding_and_cancellation_releases_the_run` covers back-pressure and cancellation in the middle of a run, and `queued_runs_expand_to_the_rows_in_queue_order` is a property test of the expansion.
+
+The adapter's stream tests also include `deferred_snapshot_rows_and_boundaries_survive_writes_deletes_and_restore`, `deferred_stream_keeps_snapshot_rows_before_current_during_writes`, and `slow_receiver_bounds_encoding_and_releases_snapshot_handles_on_drop`. They cover selected content and boundaries across changes, row ordering during writes, encoding backpressure, and cancellation cleanup. The measurement test complements these checks; it does not establish new production behavior.
 
 ## Measured baseline
 
@@ -108,3 +114,22 @@ timeout --signal=TERM --kill-after=5s 180s target/release/deps/listen_delivery_m
 ```
 
 The integration harness's 257-document smoke and all eight receiver/mutation/termination combinations passed. All-target/all-feature clippy and formatting passed. One viable fixture-revision mutant was rejected by the document-content assertion; the unchanged and restored controls passed. This validates the measurement guard, not a production mutation campaign. A separate finite harness-schedule model checked 62 states for framing and harness-owned handle/server termination; it did not model the detached Listen producer. Recorded conformance replays were not run, and production behavior was not changed.
+
+## Run-queue measurement
+
+Five alternating release runs of the in-process measurement on macOS aarch64 (18 logical CPUs, Rust 1.94.0, unchanged fat LTO), 100,000 documents with a 1,024-byte payload. "Before" is the producer that queued one entry per row; "after" queues runs. Both binaries were built with the same command from their commits. Other build and test jobs were running; the one-minute load average was about 10. Peak RSS is `/usr/bin/time -l` maximum resident set size for the whole test process, including fixture construction.
+
+| Run | Before peak RSS (bytes) | After peak RSS (bytes) | Before first document (ms) | After first document (ms) | Before final NO_CHANGE (ms) | After final NO_CHANGE (ms) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 387,547,136 | 352,387,072 | 131.360 | 134.165 | 202.723 | 210.001 |
+| 2 | 387,022,848 | 352,567,296 | 192.648 | 151.265 | 290.491 | 219.174 |
+| 3 | 385,941,504 | 353,697,792 | 107.029 | 110.158 | 158.809 | 158.851 |
+| 4 | 386,007,040 | 352,976,896 | 99.187 | 84.281 | 141.995 | 126.742 |
+| 5 | 385,859,584 | 353,435,648 | 89.259 | 96.723 | 129.168 | 144.207 |
+
+Peak RSS fell by 32.2 to 35.2 MB in every pair (about 9 percent of the process peak). Time to first document and to the final boundary overlap between the two and show no measurable change: selection, the diff and the known-document map still run in the same lock section before the first frame.
+
+```sh
+cargo test --locked -p fireemu-adapter-grpc --release --lib --no-run
+FIREEMU_LISTEN_MEASURE_DOCUMENTS=100000 /usr/bin/time -l target/release/deps/fireemu_adapter_grpc-<build-hash> streams::refresh_tests::measure_listen_initial_snapshot_delivery --exact --ignored --nocapture
+```

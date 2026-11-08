@@ -200,7 +200,9 @@ async fn respond(
                     path.starts_with("/securetoken.googleapis.com/"),
                 ))
             } else if path.starts_with("/securetoken.googleapis.com/") {
-                ordered_refresh_json(&bytes).or_else(|| serde_json::from_slice(&bytes).ok())
+                serde_json::from_slice(&bytes)
+                    .ok()
+                    .map(|value| ordered_refresh_json(&bytes).unwrap_or(value))
             } else {
                 serde_json::from_slice(&bytes).ok()
             };

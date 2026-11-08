@@ -43,6 +43,7 @@ bcrypt = "0.16"
 roxmltree = "0.21.1"
 
 [dev-dependencies]
+serde_json = { workspace = true, features = ["raw_value"] }
 proptest.workspace = true
 
 [lints]

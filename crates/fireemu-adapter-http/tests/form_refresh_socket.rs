@@ -365,6 +365,20 @@ async fn android_sdk_camel_case_json_refresh_returns_an_id_token_in_both_profile
     }
 }
 
+#[tokio::test]
+async fn refresh_rejects_invalid_raw_value_payload() {
+    let server = Server::start().await;
+    let (status, body) = server
+        .post(
+            REFRESH,
+            "application/json",
+            br#"{"$serde_json::private::RawValue":null}"#,
+        )
+        .await;
+    assert_eq!(status, 400);
+    assert_eq!(body["error"]["message"], "INVALID_JSON_PAYLOAD");
+}
+
 /// SECURETOKEN-BODY production rows, preserving the recorded wire order.
 #[allow(clippy::too_many_lines)]
 #[tokio::test]

@@ -278,6 +278,79 @@ class RunnerContractTest(unittest.TestCase):
                         except (ProcessLookupError, PermissionError):
                             pass
 
+    def test_descendant_of_an_exited_root_is_still_scanned(self):
+        # A (launched) creates B in its own session and exits; B stays alive and later
+        # creates C in yet another session. C must be found by a later scan and stopped
+        # before the leases are released.
+        with tempfile.TemporaryDirectory() as temp:
+            work = Path(temp)
+            b_marker, a_go, b_go = work / "b", work / "a-go", work / "b-go"
+            c_code = "import os,sys,time; os.setsid(); open(sys.argv[1], 'w').write(str(os.getpid())); time.sleep(60)"
+            b_code = "import os,subprocess,sys,time; os.setsid(); open(sys.argv[1], 'w').write(str(os.getpid())); [time.sleep(0.02) for _ in range(1000) if not os.path.exists(sys.argv[2])]; subprocess.Popen([sys.executable, '-c', sys.argv[3], sys.argv[1] + '.c']); time.sleep(60)"
+            a_code = "import os,subprocess,sys,time; subprocess.Popen([sys.executable, '-c', sys.argv[4], sys.argv[1], sys.argv[3], sys.argv[5]]); [time.sleep(0.02) for _ in range(1000) if not os.path.exists(sys.argv[2])]"
+            launched = subprocess.Popen(["python3", "-c", a_code, str(b_marker), str(a_go), str(b_go), b_code, c_code], start_new_session=True)
+            b = c = None
+            try:
+                def wait_for(path):
+                    for _ in range(500):
+                        if path.exists() and path.read_text():
+                            return int(path.read_text())
+                        time.sleep(0.02)
+                    self.fail("marker not written")
+                b = wait_for(b_marker)
+                owned, groups, starts = {}, set(), {}
+                children = [(launched, io.StringIO())]
+                run.observe_owned(children, owned, groups, starts)
+                self.assertIn(b, owned)
+                a_go.touch()
+                launched.wait(timeout=5)
+                self.assertIsNotNone(launched.poll())
+                b_go.touch()
+                c = wait_for(Path(str(b_marker) + ".c"))
+                self.assertEqual(os.getpgid(c), c)
+                self.assertNotIn(c, groups)
+                alive_at_release = []
+                def release(_command):
+                    alive_at_release.append([self.alive(b), self.alive(c)])
+                with patch.object(run, "TOOL", work), patch.object(run, "checked", side_effect=release), contextlib.redirect_stdout(io.StringIO()):
+                    run.cleanup(owned, children, [{"token": "fixture"}], ["registry"], work, Mock(), lambda: run.observe_owned(children, owned, groups, starts), groups=groups)
+                self.assertEqual(alive_at_release, [[False, False]])
+            finally:
+                for pid in [launched.pid, b, c]:
+                    if pid is not None:
+                        try:
+                            os.killpg(pid, signal.SIGKILL)
+                        except (ProcessLookupError, PermissionError):
+                            pass
+                        try:
+                            os.kill(pid, signal.SIGKILL)
+                        except (ProcessLookupError, PermissionError):
+                            pass
+
+    def alive(self, pid):
+        try:
+            os.kill(pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+
+    def test_reused_pid_is_not_traversed(self):
+        gone = Mock(poll=Mock(return_value=0), pid=111)
+        owned, groups, starts = {222: "old command"}, set(), {222: "Sun Nov  8 10:00:00 2026"}
+        with patch.object(run, "process_start", return_value="Sun Nov  8 11:00:00 2026"), patch.object(run, "descendants") as scan:
+            run.observe_owned([(gone, io.StringIO())], owned, groups, starts)
+        scan.assert_not_called()
+        self.assertEqual(groups, set())
+
+    def test_matching_start_time_keeps_an_owned_pid_in_the_scan(self):
+        gone = Mock(poll=Mock(return_value=0), pid=111)
+        owned, groups, starts = {222: "old command", 333: "child"}, set(), {222: "Sun Nov  8 10:00:00 2026", 333: "Sun Nov  8 10:00:00 2026"}
+        with patch.object(run, "process_start", return_value="Sun Nov  8 10:00:00 2026"), patch.object(run, "descendants", return_value={333: "child"}) as scan:
+            run.observe_owned([(gone, io.StringIO())], owned, groups, starts)
+        # 333 was found under 222 in the same pass, so it is not scanned a second time.
+        scan.assert_called_once_with(222, groups, starts)
+        self.assertEqual(owned[333], "child")
+
     def test_descendant_scan_records_every_group_it_sees(self):
         with tempfile.TemporaryDirectory() as temp:
             marker = Path(temp) / "child"

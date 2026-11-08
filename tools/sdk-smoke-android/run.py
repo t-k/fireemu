@@ -56,7 +56,11 @@ def stop(pid, command):
             raise RuntimeError("process survived cleanup")
 
 
-def descendants(pid, groups=None):
+def process_start(pid):
+    return subprocess.run(["ps", "-p", str(pid), "-o", "lstart="], capture_output=True, text=True).stdout.strip() or None
+
+
+def descendants(pid, groups=None, starts=None):
     result = {}
     todo = [pid]
     while todo and len(result) < 100:
@@ -71,8 +75,40 @@ def descendants(pid, groups=None):
                     except ProcessLookupError:
                         continue
                 result[child] = command
+                if starts is not None:
+                    # A child of a validated parent is ours now, even if the pid was reused.
+                    starts[child] = process_start(child)
                 todo.append(child)
     return result
+
+
+def observe_owned(children, owned, groups, starts):
+    """Scan every live identity-validated owned process, not only the launch roots.
+
+    A launched root may exit while an observed descendant lives on and creates
+    more processes; that descendant keeps being traversed, and every pgid seen
+    is recorded. A pid whose start time changed was reused and is not traversed.
+    """
+    seeds = []
+    for process, _ in children:
+        if process.poll() is None:
+            command = subprocess.run(["ps", "-p", str(process.pid), "-o", "comm=,args="], capture_output=True, text=True).stdout.strip()
+            if command:
+                owned[process.pid] = command
+                starts.setdefault(process.pid, process_start(process.pid))
+                seeds.append(process.pid)
+    seeds += [pid for pid in list(owned) if pid not in seeds]
+    covered = set()
+    for pid in seeds:
+        if pid in covered:
+            continue
+        started = process_start(pid)
+        if started is None or starts.get(pid) != started:
+            continue
+        found = descendants(pid, groups, starts)
+        owned.update(found)
+        covered.add(pid)
+        covered.update(found)
 
 
 def group_alive(group):
@@ -221,6 +257,7 @@ def run(args):
     allocated = set()
     owned = {}
     groups = set()
+    starts = {}
     children = []
     temporary = tempfile.TemporaryDirectory(prefix="android-run-", dir=TOOL / "build")
     work = Path(temporary.name)
@@ -291,12 +328,7 @@ def run(args):
         return process
 
     def observe():
-        for process, _ in children:
-            if process.poll() is None:
-                command = subprocess.run(["ps", "-p", str(process.pid), "-o", "comm=,args="], capture_output=True, text=True).stdout.strip()
-                if command:
-                    owned[process.pid] = command
-                owned.update(descendants(process.pid, groups))
+        observe_owned(children, owned, groups, starts)
         if owned:
             rss = subprocess.run(["ps", "-p", ",".join(map(str, owned)), "-o", "rss="], capture_output=True, text=True).stdout.split()
             if sum(map(int, rss)) > 8 * 1024 * 1024:

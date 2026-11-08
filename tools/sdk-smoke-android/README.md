@@ -37,6 +37,8 @@ All 23 fixed case IDs are required. A failed prerequisite produces a visible blo
 
 The workflow is manual-dispatch only and is not a release gate. One Linux job has a 45-minute cap; estimated cold build and two emulator runs take 20–35 minutes, pending measured CI evidence. Local execution results and unresolved cases are reported in the pull request. No device/image presence check is treated as proof that the image boots or that SDK operations pass.
 
-## Recorded compatibility limitation
+## Recorded local validation
 
-The initial same-checkout fireemu run reported 17 passed cases, an Auth sign-up failure and 5 blocked Auth-dependent cases, while all 23 passed against the official emulators. Android Auth 25.0.0 uses legacy Identity Toolkit routes for sign-up, password verification and account lookup. The smoke requires the runtime aliases supplied by [PR122](https://github.com/t-k/fireemu/pull/122); it does not duplicate that runtime patch. The pull request distinguishes the base-runtime result from any temporary integration verification with that dependency.
+Direct local runs against fireemu main `23f09d83d` and firebase-tools 15.28.2 each passed all 23 cases with the same APK. The runtime refresh support comes from main; this tool carries no separate runtime patch.
+
+An earlier direct fireemu run reported a sign-up failure and blocked dependent cases. That failure did not recur after main integration, but no packet capture exists for the failing run, so its root cause remains unknown. The pull request distinguishes direct acceptance runs from request/response diagnostics recorded in separate runs. Neither establishes production parity.

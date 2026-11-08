@@ -1145,6 +1145,7 @@ const isPlainObject = (value) =>
 
 /** The slash-led words the strict `fireemu exec` banner of the historical replay prints. */
 const DAEMON_LOG_ROUTES = new Set(["/", "/health/live", "/v1/rules"]);
+const LOOPBACK_URL = /^http:\/\/127\.0\.0\.1:\d{1,5}(?:\/[\w-][\w.-]*)*\/?$/;
 
 const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -1154,7 +1155,8 @@ const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
  * requires the daemon's banner (`daemonLog`), which names the config file and `<cwd>/firebase.json`;
  * only those exempt paths, matched whole (longest first), preceded by a line start or whitespace
  * and followed by the end of the log, whitespace or a colon that ends a word, are masked there; any
- * other slash-led word left in the banner must be one of its routes.
+ * other word left in the banner that holds a slash, a backslash or a leading tilde must be one of
+ * its routes or a loopback URL.
  */
 function withoutHistoricalBindingPaths(comparison) {
   if (!isPlainObject(comparison) || !isPlainObject(comparison.profileBinding)) return comparison;
@@ -1186,12 +1188,14 @@ function withoutHistoricalBindingPaths(comparison) {
         )
       : daemonLog;
   if (typeof maskedLog === "string") {
-    // The generic guard recognises only some roots inside prose, so the banner fails closed: after
-    // masking, every slash that starts a token (not one inside a URL) must be a banner route.
-    for (const [token] of maskedLog.matchAll(/(?<![\w.:/~-])\/[^\s)]*/g)) {
-      if (!DAEMON_LOG_ROUTES.has(token.replace(/[.,;:]+$/, ""))) {
-        throw new Error("public evidence contains a disallowed filesystem path in daemonLog");
-      }
+    // The generic guard recognises only some path forms inside prose, so the banner fails closed:
+    // after masking, every word holding a slash, a backslash or a leading tilde must be one of the
+    // banner's routes or a loopback URL.
+    for (const word of maskedLog.split(/[\s()[\];,]+/)) {
+      const trimmed = word.replace(/[.,:]+$/, "");
+      if (!/[\\/]|^~/.test(trimmed)) continue;
+      if (DAEMON_LOG_ROUTES.has(trimmed) || LOOPBACK_URL.test(trimmed)) continue;
+      throw new Error("public evidence contains a disallowed filesystem path in daemonLog");
     }
   }
   return {

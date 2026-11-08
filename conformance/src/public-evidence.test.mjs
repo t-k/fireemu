@@ -263,6 +263,14 @@ test("the historical daemonLog may name only the binding's own paths", async (t)
     `\n  note: (/srv/private.json)\n`,
     `\n  note: x=/srv/private.json\n`,
     `\n  note: ${cwd}:/srv/private.json\n`,
+    // Forms the generic prose check misses, next to a colon or not slash-led.
+    "\n  note:/srv/private.json\n",
+    "\n  note: C:/Users/alice/secret.json\n",
+    "\n  note: \\\\server\\share\\secret.json\n",
+    "\n  note: ~/secret.json\n",
+    "\n  note: file:///srv/secret.json\n",
+    "\n  note: http://127.0.0.1:1/../srv/secret.json\n",
+    "\n  note: http://example.com/srv\n",
     "\n  note: C:\\Users\\someone\\secret.json\n",
     // Only the exact exempt path is masked: a dot in it matches no other character.
     "\n  binary: /tmp/fireemu-verifyXx/fireemu try ✓/bin/fireemu\n",

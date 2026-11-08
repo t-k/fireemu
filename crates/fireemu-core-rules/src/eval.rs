@@ -1694,6 +1694,18 @@ impl<'a> Evaluator<'a> {
             .any(|binding| binding.name == name)
     }
 
+    /// Whether `value` is the top-level `data` map of a query proof's `resource`. Every
+    /// partial map of a list proof comes from the query resource, and a nested one can never
+    /// equal the map that holds it, so value equality identifies `resource.data` however the
+    /// rule reached it (a binding, a function argument).
+    fn is_query_resource_data(&self, value: &RulesValue) -> bool {
+        self.query_proof
+            && matches!(
+                self.resource.as_ref(),
+                RulesValue::Map(fields) if fields.get("data") == Some(value)
+            )
+    }
+
     fn query_derived_expression(&self, expr: &Expr) -> bool {
         let mut visiting = Vec::new();
         self.query_derived_expression_with(expr, &mut visiting)
@@ -4581,6 +4593,12 @@ impl<'a> Evaluator<'a> {
             (BinaryOp::In, V::String(k), V::PartialMap(m)) => {
                 if m.contains_key(k) {
                     V::Bool(true)
+                } else if self.is_query_resource_data(&r) {
+                    // Production answers a key the query does not constrain as absent from
+                    // `resource.data` (FS-RULES-DIFFS 2026-11-08: `!("blocked" in
+                    // resource.data)` allowed and `"owner" in resource.data` refused for an
+                    // unfiltered query). Nested maps keep their other keys undetermined.
+                    V::Bool(false)
                 } else {
                     return Err(EvalError::Unknown);
                 }
@@ -4738,6 +4756,12 @@ impl<'a> Evaluator<'a> {
                 } else {
                     return Err(EvalError::Unknown);
                 }
+            }
+            // A map or a list is never null, whatever members it holds undetermined: the query
+            // `resource` is a document (FS-RULES-DIFFS 2026-11-08, `resource != null` allowed).
+            (BinaryOp::Eq | BinaryOp::Ne, V::Map(_) | V::List(_) | V::Set(_), V::Null)
+            | (BinaryOp::Eq | BinaryOp::Ne, V::Null, V::Map(_) | V::List(_) | V::Set(_)) => {
+                V::Bool(op == BinaryOp::Ne)
             }
             (_, a, b) if undetermined(a) || undetermined(b) => return Err(EvalError::Unknown),
             (BinaryOp::Eq, a, b) => V::Bool(if query_resource_value {

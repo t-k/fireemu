@@ -1364,7 +1364,7 @@ fn undetermined_values_never_prove_a_condition() {
     // cannot be proven.
     for cond in [
         "resource.data.secret == null",
-        "!('blocked' in resource.data)",
+        "'blocked' in resource.data",
         "resource.data.keys().hasOnly(['owner'])",
         "resource.data.size() == 1",
         "resource.data.get('flag', false) == false",
@@ -1376,6 +1376,27 @@ fn undetermined_values_never_prove_a_condition() {
     ] {
         assert!(!allows(&rules(cond), &known), "{cond} must not be provable");
     }
+    // A key the query does not constrain is not in `resource.data` (FS-RULES-DIFFS production
+    // recording 2026-11-08, `fs-rules-v1/diffs/queries#blocked-nofilter`); a constrained one is.
+    assert!(allows(&rules("!('blocked' in resource.data)"), &known));
+    assert!(allows(&rules("'owner' in resource.data"), &known));
+    // Only the top-level `resource.data` map: a nested map the query constrains in part
+    // keeps its other keys undetermined (no production recording decides them).
+    let nested = abstract_ctx(
+        "/databases/(default)/documents/notes/fireemu-placeholder",
+        vec![(
+            "meta",
+            RulesValue::PartialMap(BTreeMap::from([(
+                "owner".to_owned(),
+                RulesValue::String("u1".into()),
+            )])),
+        )],
+    );
+    assert!(allows(&rules("'owner' in resource.data.meta"), &nested));
+    assert!(!allows(
+        &rules("!('blocked' in resource.data.meta)"),
+        &nested
+    ));
     // Left to right: a deciding operand ends the evaluation, an undetermined one (which may
     // be a runtime error for some document) makes the expression undetermined.
     assert!(allows(

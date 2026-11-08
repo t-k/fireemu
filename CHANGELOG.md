@@ -10,6 +10,7 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ### Fixed
 
+- Firestore Security Rules, queries, both profiles, as production answered on 2026-11-08 (two identical recordings; the official emulator answered the same): a query whose every `OR` branch filters on `documentId() ==` checks the rule against each named document as stored, also when it filters on other fields, so `where("owner", "==", uid)` with a missing document's id or with another owner's document is refused; before, such a query was proven from its filters alone and returned no document. Naming a document only adds this check: the filters must still prove the rule. In a query proof `resource != null` now holds (the query's `resource` is a document; before, a rule guarded with `resource != null &&` refused every query), and a key the query does not constrain is not in `resource.data`, so `!("blocked" in resource.data)` allows an unfiltered query while `"owner" in resource.data` still needs an `owner` filter. Any other condition on the shape of `resource.data` (its keys, size, or a nested map's other keys) still cannot be proven from a query.
 - Authentication: the Secure Token refresh accepts the JSON body with `grantType` and `refreshToken` that the Firebase Android SDK sends, as the official emulator does; before, it answered `400 MISSING_GRANT_TYPE`. A form body still uses the snake_case fields, and a body mixing both spellings is read as snake_case. Production has not been recorded for this body.
 
 ## [0.44.0] - 2026-11-07

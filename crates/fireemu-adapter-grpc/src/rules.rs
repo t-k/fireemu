@@ -29,7 +29,9 @@
 //! production; inequality constraints become ranges, `in` a set of candidates, `!=` /
 //! `not-in` an exclusion set, and `request.query` carries `limit`, `offset` and `orderBy`
 //! (`"field ASC, other DESC"`, the Emulator's rendering). The decision never depends on
-//! stored data, so it leaks nothing about it.
+//! stored data, so it leaks nothing about it, except for a query whose every disjunction names
+//! one document with `__name__ ==`: as in production, the rule is also checked against each
+//! named document as stored (a missing one refuses a rule that reads `resource`).
 //!
 //! Writes serve `getAfter()` from the state every write of the commit will leave behind.
 
@@ -1211,16 +1213,21 @@ impl RulesEnforcer {
             seen: RefCell::new(BTreeSet::new()),
         };
         let list_max = multi_total_max();
-        if let Some(candidates) = exact_name_candidates(parent, query) {
-            return authorize_exact_names(
+        if let Some(named) = named_documents(parent, query) {
+            authorize_exact_names(
                 ruleset,
                 &sink,
                 principal,
                 query,
-                &candidates,
+                &named.candidates,
                 &reader,
                 now,
-            );
+            )?;
+            // A query that filters on more than the names must also pass the constraint
+            // proof: naming a document adds a check and never widens what the filters prove.
+            if named.only_names {
+                return Ok(());
+            }
         }
         for placeholder in placeholder_paths(parent, query)? {
             for disjunction in query.dnf() {
@@ -2090,9 +2097,21 @@ pub fn placeholder_paths(parent: &Parent, query: &Query) -> Result<Vec<DocumentP
     Ok(vec![path])
 }
 
-/// Finite same-database candidates of a pure `__name__ ==`/`in` query. Any additional
-/// predicate, cursor, offset or limit falls back to the content-independent constraint proof.
-fn exact_name_candidates(parent: &Parent, query: &Query) -> Option<Vec<DocumentPath>> {
+/// The documents a query names: every disjunction holds at least one `__name__ ==` reference,
+/// each to a document inside the query's scope.
+struct NamedDocuments {
+    /// The named documents (distinct, sorted).
+    candidates: Vec<DocumentPath>,
+    /// No disjunction filters on anything but the name.
+    only_names: bool,
+}
+
+/// The documents a query names, checked against the rule as stored, as production does
+/// (FS-RULES-DIFFS 2026-11-08: `owner == uid AND documentId() == <missing>` or `== <someone
+/// else's document>` refused, `== <own document>` allowed). `None` when a disjunction names
+/// no document, a name lies outside the query's scope, or the query has a cursor, offset or
+/// limit: those keep the content-independent constraint proof alone.
+fn named_documents(parent: &Parent, query: &Query) -> Option<NamedDocuments> {
     if query.limit.is_some()
         || query.offset != 0
         || query.start_at.is_some()
@@ -2106,26 +2125,36 @@ fn exact_name_candidates(parent: &Parent, query: &Query) -> Option<Vec<DocumentP
         parent.database.as_str()
     );
     let mut candidates = BTreeSet::new();
+    let mut only_names = true;
     for disjunction in query.dnf() {
-        let [FilterExpr::Field {
-            field,
-            op: FieldOp::Equal,
-            value: Value::Reference(reference),
-        }] = disjunction.as_slice()
-        else {
-            return None;
-        };
-        if !field.is_document_name() {
-            return None;
-        }
-        let relative = reference.strip_prefix(&prefix)?;
-        let path = DocumentPath::parse(&parent.project, &parent.database, relative).ok()?;
-        if !query_scope_contains(&query.scope, &path) {
+        let names: Vec<&String> = disjunction
+            .iter()
+            .filter_map(|atom| match atom {
+                FilterExpr::Field {
+                    field,
+                    op: FieldOp::Equal,
+                    value: Value::Reference(reference),
+                } if field.is_document_name() => Some(reference),
+                _ => None,
+            })
+            .collect();
+        if names.is_empty() {
             return None;
         }
-        candidates.insert(path);
+        only_names &= disjunction.len() == 1;
+        for reference in names {
+            let relative = reference.strip_prefix(&prefix)?;
+            let path = DocumentPath::parse(&parent.project, &parent.database, relative).ok()?;
+            if !query_scope_contains(&query.scope, &path) {
+                return None;
+            }
+            candidates.insert(path);
+        }
     }
-    (!candidates.is_empty()).then(|| candidates.into_iter().collect())
+    (!candidates.is_empty()).then(|| NamedDocuments {
+        candidates: candidates.into_iter().collect(),
+        only_names,
+    })
 }
 
 fn query_scope_contains(

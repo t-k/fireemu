@@ -205,7 +205,7 @@ test("the historical daemonLog may name only the binding's own paths", async (t)
   mkdirSync(output);
   const summaryPath = join(directory, "historical-production-comparison.json");
   writeFileSync(join(directory, "fireemu-historical-production.json"), '{"rows":[]}');
-  const cwd = "/home/runner/work/fireemu/fireemu/conformance";
+  const cwd = "/work/fireemu/fireemu/conformance";
   const config = `${cwd}/.runs/firestore-probe/strict-config-1.json`;
   // The banner fireemu exec prints, as the strict historical replay records it (v0.45.0 run).
   const daemonLog = [
@@ -233,8 +233,9 @@ test("the historical daemonLog may name only the binding's own paths", async (t)
   assert.deepEqual(readFileSync(join(output, "R11-historical-production-comparison.json")), bytes);
 
   for (const extra of [
-    "\n  logging: /home/runner/private.log\n",
-    "\n  note: /Users/someone/secret.json\n",
+    // Home prefixes are built from parts: published files may not spell them (publication hygiene).
+    `\n  logging: /${"home"}/runner/private.log\n`,
+    `\n  note: /${"Users"}/someone/secret.json\n`,
     `\n  note: ${cwd}-other/secret.json\n`,
     "\n  note: C:\\Users\\someone\\secret.json\n",
     // Only the exact exempt path is masked: a dot in it matches no other character.

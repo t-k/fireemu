@@ -1690,6 +1690,44 @@ fn shape_operations_on_built_containers_keep_failing_reads_undetermined() {
     ] {
         assert!(allows(&through_let(body), &present), "{body} must hold");
     }
+    // A read whose error a deciding operand absorbed cannot fail any more, also inside a
+    // condition that picks the argument (review 2026-11-08 r7b); an unabsorbed one can.
+    let present_with_auth = {
+        let mut ctx = present.clone();
+        ctx.auth = Some(AuthContext {
+            uid: "u1".into(),
+            token: BTreeMap::from([("admin".to_owned(), RulesValue::Bool(true))]),
+        });
+        ctx
+    };
+    let can_read = |call: &str| {
+        format!("rules_version = '2';\nservice cloud.firestore {{ match /databases/{{d}}/documents {{ function canRead(id) {{ return request.auth.token.admin == true || id == request.auth.uid; }} match /notes/{{id}} {{ allow list: if {call}; }} }} }}")
+    };
+    for call in [
+        "canRead((resource.data.secret == 1 || true) ? resource.id : resource.id)",
+        "canRead((resource.data.secret == 1 && false) ? resource.id : resource.id)",
+        "canRead(resource.id)",
+    ] {
+        assert!(
+            allows(&can_read(call), &present_with_auth),
+            "{call} must hold"
+        );
+    }
+    for call in [
+        "canRead((resource.data.secret == 1 && true) ? resource.id : resource.id)",
+        "canRead((resource.data.secret == 1 || false) ? resource.id : resource.id)",
+        "canRead(resource.data.secret)",
+        "canRead((true || resource.data.secret == 1) ? resource.data.secret : resource.id)",
+    ] {
+        assert!(
+            !allows(&can_read(call), &present_with_auth),
+            "{call} must not be provable"
+        );
+    }
+    // Restoring the count keeps the reads made before the absorbed operand: the later
+    // `canRead(s)` still reads `s = r.secret`, an unabsorbed failing read.
+    let earlier_reads = "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { function canRead(id) { return request.auth.token.admin == true || id == request.auth.uid; } function g(r) { let s = r.secret; return r.other == 1 || canRead(((r.x == 1) || true) ? s : s); } match /notes/{id} { allow list: if g(resource.data); } } }";
+    assert!(!allows(earlier_reads, &present_with_auth));
     // An argument whose absent read is absorbed (`error || true` is true) is no failing
     // argument.
     assert!(allows(

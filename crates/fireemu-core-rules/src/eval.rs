@@ -4618,9 +4618,16 @@ impl<'a> Evaluator<'a> {
             // ends the request, and the second is fireemu admitting it cannot evaluate the
             // operand, which must never be allowed to read as a permissive answer.
             let mut deferred: Option<EvalError> = None;
+            // A definite answer absorbed every absent read of its operands (see
+            // `absent_reads`): none of them can fail the expression any more (review
+            // 2026-11-08 r7b).
+            let absent_before = self.absent_reads;
             for operand in operands.into_iter().rev() {
                 match self.eval(operand).and_then(|v| truthy(&v)) {
-                    Ok(b) if b == stop_on => return Ok(RulesValue::Bool(stop_on)),
+                    Ok(b) if b == stop_on => {
+                        self.absent_reads = absent_before;
+                        return Ok(RulesValue::Bool(stop_on));
+                    }
                     Ok(_) => {}
                     Err(e @ (EvalError::Budget { .. } | EvalError::Unsupported(_))) => {
                         return Err(e)

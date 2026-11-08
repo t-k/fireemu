@@ -874,6 +874,8 @@ service cloud.firestore {
     match /byId/{id} { allow list: if canRead(resource.id); }
     match /posts/{id} { allow list: if isPublished(resource.data.createdAt); }
     match /secret/{id} { allow list: if isPublished(resource.data.secret); }
+    match /absorbed/{id} { allow list: if canRead((resource.data.secret == 1 || true) ? resource.id : resource.id); }
+    match /unabsorbed/{id} { allow list: if canRead((resource.data.secret == 1 && true) ? resource.id : resource.id); }
   }
 }";
     for (profile, mut h) in start_profiles().await {
@@ -884,6 +886,8 @@ service cloud.firestore {
                     set_write("byId/d", &[("a", integer(1))]),
                     set_write("posts/p", &[("createdAt", integer(1))]),
                     set_write("secret/s", &[("a", integer(1))]),
+                    set_write("absorbed/d", &[("a", integer(1))]),
+                    set_write("unabsorbed/d", &[("a", integer(1))]),
                 ]),
                 "owner",
             ))
@@ -910,6 +914,8 @@ service cloud.firestore {
             ("byId", by_id, true),
             ("posts", ordered("posts", "createdAt"), true),
             ("secret", ordered("secret", "a"), false),
+            ("absorbed", ordered("absorbed", "a"), true),
+            ("unabsorbed", ordered("unabsorbed", "a"), false),
         ];
         for (row, request, allowed) in rows {
             let answer = run(&mut h, request, &token).await;

@@ -1165,23 +1165,100 @@ fn a_page_never_names_an_entry_it_hides() {
     }
 }
 
-#[test]
-fn maxresults_zero_does_not_name_a_hidden_entry_in_the_emulator_profile() {
-    let s = state(Profile::Emulator, LIST_ALL);
-    put(&s, "p//a", "body");
-    put(&s, "p/b", "body");
+fn list_zero(
+    s: &StorageState,
+    prefix: &str,
+    delimiter: Option<&str>,
+    token: Option<&str>,
+) -> (u16, String) {
+    let mut q = format!("prefix={}&maxResults=0", enc(prefix));
+    if let Some(d) = delimiter {
+        write!(q, "&delimiter={}", enc(d)).unwrap();
+    }
+    if let Some(t) = token {
+        write!(q, "&pageToken={}", enc(t)).unwrap();
+    }
     let r = handle(
-        &s,
-        request(
-            "GET",
-            &format!("/v0/b/{BUCKET}/o?prefix=p%2F&maxResults=0"),
-            &[],
-            b"",
-        ),
+        s,
+        request("GET", &format!("/v0/b/{BUCKET}/o?{q}"), &[], b""),
     );
-    assert_eq!(r.status, 200);
-    let body: Value = serde_json::from_slice(&r.body).unwrap();
-    assert!(!body.to_string().contains("p//a"), "{body}");
+    (r.status, String::from_utf8(r.body.to_vec()).unwrap())
+}
+
+/// The emulator `maxResults=0` page treats a hidden name exactly as an absent one: the whole
+/// answer, byte for byte, is the same with and without it, whatever token is supplied.
+#[test]
+fn maxresults_zero_answers_the_same_with_and_without_a_hidden_object() {
+    let world = |hidden: &[&str]| {
+        let s = state(Profile::Emulator, LIST_ALL);
+        for name in ["p/a", "p/b/c"].iter().chain(hidden.iter()) {
+            put(&s, name, "body");
+        }
+        s
+    };
+    // Each hidden object hides every entry it could make (an object name with an empty segment
+    // and, with the delimiter, a prefix that has one).
+    for (hidden, delimiter) in [
+        ("p/z//secret", None),
+        ("p/z/", None),
+        ("p//q", None),
+        ("p//q", Some("/")),
+        ("p/z/", Some("/")),
+    ] {
+        let without = world(&[]);
+        let with = world(&[hidden]);
+        if delimiter == Some("/") && hidden == "p/z/" {
+            // `p/z/` folds to the visible prefix `p/z/` at the delimiter, as the object `p/z/x`
+            // would: only the object's own entry is hidden, so compare it with that world.
+            let reference = world(&["p/z/x"]);
+            for token in [None, Some("p/z/"), Some("p/a"), Some("zzz")] {
+                assert_eq!(
+                    list_zero(&with, "p/", delimiter, token),
+                    list_zero(&reference, "p/", delimiter, token),
+                    "{hidden} {delimiter:?} {token:?}"
+                );
+            }
+            continue;
+        }
+        for token in [
+            None,
+            Some(hidden),
+            Some("p/z//secret"),
+            Some("p/z/"),
+            Some("p//q"),
+            Some("p/a"),
+            Some("zzz"),
+        ] {
+            assert_eq!(
+                list_zero(&with, "p/", delimiter, token),
+                list_zero(&without, "p/", delimiter, token),
+                "{hidden} {delimiter:?} {token:?}"
+            );
+        }
+    }
+}
+
+/// Continuation past hidden entries: the token names the first visible object, never a hidden
+/// one in front of it, and a supplied token that names a hidden object restarts as an unknown
+/// token does.
+#[test]
+fn maxresults_zero_continues_past_a_hidden_entry_to_a_visible_one() {
+    let s = state(Profile::Emulator, LIST_ALL);
+    for name in ["p//a", "p/b", "p/c", "p/x/"] {
+        put(&s, name, "body");
+    }
+    let page = |token: Option<&str>| {
+        let (status, body) = list_zero(&s, "p/", None, token);
+        assert_eq!(status, 200);
+        serde_json::from_str::<Value>(&body).unwrap()
+    };
+    assert_eq!(page(None)["nextPageToken"], "p/b");
+    assert_eq!(page(Some("p//a"))["nextPageToken"], "p/b");
+    assert_eq!(page(Some("p/b"))["nextPageToken"], "p/b");
+    assert_eq!(page(Some("p/c"))["nextPageToken"], "p/c");
+    // A token naming a hidden object is an unknown token: the page restarts at the first
+    // visible object.
+    assert_eq!(page(Some("p/x/"))["nextPageToken"], "p/b");
 }
 
 mod listing_properties {

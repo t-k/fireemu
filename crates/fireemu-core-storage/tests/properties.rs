@@ -143,6 +143,49 @@ proptest! {
 }
 
 proptest! {
+    /// `empty_list_page_where` is the official emulator's `maxResults=0` page over the entries the
+    /// filter takes: every taken folded prefix, and a token naming the first taken object at or
+    /// after a supplied token that names a taken object (else after the prefix). A refused entry
+    /// is as absent: it is not listed, not a token, and a token naming it changes nothing.
+    #[test]
+    fn empty_list_page_where_treats_a_refused_entry_as_absent(
+        names in names(),
+        prefix in prefixes(),
+        delimiter in delimiters(),
+        token in proptest::option::of(proptest::sample::select(
+            &["", "a", "a/b", "dir/x", "dir2/y", "x/b/c", "Z/1", "zzz"][..],
+        )),
+        modulus in 2usize..=4,
+    ) {
+        let store = store_with(&names);
+        let accept = |entry: &str, _is_prefix: bool| entry.len() % modulus != 0;
+        let page = store.empty_list_page_where(&bucket(), prefix, delimiter, token, &accept);
+        let fold = |name: &str| {
+            let rest = name.strip_prefix(prefix)?;
+            delimiter.and_then(|d| rest.find(d).map(|i| format!("{prefix}{}{d}", &rest[..i])))
+        };
+        let under: Vec<&String> = names.iter().filter(|n| n.starts_with(prefix)).collect();
+        let items: Vec<&String> = under.iter().copied().filter(|n| fold(n).is_none()).collect();
+        let start = token
+            .filter(|t| items.iter().any(|n| n.as_str() == *t) && accept(t, false))
+            .unwrap_or(prefix);
+        let expected_token = items
+            .iter()
+            .find(|n| n.as_str() >= start && accept(n, false))
+            .map(|n| (*n).clone());
+        let mut expected_prefixes: Vec<String> = under
+            .iter()
+            .filter_map(|n| fold(n))
+            .filter(|p| accept(p, true))
+            .collect();
+        expected_prefixes.dedup();
+        prop_assert!(page.items.is_empty());
+        prop_assert_eq!(page.prefixes, expected_prefixes);
+        prop_assert_eq!(page.next_page_token, expected_token);
+    }
+}
+
+proptest! {
     /// Walking a listing with `list_after` (the Firebase dialect's paging: the token names the last
     /// entry returned) yields exactly the reference listing: no entry twice, none missing, in
     /// name order, never more than `max` per page, and a token exactly when more entries follow.

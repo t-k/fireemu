@@ -4224,17 +4224,15 @@ fn fb_list(
     let store = state.store()?;
     let page = if max_results == Some(0) {
         // Only the emulator profile reaches here (strict refused above): the official emulator's
-        // empty page, whose token names the first object after the page; a hidden one is not
-        // named.
-        let mut page = store.list(
+        // empty page. A hidden name is treated exactly as an absent one, in the choice of the
+        // token's starting point as in the continuation it names.
+        store.empty_list_page_where(
             &b,
             &prefix,
             Some(delimiter.as_str()),
             page_token.as_deref(),
-            max_results,
-        );
-        page.next_page_token = page.next_page_token.filter(|name| is_listed_name(name));
-        page
+            &is_listed_entry,
+        )
     } else {
         // Paging as production answers it (recorded, lean-v5): `maxResults` counts items and
         // prefixes together in one merged name order, and the page token is the standard
@@ -4260,15 +4258,10 @@ fn fb_list(
         page
     };
     let mut body = json!({
-        "prefixes": page
-            .prefixes
-            .iter()
-            .filter(|p| is_listed_entry(p, true))
-            .collect::<Vec<_>>(),
+        "prefixes": page.prefixes,
         "items": page
             .items
             .iter()
-            .filter(|m| is_listed_entry(m.name.as_str(), false))
             .map(|m| json!({"name": m.name.as_str(), "bucket": m.bucket.as_str()}))
             .collect::<Vec<_>>(),
     });

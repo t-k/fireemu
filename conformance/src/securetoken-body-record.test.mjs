@@ -7,7 +7,7 @@ import { test } from "node:test";
 import { scanFixture } from "./auth-account/fixture-scan.mjs";
 import { ROWS, corpusDigest } from "./securetoken-body/corpus.mjs";
 import { fixtureText, publicRecording, recordProduction } from "./securetoken-body/record.mjs";
-import { recordWith } from "./securetoken-body/recording.mjs";
+import { ceilings, nextRun, recordWith } from "./securetoken-body/recording.mjs";
 import { NUMBER } from "./securetoken-body/test-support.mjs";
 import { createWorld } from "./securetoken-body/test-world.mjs";
 import { tempDir } from "./test-tmpdir.mjs";
@@ -241,4 +241,26 @@ test("the fixture holds rows only, with the digests that bind it", () => {
   assert.deepEqual([fixture.gitSha, fixture.corpusDigest, fixture.harnessDigest], ["s", "c", "h"]);
   assert.ok(text.endsWith("\n"));
   assert.deepEqual(publicRecording({ a: 1, secrets: ["x"] }), { a: 1 });
+});
+
+test("run ids never repeat within a process, even inside one second", () => {
+  const now = Date.parse("2026-11-08T12:00:00Z");
+  const seen = new Set();
+  let previous = 0;
+  for (let i = 0; i < 50; i += 1) {
+    const run = nextRun(now);
+    assert.match(run, /^\d{10}$/);
+    assert.ok(!seen.has(run));
+    assert.ok(Number(run) > previous);
+    seen.add(run);
+    previous = Number(run);
+  }
+  // A later clock moves the id forward; an earlier one cannot move it back.
+  assert.ok(Number(nextRun(now + 3_600_000)) >= Number(previous));
+  assert.ok(Number(nextRun(0)) > previous);
+});
+
+test("the ceilings leave room for the rows and the harness of a recording that polls", () => {
+  assert.deepEqual(ceilings(), { maxRequests: ROWS.length, maxHarnessRequests: 160 });
+  assert.equal(ceilings([1, 2, 3]).maxRequests, 3);
 });

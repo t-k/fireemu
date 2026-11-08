@@ -178,6 +178,7 @@ export function createWorld(options = {}) {
           status: 200,
           json: {
             name: `projects/${number}/config`,
+            signIn: { email: { enabled: true } },
             multiTenant: world.tenancy ? { allowTenants: true } : {},
           },
         };

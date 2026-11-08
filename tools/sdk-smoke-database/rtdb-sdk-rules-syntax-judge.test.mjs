@@ -195,3 +195,37 @@ test('the exec plan runs the observer rules-syntax suite on the production prefi
   } finally { rmSync(dir, { recursive: true, force: true }); }
   assert.equal(DOCUMENTS.length, 9);
 });
+
+// ---- the production recording (RTDB-RULES-SYNTAX-20261108-01) --------------------------------------------------------------------------------
+const PRODUCTION = recordedJournal(JSON.parse(readFileSync(path.join(here, 'fixtures', 'production-sdk-rules-syntax.json'), 'utf8')));
+const JAR = JSON.parse(readFileSync(path.join(here, 'fixtures', 'jar-sdk-rules-syntax.json'), 'utf8'));
+
+test('the production reduction: a clean run, nine documents loaded in both rounds, the rounds agree, every answer a recorded shape', () => {
+  assert.deepEqual(PRODUCTION.result, { status: 'complete', observed: 86, exit: 0, cleanup: { prefix: 'verified', rules: 'verified' }, unverified: [] });
+  assert.equal(PRODUCTION.prefix, PREFIX);
+  for (const p of PRODUCTION.profiles) {
+    assert.deepEqual(p.rows.filter(r => r.id.startsWith('load-')).map(r => [r.id, r.status]), DOCUMENTS.map(d => [`load-${d.id}`, 200]));
+    for (const r of p.rows) assert.notEqual(shapeOf(r), 'unknown', r.id);
+    assert.deepEqual(Object.values(p.probes), DOCUMENTS.map(() => [200]));
+  }
+  assert.deepEqual(PRODUCTION.profiles[0].rows, PRODUCTION.profiles[1].rows, 'two rounds agree');
+});
+
+test('production answered every row as the official emulator 4.11.2 did', () => {
+  const s = summarize(PRODUCTION, JAR);
+  assert.deepEqual(s.problems, []); assert.deepEqual(s.counts, { MATCH: 86, MISMATCH: 0, NEEDS_REVIEW: 0 }); assert.equal(s.match, true);
+});
+
+test('live: both profiles on a real fireemu (FIREEMU_BIN) match the production reduction in all 86 rows', { skip: !process.env.FIREEMU_BIN, timeout: 10 * 60 * 1000 }, async () => {
+  const { spawnSync } = await import('node:child_process');
+  const dir = mkdtempSync(path.join(tmpdir(), 'sdk-rules-syntax-live-'));
+  try {
+    for (const profile of ['strict', 'emulator']) {
+      const out = path.join(dir, profile);
+      const r = spawnSync(process.execPath, [path.join(here, 'rtdb-sdk-rules-syntax.mjs'), 'local', '--fireemu', process.env.FIREEMU_BIN, '--out', out, '--profile', profile, '--against', path.join(here, 'fixtures', 'production-sdk-rules-syntax.json')], { encoding: 'utf8', timeout: 5 * 60 * 1000 });
+      assert.equal(r.status, 0, `${profile}: ${r.stdout}${r.stderr}`);
+      const comparison = JSON.parse(readFileSync(path.join(out, 'comparison.json'), 'utf8'));
+      assert.deepEqual(comparison.counts, { MATCH: 86, MISMATCH: 0, NEEDS_REVIEW: 0 }, profile);
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

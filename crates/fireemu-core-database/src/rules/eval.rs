@@ -168,6 +168,11 @@ enum Value<'a> {
     Snapshot(Snapshot<'a>, Version),
     /// `query`, one object.
     Query,
+    /// `http`, one object: its one member is `encodeURL`.
+    Http,
+    /// A method read without a call (`auth.uid.contains`, `data.child`): its receiver and its name. It is no
+    /// null and equals nothing, and a call through it (`(c ? data.child : data.parent)('a')`) calls it.
+    Method(Box<Value<'a>>, &'static str),
     Regex(super::pattern::Pattern),
     Array(Vec<Value<'a>>),
 }
@@ -219,6 +224,9 @@ pub fn reset_evaluation_work_high_water() {
 struct Ctx<'c> {
     regex: bool,
     work: &'c std::cell::Cell<u64>,
+    /// The query and read kind, for `query.isOrderByChild()`.
+    query: Option<&'c QueryParams>,
+    read_kind: ReadKind,
 }
 
 /// Charges `amount` units of work; `None` (an error) past [`MAX_EVALUATION_WORK`].
@@ -386,14 +394,32 @@ fn eval_inner<'a>(
             member(object, key.as_deref(), scope)
         }
         ExprKind::Call(callee, arguments) => {
+            let ctx = Ctx {
+                regex: scope.dialect.regex,
+                work: &scope.work,
+                query: scope.query,
+                read_kind: scope.read_kind,
+            };
             let ExprKind::Member(object, name) = &callee.kind else {
-                return None;
+                // Any other callee is called when it evaluates to a method (a ternary of methods,
+                // a parenthesised member), with the arguments that method takes.
+                let Value::Method(receiver, name) = eval(callee, scope, observer)? else {
+                    return None;
+                };
+                let arguments = arguments
+                    .iter()
+                    .map(|a| eval(a, scope, observer))
+                    .collect::<Option<Vec<_>>>()?;
+                if !takes_arguments(name, arguments.len()) {
+                    return None;
+                }
+                return call(*receiver, name, &arguments, ctx);
             };
             let object = eval(object, scope, observer)?;
             observer.member_name(callee.diagnostic, name);
             let callable = matches!(
                 object,
-                Value::Snapshot(..) | Value::Str(_) | Value::Units(_)
+                Value::Snapshot(..) | Value::Str(_) | Value::Units(_) | Value::Query | Value::Http
             );
             if callable {
                 let method = observer.opaque(None);
@@ -411,15 +437,7 @@ fn eval_inner<'a>(
             if !callable {
                 observer.suppressed -= 1;
             }
-            call(
-                object,
-                name,
-                &arguments?,
-                Ctx {
-                    regex: scope.dialect.regex,
-                    work: &scope.work,
-                },
-            )
+            call(object, name, &arguments?, ctx)
         }
         ExprKind::Not(operand) => match eval(operand, scope, observer)? {
             Value::Bool(b) => Some(Value::Bool(!b)),
@@ -459,6 +477,10 @@ fn variable<'a>(name: &str, scope: &Scope<'a>) -> Option<Value<'a>> {
             .clone()
             .map(|snapshot| Value::Snapshot(snapshot, Version::New)),
         "query" => Some(Value::Query),
+        "http" => Some(Value::Http),
+        "OrderByKey" => Some(Value::Ordering(vec![ORDER_BY_KEY.to_owned()])),
+        "OrderByValue" => Some(Value::Ordering(vec![ORDER_BY_VALUE.to_owned()])),
+        "OrderByPriority" => Some(Value::Ordering(vec![PRIORITY_KEY.to_owned()])),
         _ => scope.wildcards.get(name).map(|key| Value::Str(key.clone())),
     }
 }
@@ -501,6 +523,10 @@ fn member<'a>(object: Value<'a>, name: Option<&str>, scope: &Scope<'a>) -> Optio
             #[allow(clippy::cast_precision_loss)]
             Some(Value::Num(units.len() as f64))
         }
+        Value::Str(_) | Value::Units(_) => method(object, name, &super::check::STRING_METHODS),
+        Value::Snapshot(..) => method(object, name, &super::check::SNAPSHOT_METHODS),
+        Value::Query if name == Some("isOrderByChild") => method(object, name, &["isOrderByChild"]),
+        Value::Http => method(object, name, &["encodeURL"]),
         Value::Query => query_member(
             scope.query,
             scope.read_kind,
@@ -508,6 +534,25 @@ fn member<'a>(object: Value<'a>, name: Option<&str>, scope: &Scope<'a>) -> Optio
             &scope.work,
         ),
         _ => None,
+    }
+}
+
+/// The method `name` of `object` read without a call, when `object` has one of that name.
+fn method<'a>(object: Value<'a>, name: Option<&str>, names: &[&'static str]) -> Option<Value<'a>> {
+    let name = names.iter().copied().find(|known| Some(*known) == name)?;
+    Some(Value::Method(Box::new(object), name))
+}
+
+/// Whether a method called through a value (`(c ? data.child : data.parent)(x)`) takes `n`
+/// arguments: the load checked the first method of the callee's type only, and the official
+/// emulator fails a call with another count (an internal error there, a denial here).
+fn takes_arguments(name: &str, n: usize) -> bool {
+    match name {
+        "replace" => n == 2,
+        "hasChildren" => n <= 1,
+        "val" | "parent" | "exists" | "getPriority" | "isNumber" | "isString" | "isBoolean"
+        | "toLowerCase" | "toUpperCase" => n == 0,
+        _ => n == 1,
     }
 }
 
@@ -651,14 +696,32 @@ fn bound_value<'a>(bound: Option<&Bound>) -> Value<'a> {
     }
 }
 
-/// `query.orderBy` on a read that does not order by a child: an ordering no path names (`$` is
-/// no key), so it equals only itself. In a write, a validation or a shallow read it is null, as
-/// the official emulator answers (`query.orderBy != null` is false in those).
+/// The ordering `OrderByKey` names: no path names it (`$` starts no key).
+const ORDER_BY_KEY: &str = "$key";
+/// The ordering `OrderByValue` names.
+const ORDER_BY_VALUE: &str = "$value";
+
+/// The ordering of a query that orders by key, by value or by priority, as `query.orderBy`
+/// gives it and `OrderByKey`, `OrderByValue` and `OrderByPriority` name it. An ordering by
+/// priority is the ordering by the child `.priority` (`query.orderBy == '.priority'` and
+/// `query.isOrderByChild('.priority')` hold there, recorded on the official emulator).
+fn ordering_of<'a>(order_by: &OrderBy) -> Value<'a> {
+    Value::Ordering(vec![match order_by {
+        OrderBy::Key => ORDER_BY_KEY,
+        OrderBy::Value => ORDER_BY_VALUE,
+        _ => PRIORITY_KEY,
+    }
+    .to_owned()])
+}
+
+/// `query.orderBy` on a read without a query: ordered by key for a REST `GET` and by priority
+/// for a stream or a realtime read. In a write, a validation or a shallow read it is null, as
+/// production and the official emulator answer (`query.orderBy != null` is false in those).
 fn order_by_marker<'a>(kind: ReadKind) -> Value<'a> {
-    if kind == ReadKind::Check {
-        Value::Null
-    } else {
-        Value::Ordering(vec!["$".to_owned()])
+    match kind {
+        ReadKind::Check => Value::Null,
+        ReadKind::Get => ordering_of(&OrderBy::Key),
+        ReadKind::Stream => ordering_of(&OrderBy::Priority),
     }
 }
 
@@ -710,11 +773,13 @@ fn query_member<'a>(
         // ordered by key, by value or by priority).
         "orderBy" => match &q.order_by {
             OrderBy::Child(path) => ordering(path)?,
-            _ => order_by_marker(kind),
+            other => ordering_of(other),
         },
         "equalTo" => bound(equal)?,
         "startAt" => bound(q.start.as_ref())?,
         "endAt" => bound(end)?,
+        // The exclusive end bound (`endBefore`), recorded RTDB-RULES-SYNTAX-20261108-01.
+        "endBefore" => bound(q.end.as_ref().filter(|e| !e.inclusive))?,
         "limitToFirst" => match q.limit {
             Some(Limit::First(n)) => Value::Num(f64::from(n)),
             _ => Value::Null,
@@ -772,6 +837,27 @@ fn call<'a>(
         Value::Snapshot(snapshot, version) => {
             snapshot_call(&snapshot, version, name, arguments, ctx)
         }
+        // `query` and `http` have one method each. Another name reaches here when a union type let it past the
+        // load (`(c ? 's' : http).replace(...)`): that call is an error, as there.
+        Value::Query if name == "isOrderByChild" => {
+            let keys = ordering_path(&path_argument(arguments, 0)?)?;
+            charge(
+                ctx.work,
+                keys.iter().map(String::len).sum::<usize>() + keys.len(),
+            )?;
+            let ordering = query_member(ctx.query, ctx.read_kind, "orderBy", ctx.work)?;
+            Some(Value::Bool(equal(&ordering, &Value::Ordering(keys))))
+        }
+        Value::Http if name == "encodeURL" => {
+            let units = units_of(arguments.first()?)?;
+            charge(ctx.work, units.len())?;
+            let encoded = java_url_encode(&units);
+            if encoded.len() > MAX_STRING_UNITS {
+                return None;
+            }
+            charge(ctx.work, encoded.len())?;
+            Some(Value::Str(encoded))
+        }
         Value::Str(s) if arguments.iter().any(|a| matches!(a, Value::Units(_))) => {
             units_call(&s.encode_utf16().collect::<Vec<_>>(), name, arguments, ctx)
         }
@@ -807,6 +893,45 @@ fn call<'a>(
         },
         _ => None,
     }
+}
+
+/// The keys of a path `isOrderByChild()` names, read as a string literal compared with an
+/// ordering is read: segments between slashes, empty ones dropped, each a valid key. A path
+/// without a segment, an invalid key or a lone surrogate is an error there, so the rule is false
+/// negated or not (recorded on the official emulator).
+fn ordering_path(text: &str) -> Option<Vec<String>> {
+    let joined: Vec<&str> = text.split('/').filter(|s| !s.is_empty()).collect();
+    if joined.is_empty() {
+        return None;
+    }
+    let path = Path::parse(&joined.join("/"), &crate::limits::Limits::default()).ok()?;
+    Some(path.keys().to_vec())
+}
+
+/// `http.encodeURL(s)` as the official emulator computes it: Java's
+/// `URLEncoder.encode(s, "UTF-8")` with each `+` it made for a space replaced by `%20`. ASCII
+/// letters, digits, `.`, `-`, `*` and `_` stay; every other character is each byte of its UTF-8
+/// form as `%XX` (upper case); a lone surrogate is encoded as `?` is, as Java's encoder
+/// replaces it.
+fn java_url_encode(units: &[u16]) -> String {
+    let mut out = String::new();
+    for decoded in char::decode_utf16(units.iter().copied()) {
+        let c = decoded.unwrap_or('?');
+        if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '*' | '_') {
+            out.push(c);
+        } else if c == ' ' {
+            out.push_str("%20");
+        } else {
+            let mut bytes = [0; 4];
+            for byte in c.encode_utf8(&mut bytes).bytes() {
+                const HEX: &[u8; 16] = b"0123456789ABCDEF";
+                out.push('%');
+                out.push(char::from(HEX[usize::from(byte >> 4)]));
+                out.push(char::from(HEX[usize::from(byte & 15)]));
+            }
+        }
+    }
+    out
 }
 
 /// The UTF-16 units of a string value.
@@ -1298,6 +1423,8 @@ mod bound_tests {
                 Ctx {
                     regex: false,
                     work: &std::cell::Cell::new(0),
+                    query: None,
+                    read_kind: ReadKind::Get,
                 },
             )
         };
@@ -1421,5 +1548,164 @@ mod bound_tests {
             let naive = haystack.windows(needle.len()).position(|w| w == needle.as_slice());
             proptest::prop_assert_eq!(find_units(&haystack, &needle), naive);
         }
+
+        /// `encodeURL` keeps exactly ASCII letters, digits and `.-*_`, and every other character is
+        /// the `%XX` bytes of its UTF-8 form (a lone surrogate those of `?`), so decoding gives the
+        /// input back with each lone surrogate as `?`.
+        #[test]
+        fn encode_url_is_utf8_percent_encoding_with_the_java_unreserved_set(
+            units in proptest::collection::vec(proptest::prop_oneof![0_u16..0x80, 0xD7F0_u16..0xE010, 0_u16..=u16::MAX], 0..12),
+        ) {
+            let encoded = java_url_encode(&units);
+            let mut bytes = Vec::new();
+            let mut rest = encoded.as_str();
+            while let Some(c) = rest.chars().next() {
+                if c == '%' {
+                    let hex = &rest[1..3];
+                    proptest::prop_assert_eq!(hex, hex.to_ascii_uppercase());
+                    bytes.push(u8::from_str_radix(hex, 16).unwrap());
+                    rest = &rest[3..];
+                } else {
+                    proptest::prop_assert!(c.is_ascii_alphanumeric() || ".-*_".contains(c), "{c:?} kept");
+                    bytes.push(u8::try_from(c).unwrap());
+                    rest = &rest[1..];
+                }
+            }
+            let expected: String = char::decode_utf16(units.iter().copied()).map(|d| d.unwrap_or('?')).collect();
+            proptest::prop_assert_eq!(String::from_utf8(bytes).unwrap(), expected.clone());
+            for c in expected.chars() {
+                if c.is_ascii_alphanumeric() || ".-*_".contains(c) {
+                    proptest::prop_assert!(encoded.contains(c));
+                }
+            }
+        }
+
+        /// A path for `isOrderByChild` is its non-empty segments: extra slashes never change it, and
+        /// no segment at all is an error.
+        #[test]
+        fn ordering_paths_ignore_empty_segments(keys in proptest::collection::vec("[a-z]{1,3}", 0..4), slashes in proptest::collection::vec(1_usize..3, 0..6)) {
+            let mut text = String::new();
+            for (i, key) in keys.iter().enumerate() {
+                text.push_str(&"/".repeat(*slashes.get(i).unwrap_or(&1)));
+                text.push_str(key);
+            }
+            text.push_str(&"/".repeat(*slashes.last().unwrap_or(&0)));
+            match ordering_path(&text) {
+                Some(path) => proptest::prop_assert_eq!(path, keys.clone()),
+                None => proptest::prop_assert!(keys.is_empty()),
+            }
+        }
+    }
+
+    fn query_call(argument: &str, work: &std::cell::Cell<u64>) -> Option<Value<'static>> {
+        call(
+            Value::Query,
+            "isOrderByChild",
+            &[Value::Str(argument.to_owned())],
+            Ctx {
+                regex: false,
+                work,
+                query: None,
+                read_kind: ReadKind::Get,
+            },
+        )
+    }
+
+    fn encode_call(argument: String, work: &std::cell::Cell<u64>) -> Option<usize> {
+        match call(
+            Value::Http,
+            "encodeURL",
+            &[Value::Str(argument)],
+            Ctx {
+                regex: false,
+                work,
+                query: None,
+                read_kind: ReadKind::Get,
+            },
+        ) {
+            Some(Value::Str(s)) => Some(s.len()),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn query_and_http_answer_only_their_own_method() {
+        let work = std::cell::Cell::new(0);
+        let ctx = || Ctx {
+            regex: false,
+            work: &work,
+            query: None,
+            read_kind: ReadKind::Get,
+        };
+        let text = [Value::Str("a".to_owned())];
+        assert!(call(
+            Value::Http,
+            "replace",
+            &[Value::Str("a".to_owned()), Value::Str("b".to_owned())],
+            ctx()
+        )
+        .is_none());
+        assert!(call(Value::Http, "contains", &text, ctx()).is_none());
+        assert!(call(Value::Query, "contains", &text, ctx()).is_none());
+        assert!(call(Value::Query, "encodeURL", &text, ctx()).is_none());
+        assert!(call(Value::Http, "encodeURL", &text, ctx()).is_some());
+    }
+
+    #[test]
+    fn is_order_by_child_is_charged_by_the_keys_it_reads() {
+        let work = std::cell::Cell::new(0);
+        assert!(matches!(
+            query_call("ab//c/", &work),
+            Some(Value::Bool(false))
+        ));
+        // `ab` and `c`: three bytes and two keys.
+        assert_eq!(work.get(), 5);
+        let work = std::cell::Cell::new(0);
+        assert!(query_call("$key", &work).is_none());
+        assert!(query_call("", &work).is_none());
+    }
+
+    #[test]
+    fn encode_url_builds_at_most_the_longest_string() {
+        // `+` encodes to three characters: 3n + 1 = 2^26 exactly.
+        let n = (MAX_STRING_UNITS - 1) / 3;
+        assert_eq!(3 * n + 1, MAX_STRING_UNITS);
+        let work = std::cell::Cell::new(0);
+        assert_eq!(
+            encode_call(format!("{}a", "+".repeat(n)), &work),
+            Some(MAX_STRING_UNITS)
+        );
+        assert_eq!(work.get(), u64::try_from(n + 1 + MAX_STRING_UNITS).unwrap());
+        let work = std::cell::Cell::new(0);
+        assert_eq!(encode_call(format!("{}ab", "+".repeat(n)), &work), None);
+    }
+
+    #[test]
+    fn methods_called_through_a_value_take_their_own_argument_counts() {
+        for (name, n) in [
+            ("replace", 2),
+            ("hasChildren", 0),
+            ("hasChildren", 1),
+            ("parent", 0),
+            ("val", 0),
+            ("child", 1),
+            ("contains", 1),
+            ("isOrderByChild", 1),
+            ("encodeURL", 1),
+            ("toUpperCase", 0),
+        ] {
+            assert!(takes_arguments(name, n), "{name} {n}");
+            assert!(
+                !takes_arguments(name, n + if name == "hasChildren" { 2 - n } else { 1 }),
+                "{name} {n}+"
+            );
+        }
+        assert!(!takes_arguments("child", 0));
+        assert!(!takes_arguments("replace", 1));
+        assert_eq!(
+            java_url_encode(&"a b+".encode_utf16().collect::<Vec<_>>()),
+            "a%20b%2B"
+        );
+        assert_eq!(java_url_encode(&[0xD83D]), "%3F");
     }
 }

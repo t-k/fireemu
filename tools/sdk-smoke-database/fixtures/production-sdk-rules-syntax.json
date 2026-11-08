@@ -1,0 +1,2022 @@
+{
+ "kind": "rtdb-sdk-rules-syntax-journal-v1",
+ "suite": "rules-syntax",
+ "prefix": "/sdkrulesyntax",
+ "result": {
+  "status": "complete",
+  "observed": 86,
+  "exit": 0,
+  "cleanup": {
+   "prefix": "verified",
+   "rules": "verified"
+  },
+  "unverified": []
+ },
+ "faults": [],
+ "profiles": [
+  {
+   "name": "r1-rules-syntax",
+   "rows": [
+    {
+     "id": "seed",
+     "doc": null,
+     "identity": "admin",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "{scope}.json",
+     "query": "",
+     "requestBody": "{\"eb\":{\"a\":1,\"b\":2,\"c\":3},\"ioc\":{\"a\":{\"h\":1},\"b\":{\"h\":2},\"c\":{\"h\":3}},\"obk\":{\"a\":1,\"b\":2},\"obv\":{\"a\":1,\"b\":2,\"c\":3},\"obp\":{\"a\":{\".value\":1,\".priority\":2},\"b\":{\".value\":2,\".priority\":1}},\"enc\":{\"a\":1,\"p\":1},\"mnc\":{\"a\":1,\"z\":1},\"mnt\":{\"s\":1,\"n\":1},\"tcl\":{\"a\":{\"k\":1},\"n\":{\"k\":1},\"w\":{\"k\":1}}}",
+     "status": 200,
+     "body": "{\"eb\":{\"a\":1,\"b\":2,\"c\":3},\"enc\":{\"a\":1,\"p\":1},\"ioc\":{\"a\":{\"h\":1},\"b\":{\"h\":2},\"c\":{\"h\":3}},\"mnc\":{\"a\":1,\"z\":1},\"mnt\":{\"n\":1,\"s\":1},\"obk\":{\"a\":1,\"b\":2},\"obp\":{\"a\":{\".value\":1,\".priority\":2.0},\"b\":{\".value\":2,\".priority\":1.0}},\"obv\":{\"a\":1,\"b\":2,\"c\":3},\"tcl\":{\"a\":{\"k\":1},\"n\":{\"k\":1},\"w\":{\"k\":1}}}",
+     "bodyBytes": 294,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "294",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "load-eb",
+     "doc": "eb",
+     "identity": "admin",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "/.settings/rules.json",
+     "query": "",
+     "requestBody": "{\"rules\":{\".read\":false,\".write\":false,\"sdkrulesyntax\":{\"rules-syntax\":{\"ready\":{\"eb\":{\".read\":true}},\"r1-rules-syntax\":{\"eb\":{\".read\":\"query.endBefore == 'b'\",\"w\":{\".write\":\"query.endBefore == null\"},\"x\":{\".write\":\"query.endBefore != null\"}}},\"r2-rules-syntax\":{\"eb\":{\".read\":\"query.endBefore == 'b'\",\"w\":{\".write\":\"query.endBefore == null\"},\"x\":{\".write\":\"query.endBefore != null\"}}}}}}}",
+     "status": 200,
+     "body": "{\"status\":\"ok\"}",
+     "bodyBytes": 15,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "15",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "eb-allow",
+     "doc": "eb",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/eb.json",
+     "query": "orderBy=%22%24key%22&endBefore=%22b%22&limitToLast=2",
+     "requestBody": null,
+     "status": 200,
+     "body": "{\"a\":1}",
+     "bodyBytes": 7,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "7",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "eb-deny-value",
+     "doc": "eb",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/eb.json",
+     "query": "orderBy=%22%24key%22&endBefore=%22c%22",
+     "requestBody": null,
+     "status": 401,
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "eb-deny-endat",
+     "doc": "eb",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/eb.json",
+     "query": "orderBy=%22%24key%22&endAt=%22b%22",
+     "requestBody": null,
+     "status": 401,
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "eb-deny-plain",
+     "doc": "eb",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/eb.json",
+     "query": "",
+     "requestBody": null,
+     "status": 401,
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "eb-write-null",
+     "doc": "eb",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "{scope}/eb/w.json",
+     "query": "",
+     "requestBody": "1",
+     "status": 200,
+     "body": "1",
+     "bodyBytes": 1,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "1",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "eb-write-set",
+     "doc": "eb",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "{scope}/eb/x.json",
+     "query": "",
+     "requestBody": "1",
+     "status": 401,
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "load-ioc",
+     "doc": "ioc",
+     "identity": "admin",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "/.settings/rules.json",
+     "query": "",
+     "requestBody": "{\"rules\":{\".read\":false,\".write\":false,\"sdkrulesyntax\":{\"rules-syntax\":{\"ready\":{\"ioc\":{\".read\":true}},\"r1-rules-syntax\":{\"ioc\":{\".read\":\"query.isOrderByChild('h')\",\".indexOn\":[\"h\"],\"w\":{\".write\":\"!query.isOrderByChild('h')\"},\"x\":{\".write\":\"query.isOrderByChild('h')\"}}},\"r2-rules-syntax\":{\"ioc\":{\".read\":\"query.isOrderByChild('h')\",\".indexOn\":[\"h\"],\"w\":{\".write\":\"!query.isOrderByChild('h')\"},\"x\":{\".write\":\"query.isOrderByChild('h')\"}}}}}}}",
+     "status": 200,
+     "body": "{\"status\":\"ok\"}",
+     "bodyBytes": 15,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "15",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "ioc-allow",
+     "doc": "ioc",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/ioc.json",
+     "query": "orderBy=%22h%22&limitToFirst=2",
+     "requestBody": null,
+     "status": 200,
+     "body": "{\"a\":{\"h\":1},\"b\":{\"h\":2}}",
+     "bodyBytes": 25,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "25",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "ioc-deny-key",
+     "doc": "ioc",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/ioc.json",
+     "query": "orderBy=%22%24key%22",
+     "requestBody": null,
+     "status": 401,
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "ioc-deny-plain",
+     "doc": "ioc",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/ioc.json",
+     "query": "",
+     "requestBody": null,
+     "status": 401,
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "ioc-write-not",
+     "doc": "ioc",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "{scope}/ioc/w.json",
+     "query": "",
+     "requestBody": "1",
+     "status": 200,
+     "body": "1",
+     "bodyBytes": 1,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "1",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "ioc-write-is",
+     "doc": "ioc",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "{scope}/ioc/x.json",
+     "query": "",
+     "requestBody": "1",
+     "status": 401,
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "load-obk",
+     "doc": "obk",
+     "identity": "admin",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "/.settings/rules.json",
+     "query": "",
+     "requestBody": "{\"rules\":{\".read\":false,\".write\":false,\"sdkrulesyntax\":{\"rules-syntax\":{\"ready\":{\"obk\":{\".read\":true}},\"r1-rules-syntax\":{\"obk\":{\".read\":\"query.orderBy == OrderByKey\",\"w\":{\".write\":\"query.orderBy == OrderByKey\"}}},\"r2-rules-syntax\":{\"obk\":{\".read\":\"query.orderBy == OrderByKey\",\"w\":{\".write\":\"query.orderBy == OrderByKey\"}}}}}}}",
+     "status": 200,
+     "body": "{\"status\":\"ok\"}",
+     "bodyBytes": 15,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "15",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "obk-allow-key",
+     "doc": "obk",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/obk.json",
+     "query": "orderBy=%22%24key%22&limitToFirst=1",
+     "requestBody": null,
+     "status": 200,
+     "body": "{\"a\":1}",
+     "bodyBytes": 7,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "7",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "obk-plain",
+     "doc": "obk",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/obk.json",
+     "query": "",
+     "requestBody": null,
+     "status": 200,
+     "body": "{\"a\":1,\"b\":2}",
+     "bodyBytes": 13,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "13",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "obk-deny-priority",
+     "doc": "obk",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/obk.json",
+     "query": "orderBy=%22%24priority%22",
+     "requestBody": null,
+     "status": 401,
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "obk-write",
+     "doc": "obk",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "{scope}/obk/w.json",
+     "query": "",
+     "requestBody": "1",
+     "status": 401,
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "load-obv",
+     "doc": "obv",
+     "identity": "admin",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "/.settings/rules.json",
+     "query": "",
+     "requestBody": "{\"rules\":{\".read\":false,\".write\":false,\"sdkrulesyntax\":{\"rules-syntax\":{\"ready\":{\"obv\":{\".read\":true}},\"r1-rules-syntax\":{\"obv\":{\".read\":\"query.orderBy == OrderByValue\",\".indexOn\":\".value\"}},\"r2-rules-syntax\":{\"obv\":{\".read\":\"query.orderBy == OrderByValue\",\".indexOn\":\".value\"}}}}}}",
+     "status": 200,
+     "body": "{\"status\":\"ok\"}",
+     "bodyBytes": 15,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "15",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "obv-allow",
+     "doc": "obv",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/obv.json",
+     "query": "orderBy=%22%24value%22&equalTo=2",
+     "requestBody": null,
+     "status": 200,
+     "body": "{\"b\":2}",
+     "bodyBytes": 7,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "7",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "obv-deny-key",
+     "doc": "obv",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/obv.json",
+     "query": "orderBy=%22%24key%22&equalTo=%22b%22",
+     "requestBody": null,
+     "status": 401,
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "obv-deny-plain",
+     "doc": "obv",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/obv.json",
+     "query": "",
+     "requestBody": null,
+     "status": 401,
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "load-obp",
+     "doc": "obp",
+     "identity": "admin",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "/.settings/rules.json",
+     "query": "",
+     "requestBody": "{\"rules\":{\".read\":false,\".write\":false,\"sdkrulesyntax\":{\"rules-syntax\":{\"ready\":{\"obp\":{\".read\":true}},\"r1-rules-syntax\":{\"obp\":{\".read\":\"query.orderBy == OrderByPriority\"}},\"r2-rules-syntax\":{\"obp\":{\".read\":\"query.orderBy == OrderByPriority\"}}}}}}",
+     "status": 200,
+     "body": "{\"status\":\"ok\"}",
+     "bodyBytes": 15,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "15",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "obp-allow",
+     "doc": "obp",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/obp.json",
+     "query": "orderBy=%22%24priority%22&limitToFirst=1",
+     "requestBody": null,
+     "status": 200,
+     "body": "{\"b\":2}",
+     "bodyBytes": 7,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "7",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "obp-deny-key",
+     "doc": "obp",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/obp.json",
+     "query": "orderBy=%22%24key%22",
+     "requestBody": null,
+     "status": 401,
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "obp-deny-plain",
+     "doc": "obp",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/obp.json",
+     "query": "",
+     "requestBody": null,
+     "status": 401,
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "load-enc",
+     "doc": "enc",
+     "identity": "admin",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "/.settings/rules.json",
+     "query": "",
+     "requestBody": "{\"rules\":{\".read\":false,\".write\":false,\"sdkrulesyntax\":{\"rules-syntax\":{\"ready\":{\"enc\":{\".read\":true}},\"r1-rules-syntax\":{\"enc\":{\"a\":{\".read\":\"http.encodeURL('a b') == 'a%20b'\"},\"p\":{\".read\":\"http.encodeURL('a b') == 'a+b'\"},\"w\":{\".write\":\"http.encodeURL('a b') == 'a%20b'\"}}},\"r2-rules-syntax\":{\"enc\":{\"a\":{\".read\":\"http.encodeURL('a b') == 'a%20b'\"},\"p\":{\".read\":\"http.encodeURL('a b') == 'a+b'\"},\"w\":{\".write\":\"http.encodeURL('a b') == 'a%20b'\"}}}}}}}",
+     "status": 200,
+     "body": "{\"status\":\"ok\"}",
+     "bodyBytes": 15,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "15",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "enc-allow",
+     "doc": "enc",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/enc/a.json",
+     "query": "",
+     "requestBody": null,
+     "status": 200,
+     "body": "1",
+     "bodyBytes": 1,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "1",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "enc-deny",
+     "doc": "enc",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/enc/p.json",
+     "query": "",
+     "requestBody": null,
+     "status": 401,
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "enc-write",
+     "doc": "enc",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "{scope}/enc/w.json",
+     "query": "",
+     "requestBody": "1",
+     "status": 200,
+     "body": "1",
+     "bodyBytes": 1,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "1",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "load-mnc",
+     "doc": "mnc",
+     "identity": "admin",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "/.settings/rules.json",
+     "query": "",
+     "requestBody": "{\"rules\":{\".read\":false,\".write\":false,\"sdkrulesyntax\":{\"rules-syntax\":{\"ready\":{\"mnc\":{\".read\":true}},\"r1-rules-syntax\":{\"mnc\":{\"a\":{\".read\":\"auth.uid.contains != null\"},\"z\":{\".read\":\"auth.uid.contains == null\"},\"w\":{\".write\":\"auth.uid.contains != null\"}}},\"r2-rules-syntax\":{\"mnc\":{\"a\":{\".read\":\"auth.uid.contains != null\"},\"z\":{\".read\":\"auth.uid.contains == null\"},\"w\":{\".write\":\"auth.uid.contains != null\"}}}}}}}",
+     "status": 200,
+     "body": "{\"status\":\"ok\"}",
+     "bodyBytes": 15,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "15",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "mnc-allow",
+     "doc": "mnc",
+     "identity": "override",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/mnc/a.json",
+     "query": "auth_variable_override=%7B%22uid%22%3A%22u1%22%7D",
+     "requestBody": null,
+     "status": 200,
+     "body": "1",
+     "bodyBytes": 1,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "1",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "mnc-deny",
+     "doc": "mnc",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/mnc/a.json",
+     "query": "",
+     "requestBody": null,
+     "status": 401,
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "mnc-anon-null",
+     "doc": "mnc",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/mnc/z.json",
+     "query": "",
+     "requestBody": null,
+     "status": 200,
+     "body": "1",
+     "bodyBytes": 1,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "1",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "mnc-write",
+     "doc": "mnc",
+     "identity": "override",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "{scope}/mnc/w.json",
+     "query": "auth_variable_override=%7B%22uid%22%3A%22u1%22%7D",
+     "requestBody": "1",
+     "status": 200,
+     "body": "1",
+     "bodyBytes": 1,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "1",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "load-mnt",
+     "doc": "mnt",
+     "identity": "admin",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "/.settings/rules.json",
+     "query": "",
+     "requestBody": "{\"rules\":{\".read\":false,\".write\":false,\"sdkrulesyntax\":{\"rules-syntax\":{\"ready\":{\"mnt\":{\".read\":true}},\"r1-rules-syntax\":{\"mnt\":{\"s\":{\".read\":\"(now > 0 ? 'abc'.contains : 'x') != null\"},\"n\":{\".read\":\"(now > 0 ? data.child : 'x') == null\"}}},\"r2-rules-syntax\":{\"mnt\":{\"s\":{\".read\":\"(now > 0 ? 'abc'.contains : 'x') != null\"},\"n\":{\".read\":\"(now > 0 ? data.child : 'x') == null\"}}}}}}}",
+     "status": 200,
+     "body": "{\"status\":\"ok\"}",
+     "bodyBytes": 15,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "15",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "mnt-string-allow",
+     "doc": "mnt",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/mnt/s.json",
+     "query": "",
+     "requestBody": null,
+     "status": 200,
+     "body": "1",
+     "bodyBytes": 1,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "1",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "mnt-snapshot-deny",
+     "doc": "mnt",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/mnt/n.json",
+     "query": "",
+     "requestBody": null,
+     "status": 401,
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "load-tcl",
+     "doc": "tcl",
+     "identity": "admin",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "/.settings/rules.json",
+     "query": "",
+     "requestBody": "{\"rules\":{\".read\":false,\".write\":false,\"sdkrulesyntax\":{\"rules-syntax\":{\"ready\":{\"tcl\":{\".read\":true}},\"r1-rules-syntax\":{\"tcl\":{\"a\":{\".read\":\"(true ? data.child : data.parent)('k').exists()\"},\"n\":{\".read\":\"(true ? data.child : data.parent)('zz').exists()\"},\"w\":{\".write\":\"(true ? data.child : data.parent)('k').exists()\"}}},\"r2-rules-syntax\":{\"tcl\":{\"a\":{\".read\":\"(true ? data.child : data.parent)('k').exists()\"},\"n\":{\".read\":\"(true ? data.child : data.parent)('zz').exists()\"},\"w\":{\".write\":\"(true ? data.child : data.parent)('k').exists()\"}}}}}}}",
+     "status": 200,
+     "body": "{\"status\":\"ok\"}",
+     "bodyBytes": 15,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "15",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "tcl-allow",
+     "doc": "tcl",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/tcl/a.json",
+     "query": "",
+     "requestBody": null,
+     "status": 200,
+     "body": "{\"k\":1}",
+     "bodyBytes": 7,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "7",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "tcl-deny",
+     "doc": "tcl",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/tcl/n.json",
+     "query": "",
+     "requestBody": null,
+     "status": 401,
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "tcl-write",
+     "doc": "tcl",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "{scope}/tcl/w.json",
+     "query": "",
+     "requestBody": "1",
+     "status": 200,
+     "body": "1",
+     "bodyBytes": 1,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "1",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    }
+   ],
+   "probes": {
+    "eb": [
+     200
+    ],
+    "ioc": [
+     200
+    ],
+    "obk": [
+     200
+    ],
+    "obv": [
+     200
+    ],
+    "obp": [
+     200
+    ],
+    "enc": [
+     200
+    ],
+    "mnc": [
+     200
+    ],
+    "mnt": [
+     200
+    ],
+    "tcl": [
+     200
+    ]
+   }
+  },
+  {
+   "name": "r2-rules-syntax",
+   "rows": [
+    {
+     "id": "seed",
+     "doc": null,
+     "identity": "admin",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "{scope}.json",
+     "query": "",
+     "requestBody": "{\"eb\":{\"a\":1,\"b\":2,\"c\":3},\"ioc\":{\"a\":{\"h\":1},\"b\":{\"h\":2},\"c\":{\"h\":3}},\"obk\":{\"a\":1,\"b\":2},\"obv\":{\"a\":1,\"b\":2,\"c\":3},\"obp\":{\"a\":{\".value\":1,\".priority\":2},\"b\":{\".value\":2,\".priority\":1}},\"enc\":{\"a\":1,\"p\":1},\"mnc\":{\"a\":1,\"z\":1},\"mnt\":{\"s\":1,\"n\":1},\"tcl\":{\"a\":{\"k\":1},\"n\":{\"k\":1},\"w\":{\"k\":1}}}",
+     "status": 200,
+     "body": "{\"eb\":{\"a\":1,\"b\":2,\"c\":3},\"enc\":{\"a\":1,\"p\":1},\"ioc\":{\"a\":{\"h\":1},\"b\":{\"h\":2},\"c\":{\"h\":3}},\"mnc\":{\"a\":1,\"z\":1},\"mnt\":{\"n\":1,\"s\":1},\"obk\":{\"a\":1,\"b\":2},\"obp\":{\"a\":{\".value\":1,\".priority\":2.0},\"b\":{\".value\":2,\".priority\":1.0}},\"obv\":{\"a\":1,\"b\":2,\"c\":3},\"tcl\":{\"a\":{\"k\":1},\"n\":{\"k\":1},\"w\":{\"k\":1}}}",
+     "bodyBytes": 294,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "294",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "load-eb",
+     "doc": "eb",
+     "identity": "admin",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "/.settings/rules.json",
+     "query": "",
+     "requestBody": "{\"rules\":{\".read\":false,\".write\":false,\"sdkrulesyntax\":{\"rules-syntax\":{\"ready\":{\"eb\":{\".read\":true}},\"r1-rules-syntax\":{\"eb\":{\".read\":\"query.endBefore == 'b'\",\"w\":{\".write\":\"query.endBefore == null\"},\"x\":{\".write\":\"query.endBefore != null\"}}},\"r2-rules-syntax\":{\"eb\":{\".read\":\"query.endBefore == 'b'\",\"w\":{\".write\":\"query.endBefore == null\"},\"x\":{\".write\":\"query.endBefore != null\"}}}}}}}",
+     "status": 200,
+     "body": "{\"status\":\"ok\"}",
+     "bodyBytes": 15,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "15",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "eb-allow",
+     "doc": "eb",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/eb.json",
+     "query": "orderBy=%22%24key%22&endBefore=%22b%22&limitToLast=2",
+     "requestBody": null,
+     "status": 200,
+     "body": "{\"a\":1}",
+     "bodyBytes": 7,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "7",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "eb-deny-value",
+     "doc": "eb",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/eb.json",
+     "query": "orderBy=%22%24key%22&endBefore=%22c%22",
+     "requestBody": null,
+     "status": 401,
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "eb-deny-endat",
+     "doc": "eb",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/eb.json",
+     "query": "orderBy=%22%24key%22&endAt=%22b%22",
+     "requestBody": null,
+     "status": 401,
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "eb-deny-plain",
+     "doc": "eb",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/eb.json",
+     "query": "",
+     "requestBody": null,
+     "status": 401,
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "eb-write-null",
+     "doc": "eb",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "{scope}/eb/w.json",
+     "query": "",
+     "requestBody": "1",
+     "status": 200,
+     "body": "1",
+     "bodyBytes": 1,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "1",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "eb-write-set",
+     "doc": "eb",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "{scope}/eb/x.json",
+     "query": "",
+     "requestBody": "1",
+     "status": 401,
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "load-ioc",
+     "doc": "ioc",
+     "identity": "admin",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "/.settings/rules.json",
+     "query": "",
+     "requestBody": "{\"rules\":{\".read\":false,\".write\":false,\"sdkrulesyntax\":{\"rules-syntax\":{\"ready\":{\"ioc\":{\".read\":true}},\"r1-rules-syntax\":{\"ioc\":{\".read\":\"query.isOrderByChild('h')\",\".indexOn\":[\"h\"],\"w\":{\".write\":\"!query.isOrderByChild('h')\"},\"x\":{\".write\":\"query.isOrderByChild('h')\"}}},\"r2-rules-syntax\":{\"ioc\":{\".read\":\"query.isOrderByChild('h')\",\".indexOn\":[\"h\"],\"w\":{\".write\":\"!query.isOrderByChild('h')\"},\"x\":{\".write\":\"query.isOrderByChild('h')\"}}}}}}}",
+     "status": 200,
+     "body": "{\"status\":\"ok\"}",
+     "bodyBytes": 15,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "15",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "ioc-allow",
+     "doc": "ioc",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/ioc.json",
+     "query": "orderBy=%22h%22&limitToFirst=2",
+     "requestBody": null,
+     "status": 200,
+     "body": "{\"a\":{\"h\":1},\"b\":{\"h\":2}}",
+     "bodyBytes": 25,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "25",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "ioc-deny-key",
+     "doc": "ioc",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/ioc.json",
+     "query": "orderBy=%22%24key%22",
+     "requestBody": null,
+     "status": 401,
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "ioc-deny-plain",
+     "doc": "ioc",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/ioc.json",
+     "query": "",
+     "requestBody": null,
+     "status": 401,
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "ioc-write-not",
+     "doc": "ioc",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "{scope}/ioc/w.json",
+     "query": "",
+     "requestBody": "1",
+     "status": 200,
+     "body": "1",
+     "bodyBytes": 1,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "1",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "ioc-write-is",
+     "doc": "ioc",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "{scope}/ioc/x.json",
+     "query": "",
+     "requestBody": "1",
+     "status": 401,
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "load-obk",
+     "doc": "obk",
+     "identity": "admin",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "/.settings/rules.json",
+     "query": "",
+     "requestBody": "{\"rules\":{\".read\":false,\".write\":false,\"sdkrulesyntax\":{\"rules-syntax\":{\"ready\":{\"obk\":{\".read\":true}},\"r1-rules-syntax\":{\"obk\":{\".read\":\"query.orderBy == OrderByKey\",\"w\":{\".write\":\"query.orderBy == OrderByKey\"}}},\"r2-rules-syntax\":{\"obk\":{\".read\":\"query.orderBy == OrderByKey\",\"w\":{\".write\":\"query.orderBy == OrderByKey\"}}}}}}}",
+     "status": 200,
+     "body": "{\"status\":\"ok\"}",
+     "bodyBytes": 15,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "15",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "obk-allow-key",
+     "doc": "obk",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/obk.json",
+     "query": "orderBy=%22%24key%22&limitToFirst=1",
+     "requestBody": null,
+     "status": 200,
+     "body": "{\"a\":1}",
+     "bodyBytes": 7,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "7",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "obk-plain",
+     "doc": "obk",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/obk.json",
+     "query": "",
+     "requestBody": null,
+     "status": 200,
+     "body": "{\"a\":1,\"b\":2}",
+     "bodyBytes": 13,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "13",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "obk-deny-priority",
+     "doc": "obk",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/obk.json",
+     "query": "orderBy=%22%24priority%22",
+     "requestBody": null,
+     "status": 401,
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "obk-write",
+     "doc": "obk",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "{scope}/obk/w.json",
+     "query": "",
+     "requestBody": "1",
+     "status": 401,
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "load-obv",
+     "doc": "obv",
+     "identity": "admin",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "/.settings/rules.json",
+     "query": "",
+     "requestBody": "{\"rules\":{\".read\":false,\".write\":false,\"sdkrulesyntax\":{\"rules-syntax\":{\"ready\":{\"obv\":{\".read\":true}},\"r1-rules-syntax\":{\"obv\":{\".read\":\"query.orderBy == OrderByValue\",\".indexOn\":\".value\"}},\"r2-rules-syntax\":{\"obv\":{\".read\":\"query.orderBy == OrderByValue\",\".indexOn\":\".value\"}}}}}}",
+     "status": 200,
+     "body": "{\"status\":\"ok\"}",
+     "bodyBytes": 15,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "15",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "obv-allow",
+     "doc": "obv",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/obv.json",
+     "query": "orderBy=%22%24value%22&equalTo=2",
+     "requestBody": null,
+     "status": 200,
+     "body": "{\"b\":2}",
+     "bodyBytes": 7,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "7",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "obv-deny-key",
+     "doc": "obv",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/obv.json",
+     "query": "orderBy=%22%24key%22&equalTo=%22b%22",
+     "requestBody": null,
+     "status": 401,
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "obv-deny-plain",
+     "doc": "obv",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/obv.json",
+     "query": "",
+     "requestBody": null,
+     "status": 401,
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "load-obp",
+     "doc": "obp",
+     "identity": "admin",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "/.settings/rules.json",
+     "query": "",
+     "requestBody": "{\"rules\":{\".read\":false,\".write\":false,\"sdkrulesyntax\":{\"rules-syntax\":{\"ready\":{\"obp\":{\".read\":true}},\"r1-rules-syntax\":{\"obp\":{\".read\":\"query.orderBy == OrderByPriority\"}},\"r2-rules-syntax\":{\"obp\":{\".read\":\"query.orderBy == OrderByPriority\"}}}}}}",
+     "status": 200,
+     "body": "{\"status\":\"ok\"}",
+     "bodyBytes": 15,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "15",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "obp-allow",
+     "doc": "obp",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/obp.json",
+     "query": "orderBy=%22%24priority%22&limitToFirst=1",
+     "requestBody": null,
+     "status": 200,
+     "body": "{\"b\":2}",
+     "bodyBytes": 7,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "7",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "obp-deny-key",
+     "doc": "obp",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/obp.json",
+     "query": "orderBy=%22%24key%22",
+     "requestBody": null,
+     "status": 401,
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "obp-deny-plain",
+     "doc": "obp",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/obp.json",
+     "query": "",
+     "requestBody": null,
+     "status": 401,
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "load-enc",
+     "doc": "enc",
+     "identity": "admin",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "/.settings/rules.json",
+     "query": "",
+     "requestBody": "{\"rules\":{\".read\":false,\".write\":false,\"sdkrulesyntax\":{\"rules-syntax\":{\"ready\":{\"enc\":{\".read\":true}},\"r1-rules-syntax\":{\"enc\":{\"a\":{\".read\":\"http.encodeURL('a b') == 'a%20b'\"},\"p\":{\".read\":\"http.encodeURL('a b') == 'a+b'\"},\"w\":{\".write\":\"http.encodeURL('a b') == 'a%20b'\"}}},\"r2-rules-syntax\":{\"enc\":{\"a\":{\".read\":\"http.encodeURL('a b') == 'a%20b'\"},\"p\":{\".read\":\"http.encodeURL('a b') == 'a+b'\"},\"w\":{\".write\":\"http.encodeURL('a b') == 'a%20b'\"}}}}}}}",
+     "status": 200,
+     "body": "{\"status\":\"ok\"}",
+     "bodyBytes": 15,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "15",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "enc-allow",
+     "doc": "enc",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/enc/a.json",
+     "query": "",
+     "requestBody": null,
+     "status": 200,
+     "body": "1",
+     "bodyBytes": 1,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "1",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "enc-deny",
+     "doc": "enc",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/enc/p.json",
+     "query": "",
+     "requestBody": null,
+     "status": 401,
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "enc-write",
+     "doc": "enc",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "{scope}/enc/w.json",
+     "query": "",
+     "requestBody": "1",
+     "status": 200,
+     "body": "1",
+     "bodyBytes": 1,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "1",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "load-mnc",
+     "doc": "mnc",
+     "identity": "admin",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "/.settings/rules.json",
+     "query": "",
+     "requestBody": "{\"rules\":{\".read\":false,\".write\":false,\"sdkrulesyntax\":{\"rules-syntax\":{\"ready\":{\"mnc\":{\".read\":true}},\"r1-rules-syntax\":{\"mnc\":{\"a\":{\".read\":\"auth.uid.contains != null\"},\"z\":{\".read\":\"auth.uid.contains == null\"},\"w\":{\".write\":\"auth.uid.contains != null\"}}},\"r2-rules-syntax\":{\"mnc\":{\"a\":{\".read\":\"auth.uid.contains != null\"},\"z\":{\".read\":\"auth.uid.contains == null\"},\"w\":{\".write\":\"auth.uid.contains != null\"}}}}}}}",
+     "status": 200,
+     "body": "{\"status\":\"ok\"}",
+     "bodyBytes": 15,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "15",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "mnc-allow",
+     "doc": "mnc",
+     "identity": "override",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/mnc/a.json",
+     "query": "auth_variable_override=%7B%22uid%22%3A%22u1%22%7D",
+     "requestBody": null,
+     "status": 200,
+     "body": "1",
+     "bodyBytes": 1,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "1",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "mnc-deny",
+     "doc": "mnc",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/mnc/a.json",
+     "query": "",
+     "requestBody": null,
+     "status": 401,
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "mnc-anon-null",
+     "doc": "mnc",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/mnc/z.json",
+     "query": "",
+     "requestBody": null,
+     "status": 200,
+     "body": "1",
+     "bodyBytes": 1,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "1",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "mnc-write",
+     "doc": "mnc",
+     "identity": "override",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "{scope}/mnc/w.json",
+     "query": "auth_variable_override=%7B%22uid%22%3A%22u1%22%7D",
+     "requestBody": "1",
+     "status": 200,
+     "body": "1",
+     "bodyBytes": 1,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "1",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "load-mnt",
+     "doc": "mnt",
+     "identity": "admin",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "/.settings/rules.json",
+     "query": "",
+     "requestBody": "{\"rules\":{\".read\":false,\".write\":false,\"sdkrulesyntax\":{\"rules-syntax\":{\"ready\":{\"mnt\":{\".read\":true}},\"r1-rules-syntax\":{\"mnt\":{\"s\":{\".read\":\"(now > 0 ? 'abc'.contains : 'x') != null\"},\"n\":{\".read\":\"(now > 0 ? data.child : 'x') == null\"}}},\"r2-rules-syntax\":{\"mnt\":{\"s\":{\".read\":\"(now > 0 ? 'abc'.contains : 'x') != null\"},\"n\":{\".read\":\"(now > 0 ? data.child : 'x') == null\"}}}}}}}",
+     "status": 200,
+     "body": "{\"status\":\"ok\"}",
+     "bodyBytes": 15,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "15",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "mnt-string-allow",
+     "doc": "mnt",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/mnt/s.json",
+     "query": "",
+     "requestBody": null,
+     "status": 200,
+     "body": "1",
+     "bodyBytes": 1,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "1",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "mnt-snapshot-deny",
+     "doc": "mnt",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/mnt/n.json",
+     "query": "",
+     "requestBody": null,
+     "status": 401,
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "load-tcl",
+     "doc": "tcl",
+     "identity": "admin",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "/.settings/rules.json",
+     "query": "",
+     "requestBody": "{\"rules\":{\".read\":false,\".write\":false,\"sdkrulesyntax\":{\"rules-syntax\":{\"ready\":{\"tcl\":{\".read\":true}},\"r1-rules-syntax\":{\"tcl\":{\"a\":{\".read\":\"(true ? data.child : data.parent)('k').exists()\"},\"n\":{\".read\":\"(true ? data.child : data.parent)('zz').exists()\"},\"w\":{\".write\":\"(true ? data.child : data.parent)('k').exists()\"}}},\"r2-rules-syntax\":{\"tcl\":{\"a\":{\".read\":\"(true ? data.child : data.parent)('k').exists()\"},\"n\":{\".read\":\"(true ? data.child : data.parent)('zz').exists()\"},\"w\":{\".write\":\"(true ? data.child : data.parent)('k').exists()\"}}}}}}}",
+     "status": 200,
+     "body": "{\"status\":\"ok\"}",
+     "bodyBytes": 15,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "15",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "tcl-allow",
+     "doc": "tcl",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/tcl/a.json",
+     "query": "",
+     "requestBody": null,
+     "status": 200,
+     "body": "{\"k\":1}",
+     "bodyBytes": 7,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "7",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "tcl-deny",
+     "doc": "tcl",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "GET",
+     "path": "{scope}/tcl/n.json",
+     "query": "",
+     "requestBody": null,
+     "status": 401,
+     "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+     "bodyBytes": 36,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "36",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    },
+    {
+     "id": "tcl-write",
+     "doc": "tcl",
+     "identity": "anonymous",
+     "ok": true,
+     "outcome": "answered",
+     "method": "PUT",
+     "path": "{scope}/tcl/w.json",
+     "query": "",
+     "requestBody": "1",
+     "status": 200,
+     "body": "1",
+     "bodyBytes": 1,
+     "utf8": true,
+     "clipped": false,
+     "responseHeaders": {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": "1",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*"
+     }
+    }
+   ],
+   "probes": {
+    "eb": [
+     200
+    ],
+    "ioc": [
+     200
+    ],
+    "obk": [
+     200
+    ],
+    "obv": [
+     200
+    ],
+    "obp": [
+     200
+    ],
+    "enc": [
+     200
+    ],
+    "mnc": [
+     200
+    ],
+    "mnt": [
+     200
+    ],
+    "tcl": [
+     200
+    ]
+   }
+  }
+ ],
+ "provenance": {
+  "runId": "RTDB-RULES-SYNTAX-20261108-01",
+  "target": "production",
+  "project": "fireemu-oracle-query",
+  "instance": "fireemu-q-rtdb2",
+  "suite": "rules-syntax",
+  "recordedOn": "2026-11-08",
+  "startedAt": "2026-11-08T09:24:44.878Z",
+  "endedAt": "2026-11-08T09:25:12.263Z",
+  "scriptSha256": "da6c81d21ea82cafca72fc1c8f188ea466c7bcdad647086ef1cef4468805f036",
+  "sourceHead": "1015a3a5351bcbb3906833c0efbdb88c0b7e3cdc",
+  "packetSha256": "cda5e412a22b023de14764e7316153dd9d399aca338bf5515b3dd9e896647bb5",
+  "caseSources": {
+   "rules-syntax-suite.mjs": "29df5c9f18a7fbe132fbf20fa544605467382bea8ac3853bc791a69c555551cc"
+  },
+  "counts": {
+   "requests": 112,
+   "direct": 108,
+   "reserve": 4,
+   "adc": 1,
+   "overflow": 0
+  },
+  "caps": {
+   "direct": 160,
+   "reserve": 12,
+   "adc": 1
+  },
+  "cleanup": {
+   "prefix": "verified",
+   "rules": "verified"
+  },
+  "observations": 86,
+  "sandboxLedger": {
+   "booking": 1280,
+   "close": 1281
+  },
+  "approvals": [
+   2352,
+   2353,
+   2354
+  ],
+  "journalSha256": "e0744b61e3162206acfa4c62de73e0bca9060cd1c641bb853aea057b4376cd55",
+  "resultSha256": "e103df66007291f91470d2520016e7065e92bf6abb7ea5308b0be1f26e4375ea"
+ }
+}

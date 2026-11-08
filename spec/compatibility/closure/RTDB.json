@@ -1179,7 +1179,7 @@
         "fixtureSha256": "ed2b866ffa7d33ba76c3bab870a02293d2033a4a2587b01eb897affd88deb57f",
         "comparisonTool": "tools/sdk-smoke-database/rtdb-sdk-small-judge.mjs",
         "comparisonPath": "spec/compatibility/closure/evidence/RTDB-sdk-small-comparison.json",
-        "comparisonSha256": "2bfdb4112c975c1943d9e8df22c6cec7d473d270a591a7463256e97a36394f80",
+        "comparisonSha256": "4841f0e916bfdbc4eca26bb2ec3e95873aa02a0c244ec3c5ddfb6820a97b3730",
         "release": "closure-build",
         "sourceCommit": "d0e81b04377f08f7d32597e809eeca318b49af2a",
         "binarySha256": "28c8708cd9245eef82c4e4f315f7ddf63fade919800c31f5a873235e9e0a46f2",
@@ -1238,7 +1238,7 @@
         "fixtureSha256": "75a8e586267e6681d9f88085219920bc829a94d7600699557c08d91b85de2fe8",
         "comparisonTool": "tools/sdk-smoke-database/rtdb-sdk-events-judge.mjs",
         "comparisonPath": "spec/compatibility/closure/evidence/RTDB-sdk-events-comparison.json",
-        "comparisonSha256": "ba0d47a373ddc865199bd443c9ec613c7a955c3cf444c0737f5680cd86584f43",
+        "comparisonSha256": "cea2692bb110b9905c9e4d91590278ef871ba65221f3eb219fb16dfbb93b5cc6",
         "release": "closure-build",
         "sourceCommit": "d0e81b04377f08f7d32597e809eeca318b49af2a",
         "binarySha256": "28c8708cd9245eef82c4e4f315f7ddf63fade919800c31f5a873235e9e0a46f2",
@@ -1295,7 +1295,7 @@
         "fixtureSha256": "75a8e586267e6681d9f88085219920bc829a94d7600699557c08d91b85de2fe8",
         "comparisonTool": "tools/sdk-smoke-database/rtdb-sdk-events-judge.mjs",
         "comparisonPath": "spec/compatibility/closure/evidence/RTDB-sdk-events-comparison.json",
-        "comparisonSha256": "ba0d47a373ddc865199bd443c9ec613c7a955c3cf444c0737f5680cd86584f43",
+        "comparisonSha256": "cea2692bb110b9905c9e4d91590278ef871ba65221f3eb219fb16dfbb93b5cc6",
         "release": "closure-build",
         "sourceCommit": "d0e81b04377f08f7d32597e809eeca318b49af2a",
         "binarySha256": "28c8708cd9245eef82c4e4f315f7ddf63fade919800c31f5a873235e9e0a46f2",
@@ -1348,7 +1348,7 @@
         "fixtureSha256": "d3fb07dedd12c1a066c39ea167eda6ef948e3c43e2e4eb97ed8453eb5e16d7bb",
         "comparisonTool": "tools/sdk-smoke-database/rtdb-sdk-rest-judge.mjs",
         "comparisonPath": "spec/compatibility/closure/evidence/RTDB-sdk-rest-comparison.json",
-        "comparisonSha256": "7c31fd4786f87cfab2237ec0d1ff650b5493d6d3b05df220ba158fe3d71981af",
+        "comparisonSha256": "ade1c340566eba71aee2060c0197c176c6d4d87f1ec5d754e77ca2dab2a8686a",
         "release": "closure-build",
         "sourceCommit": "d0e81b04377f08f7d32597e809eeca318b49af2a",
         "binarySha256": "28c8708cd9245eef82c4e4f315f7ddf63fade919800c31f5a873235e9e0a46f2",
@@ -1422,7 +1422,7 @@
         "fixtureSha256": "455517043f3628bf3930c8db9792bf297e077c07152726f76c27982f6d4ce49b",
         "comparisonTool": "tools/sdk-smoke-database/rtdb-sdk-rules-judge.mjs",
         "comparisonPath": "spec/compatibility/closure/evidence/RTDB-sdk-rules-comparison.json",
-        "comparisonSha256": "9d336e68f704b41f397a2edc67eb4c74f1a27df2f26e0698ab5f741b8611cdfa",
+        "comparisonSha256": "189920a06501834dcf354661c37689dcd522429ad3d470c673ec2a30d95efaa8",
         "release": "closure-build",
         "sourceCommit": "d0e81b04377f08f7d32597e809eeca318b49af2a",
         "binarySha256": "28c8708cd9245eef82c4e4f315f7ddf63fade919800c31f5a873235e9e0a46f2",
@@ -1485,7 +1485,7 @@
         "fixtureSha256": "298f58e842e3982e42c0638017bfc285224867ac39359da7b65eb8b2b43c061b",
         "comparisonTool": "tools/sdk-smoke-database/rtdb-sdk-rules-load-judge.mjs",
         "comparisonPath": "spec/compatibility/closure/evidence/RTDB-sdk-rules-load-comparison.json",
-        "comparisonSha256": "194e13ed15f7657ca341e6dd22a21d668af99886469f5eecda62c8cc38edc56e",
+        "comparisonSha256": "7f3b45800bcfab8297170b63c7edcee600ae37b68840968e82533329063dbece",
         "release": "closure-build",
         "sourceCommit": "d0e81b04377f08f7d32597e809eeca318b49af2a",
         "binarySha256": "28c8708cd9245eef82c4e4f315f7ddf63fade919800c31f5a873235e9e0a46f2",
@@ -1644,7 +1644,7 @@
         "fixtureSha256": "877d31ba10797590672527623da0b07429ce614d7f1e8240f457bd1168e1e502",
         "comparisonTool": "tools/sdk-smoke-database/rtdb-sdk-tokens-judge.mjs",
         "comparisonPath": "spec/compatibility/closure/evidence/RTDB-sdk-tokens-comparison.json",
-        "comparisonSha256": "5a0c28fad2f54f44c43a652813c0b72e5cae2a36063cb82b722118026e7de2d8",
+        "comparisonSha256": "89ceec2bc8ddb3d71a338887ccaa4340abd5c2f19feb3261e1ee489a3d07cc9c",
         "release": "closure-build",
         "sourceCommit": "d0e81b04377f08f7d32597e809eeca318b49af2a",
         "binarySha256": "28c8708cd9245eef82c4e4f315f7ddf63fade919800c31f5a873235e9e0a46f2",
@@ -1846,7 +1846,7 @@
       },
       {
         "path": "spec/compatibility/closure/evidence/RTDB-sdk-small-comparison.json",
-        "sha256": "2bfdb4112c975c1943d9e8df22c6cec7d473d270a591a7463256e97a36394f80",
+        "sha256": "4841f0e916bfdbc4eca26bb2ec3e95873aa02a0c244ec3c5ddfb6820a97b3730",
         "rows": 32,
         "summary": {
           "strict": {
@@ -1864,7 +1864,7 @@
       },
       {
         "path": "spec/compatibility/closure/evidence/RTDB-sdk-events-comparison.json",
-        "sha256": "ba0d47a373ddc865199bd443c9ec613c7a955c3cf444c0737f5680cd86584f43",
+        "sha256": "cea2692bb110b9905c9e4d91590278ef871ba65221f3eb219fb16dfbb93b5cc6",
         "rows": 160,
         "summary": {
           "strict": {
@@ -1882,7 +1882,7 @@
       },
       {
         "path": "spec/compatibility/closure/evidence/RTDB-sdk-rest-comparison.json",
-        "sha256": "7c31fd4786f87cfab2237ec0d1ff650b5493d6d3b05df220ba158fe3d71981af",
+        "sha256": "ade1c340566eba71aee2060c0197c176c6d4d87f1ec5d754e77ca2dab2a8686a",
         "rows": 144,
         "summary": {
           "strict": {
@@ -1900,7 +1900,7 @@
       },
       {
         "path": "spec/compatibility/closure/evidence/RTDB-sdk-rules-comparison.json",
-        "sha256": "9d336e68f704b41f397a2edc67eb4c74f1a27df2f26e0698ab5f741b8611cdfa",
+        "sha256": "189920a06501834dcf354661c37689dcd522429ad3d470c673ec2a30d95efaa8",
         "rows": 140,
         "summary": {
           "strict": {
@@ -1918,7 +1918,7 @@
       },
       {
         "path": "spec/compatibility/closure/evidence/RTDB-sdk-tokens-comparison.json",
-        "sha256": "5a0c28fad2f54f44c43a652813c0b72e5cae2a36063cb82b722118026e7de2d8",
+        "sha256": "89ceec2bc8ddb3d71a338887ccaa4340abd5c2f19feb3261e1ee489a3d07cc9c",
         "rows": 54,
         "summary": {
           "strict": {
@@ -1936,7 +1936,7 @@
       },
       {
         "path": "spec/compatibility/closure/evidence/RTDB-sdk-rules-load-comparison.json",
-        "sha256": "194e13ed15f7657ca341e6dd22a21d668af99886469f5eecda62c8cc38edc56e",
+        "sha256": "7f3b45800bcfab8297170b63c7edcee600ae37b68840968e82533329063dbece",
         "rows": 14,
         "summary": {
           "strict": {

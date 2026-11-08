@@ -236,6 +236,25 @@ fn query_order_by_loads_and_decides_as_the_official_emulator() {
     );
 }
 
+/// The constructs production loaded and evaluated in RTDB-RULES-SYNTAX-20261108-01 exactly as the
+/// official emulator does: `query.endBefore`, `query.isOrderByChild()`, `OrderByKey`,
+/// `OrderByValue` and `OrderByPriority`, `http.encodeURL()`, a method read without a call and a
+/// call through a non-member callee, here at more paths, queries and refusals than production
+/// was asked (recorded with `tools/rtdb-regex-fuzz/record_query_syntax.mjs`). Both profiles
+/// decide them alike.
+#[test]
+fn query_syntax_loads_and_decides_as_the_official_emulator_in_both_profiles() {
+    let fixture = include_str!("fixtures/rules-query-syntax-official-emulator-4.11.2.json");
+    for jar_dialect in [false, true] {
+        let failures = differences_with(fixture, jar_dialect);
+        assert!(
+            failures.is_empty(),
+            "{} rows differ: {failures:#?}",
+            failures.len()
+        );
+    }
+}
+
 /// The emulator profile reads `\W` and `\D` as the complement of a language of strings, and an escaped
 /// letter or digit as that character, as the official emulator does (owner 2276): 500 jar rows over
 /// bare, anchored, quantified, grouped and class forms, with and without `i`, and the `[\uD800-\uDFFF]` class,

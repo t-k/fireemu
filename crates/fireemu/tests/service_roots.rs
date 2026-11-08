@@ -308,3 +308,148 @@ fn large_firestore_queries_do_not_stall_auth_or_another_database() {
 
     queries.finish();
 }
+
+fn start_storage_load_daemon() -> (Daemon, serde_json::Value, u16) {
+    let hub_port = free_port();
+    let child = Command::new(env!("CARGO_BIN_EXE_fireemu"))
+        .env("FIREEMU_WORKER_THREADS", "2")
+        .env("FIREEMU_MAX_BLOCKING_THREADS", "16")
+        .args([
+            "up",
+            "--project",
+            "demo-storage-responsive",
+            "--only",
+            "auth,firestore,storage",
+            "--http-port",
+            "0",
+            "--firestore-port",
+            "0",
+            "--storage-port",
+            "0",
+            "--functions-port",
+            "0",
+            "--pubsub-port",
+            "0",
+            "--ui-port",
+            "0",
+            "--logging-port",
+            "0",
+            "--hub-port",
+        ])
+        .arg(hub_port.to_string())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let daemon = Daemon(child, "demo-storage-responsive");
+    let emulators = discover(hub_port);
+    (daemon, emulators, hub_port)
+}
+
+#[test]
+fn large_storage_uploads_leave_real_services_responsive() {
+    use std::sync::Arc;
+
+    let (daemon, emulators, hub_port) = start_storage_load_daemon();
+    let port = |name: &str| u16::try_from(emulators[name]["port"].as_u64().unwrap()).unwrap();
+    let auth = port("auth");
+    let firestore = port("firestore");
+    let storage = port("storage");
+    let payload = Arc::new(vec![7_u8; 64 * 1024 * 1024]);
+    let fault_path = "/v1/sessions/default/faultPlan";
+    assert_eq!(
+        json_request(auth, "PUT", fault_path, r#"{"rules":[]}"#)
+            .unwrap()
+            .0,
+        200
+    );
+
+    let clients = (0..4).map(|index| {
+        let payload = payload.clone();
+        std::thread::spawn(move || {
+            let mut stream = TcpStream::connect(("127.0.0.1", storage)).unwrap();
+            stream.set_read_timeout(Some(PROBE_PATIENCE)).unwrap();
+            stream.set_write_timeout(Some(PROBE_PATIENCE)).unwrap();
+            write!(stream,
+                "POST /v0/b/demo-storage-responsive.appspot.com/o?name=load-{index}.bin HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer owner\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                payload.len()).unwrap();
+            stream.write_all(&payload).unwrap();
+            read_response(stream).unwrap()
+        })
+    }).collect::<Vec<_>>();
+    // Empty fault plans count dispatches inside the handler without injecting a fault.
+    let deadline = Instant::now() + PROBE_PATIENCE;
+    let admitted = loop {
+        let response = request_within(auth, "GET", fault_path, None, PROBE_PATIENCE);
+        let count = response
+            .and_then(|(status, body)| {
+                (status == 200)
+                    .then(|| serde_json::from_str::<serde_json::Value>(&body).ok())
+                    .flatten()
+            })
+            .and_then(|body| body["counters"]["storage.upload"].as_u64())
+            .unwrap_or(0);
+        if count == 4 || Instant::now() >= deadline {
+            break count;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    };
+    let probes = [
+        ("Auth", auth, "/"),
+        ("control", auth, "/health/live"),
+        ("Hub", hub_port, "/emulators"),
+        (
+            "Firestore GetDocument",
+            firestore,
+            "/v1/projects/demo-storage-responsive/databases/other/documents/items/missing",
+        ),
+    ]
+    .map(|(name, port, path)| {
+        let result = if name == "Firestore GetDocument" {
+            write_json_request(port, "GET", path, "").and_then(read_response)
+        } else {
+            request_within(port, "GET", path, None, PROBE_PATIENCE)
+        };
+        (name, result)
+    });
+    // All admitted requests have unique names and eventually succeed. Fewer than four visible objects after the probes proves admitted work remained unfinished throughout them.
+    let listed = json_request(
+        storage,
+        "GET",
+        "/v0/b/demo-storage-responsive.appspot.com/o",
+        "",
+    );
+    // Join before asserting so a failed probe never leaves upload threads behind.
+    let responses = clients
+        .into_iter()
+        .map(std::thread::JoinHandle::join)
+        .collect::<Vec<_>>();
+    drop(daemon);
+    assert_eq!(
+        admitted, 4,
+        "all four uploads must enter the server handler before probing"
+    );
+    let (status, body) = listed.unwrap();
+    assert_eq!(status, 200, "{body}");
+    let listing: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let committed = listing["items"].as_array().map_or(0, Vec::len);
+    assert!(
+        committed < 4,
+        "all four admitted uploads had committed before the server-side completion observation"
+    );
+    for response in responses {
+        assert_eq!(response.unwrap().0, 200);
+    }
+    for (name, response) in probes {
+        assert_eq!(
+            response.unwrap().0,
+            if name == "Firestore GetDocument" {
+                404
+            } else {
+                200
+            },
+            "{name}"
+        );
+    }
+}

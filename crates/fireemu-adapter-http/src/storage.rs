@@ -30,7 +30,7 @@ use std::sync::{Arc, Mutex};
 use fireemu_core_app_check::admission::{AdmissionRequest, PrivilegedBypass, ServiceAdmission};
 use fireemu_core_app_check::header::classify_app_check_header;
 use fireemu_core_app_check::verify::BaselineMode;
-use fireemu_core_auth::jwt::{verify_rules_token_for_project, RulesTokenPolicy, TokenAcceptance};
+use fireemu_core_auth::jwt::{RulesTokenPolicy, SignatureCheckedToken, TokenAcceptance};
 use fireemu_core_rules::eval::{
     evaluate_request_with, Decision, DocumentAccess, Method, RequestContext, RulesService,
     ABSTRACT_PREFIX, ABSTRACT_SEGMENT,
@@ -2444,8 +2444,9 @@ impl StorageState {
         &self,
         authorization: Option<&str>,
         bucket: &str,
+        signature: &mut Option<SignatureCheckedToken>,
     ) -> Result<Principal, (u16, String)> {
-        self.principal_or_message(authorization, bucket)
+        self.principal_or_message(authorization, bucket, signature)
             .map_err(|refusal| match refusal {
                 PrincipalRefusal::Unauthenticated(message) => (401, message),
                 PrincipalRefusal::ForeignAudience => (403, "Permission denied.".to_owned()),
@@ -2456,6 +2457,7 @@ impl StorageState {
         &self,
         authorization: Option<&str>,
         bucket: &str,
+        signature: &mut Option<SignatureCheckedToken>,
     ) -> Result<Principal, PrincipalRefusal> {
         let Some(value) = authorization else {
             return Ok(Principal::Anonymous);
@@ -2478,9 +2480,7 @@ impl StorageState {
         let parent = store_arc
             .lock()
             .map_err(|_| "auth store poisoned".to_owned())?;
-        // The audience is checked before the signature so a token of another session
-        // says so, instead of failing as an unknown user of this one.
-        let decoded = fireemu_core_auth::jwt::decode_token(token, parent.signer());
+        // Check the signature before routing; audience and tenant routing still precede the selected store's claim and account checks.
         // Under strict only the recorded shape is an anonymous caller: `Firebase ` followed by a
         // non-empty value without a dot (stage 3 v9, `token-malformed`: the recorded value is 32
         // base64url characters, answered exactly as no credential is, 403 from the rules and the
@@ -2492,16 +2492,27 @@ impl StorageState {
         // without a dot, with two or with four segments as unauthenticated, but admits a
         // decodable three-segment value as its user, which this profile has never done; a
         // published divergence of the compatibility contract).
-        let decoded_token = match decoded {
-            Ok(decoded_token) => decoded_token,
-            Err(error) => {
-                let recorded_shape = firebase_scheme && !token.is_empty() && !token.contains('.');
-                if !recorded_shape && self.token_acceptance != TokenAcceptance::EmulatorMock {
-                    return Err(format!("invalid ID token: {error}").into());
+        if !signature
+            .as_ref()
+            .is_some_and(|checked| checked.can_reuse_signature_for(token, &parent))
+        {
+            let decoded = SignatureCheckedToken::decode(token, &parent);
+            *signature = Some(match decoded {
+                Ok(decoded_token) => decoded_token,
+                Err(error) => {
+                    let recorded_shape =
+                        firebase_scheme && !token.is_empty() && !token.contains('.');
+                    if !recorded_shape && self.token_acceptance != TokenAcceptance::EmulatorMock {
+                        return Err(format!("invalid ID token: {error}").into());
+                    }
+                    return Ok(Principal::Anonymous);
                 }
-                return Ok(Principal::Anonymous);
-            }
-        };
+            });
+        }
+        let checked_token = signature
+            .as_ref()
+            .expect("a decoded signature is available");
+        let decoded_token = checked_token.decoded();
         let aud = decoded_token
             .payload
             .get("aud")
@@ -2541,8 +2552,7 @@ impl StorageState {
         let store = store_arc
             .lock()
             .map_err(|_| "auth store poisoned".to_owned())?;
-        let decoded = match verify_rules_token_for_project(
-            token,
+        let decoded = match checked_token.verify_for_project(
             &store,
             self.now(),
             RulesTokenPolicy::new(self.token_acceptance, self.allow_unsigned_id_tokens),
@@ -2552,7 +2562,7 @@ impl StorageState {
             // Storage honours an ID token whose refresh tokens were revoked (production, stage 3
             // v9, `token-revoked`: the read is allowed). Revocation is the last check of the
             // verification, so the signature, expiry, audience and account have all passed.
-            Err(fireemu_core_auth::jwt::JwtError::Revoked) => decoded_token,
+            Err(fireemu_core_auth::jwt::JwtError::Revoked) => decoded_token.clone(),
             Err(e) => return Err(format!("invalid ID token: {e}").into()),
         };
         drop(store);
@@ -3701,10 +3711,13 @@ fn handle_request(state: &StorageState, req: StorageRequest) -> StorageResponse 
         }
         undeclared = unknown_bucket_written(state, &route, &req.method, &params);
     }
+    // This proof lives only for this request, including a resumable finalization's repeated authentication.
+    let mut signature = None;
     let principal = match dialect {
         // The whole JSON API side is the privileged dialect: rules never run there.
         Dialect::Gcs => Principal::Owner,
-        Dialect::Firebase => match state.principal(authorization, &bucket_of_route) {
+        Dialect::Firebase => match state.principal(authorization, &bucket_of_route, &mut signature)
+        {
             Ok(p) => p,
             Err((status, message)) => {
                 return principal_refusal_response(dialect, status, &message);
@@ -3735,7 +3748,15 @@ fn handle_request(state: &StorageState, req: StorageRequest) -> StorageResponse 
         Route::FbBucket { bucket } => match method.as_str() {
             "GET" => fb_list(state, &principal, &bucket, &params),
             "POST" | "PUT" => fb_object_post(
-                state, &principal, &bucket, None, req, &params, &host, &admitted,
+                state,
+                &principal,
+                &bucket,
+                None,
+                req,
+                &params,
+                &host,
+                &admitted,
+                &mut signature,
             ),
             _ => Ok(plain_status(501)),
         },
@@ -3752,6 +3773,7 @@ fn handle_request(state: &StorageState, req: StorageRequest) -> StorageResponse 
                 &params,
                 &host,
                 &admitted,
+                &mut signature,
             ),
             "PUT" => {
                 if req
@@ -3769,6 +3791,7 @@ fn handle_request(state: &StorageState, req: StorageRequest) -> StorageResponse 
                         &params,
                         &host,
                         &admitted,
+                        &mut signature,
                     )
                 }
             }
@@ -4615,6 +4638,7 @@ fn fb_object_post(
     params: &BTreeMap<String, String>,
     host: &str,
     admitted: &AdmittedApp,
+    signature: &mut Option<SignatureCheckedToken>,
 ) -> Outcome {
     let b = bucket_name(bucket)?;
     let now = state.now();
@@ -4729,7 +4753,9 @@ fn fb_object_post(
         let Some(upload_id) = params.get("upload_id") else {
             return Ok(plain_status(400));
         };
-        return fb_resumable_command(state, &b, upload_id, &command, req, host, admitted);
+        return fb_resumable_command(
+            state, &b, upload_id, &command, req, host, admitted, signature,
+        );
     }
     let Some(name) = name else {
         return Ok(plain_status(400));
@@ -4887,7 +4913,7 @@ fn fb_commit(
 }
 
 /// A Firebase resumable command on an existing session: query, cancel, upload, finalize.
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 fn fb_resumable_command(
     state: &StorageState,
     bucket: &BucketName,
@@ -4896,6 +4922,7 @@ fn fb_resumable_command(
     mut req: StorageRequest,
     host: &str,
     admitted: &AdmittedApp,
+    signature: &mut Option<SignatureCheckedToken>,
 ) -> Outcome {
     let _ = host;
     let id = UploadId::from_str_unchecked(upload_id);
@@ -5005,7 +5032,7 @@ fn fb_resumable_command(
             Ok(UploadPhase::Active(_)) => {}
             Err(e) => return Ok(fb_core_err(e)),
         }
-        let finalized = finalize_resumable(state, &mut store, &id, &req, now);
+        let finalized = finalize_resumable(state, &mut store, &id, &req, now, signature);
         if let (Err(FinalizeError::Store(StorageError::StoredBytesLimit)), Some(checkpoint)) =
             (&finalized, checkpoint)
         {
@@ -5045,6 +5072,7 @@ fn finalize_resumable(
     id: &UploadId,
     req: &StorageRequest,
     now: LogicalInstant,
+    signature: &mut Option<SignatureCheckedToken>,
 ) -> Result<ObjectMetadata, FinalizeError> {
     // Checksums declared on the finalizing request are verified by the store when it
     // commits (a mismatch ends the session).
@@ -5071,7 +5099,7 @@ fn finalize_resumable(
     // The caller is the one that started the session (its credentials are verified again
     // now, as the official emulator does).
     let principal = state
-        .principal(authorization.as_deref(), b.as_str())
+        .principal(authorization.as_deref(), b.as_str(), signature)
         .map_err(FinalizeError::Auth)?;
     let existing = store.get(&b, &n).cloned();
     // Also a `create` over an existing object (see `fb_commit`).
@@ -6658,7 +6686,7 @@ fn gcs_resumable_put(
         .append_upload_owned(&id, start, chunk, now)
         .map_err(gcs_core_err)?;
     if finalize {
-        let finalized = finalize_resumable(state, &mut store, &id, &req, now);
+        let finalized = finalize_resumable(state, &mut store, &id, &req, now, &mut None);
         if let (Err(FinalizeError::Store(StorageError::StoredBytesLimit)), Some(checkpoint)) =
             (&finalized, checkpoint)
         {

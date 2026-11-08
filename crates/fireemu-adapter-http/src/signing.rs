@@ -109,6 +109,10 @@ impl IdTokenSigner for RsaSigner {
             .unwrap_or(false)
     }
 
+    fn signature_verification_is_immutable(&self) -> bool {
+        true
+    }
+
     fn public_jwk_json(&self) -> String {
         jwk_value(&self.jwk).to_string()
     }

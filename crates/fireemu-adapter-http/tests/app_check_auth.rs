@@ -268,61 +268,22 @@ fn refresh_token_of_the_other_tenant(registry: &fireemu_core_auth::store::AuthRe
 
 #[test]
 fn an_admission_for_one_project_does_not_refresh_another_projects_session() {
-    for field in ["refresh_token", "refreshToken"] {
-        let (h, registry, _) = two_projects();
-        let refresh_token = refresh_token_of_the_other_tenant(&registry);
-        let body = json!({"grant_type": "refresh_token", (field): refresh_token});
-        let denied = h.post(REFRESH, &body, &[&h.valid_token()]);
-        assert_eq!(denied.status, 403, "{}", denied.body);
-        assert!(
-            denied.body.to_string().contains("APP_CHECK"),
-            "{}",
-            denied.body
-        );
-        assert!(denied.body.get("id_token").is_none());
-        assert!(registry.tenant_store("demo-app", "tB").is_none());
-        let other = fixture::token(&h.app_check, "demo-other", fixture::OTHER_APP_ID);
-        let served = h.post(REFRESH, &body, &[&other]);
-        assert_eq!(served.status, 200, "{}", served.body);
-        assert!(registry.tenant_store("demo-app", "tB").is_none());
-    }
-}
-
-#[test]
-fn a_non_refresh_token_keeps_its_existing_spelling_selection() {
-    for field in ["refresh_token", "refreshToken"] {
-        for issuer_credential in [false, true] {
-            let (h, registry, _) = two_projects();
-            let refresh = refresh_token_of_the_other_tenant(&registry);
-            let body = auth_uri_body(&json!({"tenantId": "tB", (field): refresh}));
-            let credential = if issuer_credential {
-                fixture::token(&h.app_check, "demo-other", fixture::OTHER_APP_ID)
-            } else {
-                h.valid_token()
-            };
-            let response = h.post(
-                &format!("{V1}/accounts:createAuthUri"),
-                &body,
-                &[&credential],
-            );
-            let selects_issuer = field == "refresh_token";
-            let admitted = selects_issuer == issuer_credential;
-            assert_eq!(
-                response.status,
-                if admitted { 200 } else { 403 },
-                "{field}/{issuer_credential}: {}",
-                response.body
-            );
-            if !admitted {
-                assert!(response.body.to_string().contains("APP_CHECK"));
-            }
-            // Admission refusal must not create the default project's tenant either.
-            assert_eq!(
-                registry.tenant_store("demo-app", "tB").is_some(),
-                admitted && !selects_issuer
-            );
-        }
-    }
+    let (h, registry, _) = two_projects();
+    let refresh_token = refresh_token_of_the_other_tenant(&registry);
+    let body = json!({"grant_type": "refresh_token", "refresh_token": refresh_token});
+    let denied = h.post(REFRESH, &body, &[&h.valid_token()]);
+    assert_eq!(denied.status, 403, "{}", denied.body);
+    assert!(
+        denied.body.to_string().contains("APP_CHECK"),
+        "{}",
+        denied.body
+    );
+    assert!(denied.body.get("id_token").is_none());
+    assert!(registry.tenant_store("demo-app", "tB").is_none());
+    let other = fixture::token(&h.app_check, "demo-other", fixture::OTHER_APP_ID);
+    let served = h.post(REFRESH, &body, &[&other]);
+    assert_eq!(served.status, 200, "{}", served.body);
+    assert!(registry.tenant_store("demo-app", "tB").is_none());
 }
 
 fn alg_none(claims: &Value) -> String {

@@ -23,6 +23,7 @@
 // `--smoke` form drops the browser clients and the waits for the tokens' expiry, so the rest of
 // the program can be tried in a few minutes; its rows are never compared.
 
+import { publicEvidence } from "../evidence.mjs";
 import { spawn } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -313,7 +314,7 @@ async function exportStage2Comparison(args) {
     harnessDigestAtCommit: await stage2HarnessDigestAt(harnessCommit),
     fireemuCommit: flag("--fireemu-commit"),
   });
-  await writeFile(out, `${JSON.stringify(evidence, null, 2)}\n`);
+  await writeFile(out, `${JSON.stringify(publicEvidence(evidence), null, 2)}\n`);
   console.log(
     JSON.stringify({ out, summary: evidence.summary, fireemu: evidence.fireemu }, null, 2),
   );

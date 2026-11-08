@@ -18,6 +18,7 @@
 // for the run; fireemu is configured to trust their public halves as the two signer service
 // accounts, so the same corpus reaches the same verification decisions on both sides.
 
+import { publicEvidence } from "../evidence.mjs";
 import { execFile, spawn } from "node:child_process";
 import { createHash, generateKeyPairSync, randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
@@ -607,7 +608,7 @@ async function exportComparison(out) {
         : { row, status },
     ),
   };
-  await writeFile(out, `${JSON.stringify(evidence, null, 2)}\n`);
+  await writeFile(out, `${JSON.stringify(publicEvidence(evidence), null, 2)}\n`);
   console.log(JSON.stringify({ out, summary: evidence.summary, fixtureSha256 }, null, 2));
 }
 

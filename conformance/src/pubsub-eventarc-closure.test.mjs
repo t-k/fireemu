@@ -315,6 +315,34 @@ const originalProofSha = "a82eded4a149e795d62b8a78fbc400de7e8f4e11de9e7e897ebb1a
 const adjudicationPath = "spec/compatibility/closure/evidence/EVENTARC-adjudication.json";
 const acquisitionPath = "spec/compatibility/closure/evidence/EVENTARC-comparison.json.gz";
 const acquisitionSha = "5dda2ef8de3aeeed554a54d63cb1bed50fedee538369e5f2408b7c9230d18ae1";
+const historicalPublicHashes = new Map([
+  [acquisitionPath, acquisitionSha],
+  [
+    "conformance/src/eventarc-production/run.mjs",
+    "3356bfc4a2a8ec65fb49b428c95f7743e0ee08b3859ccca980ed0f08856c28a7",
+  ],
+  [
+    "conformance/src/eventarc-production/compare.mjs",
+    "0e4233c2ca7406477985d3cd8dc3570faf0d6aeb744897007900887743e9a6f0",
+  ],
+  [
+    "conformance/src/eventarc-production/lifecycle-evidence.mjs",
+    "7412ca969e36c643677624b2c146942524faee162ff3e150232904ad39bf2e3a",
+  ],
+  [
+    "conformance/src/eventarc-production/sdk.mjs",
+    "2d218a628a9b80cf3466b30200adc4bf40863bdcf5bc3d6137f165f7d10e0e9f",
+  ],
+  [
+    "conformance/src/eventarc-production/probe-sdk.mjs",
+    "5db9d409a36daa1479a0ee8e704d59d4b0887ae8d905e5e6a4a20cccb90a886b",
+  ],
+]);
+const historicalPublicSha = (path) => {
+  const digest = historicalPublicHashes.get(path);
+  assert.ok(digest, "the historical public hash fixture names every public snapshot");
+  return digest;
+};
 const decodedAcquisitionSha = "76c47b99496a616e8c2faab841e8267901f985e95221b43cd38dbf82d973f907";
 const sortedValue = (value) =>
   Array.isArray(value)
@@ -698,7 +726,10 @@ for (const [name, mutate, message] of retrospectiveCounters) {
     const { closure, adjudication } = eventarcFixture();
     const comparison = smallAcquisition(adjudication);
     mutate(adjudication);
-    assert.throws(() => assertRetrospectiveClosure(closure, adjudication, comparison), message);
+    assert.throws(
+      () => assertRetrospectiveClosure(closure, adjudication, comparison, historicalPublicSha),
+      message,
+    );
   });
 }
 test("EVENTARC retrospective rejects missing public bytes", () => {
@@ -707,7 +738,7 @@ test("EVENTARC retrospective rejects missing public bytes", () => {
     () =>
       assertRetrospectiveClosure(closure, adjudication, smallAcquisition(adjudication), (path) => {
         if (path === acquisitionPath) throw new Error("missing public acquisition");
-        return sha256(path);
+        return historicalPublicSha(path);
       }),
     /missing public acquisition/,
   );
@@ -717,7 +748,7 @@ test("EVENTARC retrospective cannot turn generated PENDING into MATCH", () => {
   const comparison = smallAcquisition(adjudication);
   comparison.rows[0].status = "MATCH";
   assert.throws(
-    () => assertRetrospectiveClosure(closure, adjudication, comparison),
+    () => assertRetrospectiveClosure(closure, adjudication, comparison, historicalPublicSha),
     /remain PENDING/,
   );
 });
@@ -739,7 +770,13 @@ test("EVENTARC retrospective cannot promote without final approval and settled R
     const { closure, adjudication } = eventarcFixture();
     change(adjudication);
     assert.throws(
-      () => assertRetrospectiveClosure(closure, adjudication, smallAcquisition(adjudication)),
+      () =>
+        assertRetrospectiveClosure(
+          closure,
+          adjudication,
+          smallAcquisition(adjudication),
+          historicalPublicSha,
+        ),
       expected,
     );
   }
@@ -759,7 +796,13 @@ test("EVENTARC retrospective rejects a wrong condition proof pin", () => {
   const { closure, adjudication } = eventarcFixture();
   closure.conditions[0].evidence.originalCaseProofSha256 = "0".repeat(64);
   assert.throws(
-    () => assertRetrospectiveClosure(closure, adjudication, smallAcquisition(adjudication)),
+    () =>
+      assertRetrospectiveClosure(
+        closure,
+        adjudication,
+        smallAcquisition(adjudication),
+        historicalPublicSha,
+      ),
     /condition original proof pin/,
   );
 });
@@ -767,7 +810,13 @@ test("EVENTARC retrospective retains original project and source qualifications"
   const { closure, adjudication } = eventarcFixture();
   adjudication.nativeProjectQualification.HAndW = "fireemu-oracle-idp";
   assert.throws(
-    () => assertRetrospectiveClosure(closure, adjudication, smallAcquisition(adjudication)),
+    () =>
+      assertRetrospectiveClosure(
+        closure,
+        adjudication,
+        smallAcquisition(adjudication),
+        historicalPublicSha,
+      ),
     /strictly equal/,
   );
 });
@@ -776,7 +825,7 @@ test("EVENTARC retrospective rejects corrupt public acquisition bytes", () => {
   assert.throws(
     () =>
       assertRetrospectiveClosure(closure, adjudication, smallAcquisition(adjudication), (path) =>
-        path === acquisitionPath ? "0".repeat(64) : sha256(path),
+        path === acquisitionPath ? "0".repeat(64) : historicalPublicSha(path),
       ),
     /public acquisition bytes/,
   );
@@ -786,7 +835,13 @@ test("EVENTARC retrospective cannot promote from flags without final evidence", 
     const { closure, adjudication } = eventarcFixture();
     delete adjudication.finalArtifact[key];
     assert.throws(
-      () => assertRetrospectiveClosure(closure, adjudication, smallAcquisition(adjudication)),
+      () =>
+        assertRetrospectiveClosure(
+          closure,
+          adjudication,
+          smallAcquisition(adjudication),
+          historicalPublicSha,
+        ),
       /genuine final evidence required/,
       key,
     );

@@ -181,6 +181,12 @@ test('v2 Storage and Pub/Sub: real runtime bucket and topic, not parameter strin
   assert.deepEqual((await f.called()).seen.json,{});
 });
 
+test('v2 Eventarc: a custom channel subscription keeps its channel for the Remote Config type',async t=>{
+  const f=await start(t,`define('subject','gcfv2',{eventTrigger:{eventType:'google.firebase.remoteconfig.remoteConfig.v1.updated',channel:'locations/us-central1/channels/custom',eventFilters:{source:'catalog'}}});`);
+  const trigger=f.spec('subject')?.trigger;assert.equal(trigger?.type,'eventarc');
+  assert.equal(trigger.channel,'locations/us-central1/channels/custom');assert.deepEqual(trigger.filters,{source:'catalog'});
+});
+
 test('v2 Eventarc: resolve own filter values, including empty and prototype-looking keys',async t=>{
   const f=await start(t,`const filters=Object.create({inherited:'must-not-copy'});filters.source=param('source','catalog');filters.empty=param('empty','');Object.defineProperty(filters,'__proto__',{value:param('proto','literal'),enumerable:true});filters.toJSON='literal-toJSON-filter';define('subject','gcfv2',{eventTrigger:{eventType:'com.example.changed',channel:param('channel','locations/asia-northeast1/channels/custom'),eventFilters:filters}});`);
   const trigger=f.spec('subject')?.trigger;assert.ok(trigger);

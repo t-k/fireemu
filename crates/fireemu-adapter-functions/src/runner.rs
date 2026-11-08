@@ -673,6 +673,7 @@ impl Runner {
         for (k, v) in child_environment {
             cmd.env(k, v);
         }
+        let started = std::time::Instant::now();
         #[cfg(not(windows))]
         let mut child = cmd
             .spawn()
@@ -689,6 +690,7 @@ impl Runner {
                 .spawn()
                 .map_err(|e| format!("functions runner: cannot start {program}: {e}"))?
         };
+        let child_pid = child.id();
         #[cfg(not(windows))]
         let stdin = child
             .stdin
@@ -906,6 +908,7 @@ impl Runner {
         let hello = match hello {
             Ok(hello) => hello,
             Err(reason) => {
+                let elapsed = started.elapsed();
                 #[cfg(unix)]
                 let process_group = child.id();
                 // stdout can close just before process termination, or while the
@@ -950,8 +953,9 @@ impl Runner {
                             .into_owned()
                     })
                     .unwrap_or_default();
+                let stdout_saw_byte = !stdout.is_empty();
                 return Err(format!(
-                    "{reason}; exit status: {status}; captured stderr: {stderr:?}; last stdout bytes: {stdout:?}"
+                    "{reason}; exit status: {status}; captured stderr: {stderr:?}; last stdout bytes: {stdout:?}; elapsed since spawn: {elapsed:?}; child pid: {child_pid:?}; stdout saw any byte: {stdout_saw_byte}"
                 ));
             }
         };

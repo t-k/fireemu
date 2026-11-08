@@ -20,6 +20,7 @@
 // copies the record into the repository and cites its digest. Running it again for another binary replaces the evidence of every condition together,
 // and an existing note on a condition stays.
 
+import { publicEvidence, publicEvidenceBytes } from "../evidence.mjs";
 import { createHash } from "node:crypto";
 import { readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
@@ -341,6 +342,7 @@ export function closureEvidenceCommand(
     for (const name of recordOptions)
       if (!options[name]) refuse(`--${name} is required with the build record options`);
     recordBytes = readFileSync(options["build-record"]);
+    publicEvidenceBytes(recordBytes);
     finalArtifact = {
       buildRecord: JSON.parse(recordBytes.toString("utf8")),
       buildRecordPath: options["build-record-path"],
@@ -356,13 +358,16 @@ export function closureEvidenceCommand(
     hold,
     finalArtifact,
   });
+  const comparisonText = `${JSON.stringify(publicEvidence(comparison), null, 1)}\n`;
+  const closureOutput = replaceConditionLines(closureText, closure);
+  publicEvidenceBytes(Buffer.from(closureOutput));
   if (recordBytes !== undefined) {
     mkdirSync(dirname(options["build-record-out"]), { recursive: true });
     writeFileSync(options["build-record-out"], recordBytes);
   }
   mkdirSync(dirname(options.out), { recursive: true });
-  writeFileSync(options.out, `${JSON.stringify(comparison, null, 1)}\n`);
-  writeFileSync(options.closure, replaceConditionLines(closureText, closure));
+  writeFileSync(options.out, comparisonText);
+  writeFileSync(options.closure, closureOutput);
   log(
     `closure evidence: ${comparison.rows.length} rows of ${comparison.artifactSha256} written; ${closure.conditions.filter((c) => c.status === "VERIFIED").length} conditions verified`,
   );

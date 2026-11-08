@@ -22,6 +22,7 @@
 // The run requires multi-tenancy off, no tenant, no project account and MFA off before it
 // starts and after it ends.
 
+import { publicEvidence } from "../evidence.mjs";
 import { execFile, spawn } from "node:child_process";
 import { createHash, generateKeyPairSync, randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
@@ -1523,7 +1524,7 @@ async function exportComparison(out) {
   const comparison = JSON.parse(await readFile(join(RUN_DIR, "comparison.json"), "utf8"));
   const fixtureSha256 = sha256(await readFile(FIXTURE, "utf8"));
   const evidence = comparisonEvidence(comparison, fixtureSha256);
-  await writeFile(out, `${JSON.stringify(evidence, null, 2)}\n`);
+  await writeFile(out, `${JSON.stringify(publicEvidence(evidence), null, 2)}\n`);
   console.log(JSON.stringify({ out, summary: evidence.summary, fixtureSha256 }, null, 2));
 }
 

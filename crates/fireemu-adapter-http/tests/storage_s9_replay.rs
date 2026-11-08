@@ -829,7 +829,10 @@ fn multipart_body(meta: &Value, data: &[u8]) -> (String, Vec<u8>) {
 }
 
 /// Every v0 route that takes an object name: (label, request builder for `name`).
-fn v0_write_routes() -> Vec<(&'static str, fn(&str, &[(&str, &str)]) -> StorageRequest)> {
+type RouteBuilder = fn(&str, &[(&str, &str)]) -> StorageRequest;
+
+#[allow(clippy::too_many_lines)]
+fn v0_write_routes() -> Vec<(&'static str, RouteBuilder)> {
     fn with(auth: &[(&str, &str)], extra: &[(&str, &str)]) -> Vec<(String, String)> {
         auth.iter()
             .chain(extra.iter())
@@ -838,7 +841,7 @@ fn v0_write_routes() -> Vec<(&'static str, fn(&str, &[(&str, &str)]) -> StorageR
     }
     fn build(
         method: &str,
-        path: String,
+        path: &str,
         auth: &[(&str, &str)],
         extra: &[(&str, &str)],
         body: &[u8],
@@ -848,13 +851,13 @@ fn v0_write_routes() -> Vec<(&'static str, fn(&str, &[(&str, &str)]) -> StorageR
             .iter()
             .map(|(k, v)| (k.as_str(), v.as_str()))
             .collect();
-        request(method, &path, &refs, body)
+        request(method, path, &refs, body)
     }
     vec![
         ("post-path-media", |n, a| {
             build(
                 "POST",
-                format!("/v0/b/{BUCKET}/o/{}", enc(n)),
+                &format!("/v0/b/{BUCKET}/o/{}", enc(n)),
                 a,
                 &[("content-type", "text/plain")],
                 b"x",
@@ -863,7 +866,7 @@ fn v0_write_routes() -> Vec<(&'static str, fn(&str, &[(&str, &str)]) -> StorageR
         ("put-path-media", |n, a| {
             build(
                 "PUT",
-                format!("/v0/b/{BUCKET}/o/{}", enc(n)),
+                &format!("/v0/b/{BUCKET}/o/{}", enc(n)),
                 a,
                 &[("content-type", "text/plain")],
                 b"x",
@@ -872,7 +875,7 @@ fn v0_write_routes() -> Vec<(&'static str, fn(&str, &[(&str, &str)]) -> StorageR
         ("post-query-media", |n, a| {
             build(
                 "POST",
-                format!("/v0/b/{BUCKET}/o?name={}&uploadType=media", enc(n)),
+                &format!("/v0/b/{BUCKET}/o?name={}&uploadType=media", enc(n)),
                 a,
                 &[("content-type", "text/plain")],
                 b"x",
@@ -881,7 +884,7 @@ fn v0_write_routes() -> Vec<(&'static str, fn(&str, &[(&str, &str)]) -> StorageR
         ("put-query-media", |n, a| {
             build(
                 "PUT",
-                format!("/v0/b/{BUCKET}/o?name={}&uploadType=media", enc(n)),
+                &format!("/v0/b/{BUCKET}/o?name={}&uploadType=media", enc(n)),
                 a,
                 &[("content-type", "text/plain")],
                 b"x",
@@ -891,7 +894,7 @@ fn v0_write_routes() -> Vec<(&'static str, fn(&str, &[(&str, &str)]) -> StorageR
             let (ct, body) = multipart_body(&serde_json::json!({"name": n}), b"x");
             build(
                 "POST",
-                format!("/v0/b/{BUCKET}/o?name={}&uploadType=multipart", enc(n)),
+                &format!("/v0/b/{BUCKET}/o?name={}&uploadType=multipart", enc(n)),
                 a,
                 &[
                     ("content-type", &ct),
@@ -904,7 +907,7 @@ fn v0_write_routes() -> Vec<(&'static str, fn(&str, &[(&str, &str)]) -> StorageR
             let (ct, body) = multipart_body(&serde_json::json!({}), b"x");
             build(
                 "POST",
-                format!("/v0/b/{BUCKET}/o/{}", enc(n)),
+                &format!("/v0/b/{BUCKET}/o/{}", enc(n)),
                 a,
                 &[
                     ("content-type", &ct),
@@ -916,7 +919,7 @@ fn v0_write_routes() -> Vec<(&'static str, fn(&str, &[(&str, &str)]) -> StorageR
         ("post-query-resumable-start", |n, a| {
             build(
                 "POST",
-                format!("/v0/b/{BUCKET}/o?name={}", enc(n)),
+                &format!("/v0/b/{BUCKET}/o?name={}", enc(n)),
                 a,
                 &[
                     ("x-goog-upload-protocol", "resumable"),
@@ -929,7 +932,7 @@ fn v0_write_routes() -> Vec<(&'static str, fn(&str, &[(&str, &str)]) -> StorageR
         ("post-path-resumable-start", |n, a| {
             build(
                 "POST",
-                format!("/v0/b/{BUCKET}/o/{}", enc(n)),
+                &format!("/v0/b/{BUCKET}/o/{}", enc(n)),
                 a,
                 &[
                     ("x-goog-upload-protocol", "resumable"),
@@ -942,7 +945,7 @@ fn v0_write_routes() -> Vec<(&'static str, fn(&str, &[(&str, &str)]) -> StorageR
         ("post-path-create-token", |n, a| {
             build(
                 "POST",
-                format!("/v0/b/{BUCKET}/o/{}?create_token=true", enc(n)),
+                &format!("/v0/b/{BUCKET}/o/{}?create_token=true", enc(n)),
                 a,
                 &[],
                 b"",
@@ -951,7 +954,7 @@ fn v0_write_routes() -> Vec<(&'static str, fn(&str, &[(&str, &str)]) -> StorageR
         ("post-path-delete-token", |n, a| {
             build(
                 "POST",
-                format!("/v0/b/{BUCKET}/o/{}?delete_token=t", enc(n)),
+                &format!("/v0/b/{BUCKET}/o/{}?delete_token=t", enc(n)),
                 a,
                 &[],
                 b"",
@@ -960,7 +963,7 @@ fn v0_write_routes() -> Vec<(&'static str, fn(&str, &[(&str, &str)]) -> StorageR
         ("patch", |n, a| {
             build(
                 "PATCH",
-                format!("/v0/b/{BUCKET}/o/{}", enc(n)),
+                &format!("/v0/b/{BUCKET}/o/{}", enc(n)),
                 a,
                 &[("content-type", "application/json")],
                 br#"{"contentType":"text/x-new"}"#,
@@ -969,7 +972,7 @@ fn v0_write_routes() -> Vec<(&'static str, fn(&str, &[(&str, &str)]) -> StorageR
         ("put-method-override-patch", |n, a| {
             build(
                 "PUT",
-                format!("/v0/b/{BUCKET}/o/{}", enc(n)),
+                &format!("/v0/b/{BUCKET}/o/{}", enc(n)),
                 a,
                 &[
                     ("content-type", "application/json"),
@@ -981,7 +984,7 @@ fn v0_write_routes() -> Vec<(&'static str, fn(&str, &[(&str, &str)]) -> StorageR
         ("delete", |n, a| {
             build(
                 "DELETE",
-                format!("/v0/b/{BUCKET}/o/{}", enc(n)),
+                &format!("/v0/b/{BUCKET}/o/{}", enc(n)),
                 a,
                 &[],
                 b"",

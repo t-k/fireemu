@@ -77,13 +77,17 @@ fn tokens(chars: &[char], at: &mut usize, nested: bool) -> Vec<Token> {
     out
 }
 
-fn ends(sequence: &[Token], input: &[char], start: usize) -> BTreeSet<usize> {
+fn ends(sequence: &[Token], input: &[char], start: usize, nocase: bool) -> BTreeSet<usize> {
     let mut positions = BTreeSet::from([start]);
     for token in sequence {
         let mut next = BTreeSet::new();
         for pos in positions {
             match token {
-                Token::Literal(ch) if input.get(pos) == Some(ch) => {
+                Token::Literal(ch)
+                    if input.get(pos).is_some_and(|value| {
+                        value == ch || (nocase && value.to_lowercase().eq(ch.to_lowercase()))
+                    }) =>
+                {
                     next.insert(pos + 1);
                 }
                 Token::Any if pos < input.len() => {
@@ -92,7 +96,10 @@ fn ends(sequence: &[Token], input: &[char], start: usize) -> BTreeSet<usize> {
                 Token::Star => next.extend(pos..=input.len()),
                 Token::Class(ranges, negative) => {
                     if input.get(pos).is_some_and(|ch| {
-                        ranges.iter().any(|(a, b)| a <= ch && ch <= b) != *negative
+                        let contains = |c: char| ranges.iter().any(|(a, b)| *a <= c && c <= *b);
+                        (contains(*ch)
+                            || (nocase && ch.to_lowercase().chain(ch.to_uppercase()).any(contains)))
+                            != *negative
                     }) {
                         next.insert(pos + 1);
                     }
@@ -100,7 +107,7 @@ fn ends(sequence: &[Token], input: &[char], start: usize) -> BTreeSet<usize> {
                 Token::Group(kind, alternatives) => {
                     let once: BTreeSet<_> = alternatives
                         .iter()
-                        .flat_map(|alt| ends(alt, input, pos))
+                        .flat_map(|alt| ends(alt, input, pos, nocase))
                         .collect();
                     match kind {
                         '!' => next.extend((pos..=input.len()).filter(|end| !once.contains(end))),
@@ -120,7 +127,7 @@ fn ends(sequence: &[Token], input: &[char], start: usize) -> BTreeSet<usize> {
                                     .flat_map(|p| {
                                         alternatives
                                             .iter()
-                                            .flat_map(move |alt| ends(alt, input, *p))
+                                            .flat_map(move |alt| ends(alt, input, *p, nocase))
                                     })
                                     .collect();
                                 let before = reached.len();
@@ -145,7 +152,7 @@ fn ends(sequence: &[Token], input: &[char], start: usize) -> BTreeSet<usize> {
     positions
 }
 
-fn segment(pattern: &str, value: &str, dot: bool) -> bool {
+fn segment(pattern: &str, value: &str, dot: bool, nocase: bool) -> bool {
     if !dot && value.starts_with('.') && !pattern.starts_with('.') && !pattern.starts_with("\\.") {
         return false;
     }
@@ -154,10 +161,10 @@ fn segment(pattern: &str, value: &str, dot: bool) -> bool {
     }
     let chars: Vec<_> = pattern.chars().collect();
     let value: Vec<_> = value.chars().collect();
-    ends(&tokens(&chars, &mut 0, false), &value, 0).contains(&value.len())
+    ends(&tokens(&chars, &mut 0, false), &value, 0, nocase).contains(&value.len())
 }
 
-fn path_match(pattern: &[&str], path: &[&str], dot: bool) -> bool {
+fn path_match(pattern: &[&str], path: &[&str], dot: bool, nocase: bool) -> bool {
     let Some(first) = pattern.first() else {
         return path.is_empty();
     };
@@ -166,14 +173,14 @@ fn path_match(pattern: &[&str], path: &[&str], dot: bool) -> bool {
             if !dot && path[..take].iter().any(|part| part.starts_with('.')) {
                 break;
             }
-            if path_match(&pattern[1..], &path[take..], dot) {
+            if path_match(&pattern[1..], &path[take..], dot, nocase) {
                 return true;
             }
         }
         false
     } else {
         path.first().is_some_and(|part| {
-            segment(first, part, dot) && path_match(&pattern[1..], &path[1..], dot)
+            segment(first, part, dot, nocase) && path_match(&pattern[1..], &path[1..], dot, nocase)
         })
     }
 }
@@ -365,7 +372,7 @@ pub(super) fn glob_with_dot(pattern: &str, path: &str, dot: bool) -> bool {
     let matched = alternatives(pattern, false).iter().any(|pattern| {
         let pattern: Vec<_> = pattern.split('/').collect();
         let path: Vec<_> = path.split('/').collect();
-        path_match(&pattern, &path, dot)
+        path_match(&pattern, &path, dot, false)
     });
     matched != (negative % 2 == 1)
 }
@@ -374,8 +381,25 @@ pub(super) fn deploy_ignore(pattern: &str, path: &str, public_root: &str) -> boo
     let absolute_path = format!("{}/{}", public_root.trim_end_matches('/'), path);
     alternatives(pattern, true).iter().any(|expanded| {
         let expanded = expanded.trim_start_matches("./");
-        // Ignore reconstructs globParts and parses them again; escaped braces lose their escape.
-        let expanded = expanded.replace("\\{", "{").replace("\\}", "}");
+        // Brace expansion unescapes these characters before Ignore parses globParts again.
+        let mut reconstructed = String::new();
+        let brace_expansion = pattern
+            .find('{')
+            .is_some_and(|i| pattern[i + 1..].contains('}'));
+        let mut chars = expanded.chars().peekable();
+        while let Some(ch) = chars.next() {
+            if brace_expansion
+                && ch == '\\'
+                && chars
+                    .peek()
+                    .is_some_and(|c| matches!(c, '\\' | '{' | '}' | ',' | '.'))
+            {
+                reconstructed.push(chars.next().unwrap());
+            } else {
+                reconstructed.push(ch);
+            }
+        }
+        let expanded = reconstructed;
         alternatives(&expanded, true).iter().any(|pattern| {
             let path = if pattern.starts_with('/')
                 || (cfg!(windows) && pattern.as_bytes().get(1) == Some(&b':'))
@@ -384,20 +408,16 @@ pub(super) fn deploy_ignore(pattern: &str, path: &str, public_root: &str) -> boo
             } else {
                 path
             };
-            let pattern = if cfg!(any(target_os = "macos", windows)) {
-                pattern.to_lowercase()
-            } else {
-                pattern.to_owned()
-            };
-            let path = if cfg!(any(target_os = "macos", windows)) {
-                path.to_lowercase()
-            } else {
-                path.to_owned()
-            };
             let pattern: Vec<_> = pattern.split('/').collect();
             let slash_path = format!("{path}/");
-            path_match(&pattern, &path.split('/').collect::<Vec<_>>(), true)
-                || path_match(&pattern, &slash_path.split('/').collect::<Vec<_>>(), true)
+            let nocase = cfg!(any(target_os = "macos", windows));
+            path_match(&pattern, &path.split('/').collect::<Vec<_>>(), true, nocase)
+                || path_match(
+                    &pattern,
+                    &slash_path.split('/').collect::<Vec<_>>(),
+                    true,
+                    nocase,
+                )
         })
     })
 }

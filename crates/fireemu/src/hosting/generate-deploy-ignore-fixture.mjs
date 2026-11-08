@@ -15,6 +15,20 @@ const extra = [
   ['{./private.json,public.json}', 'private.json'],
   ['{PUBLIC_ROOT}/private.json', 'private.json'],
   ['PRIVATE.JSON', 'private.json', true],
+  ['\\{private\\,public\\}.json', 'private.json'],
+  ['\\{private\\,public\\}.json', 'public.json'],
+  ['private\\,public.json', 'private,public.json'],
+  ['\\{private\\,public\\}\\.json', 'private.json'],
+  ['{private,public}\\*.json', 'private*.json'],
+  ['{private,public}\\*.json', 'private.json'],
+  ['private\\*.json', 'private*.json'],
+  ['private\\*.json', 'private.json'],
+  ['[A-z]*.json', '_secret.json'],
+  ['[A-z]*.json', 'Private.json'],
+  ['[a-Z]*.json', '_secret.json'],
+  ['[^A-z]*.json', '_secret.json'],
+  ['[^A-z]*.json', '0secret.json'],
+  ['[A-Z]*.json', 'private.json', true],
 ];
 for (const [pattern, path, nocase] of extra) {
   if (!rows.some(row => row.pattern === pattern && row.path === path)) {

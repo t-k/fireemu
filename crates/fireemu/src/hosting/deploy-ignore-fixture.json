@@ -15355,5 +15355,76 @@
     "path": "private.json",
     "nocase": true,
     "expected": true
+  },
+  {
+    "pattern": "\\{private\\,public\\}.json",
+    "path": "private.json",
+    "expected": true
+  },
+  {
+    "pattern": "\\{private\\,public\\}.json",
+    "path": "public.json",
+    "expected": true
+  },
+  {
+    "pattern": "private\\,public.json",
+    "path": "private,public.json",
+    "expected": true
+  },
+  {
+    "pattern": "private\\*.json",
+    "path": "private*.json",
+    "expected": true
+  },
+  {
+    "pattern": "private\\*.json",
+    "path": "private.json",
+    "expected": false
+  },
+  {
+    "pattern": "[A-z]*.json",
+    "path": "_secret.json",
+    "expected": true
+  },
+  {
+    "pattern": "[A-z]*.json",
+    "path": "Private.json",
+    "expected": true
+  },
+  {
+    "pattern": "[a-Z]*.json",
+    "path": "_secret.json",
+    "expected": false
+  },
+  {
+    "pattern": "[^A-z]*.json",
+    "path": "_secret.json",
+    "expected": false
+  },
+  {
+    "pattern": "[^A-z]*.json",
+    "path": "0secret.json",
+    "expected": true
+  },
+  {
+    "pattern": "[A-Z]*.json",
+    "path": "private.json",
+    "nocase": true,
+    "expected": true
+  },
+  {
+    "pattern": "\\{private\\,public\\}\\.json",
+    "path": "private.json",
+    "expected": true
+  },
+  {
+    "pattern": "{private,public}\\*.json",
+    "path": "private*.json",
+    "expected": true
+  },
+  {
+    "pattern": "{private,public}\\*.json",
+    "path": "private.json",
+    "expected": false
   }
 ]

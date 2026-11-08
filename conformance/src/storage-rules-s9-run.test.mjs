@@ -238,6 +238,9 @@ describe("storage rules s9 production run glue", () => {
     assert.deepEqual(seen.deps, { fake: true });
     assert.equal(calls.closed, 1);
     assert.equal(final.closureReady, true);
+    assert.equal(final.gitSha, "a".repeat(40), "the final report carries the pins");
+    assert.deepEqual(Object.keys(final.modules).length, 7);
+    assert.match(final.startedAt, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/);
     assert.equal(final.estimatedUsd, ESTIMATED_USD);
     assert.equal(JSON.parse(logger.lines[0]).runId, "sr-0123abcd");
     const header = JSON.parse(readFileSync(join(options.outPath, "run-header.json"), "utf8"));

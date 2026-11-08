@@ -139,6 +139,12 @@ describe("storage rules s9 command line", () => {
       assert.equal(report.stopped, null);
       assert.equal(report.complete, true);
       assert.equal(report.estimatedUsd, 0.05);
+      assert.match(report.startedAt, /^\d{4}-\d\d-\d\dT/);
+      assert.equal(
+        Object.keys(report.modules).length,
+        7,
+        "the local report carries the module pins",
+      );
       assert.deepEqual(readdirSync(out).sort(), [
         "journal.jsonl",
         "results.json",

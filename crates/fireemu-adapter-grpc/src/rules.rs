@@ -32,7 +32,7 @@
 //! stored data, so it leaks nothing about it, except for a branch of the query that names a
 //! document with `__name__ ==`: as in production, the rule is checked against each named
 //! document as stored (a missing one refuses a rule that reads `resource`), and a branch that
-//! names exactly one document is decided by it alone (see [`name_plan`]).
+//! names exactly one document is decided by it alone (see `name_plan`).
 //!
 //! Writes serve `getAfter()` from the state every write of the commit will leave behind.
 

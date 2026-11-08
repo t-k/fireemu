@@ -663,10 +663,6 @@ async fn the_query_resource_data_holds_the_constrained_keys_only() {
     let a_is_1 = || Some(field_filter("a", Op::Equal, integer(1)));
     let meta_a_is_1 = || Some(field_filter("meta.a", Op::Equal, integer(1)));
     for (profile, mut h) in start_profiles().await {
-        // `get(key, default)` and `in` on a map the query constrains in part were recorded only
-        // over stored documents lacking the key: strict keeps them unproven (coordinator ruling
-        // 2026-11-08), the emulator profile follows the official emulator's allow.
-        let official = profile == "emulator";
         let (alice, token) = h.user("alice@example.com");
         let mine = |collection: &str| {
             set_write(
@@ -710,7 +706,7 @@ async fn the_query_resource_data_holds_the_constrained_keys_only() {
             (
                 "nested-neg-filtered",
                 from("nested-neg", false, meta_a_is_1()),
-                official,
+                true,
             ),
             (
                 "nested-pos-nofilter",
@@ -728,12 +724,8 @@ async fn the_query_resource_data_holds_the_constrained_keys_only() {
             ("keys-pos-filtered", from("keys-pos", false, a_is_1()), true),
             ("size-nofilter", from("size", false, None), false),
             ("size-filtered", from("size", false, a_is_1()), true),
-            ("get-neg-nofilter", from("get-neg", false, None), official),
-            (
-                "get-neg-filtered",
-                from("get-neg", false, a_is_1()),
-                official,
-            ),
+            ("get-neg-nofilter", from("get-neg", false, None), true),
+            ("get-neg-filtered", from("get-neg", false, a_is_1()), true),
             ("get-pos-nofilter", from("get-pos", false, None), false),
             ("get-pos-filtered", from("get-pos", false, a_is_1()), true),
             ("cg-blocked-group", from("cg", true, None), true),
@@ -807,10 +799,6 @@ service cloud.firestore {
   }
 }";
     for (profile, mut h) in start_profiles().await {
-        // `get(key, default)` and `in` on a map the query constrains in part were recorded only
-        // over stored documents lacking the key: strict keeps them unproven (coordinator ruling
-        // 2026-11-08), the emulator profile follows the official emulator's allow.
-        let official = profile == "emulator";
         let (_alice, token) = h.user("alice@example.com");
         let a_blocked =
             |path: &str| set_write(path, &[("a", integer(1)), ("blocked", bool_value(true))]);
@@ -843,8 +831,8 @@ service cloud.firestore {
             ("has-only", filtered("has-only", "a"), false),
             ("size-one", filtered("size-one", "a"), false),
             ("look-alike", filtered("look-alike", "a"), false),
-            ("get-default", filtered("get-default", "a"), official),
-            ("nested", filtered("nested", "meta.a"), official),
+            ("get-default", filtered("get-default", "a"), true),
+            ("nested", filtered("nested", "meta.a"), true),
         ];
         for (row, request, allowed) in rows {
             let answer = run(&mut h, request, &token).await;

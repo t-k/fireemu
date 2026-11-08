@@ -334,12 +334,10 @@ impl CompatibilityProfile {
         matches!(self, Self::Emulator)
     }
 
-    /// Whether a Firestore query proof also gives the official emulator's answers to shapes
-    /// production has not been recorded answering: an `OR` mixing a branch that names a
-    /// document with one that names none (production asked for a composite index first),
-    /// `get(key, default)` of `resource.data` and `in` on a map the query constrains in part
-    /// (recorded only over stored documents that lack the key; FS-RULES-SHAPES, 2026-11-08).
-    /// `strict` keeps them unproven until production is recorded.
+    /// Whether a Firestore query authorization also gives the official emulator's answers to
+    /// shapes production has not been recorded answering: an `OR` mixing a branch that names a
+    /// document with one that names none (production asked for a composite index first,
+    /// FS-RULES-SHAPES 2026-11-08). `strict` refuses them until production is recorded.
     #[must_use]
     pub const fn official_query_answers(self) -> bool {
         matches!(self, Self::Emulator)

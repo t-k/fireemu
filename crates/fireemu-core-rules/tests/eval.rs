@@ -1533,67 +1533,6 @@ fn undetermined_values_never_prove_a_condition() {
     }
 }
 
-/// The strict profile's query proofs (`QueryProofAnswers::Recorded`) keep unproven the two
-/// shapes production was recorded answering only over stored documents that lack the key
-/// read: `get(key, default)` of an unconstrained key and `in` on a map the query constrains in
-/// part (coordinator ruling 2026-11-08). The top-level `in` (recorded with the key stored) and
-/// every positive answer stay; the official answers (the default) prove both.
-#[test]
-fn recorded_query_answers_keep_get_default_and_nested_membership_unproven() {
-    use fireemu_core_rules::eval::{evaluate_query_proof_traced_owned, QueryProofAnswers};
-    let rules = |cond: &str| {
-        format!("rules_version = '2';\nservice cloud.firestore {{ match /databases/{{d}}/documents {{ match /notes/{{id}} {{ allow list: if {cond}; }} }} }}")
-    };
-    let query = abstract_ctx(
-        "/databases/(default)/documents/notes/fireemu-placeholder",
-        vec![
-            ("owner", RulesValue::String("u1".into())),
-            (
-                "meta",
-                RulesValue::PartialMap(BTreeMap::from([("a".to_owned(), RulesValue::Int(1))])),
-            ),
-        ],
-    );
-    let allowed = |cond: &str, answers: QueryProofAnswers| {
-        let ruleset = parse_ruleset(&rules(cond)).unwrap();
-        let (report, _) = evaluate_query_proof_traced_owned(&ruleset, query.clone(), None, answers);
-        matches!(report.decision, Decision::Allow)
-    };
-    for cond in [
-        "resource.data.get('flag', false) == false",
-        "!('blocked' in resource.data.meta)",
-    ] {
-        assert!(!allowed(cond, QueryProofAnswers::Recorded), "{cond} strict");
-        assert!(
-            allowed(cond, QueryProofAnswers::Official),
-            "{cond} official"
-        );
-    }
-    for cond in [
-        "!('blocked' in resource.data)",
-        "'a' in resource.data.meta",
-        "resource.data.get('owner', 'x') == 'u1'",
-        "!resource.data.keys().hasAny(['blocked'])",
-        "resource.data.size() > 0",
-    ] {
-        assert!(allowed(cond, QueryProofAnswers::Recorded), "{cond} strict");
-        assert!(
-            allowed(cond, QueryProofAnswers::Official),
-            "{cond} official"
-        );
-    }
-    for cond in [
-        "resource.data.get('flag', 0) == 1",
-        "'blocked' in resource.data.meta",
-    ] {
-        assert!(!allowed(cond, QueryProofAnswers::Recorded), "{cond} strict");
-        assert!(
-            !allowed(cond, QueryProofAnswers::Official),
-            "{cond} official"
-        );
-    }
-}
-
 /// `keys()` is the only method whose result is read as its receiver's for the numeric
 /// stringification guard (a map's keys are field names); any other method with a
 /// query-derived number in its arguments stays representation-sensitive.

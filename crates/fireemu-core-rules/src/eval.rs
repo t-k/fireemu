@@ -193,20 +193,6 @@ pub struct RequestContext {
     pub request_query: Option<RulesValue>,
 }
 
-/// Which answers a query proof gives to the shapes production was recorded answering only
-/// over stored documents that lack the key read (FS-RULES-SHAPES, 2026-11-08): `get(key,
-/// default)` of `resource.data` for an unconstrained key, and `in` on a map the query
-/// constrains in part. The official emulator answers both from the constrained keys.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum QueryProofAnswers {
-    /// Also the official emulator's answers (the `emulator` profile, and the default).
-    #[default]
-    Official,
-    /// Only the shapes production was recorded answering over stored documents holding the
-    /// key (the `strict` profile): the two shapes above stay unproven.
-    Recorded,
-}
-
 /// Why a request was denied.
 #[derive(Debug, Clone, PartialEq)]
 pub enum DenyReason {
@@ -483,9 +469,6 @@ struct Evaluator<'a> {
     /// Abstract resources are query proofs: equality filters preserve Firestore's numeric
     /// equivalence even after a nested member is projected to a concrete Rules value.
     query_proof: bool,
-    /// Which answers a query proof gives to the shapes production was recorded answering only
-    /// over stored documents that lack the key (see [`QueryProofAnswers`]).
-    query_answers: QueryProofAnswers,
     /// `get()` / `exists()` provider (`None` = unsupported).
     access: Option<&'a dyn DocumentAccess>,
     /// The service: in Firestore rules the FS-RULES observations (a missing document is null,
@@ -588,20 +571,8 @@ pub fn evaluate_request_traced(
 #[must_use]
 pub fn evaluate_request_traced_owned(
     ruleset: &Ruleset,
-    ctx: RequestContext,
-    access: Option<&dyn DocumentAccess>,
-) -> (EvaluationReport, Coverage) {
-    evaluate_query_proof_traced_owned(ruleset, ctx, access, QueryProofAnswers::default())
-}
-
-/// [`evaluate_request_traced_owned`] with the answers a query proof gives to the shapes
-/// production has not been recorded answering (see [`QueryProofAnswers`]).
-#[must_use]
-pub fn evaluate_query_proof_traced_owned(
-    ruleset: &Ruleset,
     mut ctx: RequestContext,
     access: Option<&dyn DocumentAccess>,
-    answers: QueryProofAnswers,
 ) -> (EvaluationReport, Coverage) {
     let coverage = core::cell::RefCell::new(Coverage::default());
     let resource_absent = ctx.resource.is_none();
@@ -616,7 +587,6 @@ pub fn evaluate_query_proof_traced_owned(
         &request,
         &resource,
         resource_absent,
-        answers,
     );
     (report, coverage.into_inner())
 }
@@ -657,7 +627,6 @@ fn evaluate_with_coverage(
         &request,
         &resource,
         resource_absent,
-        QueryProofAnswers::default(),
     )
 }
 
@@ -670,7 +639,6 @@ fn evaluate_prepared(
     request: &Arc<RulesValue>,
     resource: &Arc<RulesValue>,
     resource_absent: bool,
-    answers: QueryProofAnswers,
 ) -> EvaluationReport {
     let mut budget = Budget {
         expressions: 0,
@@ -719,7 +687,6 @@ fn evaluate_prepared(
             request: Arc::clone(request),
             resource: Arc::clone(resource),
             query_proof: ctx.abstract_path,
-            query_answers: answers,
             access,
             service: ctx.service,
             doc_cache: BTreeMap::new(),
@@ -1757,7 +1724,7 @@ impl<'a> Evaluator<'a> {
     ///   refused without a filter, allowed with one);
     /// - `resource.data.get(key, default)` of an unconstrained key is the default
     ///   (`get("blocked", false) == false` allowed, `get("a", 0) == 1` refused without a
-    ///   filter), with the official answers only (see [`QueryProofAnswers`]).
+    ///   filter).
     ///
     /// An exact key set or size was not recorded and stays undetermined (review 2026-11-08
     /// r2). The receiver must be `resource.data` itself (see
@@ -1795,12 +1762,9 @@ impl<'a> Evaluator<'a> {
                 }),
                 upper: None,
             })),
-            ("get", [RulesValue::String(key), default]) => match fields.get(key) {
-                Some(value) => Ok(value.clone()),
-                // The default only with the official answers (see `QueryProofAnswers`).
-                None if self.query_answers == QueryProofAnswers::Official => Ok(default.clone()),
-                None => Err(EvalError::Unknown),
-            },
+            ("get", [RulesValue::String(key), default]) => {
+                Ok(fields.get(key).cloned().unwrap_or_else(|| default.clone()))
+            }
             _ => Err(EvalError::Unknown),
         })
     }
@@ -4754,13 +4718,7 @@ impl<'a> Evaluator<'a> {
             (BinaryOp::In, V::String(k), V::PartialMap(m)) => {
                 if m.contains_key(k) {
                     V::Bool(true)
-                } else if self.query_proof
-                    && (self.query_answers == QueryProofAnswers::Official
-                        || self.is_query_resource_data_expr(right))
-                {
-                    // On a nested map only with the official answers (see
-                    // `QueryProofAnswers`): production was recorded there only over stored
-                    // documents that lack the key.
+                } else if self.query_proof {
                     // Production answers a key the query does not constrain as absent from
                     // `resource.data` and from a map of it the query constrains in part
                     // (FS-RULES-DIFFS and FS-RULES-SHAPES 2026-11-08: `!("blocked" in

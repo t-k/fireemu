@@ -1166,8 +1166,7 @@ function withoutHistoricalBindingPaths(comparison) {
     config?.sourcePath,
     indexes?.path,
     indexes?.sourcePath,
-  ]
-    .filter((path) => typeof path === "string" && path.startsWith("/") && path.length > 1);
+  ].filter((path) => typeof path === "string" && path.startsWith("/") && path.length > 1);
   const maskedLog =
     typeof daemonLog === "string" && exemptPaths.length > 0
       ? daemonLog.replace(

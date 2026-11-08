@@ -1625,3 +1625,29 @@ test("a 200 that names the wrong display name, or no tenant, is read back before
     assert.equal(rows.filter((r) => r.phase === "read").length, 2, name);
   }
 });
+
+test("the switch is written before it is read back", async () => {
+  let inner;
+  const ticks = async () => {
+    for (let i = 0; i < 5; i += 1) await new Promise((resolve) => setImmediate(resolve));
+  };
+  const slowPatch = async (url, init) => {
+    if (init.method === "PATCH") await ticks();
+    return inner(url, init);
+  };
+  const t = fakeSession({ world: { tenancy: false }, session: { transport: slowPatch } });
+  inner = t.fetch;
+  const recording = await t.session.runRecording();
+  assert.equal(recording.closureReady, true);
+  const ids = t.journal.map((e) => e.id);
+  // Each write completes before the first read that could show it.
+  assert.deepEqual(ids.slice(0, 4), [
+    "read-config",
+    "write-tenancy",
+    "read-config",
+    "list-tenants",
+  ]);
+  const last = ids.lastIndexOf("write-tenancy");
+  assert.equal(ids[last + 1], "read-config");
+  assert.equal(ids[last + 2], "count-accounts");
+});

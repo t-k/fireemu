@@ -46,6 +46,9 @@ function deps(overrides = {}) {
     preflight: async () => ({ report: { fake: true }, problems: overrides.problems ?? [] }),
     recordOnce: async (n, _web, { shouldStop }) => {
       calls.push(`record-${n}`);
+      // A run records twice; a third start is a loop that does not end, and fails here, not by timeout.
+      if (calls.filter((c) => c.startsWith("record-")).length > 2)
+        throw new Error("a third recording was started");
       return recordWith(
         { kind: "local", origin: "http://127.0.0.1:1", projectNumber: NUMBER },
         dir,

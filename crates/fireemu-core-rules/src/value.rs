@@ -304,3 +304,44 @@ impl AuthContext {
         RulesValue::Map(m)
     }
 }
+
+/// First scalar of the stand-ins for lone surrogates: Supplementary Private Use Area-B,
+/// U+10D800 to U+10DFFF, one for each of the 2048 surrogate units.
+const LONE_SURROGATE_BASE: u32 = 0x10_D800;
+
+/// A Rules string is a Rust `String`, which cannot hold half of a surrogate pair. A lone
+/// surrogate `unit` (U+D800 to U+DFFF) is held as a private-use stand-in that counts as one
+/// UTF-16 unit and equals only itself. A string that really holds one of these private-use
+/// scalars is read one unit short; none is assigned.
+#[must_use]
+pub(crate) fn lone_surrogate_char(unit: u32) -> char {
+    char::from_u32(LONE_SURROGATE_BASE + (unit - 0xD800)).unwrap_or(char::REPLACEMENT_CHARACTER)
+}
+
+/// Whether `c` is the stand-in of a lone surrogate.
+#[must_use]
+pub(crate) fn is_lone_surrogate_char(c: char) -> bool {
+    (LONE_SURROGATE_BASE..LONE_SURROGATE_BASE + 0x800).contains(&(c as u32))
+}
+
+/// The UTF-16 units of `text` as characters: a character outside the BMP is its two surrogate
+/// stand-ins, any other character itself (a stand-in is already one lone unit).
+pub(crate) fn utf16_units(text: &str) -> impl Iterator<Item = char> + '_ {
+    text.chars().flat_map(|c| {
+        let mut buffer = [0u16; 2];
+        let units = c.encode_utf16(&mut buffer);
+        // A stand-in is already one lone unit, though it is outside the BMP.
+        let pair = units.len() == 2 && !is_lone_surrogate_char(c);
+        let (high, low) = (units[0], units[units.len() - 1]);
+        [
+            Some(if pair {
+                lone_surrogate_char(u32::from(high))
+            } else {
+                c
+            }),
+            pair.then(|| lone_surrogate_char(u32::from(low))),
+        ]
+        .into_iter()
+        .flatten()
+    })
+}

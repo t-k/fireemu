@@ -676,8 +676,9 @@ impl<'a> Parser<'a> {
         let value = u32::from_str_radix(&digits, 16).ok();
         // A surrogate cannot be a Rust `char`. The runtime reads rule strings as UTF-16, so
         // `\ud83d\ude00` is one character and a surrogate written alone is a lone unit
-        // (recorded in production: `string-escape#publishes` compiles `"\ud83d"`); it is held
-        // as U+FFFD, as the Realtime Database rules reader holds one.
+        // (recorded in production: `string-escape#publishes` compiles `"\ud83d"`). It is held
+        // as the stand-in of `crate::value::lone_surrogate_char`; the evaluator turns it into
+        // U+FFFD for the profile that follows production (`LoneSurrogateLiterals`).
         if let Some(high) = value.filter(|v| (0xD800..0xDC00).contains(v) && kind == 'u') {
             if let Some(low) = self.low_surrogate_escape() {
                 return Ok(
@@ -687,7 +688,7 @@ impl<'a> Parser<'a> {
             }
         }
         match value {
-            Some(v) if (0xD800..0xE000).contains(&v) => Ok(char::REPLACEMENT_CHARACTER),
+            Some(v) if (0xD800..0xE000).contains(&v) => Ok(crate::value::lone_surrogate_char(v)),
             Some(v) => char::from_u32(v)
                 .ok_or_else(|| self.error(format!("`\\{kind}{digits}` names no character"))),
             None => Err(self.error(format!("`\\{kind}{digits}` names no character"))),
@@ -818,6 +819,7 @@ impl<'a> Parser<'a> {
                 version,
                 services,
                 value_dependencies: crate::ast::ValueDependencies::default(),
+                lone_surrogate_literals: crate::ast::LoneSurrogateLiterals::default(),
                 function_scopes: Vec::new(),
             },
             top_level_functions,

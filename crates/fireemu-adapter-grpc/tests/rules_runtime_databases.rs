@@ -15,6 +15,7 @@ use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_auth::store::AuthStore;
 use fireemu_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningContext};
 use fireemu_core_firestore::path::DocumentPath;
+use fireemu_core_rules::ast::LoneSurrogateLiterals;
 use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::determinism::SplitMix64;
@@ -32,6 +33,14 @@ struct World {
 }
 
 fn world(refuse_without_ruleset: bool, declared: &[(&str, &str)]) -> World {
+    world_in(refuse_without_ruleset, declared, None)
+}
+
+fn world_in(
+    refuse_without_ruleset: bool,
+    declared: &[(&str, &str)],
+    literals: Option<LoneSurrogateLiterals>,
+) -> World {
     let gateway = Gateway {
         enforce_limits: true,
         ctx: PlanningContext {
@@ -59,13 +68,14 @@ fn world(refuse_without_ruleset: bool, declared: &[(&str, &str)]) -> World {
             )
         })
         .collect::<BTreeMap<_, _>>();
-    let enforcer = RulesEnforcer::new(
-        Arc::new(RulesetSlot::new(LoadedRules::from_source(OPEN).unwrap())),
-        auth,
-        clock,
-    )
-    .with_database_rules(slots)
-    .with_refusal_without_ruleset(refuse_without_ruleset);
+    let primary = RulesetSlot::new(LoadedRules::from_source(OPEN).unwrap());
+    let primary = match literals {
+        Some(literals) => primary.with_lone_surrogate_literals(literals),
+        None => primary,
+    };
+    let enforcer = RulesEnforcer::new(Arc::new(primary), auth, clock)
+        .with_database_rules(slots)
+        .with_refusal_without_ruleset(refuse_without_ruleset);
     let project = ProjectId::try_new("demo-app").unwrap();
     let reader = LatestReader {
         backend,
@@ -202,4 +212,29 @@ fn a_deleted_database_gives_up_the_rules_set_for_it() {
     // Forgetting never touches the default rules or a declared database.
     world.enforcer.forget_database_rules("(default)");
     assert!(world.anonymous_get("(default)"));
+}
+
+/// `string-escape#esc-high`: production denies `"é🔥x"[1] == "\ud83d"`, the official emulator
+/// allows it. A database created at run time takes the meaning of the profile of the primary
+/// ruleset, not a default.
+const LONE_ESCAPE: &str = r#"service cloud.firestore { match /databases/{database}/documents { match /{document=**} { allow read: if "é🔥x"[1] == "\ud83d"; } } }"#;
+
+#[test]
+fn a_runtime_database_takes_the_lone_surrogate_meaning_of_the_profile() {
+    for (literals, allowed) in [
+        (LoneSurrogateLiterals::Unit, true),
+        (LoneSurrogateLiterals::Replacement, false),
+    ] {
+        let world = world_in(false, &[], Some(literals));
+        world
+            .enforcer
+            .replace_database_source("other", LONE_ESCAPE)
+            .unwrap();
+        assert_eq!(world.anonymous_get("other"), allowed, "{literals:?}");
+        world
+            .enforcer
+            .replace_database_source("(default)", LONE_ESCAPE)
+            .unwrap();
+        assert_eq!(world.anonymous_get("(default)"), allowed, "{literals:?}");
+    }
 }

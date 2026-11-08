@@ -464,6 +464,9 @@ impl DocumentAccess for NoDocumentAccess {
 struct Evaluator<'a> {
     /// Current `eval` recursion depth.
     nesting: u32,
+    /// What a lone surrogate escape in a string literal is: U+FFFD (production) or the lone
+    /// unit an index reads (the official emulator).
+    lone_surrogate_literals: crate::ast::LoneSurrogateLiterals,
     request: Arc<RulesValue>,
     resource: Arc<RulesValue>,
     /// Abstract resources are query proofs: equality filters preserve Firestore's numeric
@@ -684,6 +687,7 @@ fn evaluate_prepared(
         };
         let mut ev = Evaluator {
             nesting: 0,
+            lone_surrogate_literals: ruleset.lone_surrogate_literals,
             request: Arc::clone(request),
             resource: Arc::clone(resource),
             query_proof: ctx.abstract_path,
@@ -4208,6 +4212,12 @@ impl<'a> Evaluator<'a> {
                 Literal::Bool(b) => RulesValue::Bool(*b),
                 Literal::Int(i) => RulesValue::Int(*i),
                 Literal::Float(f) => RulesValue::Float(*f),
+                Literal::Str(s)
+                    if self.lone_surrogate_literals
+                        == crate::ast::LoneSurrogateLiterals::Replacement =>
+                {
+                    RulesValue::String(replace_lone_surrogates(s))
+                }
                 Literal::Str(s) => RulesValue::String(s.clone()),
             }),
             ExprKind::Ident(name) => self
@@ -6040,19 +6050,31 @@ fn slice(
 /// The length of `s` in UTF-16 code units, which is what the Rules runtime counts
 /// (`string-index#size-4`: `"é🔥x".size() == 4`, recorded in production).
 fn utf16_len(s: &str) -> usize {
-    s.encode_utf16().count()
+    crate::value::utf16_units(s).count()
 }
 
 /// The code unit at `index` as a string, or `None` past the end (`string-index#idx0` to
-/// `idx4-*`). Half of a surrogate pair cannot be a Rust `String`; it is held as U+FFFD, which
-/// equals no whole character, as production answers for `"é🔥x"[1] == "🔥"`.
+/// `idx4-*`). Half of a surrogate pair cannot be a Rust `String`; it is held as the stand-in
+/// of a lone surrogate, which equals no whole character, as production answers for
+/// `"é🔥x"[1] == "🔥"`.
 fn utf16_unit_at(s: &str, index: usize) -> Option<String> {
-    let unit = s.encode_utf16().nth(index)?;
-    let character = char::decode_utf16([unit])
-        .next()
-        .and_then(Result::ok)
-        .unwrap_or(char::REPLACEMENT_CHARACTER);
-    Some(character.to_string())
+    crate::value::utf16_units(s)
+        .nth(index)
+        .map(|unit| unit.to_string())
+}
+
+/// `s` with each lone-surrogate stand-in written as U+FFFD, which is what production holds a
+/// lone surrogate escape as (`string-escape#esc-high`).
+fn replace_lone_surrogates(s: &str) -> String {
+    s.chars()
+        .map(|c| {
+            if crate::value::is_lone_surrogate_char(c) {
+                char::REPLACEMENT_CHARACTER
+            } else {
+                c
+            }
+        })
+        .collect()
 }
 
 /// Nanoseconds per day.

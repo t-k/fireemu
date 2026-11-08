@@ -13,6 +13,21 @@ pub struct Span {
     pub offset: usize,
 }
 
+/// What a lone surrogate written as an escape in a rule string (`"\ud83d"`) is, which the
+/// compatibility profile decides.
+///
+/// A string is read by UTF-16 unit, so `"é🔥x"[1]` is half of an emoji. In the recorded
+/// `string-escape#esc-high` row production answered `false` for `"é🔥x"[1] == "\ud83d"`
+/// (the ruleset compiled), where the official emulator answers `true`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LoneSurrogateLiterals {
+    /// The escape is U+FFFD, which the half read by index is not: production.
+    #[default]
+    Replacement,
+    /// The escape is the same lone unit an index reads: the official emulator.
+    Unit,
+}
+
 /// A parsed ruleset.
 #[derive(Debug, Clone)]
 pub struct Ruleset {
@@ -21,6 +36,7 @@ pub struct Ruleset {
     /// Services.
     pub services: Vec<Service>,
     pub(crate) value_dependencies: ValueDependencies,
+    pub(crate) lone_surrogate_literals: LoneSurrogateLiterals,
     pub(crate) function_scopes: Vec<Arc<crate::scope::ServiceScopes>>,
 }
 
@@ -29,6 +45,7 @@ impl PartialEq for Ruleset {
         self.version == other.version
             && self.services == other.services
             && self.value_dependencies == other.value_dependencies
+            && self.lone_surrogate_literals == other.lone_surrogate_literals
     }
 }
 
@@ -54,6 +71,19 @@ impl ValueDependencies {
 }
 
 impl Ruleset {
+    /// What a lone surrogate escape in a rule string is.
+    #[must_use]
+    pub const fn lone_surrogate_literals(&self) -> LoneSurrogateLiterals {
+        self.lone_surrogate_literals
+    }
+
+    /// This ruleset with `mode` as the meaning of a lone surrogate escape.
+    #[must_use]
+    pub fn with_lone_surrogate_literals(mut self, mode: LoneSurrogateLiterals) -> Self {
+        self.lone_surrogate_literals = mode;
+        self
+    }
+
     /// Returns the document-shaped values any expression in this ruleset may read.
     #[must_use]
     pub const fn value_dependencies(&self) -> ValueDependencies {

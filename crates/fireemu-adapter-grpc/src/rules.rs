@@ -772,7 +772,7 @@ impl RulesEnforcer {
                     .write()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .entry(database.to_owned())
-                    .or_default(),
+                    .or_insert_with(|| Arc::new(self.rules.empty_like())),
             )
         };
         slot.replace_loaded(loaded)

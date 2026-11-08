@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::ops::Deref;
 use std::sync::{Arc, Mutex, RwLock};
 
-use crate::ast::{Item, PathSegment, Ruleset, Span};
+use crate::ast::{Item, LoneSurrogateLiterals, PathSegment, Ruleset, Span};
 use crate::coverage::RulesDiagnostics;
 use crate::lint::{lint_parsed, DiagnosticLevel, LintOptions};
 use crate::parse::{parse_ruleset, ParseError};
@@ -99,6 +99,19 @@ impl LoadedRules {
             ruleset: Some(Arc::new(ruleset)),
             diagnostics: Arc::new(Mutex::new(RulesDiagnostics::default())),
         })
+    }
+
+    /// These rules with `mode` as the meaning of a lone surrogate escape in a rule string;
+    /// the compatibility profile decides it when the rules are loaded. Rules that are not
+    /// configured are returned as they are.
+    #[must_use]
+    pub fn with_lone_surrogate_literals(mut self, mode: LoneSurrogateLiterals) -> Self {
+        if let Some(ruleset) = self.ruleset.as_mut() {
+            if ruleset.lone_surrogate_literals() != mode {
+                *Arc::make_mut(ruleset) = (**ruleset).clone().with_lone_surrogate_literals(mode);
+            }
+        }
+        self
     }
 
     /// Whether rules are configured.
@@ -326,6 +339,9 @@ impl std::error::Error for RulesDiagnosticsError {}
 #[derive(Debug)]
 pub struct RulesetSlot {
     active: RwLock<Arc<ActiveRules>>,
+    /// The meaning of a lone surrogate escape for every ruleset this slot publishes (the
+    /// compatibility profile's); `None` keeps what each loaded ruleset carries.
+    lone_surrogate_literals: Option<LoneSurrogateLiterals>,
 }
 
 impl RulesetSlot {
@@ -337,6 +353,40 @@ impl RulesetSlot {
                 generation: 0,
                 loaded: Arc::new(loaded),
             })),
+            lone_surrogate_literals: None,
+        }
+    }
+
+    /// This slot with `mode` as the meaning of a lone surrogate escape in every ruleset it
+    /// holds now and publishes later.
+    #[must_use]
+    pub fn with_lone_surrogate_literals(mut self, mode: LoneSurrogateLiterals) -> Self {
+        self.lone_surrogate_literals = Some(mode);
+        let active = self
+            .active
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let loaded = (*active.loaded).clone().with_lone_surrogate_literals(mode);
+        *active = Arc::new(ActiveRules {
+            generation: active.generation,
+            loaded: Arc::new(loaded),
+        });
+        self
+    }
+
+    /// The meaning of a lone surrogate escape this slot imposes, if it imposes one.
+    #[must_use]
+    pub const fn lone_surrogate_literals(&self) -> Option<LoneSurrogateLiterals> {
+        self.lone_surrogate_literals
+    }
+
+    /// A slot with no rules that imposes the same meaning of a lone surrogate escape.
+    #[must_use]
+    pub fn empty_like(&self) -> Self {
+        let slot = Self::default();
+        match self.lone_surrogate_literals {
+            Some(mode) => slot.with_lone_surrogate_literals(mode),
+            None => slot,
         }
     }
 
@@ -412,6 +462,10 @@ impl RulesetSlot {
             .generation
             .checked_add(1)
             .ok_or_else(|| "ruleset generation is exhausted".to_owned())?;
+        let loaded = match self.lone_surrogate_literals {
+            Some(mode) => loaded.with_lone_surrogate_literals(mode),
+            None => loaded,
+        };
         *active = Arc::new(ActiveRules {
             generation,
             loaded: Arc::new(loaded),

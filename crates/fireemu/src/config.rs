@@ -299,6 +299,18 @@ impl CompatibilityProfile {
         }
     }
 
+    /// What a lone surrogate escape (`"\ud83d"`) in a rule string is: production holds it as
+    /// U+FFFD, so `"é🔥x"[1] == "\ud83d"` is false (`string-escape#esc-high`, recorded
+    /// 2026-11-08); the official emulator keeps it as the same lone unit an index reads, so
+    /// the comparison is true and the emulator profile never refuses more than it.
+    #[must_use]
+    pub const fn lone_surrogate_literals(self) -> fireemu_core_rules::ast::LoneSurrogateLiterals {
+        match self {
+            Self::Emulator => fireemu_core_rules::ast::LoneSurrogateLiterals::Unit,
+            Self::Strict => fireemu_core_rules::ast::LoneSurrogateLiterals::Replacement,
+        }
+    }
+
     /// How a caller's ID token is verified on the Security Rules surfaces.
     #[must_use]
     pub const fn token_acceptance(self) -> TokenAcceptance {
@@ -5733,6 +5745,21 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    /// `string-escape#esc-high`: the strict profile follows production, the emulator profile
+    /// the official emulator.
+    #[test]
+    fn the_profile_decides_what_a_lone_surrogate_escape_is() {
+        use fireemu_core_rules::ast::LoneSurrogateLiterals;
+        assert_eq!(
+            CompatibilityProfile::Strict.lone_surrogate_literals(),
+            LoneSurrogateLiterals::Replacement
+        );
+        assert_eq!(
+            CompatibilityProfile::Emulator.lone_surrogate_literals(),
+            LoneSurrogateLiterals::Unit
+        );
+    }
 
     /// The profile decides how strictly `firestore.indexes.json` loads.
     #[test]

@@ -259,6 +259,61 @@ fn emulators() -> serde_json::Value {
     serde_json::json!({"hosting":{"port":0},"ui":{"enabled":false},"hub":{"port":0},"logging":{"port":0}})
 }
 
+#[test]
+fn hosting_ignored_assets_are_absent_from_every_route() {
+    let dir = Scratch::new("hosting", "ignored-assets");
+    for (path, contents) in [
+        ("public/private.json", "private"),
+        ("public/clean.html", "clean"),
+        ("public/folder/index.html", "index"),
+        ("public/locales/en/page.html", "localized"),
+        ("public/page.html", "ordinary"),
+        ("public/rewrite.html", "rewrite"),
+        ("public/404.html", "custom404"),
+    ] {
+        let file = dir.join(path);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(file, contents).unwrap();
+    }
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("private.json", dir.join("public/alias.json")).unwrap();
+    let firebase = serde_json::json!({"hosting":{
+        "public":dir.join("public"), "cleanUrls":true,
+        "i18n":{"root":"locales"},
+        "ignore":["private.json", "clean.html", "folder/index.html", "locales/en/page.html", "rewrite.html", "404.html"],
+        "rewrites":[{"source":"/rewritten", "destination":"/rewrite.html"}]
+    },"emulators":emulators()});
+    let (_child, address) = start(&dir, &firebase, "hosting");
+    let mut failures = Vec::new();
+    for path in [
+        "/private.json",
+        "/clean",
+        "/folder/",
+        "/rewritten",
+        "/missing",
+    ] {
+        let reply = request(&address, path);
+        if !reply.starts_with("HTTP/1.1 404") || reply.contains("custom404") {
+            failures.push(format!("{path}: {reply}"));
+        }
+    }
+    #[cfg(unix)]
+    {
+        let reply = request(&address, "/alias.json");
+        if !reply.starts_with("HTTP/1.1 404") {
+            failures.push(format!("alias: {reply}"));
+        }
+    }
+    let mut stream = TcpStream::connect(&address).unwrap();
+    write!(stream, "GET /page.html HTTP/1.1\r\nHost: {address}\r\nAccept-Language: en\r\nConnection: close\r\n\r\n").unwrap();
+    let mut reply = String::new();
+    stream.read_to_string(&mut reply).unwrap();
+    if !reply.ends_with("ordinary") {
+        failures.push(format!("i18n: {reply}"));
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
 // Review 2026-11-07 P2 and Should: reserved initialization URLs precede a catch-all redirect,
 // and the shared configuration carries a nonsecret local API key.
 #[test]

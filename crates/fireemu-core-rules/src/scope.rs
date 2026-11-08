@@ -474,7 +474,8 @@ mod scope_plan_tests {
                     let environment = scopes.get(inner).unwrap();
                     assert_eq!(environment.function("top").unwrap().name, "top");
                     super::measure_operation(&format!("{label} checked-get"), || {
-                        let scopes = super::FunctionScopes::new(black_box(items), black_box(compiled));
+                        let scopes =
+                            super::FunctionScopes::new(black_box(items), black_box(compiled));
                         black_box(scopes.get(black_box(inner)));
                     });
                     super::measure_operation(&format!("{label} live-outer-lookup"), || {

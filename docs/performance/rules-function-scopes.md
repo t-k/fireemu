@@ -119,7 +119,9 @@ The full Rules suite passed 292 tests with six skipped; all-target/all-feature c
 
 ### Paired release comparison
 
-The saved release baseline from `342022267e06141060576898d3064e2e5d75999a` and the candidate used the unchanged benchmark fixture and 2,000 evaluations per row. Both builds finished before measurement. Five samples of each executable ran serially, alternating which version ran first. The Linux/arm64 container limits remained four CPUs, 6GiB memory and zero swap. Concurrent host work included two Rust mutation jobs and a Python mutation harness; the one-minute host load average ranged from 21.11 to 23.88 on 18 logical CPUs. Holders and load were recorded before and after every process.
+The saved release baseline from `342022267e06141060576898d3064e2e5d75999a` and the candidate used the unchanged benchmark fixture and 2,000 evaluations per row. This baseline was rebuilt after the test-only generation/capture additions; it is the `0895154…` binary from the November 8 investigation, not the `3bbdee9…` binary from the original November 7 report. The fixture, Cargo manifest, lockfile and toolchain file have identical hashes at the original baseline, rebuilt baseline and candidate revisions. The rebuild's four Rules source hashes match `342022267`, and its executable was copied before candidate compilation and rechecked by SHA-256 before comparison. This establishes the comparison's source custody without asserting bit-identical builds across revisions.
+
+Both builds finished before measurement. Five samples of each executable ran serially, alternating which version ran first. The Linux/arm64 container limits remained four CPUs, 6GiB memory and zero swap. Concurrent host work included two Rust mutation jobs and a Python mutation harness; the one-minute host load average ranged from 21.11 to 23.88 on 18 logical CPUs. Holders and load were recorded before and after every process.
 
 Results are µs/evaluation, with the full range of five samples:
 
@@ -149,6 +151,8 @@ Results are µs/operation, with all five samples' ranges:
 Checked lookup stayed approximately constant in this fixed-depth fixture, while the retained live sibling scan grew with block count. The legacy control includes the global agreement walk but excludes declaration search; these are distinct operations, timed in separate batches, so their ratio is not an end-to-end speedup. The direct agreement control at 1,000 blocks measured 6.3230µs (5.9319–6.5252). Host load rose from 21.57 before the process to 30.99 afterward; even complete evaluation of the zero-block fixture ranged from 6.60 to 22.32µs within this run. The direct results support removal of the global setup work and identify the remaining scan, while preserving the uncertainty of the paired request timings. This additional run was planned separately and was not a retry of the paired comparison.
 
 The command is the same `scope::scope_plan_tests::measure_residual_scope_resolution` release command shown above. The two added output labels are `checked-get` and `live-outer-lookup`; `first-plan` is now a test-only legacy control.
+
+The full 292-test run covers the production and regression commit `4b69e9bbb`. After the final ignored measurement additions, the restored focused eight-test run, all-target/all-feature clippy and the ignored release measurement passed. The full suite was not repeated for those test-only timing additions. A subsequent one-line formatting correction passed `rustfmt --edition 2021 --check` for both changed source files; it changes no Rust tokens or behavior.
 
 ## Remaining limits
 

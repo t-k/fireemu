@@ -35,7 +35,8 @@ export function reduceBig(value) {
  * attributed on this form, and the members themselves are compared between runs.
  */
 export function plain(node) {
-  if (node === null || typeof node !== "object" || Array.isArray(node)) return node;
+  if (Array.isArray(node)) return node.map(plain);
+  if (node === null || typeof node !== "object") return node;
   if (".value" in node) return node[".value"];
   return Object.fromEntries(
     Object.entries(node)

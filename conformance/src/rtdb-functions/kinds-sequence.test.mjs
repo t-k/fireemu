@@ -265,3 +265,155 @@ test("seeded random writes agree with an independent reference of the leaves", (
   }
   assert.ok(last);
 });
+
+test("plain keeps arrays as arrays and unwraps inside them", () => {
+  assert.deepEqual(plain([1, { ".value": 2, ".priority": 3 }, { a: 1, ".priority": 2 }]), [
+    1,
+    2,
+    { a: 1 },
+  ]);
+  assert.ok(Array.isArray(plain([1, 2])));
+  assert.deepEqual(plain({ list: [{ ".value": 4, ".priority": 1 }] }), { list: [4] });
+});
+
+test("the planned payload sizes and the observation-only steps are pinned", () => {
+  const byId = Object.fromEntries(buildSteps("N").map((s) => [s.id, s]));
+  assert.equal(byId.k11.body.blob.length, 100 * 1024);
+  assert.equal(byId.k12.body.blob.length, 600 * 1024);
+  assert.equal(byId.k13.body.blob.length, 2 * 1024 * 1024);
+  assert.deepEqual(
+    buildSteps("N")
+      .filter((s) => s.observeOnly)
+      .map((s) => s.id),
+    ["k8", "k11", "k12", "k13", "k14"],
+  );
+});
+
+test("groups of one step are listed in name order", () => {
+  const steps = [
+    {
+      id: "a",
+      method: "PATCH",
+      path: PREFIX,
+      body: { "gz/items/x": { v: 1 }, "ga/items/x": { v: 1 } },
+      context: "admin",
+    },
+  ];
+  assert.deepEqual(groupList(transitions(steps)[0]), ["ga", "gz"]);
+  assert.deepEqual(leafList(transitions(steps)[0]), ["create ga/x", "create gz/x"]);
+});
+
+test("a frame is accepted only in the shape its handler prints", () => {
+  const steps = buildSteps("N");
+  const handler = (name) => FIXTURE_HANDLERS.find((h) => h.name === name);
+  const params = { group: "ga", id: "a1" };
+  const snap = { exists: true, key: "a1", value: { value: 1, run: "N" } };
+  const make = (name, event) => ({
+    handler: name,
+    generation: handler(name).generation,
+    event:
+      handler(name).generation === 1
+        ? { context: { params: event.params }, data: event.data }
+        : event,
+  });
+  const reason = (name, event) => matchFrame(make(name, event), steps).reason;
+  // a single-node handler needs `exists`; a change handler needs both sides
+  assert.equal(reason("k9CreatedV2", { params, data: { key: "a1", value: {} } }), "shape");
+  assert.equal(reason("k9DeletedV1", { params, data: { before: snap, after: snap } }), "shape");
+  assert.equal(reason("k9UpdatedV2", { params, data: snap }), "shape");
+  assert.equal(reason("k9UpdatedV2", { params, data: { before: snap } }), "shape");
+  assert.equal(reason("k9AnyWrittenV2", { params, data: { after: snap } }), "shape");
+  // an item handler needs the id, every handler the group
+  assert.equal(reason("k9CreatedV2", { params: { group: "ga" }, data: snap }), "shape");
+  assert.equal(reason("k9CreatedV2", { params: { id: "a1" }, data: snap }), "shape");
+  assert.equal(
+    reason("k9GroupWrittenV2", { params: {}, data: { before: snap, after: snap } }),
+    "shape",
+  );
+  // the group handler does not need an id
+  assert.notEqual(
+    reason("k9GroupWrittenV2", { params: { group: "ga" }, data: { before: snap, after: snap } }),
+    "shape",
+  );
+  // `exists` decides what a snapshot says, not the value next to it
+  const gone = { exists: false, key: "a1", value: { value: 1, run: "N" } };
+  assert.equal(reason("k9CreatedV2", { params, data: gone }), "no-match");
+});
+
+test("two writes with the same node, or two groups with the same content, are told apart or left ambiguous", () => {
+  const step = (id, path, body) => ({
+    id,
+    method: "PUT",
+    path: `${PREFIX}/${path}`,
+    body,
+    context: "admin",
+  });
+  const handler = FIXTURE_HANDLERS.find((h) => h.name === "k9AnyWrittenV2");
+  const frame = (group, before, after) => ({
+    handler: handler.name,
+    generation: 2,
+    event: {
+      params: { group, id: "x" },
+      data: {
+        before: before === null ? { exists: false, value: null } : { exists: true, value: before },
+        after: after === null ? { exists: false, value: null } : { exists: true, value: after },
+      },
+    },
+  });
+  // the same node content in two groups: the group in the frame names the write
+  const groups = [step("one", "ga/items/x", { v: 1 }), step("two", "gb/items/x", { v: 1 })];
+  assert.equal(matchFrame(frame("ga", null, { v: 1 }), groups).step, "one");
+  assert.equal(matchFrame(frame("gb", null, { v: 1 }), groups).step, "two");
+  // the same node, the same transition, in two steps: ambiguous, never the first
+  const twice = [
+    step("one", "ga/items/x", { v: 1 }),
+    step("gap", "ga/items/x", { v: 2 }),
+    step("back", "ga/items/x", { v: 1 }),
+    step("again", "ga/items/x", { v: 2 }),
+  ];
+  const ambiguous = matchFrame(frame("ga", { v: 1 }, { v: 2 }), twice);
+  assert.equal(ambiguous.step, null);
+  assert.equal(ambiguous.reason, "ambiguous");
+  assert.deepEqual(ambiguous.candidates, ["gap", "again"]);
+  // the item id names the write too
+  const ids = [step("x", "ga/items/x", { v: 1 }), step("y", "ga/items/y", { v: 1 })];
+  const other = frame("ga", null, { v: 1 });
+  other.event.params.id = "y";
+  assert.equal(matchFrame(other, ids).step, "y");
+  // the group handler is matched on the group's content, and on the group
+  const groupHandler = FIXTURE_HANDLERS.find((h) => h.name === "k9GroupWrittenV2");
+  const group = (name, before, after) => ({
+    handler: groupHandler.name,
+    generation: 2,
+    event: {
+      params: { group: name },
+      data: {
+        before: before === null ? { exists: false, value: null } : { exists: true, value: before },
+        after: { exists: true, value: after },
+      },
+    },
+  });
+  assert.equal(matchFrame(group("ga", null, { items: { x: { v: 1 } } }), groups).step, "one");
+  assert.equal(matchFrame(group("gb", null, { items: { x: { v: 1 } } }), groups).step, "two");
+  assert.equal(
+    matchFrame(group("ga", null, { items: { x: { v: 9 } } }), groups).reason,
+    "no-match",
+  );
+  assert.equal(
+    matchFrame(group("ga", { items: { x: { v: 1 } } }, { items: { x: { v: 1 } } }), groups).reason,
+    "no-match",
+  );
+});
+
+test("observe counts what it attributed and what it could not", () => {
+  const steps = buildSteps("N");
+  const handler = FIXTURE_HANDLERS.find((h) => h.name === "k9CreatedV2");
+  const good = frameFor(handler, transitions(steps)[0].leaves[0]);
+  const stray = structuredClone(good);
+  stray.event.params.id = "nobody";
+  const report = observe({ writes: {}, frames: [good, stray], steps });
+  assert.deepEqual(report.totals, { frames: 2, attributed: 1, unattributed: 1 });
+  assert.deepEqual(report.unattributed, [
+    { handler: "k9CreatedV2", reason: "no-match", candidates: [] },
+  ]);
+});

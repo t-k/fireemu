@@ -569,6 +569,13 @@ const SHAPES_QUERY_RULES = [
   ["fsr9-q-get-pos", 'resource.data.get("a", 0) == 1'],
   ["{path=**}/fsr9-q-cg", '!("blocked" in resource.data)'],
   ["{path=**}/fsr9-q-cg-has", '"blocked" in resource.data'],
+  // The negated `in` over a collection whose stored documents do hold the key.
+  ["{path=**}/fsr9-q-blk", '!("blocked" in resource.data)'],
+  // A container built from a field the query does not constrain, which the stored document lacks.
+  ["fsr9-q-sec-list", "[resource.data.secret] != null"],
+  ["fsr9-q-sec-map", '{"k": resource.data.secret} != null'],
+  ["fsr9-q-sec-bare", "resource.data.secret != null"],
+  ["fsr9-q-sec-owner", "[resource.data.owner] != null"],
 ];
 
 export const SHAPES_RULESETS = {
@@ -644,6 +651,8 @@ const shapesProgram = (name, steps, seed = []) => ({
 const N1 = { n: { integerValue: "1" } };
 const A1 = { a: { integerValue: "1" } };
 const META_A1 = { meta: { mapValue: { fields: A1 } } };
+const MINE = { owner: { stringValue: "UID(anon)" }, ...N1 };
+const notNull = (fieldPath) => ({ unaryFilter: { op: "IS_NOT_NULL", field: { fieldPath } } });
 
 export const SHAPES_PROGRAMS = [
   shapesProgram(
@@ -688,6 +697,23 @@ export const SHAPES_PROGRAMS = [
       queryRow("cg-blocked-group", { collectionId: "fsr9-q-cg", allDescendants: true }),
       queryRow("cg-has-group", { collectionId: "fsr9-q-cg-has", allDescendants: true }),
       queryRow("cg-blocked-single", { collectionId: "fsr9-q-cg" }),
+      // The same negated `in` where the stored documents hold `blocked`: unfiltered, filtered
+      // `blocked != null` (the SDK's IS_NOT_NULL), as a group, and the refused control that
+      // constrains `blocked` (cg-blocked-single above is the allowed control).
+      queryRow("blk-stored-nofilter", { collectionId: "fsr9-q-blk" }),
+      queryRow("blk-not-null", { collectionId: "fsr9-q-blk" }, notNull("blocked")),
+      queryRow("blk-stored-group", { collectionId: "fsr9-q-blk", allDescendants: true }),
+      queryRow(
+        "blk-eq-true",
+        { collectionId: "fsr9-q-blk" },
+        field("blocked", "EQUAL", { booleanValue: true }),
+      ),
+      // `secret` is not constrained and not stored; owner == uid is. Bare read: refused control;
+      // a list of `owner`: allowed control.
+      queryRow("sec-list-owner", { collectionId: "fsr9-q-sec-list" }, ME),
+      queryRow("sec-map-owner", { collectionId: "fsr9-q-sec-map" }, ME),
+      queryRow("sec-bare-owner", { collectionId: "fsr9-q-sec-bare" }, ME),
+      queryRow("sec-owner-owner", { collectionId: "fsr9-q-sec-owner" }, ME),
     ],
     [
       { doc: "fsr9-q-owner/mine", fields: { owner: { stringValue: "UID(anon)" }, ...N1 } },
@@ -703,6 +729,12 @@ export const SHAPES_PROGRAMS = [
       { doc: "fsr9-q-cg/c1", fields: N1 },
       { doc: "fsr9-q-x/y/fsr9-q-cg/c2", fields: N1 },
       { doc: "fsr9-q-cg-has/c1", fields: N1 },
+      { doc: "fsr9-q-blk/b1", fields: { blocked: { booleanValue: true } } },
+      { doc: "fsr9-q-x/y/fsr9-q-blk/b2", fields: { blocked: { booleanValue: true } } },
+      { doc: "fsr9-q-sec-list/s1", fields: MINE },
+      { doc: "fsr9-q-sec-map/s1", fields: MINE },
+      { doc: "fsr9-q-sec-bare/s1", fields: MINE },
+      { doc: "fsr9-q-sec-owner/s1", fields: MINE },
     ],
   ),
   shapesProgram(

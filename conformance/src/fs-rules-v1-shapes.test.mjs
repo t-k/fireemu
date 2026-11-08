@@ -72,7 +72,7 @@ const collectionOf = (path) => path.split("/").at(-2);
 
 // ---- the corpus -----------------------------------------------------------------------------
 
-test("the corpus is five programs of 72 rows, valid and under the cap", () => {
+test("the corpus is five programs of 80 rows, valid and under the cap", () => {
   assert.deepEqual(
     SHAPES_PROGRAMS.map((p) => p.id),
     [
@@ -90,12 +90,12 @@ test("the corpus is five programs of 72 rows, valid and under the cap", () => {
     "shapes-fn-shadow",
     "shapes-fn-after",
   ]);
-  assert.equal(validateCorpus(SHAPES_PROGRAMS), 72);
-  assert.equal(countRequests(SHAPES_PROGRAMS), 72);
-  assert.ok(72 <= REQUEST_CAP);
+  assert.equal(validateCorpus(SHAPES_PROGRAMS), 80);
+  assert.equal(countRequests(SHAPES_PROGRAMS), 80);
+  assert.ok(80 <= REQUEST_CAP);
   assert.deepEqual(
     SHAPES_PROGRAMS.map((p) => rowsOf(p).length),
-    [28, 21, 18, 3, 2],
+    [36, 21, 18, 3, 2],
   );
   for (const p of SHAPES_PROGRAMS) assert.deepEqual(p.steps[0], { id: "publishes", publish: true });
 });
@@ -222,12 +222,17 @@ test("the query rules are exactly these", () => {
     ["fsr9-q-get-pos", 'resource.data.get("a", 0) == 1'],
     ["{path=**}/fsr9-q-cg", '!("blocked" in resource.data)'],
     ["{path=**}/fsr9-q-cg-has", '"blocked" in resource.data'],
+    ["{path=**}/fsr9-q-blk", '!("blocked" in resource.data)'],
+    ["fsr9-q-sec-list", "[resource.data.secret] != null"],
+    ["fsr9-q-sec-map", '{"k": resource.data.secret} != null'],
+    ["fsr9-q-sec-bare", "resource.data.secret != null"],
+    ["fsr9-q-sec-owner", "[resource.data.owner] != null"],
   ])
     assert.ok(
       source.includes(`match /${match}/{id} {\n      allow list: if ${condition};\n    }`),
       match,
     );
-  assert.equal(source.split("allow list").length - 1, 10);
+  assert.equal(source.split("allow list").length - 1, 15);
 });
 
 const owner = {
@@ -329,6 +334,32 @@ test("the query-resource rows query each collection without and with a filter, a
       ["cg-blocked-group", { from: [{ collectionId: "fsr9-q-cg", allDescendants: true }] }],
       ["cg-has-group", { from: [{ collectionId: "fsr9-q-cg-has", allDescendants: true }] }],
       ["cg-blocked-single", { from: [{ collectionId: "fsr9-q-cg" }] }],
+      ["blk-stored-nofilter", { from: [{ collectionId: "fsr9-q-blk" }] }],
+      [
+        "blk-not-null",
+        {
+          from: [{ collectionId: "fsr9-q-blk" }],
+          where: { unaryFilter: { op: "IS_NOT_NULL", field: { fieldPath: "blocked" } } },
+        },
+      ],
+      ["blk-stored-group", { from: [{ collectionId: "fsr9-q-blk", allDescendants: true }] }],
+      [
+        "blk-eq-true",
+        {
+          from: [{ collectionId: "fsr9-q-blk" }],
+          where: {
+            fieldFilter: {
+              field: { fieldPath: "blocked" },
+              op: "EQUAL",
+              value: { booleanValue: true },
+            },
+          },
+        },
+      ],
+      ["sec-list-owner", { from: [{ collectionId: "fsr9-q-sec-list" }], where: owner }],
+      ["sec-map-owner", { from: [{ collectionId: "fsr9-q-sec-map" }], where: owner }],
+      ["sec-bare-owner", { from: [{ collectionId: "fsr9-q-sec-bare" }], where: owner }],
+      ["sec-owner-owner", { from: [{ collectionId: "fsr9-q-sec-owner" }], where: owner }],
     ],
   );
 });
@@ -351,6 +382,12 @@ test("the query seed is exactly these documents, and the other programs seed not
     { doc: "fsr9-q-cg/c1", fields: n1 },
     { doc: "fsr9-q-x/y/fsr9-q-cg/c2", fields: n1 },
     { doc: "fsr9-q-cg-has/c1", fields: n1 },
+    { doc: "fsr9-q-blk/b1", fields: { blocked: { booleanValue: true } } },
+    { doc: "fsr9-q-x/y/fsr9-q-blk/b2", fields: { blocked: { booleanValue: true } } },
+    ...["list", "map", "bare", "owner"].map((kind) => ({
+      doc: `fsr9-q-sec-${kind}/s1`,
+      fields: { owner: { stringValue: "UID(anon)" }, ...n1 },
+    })),
   ]);
   for (const other of SHAPES_PROGRAMS.slice(1)) assert.deepEqual(other.seed, [], other.id);
 });
@@ -418,7 +455,7 @@ test("a recording leaves the sandbox as it found it, with the request counts the
   assert.deepEqual(out.cleanupErrors, []);
   assert.deepEqual(out.failures, []);
   assert.deepEqual(out.unknowns, []);
-  assert.equal(out.requests, 72);
+  assert.equal(out.requests, 80);
   assert.equal(out.harnessRequests, 847);
   assert.equal(out.publications.length, 5);
   assert.equal(world.releases.size, 0);
@@ -459,7 +496,7 @@ test("the seed and the query bodies carry the principal's uid, and the recording
       c.headers.authorization?.startsWith("Bearer ") &&
       !c.headers.authorization.startsWith("Bearer ya29."),
   );
-  assert.equal(sent.length, 28);
+  assert.equal(sent.length, 36);
   assert.ok(JSON.stringify(sent[0].body).includes(`"stringValue":"${uid}"`));
   assert.ok(!JSON.stringify(sent).includes("UID("), "no placeholder is sent");
   assert.ok(!JSON.stringify(sent).includes("{docs}"), "every document name is expanded");
@@ -531,7 +568,7 @@ test("the fixture keeps the other corpora and adds the shapes programs", async (
   assert.equal(Object.keys(fixture.programs).length, 6);
   // The fixture the recorder writes is what the report reads.
   const rows = shapesReport(fixture);
-  assert.equal(rows.length, 77);
+  assert.equal(rows.length, 85);
   assert.ok(rows.every((r) => ["allowed", "compiled"].includes(r.answer)));
 });
 

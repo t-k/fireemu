@@ -173,7 +173,7 @@ test("shapes-report prints one line per shapes row from the checked-in fixture, 
   const result = run(["shapes-report"]);
   assert.equal(result.status, 0, result.stderr);
   const lines = result.stdout.trimEnd().split("\n");
-  assert.equal(lines.length, 77);
+  assert.equal(lines.length, 85);
   // The shapes family is not recorded yet: every row is missing, so neither comparison holds.
   assert.match(
     lines[0],

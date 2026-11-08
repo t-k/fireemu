@@ -9447,16 +9447,19 @@ service firebase.storage {
                     403,
                 );
             }
-            // The strict outcomes are observed production results; emulator preserves its old target.
+            // The strict outcomes are observed production results. A listing with the delimiter `/`
+            // is answered the same way in the emulator profile (STORAGE-RULES-S9: the official
+            // emulator and production allow it too); without a delimiter the emulator profile
+            // preserves its old target.
             for delimiter in ["/", ""] {
-                let own_status = if (strict && delimiter == "/")
+                let own_status = if delimiter == "/"
                     || variant != "single" && (!strict || variant == "recursive")
                 {
                     200
                 } else {
                     403
                 };
-                let ancestor_status = if strict && delimiter == "/" && variant != "single" {
+                let ancestor_status = if delimiter == "/" && variant != "single" {
                     200
                 } else {
                     403

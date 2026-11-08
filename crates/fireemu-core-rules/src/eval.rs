@@ -90,6 +90,12 @@ pub const ABSTRACT_SEGMENT: &str = "fireemu-placeholder";
 /// proofs); only a recursive wildcard can consume it.
 pub const ABSTRACT_PREFIX: &str = "fireemu-any-prefix";
 
+/// [`ABSTRACT_PREFIX`] for a Storage list without a delimiter, the one listing shape whose
+/// `request.path` production has shown: the bucket-relative path of the prefix, without its
+/// trailing `/` (recorded, STORAGE-RULES-S9: `request.path == /b/$(bucket)/o/<prefix>` allowed
+/// a listing of `<prefix>/`). Every other proof marker leaves `request.path` undetermined.
+pub const ABSTRACT_LIST_PREFIX: &str = "fireemu-list-prefix";
+
 /// Typed matcher input keeps concrete names distinct from query proof markers.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum MatchSegment {
@@ -140,7 +146,7 @@ fn match_segments(ctx: &RequestContext) -> Vec<MatchSegment> {
                 && (ctx.service != RulesService::Storage || index + 1 == segments.len());
             match (*value, abstract_segment) {
                 (ABSTRACT_SEGMENT, true) => MatchSegment::AnySegment,
-                (ABSTRACT_PREFIX, true) => MatchSegment::AnyPrefix,
+                (ABSTRACT_PREFIX | ABSTRACT_LIST_PREFIX, true) => MatchSegment::AnyPrefix,
                 _ => MatchSegment::Literal((*value).to_owned()),
             }
         })
@@ -792,6 +798,28 @@ fn evaluate_prepared(
     }
 }
 
+/// `request.path`: the request's own path, or undetermined in a proof over every potential
+/// result. A Storage listing proof of the recorded shape ([`ABSTRACT_LIST_PREFIX`]) still knows
+/// it: it is the path of the listed prefix, which is the path without the synthetic tail.
+fn request_path(ctx: &RequestContext) -> RulesValue {
+    let mut segments: Vec<String> = ctx
+        .path
+        .trim_start_matches('/')
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+        .collect();
+    if ctx.abstract_path {
+        let listed_prefix = ctx.service == RulesService::Storage
+            && segments.last().map(String::as_str) == Some(ABSTRACT_LIST_PREFIX);
+        if !listed_prefix {
+            return RulesValue::Unknown;
+        }
+        segments.pop();
+    }
+    RulesValue::Path(segments)
+}
+
 fn build_request(ctx: &RequestContext) -> RulesValue {
     build_request_with_resource(ctx, ctx.request_resource.clone())
 }
@@ -811,21 +839,7 @@ fn build_request_with_resource(
         "method".to_owned(),
         RulesValue::String(ctx.method.name().to_owned()),
     );
-    m.insert(
-        "path".to_owned(),
-        if ctx.abstract_path {
-            RulesValue::Unknown
-        } else {
-            RulesValue::Path(
-                ctx.path
-                    .trim_start_matches('/')
-                    .split('/')
-                    .filter(|s| !s.is_empty())
-                    .map(str::to_owned)
-                    .collect(),
-            )
-        },
-    );
+    m.insert("path".to_owned(), request_path(ctx));
     m.insert(
         "time".to_owned(),
         RulesValue::Timestamp(ctx.time_unix_nanos),
@@ -4749,6 +4763,15 @@ impl<'a> Evaluator<'a> {
                 } else {
                     return Err(EvalError::Unknown);
                 }
+            }
+            // A list literal is never null, whatever its members are. The members were evaluated
+            // above, so a read that can fail has already ended the evaluation; what is left is a
+            // capture, which cannot fail. Storage only: the Firestore query proofs decide their own.
+            (BinaryOp::Eq | BinaryOp::Ne, V::List(_), V::Null)
+            | (BinaryOp::Eq | BinaryOp::Ne, V::Null, V::List(_))
+                if self.service == RulesService::Storage =>
+            {
+                V::Bool(op == BinaryOp::Ne)
             }
             (_, a, b) if undetermined(a) || undetermined(b) => return Err(EvalError::Unknown),
             (BinaryOp::Eq, a, b) => V::Bool(if query_resource_value {

@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 
 use fireemu_core_rules::eval::{
     evaluate_request_with, Decision, DocumentAccess, Method, RequestContext, RulesService,
-    ABSTRACT_SEGMENT,
+    ABSTRACT_LIST_PREFIX, ABSTRACT_PREFIX, ABSTRACT_SEGMENT,
 };
 use fireemu_core_rules::parse::parse_ruleset;
 use fireemu_core_rules::value::{AuthContext, RulesValue};
@@ -238,35 +238,10 @@ fn a_function_outside_the_service_block_loads_in_a_storage_ruleset() {
 // Storage-specific: object names whose path has an empty segment
 // ---------------------------------------------------------------------------------------------
 
-/// Finding S9. SECURITY (allows more than the official runtime). The matcher drops empty path
-/// segments (`filter(|s| !s.is_empty())`), so the object `public//x` and the object `/public/x`
-/// are matched as `public/x` and granted by `match /public/{f} { allow read: if true; }`.
-/// OFFICIAL Storage runtime: both requests make the rules process throw
-/// `IllegalArgumentException: Path segment cannot be empty` (`PathUtils.parse`) and the
-/// emulator exits, so no allow is produced; a trailing slash (`public/x/`) is read as
-/// `public/x` (200), as here. Production is unrecorded: the object names are valid in Cloud
-/// Storage, and the library error suggests an evaluation error, which is a denial.
-#[test]
-#[ignore = "audit finding S9: object names with an empty interior or leading path segment match as if the segment were absent; the official runtime errors (needs a production row for the exact answer)"]
-fn an_object_name_with_an_empty_path_segment_matches_no_allow() {
-    let rules = storage("match /public/{f} { allow get: if true; }");
-    let allows = |name: &str| {
-        decide(
-            &rules,
-            &format!("/b/bkt/o/{name}"),
-            Some(object(name, &[])),
-            false,
-            Method::Get,
-        )
-    };
-    assert!(allows("public/x"), "control");
-    assert!(
-        allows("public/x/"),
-        "a trailing slash is read as public/x by the official runtime"
-    );
-    assert!(!allows("public//x"));
-    assert!(!allows("/public/x"));
-}
+// Finding S9 is answered at the Firebase HTTP boundary, not here: production's v0 API refuses an
+// object name with an empty interior segment, a leading slash or a trailing slash with a 400 before
+// any rule is evaluated (recorded, STORAGE-RULES-S9). The replay and near-miss tests are in
+// `crates/fireemu-adapter-http/tests/storage_s9_replay.rs`.
 
 // ---------------------------------------------------------------------------------------------
 // Classes 1, 2, 3, 5: the Storage list proof (strict profile, one synthetic tail segment)
@@ -306,13 +281,100 @@ fn the_storage_list_proof_refuses_what_it_cannot_prove() {
     assert!(list_allows("{'k': file}.size() == 1"));
 }
 
-/// Finding S10. COMPATIBILITY (weak): the Firestore recording `members-bare-nofilter` shows a
-/// container holding an unconstrained read is decided `!= null`; a Storage list proof refuses
-/// `[file] != null` for a capture. The Storage list proof is fireemu's own device (production
-/// evaluates one request), so the expected answer is by the documented semantics (a list
-/// literal is never null) and needs a production row to be more than that.
+/// Finding S10. COMPATIBILITY. Production allowed `allow list: if [file] != null` under
+/// `match /p/{file=**}` (recorded, STORAGE-RULES-S9, `l1-capture-not-null`, two recordings: 200).
+/// A list literal is never null; its members here are captures, which cannot fail. A member that
+/// can fail (a read of a document, `firestore.get(...)`) is still refused (see
+/// `the_storage_list_proof_refuses_what_it_cannot_prove`).
 #[test]
-#[ignore = "audit finding S10: [capture] != null is undetermined in a Storage list proof; a list is never null (unknown expectation)"]
 fn a_list_of_a_capture_is_not_null_in_a_storage_list_proof() {
     assert!(list_allows("[file] != null"));
+    assert!(!list_allows("[file] == null"));
+    assert!(list_allows("null != [file]"));
+    assert!(list_allows("[file, 'a'] != null"));
+    // Only a list literal is decided: the capture itself stays undetermined.
+    assert!(!list_allows("file != null"));
+    assert!(!list_allows("file == null"));
+}
+
+/// The listing proof of the shape production showed: no delimiter, so `request.path` is the
+/// path of the listed prefix (recorded, STORAGE-RULES-S9, `l3-path-prefix`, two recordings:
+/// `request.path == /b/$(bucket)/o/<prefix>` allowed a listing of `<prefix>/`). Other proof
+/// shapes leave `request.path` undetermined, and so does a path that is not the prefix's.
+#[test]
+fn request_path_of_a_listing_without_a_delimiter_is_the_prefix_path() {
+    let rules = storage("match /docs/{file=**} { allow list: if CONDITION; }");
+    let decide_list = |condition: &str, tail: &str| {
+        decide(
+            &rules.replace("CONDITION", condition),
+            &format!("/b/bkt/o/docs/{tail}"),
+            None,
+            true,
+            Method::List,
+        )
+    };
+    let tail = ABSTRACT_LIST_PREFIX;
+    assert!(decide_list("request.path == /b/$(bucket)/o/docs", tail));
+    assert!(decide_list("request.path[3] == 'docs'", tail));
+    assert!(!decide_list("request.path == /b/$(bucket)/o/doc", tail));
+    assert!(!decide_list("request.path == /b/$(bucket)/o/docs/x", tail));
+    assert!(!decide_list(
+        &format!("request.path == /b/$(bucket)/o/docs/{tail}"),
+        tail
+    ));
+    // The same expression is undetermined under the other markers.
+    for other in [ABSTRACT_SEGMENT, ABSTRACT_PREFIX] {
+        assert!(!decide_list("request.path == /b/$(bucket)/o/docs", other));
+        assert!(!decide_list("request.path[3] == 'docs'", other));
+    }
+}
+
+/// A single-segment `{file}` never consumes a listing proof tail, whichever marker it is (recorded,
+/// STORAGE-RULES-S9: `l4-single-segment` denied, two recordings): only a recursive wildcard can.
+#[test]
+fn a_single_segment_capture_does_not_match_a_listing_proof_tail() {
+    let rules = storage("match /docs/{file} { allow list: if true; }");
+    for tail in [ABSTRACT_LIST_PREFIX, ABSTRACT_PREFIX] {
+        assert!(
+            !decide(
+                &rules,
+                &format!("/b/bkt/o/docs/{tail}"),
+                None,
+                true,
+                Method::List
+            ),
+            "{tail}"
+        );
+    }
+    // Control: the one-level proof is what `{file}` consumes.
+    assert!(decide(
+        &rules,
+        &format!("/b/bkt/o/docs/{ABSTRACT_SEGMENT}"),
+        None,
+        true,
+        Method::List
+    ));
+}
+
+/// The Storage rule that a list literal is not null does not reach the Firestore query proof,
+/// which decides its own containers (rules-query-fix).
+#[test]
+fn a_list_of_a_capture_stays_undetermined_in_a_firestore_query_proof() {
+    let rules = "rules_version = '2';\nservice cloud.firestore { match /databases/{db}/documents { match /docs/{d} { allow list: if [d] != null; } } }";
+    let ruleset = parse_ruleset(rules).unwrap();
+    let context = RequestContext {
+        service: RulesService::Firestore,
+        method: Method::List,
+        path: format!("/databases/(default)/documents/docs/{ABSTRACT_SEGMENT}"),
+        auth: None,
+        resource: None,
+        request_resource: None,
+        time_unix_nanos: 0,
+        abstract_path: true,
+        request_query: None,
+    };
+    assert!(!matches!(
+        evaluate_request_with(&ruleset, &context, Some(&NoDocuments)).decision,
+        Decision::Allow
+    ));
 }

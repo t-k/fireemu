@@ -33,7 +33,7 @@ use fireemu_core_app_check::verify::BaselineMode;
 use fireemu_core_auth::jwt::{verify_rules_token_for_project, RulesTokenPolicy, TokenAcceptance};
 use fireemu_core_rules::eval::{
     evaluate_request_with, Decision, DocumentAccess, Method, RequestContext, RulesService,
-    ABSTRACT_PREFIX, ABSTRACT_SEGMENT,
+    ABSTRACT_LIST_PREFIX, ABSTRACT_PREFIX, ABSTRACT_SEGMENT,
 };
 use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
 use fireemu_core_rules::value::{AuthContext, RulesValue};
@@ -1272,6 +1272,24 @@ fn fb_object_not_found() -> StorageResponse {
     production_error(404, "Not Found.")
 }
 
+/// Whether the Firebase v0 API refuses `path` as a path: it starts or ends with `/` or holds two
+/// consecutive `/`. Objects with such names can exist (the Cloud Storage JSON API accepts them);
+/// only this API refuses them, before any rule is evaluated.
+fn has_empty_path_segment(path: &str) -> bool {
+    path.starts_with('/') || path.ends_with('/') || path.contains("//")
+}
+
+/// Production's answer to a Firebase v0 read or list whose path has an empty segment (recorded,
+/// STORAGE-RULES-S9, two recordings: the metadata read, the media read and the list, 400,
+/// `application/json; charset=UTF-8`, 116 bytes, under an allow-all rule too). Both profiles
+/// answer it: the official emulator's rules process fails on such a path instead of answering.
+fn fb_empty_path_segment() -> StorageResponse {
+    production_error(
+        400,
+        "The path may not end with '/' or contain two consecutive '/'s",
+    )
+}
+
 /// Production's answer to a request on a cancelled JSON API resumable session (recorded,
 /// probe-v2, 2026-09-30: the `DELETE` that cancels and the status query after it, 499,
 /// `application/json; charset=UTF-8`, 224 bytes, ending in a line feed like every Google-fronted
@@ -2221,6 +2239,8 @@ impl<'a> RulesPath<'a> {
                 prefix,
                 strict.then_some(if delimiter == "/" {
                     ABSTRACT_SEGMENT
+                } else if delimiter.is_empty() {
+                    ABSTRACT_LIST_PREFIX
                 } else {
                     // Only slash bounds entry depth. Other delimiters can leave slashes
                     // inside an entry, so they cannot justify a single-segment proof.
@@ -2616,33 +2636,55 @@ impl StorageState {
             });
         }
         let (object_path, abstract_tail) = target.proof(self.is_strict());
-        let mut path = if object_path.is_empty() {
-            format!("/b/{}/o", bucket.as_str())
-        } else {
-            format!("/b/{}/o/{object_path}", bucket.as_str())
+        let resource_value = resource.unwrap_or(RulesValue::Null);
+        let request_value = request_resource;
+        let context = |tail: Option<&'static str>| {
+            let mut path = if object_path.is_empty() {
+                format!("/b/{}/o", bucket.as_str())
+            } else {
+                format!("/b/{}/o/{object_path}", bucket.as_str())
+            };
+            if let Some(tail) = tail {
+                path.push('/');
+                path.push_str(tail);
+            }
+            RequestContext {
+                service: RulesService::Storage,
+                method,
+                path,
+                auth: match principal {
+                    Principal::User(a) => Some(a.clone()),
+                    _ => None,
+                },
+                resource: Some(resource_value.clone()),
+                request_resource: Some(request_value.clone()),
+                time_unix_nanos: self.now().as_nanos(),
+                abstract_path: tail.is_some(),
+                request_query: None,
+            }
         };
-        if let Some(tail) = abstract_tail {
-            path.push('/');
-            path.push_str(tail);
-        }
-        let ctx = RequestContext {
-            service: RulesService::Storage,
-            method,
-            path,
-            auth: match principal {
-                Principal::User(a) => Some(a.clone()),
-                _ => None,
-            },
-            resource: Some(resource.unwrap_or(RulesValue::Null)),
-            request_resource: Some(request_resource),
-            time_unix_nanos: self.now().as_nanos(),
-            abstract_path: abstract_tail.is_some(),
-            request_query: None,
-        };
+        let ctx = context(abstract_tail);
         let access = self.firestore.as_deref().map(|a| a as &dyn DocumentAccess);
+        // A listing with the delimiter `/` stands for the entries one level below the prefix, and
+        // production lets `match /p/{f}` grant it when every such entry is granted (recorded,
+        // STORAGE-RULES-S9: `list-pub-delim` 200, the same rule refusing the same prefix without
+        // a delimiter). The strict profile proves that for every entry; the emulator profile
+        // evaluates the prefix itself, which `{f}` never matches, so it also accepts that proof
+        // instead of refusing what production and the official emulator answer.
+        let one_level_listing =
+            !self.is_strict() && matches!(target, RulesPath::List { delimiter: "/", .. });
+        let proven_one_level = || {
+            one_level_listing
+                && matches!(
+                    evaluate_request_with(ruleset, &context(Some(ABSTRACT_SEGMENT)), access)
+                        .decision,
+                    Decision::Allow
+                )
+        };
         let Some(log) = self.rules.denial_log() else {
             return match evaluate_request_with(ruleset, &ctx, access).decision {
                 Decision::Allow => Ok(()),
+                Decision::Deny(_) if proven_one_level() => Ok(()),
                 Decision::Deny(_) => Err(fb_denied(self.is_strict(), method)),
             };
         };
@@ -2650,6 +2692,7 @@ impl StorageState {
             fireemu_core_rules::eval::evaluate_request_traced(ruleset, &ctx, access);
         match report.decision {
             Decision::Allow => Ok(()),
+            Decision::Deny(_) if proven_one_level() => Ok(()),
             Decision::Deny(reason) => {
                 use fireemu_core_rules::denial::{
                     deny_reason_summary, DeniedCondition, RulesDenial,
@@ -4068,6 +4111,12 @@ fn fb_list(
             "The prefix parameter is required to be empty or ends with a single / character.",
         ));
     }
+    // The recorded refusal covers a leading slash and two consecutive slashes in the prefix; the
+    // one trailing slash a prefix ends with is not part of the check.
+    let listed = prefix.strip_suffix('/').unwrap_or(&prefix);
+    if listed.starts_with('/') || listed.contains("//") {
+        return Err(fb_empty_path_segment());
+    }
     let delimiter = params.get("delimiter").cloned().unwrap_or_default();
     let page_token = params.get("pageToken").cloned();
     let max_results = params
@@ -4142,13 +4191,14 @@ fn fb_list(
             .map(|last| fireemu_core_storage::hash::base64(last.as_bytes()));
         page
     };
-    // The official Firebase list filters malformed names out of the answer.
+    // The official Firebase list filters malformed names out of the answer, and production does
+    // too: the prefix `P/pub//` an object `P/pub//x` leaves is not listed (recorded, S9).
     let is_valid = |name: &str| !name.is_empty() && name.split('/').all(|s| !s.is_empty());
     let mut body = json!({
         "prefixes": page
             .prefixes
             .iter()
-            .filter(|p| is_valid(p.trim_end_matches('/')))
+            .filter(|p| is_valid(p.strip_suffix('/').unwrap_or(p)))
             .collect::<Vec<_>>(),
         "items": page
             .items
@@ -4180,6 +4230,9 @@ fn fb_get(
     // emulator answers 404 too (measured, firebase-tools 15.28.2, 1,100 characters).
     if is_unreadable_name(name) {
         return Ok(fb_object_not_found());
+    }
+    if has_empty_path_segment(name) {
+        return Err(fb_empty_path_segment());
     }
     let n = object_name(name)?;
     let now = state.now();
@@ -6400,7 +6453,17 @@ fn gcs_upload(
         .get("uploadType")
         .cloned()
         .or_else(|| req.header("x-goog-upload-protocol").map(str::to_owned));
-    let strip_leading = |name: String| name.strip_prefix('/').map(str::to_owned).unwrap_or(name);
+    // The official emulator drops one leading `/` of an uploaded name, so `/x` and `x` are one
+    // object there. Cloud Storage keeps them apart (recorded, STORAGE-RULES-S9: the objects
+    // `/P/pub/x` and `P/pub/x` were created and listed separately), and the strict profile does
+    // too.
+    let strict = state.is_strict();
+    let strip_leading = |name: String| {
+        if strict {
+            return name;
+        }
+        name.strip_prefix('/').map(str::to_owned).unwrap_or(name)
+    };
     match upload_type.as_deref() {
         Some("resumable") => {
             let meta_json: Value = if req.body.is_empty() {

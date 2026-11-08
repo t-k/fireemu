@@ -168,3 +168,21 @@ test(
     }
   },
 );
+
+test("shapes-report prints one line per shapes row from the checked-in fixture, with both comparisons", () => {
+  const result = run(["shapes-report"]);
+  assert.equal(result.status, 0, result.stderr);
+  const lines = result.stdout.trimEnd().split("\n");
+  assert.equal(lines.length, 77);
+  // The shapes family is not recorded yet: every row is missing, so neither comparison holds.
+  assert.match(
+    lines[0],
+    /^unknown {8}unknown {8}queries#publishes {18}missing \(official: compiled, fixes: compiled\) \[not recorded\]$/,
+  );
+  assert.ok(lines.every((line) => line.startsWith("unknown        unknown        ")));
+  assert.match(
+    lines.at(-1),
+    /^.* fn-after#fn-after-false +missing \(official: denied, fixes: denied\)/,
+  );
+  assert.match(run(["nope"]).stderr, /\|diffs-report\|shapes-report$/m);
+});

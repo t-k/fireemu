@@ -535,7 +535,7 @@ fn assert_signature_reuse_equivalent(
     let legacy = verify_rules_token_for_project(&token, &store, now, policy, "demo-app");
     assert_eq!(
         reused, legacy,
-        "emulator={emulator}, signer={signer}, tenant={tenant}, fault={fault}, account={account}, offset={clock_offset}"
+        "emulator={emulator}, signer={signer}, tenant={tenant}, fault={fault}, offset={clock_offset}"
     );
 }
 

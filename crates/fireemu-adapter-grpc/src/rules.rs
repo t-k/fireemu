@@ -61,8 +61,9 @@ use fireemu_core_rules::coverage::{
     decided_conditions, Coverage, CoverageEntry, RequestTrace, RulesDiagnostics,
 };
 use fireemu_core_rules::eval::{
-    evaluate_request_traced_owned, try_compare, Decision, DenyReason, DocumentAccess, Method,
-    RequestContext, RulesService, ABSTRACT_PREFIX, ABSTRACT_SEGMENT,
+    evaluate_query_proof_traced_owned, evaluate_request_traced_owned, try_compare, Decision,
+    DenyReason, DocumentAccess, Method, QueryProofAnswers, RequestContext, RulesService,
+    ABSTRACT_PREFIX, ABSTRACT_SEGMENT,
 };
 use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
 use fireemu_core_rules::value::{AuthContext, RangeBound, RulesValue, ValueRange};
@@ -469,12 +470,14 @@ pub struct RulesEnforcer {
     /// Whether an end user may open a read-write transaction: production refuses it with the
     /// ordinary denial (the `strict` profile); the official emulator opens it.
     end_user_transactions: bool,
-    /// Whether an `OR` query mixing a branch that names one document with a branch that names
-    /// none lets the named document decide its branch: the official emulator does (the
-    /// `emulator` profile); production's Rules answer was not recorded (it asked for a
-    /// composite index first), so the `strict` profile proves every branch from its
-    /// constraints too.
-    mixed_named_or_branches: bool,
+    /// Whether a query proof also gives the official emulator's answers to shapes production
+    /// has not been recorded answering (the `emulator` profile), or only production's recorded
+    /// ones (the `strict` profile): an `OR` mixing a branch that names one document with a
+    /// branch that names none is authorized branch by branch (production asked for a composite
+    /// index first, FS-RULES-SHAPES), and `get(key, default)` of `resource.data` and `in` on a
+    /// map the query constrains in part answer from the constrained keys (recorded only over
+    /// stored documents that lack the key). See [`QueryProofAnswers`].
+    official_query_answers: bool,
     /// Which ID-token checks apply (see [`TokenSemantics`]).
     token_semantics: TokenSemantics,
     /// The wall time an unpinned strict session follows; `None` keeps the clock where it is
@@ -520,7 +523,7 @@ impl RulesEnforcer {
             unsigned_id_tokens: None,
             refuse_without_ruleset: false,
             end_user_transactions: true,
-            mixed_named_or_branches: true,
+            official_query_answers: true,
             token_semantics: TokenSemantics::default(),
             wall_clock: None,
             listen_stream_lifetime: false,
@@ -652,11 +655,11 @@ impl RulesEnforcer {
         self
     }
 
-    /// Sets whether a named document decides its branch of an `OR` query that also has a
-    /// branch naming no document (see the field).
+    /// Sets whether query proofs also give the official emulator's answers to shapes
+    /// production has not been recorded answering (see the field).
     #[must_use]
-    pub const fn with_mixed_named_or_branches(mut self, decided: bool) -> Self {
-        self.mixed_named_or_branches = decided;
+    pub const fn with_official_query_answers(mut self, official: bool) -> Self {
+        self.official_query_answers = official;
         self
     }
 
@@ -1234,7 +1237,7 @@ impl RulesEnforcer {
             .iter()
             .map(|disjunction| name_plan(parent, query, disjunction))
             .collect();
-        if !self.mixed_named_or_branches && plans.iter().any(|plan| plan.names.is_empty()) {
+        if !self.official_query_answers && plans.iter().any(|plan| plan.names.is_empty()) {
             // A branch naming no document beside a named one: production's Rules answer was
             // not recorded, so every branch is proven from its constraints too.
             for plan in &mut plans {
@@ -1280,6 +1283,11 @@ impl RulesEnforcer {
                     &placeholder,
                     &reader,
                     Some(&sink),
+                    if self.official_query_answers {
+                        QueryProofAnswers::Official
+                    } else {
+                        QueryProofAnswers::Recorded
+                    },
                 )?;
                 let accessed = reader.seen.borrow().len() as u64;
                 if accessed > list_max {
@@ -1520,9 +1528,18 @@ fn evaluate_with(
         abstract_path: false,
         request_query: None,
     };
-    decide(ruleset, ctx, method, path, access, sink)
+    decide(
+        ruleset,
+        ctx,
+        method,
+        path,
+        access,
+        sink,
+        QueryProofAnswers::default(),
+    )
 }
 
+/// `answers` matters only to a query proof (see [`QueryProofAnswers`]).
 fn decide(
     ruleset: &Ruleset,
     ctx: RequestContext,
@@ -1530,9 +1547,10 @@ fn decide(
     path: &DocumentPath,
     access: &dyn DocumentAccess,
     sink: Option<&DecisionSink<'_>>,
+    answers: QueryProofAnswers,
 ) -> Result<(), Status> {
     let uid = ctx.auth.as_ref().map(|auth| auth.uid.clone());
-    let (report, coverage) = evaluate_request_traced_owned(ruleset, ctx, Some(access));
+    let (report, coverage) = evaluate_query_proof_traced_owned(ruleset, ctx, Some(access), answers);
     let denial = match &report.decision {
         Decision::Allow => None,
         Decision::Deny(reason) => Some(format!(

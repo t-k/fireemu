@@ -683,6 +683,16 @@ fn signature_reuse_observes_session_reset_after_capture() {
         let checked = SignatureCheckedToken::decode(&token, &store).unwrap();
         (token, checked)
     };
+    assert!(
+        checked
+            .verify_for_project(
+                &selected.lock().unwrap(),
+                t0(),
+                TokenAcceptance::Verified,
+                "demo-session"
+            )
+            .is_ok()
+    );
     let reset = registry
         .prepare_project_reset("demo-session")
         .unwrap()
@@ -762,4 +772,54 @@ fn same_arc_signature_reuse_observes_in_place_key_rotation() {
     );
     assert_eq!(reused, legacy);
     assert_eq!(calls.load(Ordering::SeqCst), 3);
+}
+
+#[test]
+fn repeated_signature_reuse_rechecks_account_and_time() {
+    use fireemu_core_auth::jwt::{SignatureCheckedToken, encode_with};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let mut store = AuthStore::new("demo-app", SplitMix64::new(1), TotpPolicy::default());
+    let calls = Arc::new(AtomicUsize::new(0));
+    store.set_signer(Arc::new(ReuseSigner {
+        key: 7,
+        calls: calls.clone(),
+    }));
+    let uid = store
+        .create_user(NewUser::email("recheck@example.test"), t0())
+        .unwrap();
+    let claims = store.id_token_claims(&uid, None, t0()).unwrap();
+    let token = encode_with(&claims, store.signer());
+    let checked = SignatureCheckedToken::decode(&token, &store).unwrap();
+    assert!(
+        checked
+            .verify_for_project(&store, t0(), TokenAcceptance::Verified, "demo-app")
+            .is_ok()
+    );
+    store.user_mut(&uid).unwrap().disabled = true;
+    assert!(checked.can_reuse_signature_for(&token, &store));
+    assert_eq!(
+        checked.verify_for_project(&store, t0(), TokenAcceptance::Verified, "demo-app"),
+        Err(JwtError::UserDisabled)
+    );
+    store.user_mut(&uid).unwrap().disabled = false;
+    store
+        .revoke_tokens(
+            &uid,
+            LogicalInstant::from_unix_seconds(claims.auth_time + 1),
+        )
+        .unwrap();
+    assert_eq!(
+        checked.verify_for_project(&store, t0(), TokenAcceptance::Verified, "demo-app"),
+        Err(JwtError::Revoked)
+    );
+    assert_eq!(
+        checked.verify_for_project(
+            &store,
+            LogicalInstant::from_unix_seconds(claims.exp),
+            TokenAcceptance::Verified,
+            "demo-app"
+        ),
+        Err(JwtError::Expired)
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
 }

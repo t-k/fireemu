@@ -6697,6 +6697,143 @@ fn storage_reuses_the_real_session_rsa_signature() {
     }
 }
 
+struct DefaultStorageSigner(CountingStorageSigner);
+
+impl fireemu_core_auth::jwt::IdTokenSigner for DefaultStorageSigner {
+    fn alg(&self) -> &'static str {
+        self.0.alg()
+    }
+    fn kid(&self) -> &str {
+        self.0.kid()
+    }
+    fn sign(&self, input: &[u8]) -> Vec<u8> {
+        self.0.sign(input)
+    }
+    fn verify(&self, input: &[u8], signature: &[u8]) -> bool {
+        self.0.verify(input, signature)
+    }
+    fn public_jwk_json(&self) -> String {
+        self.0.public_jwk_json()
+    }
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn resumable_finalization_verifies_each_distinct_immutable_token_once() {
+    for acceptance in BOTH_PROFILES {
+        for fallback in [false, true] {
+            for case in ["same", "distinct", "revoked", "expired-session"] {
+                let s = state_with(Some(OWNED_STORAGE_RULES), acceptance);
+                let calls = Arc::new(AtomicUsize::new(0));
+                let (starter, other, starter_token, other_token) = {
+                    let shared = s.auth.default_store();
+                    let mut store = shared.lock().unwrap();
+                    let signer: Arc<dyn fireemu_core_auth::jwt::IdTokenSigner> = if fallback {
+                        Arc::new(DefaultStorageSigner(CountingStorageSigner(calls.clone())))
+                    } else {
+                        Arc::new(CountingStorageSigner(calls.clone()))
+                    };
+                    store.set_signer(signer);
+                    let starter = store
+                        .create_user(NewUser::email("starter@example.test"), START)
+                        .unwrap();
+                    let other = store
+                        .create_user(NewUser::email("other@example.test"), START)
+                        .unwrap();
+                    let token = |uid| {
+                        fireemu_core_auth::jwt::encode_with(
+                            &store.id_token_claims(uid, None, START).unwrap(),
+                            store.signer(),
+                        )
+                    };
+                    let a = token(&starter);
+                    let b = token(&other);
+                    (starter, other, a, b)
+                };
+                let authorization = format!("Firebase {starter_token}");
+                let started = handle(
+                    &s,
+                    req(
+                        "POST",
+                        &format!(
+                            "/v0/b/{BUCKET}/o?name=owned%2F{}%2Fresumable.txt",
+                            starter.as_str()
+                        ),
+                        &[
+                            ("authorization", &authorization),
+                            ("x-goog-upload-protocol", "resumable"),
+                            ("x-goog-upload-command", "start"),
+                        ],
+                        b"{}",
+                    ),
+                );
+                assert_eq!(started.status, 200, "{acceptance:?}/{case}");
+                let session = header(&started, "x-goog-upload-url")
+                    .unwrap()
+                    .strip_prefix("http://127.0.0.1:9199")
+                    .unwrap()
+                    .to_owned();
+                let incoming = if case == "expired-session" {
+                    let now = LogicalInstant::from_nanos(START.as_nanos() + 3_601_000_000_000);
+                    s.clock.lock().unwrap().set(now).unwrap();
+                    let shared = s.auth.default_store();
+                    let store = shared.lock().unwrap();
+                    fireemu_core_auth::jwt::encode_with(
+                        &store.id_token_claims(&other, None, now).unwrap(),
+                        store.signer(),
+                    )
+                } else if case == "distinct" {
+                    other_token
+                } else {
+                    starter_token
+                };
+                if case == "revoked" {
+                    let now = LogicalInstant::from_nanos(START.as_nanos() + 1_000_000_000);
+                    s.clock.lock().unwrap().set(now).unwrap();
+                    s.auth
+                        .default_store()
+                        .lock()
+                        .unwrap()
+                        .revoke_tokens(&starter, now)
+                        .unwrap();
+                }
+                calls.store(0, Ordering::SeqCst);
+                let finalized = handle(
+                    &s,
+                    req(
+                        "POST",
+                        &session,
+                        &[
+                            ("authorization", &format!("Firebase {incoming}")),
+                            ("x-goog-upload-command", "upload, finalize"),
+                            ("x-goog-upload-offset", "0"),
+                        ],
+                        b"resumable",
+                    ),
+                );
+                assert_eq!(
+                    finalized.status,
+                    if case == "expired-session" { 401 } else { 200 },
+                    "{acceptance:?}/{case}: {:?}",
+                    finalized.body
+                );
+                let expected = if fallback {
+                    4
+                } else if matches!(case, "distinct" | "expired-session") {
+                    2
+                } else {
+                    1
+                };
+                assert_eq!(
+                    calls.load(Ordering::SeqCst),
+                    expected,
+                    "{acceptance:?}/{case}/fallback={fallback}"
+                );
+            }
+        }
+    }
+}
+
 /// Ledger 781 on Storage: a signed (session-RSA) ID token whose `iat` and `auth_time` are in
 /// the future is refused in strict (`Verified`) with 401, as an expired token is, and
 /// is evaluated as its user in the emulator profile (`EmulatorMock`), as the official emulator

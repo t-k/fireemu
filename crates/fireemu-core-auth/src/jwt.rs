@@ -626,6 +626,20 @@ impl SignatureCheckedToken {
         &self.decoded
     }
 
+    /// Whether the exact token can reuse this immutable signature result with the currently installed signer. This does not authenticate claims: callers must repeat the live store checks with `verify_for_project`.
+    #[must_use]
+    pub fn can_reuse_signature_for(&self, token: &str, store: &AuthStore) -> bool {
+        if !self.reusable || self.token != token {
+            return false;
+        }
+        let selected_signer = store.signer_arc();
+        match (&self.signer, &selected_signer) {
+            (None, None) => true,
+            (Some(captured), Some(selected)) => Arc::ptr_eq(captured, selected),
+            _ => false,
+        }
+    }
+
     /// Validates Rules claims against the current store, reusing the signature check only when the installed signer is still the same object and explicitly guarantees immutable verification. Mutable, unclassified and replaced signers are verified normally, including when they advertise the same algorithm and key ID.
     pub fn verify_for_project(
         &self,
@@ -637,13 +651,7 @@ impl SignatureCheckedToken {
         let expected_project =
             ProjectId::try_new(expected_project.to_owned()).map_err(|_| JwtError::Malformed)?;
         let policy = policy.into();
-        let selected_signer = store.signer_arc();
-        let same_signer = match (&self.signer, &selected_signer) {
-            (None, None) => true,
-            (Some(captured), Some(selected)) => Arc::ptr_eq(captured, selected),
-            _ => false,
-        };
-        if !same_signer || !self.reusable {
+        if !self.can_reuse_signature_for(&self.token, store) {
             return verify_rules_token_with_expected_project(
                 &self.token,
                 store,

@@ -256,7 +256,7 @@
     "tool": [
       {
         "path": "tools/sdk-smoke-database/rtdb-sdk-jar.mjs",
-        "sha256": "6a90a1cef5dec0dd7a2d9d164b1ed71c08cd4c8fa854604c15637b63dd7f614d"
+        "sha256": "066127cfd0336aadbf7519da8d24969a84f086ef9920c9c1ef358e04608967a4"
       },
       {
         "path": "tools/sdk-smoke-database/jar.mjs",

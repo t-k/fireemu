@@ -219,6 +219,16 @@
       "decidedBy": "coordinator",
       "decidedOn": "2026-11-06",
       "decisionRef": "The project coordinator's decision of 2026-11-06 under the owner's delegation, after the final delta check."
+    },
+    {
+      "id": "R13",
+      "decision": "R12 is extended by one recording: the Rules query and call syntax of 2026-11-08 (RTDB/rules-query-and-call-syntax, run RTDB-RULES-SYNTAX-20261108-01): query.endBefore, query.isOrderByChild(), OrderByKey, OrderByValue, OrderByPriority, http.encodeURL(), a method read without a call and a call whose callee is a ternary, with their reads and writes, for the 86 recorded observations only. Production loaded all nine documents and answered every observation as the official emulator 4.11.2 does; both profiles, replayed on the syntax closure build (an unpublished release-profile build of source commit f1f494922, binary 73572d13..., --locked, RUSTC_WRAPPER empty, a fresh worktree-local target directory), match production in all of them. The parent status and the scope R12 states are otherwise unchanged; the other conditions stay bound to the closure build of d0e81b043.",
+      "rationale": "The constructs were the last Rules refusals listed against the official emulator; production answered them in one clean recording (sandbox-ledger 1280 and 1281), and the fix that follows it is replayed on its own build.",
+      "amends": "R12",
+      "status": "FROZEN",
+      "decidedBy": "coordinator",
+      "decidedOn": "2026-11-08",
+      "decisionRef": "The project coordinator's direction of 2026-11-08 to register the recording as a release comparison and its own condition, under the owner's delegation (owner ledger 2350)."
     }
   ],
   "conditions": [
@@ -1348,7 +1358,7 @@
         "fixtureSha256": "d3fb07dedd12c1a066c39ea167eda6ef948e3c43e2e4eb97ed8453eb5e16d7bb",
         "comparisonTool": "tools/sdk-smoke-database/rtdb-sdk-rest-judge.mjs",
         "comparisonPath": "spec/compatibility/closure/evidence/RTDB-sdk-rest-comparison.json",
-        "comparisonSha256": "ade1c340566eba71aee2060c0197c176c6d4d87f1ec5d754e77ca2dab2a8686a",
+        "comparisonSha256": "f083c362469c9ba961b56e433dbe01d38e91bb61868e50feb33d95cd5e443a0c",
         "release": "closure-build",
         "sourceCommit": "d0e81b04377f08f7d32597e809eeca318b49af2a",
         "binarySha256": "28c8708cd9245eef82c4e4f315f7ddf63fade919800c31f5a873235e9e0a46f2",
@@ -1485,7 +1495,7 @@
         "fixtureSha256": "298f58e842e3982e42c0638017bfc285224867ac39359da7b65eb8b2b43c061b",
         "comparisonTool": "tools/sdk-smoke-database/rtdb-sdk-rules-load-judge.mjs",
         "comparisonPath": "spec/compatibility/closure/evidence/RTDB-sdk-rules-load-comparison.json",
-        "comparisonSha256": "7f3b45800bcfab8297170b63c7edcee600ae37b68840968e82533329063dbece",
+        "comparisonSha256": "9f3d3c7f0abf75113698cb9f322f0155593addff0b99d619c1faf7204b79e623",
         "release": "closure-build",
         "sourceCommit": "d0e81b04377f08f7d32597e809eeca318b49af2a",
         "binarySha256": "28c8708cd9245eef82c4e4f315f7ddf63fade919800c31f5a873235e9e0a46f2",
@@ -1541,7 +1551,7 @@
           "productionObserved": false
         },
         "jarOnlyQueryOrderBy": {
-          "statement": "query.orderBy loads in both profiles and decides as the official emulator does (owner 2276; production documents it): it is the child ordering when the read orders by a child, otherwise a value that equals only itself, so `query.orderBy == null` is false and `query.orderBy != null` is true on a plain read, a stream and a listen, and null in a write, a validation and a shallow read. Rules that use it were refused at load before, so none was in force; the rules that can now allow a read are those that name query.orderBy. Unobserved in production, so strict follows the jar.",
+          "statement": "query.orderBy loads in both profiles and decides as the official emulator does (owner 2276; production documents it): it is the child ordering when the read orders by a child and otherwise the ordering OrderByKey, OrderByValue or OrderByPriority names (the last is the child .priority; see RTDB/rules-query-and-call-syntax, where production was recorded answering those names), so `query.orderBy == null` is false and `query.orderBy != null` is true on a plain read, a stream and a listen, and null in a write, a validation and a shallow read. Rules that use it were refused at load before, so none was in force; the rules that can now allow a read are those that name query.orderBy. Unobserved in production, so strict follows the jar.",
           "fixture": "crates/fireemu-core-database/tests/fixtures/rules-query-orderby-official-emulator-4.11.2.json",
           "fixtureSha256": "b153dc32a598626e774a5278b425250907209cb7c4517ab1bffa234997b36148",
           "rows": 81,
@@ -1620,6 +1630,87 @@
       }
     },
     {
+      "conditionId": "RTDB/rules-query-and-call-syntax",
+      "coverageLedgerRows": [
+        "RTDB-CV-05"
+      ],
+      "source": "spec/compatibility/contract.json#database",
+      "cases": [
+        "9 Rules documents in two rounds (r1-rules-syntax, r2-rules-syntax) PUT to /.settings/rules.json, one per construct: query.endBefore, query.isOrderByChild(), OrderByKey, OrderByValue, OrderByPriority, http.encodeURL(), a method read without a call (auth.uid.contains), a method read without a call through a ternary, and a call whose callee is a ternary; production loaded all nine",
+        "under each document, anonymous and auth_variable_override reads and writes with the queries that make it matter (orderBy $key, $value, $priority and a child, endBefore, endAt, equalTo, limitToFirst, limitToLast, and a plain read), each with an allowed and a refused control: 33 cases per round, 200 or 401 with the recorded bodies",
+        "the official emulator jar 4.11.2 answered all 86 observations as production did; 591 further jar rows (rules-query-syntax-official-emulator-4.11.2.json: isOrderByChild path forms and errors, endBefore, the ordering names, encodeURL characters, method values, calls through a value and their refusal texts) and 87 cells rows are unobserved in production, so strict follows the jar there"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recording": "RTDB-RULES-SYNTAX-20261108-01",
+            "project": "fireemu-oracle-query",
+            "recordedOn": "2026-11-08",
+            "observations": 86
+          }
+        ],
+        "fixturePath": "tools/sdk-smoke-database/fixtures/production-sdk-rules-syntax.json",
+        "fixtureSha256": "e146553efaa6c6888f8dee22ca7588d3e2e5c6a94014b1c56f69cee960ce10b3",
+        "comparisonTool": "tools/sdk-smoke-database/rtdb-sdk-rules-syntax-judge.mjs",
+        "comparisonPath": "spec/compatibility/closure/evidence/RTDB-sdk-rules-syntax-comparison.json",
+        "comparisonSha256": "5559be81182cfeebc5b2459104bbdb2e75e35ff9d562518aa2a743c37771b6ec",
+        "release": "syntax-closure-build",
+        "sourceCommit": "f1f4949224bb4e2993a3523be6c956470d21e54f",
+        "binarySha256": "73572d1346b4a5ad65b3c7350916fe9d5cfef7b3e1fabac246c14bbc58bcfaa8",
+        "toolCommit": "f1f4949224bb4e2993a3523be6c956470d21e54f",
+        "rows": {
+          "strict": {
+            "MATCH": 86
+          },
+          "emulator": {
+            "MATCH": 86
+          }
+        },
+        "productionRequests": 0,
+        "ownerDecisions": "docs.local/instructions/owner-decisions.md (2350: the RTDB remaining items; 2352: the envelope caps; 2353 and 2354: the approval and V lines of run RTDB-RULES-SYNTAX-20261108-01); sandbox-ledger lines 1280 (booking) and 1281 (close)",
+        "tests": [
+          "tools/sdk-smoke-database/rtdb-sdk-rules-syntax-judge.test.mjs",
+          "tools/sdk-smoke-database/sdk-observer/rules-syntax.test.mjs",
+          "tools/sdk-smoke-database/rtdb-sdk-jar.test.mjs",
+          "crates/fireemu-adapter-database/tests/rules_syntax_production.rs",
+          "crates/fireemu-adapter-database/tests/rules_cells.rs",
+          "crates/fireemu-core-database/tests/rules.rs",
+          "conformance/src/rtdb-finite-families-closure.test.mjs",
+          "conformance/src/release-strict-regression.test.mjs",
+          "conformance/src/rtdb-release-replay.test.mjs"
+        ],
+        "scope": "The 86 recorded observations only. Both profiles and the official emulator jar 4.11.2 match production in all of them. The ledger's 112 requests are the 108 direct and 4 reserve requests the recorder counted, with no coordinator reads.",
+        "officialEmulatorFixture": {
+          "path": "tools/sdk-smoke-database/fixtures/jar-sdk-rules-syntax.json",
+          "sha256": "27129da5acda28c7a54dd02294d4621fce775a338e7470babe78c6e9ff0c325f"
+        },
+        "requestsNote": "sandbox-ledger close row 1281: 108 direct, 4 reserve, 0 coordinator reads; documents loaded 9 of 9 per round",
+        "closureReplays": {
+          "strict": {
+            "path": "tools/sdk-smoke-database/fixtures/closure-sdk-rules-syntax-strict.json",
+            "sha256": "27129da5acda28c7a54dd02294d4621fce775a338e7470babe78c6e9ff0c325f"
+          },
+          "emulator": {
+            "path": "tools/sdk-smoke-database/fixtures/closure-sdk-rules-syntax-emulator.json",
+            "sha256": "27129da5acda28c7a54dd02294d4621fce775a338e7470babe78c6e9ff0c325f"
+          }
+        },
+        "jarOnlyQuerySyntax": {
+          "statement": "Beyond the recorded documents, the constructs decide as the official emulator does in both profiles (production answered every recorded row as the jar, so strict follows the jar where production was not asked): query.endBefore is the exclusive end bound; query.isOrderByChild(path) reads the path as a string literal compared with an ordering is read (empty segments dropped; a path with no segment, an invalid key or a lone surrogate is an error) and holds when the read is ordered by that child; OrderByKey, OrderByValue and OrderByPriority equal query.orderBy on a read ordered by key, by value and by priority (a plain REST read is ordered by key, a stream and a listen by priority, and the ordering by priority is the child .priority); http.encodeURL(s) is Java's URLEncoder.encode(s, \"UTF-8\") with %20 for a space and a lone surrogate encoded as ?; a method read without a call is a value that is not null and equals nothing; a callee that is not a member is called when its type holds a method, checked at load as the first method of that type. A call through such a value with an argument count its method does not take, which the official emulator answers with an internal error (500), is denied here, as for every 500 of the official emulator.",
+          "fixture": "crates/fireemu-core-database/tests/fixtures/rules-query-syntax-official-emulator-4.11.2.json",
+          "fixtureSha256": "e0a31a56633957c70234b7e9b5292ba1f527aeb4dce5677a4c2d190fa9b28e86",
+          "rows": 591,
+          "tests": [
+            "crates/fireemu-core-database/tests/rules.rs",
+            "crates/fireemu-core-database/src/rules/eval.rs",
+            "crates/fireemu-adapter-database/tests/rules_cells.rs"
+          ],
+          "productionObserved": false
+        }
+      }
+    },
+    {
       "conditionId": "RTDB/invalid-credentials-rest",
       "coverageLedgerRows": [
         "RTDB-CV-04"
@@ -1644,7 +1735,7 @@
         "fixtureSha256": "877d31ba10797590672527623da0b07429ce614d7f1e8240f457bd1168e1e502",
         "comparisonTool": "tools/sdk-smoke-database/rtdb-sdk-tokens-judge.mjs",
         "comparisonPath": "spec/compatibility/closure/evidence/RTDB-sdk-tokens-comparison.json",
-        "comparisonSha256": "89ceec2bc8ddb3d71a338887ccaa4340abd5c2f19feb3261e1ee489a3d07cc9c",
+        "comparisonSha256": "18472620ca4c525b4bf5d1beacbbeb300d33380ef961acb5adfde8b7c737b18e",
         "release": "closure-build",
         "sourceCommit": "d0e81b04377f08f7d32597e809eeca318b49af2a",
         "binarySha256": "28c8708cd9245eef82c4e4f315f7ddf63fade919800c31f5a873235e9e0a46f2",
@@ -1882,7 +1973,7 @@
       },
       {
         "path": "spec/compatibility/closure/evidence/RTDB-sdk-rest-comparison.json",
-        "sha256": "ade1c340566eba71aee2060c0197c176c6d4d87f1ec5d754e77ca2dab2a8686a",
+        "sha256": "f083c362469c9ba961b56e433dbe01d38e91bb61868e50feb33d95cd5e443a0c",
         "rows": 144,
         "summary": {
           "strict": {
@@ -1918,7 +2009,7 @@
       },
       {
         "path": "spec/compatibility/closure/evidence/RTDB-sdk-tokens-comparison.json",
-        "sha256": "89ceec2bc8ddb3d71a338887ccaa4340abd5c2f19feb3261e1ee489a3d07cc9c",
+        "sha256": "18472620ca4c525b4bf5d1beacbbeb300d33380ef961acb5adfde8b7c737b18e",
         "rows": 54,
         "summary": {
           "strict": {
@@ -1936,7 +2027,7 @@
       },
       {
         "path": "spec/compatibility/closure/evidence/RTDB-sdk-rules-load-comparison.json",
-        "sha256": "7f3b45800bcfab8297170b63c7edcee600ae37b68840968e82533329063dbece",
+        "sha256": "9f3d3c7f0abf75113698cb9f322f0155593addff0b99d619c1faf7204b79e623",
         "rows": 14,
         "summary": {
           "strict": {
@@ -1969,6 +2060,24 @@
           }
         },
         "binding": "the closure build, an unpublished release-profile build of source commit d0e81b043 (binary 28c8708c...), --locked, RUSTC_WRAPPER empty"
+      },
+      {
+        "path": "spec/compatibility/closure/evidence/RTDB-sdk-rules-syntax-comparison.json",
+        "sha256": "5559be81182cfeebc5b2459104bbdb2e75e35ff9d562518aa2a743c37771b6ec",
+        "rows": 86,
+        "summary": {
+          "strict": {
+            "MATCH": 86,
+            "MISMATCH": 0,
+            "NEEDS_REVIEW": 0
+          },
+          "emulator": {
+            "MATCH": 86,
+            "MISMATCH": 0,
+            "NEEDS_REVIEW": 0
+          }
+        },
+        "binding": "the syntax closure build, an unpublished release-profile build of source commit f1f494922 (binary 73572d13...), --locked, RUSTC_WRAPPER empty"
       }
     ],
     "productionRequests": 0,

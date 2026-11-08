@@ -18,6 +18,8 @@ import { recordedJournal as recordedTokens } from "../../tools/sdk-smoke-databas
 import { summarize as summarizeTokens } from "../../tools/sdk-smoke-database/rtdb-sdk-tokens-judge.mjs";
 import { recordedJournal as recordedRulesLoad } from "../../tools/sdk-smoke-database/rtdb-sdk-rules-load-fixture.mjs";
 import { summarize as summarizeRulesLoad } from "../../tools/sdk-smoke-database/rtdb-sdk-rules-load-judge.mjs";
+import { recordedJournal as recordedRulesSyntax } from "../../tools/sdk-smoke-database/rtdb-sdk-rules-syntax-fixture.mjs";
+import { summarize as summarizeRulesSyntax } from "../../tools/sdk-smoke-database/rtdb-sdk-rules-syntax-judge.mjs";
 import {
   compareRecordings as compareBreadth,
   readFrames as readBreadthFrames,
@@ -43,6 +45,7 @@ const names = {
   "sdk-rules": "sdk-rules",
   "sdk-tokens": "sdk-tokens",
   "sdk-rules-load": "sdk-rules-load",
+  "sdk-rules-syntax": "sdk-rules-syntax",
   breadth: "breadth",
   functions: "functions",
   smoke: "smoke",
@@ -59,6 +62,7 @@ const scripts = {
   "sdk-rules": `${T}/rtdb-sdk-rules.mjs`,
   "sdk-tokens": `${T}/rtdb-sdk-tokens.mjs`,
   "sdk-rules-load": `${T}/rtdb-sdk-rules-load.mjs`,
+  "sdk-rules-syntax": `${T}/rtdb-sdk-rules-syntax.mjs`,
   breadth: "conformance/src/rtdb-functions/breadth-local-run.mjs",
   functions: "conformance/src/rtdb-functions/local-run.mjs",
 };
@@ -87,6 +91,12 @@ const SUITES = {
     recorded: recordedRulesLoad,
     summarize: summarizeRulesLoad,
     rows: 14,
+  },
+  "sdk-rules-syntax": {
+    fixture: "production-sdk-rules-syntax.json",
+    recorded: recordedRulesSyntax,
+    summarize: summarizeRulesSyntax,
+    rows: 86,
   },
 };
 export function campaignPlan(name, binary, out) {
@@ -121,6 +131,7 @@ export function campaignPlan(name, binary, out) {
       "sdk-rules",
       "sdk-tokens",
       "sdk-rules-load",
+      "sdk-rules-syntax",
       "breadth",
       "functions",
     ].includes(campaign)

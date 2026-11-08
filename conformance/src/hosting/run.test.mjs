@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-const fixtures = new URL("../../fixtures/hosting/", import.meta.url);
+const fixtures = new URL("../../hosting-fixtures/", import.meta.url);
 test("every HTTP condition names a fixture configuration and is unique", async () => {
   const corpus = JSON.parse(await readFile(new URL("cases.json", fixtures), "utf8"));
   const ids = new Set();

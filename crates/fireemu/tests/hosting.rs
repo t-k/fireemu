@@ -68,7 +68,7 @@ fn request(address: &str, target: &str) -> String {
 #[test]
 fn hosting_cli_serves_shared_fixture_and_withdraws_readiness_on_shutdown() {
     let fixture =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../conformance/fixtures/hosting");
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../conformance/hosting-fixtures");
     let corpus: serde_json::Value =
         serde_json::from_slice(&std::fs::read(fixture.join("cases.json")).unwrap()).unwrap();
     let (dir, security) = site_fixture(&fixture);
@@ -172,7 +172,7 @@ fn hosting_cli_serves_shared_fixture_and_withdraws_readiness_on_shutdown() {
 #[test]
 fn failed_hosting_startup_never_publishes_readiness() {
     let fixture =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../conformance/fixtures/hosting");
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../conformance/hosting-fixtures");
     let corpus: serde_json::Value =
         serde_json::from_slice(&std::fs::read(fixture.join("cases.json")).unwrap()).unwrap();
     for occupied in [false, true] {

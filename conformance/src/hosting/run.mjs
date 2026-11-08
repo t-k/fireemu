@@ -11,7 +11,7 @@ import { createHash } from "node:crypto";
 import net from "node:net";
 import { spawn } from "node:child_process";
 
-const fixtureRoot = fileURLToPath(new URL("../../fixtures/hosting/", import.meta.url));
+const fixtureRoot = fileURLToPath(new URL("../../hosting-fixtures/", import.meta.url));
 const corpus = JSON.parse(await readFile(resolve(fixtureRoot, "cases.json"), "utf8"));
 const require = createRequire(import.meta.url);
 const firebasePackage = require.resolve("firebase-tools/package.json");
@@ -265,7 +265,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
               .update(await readFile(resolve(fixtureRoot, "cases.json")))
               .digest("hex"),
             lockSha256: createHash("sha256")
-              .update(await readFile(resolve(fixtureRoot, "../../pnpm-lock.yaml")))
+              .update(await readFile(resolve(fixtureRoot, "../pnpm-lock.yaml")))
               .digest("hex"),
           },
           noEgress: proof,

@@ -1,5 +1,6 @@
 //! Assets are opened relative to a retained directory capability, never reopened by path.
 
+use fireemu_core_types::codec::{percent_decode_bytes, percent_escapes_are_well_formed, PlusMode};
 use md5::{Digest, Md5};
 use std::io::{Read, Seek};
 use std::sync::Arc;
@@ -13,25 +14,27 @@ pub(super) struct Asset {
 }
 
 pub(super) fn decode_uri(value: &str) -> Option<String> {
+    if !percent_escapes_are_well_formed(value) {
+        return None;
+    }
     let input = value.as_bytes();
+    let mut decoded = percent_decode_bytes(value, PlusMode::Literal).into_iter();
     let mut output = Vec::with_capacity(input.len());
     let mut i = 0;
     while i < input.len() {
-        if input[i] != b'%' {
-            output.push(input[i]);
-            i += 1;
-            continue;
-        }
-        let hex = input.get(i + 1..i + 3)?;
-        let hi = (hex[0] as char).to_digit(16)?;
-        let lo = (hex[1] as char).to_digit(16)?;
-        let byte = u8::try_from(hi * 16 + lo).ok()?;
-        if b";/?:@&=+$,#".contains(&byte) {
-            output.extend_from_slice(&input[i..i + 3]);
+        let byte = decoded.next()?;
+        if input[i] == b'%' {
+            let escape = input.get(i..i + 3)?;
+            if b";/?:@&=+$,#".contains(&byte) {
+                output.extend_from_slice(escape);
+            } else {
+                output.push(byte);
+            }
+            i += 3;
         } else {
             output.push(byte);
+            i += 1;
         }
-        i += 3;
     }
     String::from_utf8(output).ok()
 }
@@ -181,7 +184,7 @@ mod tests {
         let fixture = Fixture::new();
         let root = fixture.root();
         let cases: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../../conformance/fixtures/hosting/security.json"
+            "../../../../conformance/hosting-fixtures/security.json"
         ))
         .unwrap();
         symlink("../outside.txt", &fixture.0.join("public/outside-link.txt"));
@@ -258,6 +261,48 @@ mod tests {
         assert!(open(&root, "/junction/outside.txt").is_none());
         drop(root);
         std::fs::remove_dir(junction).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod decoder_tests {
+    use super::decode_uri;
+
+    #[test]
+    fn uri_decoding_preserves_reserved_spelling_plus_and_one_decode() {
+        for (input, expected) in [
+            ("a+b", "a+b"),
+            ("%2f%2F%3a%3A%3f%3F", "%2f%2F%3a%3A%3f%3F"),
+            (
+                "%3B%2F%3F%3A%40%26%3D%2B%24%2C%23",
+                "%3B%2F%3F%3A%40%26%3D%2B%24%2C%23",
+            ),
+            ("%252f%255c", "%2f%5c"),
+            ("%25%20%5c%00", "% \\\0"),
+            ("caf%C3%A9/%E6%97%A5", "café/日"),
+            ("literal日+%20end", "literal日+ end"),
+        ] {
+            assert_eq!(decode_uri(input).as_deref(), Some(expected), "{input}");
+        }
+    }
+
+    #[test]
+    fn malformed_escapes_and_invalid_utf8_are_refused_without_lossy_replacement() {
+        for input in [
+            "%",
+            "%2",
+            "%2G",
+            "%+f",
+            "%-1",
+            "a%zzb",
+            "%80",
+            "%C0%AF",
+            "%ED%A0%80",
+            "%F4%90%80%80",
+            "%C3",
+        ] {
+            assert_eq!(decode_uri(input), None, "{input}");
+        }
     }
 }
 

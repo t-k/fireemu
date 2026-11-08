@@ -22,7 +22,7 @@ const firebase = require("firebase/compat/app");
 require("firebase/compat/auth");
 const binary = resolve(process.argv[2]);
 const edges = JSON.parse(
-  await readFile(new URL("../../fixtures/hosting/redirect-edges.json", import.meta.url)),
+  await readFile(new URL("../../hosting-fixtures/redirect-edges.json", import.meta.url)),
 );
 const failures = [];
 async function check(name, run) {

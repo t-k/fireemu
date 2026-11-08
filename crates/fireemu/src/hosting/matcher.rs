@@ -288,7 +288,7 @@ mod tests {
     use super::*;
     fn corpus() -> Vec<serde_json::Value> {
         serde_json::from_str(include_str!(
-            "../../../../conformance/fixtures/hosting/official-globs.json"
+            "../../../../conformance/hosting-fixtures/official-globs.json"
         ))
         .unwrap()
     }

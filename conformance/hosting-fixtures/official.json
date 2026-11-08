@@ -2,7 +2,7 @@
   "pin": "firebase-tools@15.28.2",
   "stack": "actual superstatic strict + Hosting init/functions/run middleware and init template, synthetic project config",
   "inputs": {
-    "runnerSha256": "420ef6ad5c3ac9117b7c1b0ac862d495f8c1577a00ef6d231d49f5bedc4905d8",
+    "runnerSha256": "60f51e78ed905dadf5fa8f8e2098d9717abdf845ac3d5e5618e72e3a430490a8",
     "corpusSha256": "8a6e27ebd6894a8053385a5121b98d4a7a96f6b7193f9d222952837c940ff4ff",
     "lockSha256": "f197c15da81d633ed4d96665886ef8a10153cf105213e27fd0e4c6526bb1d821"
   },

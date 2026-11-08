@@ -19,7 +19,7 @@
       "recipeIds": [
         "hosting/static-files"
       ],
-      "fixture": "conformance/fixtures/hosting/cases.json",
+      "fixture": "conformance/hosting-fixtures/cases.json",
       "productionEvidence": [],
       "fixtureCaseIds": [
         "root",
@@ -30,7 +30,7 @@
         "static-post",
         "range"
       ],
-      "officialFixture": "conformance/fixtures/hosting/official.json"
+      "officialFixture": "conformance/hosting-fixtures/official.json"
     },
     {
       "conditionId": "HOSTING/redirects",
@@ -39,7 +39,7 @@
       "recipeIds": [
         "hosting/redirects"
       ],
-      "fixture": "conformance/fixtures/hosting/cases.json",
+      "fixture": "conformance/hosting-fixtures/cases.json",
       "productionEvidence": [],
       "fixtureCaseIds": [
         "redirect-first",
@@ -48,7 +48,7 @@
         "redirect-capture-prefix",
         "redirect-capture-literal"
       ],
-      "officialFixture": "conformance/fixtures/hosting/official.json"
+      "officialFixture": "conformance/hosting-fixtures/official.json"
     },
     {
       "conditionId": "HOSTING/rewrites",
@@ -57,13 +57,13 @@
       "recipeIds": [
         "hosting/rewrites"
       ],
-      "fixture": "conformance/fixtures/hosting/cases.json",
+      "fixture": "conformance/hosting-fixtures/cases.json",
       "productionEvidence": [],
       "fixtureCaseIds": [
         "rewrite-first",
         "static"
       ],
-      "officialFixture": "conformance/fixtures/hosting/official.json"
+      "officialFixture": "conformance/hosting-fixtures/official.json"
     },
     {
       "conditionId": "HOSTING/glob-matching",
@@ -72,9 +72,9 @@
       "recipeIds": [
         "hosting/glob-matching"
       ],
-      "fixture": "conformance/fixtures/hosting/glob-cases.json",
+      "fixture": "conformance/hosting-fixtures/glob-cases.json",
       "productionEvidence": [],
-      "officialFixture": "conformance/fixtures/hosting/official-globs.json",
+      "officialFixture": "conformance/hosting-fixtures/official-globs.json",
       "fixtureSelection": "All 138 pattern/path pairs"
     },
     {
@@ -84,7 +84,7 @@
       "recipeIds": [
         "hosting/headers-cache"
       ],
-      "fixture": "conformance/fixtures/hosting/cases.json",
+      "fixture": "conformance/hosting-fixtures/cases.json",
       "productionEvidence": [],
       "fixtureCaseIds": [
         "static",
@@ -93,7 +93,7 @@
         "modified-static",
         "modified-rewrite"
       ],
-      "officialFixture": "conformance/fixtures/hosting/official.json"
+      "officialFixture": "conformance/hosting-fixtures/official.json"
     },
     {
       "conditionId": "HOSTING/clean-urls",
@@ -102,7 +102,7 @@
       "recipeIds": [
         "hosting/clean-urls"
       ],
-      "fixture": "conformance/fixtures/hosting/cases.json",
+      "fixture": "conformance/hosting-fixtures/cases.json",
       "productionEvidence": [],
       "fixtureCaseIds": [
         "clean-_page",
@@ -124,7 +124,7 @@
         "clean-noslash-_dir_",
         "clean-noslash-_dir_index.html"
       ],
-      "officialFixture": "conformance/fixtures/hosting/official.json"
+      "officialFixture": "conformance/hosting-fixtures/official.json"
     },
     {
       "conditionId": "HOSTING/trailing-slash",
@@ -133,7 +133,7 @@
       "recipeIds": [
         "hosting/trailing-slash"
       ],
-      "fixture": "conformance/fixtures/hosting/cases.json",
+      "fixture": "conformance/hosting-fixtures/cases.json",
       "productionEvidence": [],
       "fixtureCaseIds": [
         "slash-_page",
@@ -161,7 +161,7 @@
         "clean-noslash-_dir_",
         "clean-noslash-_dir_index.html"
       ],
-      "officialFixture": "conformance/fixtures/hosting/official.json"
+      "officialFixture": "conformance/hosting-fixtures/official.json"
     },
     {
       "conditionId": "HOSTING/i18n",
@@ -170,7 +170,7 @@
       "recipeIds": [
         "hosting/i18n"
       ],
-      "fixture": "conformance/fixtures/hosting/cases.json",
+      "fixture": "conformance/hosting-fixtures/cases.json",
       "productionEvidence": [],
       "fixtureCaseIds": [
         "i18n-language",
@@ -179,7 +179,7 @@
         "i18n-language-cookie",
         "i18n-fallback"
       ],
-      "officialFixture": "conformance/fixtures/hosting/official.json"
+      "officialFixture": "conformance/hosting-fixtures/official.json"
     },
     {
       "conditionId": "HOSTING/reserved-paths",
@@ -188,7 +188,7 @@
       "recipeIds": [
         "hosting/reserved-paths"
       ],
-      "fixture": "conformance/fixtures/hosting/cases.json",
+      "fixture": "conformance/hosting-fixtures/cases.json",
       "productionEvidence": [],
       "fixtureCaseIds": [
         "reserved-json",
@@ -196,7 +196,7 @@
         "reserved-emulator-js",
         "reserved-unknown"
       ],
-      "officialFixture": "conformance/fixtures/hosting/official.json"
+      "officialFixture": "conformance/hosting-fixtures/official.json"
     },
     {
       "conditionId": "HOSTING/not-found",
@@ -205,14 +205,14 @@
       "recipeIds": [
         "hosting/not-found"
       ],
-      "fixture": "conformance/fixtures/hosting/cases.json",
+      "fixture": "conformance/hosting-fixtures/cases.json",
       "productionEvidence": [],
       "fixtureCaseIds": [
         "missing",
         "404-direct",
         "default-404"
       ],
-      "officialFixture": "conformance/fixtures/hosting/official.json"
+      "officialFixture": "conformance/hosting-fixtures/official.json"
     },
     {
       "conditionId": "HOSTING/function-rewrites",
@@ -221,13 +221,13 @@
       "recipeIds": [
         "hosting/function-rewrites"
       ],
-      "fixture": "conformance/fixtures/hosting/cases.json",
+      "fixture": "conformance/hosting-fixtures/cases.json",
       "productionEvidence": [],
       "fixtureCaseIds": [
         "function",
         "function-post"
       ],
-      "officialFixture": "conformance/fixtures/hosting/official.json"
+      "officialFixture": "conformance/hosting-fixtures/official.json"
     },
     {
       "conditionId": "HOSTING/run-rewrites",
@@ -236,12 +236,12 @@
       "recipeIds": [
         "hosting/run-rewrites"
       ],
-      "fixture": "conformance/fixtures/hosting/cases.json",
+      "fixture": "conformance/hosting-fixtures/cases.json",
       "productionEvidence": [],
       "fixtureCaseIds": [
         "run"
       ],
-      "officialFixture": "conformance/fixtures/hosting/official.json"
+      "officialFixture": "conformance/hosting-fixtures/official.json"
     }
   ],
   "integratedRegression": {

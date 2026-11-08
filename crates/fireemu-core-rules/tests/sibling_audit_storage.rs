@@ -119,7 +119,6 @@ fn list_allows(condition: &str) -> bool {
 /// more units than the limit). OFFICIAL: `size() == 4` 200, `size() == 3` 403 for `é🔥x`, and
 /// `size() == 2` 200, `size() == 1` 403 for U+10D83D. PRODUCTION-FS: rows size-4/size-3.
 #[test]
-#[ignore = "audit finding S1: size() counts scalars; expected UTF-16 units (fixed in the shared evaluator by work/rules-string-fix, unmerged)"]
 fn a_storage_name_is_sized_by_utf16_units() {
     assert!(get_allows("resource.name.size() == 4", "é🔥x"));
     assert!(!get_allows("resource.name.size() == 3", "é🔥x"));
@@ -133,7 +132,6 @@ fn a_storage_name_is_sized_by_utf16_units() {
 /// read as another). OFFICIAL: `name[3] == "x"` 200, `name[2] == "x"` 403 for `é🔥x`.
 /// PRODUCTION-FS: rows idx2-x, idx3-x.
 #[test]
-#[ignore = "audit finding S2: s[i] indexes scalars; expected UTF-16 units (work/rules-string-fix, unmerged)"]
 fn a_storage_name_is_indexed_by_utf16_unit() {
     assert!(get_allows("resource.name[3] == 'x'", "é🔥x"));
     assert!(!get_allows("resource.name[2] == 'x'", "é🔥x"));
@@ -142,7 +140,6 @@ fn a_storage_name_is_indexed_by_utf16_unit() {
 /// Finding S3. OFFICIAL: `name[0:3] == "é🔥"` 200, `name[0:2] == "é🔥"` 403 for `é🔥x`.
 /// PRODUCTION-FS: rows rng-03 (allowed), rng-02 (denied).
 #[test]
-#[ignore = "audit finding S3: s[a:b] slices scalars; expected UTF-16 units (work/rules-string-fix, unmerged)"]
 fn a_storage_name_is_sliced_by_utf16_unit() {
     assert!(get_allows("resource.name[0:3] == 'é🔥'", "é🔥x"));
     assert!(!get_allows("resource.name[0:2] == 'é🔥'", "é🔥x"));
@@ -153,7 +150,6 @@ fn a_storage_name_is_sliced_by_utf16_unit() {
 /// unit count of the OFFICIAL name rows above and the shared `size()`; the metadata path itself
 /// was not run on the official runtime.
 #[test]
-#[ignore = "audit finding S4: metadata value size() counts scalars; expected UTF-16 units (work/rules-string-fix, unmerged)"]
 fn a_storage_metadata_value_is_sized_by_utf16_units() {
     assert!(get_allows_with(
         "resource.metadata.k.size() == 3",
@@ -184,7 +180,6 @@ fn a_dot_matches_a_supplementary_character_as_one() {
 /// Unicode tables, so `"É".lower() == "é"` is true here. No production row has a non-ASCII
 /// letter (the FS-RULES-SHAPES `low-*` and `up-*` rows use `A🔥X`).
 #[test]
-#[ignore = "audit finding S6: lower()/upper() map non-ASCII letters; the official runtime maps ASCII only; production unrecorded (needs a row)"]
 fn lower_and_upper_change_ascii_letters_only_as_the_official_runtime_does() {
     assert!(!get_allows("resource.name.lower() == 'é'", "É"));
     assert!(get_allows("resource.name.lower() == 'É'", "É"));
@@ -201,7 +196,6 @@ fn lower_and_upper_change_ascii_letters_only_as_the_official_runtime_does() {
 /// PRODUCTION-FS: `string-escape#esc-high` publishes (production compiles it; it denies
 /// `"é🔥x"[1] == "\ud83d"`).
 #[test]
-#[ignore = "audit finding S7: a lone surrogate escape is a load error; official and production load it (work/rules-string-fix, unmerged)"]
 fn a_lone_surrogate_escape_in_a_storage_ruleset_loads() {
     let rules = storage(r#"match /{p=**} { allow get: if "\ud83d".size() == 1; }"#);
     assert!(parse_ruleset(&rules).is_ok());
@@ -216,7 +210,6 @@ fn a_lone_surrogate_escape_in_a_storage_ruleset_loads() {
 /// PRODUCTION-FS: `fn-top-true` allowed, `fn-after-true` recorded 2026-11-08; the Storage
 /// runtime itself is unrecorded.
 #[test]
-#[ignore = "audit finding S8: a function outside the service block is a load error; official accepts (work/rules-string-fix, unmerged)"]
 fn a_function_outside_the_service_block_loads_in_a_storage_ruleset() {
     let service = "service firebase.storage { match /b/{bucket}/o { match /{p=**} { allow get: if ok(); } } }";
     let before = format!("rules_version = '2';\nfunction ok() {{ return true; }}\n{service}");

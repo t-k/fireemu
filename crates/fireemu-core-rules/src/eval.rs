@@ -5734,11 +5734,12 @@ fn method_call(
         }
         (V::String(s), "lower") => {
             arity(0)?;
-            V::String(s.to_lowercase())
+            // ASCII letters only: recorded in production (`unicode/case#*`, 2026-11-08).
+            V::String(s.to_ascii_lowercase())
         }
         (V::String(s), "upper") => {
             arity(0)?;
-            V::String(s.to_uppercase())
+            V::String(s.to_ascii_uppercase())
         }
         (V::String(s), "trim") => {
             arity(0)?;
@@ -6206,31 +6207,21 @@ fn select_units(
     Ok(crate::value::string_from_pieces(&selected))
 }
 
-/// `lower()` or `upper()` of a string that holds a lone surrogate: the characters between the
-/// lone units change case, the lone units stay.
+/// `lower()` or `upper()` of a string that holds a lone surrogate: ASCII letters change, every
+/// other unit stays (the mapping is ASCII-only, `unicode/case#*`).
 fn units_case(units: &[u16], lower: bool) -> Vec<u16> {
-    let mut out = Vec::with_capacity(units.len());
-    let mut run = String::new();
-    let flush = |run: &mut String, out: &mut Vec<u16>| {
-        let cased = if lower {
-            run.to_lowercase()
-        } else {
-            run.to_uppercase()
-        };
-        out.extend(cased.encode_utf16());
-        run.clear();
-    };
-    for piece in crate::value::pieces(units) {
-        match piece {
-            crate::value::Piece::Char(c) => run.push(c),
-            crate::value::Piece::Lone(unit) => {
-                flush(&mut run, &mut out);
-                out.push(unit);
-            }
-        }
-    }
-    flush(&mut run, &mut out);
-    out
+    units
+        .iter()
+        .map(|unit| match u8::try_from(*unit) {
+            // A byte above 0x7f is not an ASCII letter and stays as it is.
+            Ok(byte) => u16::from(if lower {
+                byte.to_ascii_lowercase()
+            } else {
+                byte.to_ascii_uppercase()
+            }),
+            _ => *unit,
+        })
+        .collect()
 }
 
 /// `split()` where a lone surrogate is involved (the official emulator): the separator is

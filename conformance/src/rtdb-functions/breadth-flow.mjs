@@ -1,7 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { observe } from "./breadth-sequence.mjs";
-import { judgeRun } from "./breadth-judge.mjs";
+import { observe as breadthObserve } from "./breadth-sequence.mjs";
+import { judgeRun as breadthJudge } from "./breadth-judge.mjs";
 
 export const BREADTH_WINDOWS = Object.freeze({
   propagationMs: 300000,
@@ -11,9 +11,38 @@ export const BREADTH_WINDOWS = Object.freeze({
   tailMs: 150000,
 });
 
+/** Complete when every deployed handler delivered every changed leaf, and each retry-on handler succeeded. */
+export function breadthComplete({ report, deployed, result }) {
+  return (
+    !result.logs.incomplete &&
+    report.steps.every((step) =>
+      step.leaves.every((leaf) =>
+        deployed.every((target) => {
+          const seen = leaf.handlers[target.functionName];
+          return (
+            seen?.frames > 0 &&
+            (leaf.group !== "gr" ||
+              !target.required ||
+              Object.values(seen.attempts).some((attempts) =>
+                attempts.some((attempt) => attempt?.threw === false),
+              ))
+          );
+        }),
+      ),
+    )
+  );
+}
+
+/**
+ * The shared flow of a trigger recording. The breadth recording is the default; another scenario plugs
+ * in `deps.observe`, `deps.judge`, `deps.complete` and `deps.windows`.
+ */
 export async function runBreadth(deps) {
   const { targets, ops, clock, abort, log } = deps;
-  const windows = BREADTH_WINDOWS;
+  const windows = deps.windows ?? BREADTH_WINDOWS;
+  const observe = deps.observe ?? breadthObserve;
+  const judgeRun = deps.judge ?? breadthJudge;
+  const complete = deps.complete ?? breadthComplete;
   const states = new Map(targets.map((t) => [t.key, { started: false, cleaned: false }]));
   const reasons = [];
   const writes = {};
@@ -148,24 +177,8 @@ export async function runBreadth(deps) {
         nextRead += windows.pollMs;
         const report = observe({ writes, frames: result.frames, steps: deps.steps });
         const deployed = targets.filter((target) => result.records[target.key] !== undefined);
-        const complete =
-          !result.logs.incomplete &&
-          report.steps.every((step) =>
-            step.leaves.every((leaf) =>
-              deployed.every((target) => {
-                const seen = leaf.handlers[target.functionName];
-                return (
-                  seen?.frames > 0 &&
-                  (leaf.group !== "gr" ||
-                    !target.required ||
-                    Object.values(seen.attempts).some((attempts) =>
-                      attempts.some((attempt) => attempt?.threw === false),
-                    ))
-                );
-              }),
-            ),
-          );
-        if (!complete) quietSince = null;
+        const finished = complete({ report, deployed, result });
+        if (!finished) quietSince = null;
         else if (quietSince === null || result.frames.length !== previous) quietSince = clock.now();
         if (quietSince !== null && clock.now() - quietSince >= windows.quietMs) break;
       }

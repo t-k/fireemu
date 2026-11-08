@@ -8,6 +8,7 @@ export function createAuth({
   apiKey,
   email,
   password,
+  claims,
   log,
   stop = {},
   secrets = [],
@@ -63,6 +64,15 @@ export function createAuth({
     async signIn() {
       if (unknown || state !== "live" || signedIn) throw Error("sign in unavailable");
       signedIn = true;
+      if (claims) {
+        // custom claims go on the owned user before the token is minted; the user stays deletable if this fails
+        const set = await admin.call("user-claims", "POST", `${base}/accounts:update`, {
+          localId: uid,
+          customAttributes: JSON.stringify(claims),
+        });
+        if (set.outcome !== "ok")
+          return { outcome: set.outcome === "refused" ? "refused" : "unknown", status: set.status };
+      }
       const r = await signInClient.call(
         "user-sign-in",
         "POST",

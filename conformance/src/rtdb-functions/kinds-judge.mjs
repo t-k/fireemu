@@ -1,8 +1,4 @@
-import {
-  NAMED_CONTEXT_MEMBERS,
-  NAMED_EVENT_MEMBERS,
-  isRecordedMember,
-} from "./kinds-frames.mjs";
+import { NAMED_CONTEXT_MEMBERS, NAMED_EVENT_MEMBERS, isRecordedMember } from "./kinds-frames.mjs";
 
 const writeOk = (write) => !write?.outcome || ["ok", "unknown"].includes(write.outcome);
 
@@ -17,7 +13,12 @@ export function judgeRun({ report, frames, writes, ignored, userUid, deployed })
     if (!writeOk(step.write) && seen.frames > 0) reasons.push(`unexpected delivery: ${label}`);
     else if (writeOk(step.write) && seen.expected === 0 && seen.frames > 0)
       reasons.push(`unexpected delivery: ${label}`);
-    else if (step.write?.outcome === "ok" && seen.expected === 1 && seen.frames === 0 && !step.observeOnly)
+    else if (
+      step.write?.outcome === "ok" &&
+      seen.expected === 1 &&
+      seen.frames === 0 &&
+      !step.observeOnly
+    )
       reasons.push(`missing delivery: ${label}`);
     if (seen.distinctEventIds > 1) reasons.push(`multiple event ids: ${label}`);
     if (seen.duplicateFrames > 0) reasons.push(`repeated delivery: ${label}`);

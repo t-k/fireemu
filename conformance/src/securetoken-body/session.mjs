@@ -104,6 +104,8 @@ export function createSession(ctx, options = {}) {
     try {
       response = await transport(request.url, {
         ...request.init,
+        // A redirect is an unknown answer, never an answer: it must not reach a URL the guard has not seen.
+        redirect: "error",
         signal: AbortSignal.timeout(timeoutMs),
       });
       text = await response.text();
@@ -356,8 +358,8 @@ export function createSession(ctx, options = {}) {
         ),
       );
     }
-    // An account unknown at create and never found is searched for by its local id before the
-    // tenant goes (a tenant's accounts go with it, but a project account does not).
+    // A project account whose create was unknown and never found is not searched for here: it stops the
+    // recording open, and the `recordsCount` audit below reports it. A tenant's accounts go with the tenant.
     if (state.tenantId !== undefined && isOwned(ownership, tenantName())) {
       await attempt("tenant", () =>
         deleteAndReadBack(

@@ -111,6 +111,13 @@ export async function recordProduction(env, deps) {
         error = recording.failure;
         break;
       }
+      // A recording that left a name open or tenancy on is the last: the next one would take what is left
+      // as its starting state, and the preflight has not re-read the sandbox.
+      if (recording.closureReady !== true) {
+        outcome = "needs-recovery";
+        error = `recording ${n} is not closure-ready; recording ${n + 1} is not started`;
+        break;
+      }
     }
   } catch (caught) {
     outcome = caught.fatal ? "aborted-fatal" : "aborted";

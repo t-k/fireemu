@@ -2,6 +2,7 @@
 // what it records, and what its cleanup does when a delete, a create or a switch answers badly.
 
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { mock, test } from "node:test";
@@ -1650,4 +1651,92 @@ test("the switch is written before it is read back", async () => {
   const last = ids.lastIndexOf("write-tenancy");
   assert.equal(ids[last + 1], "read-config");
   assert.equal(ids[last + 2], "count-accounts");
+});
+
+// ---- a redirect is never followed ----------------------------------------------------------------
+
+test("every request tells fetch not to follow a redirect", async () => {
+  const { session, world } = fakeSession({ world: { tenancy: false } });
+  await session.runRecording();
+  assert.ok(world.log.length > 40);
+  assert.ok(world.log.every((e) => e.redirect === "error"));
+});
+
+test("a redirect met by a create, a delete or a row is an unknown answer, never an answer", async () => {
+  const redirected = (match) =>
+    fakeSession({ world: { faults: [(req) => (match(req) ? "throw-redirect" : undefined)] } });
+  // A create: the name is unknown and, with nothing found, the recording stops open.
+  const create = redirected(
+    (req) => req.method === "POST" && req.path.endsWith("v1/projects/%P/accounts"),
+  );
+  const a = await create.session.runRecording();
+  assert.match(a.failure, /account a: the create answer is unknown/);
+  assert.equal(a.closureReady, false);
+  assert.equal(a.ownership.unknownAnswers[0].reason, "transport-error");
+  // The same for the tenant create, which is looked for by name before the recording stops.
+  const tenant = redirected((req) => req.method === "POST" && req.path.endsWith("tenants"));
+  const b = await tenant.session.runRecording();
+  assert.equal(b.ownership.unknownAnswers[0].reason, "transport-error");
+  // A delete: sticky, never sent again, the recording is not closure-ready.
+  const del = redirected(
+    (req) => req.path.endsWith("accounts:delete") && JSON.parse(req.body).localId.endsWith("-b"),
+  );
+  const c = await del.session.runRecording();
+  assert.equal(c.closureReady, false);
+  assert.ok(c.ownership.reasons.some((r) => r.startsWith("unknown-delete-answers")));
+  assert.equal(del.journal.filter((e) => e.id === "delete-account").length, 3);
+  // A row: recorded as a transport failure, which the judge reads as unknown.
+  let refreshes = 0;
+  const row = redirected((req) => req.path === "v1/token" && ++refreshes === 3);
+  const d = await row.session.runRecording();
+  assert.equal(d.rows["json-camel"].status, 0);
+  assert.equal(d.rows["json-camel"].transport, "TypeError");
+  assert.equal(classifyAnswer(d.rows["json-camel"]).why, "transport failure");
+  assert.equal(d.closureReady, true);
+});
+
+/** A server that answers every request with a redirect and counts what it is asked. */
+async function redirectingServer() {
+  const seen = [];
+  const server = createServer((req, res) => {
+    seen.push(req.url);
+    res.writeHead(302, { location: "/elsewhere" });
+    res.end();
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  return {
+    seen,
+    origin: `http://127.0.0.1:${server.address().port}`,
+    close: () => new Promise((resolve) => server.close(resolve)),
+  };
+}
+
+test("against a real server that redirects, the session sees a transport failure and follows nothing", async () => {
+  const server = await redirectingServer();
+  try {
+    const ctx = createContext({
+      run: "1794000000",
+      project: SANDBOX_PROJECT,
+      target: { kind: "local", origin: server.origin, projectNumber: NUMBER },
+    });
+    const { openOwnership } = await import("./shared/ownership.mjs");
+    const { createSession } = await import("./securetoken-body/session.mjs");
+    const { tempDir } = await import("./test-tmpdir.mjs");
+    const ownership = openOwnership({
+      path: `${tempDir("stb-")}/issued.jsonl`,
+      runId: "stb-1794000000",
+    });
+    const recording = await createSession(ctx, { ownership, sleep: async () => {} }).runRecording();
+    assert.match(
+      recording.failure,
+      /^harness GET admin\/v2\/projects\/\{project\}\/config: TypeError$/,
+    );
+    // The config read, then the one request cleanup still makes (the account count): no redirect is followed.
+    assert.deepEqual(server.seen, [
+      `/identitytoolkit.googleapis.com/admin/v2/projects/${SANDBOX_PROJECT}/config`,
+      `/identitytoolkit.googleapis.com/v1/projects/${SANDBOX_PROJECT}/accounts:query`,
+    ]);
+  } finally {
+    await server.close();
+  }
 });

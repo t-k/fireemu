@@ -2,6 +2,7 @@
 // the process, where, and with which credential.
 
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
 import { mock, test } from "node:test";
 
 import { SANDBOX_PROJECT, createContext } from "./auth-account/harness.mjs";
@@ -634,4 +635,43 @@ test("a failed tenant list is a failed read, and a count of tenants is a problem
   assert.equal(c.report.tenants, 0);
   assert.equal(c.report.tenantsListed, false);
   assert.deepEqual(c.problems, []);
+});
+
+test("a preflight read does not follow a redirect, and says the read failed", async () => {
+  const seen = [];
+  const server = createServer((incoming, res) => {
+    seen.push(incoming.url);
+    res.writeHead(302, { location: "/elsewhere" });
+    res.end();
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const ctx = createContext({
+      run: RUN,
+      project: SANDBOX_PROJECT,
+      target: {
+        kind: "local",
+        origin: `http://127.0.0.1:${server.address().port}`,
+        projectNumber: NUMBER,
+      },
+    });
+    const { report, problems } = await preflight(ctx);
+    assert.deepEqual(report.failedReads, ["config (HTTP 0)", "accounts (HTTP 0)"]);
+    assert.ok(problems.length >= 2);
+    assert.equal(seen.length, 2);
+    assert.ok(!seen.includes("/elsewhere"));
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+  // And the init it hands to the fetch says so.
+  const inits = [];
+  const fake = createWorld({ project: SANDBOX_PROJECT, number: NUMBER, tenancy: true });
+  await preflight(production(), "", {
+    fetchImpl: (url, init) => {
+      inits.push(init.redirect);
+      const parsed = new URL(url);
+      return fake.fetch(`http://127.0.0.1:1${parsed.pathname}${parsed.search}`, init);
+    },
+  });
+  assert.deepEqual(inits, ["error", "error", "error"]);
 });

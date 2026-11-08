@@ -301,6 +301,7 @@ export function createWorld(options = {}) {
       authorized: (init.headers?.authorization ?? "").startsWith("Bearer "),
     };
     world.log.push({
+      redirect: init.redirect,
       method: req.method,
       path: req.path,
       contentType: req.contentType,
@@ -309,6 +310,11 @@ export function createWorld(options = {}) {
     for (const fault of faults) {
       const injected = fault(req, world);
       if (injected === "throw-plain") throw "connection lost";
+      // What fetch does when it meets a redirect it was told not to follow.
+      if (injected === "throw-redirect")
+        throw Object.assign(new TypeError("fetch failed"), {
+          cause: new Error("unexpected redirect"),
+        });
       if (injected === "throw")
         throw Object.assign(new Error("fetch failed"), { cause: { code: "ECONNRESET" } });
       if (injected) return reply(injected);

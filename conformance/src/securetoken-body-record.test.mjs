@@ -474,7 +474,8 @@ test("meta.json says how the run ended, in two-space JSON, and what was cleaned 
   const text = d.writes.get("meta.json");
   assert.ok(text.startsWith('{\n  "sha": '));
   const meta = JSON.parse(text);
-  assert.equal(meta.outcome, "recorded");
+  assert.equal(meta.outcome, "needs-recovery");
+  assert.match(meta.error, /recording 1 is not closure-ready/);
   assert.equal(meta.sha, "a".repeat(40));
   assert.equal(meta.harness, "b".repeat(64));
   assert.equal(meta.corpusDigest, corpusDigest());
@@ -483,7 +484,7 @@ test("meta.json says how the run ended, in two-space JSON, and what was cleaned 
   assert.equal(meta.startedAt, "2026-11-08T12:00:00.000Z");
   assert.equal(
     warnings.at(-1),
-    "NOT CLOSURE-READY on fireemu-oracle-idp:\n  account a: gone wrong\n  account a: gone wrong\n  unknown answer to delete account:stb-1-a: server-error\n  unknown answer to delete account:stb-1-a: server-error",
+    "NOT CLOSURE-READY on fireemu-oracle-idp:\n  account a: gone wrong\n  unknown answer to delete account:stb-1-a: server-error",
   );
 });
 
@@ -579,12 +580,100 @@ test("the closing ledger line carries unknowns, cleanup errors and an error only
   await recordProduction(ENV, withUnknown);
   assert.deepEqual(withUnknown.ledger.at(-1).unknowns, [
     { call: "delete x", answer: "server-error" },
-    { call: "delete x", answer: "server-error" },
   ]);
   assert.equal("cleanupErrors" in withUnknown.ledger.at(-1), false);
   const withCleanup = only({ cleanupErrors: ["tenant: x"], closureReady: false });
   await recordProduction(ENV, withCleanup);
-  assert.deepEqual(withCleanup.ledger.at(-1).cleanupErrors, ["tenant: x", "tenant: x"]);
+  assert.deepEqual(withCleanup.ledger.at(-1).cleanupErrors, ["tenant: x"]);
   assert.equal("unknowns" in withCleanup.ledger.at(-1), false);
-  assert.equal("error" in withCleanup.ledger.at(-1), false);
+  assert.equal(
+    withCleanup.ledger.at(-1).error,
+    "recording 1 is not closure-ready; recording 2 is not started",
+  );
+});
+
+// ---- a recording that is not closure-ready ends the run -----------------------------------------
+
+test("a recording that is not closure-ready is the last one: recording 2 is never started", async () => {
+  const cases = {
+    "an unknown delete": { unknowns: [{ call: "delete account:stb-1-a", answer: "server-error" }] },
+    "a cleanup error": { cleanupErrors: ["account audit: 1 project-level account(s) remain"] },
+    "an open name without either": {},
+  };
+  for (const [name, extra] of Object.entries(cases)) {
+    const d = deps();
+    const numbers = [];
+    d.recordOnce = async (n) => {
+      numbers.push(n);
+      return stub({ ...extra, closureReady: false });
+    };
+    const warnings = [];
+    d.warn = (text) => warnings.push(text);
+    const result = await recordProduction(ENV, d);
+    assert.deepEqual(numbers, [1], name);
+    assert.equal(result.outcome, "needs-recovery", name);
+    assert.equal(result.exitCode, 1, name);
+    assert.match(
+      result.error,
+      /recording 1 is not closure-ready; recording 2 is not started/,
+      name,
+    );
+    assert.ok(!d.writes.has("FIXTURE"), name);
+    assert.ok(d.writes.has("recording-1.json") && !d.writes.has("recording-2.json"), name);
+    const end = d.ledger.at(-1);
+    assert.equal(end.outcome, "needs-recovery", name);
+    assert.equal(end.recordings, 1, name);
+    assert.equal(end.closureReady, false, name);
+    assert.equal(end.error, result.error, name);
+  }
+});
+
+test("a switch-back that fails after recording 1 stops the run with tenancy left on and no second recording", async () => {
+  const d = deps();
+  d.world.tenancy = false;
+  let patches = 0;
+  const original = d.recordOnce;
+  const faulty = createWorld({
+    project: "fireemu-oracle-idp",
+    number: NUMBER,
+    tenancy: false,
+    faults: [
+      (req) => (req.method === "PATCH" && ++patches === 2 ? { status: 503, json: {} } : undefined),
+    ],
+  });
+  const dir = tempDir("stb-sb-");
+  const numbers = [];
+  d.recordOnce = async (n, _web, { shouldStop }) => {
+    numbers.push(n);
+    return recordWith(
+      { kind: "local", origin: "http://127.0.0.1:1", projectNumber: NUMBER },
+      dir,
+      n,
+      {
+        transport: faulty.fetch,
+        sleep: async () => {},
+        pollMs: 0,
+        shouldStop,
+      },
+    );
+  };
+  void original;
+  const result = await recordProduction(ENV, d);
+  assert.deepEqual(numbers, [1]);
+  assert.equal(result.outcome, "needs-recovery");
+  assert.equal(faulty.world.tenancy, true);
+  const recording = JSON.parse(d.writes.get("recording-1.json"));
+  assert.deepEqual(recording.tenancy, { before: false, switchedOn: true, restored: false });
+  assert.ok(recording.cleanupErrors.some((e) => e.startsWith("restore multi-tenancy")));
+  assert.equal(d.ledger.at(-1).recordings, 1);
+  assert.equal(d.ledger.at(-1).closureReady, false);
+});
+
+test("a closure-ready recording still lets the second one run", async () => {
+  const d = deps();
+  const numbers = [];
+  d.recordOnce = async (n) => (numbers.push(n), stub());
+  const result = await recordProduction(ENV, d);
+  assert.deepEqual(numbers, [1, 2]);
+  assert.equal(result.outcome, "recorded");
 });

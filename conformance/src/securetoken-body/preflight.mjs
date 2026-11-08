@@ -16,6 +16,7 @@ export async function preflight(
     try {
       const response = await fetchImpl(request.url, {
         ...request.init,
+        redirect: "error",
         signal: AbortSignal.timeout(timeoutMs),
       });
       const text = await response.text();

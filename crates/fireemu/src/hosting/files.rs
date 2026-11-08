@@ -79,9 +79,10 @@ pub(super) fn open(root: &cap_std::fs::Dir, path: &str) -> Option<Asset> {
 }
 
 pub(super) async fn find(
-    root: Arc<cap_std::fs::Dir>,
+    root: Option<Arc<cap_std::fs::Dir>>,
     paths: Vec<String>,
 ) -> Option<(String, Asset)> {
+    let root = root?;
     tokio::task::spawn_blocking(move || {
         paths
             .into_iter()

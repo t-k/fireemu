@@ -1181,6 +1181,8 @@ pub struct RuntimeConfig {
     pub functions_addr: String,
     /// Hosting HTTP bind address.
     pub hosting_addr: String,
+    /// Whether the Hosting port was configured; firebase-tools moves only a default port.
+    pub hosting_addr_explicit: bool,
     /// The site configuration loaded from firebase.json.
     pub hosting: Option<crate::hosting::Config>,
     /// Eventarc HTTP bind address. The pinned official suite starts this dependency only
@@ -1697,6 +1699,7 @@ impl Default for RuntimeConfig {
             rules_denial_log: true,
             functions_addr: "127.0.0.1:5001".to_owned(),
             hosting_addr: "127.0.0.1:5000".to_owned(),
+            hosting_addr_explicit: false,
             hosting: None,
             eventarc_addr: "127.0.0.1:9299".to_owned(),
             eventarc_enabled: false,
@@ -3136,11 +3139,20 @@ impl RuntimeConfig {
         self.apply_storage(obj.get("storage"), &file, &mut report)?;
         self.database_rules = Self::apply_database(obj.get("database"), &file)?;
         self.apply_functions(obj.get("functions"), base, only, &mut report)?;
+        // A run that did not name Hosting keeps starting when its Hosting entry is one fireemu
+        // cannot serve (firebase-tools 15.28.2 serves it); the entry is only noted, as it was
+        // before Hosting existed. `--only hosting` keeps every error.
+        let mut hosting_unsupported = None;
         if only.hosting {
-            self.hosting = obj
+            match obj
                 .get("hosting")
-                .map(|value| crate::hosting::Config::parse(value, base).map_err(ConfigError))
-                .transpose()?;
+                .map(|value| crate::hosting::Config::parse(value, base))
+                .transpose()
+            {
+                Ok(hosting) => self.hosting = hosting,
+                Err(error) if only.explicit => return Err(ConfigError(error)),
+                Err(error) => hosting_unsupported = Some(error),
+            }
         }
         if let Some(emulators) = obj.get("emulators") {
             let emulators = emulators.as_object().ok_or_else(|| {
@@ -3180,13 +3192,25 @@ impl RuntimeConfig {
                             self.allow_non_loopback_hosts,
                         )?;
                     }
-                    "hosting" if only.hosting => {
-                        self.hosting_addr = emulator_addr(
-                            entry,
-                            name,
-                            &self.hosting_addr,
-                            self.allow_non_loopback_hosts,
-                        )?;
+                    // An unselected or unsupported Hosting entry configures nothing.
+                    "hosting" => {
+                        if only.hosting && hosting_unsupported.is_none() {
+                            match emulator_addr(
+                                entry,
+                                name,
+                                &self.hosting_addr,
+                                self.allow_non_loopback_hosts,
+                            ) {
+                                Ok(addr) => {
+                                    self.hosting_addr = addr;
+                                    self.hosting_addr_explicit = entry
+                                        .as_object()
+                                        .is_some_and(|entry| entry.contains_key("port"));
+                                }
+                                Err(error) if only.explicit => return Err(error),
+                                Err(ConfigError(error)) => hosting_unsupported = Some(error),
+                            }
+                        }
                     }
                     "functions" => {
                         self.functions_addr = emulator_addr(
@@ -3295,6 +3319,12 @@ impl RuntimeConfig {
                     }
                 }
             }
+        }
+        if let Some(error) = hosting_unsupported {
+            self.hosting = None;
+            report.notices.push(format!(
+                "hosting: {error}; Hosting is not started (name it in --only to make this an error)"
+            ));
         }
         Ok(report)
     }
@@ -4382,6 +4412,7 @@ impl RuntimeConfig {
         }
         if let Some(port) = d.get("hostingPort").and_then(Value::as_u64) {
             cfg.hosting_addr = format!("127.0.0.1:{port}");
+            cfg.hosting_addr_explicit = true;
         }
         if let Some(port) = d.get("functionsPort").and_then(Value::as_u64) {
             cfg.functions_addr = format!("127.0.0.1:{port}");
@@ -11943,5 +11974,84 @@ mod eventarc_authentication_tests {
                 prop_assert_eq!(cfg.eventarc_authentication, expected);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod hosting_selection_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn apply(
+        firebase: &Value,
+        only: &Selection,
+    ) -> (RuntimeConfig, Result<FirebaseJsonReport, ConfigError>) {
+        let mut cfg = RuntimeConfig::default();
+        let result = cfg.apply_firebase_json(firebase, std::path::Path::new("/project"), only);
+        (cfg, result)
+    }
+
+    // Review 2026-11-07 P2: `--only auth` with a nonloopback Hosting host must start.
+    #[test]
+    fn an_excluded_hosting_address_never_blocks_other_services() {
+        let firebase = json!({"hosting": {"public": "public"}, "emulators": {"hosting": {"host": "0.0.0.0", "port": 5000}}});
+        let (cfg, result) = apply(&firebase, &Selection::parse("auth").unwrap());
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(cfg.hosting, None);
+        assert_eq!(cfg.hosting_addr, "127.0.0.1:5000");
+    }
+
+    #[test]
+    fn explicitly_selected_hosting_keeps_its_configuration_errors() {
+        let only = Selection::parse("hosting").unwrap();
+        for firebase in [
+            json!({"hosting": {"public": "public"}, "emulators": {"hosting": {"host": "0.0.0.0"}}}),
+            json!({"hosting": [{"target": "a", "public": "a"}, {"target": "b", "public": "b"}]}),
+            json!({"hosting": {"source": "."}}),
+        ] {
+            let (_, result) = apply(&firebase, &only);
+            assert!(result.is_err(), "{firebase}");
+        }
+    }
+
+    // firebase-tools 15.28.2 starts Hosting for these shapes; before Hosting existed, fireemu
+    // only noted the entry. A run that did not name Hosting must keep starting.
+    #[test]
+    fn default_selection_notes_unsupported_hosting_instead_of_refusing_startup() {
+        for firebase in [
+            json!({"hosting": {"public": "public"}, "emulators": {"hosting": {"host": "0.0.0.0"}}}),
+            json!({"hosting": [{"target": "a", "public": "a"}, {"target": "b", "public": "b"}]}),
+            json!({"hosting": {"source": "."}}),
+            json!({"hosting": {"public": "public", "rewrites": [{"regex": "(", "destination": "/"}]}}),
+        ] {
+            let (cfg, result) = apply(&firebase, &Selection::default());
+            let report = result.unwrap_or_else(|error| panic!("{firebase}: {error:?}"));
+            assert_eq!(cfg.hosting, None, "{firebase}");
+            assert_eq!(cfg.hosting_addr, "127.0.0.1:5000", "{firebase}");
+            assert!(
+                report.notices.iter().any(|n| n.contains("hosting")),
+                "{firebase}: {:?}",
+                report.notices
+            );
+        }
+        let (cfg, result) = apply(
+            &json!({"hosting": {"public": "public"}, "emulators": {"hosting": {"port": 5005}}}),
+            &Selection::default(),
+        );
+        assert!(result.unwrap().notices.is_empty());
+        assert!(cfg.hosting.is_some());
+        assert_eq!(cfg.hosting_addr, "127.0.0.1:5005");
+        assert!(cfg.hosting_addr_explicit);
+    }
+
+    #[test]
+    fn the_default_hosting_port_is_relocatable_and_a_configured_one_is_not() {
+        let (cfg, result) = apply(
+            &json!({"hosting": {"public": "public"}, "emulators": {"hosting": {"host": "127.0.0.1"}}}),
+            &Selection::default(),
+        );
+        result.unwrap();
+        assert!(!cfg.hosting_addr_explicit);
+        assert!(!RuntimeConfig::default().hosting_addr_explicit);
     }
 }

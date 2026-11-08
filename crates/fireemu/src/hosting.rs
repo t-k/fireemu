@@ -102,7 +102,8 @@ impl hyper::body::Body for ProxyBody {
 
 struct Site {
     data: Value,
-    root: Arc<cap_std::fs::Dir>,
+    /// `None` when the public directory does not exist: every asset lookup misses.
+    root: Option<Arc<cap_std::fs::Dir>>,
     project: String,
     upstream: Option<std::net::SocketAddr>,
     emulators: Value,
@@ -260,25 +261,17 @@ impl Site {
             || path == "/__/firebase/init.js"
             || (path.starts_with("/__/firebase/") && path.split('/').count() >= 5);
         for rule in self.rules("redirects").iter().filter(|_| !reserved) {
-            let destination = redirect_destination(rule, &decoded);
-            if let Some((authority, mut destination)) = destination {
-                if !query.is_empty() {
-                    destination.push(if destination.contains('?') { '&' } else { '?' });
-                    let Some(decoded_query) = files::decode_uri(&query[1..]) else {
-                        return response(400, "Malformed URL", None);
-                    };
-                    destination.push_str(&decoded_query);
+            match configured_redirect(rule, &decoded, &query) {
+                None => {}
+                Some(Err(())) => return response(400, "Malformed URL", None),
+                Some(Ok(location)) => {
+                    let status = rule
+                        .get("type")
+                        .and_then(Value::as_u64)
+                        .and_then(|v| u16::try_from(v).ok())
+                        .unwrap_or(301);
+                    return Self::redirect(&location, status, head);
                 }
-                let status = rule
-                    .get("type")
-                    .and_then(Value::as_u64)
-                    .and_then(|v| u16::try_from(v).ok())
-                    .unwrap_or(301);
-                return Self::redirect(
-                    &format!("{authority}{}", encode_redirect_uri(&destination)),
-                    status,
-                    head,
-                );
             }
         }
         let result = self
@@ -615,6 +608,22 @@ fn encode_redirect_uri(value: &str) -> String {
     encoded
 }
 
+/// The `Location` of a matching configured redirect, `Err` for a malformed query.
+fn configured_redirect(rule: &Value, decoded: &str, query: &str) -> Option<Result<String, ()>> {
+    let (authority, mut destination) = redirect_destination(rule, decoded)?;
+    if !query.is_empty() {
+        destination.push(if destination.contains('?') { '&' } else { '?' });
+        let Some(decoded_query) = files::decode_uri(&query[1..]) else {
+            return Some(Err(()));
+        };
+        destination.push_str(&decoded_query);
+    }
+    Some(Ok(format!(
+        "{authority}{}",
+        encode_redirect_uri(&destination)
+    )))
+}
+
 fn redirect_parts<'a>(destination: &'a str, source: Option<&str>) -> Option<(&'a str, &'a str)> {
     let capture_names: Vec<_> = source
         .into_iter()
@@ -730,11 +739,16 @@ pub fn prepare(
     upstream: Option<std::net::SocketAddr>,
     emulators: Value,
 ) -> Result<PreparedSite, String> {
-    let root = cap_std::fs::Dir::open_ambient_dir(&config.public, cap_std::ambient_authority())
-        .map_err(|e| format!("hosting.public: {e}"))?;
+    // firebase-tools 15.28.2 only logs a missing public directory at debug level and serves.
+    let root =
+        match cap_std::fs::Dir::open_ambient_dir(&config.public, cap_std::ambient_authority()) {
+            Ok(root) => Some(Arc::new(root)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(format!("hosting.public: {error}")),
+        };
     Ok(PreparedSite(Arc::new(Site {
         data: config.data,
-        root: Arc::new(root),
+        root,
         project,
         upstream,
         emulators,
@@ -758,6 +772,89 @@ pub async fn serve(
                 });
             }
             _=connections.join_next(),if !connections.is_empty()=>{}
+        }
+    }
+}
+
+#[cfg(test)]
+mod redirect_tests {
+    use super::*;
+    use proptest::prelude::*;
+    use serde_json::json;
+
+    fn location(destination: &str, raw_path: &str, raw_query: &str) -> Option<Result<String, ()>> {
+        let rule = json!({"source": "/go/:name", "destination": destination, "type": 302});
+        let decoded = files::decode_uri(raw_path).expect("well-formed test path");
+        configured_redirect(&rule, &decoded, raw_query)
+    }
+
+    // Review 2026-11-07 P1: a captured `%5c` must not become `/\evil.example`.
+    #[test]
+    fn a_captured_backslash_stays_an_encoded_path_byte() {
+        assert_eq!(
+            location("/:name", "/go/%5cevil.example", ""),
+            Some(Ok("/%5Cevil.example".to_owned()))
+        );
+        assert_eq!(
+            location("/:name", "/go/%5c%5cevil.example", "?a=%5c"),
+            Some(Ok("/%5C%5Cevil.example?a=%5C".to_owned()))
+        );
+        assert_eq!(
+            location("/:name", "/go/%2fevil.example", ""),
+            Some(Ok("/%252fevil.example".to_owned()))
+        );
+        assert_eq!(location("/:name", "/go/", ""), None);
+        assert_eq!(location("/:name", "/go/x", "?%zz"), Some(Err(())));
+        assert_eq!(location(":name", "/go/evil.example", ""), None);
+        assert_eq!(location("http://:name/", "/go/evil.example", ""), None);
+    }
+
+    fn encode_component(value: &str) -> String {
+        value
+            .bytes()
+            .map(|b| {
+                if b.is_ascii_alphanumeric() || b"-_.!~*'()".contains(&b) {
+                    char::from(b).to_string()
+                } else {
+                    format!("%{b:02X}")
+                }
+            })
+            .collect()
+    }
+
+    proptest! {
+        // A capture or query can never change the origin, add a scheme, or inject a
+        // header byte, whatever text it carries (the review's backslash, `//`, CR/LF,
+        // `javascript:` and encoded-slash shapes are all in this space).
+        #[test]
+        fn captures_and_queries_never_change_the_redirect_origin(
+            segment in "\\PC{1,12}|[\\\\/:%?#@ \\t\\r\\na.]{1,12}",
+            query in "\\PC{0,8}|[\\\\/:%?#@\\r\\n]{0,8}",
+        ) {
+            let raw_path = format!("/go/{}", encode_component(&segment));
+            let raw_query = if query.is_empty() { String::new() } else { format!("?{}", encode_component(&query)) };
+            for (destination, prefix) in [
+                ("/:name", "/"),
+                ("/next/:name", "/next/"),
+                ("folder/:name", "folder/"),
+                ("https://example.test/:name", "https://example.test/"),
+                ("HTTPS://example.test:444/:name", "HTTPS://example.test:444/"),
+                ("//example.test:1234/:name", "//example.test:1234/"),
+                ("http://[::1]/:name", "http://[::1]/"),
+            ] {
+                let Some(Ok(location)) = location(destination, &raw_path, &raw_query) else {
+                    prop_assert!(false, "{destination} {raw_path}{raw_query} must redirect");
+                    unreachable!();
+                };
+                prop_assert!(location.starts_with(prefix), "{location}");
+                let rest = &location[prefix.len()..];
+                prop_assert!(!rest.starts_with('/'), "{location}");
+                prop_assert!(
+                    location.bytes().all(|b| b.is_ascii_graphic() && b != b'\\'),
+                    "{location:?}"
+                );
+                prop_assert!(hyper::header::HeaderValue::try_from(location.as_str()).is_ok());
+            }
         }
     }
 }

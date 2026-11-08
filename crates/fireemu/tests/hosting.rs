@@ -175,44 +175,137 @@ fn failed_hosting_startup_never_publishes_readiness() {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../conformance/hosting-fixtures");
     let corpus: serde_json::Value =
         serde_json::from_slice(&std::fs::read(fixture.join("cases.json")).unwrap()).unwrap();
-    for occupied in [false, true] {
-        let dir = Scratch::new("hosting", "failed-start");
-        let reservation = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let mut hosting = corpus["configs"]["default"].clone();
-        hosting["public"] = if occupied {
-            fixture.join("public")
-        } else {
-            dir.join("missing-public")
-        }
-        .to_string_lossy()
-        .to_string()
-        .into();
-        let port = if occupied {
-            reservation.local_addr().unwrap().port()
-        } else {
-            0
-        };
-        let firebase = serde_json::json!({"hosting":hosting,"emulators":{"hosting":{"port":port},"ui":{"enabled":false},"hub":{"port":0},"logging":{"port":0}}});
-        std::fs::write(dir.join("firebase.json"), firebase.to_string()).unwrap();
-        let ready = dir.join("ready.json");
-        let output = Command::new(env!("CARGO_BIN_EXE_fireemu"))
-            .args(["up", "--only", "hosting", "--firebase-json"])
+    let dir = Scratch::new("hosting", "failed-start");
+    // A configured port is fixed, so an occupied one fails startup before readiness.
+    let reservation = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let mut hosting = corpus["configs"]["default"].clone();
+    hosting["public"] = fixture.join("public").to_string_lossy().to_string().into();
+    let port = reservation.local_addr().unwrap().port();
+    let firebase = serde_json::json!({"hosting":hosting,"emulators":{"hosting":{"port":port},"ui":{"enabled":false},"hub":{"port":0},"logging":{"port":0}}});
+    std::fs::write(dir.join("firebase.json"), firebase.to_string()).unwrap();
+    let ready = dir.join("ready.json");
+    let output = Command::new(env!("CARGO_BIN_EXE_fireemu"))
+        .args(["up", "--only", "hosting", "--firebase-json"])
+        .arg(dir.join("firebase.json"))
+        .arg("--ready-file")
+        .arg(&ready)
+        .args(["--owner-stdin", "--log-verbosity", "quiet"])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "startup must fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("bind"), "{stderr}");
+    assert!(
+        !ready.exists(),
+        "failed startup cannot publish a ready endpoint"
+    );
+}
+
+fn start(dir: &std::path::Path, firebase: &serde_json::Value, only: &str) -> (OwnedChild, String) {
+    std::fs::write(dir.join("firebase.json"), firebase.to_string()).unwrap();
+    let ready = dir.join("ready.json");
+    let mut child = OwnedChild(
+        Command::new(env!("CARGO_BIN_EXE_fireemu"))
+            .args([
+                "up",
+                "--only",
+                only,
+                "--project",
+                "demo-hosting",
+                "--firebase-json",
+            ])
             .arg(dir.join("firebase.json"))
             .arg("--ready-file")
             .arg(&ready)
             .args(["--owner-stdin", "--log-verbosity", "quiet"])
-            .stdin(Stdio::null())
-            .output()
-            .unwrap();
-        assert!(!output.status.success(), "startup must fail");
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(
-            stderr.contains(if occupied { "bind" } else { "hosting.public" }),
-            "{stderr}"
-        );
-        assert!(
-            !ready.exists(),
-            "failed startup cannot publish a ready endpoint"
-        );
-    }
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let descriptor = loop {
+        if let Some(status) = child.0.try_wait().unwrap() {
+            let mut stderr = String::new();
+            child
+                .0
+                .stderr
+                .take()
+                .unwrap()
+                .read_to_string(&mut stderr)
+                .unwrap();
+            panic!("startup failed; {status}: {stderr}");
+        }
+        if let Ok(bytes) = std::fs::read(&ready) {
+            break serde_json::from_slice::<serde_json::Value>(&bytes).unwrap();
+        }
+        assert!(Instant::now() < deadline, "readiness deadline");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let address = descriptor["hostingUrl"]
+        .as_str()
+        .map(|url| {
+            url.trim_start_matches("http://")
+                .trim_end_matches('/')
+                .to_owned()
+        })
+        .unwrap_or_default();
+    (child, address)
+}
+
+fn emulators() -> serde_json::Value {
+    serde_json::json!({"hosting":{"port":0},"ui":{"enabled":false},"hub":{"port":0},"logging":{"port":0}})
+}
+
+// Review 2026-11-07 P2 and Should: reserved initialization URLs precede a catch-all redirect,
+// and the shared configuration carries a nonsecret local API key.
+#[test]
+fn reserved_routes_precede_a_catch_all_redirect() {
+    let dir = Scratch::new("hosting", "reserved");
+    std::fs::create_dir(dir.join("public")).unwrap();
+    std::fs::write(dir.join("public/index.html"), "index").unwrap();
+    let firebase = serde_json::json!({"hosting":{"public":dir.join("public"),"redirects":[{"source":"**","destination":"/maintenance","type":302}]},"emulators":emulators()});
+    let (_child, address) = start(&dir, &firebase, "hosting");
+    let init = request(&address, "/__/firebase/init.json");
+    assert!(init.starts_with("HTTP/1.1 200"), "{init}");
+    assert!(init.contains("\"apiKey\":\"fireemu-local-only\""), "{init}");
+    assert!(init.contains("\"projectId\":\"demo-hosting\""), "{init}");
+    let script = request(&address, "/__/firebase/init.js?useEmulator=true");
+    assert!(script.starts_with("HTTP/1.1 200"), "{script}");
+    assert!(script.contains("initializeApp"), "{script}");
+    let ordinary = request(&address, "/ordinary");
+    assert!(ordinary.starts_with("HTTP/1.1 302"), "{ordinary}");
+    assert!(
+        ordinary
+            .to_ascii_lowercase()
+            .contains("location: /maintenance\r\n"),
+        "{ordinary}"
+    );
+}
+
+// firebase-tools 15.28.2 only logs a missing public directory at debug level and starts.
+#[test]
+fn a_missing_public_directory_starts_and_answers_not_found() {
+    let dir = Scratch::new("hosting", "missing-public");
+    let firebase = serde_json::json!({"hosting":{"public":dir.join("missing-public")},"emulators":emulators()});
+    let (_child, address) = start(&dir, &firebase, "hosting");
+    let page = request(&address, "/index.html");
+    assert!(page.starts_with("HTTP/1.1 404"), "{page}");
+    let init = request(&address, "/__/firebase/init.json");
+    assert!(init.starts_with("HTTP/1.1 200"), "{init}");
+}
+
+// Review 2026-11-07 P2: an unselected Hosting entry never blocks an Auth-only run, and a run
+// that names no service keeps starting when its Hosting configuration is unsupported.
+#[test]
+fn unselected_or_unsupported_hosting_never_blocks_startup() {
+    let dir = Scratch::new("hosting", "excluded");
+    let mut emulators = emulators();
+    emulators["hosting"]["host"] = "0.0.0.0".into();
+    emulators["auth"] = serde_json::json!({"port":0});
+    let firebase = serde_json::json!({"hosting":{"public":"public"},"emulators":emulators});
+    let (_child, address) = start(&dir, &firebase, "auth");
+    assert!(address.is_empty(), "Hosting must not start: {address}");
 }

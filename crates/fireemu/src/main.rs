@@ -1358,6 +1358,7 @@ fn apply_port_overrides(cfg: &mut RuntimeConfig, raw: &RawOptions) {
     }
     if let Some(p) = raw.hosting_port {
         cfg.hosting_addr = with_port(&cfg.hosting_addr, p);
+        cfg.hosting_addr_explicit = true;
     }
     if let Some(p) = raw.functions_port {
         cfg.functions_addr = with_port(&cfg.functions_addr, p);
@@ -2912,6 +2913,7 @@ async fn bind_relocatable_listener(
     addr: &str,
     explicit: bool,
     service: &'static str,
+    avoid: &[u16],
 ) -> Result<tokio::net::TcpListener, String> {
     if explicit || addr.ends_with(":0") {
         return bind_listener(addr).await;
@@ -2920,7 +2922,7 @@ async fn bind_relocatable_listener(
         .rsplit_once(':')
         .and_then(|(host, port)| port.parse::<u16>().ok().map(|port| (host, port)))
         .ok_or_else(|| format!("bind {addr}: invalid address"))?;
-    for candidate in port..=u16::MAX {
+    for candidate in (port..=u16::MAX).filter(|candidate| !avoid.contains(candidate)) {
         let candidate_addr = format!("{host}:{candidate}");
         match tokio::net::TcpListener::bind(&candidate_addr).await {
             Ok(listener) => {
@@ -2938,6 +2940,27 @@ async fn bind_relocatable_listener(
     Err(format!(
         "could not find an open {service} port in {port}-65535"
     ))
+}
+
+/// firebase-tools 15.28.2 moves a default Hosting port up and never onto 5001.
+async fn bind_hosting(
+    cfg: &RuntimeConfig,
+    only: &Selection,
+) -> Result<Option<tokio::net::TcpListener>, String> {
+    if only.explicit && only.hosting && cfg.hosting.is_none() {
+        return Err("--only hosting requires hosting.public in firebase.json".to_owned());
+    }
+    if !only.hosting || cfg.hosting.is_none() {
+        return Ok(None);
+    }
+    bind_relocatable_listener(
+        &cfg.hosting_addr,
+        cfg.hosting_addr_explicit,
+        "Hosting emulator",
+        &[5001],
+    )
+    .await
+    .map(Some)
 }
 
 async fn bind_listeners(cfg: &RuntimeConfig, only: &Selection) -> Result<Listeners, String> {
@@ -2968,14 +2991,7 @@ async fn bind_listeners(cfg: &RuntimeConfig, only: &Selection) -> Result<Listene
     } else {
         None
     };
-    let hosting = if only.hosting && cfg.hosting.is_some() {
-        Some(bind_listener(&cfg.hosting_addr).await?)
-    } else {
-        None
-    };
-    if only.explicit && only.hosting && cfg.hosting.is_none() {
-        return Err("--only hosting requires hosting.public in firebase.json".to_owned());
-    }
+    let hosting = bind_hosting(cfg, only).await?;
     let functions = if only.functions && cfg.functions_source.is_some() {
         Some(bind_listener(&cfg.functions_addr).await?)
     } else {
@@ -2990,6 +3006,7 @@ async fn bind_listeners(cfg: &RuntimeConfig, only: &Selection) -> Result<Listene
                 &cfg.eventarc_addr,
                 cfg.eventarc_addr_explicit,
                 "Eventarc emulator",
+                &[],
             )
             .await?,
         )
@@ -3002,6 +3019,7 @@ async fn bind_listeners(cfg: &RuntimeConfig, only: &Selection) -> Result<Listene
                 &cfg.tasks_addr,
                 cfg.tasks_addr_explicit,
                 "Cloud Tasks emulator",
+                &[],
             )
             .await?,
         )
@@ -5612,5 +5630,61 @@ mod storage_endpoint_tests {
             storage_endpoint(&firestore_only, &all).as_deref(),
             Some("http://127.0.0.1:9199")
         );
+    }
+}
+
+#[cfg(test)]
+mod hosting_bind_tests {
+    use super::*;
+
+    fn hosting_only(addr: String, explicit: bool) -> RuntimeConfig {
+        RuntimeConfig {
+            hosting_addr: addr,
+            hosting_addr_explicit: explicit,
+            hosting: Some(
+                crate::hosting::Config::parse(
+                    &serde_json::json!({"public": "public"}),
+                    std::path::Path::new("/project"),
+                )
+                .unwrap(),
+            ),
+            hub_addr: "127.0.0.1:0".to_owned(),
+            hub_addr_explicit: true,
+            logging_enabled: false,
+            ..RuntimeConfig::default()
+        }
+    }
+
+    // firebase-tools 15.28.2 searches upward from the default Hosting port (5000 is often
+    // taken on macOS) and never lands on 5001, the Functions default.
+    #[tokio::test]
+    async fn a_busy_default_hosting_port_moves_up_and_skips_the_functions_port() {
+        let busy = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = busy.local_addr().unwrap().port();
+        let cfg = hosting_only(format!("127.0.0.1:{port}"), false);
+        let only = Selection::parse("hosting").unwrap();
+        let listeners = bind_listeners(&cfg, &only).await.unwrap();
+        let bound = listeners.hosting.unwrap().local_addr().unwrap().port();
+        assert_ne!(bound, port);
+        assert!(bound > port);
+        let avoided = bind_relocatable_listener(
+            &format!("127.0.0.1:{}", 5000),
+            false,
+            "Hosting emulator",
+            &[5000, 5001],
+        )
+        .await
+        .unwrap();
+        assert!(avoided.local_addr().unwrap().port() > 5001);
+    }
+
+    #[tokio::test]
+    async fn a_configured_hosting_port_is_never_moved() {
+        let busy = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = busy.local_addr().unwrap().port();
+        let cfg = hosting_only(format!("127.0.0.1:{port}"), true);
+        let only = Selection::parse("hosting").unwrap();
+        let error = bind_listeners(&cfg, &only).await.err().unwrap();
+        assert!(error.contains("bind"), "{error}");
     }
 }

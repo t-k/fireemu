@@ -60,7 +60,7 @@ test('near misses are unknown: other statuses, byte counts, headers, bodies, cli
     { ...deny, responseHeaders: { ...deny.responseHeaders, 'content-length': '37' } }, { ...deny, responseHeaders: { ...deny.responseHeaders, 'content-type': 'application/json' } },
     { ...deny, responseHeaders: { ...deny.responseHeaders, etag: 'x' } }, { ...deny, responseHeaders: {} }, { ...deny, responseHeaders: undefined },
     { ...deny, clipped: true }, { ...deny, utf8: false }, { ...deny, ok: false }, { ...deny, outcome: 'unknown-status' }, { ...deny, status: undefined },
-    { ...ok, body: '{"status":"OK"}' }, { ...ok, status: 201 }, { ...ok, id: 'load-eb', status: 400, body: 'x' }, { ...ok, status: 401 },
+    { ...ok, body: '{"status":"OK"}' }, { ...ok, status: 201 }, { ...ok, bodyBytes: 16, responseHeaders: HEADERS(16) }, { ...recorded('tok-admin-allow'), status: 204 }, { ...recorded('tok-admin-allow'), status: 201 }, { ...ok, id: 'load-eb', status: 400, body: 'x' }, { ...ok, status: 401 },
     { ...recorded('ix-c'), body: recorded('ix-c').body.replace('Index', 'index') }, { id: 'x', ok: true, outcome: 'not-loaded', status: 200 }, null,
   ];
   for (const [i, r] of unknown.entries()) assert.equal(shapeOf(r), 'unknown', `near miss ${i}`);
@@ -95,6 +95,7 @@ test('an unknown production answer and differing production rounds are NEEDS_REV
   const odd = run({ tweak: (r, p) => (r.id === 'eb-allow' && p === 'r2-rules-syntax' ? { ...r, status: 403 } : r) });
   let s = summarize(odd, base);
   assert.deepEqual(s.rows.filter(r => r.verdict !== 'MATCH').map(r => [r.profile, r.case, r.verdict]), [['r1-rules-syntax', 'eb-allow', 'NEEDS_REVIEW'], ['r2-rules-syntax', 'eb-allow', 'NEEDS_REVIEW']]);
+  assert.equal(s.counts.MISMATCH, 0); assert.equal(s.match, false, 'a NEEDS_REVIEW case is not a match');
   const differ = run({ tweak: (r, p) => (r.id === 'obk-plain' && p === 'r2-rules-syntax' ? row(TABLE.find(t => t.id === 'obk-plain'), 'denied') : r) });
   s = summarize(differ, base);
   assert.deepEqual(s.rows.filter(r => r.verdict !== 'MATCH').map(r => [r.case, r.verdict, r.reason]), [['obk-plain', 'NEEDS_REVIEW', 'production rounds differ'], ['obk-plain', 'NEEDS_REVIEW', 'production rounds differ']]);
@@ -116,6 +117,8 @@ test('MISMATCH needs a recorded shape on both sides and agreeing rounds; the bod
   assert.deepEqual(s.rows.filter(r => r.verdict !== 'MATCH').map(r => [r.case, r.verdict, r.reason]), [['tcl-deny', 'MISMATCH', 'production denied 401, local allowed 200'], ['tcl-deny', 'MISMATCH', 'production denied 401, local allowed 200']]);
   const longer = run({ tweak: r => (r.id === 'seed' ? { ...r, body: `${r.body} `, bodyBytes: r.bodyBytes + 1, responseHeaders: HEADERS(r.bodyBytes + 1) } : r) });
   assert.equal(summarize(run(), longer).rows.filter(r => r.verdict === 'MISMATCH').length, 2);
+  const bytes = run({ tweak: r => (r.id === 'seed' ? { ...r, bodyBytes: r.bodyBytes + 1, responseHeaders: HEADERS(r.bodyBytes + 1) } : r) });
+  assert.equal(summarize(run(), bytes).rows.filter(r => r.verdict === 'MISMATCH').length, 2, 'the byte count is judged, not only the stored text');
 });
 
 test('an incomplete, unverified or faulted run, another prefix or a missing case is a problem, nothing is judged', () => {
@@ -163,6 +166,10 @@ test('the production fixture needs the provenance, one ADC, no overflow and no u
   assert.equal(fixture.provenance.suite, 'rules-syntax'); assert.deepEqual(Object.keys(fixture.provenance.caseSources), ['rules-syntax-suite.mjs']);
   assert.deepEqual(recordedJournal(fixture).profiles, reduceRulesSyntaxJournal(rawRows(doc), prod).profiles);
   assert.throws(() => buildRulesSyntaxFixture(rawRows(doc), RESULT, meta), /production run only/);
+  assert.ok(buildRulesSyntaxFixture(rawRows(doc), prod, { ...meta, journalSha256: `${'1'.repeat(12)}${'a'.repeat(52)}` }), 'a digest with twelve decimal digits is not a project number');
+  const leaky = run({ tweak: r => (r.id === 'seed' ? { ...r, body: '{"n":123456789012}' } : r) });
+  assert.throws(() => buildRulesSyntaxFixture(rawRows(leaky), prod, meta), /12-digit number/);
+  assert.throws(() => buildRulesSyntaxFixture(rawRows(doc), prod, { ...meta, sourceHead: `x${'1'.repeat(12)}` }), /12-digit number/);
   assert.throws(() => buildRulesSyntaxFixture(rawRows(doc), { ...prod, counts: { direct: 38, reserve: 4, adc: 2 } }, meta), /exactly one ADC/);
   assert.throws(() => buildRulesSyntaxFixture(rawRows(doc), { ...prod, counts: { direct: 38, reserve: 4, adc: 1, overflow: 1 } }, meta), /overflow/);
   assert.throws(() => buildRulesSyntaxFixture(rawRows(doc), { ...prod, unverified: ['x'] }, meta), /unverified/);

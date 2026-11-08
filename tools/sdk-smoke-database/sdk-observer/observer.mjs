@@ -252,7 +252,7 @@ export async function run(opts, deps = {}) {
   const fail = (code, status, error) => { exit = code; result.status = status; result.error = String(error?.message ?? error); jw({ kind: 'error', status, error: result.error }); };
   try {
     if (production) {   // refusals here send nothing except the one tokeninfo POST
-      checkApproval(readFileSync(T.paths.owner, 'utf8'), { runId: o.runId, scriptSha256: scriptSha, directCap: o.directCap, prefix: o.prefix, suite, basis: S.basis });
+      checkApproval(readFileSync(T.paths.owner, 'utf8'), { runId: o.runId, scriptSha256: scriptSha, directCap: o.directCap, prefix: o.prefix, suite });
       releases.push(claim(T.paths.lease, JSON.stringify({ pid: process.pid, envelopeId: o.runId, packetSha256: scriptSha, nonce })));
       releases.push(claim(T.paths.recording, JSON.stringify({ envelopeId: o.runId, nonce, packetSha256: scriptSha, pid: process.pid, purpose: 'RTDB-SMALL-OBSERVER' })));
       counter.take('adc', 'adc'); const token = d.mint(T.gcloud);
@@ -280,8 +280,7 @@ export async function run(opts, deps = {}) {
       const pre = await rest('prefix-before', 'GET', prefixUrl);
       if (pre.status !== 200 || pre.text.trim() !== 'null') throw new Error('prefix is not null');
       state.touched = true;   // from the PUT on, the cleanup runs even if the answer never arrives
-      if (suite === 'rules-syntax') state.touched = true;   // each profile loads its own documents; the seed and the writes go under the prefix
-      else {
+      if (suite !== 'rules-syntax') {   // a rules-syntax profile loads its own documents; its seed and writes go under the prefix
         const put = await rest('rules-install', 'PUT', rulesUrl, { body: installBody });
         if (unknownStatus(put.status)) result.unverified.push('unknown mutation outcome: rules-install');   // below 200, 3xx or 5xx: the Rules may or may not have changed: exit 3, claims kept, A2
         const back = await rest('rules-installed', 'GET', rulesUrl);
@@ -301,7 +300,7 @@ export async function run(opts, deps = {}) {
       for (const label of rows.flatMap(row => row.unknown ?? [])) result.unverified.push(`unknown ${REST_PARTS.includes(part) ? 'REST' : 'SDK'} mutation outcome: ${profile}/${label}`);   // a write, push or transaction that hit its deadline: like an unknown REST mutation it keeps the claims for the A2 read-back
       for (const label of rows.flatMap(row => row.unknownObservation ?? [])) (result.unknownObservations ??= []).push(`${profile}/${label}`);   // a GET whose answer cannot be judged: nothing changed, so no A2 read-back, but the case is not ok and is never counted
       result.cases.push(...rows.map(({ value, steps, ...row }) => ({ profile, ...row })));
-      if (rows.some(row => !row.ok) && (!o.continueOnFailure || part === 'rules-load')) break;
+      if (rows.some(row => !row.ok) && (!o.continueOnFailure || part === 'rules-load' || part === 'rules-syntax')) break;   // the Rules in effect may be unknown: no further round
     }
     const partOf = name => S.plan.find(p => p.name === name)?.suite;
     const adminNames = S.plan.filter(p => p.suite === 'admin').map(p => p.name);

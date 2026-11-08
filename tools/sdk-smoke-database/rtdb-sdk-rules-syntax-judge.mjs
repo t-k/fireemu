@@ -4,7 +4,8 @@
 // each with the run and case it was recorded in). The layout is judged by the recorded byte counts (bodyBytes and content-length),
 // with the exact JSON headers production sent; anything else, an answer outside 200/400/401, other headers, a clipped or unreadable
 // body, is `unknown`, and a case with an unknown side is NEEDS_REVIEW, never MATCH or MISMATCH. A case whose two production rounds
-// differ is NEEDS_REVIEW too. A case is MATCH when both sides have the same shape, status, body, body bytes and headers.
+// differ is NEEDS_REVIEW too. A case is MATCH when both sides have the same shape, status, body and body bytes (a known shape
+// fixes the headers: the four JSON headers with content-length equal to the body bytes).
 import { DOCUMENTS, RULES_SYNTAX_PROFILES, TABLE, syntaxRules } from './sdk-observer/rules-syntax-suite.mjs';
 import { KIND } from './rtdb-sdk-rules-syntax-fixture.mjs';
 
@@ -56,7 +57,7 @@ function requestMatches(row, spec, prefix) {
 }
 
 export const caseCount = () => RULES_SYNTAX_PROFILES.length * TABLE.length;
-const answerOf = r => JSON.stringify([shapeOf(r), r.status ?? null, r.body ?? null, r.bodyBytes ?? null, r.responseHeaders ?? null]);
+const answerOf = r => JSON.stringify([shapeOf(r), r.status ?? null, r.body ?? null, r.bodyBytes ?? null]);
 
 export function summarize(production, local) {
   const counts = { MATCH: 0, MISMATCH: 0, NEEDS_REVIEW: 0 }, rows = [], problems = [];

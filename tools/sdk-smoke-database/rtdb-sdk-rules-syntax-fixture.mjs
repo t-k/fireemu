@@ -67,7 +67,9 @@ export function buildRulesSyntaxFixture(rows, result, meta) {
     sandboxLedger: { booking: meta.bookingRow, close: meta.closeRow }, approvals: meta.approvals, journalSha256: meta.journalSha256, resultSha256: meta.resultSha256,
   };
   const doc = { ...reduced, provenance };
-  assertPublishable(JSON.stringify(doc));
+  // A SHA-256 digest is 64 hex digits and holds a run of 12 decimal digits about one time in six; it names no project, so the
+  // project-number guard reads the document with every digest-shaped string masked. Everything else is checked as it is.
+  assertPublishable(JSON.stringify(doc, (_key, value) => (typeof value === 'string' && /^[0-9a-f]{64}$/.test(value) ? '<sha256>' : value)));
   return doc;
 }
 

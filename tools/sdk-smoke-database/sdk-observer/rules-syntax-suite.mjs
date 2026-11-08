@@ -188,7 +188,7 @@ export async function runRulesSyntaxProfile({ send, url, scope, prefix, emit = (
     }
     return 'not-ready';
   };
-  let loaded = null;   // the document whose load answer of this profile was 200 and whose probe read 200
+  let loaded = null;   // the last document this profile loaded (200) and probed (200); a case runs only under its own document
   for (const spec of TABLE) {
     if (cancelled()) return rows;
     const head = { id: spec.id, doc: spec.doc, identity: spec.identity };
@@ -212,14 +212,11 @@ export async function runRulesSyntaxProfile({ send, url, scope, prefix, emit = (
       ...(unknown ? { unknown: [spec.id] } : {}),
     });
     if (unknown || (isLoad && clipped)) return rows;   // a clipped load answer is not a Rules answer: the cleanup restores the baseline
-    if (isLoad) {
-      loaded = null;
-      if (answer.status === 200) {
-        const verdict = await probe(spec.doc);
-        if (verdict === 'cancelled') return rows;
-        if (verdict !== 'ready') return stop(`ready-${spec.doc}`, verdict);   // a GET: never an unknown mutation
-        loaded = spec.doc;
-      }
+    if (isLoad && answer.status === 200) {
+      const verdict = await probe(spec.doc);
+      if (verdict === 'cancelled') return rows;
+      if (verdict !== 'ready') return stop(`ready-${spec.doc}`, verdict);   // a GET: never an unknown mutation
+      loaded = spec.doc;
     }
   }
   return rows;

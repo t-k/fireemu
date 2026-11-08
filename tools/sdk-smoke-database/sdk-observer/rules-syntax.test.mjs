@@ -160,8 +160,20 @@ test('the probe: retried up to MAX_PROBES, delay between attempts, a never-ready
   fake = fakeSend({ probe: doc => (doc === 'obk' ? 401 : 200) });
   rows = await profile(fake);
   assert.equal(fake.calls.filter(c => c.label.startsWith('ready-obk')).length, MAX_PROBES);
+  const waits = []; fake = fakeSend({ probe: doc => (doc === 'obk' ? 401 : 200) });
+  await profile(fake, { sleep: async ms => { waits.push(ms); }, probeDelayMs: 3 });
+  assert.equal(waits.length, MAX_PROBES - 1, 'no pause after the last probe');
   assert.deepEqual(rows.at(-1), { id: 'ready-obk', ok: false, outcome: 'not-ready' });
   assert.ok(!fake.calls.some(c => c.label === 'obk-allow-key'));
+});
+
+test('a clipped case answer is not ok and not unknown, and the profile goes on', async () => {
+  const fake = fakeSend({ onCase: label => (label === 'obv-allow' ? { ...answer(200, '{"b":2}'), clipped: true } : answer(200, '1')) });
+  const rows = await profile(fake);
+  const r = rows.find(x => x.id === 'obv-allow');
+  assert.deepEqual([r.ok, r.outcome, r.unknown], [false, 'clipped', undefined]);
+  assert.equal(rows.length, RULES_SYNTAX_CASES.length);
+  assert.ok(fake.calls.some(c => c.label === 'obv-deny-key'));
 });
 
 test('a cancelled profile sends nothing more', async () => {
@@ -177,20 +189,20 @@ test('the scope must be the profile scope under the prefix', async () => {
 
 // ---- the suite inside the observer run ----------------------------------------------------------------------------------------------------------
 /** A fake database: Rules PUTs accepted unless refused by id; ready reads 200 for the document in effect; cases echo 200. */
-async function fakeDatabase({ refuse = [] } = {}) {
-  const state = { rules: BASELINE, puts: [], log: [], data: null };
+async function fakeDatabase({ refuse = [], loadStatus = {}, readyMisses = 0 } = {}) {
+  const state = { rules: BASELINE, puts: [], log: [], data: null, misses: {} };
   const server = createServer((req, res) => {
     let body = ''; req.on('data', d => { body += d; });
     req.on('end', () => {
       const u = new URL(req.url, 'http://x'); state.log.push({ method: req.method, path: u.pathname, search: u.search, headers: req.headers, body });
       if (u.pathname === '/.settings/rules.json') {
-        if (req.method === 'PUT') { const id = body === BASELINE ? null : Object.keys(JSON.parse(body).rules.sdkrulesyntax[RULES_SYNTAX_AREA].ready)[0]; state.puts.push(body); if (refuse.includes(id)) { res.writeHead(400).end('{\n  "error" : "1:1: x\\n"\n}\n'); return; } state.rules = body; res.writeHead(200).end('{"status":"ok"}'); }
+        if (req.method === 'PUT') { const id = body === BASELINE ? null : Object.keys(JSON.parse(body).rules.sdkrulesyntax[RULES_SYNTAX_AREA].ready)[0]; state.puts.push(body); if (refuse.includes(id)) { res.writeHead(400).end('{\n  "error" : "1:1: x\\n"\n}\n'); return; } state.rules = body; res.writeHead(loadStatus[id] ?? 200).end('{"status":"ok"}'); }
         else res.writeHead(200).end(state.rules);
         return;
       }
       if (u.pathname === `${PREFIX}.json`) { if (req.method === 'DELETE') state.data = null; res.writeHead(200).end(req.method === 'DELETE' ? 'null' : JSON.stringify(state.data)); return; }
       const ready = /\/ready\/([a-z]+)\.json$/.exec(u.pathname);
-      if (ready) { res.writeHead(state.rules.includes(`"ready":{"${ready[1]}"`) ? 200 : 401).end('null'); return; }
+      if (ready) { const missed = (state.misses[ready[1]] = (state.misses[ready[1]] ?? 0) + 1) <= readyMisses; res.writeHead(!missed && state.rules.includes(`"ready":{"${ready[1]}"`) ? 200 : 401).end('null'); return; }
       if (req.method === 'PUT') state.data = 'written';
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' }).end('1');
     });
@@ -232,6 +244,26 @@ test('run --suite rules-syntax with refused documents: complete, the refused cas
   } finally { db.close(); rmSync(out, { recursive: true, force: true }); }
 });
 
+test('run --suite rules-syntax: the local probe pause applies (the profile gets the run probe delay)', async () => {
+  const db = await fakeDatabase({ readyMisses: 1 }), out = mkdtempSync(path.join(tmpdir(), 'syntax-run-'));
+  try {
+    const started = Date.now();
+    const { exit, result } = await run({ target: local(db.host), runId: 'TEST-SYNTAX-04', prefix: PREFIX, directCap: 160, outDir: path.join(out, 'run'), suite: 'rules-syntax' });
+    assert.equal(exit, 0, JSON.stringify(result));
+    assert.ok(Date.now() - started < 15000, 'eighteen pauses of the emulator probe delay, not of the production one');
+  } finally { db.close(); rmSync(out, { recursive: true, force: true }); }
+});
+
+test('run --suite rules-syntax: an unknown load in round 1 ends the run before round 2; the cleanup still runs and the claims stay', async () => {
+  const db = await fakeDatabase({ loadStatus: { ioc: 503 } }), out = mkdtempSync(path.join(tmpdir(), 'syntax-run-'));
+  try {
+    const { exit, result } = await run({ target: local(db.host), runId: 'TEST-SYNTAX-05', prefix: PREFIX, directCap: 160, outDir: path.join(out, 'run'), suite: 'rules-syntax', probeDelayMs: 1, continueOnFailure: true });
+    assert.equal(exit, 3); assert.ok(result.unverified.includes('unknown REST mutation outcome: r1-rules-syntax/load-ioc'), JSON.stringify(result.unverified));
+    assert.ok(!db.state.log.some(r => r.path.includes('/r2-rules-syntax')), 'round 2 sent nothing');
+    assert.deepEqual(result.cleanup, { prefix: 'verified', rules: 'verified' }); assert.equal(db.state.rules, BASELINE);
+  } finally { db.close(); rmSync(out, { recursive: true, force: true }); }
+});
+
 test('the suite constants: cap range, deadlines above the worst probe case, the backstop, approval basis 2350 and the read-back', () => {
   const S = SUITES['rules-syntax'];
   assert.equal(S.capMax, 160); assert.equal(S.basis, '2350');
@@ -245,8 +277,6 @@ test('the suite constants: cap range, deadlines above the worst probe case, the 
   checkApproval(line('a'.repeat(64)), want);
   assert.throws(() => checkApproval(line('a'.repeat(64)).replace('basis=2350', 'basis=2217'), want), /approval fields differ/);
   assert.throws(() => checkApproval(line('a'.repeat(64)).replace('suite=rules-syntax', 'suite=rules'), want), /approval fields differ/);
-  assert.throws(() => checkApproval(line('a'.repeat(64)), { ...want, basis: '2217' }), /approval basis/);
-  checkApproval(line('a'.repeat(64)), { ...want, basis: undefined });
 });
 
 test('the production run checks the approval with basis 2350 before anything is sent', async () => {

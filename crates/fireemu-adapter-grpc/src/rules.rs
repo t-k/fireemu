@@ -2178,18 +2178,18 @@ pub fn placeholder_paths(parent: &Parent, query: &Query) -> Result<Vec<DocumentP
 struct NamePlan {
     /// The named documents inside the query's scope, checked against the rule as stored.
     names: Vec<DocumentPath>,
-    /// The named document alone decides the branch: the branch names exactly one document
-    /// and the query has no offset. Otherwise the branch also needs its constraint proof.
+    /// The named document alone decides the branch: the branch names exactly one document.
+    /// Otherwise the branch also needs its constraint proof.
     decides: bool,
 }
 
-/// The plan of one branch, as production answered (FS-RULES-DIFFS and FS-RULES-SHAPES,
-/// 2026-11-08): one named document decides its branch whatever else the branch filters on
-/// (`owner == uid AND documentId() == <missing or foreign>` refused, `documentId() == <own>
-/// AND n == 1` allowed), also with a limit or a cursor; two names in one branch are refused
-/// even when both documents pass (`two-names-own`), so they keep the constraint proof. An
-/// offset was not recorded and keeps the constraint proof too. A branch naming a document
-/// outside the query's scope (or none) is proven from its constraints alone.
+/// The plan of one branch, as production answered (FS-RULES-DIFFS, FS-RULES-SHAPES and
+/// FS-RULES-SHAPES-TWO, 2026-11-08): one named document decides its branch whatever else the
+/// branch filters on (`owner == uid AND documentId() == <missing or foreign>` refused,
+/// `documentId() == <own> AND n == 1` allowed), also with a limit, a cursor or an offset
+/// (`name-offset` allowed, `foreign-offset` refused); two names in one branch are refused even
+/// when both documents pass (`two-names-own`), so they keep the constraint proof. A branch
+/// naming a document outside the query's scope (or none) is proven from its constraints alone.
 fn name_plan(parent: &Parent, query: &Query, disjunction: &[FilterExpr]) -> NamePlan {
     let prefix = format!(
         "projects/{}/databases/{}/documents/",
@@ -2217,7 +2217,7 @@ fn name_plan(parent: &Parent, query: &Query, disjunction: &[FilterExpr]) -> Name
         .collect();
     let names = names.unwrap_or_default();
     NamePlan {
-        decides: names.len() == 1 && query.offset == 0,
+        decides: names.len() == 1,
         names,
     }
 }

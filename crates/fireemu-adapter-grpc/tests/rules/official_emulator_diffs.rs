@@ -330,8 +330,7 @@ async fn an_or_mixing_a_named_and_an_unnamed_branch_follows_each_profile() {
 /// Every combination of which document is named (none, the caller's, someone else's, a
 /// missing one) and which owner is filtered on (none, the caller, someone else): a named
 /// document decides alone (`own-plus-unproven`); without one the owner filter must prove the
-/// rule. A reference-valued filter on another field names nothing, and an offset (not
-/// recorded) keeps the constraint proof beside the named document.
+/// rule, also with an offset. A reference-valued filter on another field names nothing.
 #[tokio::test]
 async fn a_named_document_decides_and_otherwise_the_filters_must_prove() {
     for (profile, mut h) in start_profiles().await {
@@ -359,13 +358,13 @@ async fn a_named_document_decides_and_otherwise_the_filters_must_prove() {
                 if !allowed {
                     assert_eq!(answer, Err(tonic::Code::PermissionDenied));
                 }
-                // With an offset the constraint proof is also required.
+                // An offset changes nothing (FS-RULES-SHAPES-TWO `name-offset`,
+                // `owner-offset` allowed, `foreign-offset` refused).
                 let mut offset = tasks_where(filter);
                 query_mut(&mut offset).offset = 1;
-                let with_offset = allowed && (named.is_none() || owner == Some(alice.as_str()));
                 assert_eq!(
                     run(&mut h, offset, &token).await.is_ok(),
-                    with_offset,
+                    allowed,
                     "{profile} offset named={named:?} owner={owner:?}"
                 );
             }
@@ -781,12 +780,13 @@ fn bool_value(value: bool) -> pb::Value {
 }
 
 /// The review's cases (2026-11-08 r2), each over a stored document the rule would refuse if it
-/// were evaluated: an exact key set or size and a look-alike of the query resource are not
-/// proven; the recorded key-set reads (`get` with a default, `in` on a map the query
-/// constrains in part) stay allowed, since production authorizes a query from its constraints,
-/// not from the stored documents (`blk-stored-nofilter`, `has-owner-nofilter`).
+/// were evaluated: production authorizes a query from its constraints, not the stored
+/// documents, so `keys().hasOnly`, `size() == 1`, `get` with a default and `in` on a map the
+/// query constrains in part are allowed (FS-RULES-SHAPES-TWO only-extra, size-extra,
+/// get-stored, meta-stored); a look-alike of the query resource built from a missing field is
+/// not proven.
 #[tokio::test]
-async fn unrecorded_key_set_reads_and_look_alike_resources_are_not_proven() {
+async fn key_set_reads_follow_the_constraints_and_look_alike_resources_are_not_proven() {
     use sq::field_filter::Operator as Op;
     const REVIEW_RULES: &str = r"rules_version = '2';
 service cloud.firestore {
@@ -828,8 +828,8 @@ service cloud.firestore {
             request
         };
         let rows = [
-            ("has-only", filtered("has-only", "a"), false),
-            ("size-one", filtered("size-one", "a"), false),
+            ("has-only", filtered("has-only", "a"), true),
+            ("size-one", filtered("size-one", "a"), true),
             ("look-alike", filtered("look-alike", "a"), false),
             ("get-default", filtered("get-default", "a"), true),
             ("nested", filtered("nested", "meta.a"), true),
@@ -909,6 +909,146 @@ service cloud.firestore {
                     answer,
                     Err(tonic::Code::PermissionDenied),
                     "{profile} {collection}"
+                );
+            }
+        }
+        h.handle.abort();
+    }
+}
+
+/// The rows of FS-RULES-SHAPES-TWO (2026-11-08 11:38-11:47Z, two identical recordings; the
+/// official emulator answered the same), seeded as production was. Production authorizes a list
+/// from the query's constraints, not from the stored documents: the query's `resource.data`
+/// holds exactly the constrained keys, so `get` with a default, `keys()` (an exact list),
+/// `size()` (an exact count) and `in` on a partially constrained map answer from them even when
+/// the stored documents hold another key; `resource` passed to a function is still the
+/// resource; a named document decides its branch also with an offset.
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn the_second_shapes_rows_follow_production() {
+    use sq::field_filter::Operator as Op;
+    const SHAPES_TWO_RULES: &str = r"rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function f(r) { return r != null; }
+    function g(r) { return r == null; }
+    match /ctl-true/{id} { allow list: if true; }
+    match /ctl-false/{id} { allow list: if false; }
+    match /get/{id} { allow list: if resource.data.get('blocked', false) == false; }
+    match /get-absent/{id} { allow list: if resource.data.get('blocked', false) == false; }
+    match /keys/{id} { allow list: if !resource.data.keys().hasAny(['blocked']); }
+    match /keys-absent/{id} { allow list: if !resource.data.keys().hasAny(['blocked']); }
+    match /meta/{id} { allow list: if !('blocked' in resource.data.meta); }
+    match /meta-absent/{id} { allow list: if !('blocked' in resource.data.meta); }
+    match /only-plain/{id} { allow list: if resource.data.keys().hasOnly(['a']); }
+    match /only-extra/{id} { allow list: if resource.data.keys().hasOnly(['a']); }
+    match /only-b/{id} { allow list: if resource.data.keys().hasOnly(['b']); }
+    match /size-plain/{id} { allow list: if resource.data.size() == 1; }
+    match /size-extra/{id} { allow list: if resource.data.size() == 1; }
+    match /size-zero/{id} { allow list: if resource.data.size() == 0; }
+    match /own/{id} { allow list: if resource.data.owner == request.auth.uid; }
+    match /fn-resource/{id} { allow list: if f(resource); }
+    match /fn-null/{id} { allow list: if g(resource); }
+    match /fn-arg/{id} { allow list: if f(request.auth); }
+  }
+}";
+    for (profile, mut h) in start_profiles().await {
+        let (alice, token) = h.user("alice@example.com");
+        let a1 = |path: &str| set_write(path, &[("a", integer(1))]);
+        let a1_and =
+            |path: &str, key: &str| set_write(path, &[("a", integer(1)), (key, bool_value(true))]);
+        h.client
+            .commit(with_bearer(
+                commit(vec![
+                    a1("ctl-true/d1"),
+                    a1("ctl-false/d1"),
+                    a1_and("get/d1", "blocked"),
+                    a1("get-absent/d1"),
+                    a1_and("keys/d1", "blocked"),
+                    a1("keys-absent/d1"),
+                    set_write(
+                        "meta/d1",
+                        &[(
+                            "meta",
+                            map(&[("a", integer(1)), ("blocked", bool_value(true))]),
+                        )],
+                    ),
+                    set_write("meta-absent/d1", &[("meta", map(&[("a", integer(1))]))]),
+                    a1("only-plain/d1"),
+                    a1_and("only-extra/d1", "extra"),
+                    a1("only-b/d1"),
+                    a1("size-plain/d1"),
+                    a1_and("size-extra/d1", "extra"),
+                    a1("size-zero/d1"),
+                    set_write("own/mine", &[("owner", s(&alice)), ("n", integer(1))]),
+                    set_write("own/mine2", &[("owner", s(&alice)), ("n", integer(1))]),
+                    set_write(
+                        "own/foreign",
+                        &[("owner", s("other-owner")), ("n", integer(1))],
+                    ),
+                    a1("fn-resource/d1"),
+                    a1("fn-null/d1"),
+                    a1("fn-arg/d1"),
+                ]),
+                "owner",
+            ))
+            .await
+            .unwrap();
+        h.rules.replace_source(SHAPES_TWO_RULES).unwrap();
+        let q = |collection: &str, filter: sq::Filter, offset: i32| {
+            let mut request = list(collection);
+            let query = query_mut(&mut request);
+            query.r#where = Some(filter);
+            query.offset = offset;
+            request
+        };
+        let a_is_1 = || field_filter("a", Op::Equal, integer(1));
+        let meta_a_is_1 = || field_filter("meta.a", Op::Equal, integer(1));
+        let blocked_is = |value: bool| field_filter("blocked", Op::Equal, bool_value(value));
+        let own_name =
+            |id: &str| field_filter("__name__", Op::Equal, reference(&format!("own/{id}")));
+        let rows = [
+            ("ctl-allow", q("ctl-true", a_is_1(), 0), true),
+            ("ctl-deny", q("ctl-false", a_is_1(), 0), false),
+            ("get-stored", q("get", a_is_1(), 0), true),
+            ("get-absent", q("get-absent", a_is_1(), 0), true),
+            ("get-allow", q("get", blocked_is(false), 0), true),
+            ("get-deny", q("get", blocked_is(true), 0), false),
+            ("keys-stored", q("keys", a_is_1(), 0), true),
+            ("keys-absent", q("keys-absent", a_is_1(), 0), true),
+            ("keys-deny", q("keys", blocked_is(true), 0), false),
+            ("meta-stored", q("meta", meta_a_is_1(), 0), true),
+            ("meta-absent", q("meta-absent", meta_a_is_1(), 0), true),
+            (
+                "meta-deny",
+                q(
+                    "meta",
+                    field_filter("meta.blocked", Op::Equal, bool_value(true)),
+                    0,
+                ),
+                false,
+            ),
+            ("only-plain", q("only-plain", a_is_1(), 0), true),
+            ("only-extra", q("only-extra", a_is_1(), 0), true),
+            ("only-b-deny", q("only-b", a_is_1(), 0), false),
+            ("size-plain", q("size-plain", a_is_1(), 0), true),
+            ("size-extra", q("size-extra", a_is_1(), 0), true),
+            ("size-zero-deny", q("size-zero", a_is_1(), 0), false),
+            ("name-offset", q("own", own_name("mine"), 1), true),
+            ("owner-offset", q("own", owner_filter(&alice), 1), true),
+            ("foreign-offset", q("own", own_name("foreign"), 1), false),
+            ("fn-resource", q("fn-resource", a_is_1(), 0), true),
+            ("fn-null-deny", q("fn-null", a_is_1(), 0), false),
+            ("fn-arg-allow", q("fn-arg", a_is_1(), 0), true),
+        ];
+        for (row, request, allowed) in rows {
+            let answer = run(&mut h, request, &token).await;
+            assert_eq!(answer.is_ok(), allowed, "{profile} {row}: {answer:?}");
+            if !allowed {
+                assert_eq!(
+                    answer,
+                    Err(tonic::Code::PermissionDenied),
+                    "{profile} {row}"
                 );
             }
         }

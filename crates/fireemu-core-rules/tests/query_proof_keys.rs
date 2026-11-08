@@ -8,11 +8,11 @@
 //!   (`#blocked-nofilter` allowed `!("blocked" in resource.data)`, `#has-owner-nofilter`
 //!   refused `"owner" in resource.data`, `#has-owner-filtered` allowed it).
 //!
-//! FS-RULES-SHAPES (2026-11-08) extended this to the recorded key-set reads of
-//! `resource.data` (a negated `keys().hasAny`, `keys().hasAll`, `size()` from below, `get()`
-//! with a default), `in` also on a map the query constrains in part, and a list or map built
-//! from an unconstrained field is not provably non-null. An exact key set or size, equality
-//! of the map and its values stay undetermined.
+//! FS-RULES-SHAPES and FS-RULES-SHAPES-TWO (2026-11-08) extended this: `keys()` (an exact
+//! list), `size()` (an exact count) and `get()` with a default of `resource.data` answer from
+//! the constrained keys, also when stored documents hold another key; `in` also on a map the
+//! query constrains in part; a list or map built from an unconstrained field is not provably
+//! non-null. Equality of the map and its values stay undetermined.
 
 use std::collections::BTreeMap;
 
@@ -162,10 +162,9 @@ proptest! {
         }
     }
 
-    /// The key-set reads production answered (FS-RULES-SHAPES 2026-11-08): a negated
-    /// `keys().hasAny`, `keys().hasAll` of constrained keys, `size()` bounded below by the
-    /// constrained keys and `get()` with a default. An exact key set or size, the map's
-    /// equality and `diff()` stay undetermined (review 2026-11-08 r2).
+    /// The key set of the query data is exactly the constrained keys for `keys()`, `size()`
+    /// and `get()` with a default (FS-RULES-SHAPES and FS-RULES-SHAPES-TWO 2026-11-08, also
+    /// with another key stored); the map's equality and `diff()` stay undetermined.
     #[test]
     fn the_query_data_key_set_is_the_constrained_keys(data in constrained_data()) {
         let keys: Vec<String> = data.keys().map(|k| format!("'{k}'")).collect();
@@ -173,17 +172,16 @@ proptest! {
         let query = ctx(data, true);
         for condition in [
             format!("resource.data.keys().hasAll([{}])", keys.join(", ")),
-            format!("resource.data.size() >= {size}"),
+            format!("resource.data.keys().hasOnly([{}])", keys.join(", ")),
+            format!("resource.data.keys().size() == {size}"),
+            format!("resource.data.size() == {size}"),
+            format!("resource.data.size() <= {size}"),
             "!resource.data.keys().hasAny(['zz'])".to_owned(),
             "resource.data.get('zz', 7) == 7".to_owned(),
         ] {
             prop_assert!(allows(&condition, &query), "{} must hold", condition);
         }
         for condition in [
-            format!("resource.data.keys().hasOnly([{}])", keys.join(", ")),
-            format!("resource.data.keys().size() == {size}"),
-            format!("resource.data.size() == {size}"),
-            format!("resource.data.size() <= {size}"),
             format!("resource.data.size() == {}", size + 1),
             "resource.data.keys().hasAny(['zz'])".to_owned(),
             "resource.data == {}".to_owned(),

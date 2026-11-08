@@ -30,7 +30,7 @@ use crate::ast::{
 };
 use crate::coverage::{Coverage, ExprValue, UndefinedCause};
 use crate::scope::{FunctionEnvironment, FunctionScopes, ServiceScopes};
-use crate::value::{AuthContext, MapDiff, RangeBound, RulesValue, ValueRange};
+use crate::value::{AuthContext, MapDiff, RulesValue, ValueRange};
 
 /// Namespaces callable as `namespace.function(...)` unless shadowed by a binding.
 const NAMESPACES: [&str; 6] = [
@@ -375,6 +375,8 @@ struct Binding<'a> {
     query_numeric_error_source: bool,
     query_float_zero_ambiguous: bool,
     query_numeric_stringification_sensitive: bool,
+    /// The binding holds the query's resource itself (see `is_query_resource_expr`).
+    query_resource: bool,
     state: BindingState<'a>,
 }
 
@@ -398,6 +400,7 @@ impl Binding<'_> {
             query_numeric_error_source: false,
             query_float_zero_ambiguous: false,
             query_numeric_stringification_sensitive: false,
+            query_resource: false,
             state: BindingState::Value(value),
         }
     }
@@ -420,6 +423,7 @@ impl Binding<'_> {
             query_numeric_error_source,
             query_float_zero_ambiguous,
             query_numeric_stringification_sensitive,
+            query_resource: false,
             state: BindingState::Value(value),
         }
     }
@@ -1714,20 +1718,13 @@ impl<'a> Evaluator<'a> {
             .any(|binding| binding.name == name)
     }
 
-    /// The key-set reads of a query proof's `resource.data` that production answered
-    /// (FS-RULES-SHAPES 2026-11-08), each only in the form recorded:
-    /// - `resource.data.keys()` holds every constrained key (`keys().hasAll(["a"])` refused
-    ///   without a filter, allowed with `a == 1`), and other keys may exist: a partial list;
-    /// - `resource.data.keys().hasAny(keys)` is false when no key is constrained
-    ///   (`!keys().hasAny(["blocked"])` allowed with and without a filter);
-    /// - `resource.data.size()` is at least the number of constrained keys (`size() > 0`
-    ///   refused without a filter, allowed with one);
-    /// - `resource.data.get(key, default)` of an unconstrained key is the default
-    ///   (`get("blocked", false) == false` allowed, `get("a", 0) == 1` refused without a
-    ///   filter).
-    ///
-    /// An exact key set or size was not recorded and stays undetermined (review 2026-11-08
-    /// r2). The receiver must be `resource.data` itself (see
+    /// `keys()`, `size()` and `get(key, default)` of a query proof's `resource.data`, which
+    /// production answers from the keys the query constrains alone, whatever the stored
+    /// documents hold (FS-RULES-SHAPES and FS-RULES-SHAPES-TWO, 2026-11-08: `!keys().hasAny(
+    /// ["blocked"])`, `keys().hasOnly(["a"])`, `size() == 1` and `get("blocked", false) ==
+    /// false` allowed with `a == 1` also over documents that store another key;
+    /// `keys().hasOnly(["b"])`, `size() == 0`, `size() > 0` unfiltered and `get("a", 0) == 1`
+    /// unfiltered refused). The receiver must be `resource.data` itself (see
     /// [`Self::is_query_resource_data_expr`]). `None` for every other call, which keeps its
     /// ordinary answer.
     fn closed_query_data_call(
@@ -1737,9 +1734,6 @@ impl<'a> Evaluator<'a> {
         name: &str,
         args: &[RulesValue],
     ) -> Option<Result<RulesValue, EvalError>> {
-        if name == "hasAny" {
-            return self.closed_query_keys_has_any(object, args);
-        }
         let RulesValue::PartialMap(fields) = receiver else {
             return None;
         };
@@ -1750,18 +1744,12 @@ impl<'a> Evaluator<'a> {
             return Some(Err(EvalError::Unknown));
         }
         Some(match (name, args) {
-            ("keys", []) => Ok(RulesValue::PartialList(
+            ("keys", []) => Ok(RulesValue::List(
                 fields.keys().cloned().map(RulesValue::String).collect(),
             )),
-            ("size", []) => Ok(RulesValue::Range(ValueRange {
-                lower: Some(RangeBound {
-                    value: Box::new(RulesValue::Int(
-                        i64::try_from(fields.len()).unwrap_or(i64::MAX),
-                    )),
-                    inclusive: true,
-                }),
-                upper: None,
-            })),
+            ("size", []) => Ok(RulesValue::Int(
+                i64::try_from(fields.len()).unwrap_or(i64::MAX),
+            )),
             ("get", [RulesValue::String(key), default]) => {
                 Ok(fields.get(key).cloned().unwrap_or_else(|| default.clone()))
             }
@@ -1769,53 +1757,27 @@ impl<'a> Evaluator<'a> {
         })
     }
 
-    /// `resource.data.keys().hasAny(keys)` in a query proof: true when a wanted key is
-    /// constrained, false when none is (see [`Self::closed_query_data_call`]).
-    fn closed_query_keys_has_any(
-        &self,
-        object: &Expr,
-        args: &[RulesValue],
-    ) -> Option<Result<RulesValue, EvalError>> {
-        let ExprKind::Call {
-            callee,
-            args: call_args,
-            ..
-        } = object.kind()
-        else {
-            return None;
-        };
-        let ExprKind::Member { object: data, name } = callee.kind() else {
-            return None;
-        };
-        if name != "keys" || !call_args.is_empty() || !self.is_query_resource_data_expr(data) {
-            return None;
-        }
-        let RulesValue::Map(resource) = self.resource.as_ref() else {
-            return None;
-        };
-        let Some(RulesValue::PartialMap(fields)) = resource.get("data") else {
-            return None;
-        };
-        let [RulesValue::List(wanted)] = args else {
-            return Some(Err(EvalError::Unknown));
-        };
-        let mut found = false;
-        for key in wanted {
-            let RulesValue::String(key) = key else {
-                return Some(Err(EvalError::Unknown));
-            };
-            found |= fields.contains_key(key);
-        }
-        Some(Ok(RulesValue::Bool(found)))
-    }
-
-    /// Whether `expr` is the identifier `resource` of a query proof, not shadowed by a
-    /// binding: the query's resource itself, recognized by where the value comes from rather
-    /// than by its value, which a map literal could reproduce (review 2026-11-08 r2).
+    /// Whether `expr` is the query's resource in a query proof: the identifier `resource`
+    /// unshadowed, or a binding (a function parameter, a `let`) bound to it. It is recognized
+    /// by where the value comes from rather than by its value, which a map literal could
+    /// reproduce (review 2026-11-08 r2); FS-RULES-SHAPES-TWO (2026-11-08) recorded
+    /// `f(resource)` with `f(r) = r != null` allowed.
     fn is_query_resource_expr(&self, expr: &Expr) -> bool {
-        self.query_proof
-            && matches!(expr.kind(), ExprKind::Ident(name) if name == "resource")
-            && !self.has_binding("resource")
+        if !self.query_proof {
+            return false;
+        }
+        let ExprKind::Ident(name) = expr.kind() else {
+            return false;
+        };
+        match self
+            .scope
+            .bindings
+            .iter()
+            .rposition(|binding| binding.name == *name)
+        {
+            Some(index) => self.scope.bindings[index].query_resource,
+            None => name == "resource",
+        }
     }
 
     /// Whether `expr` is the identifier `request` or `resource`, unshadowed by a binding: a
@@ -5014,13 +4976,17 @@ impl<'a> Evaluator<'a> {
                         .iter()
                         .map(|argument| self.query_numeric_error_source(argument))
                         .collect();
+                    let resource_provenance = args
+                        .iter()
+                        .map(|argument| self.is_query_resource_expr(argument))
+                        .collect();
                     return self.call_user(
                         f,
                         values,
                         query_provenance,
                         stringification_provenance,
                         numeric_source_provenance,
-                        numeric_error_provenance,
+                        (numeric_error_provenance, resource_provenance),
                     );
                 }
                 match name.as_str() {
@@ -5286,7 +5252,7 @@ impl<'a> Evaluator<'a> {
         query_provenance: Vec<QueryFloatZeroProvenance>,
         stringification_provenance: Vec<bool>,
         numeric_source_provenance: Vec<bool>,
-        numeric_error_provenance: Vec<bool>,
+        (numeric_error_provenance, resource_provenance): (Vec<bool>, Vec<bool>),
     ) -> Result<RulesValue, EvalError> {
         if values.len() != f.params.len() {
             return Err(soft(format!(
@@ -5335,6 +5301,14 @@ impl<'a> Evaluator<'a> {
                 stringification_sensitive,
             ));
         }
+        // The parameters are the last bindings pushed.
+        let parameters = self.scope.bindings.len() - f.params.len();
+        for (binding, query_resource) in self.scope.bindings[parameters..]
+            .iter_mut()
+            .zip(resource_provenance)
+        {
+            binding.query_resource = query_resource;
+        }
         let result = {
             for l in &f.lets {
                 let visible_before = self.scope.bindings.len();
@@ -5349,6 +5323,7 @@ impl<'a> Evaluator<'a> {
                     self.query_numeric_stringification_sensitive(&l.value);
                 let query_numeric_source = self.query_numeric_expression_source(&l.value);
                 let query_numeric_error_source = self.query_numeric_error_source(&l.value);
+                let query_resource = self.is_query_resource_expr(&l.value);
                 self.scope.bindings.push(Binding {
                     name: l.name.clone(),
                     visible_before,
@@ -5357,6 +5332,7 @@ impl<'a> Evaluator<'a> {
                     query_numeric_error_source,
                     query_float_zero_ambiguous,
                     query_numeric_stringification_sensitive,
+                    query_resource,
                     state: BindingState::Lazy(&l.value),
                 });
             }

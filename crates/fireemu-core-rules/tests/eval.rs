@@ -1382,10 +1382,10 @@ fn undetermined_values_never_prove_a_condition() {
     // recording 2026-11-08, `fs-rules-v1/diffs/queries#blocked-nofilter`); a constrained one is.
     assert!(allows(&rules("!('blocked' in resource.data)"), &known));
     assert!(allows(&rules("'owner' in resource.data"), &known));
-    // Only the recorded key-set reads are answered (FS-RULES-SHAPES 2026-11-08): a negated
-    // `keys().hasAny`, `keys().hasAll` of constrained keys, `size()` bounded below by the
-    // constrained keys, and `get()` of an unconstrained key answering its default. An exact
-    // key set or size was not recorded and stays unprovable (review 2026-11-08 r2).
+    // Its key set is exactly the constrained keys, whatever the stored documents hold
+    // (FS-RULES-SHAPES and FS-RULES-SHAPES-TWO 2026-11-08: get-stored, keys-stored,
+    // only-extra and size-extra allowed with another key stored; only-b-deny and
+    // size-zero-deny refused).
     assert!(allows(
         &rules("!resource.data.keys().hasAny(['flag'])"),
         &known
@@ -1407,8 +1407,44 @@ fn undetermined_values_never_prove_a_condition() {
         "!('flag' in resource.data.keys())",
         "resource.data.keys() == ['owner']",
     ] {
-        assert!(!allows(&rules(cond), &known), "{cond} must not be provable");
+        assert!(allows(&rules(cond), &known), "{cond} must hold");
     }
+    for cond in [
+        "resource.data.keys().hasOnly(['flag'])",
+        "resource.data.size() == 0",
+        "resource.data.size() == 2",
+    ] {
+        assert!(!allows(&rules(cond), &known), "{cond} must not hold");
+    }
+    // `resource` passed to a function or bound by `let` is still the query's resource
+    // (FS-RULES-SHAPES-TWO `fn-resource` allowed, `fn-null-deny` refused); a map literal
+    // passed the same way is not.
+    let through = |body: &str, call: &str| {
+        format!("rules_version = '2';\nservice cloud.firestore {{ match /databases/{{d}}/documents {{ function f(r) {{ {body} }} match /notes/{{id}} {{ allow list: if {call}; }} }} }}")
+    };
+    assert!(allows(&through("return r != null;", "f(resource)"), &known));
+    assert!(!allows(
+        &through("return r == null;", "f(resource)"),
+        &known
+    ));
+    assert!(allows(
+        &through("let s = r; return s != null;", "f(resource)"),
+        &known
+    ));
+    assert!(!allows(
+        &through(
+            "return r != null;",
+            "f({'data': resource.data, 'id': resource.data.secret})"
+        ),
+        &known
+    ));
+    assert!(!allows(
+        &through(
+            "let resource = {'k': r}; return resource != null;",
+            "f(resource.data.secret)"
+        ),
+        &known
+    ));
     // The query resource is recognized by where it came from, not by its value: a map
     // literal equal to it, built from failing reads, is not provably non-null (review
     // 2026-11-08 r2).

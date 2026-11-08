@@ -5691,6 +5691,13 @@ mod hosting_bind_tests {
     }
 
     #[tokio::test]
+    async fn hosting_left_out_of_only_binds_nothing_even_when_configured() {
+        let cfg = hosting_only("127.0.0.1:0".to_owned(), false);
+        let only = Selection::parse("auth").unwrap();
+        assert!(bind_hosting(&cfg, &only).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
     async fn a_configured_hosting_port_is_never_moved() {
         let busy = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = busy.local_addr().unwrap().port();

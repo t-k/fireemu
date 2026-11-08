@@ -27,6 +27,7 @@ import {
   judgeShapesPublication,
   OFFICIAL,
   shapesReport,
+  shapesReportLine,
 } from "./fs-rules-v1/shapes.mjs";
 import {
   ceilings,
@@ -664,6 +665,9 @@ test("the report compares each answer with the official emulator and with fixed 
   assert.equal(rows["fn-shadow#fn-shadow-inner-only"].fixesVerdict, "unknown");
   assert.equal(rows["fn-after#publishes"].answer, "refused");
   assert.equal(rows["fn-after#publishes"].detail, "ruleset 400: Unexpected 'function'.");
+  assert.equal(rows["fn-after#publishes"].official, "compiled");
+  assert.equal(rows["fn-after#publishes"].verdict, "differs");
+  assert.equal(rows["fn-after#publishes"].fixesVerdict, "differs");
   assert.equal(rows["fn-after#fn-after-true"].answer, "not-evaluated");
   assert.equal(rows["fn-after#fn-after-true"].verdict, "not-evaluated");
   assert.equal(rows["queries#owner-alone"].answer, "missing");
@@ -737,4 +741,60 @@ test("a query answer carries its document count; a missing claim is no-claim", (
     fixesVerdict: "unknown",
   });
   assert.equal(rows["queries#publishes"].verdict, "no-claim");
+});
+
+test("a refusal carries its diagnostics only when there are some, and a compiled publication never does", () => {
+  const diagnostics = { stage: "release", status: 400, message: "bad" };
+  const rows = Object.fromEntries(
+    shapesReport({
+      programs: {
+        "fs-rules-v1/shapes/fn-after": programRecord({ publishes: { compiled: false } }),
+        "fs-rules-v1/shapes/fn-shadow": programRecord(
+          { publishes: { compiled: true } },
+          { diagnostics },
+        ),
+      },
+    }).map((r) => [r.row, r]),
+  );
+  assert.deepEqual(rows["fn-after#publishes"], {
+    row: "fn-after#publishes",
+    official: "compiled",
+    fixes: "compiled",
+    answer: "refused",
+    verdict: "differs",
+    fixesVerdict: "differs",
+  });
+  assert.deepEqual(rows["fn-shadow#publishes"], {
+    row: "fn-shadow#publishes",
+    official: "compiled",
+    fixes: "compiled",
+    answer: "compiled",
+    verdict: "agrees",
+    fixesVerdict: "agrees",
+  });
+});
+
+test("a report line shows both verdicts, the document count, both expectations and the reason", () => {
+  assert.equal(
+    shapesReportLine({
+      row: "queries#owner-alone",
+      official: "allowed",
+      fixes: "denied",
+      answer: "allowed",
+      documents: 2,
+      verdict: "agrees",
+      fixesVerdict: "differs",
+    }),
+    "agrees         differs        queries#owner-alone                allowed docs=2 (official: allowed, fixes: denied)",
+  );
+  assert.equal(
+    shapesReportLine({
+      row: "fn-after#publishes",
+      answer: "refused",
+      detail: "ruleset 400: x",
+      verdict: "no-claim",
+      fixesVerdict: "no-claim",
+    }),
+    "no-claim       no-claim       fn-after#publishes                 refused (official: -, fixes: -) [ruleset 400: x]",
+  );
 });

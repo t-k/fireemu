@@ -44,7 +44,7 @@ import {
   validateCorpus,
 } from "./corpus.mjs";
 import { diffsReport } from "./diffs.mjs";
-import { shapesReport } from "./shapes.mjs";
+import { shapesReport, shapesReportLine } from "./shapes.mjs";
 import { createGrpcAdapter } from "./grpc.mjs";
 import {
   brief,
@@ -374,10 +374,7 @@ async function diffsReportCommand() {
 /** What production answered for each FS-RULES shapes row, against the official emulator and fixed fireemu. */
 async function shapesReportCommand() {
   const fixture = JSON.parse(await readFile(FIXTURE, "utf8"));
-  for (const r of shapesReport(fixture))
-    console.log(
-      `${r.verdict.padEnd(14)} ${r.fixesVerdict.padEnd(14)} ${r.row.padEnd(34)} ${r.answer}${r.documents === undefined ? "" : ` docs=${r.documents}`} (official: ${r.official ?? "-"}, fixes: ${r.fixes ?? "-"})${r.detail ? ` [${r.detail}]` : ""}`,
-    );
+  for (const r of shapesReport(fixture)) console.log(shapesReportLine(r));
 }
 
 async function exportComparison(out) {

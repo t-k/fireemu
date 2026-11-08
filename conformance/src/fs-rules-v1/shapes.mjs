@@ -258,3 +258,7 @@ export function shapesReport(fixture, { official = OFFICIAL, fixes = FIXES } = {
   }
   return rows;
 }
+
+/** One printed report line: both verdicts, the row, the answer, the two expectations, the reason. */
+export const shapesReportLine = (r) =>
+  `${r.verdict.padEnd(14)} ${r.fixesVerdict.padEnd(14)} ${r.row.padEnd(34)} ${r.answer}${r.documents === undefined ? "" : ` docs=${r.documents}`} (official: ${r.official ?? "-"}, fixes: ${r.fixes ?? "-"})${r.detail ? ` [${r.detail}]` : ""}`;

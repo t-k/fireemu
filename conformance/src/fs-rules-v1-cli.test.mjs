@@ -186,3 +186,9 @@ test("shapes-report prints one line per shapes row from the checked-in fixture, 
   );
   assert.match(run(["nope"]).stderr, /\|diffs-report\|shapes-report$/m);
 });
+
+test("check runs the local side and refuses without a fireemu binary", () => {
+  const result = run(["check"], { FIREEMU_BIN: "/nonexistent/fireemu", FS3_CORPUS: "shapes" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /fireemu is not built/);
+});

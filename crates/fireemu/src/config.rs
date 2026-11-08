@@ -299,15 +299,15 @@ impl CompatibilityProfile {
         }
     }
 
-    /// What a lone surrogate escape (`"\ud83d"`) in a rule string is: production holds it as
+    /// How Security Rules treat a lone surrogate: production holds a half cut from a pair as
     /// U+FFFD, so `"é🔥x"[1] == "\ud83d"` is false (`string-escape#esc-high`, recorded
-    /// 2026-11-08); the official emulator keeps it as the same lone unit an index reads, so
-    /// the comparison is true and the emulator profile never refuses more than it.
+    /// 2026-11-08), and refuses a pattern that holds one; the official emulator keeps the lone
+    /// unit, so the comparison is true and the emulator profile never refuses more than it.
     #[must_use]
-    pub const fn lone_surrogate_literals(self) -> fireemu_core_rules::ast::LoneSurrogateLiterals {
+    pub const fn lone_surrogates(self) -> fireemu_core_rules::ast::LoneSurrogates {
         match self {
-            Self::Emulator => fireemu_core_rules::ast::LoneSurrogateLiterals::Unit,
-            Self::Strict => fireemu_core_rules::ast::LoneSurrogateLiterals::Replacement,
+            Self::Emulator => fireemu_core_rules::ast::LoneSurrogates::Official,
+            Self::Strict => fireemu_core_rules::ast::LoneSurrogates::Production,
         }
     }
 
@@ -5750,14 +5750,14 @@ mod tests {
     /// the official emulator.
     #[test]
     fn the_profile_decides_what_a_lone_surrogate_escape_is() {
-        use fireemu_core_rules::ast::LoneSurrogateLiterals;
+        use fireemu_core_rules::ast::LoneSurrogates;
         assert_eq!(
-            CompatibilityProfile::Strict.lone_surrogate_literals(),
-            LoneSurrogateLiterals::Replacement
+            CompatibilityProfile::Strict.lone_surrogates(),
+            LoneSurrogates::Production
         );
         assert_eq!(
-            CompatibilityProfile::Emulator.lone_surrogate_literals(),
-            LoneSurrogateLiterals::Unit
+            CompatibilityProfile::Emulator.lone_surrogates(),
+            LoneSurrogates::Official
         );
     }
 

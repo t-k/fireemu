@@ -2,33 +2,33 @@
 //!
 //! The rows come from the 2026-11-08 production recording of the FS-RULES differences corpus
 //! (`string-index#*`, `string-escape#*`, program `fs-rules-v1/diffs`). Its subject is
-//! "é🔥x", the units é, D83D, DD25, x. A half of the emoji cannot be a Rust `String`, so it is
-//! held as U+FFFD (the Realtime Database rules reader does the same for a lone surrogate).
+//! "é🔥x", the units é, D83D, DD25, x. A string that holds a lone surrogate is a
+//! `RulesValue::IllFormed`; production holds a half cut from a pair as U+FFFD, the official
+//! emulator as the lone unit.
 
 use std::collections::BTreeMap;
 
-use fireemu_core_rules::ast::LoneSurrogateLiterals;
+use fireemu_core_rules::ast::LoneSurrogates;
 use fireemu_core_rules::eval::{evaluate_request, Decision, Method, RequestContext, RulesService};
 use fireemu_core_rules::parse::parse_ruleset;
 use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
 use fireemu_core_rules::value::AuthContext;
 
-/// What the official emulator does: a lone surrogate escape and a half read by index are the
-/// same lone unit.
-const OFFICIAL: LoneSurrogateLiterals = LoneSurrogateLiterals::Unit;
-/// What production does (recorded `string-escape#esc-high`): the escape is U+FFFD and differs
-/// from the half.
-const PRODUCTION: LoneSurrogateLiterals = LoneSurrogateLiterals::Replacement;
+/// What the official emulator does: a half cut from a pair is the lone unit an escape writes.
+const OFFICIAL: LoneSurrogates = LoneSurrogates::Official;
+/// What production does (recorded `string-escape#esc-high`): a half cut from a pair is U+FFFD
+/// and differs from the escape.
+const PRODUCTION: LoneSurrogates = LoneSurrogates::Production;
 use proptest::prelude::*;
 
 fn decide(service: RulesService, source: &str) -> Decision {
     decide_in(service, source, PRODUCTION)
 }
 
-fn decide_in(service: RulesService, source: &str, mode: LoneSurrogateLiterals) -> Decision {
+fn decide_in(service: RulesService, source: &str, mode: LoneSurrogates) -> Decision {
     let ruleset = parse_ruleset(source)
         .unwrap_or_else(|e| panic!("{source}: {e:?}"))
-        .with_lone_surrogate_literals(mode);
+        .with_lone_surrogates(mode);
     let path = match service {
         RulesService::Firestore => "/databases/(default)/documents/notes/n1",
         RulesService::Storage => "/b/bucket/o/notes/n1",
@@ -66,7 +66,7 @@ fn allowed(condition: &str) -> bool {
     allowed_in(condition, PRODUCTION)
 }
 
-fn allowed_in(condition: &str, mode: LoneSurrogateLiterals) -> bool {
+fn allowed_in(condition: &str, mode: LoneSurrogates) -> bool {
     matches!(
         decide_in(RulesService::Firestore, &firestore_rules(condition), mode),
         Decision::Allow
@@ -136,11 +136,9 @@ fn a_lone_high_surrogate_escape_is_the_indexed_half_in_the_official_emulator() {
 #[test]
 fn production_is_the_default_of_a_parsed_ruleset() {
     let ruleset = parse_ruleset("service cloud.firestore {}").unwrap();
-    assert_eq!(ruleset.lone_surrogate_literals(), PRODUCTION);
+    assert_eq!(ruleset.lone_surrogates(), PRODUCTION);
     assert_eq!(
-        ruleset
-            .with_lone_surrogate_literals(OFFICIAL)
-            .lone_surrogate_literals(),
+        ruleset.with_lone_surrogates(OFFICIAL).lone_surrogates(),
         OFFICIAL
     );
 }
@@ -172,25 +170,31 @@ fn the_other_recorded_rows_do_not_depend_on_the_profile() {
 }
 
 #[test]
-fn the_two_halves_of_an_emoji_are_different_units_in_both_profiles() {
-    for mode in [OFFICIAL, PRODUCTION] {
-        assert!(allowed_in(r#""😀"[0] == "😀"[0]"#, mode), "{mode:?}");
-        assert!(allowed_in(r#""😀"[0] != "😀"[1]"#, mode), "{mode:?}");
-        assert!(allowed_in(r#""😀"[0].size() == 1"#, mode), "{mode:?}");
-    }
+fn the_official_emulator_keeps_the_two_halves_of_an_emoji_apart() {
+    assert!(allowed_in(r#""😀"[0] == "😀"[0]"#, OFFICIAL));
+    assert!(allowed_in(r#""😀"[0] != "😀"[1]"#, OFFICIAL));
+    assert!(allowed_in(r#""😀"[0].size() == 1"#, OFFICIAL));
 }
 
-/// Not recorded: what a lone escape equals. The official emulator keeps it as a lone unit,
-/// which is not U+FFFD; production is taken to hold it as U+FFFD (the reading that gives its
-/// recorded answer).
+/// Not recorded: a half cut from a pair in production. It is U+FFFD, the reading that gives
+/// the recorded `esc-high` and `rng-12-size`, so two halves are equal there.
 #[test]
-fn a_lone_escape_is_a_lone_unit_for_the_official_emulator_and_u_fffd_for_production() {
-    assert!(allowed_in(r#""\ud83d" != "\ufffd""#, OFFICIAL));
-    assert!(allowed_in(r#""\ud83d" == "\ufffd""#, PRODUCTION));
-    assert!(allowed_in(r#""\ud83d" == "\ud83d""#, OFFICIAL));
-    assert!(allowed_in(r#""\ud83d" != "\ude00""#, OFFICIAL));
-    assert!(allowed_in(r#""\ud83d".size() == 1"#, OFFICIAL));
-    assert!(allowed_in(r#""\ud83d".size() == 1"#, PRODUCTION));
+fn production_holds_a_half_cut_from_a_pair_as_u_fffd() {
+    assert!(allowed_in(r#""😀"[0] == "\ufffd""#, PRODUCTION));
+    assert!(allowed_in(r#""😀"[1] == "😀"[0]"#, PRODUCTION));
+    assert!(allowed_in(r#""é😀"[0:2] == "é\ufffd""#, PRODUCTION));
+    assert!(!allowed_in(r#""😀"[0] == "\ufffd""#, OFFICIAL));
+}
+
+/// `string-escape#hi-fffd`: a lone escape is not U+FFFD, in both profiles; and it is itself.
+#[test]
+fn a_lone_escape_is_neither_u_fffd_nor_another_unit() {
+    for mode in [OFFICIAL, PRODUCTION] {
+        assert!(!allowed_in(r#""\ud83d" == "\ufffd""#, mode), "{mode:?}");
+        assert!(allowed_in(r#""\ud83d" == "\ud83d""#, mode), "{mode:?}");
+        assert!(allowed_in(r#""\ud83d" != "\ude00""#, mode), "{mode:?}");
+        assert!(allowed_in(r#""\ud83d".size() == 1"#, mode), "{mode:?}");
+    }
 }
 
 #[test]
@@ -214,41 +218,41 @@ fn a_ruleset_carries_its_profile_through_a_loaded_ruleset_and_a_slot() {
     };
     let loaded = LoadedRules::from_source(&source).unwrap();
     assert_eq!(
-        loaded.ruleset.as_ref().unwrap().lone_surrogate_literals(),
+        loaded.ruleset.as_ref().unwrap().lone_surrogates(),
         PRODUCTION
     );
-    let official = loaded.clone().with_lone_surrogate_literals(OFFICIAL);
+    let official = loaded.clone().with_lone_surrogates(OFFICIAL);
     assert_eq!(
-        official.ruleset.as_ref().unwrap().lone_surrogate_literals(),
+        official.ruleset.as_ref().unwrap().lone_surrogates(),
         OFFICIAL
     );
     // The original is not changed by the copy.
     assert_eq!(
-        loaded.ruleset.as_ref().unwrap().lone_surrogate_literals(),
+        loaded.ruleset.as_ref().unwrap().lone_surrogates(),
         PRODUCTION
     );
 
     // A slot without a profile keeps what is loaded.
     let plain = RulesetSlot::new(official.clone());
-    assert_eq!(plain.lone_surrogate_literals(), None);
+    assert_eq!(plain.lone_surrogates(), None);
     assert!(matches!(decision(&plain), Decision::Allow));
 
     // A slot with a profile sets it on what it holds and on every replacement.
-    let slot = RulesetSlot::new(loaded.clone()).with_lone_surrogate_literals(OFFICIAL);
-    assert_eq!(slot.lone_surrogate_literals(), Some(OFFICIAL));
+    let slot = RulesetSlot::new(loaded.clone()).with_lone_surrogates(OFFICIAL);
+    assert_eq!(slot.lone_surrogates(), Some(OFFICIAL));
     assert!(matches!(decision(&slot), Decision::Allow));
     slot.replace_loaded(loaded.clone()).unwrap();
     assert!(matches!(decision(&slot), Decision::Allow));
-    let strict = RulesetSlot::new(official).with_lone_surrogate_literals(PRODUCTION);
+    let strict = RulesetSlot::new(official).with_lone_surrogates(PRODUCTION);
     assert!(matches!(decision(&strict), Decision::Deny(_)));
     strict
-        .replace_loaded(loaded.with_lone_surrogate_literals(OFFICIAL))
+        .replace_loaded(loaded.with_lone_surrogates(OFFICIAL))
         .unwrap();
     assert!(matches!(decision(&strict), Decision::Deny(_)));
 
     // A slot made like another one has the same profile and no rules.
     let like = slot.empty_like();
-    assert_eq!(like.lone_surrogate_literals(), Some(OFFICIAL));
+    assert_eq!(like.lone_surrogates(), Some(OFFICIAL));
     assert!(like.snapshot().unwrap().ruleset.is_none());
 }
 
@@ -281,18 +285,20 @@ fn only_a_u_escape_of_a_high_surrogate_takes_the_low_escape_after_it() {
     assert!(allowed(r#""\ud83d\uDe00" == "😀""#));
 }
 
-/// The stand-ins of lone surrogates are U+10D800 to U+10DFFF; their neighbours are ordinary
-/// private-use characters of two UTF-16 units.
+/// A real character that happens to be near the surrogates in some encoding is just a character.
 #[test]
-fn only_the_stand_in_range_counts_as_one_unit() {
+fn private_use_characters_are_ordinary_characters() {
     for mode in [OFFICIAL, PRODUCTION] {
-        assert!(allowed_in(r#""\U0010d7ff".size() == 2"#, mode), "{mode:?}");
-        assert!(allowed_in(r#""\U0010e000".size() == 2"#, mode), "{mode:?}");
-        assert!(allowed_in(r#""\U0010ffff".size() == 2"#, mode), "{mode:?}");
-        assert!(allowed_in(r#""\U0010d7ff"[0] != "\U0010d7ff"[1]"#, mode));
-        assert!(allowed_in(r#""\U0010e000"[1] != "\U0010d800""#, mode));
-        assert!(allowed_in(r#""\U0010d7ff" != "\ufffd""#, mode), "{mode:?}");
-        assert!(allowed_in(r#""\U0010e000" != "\ufffd""#, mode), "{mode:?}");
+        assert!(allowed_in(r#""\U0010d800".size() == 2"#, mode), "{mode:?}");
+        assert!(allowed_in(r#""\U0010d800" != "\ud800""#, mode), "{mode:?}");
+        assert!(
+            allowed_in(r#""\U0010dfff"[0] != "\udbff""#, mode),
+            "{mode:?}"
+        );
+        assert!(
+            allowed_in(r#""\U0010d800\ud800".size() == 3"#, mode),
+            "{mode:?}"
+        );
     }
 }
 
@@ -303,13 +309,126 @@ fn rulesets_are_equal_when_source_and_profile_agree() {
     let parsed = |source: &str| parse_ruleset(source).unwrap();
     assert!(parsed(a) == parsed(a));
     assert!(parsed(a) != parsed(b));
-    assert!(parsed(a) != parsed(a).with_lone_surrogate_literals(OFFICIAL));
-    assert!(
-        parsed(a).with_lone_surrogate_literals(OFFICIAL)
-            == parsed(a).with_lone_surrogate_literals(OFFICIAL)
-    );
+    assert!(parsed(a) != parsed(a).with_lone_surrogates(OFFICIAL));
+    assert!(parsed(a).with_lone_surrogates(OFFICIAL) == parsed(a).with_lone_surrogates(OFFICIAL));
     let versioned = format!("rules_version = '2';\n{a}");
     assert!(parsed(a) != parsed(&versioned));
+}
+
+// ---- operations on a string that holds a lone surrogate (not recorded, except where noted) ----
+
+#[test]
+fn a_non_string_argument_fails_the_call_in_both_profiles() {
+    for mode in [OFFICIAL, PRODUCTION] {
+        for condition in [
+            r#""a\ud83d".split(1).size() > 0"#,
+            r#"!"\ud83d".matches(1)"#,
+            r#""\ud83d".replace(1, "x").size() > 0"#,
+            r#""\ud83d".replace(".", 1).size() == 0"#,
+            r#""\ud83d".matches()"#,
+            r#""\ud83d".split()"#,
+        ] {
+            assert!(!allowed_in(condition, mode), "{mode:?} {condition}");
+        }
+    }
+}
+
+/// The official emulator: a lone unit matches itself and `.` and nothing else, whatever
+/// private-use characters the texts hold.
+#[test]
+fn a_lone_unit_never_matches_a_character_that_is_really_there() {
+    assert!(!allowed_in(
+        r#""\U00100000\ud83d".matches(".\U00100000")"#,
+        OFFICIAL
+    ));
+    assert!(allowed_in(
+        r#""\U00100000\ud83d".matches("\U00100000.")"#,
+        OFFICIAL
+    ));
+    assert!(allowed_in(r#""\U00100000\ud83d".matches("..")"#, OFFICIAL));
+    assert!(allowed_in(
+        r#""\U00100000\ud83d".replace("\ud83d", "x") == "\U00100000x""#,
+        OFFICIAL
+    ));
+    assert!(allowed_in(
+        r#""\U00100000\ud83d".replace("\U00100000", "x") == "x\ud83d""#,
+        OFFICIAL
+    ));
+}
+
+/// Production fails a pattern, a separator and a replacement that holds a lone unit, and
+/// anything on such a subject that was not recorded; the recorded `matches(".")` works.
+#[test]
+fn production_fails_what_it_was_not_recorded_to_do_with_a_lone_unit() {
+    assert!(allowed_in(r#""a\ud83d".matches("a.")"#, PRODUCTION));
+    assert!(!allowed_in(
+        r#""a\ud83d".split("a").size() == 2"#,
+        PRODUCTION
+    ));
+    assert!(!allowed_in(
+        r#""a\ud83d".replace("a", "x") == "x\ud83d""#,
+        PRODUCTION
+    ));
+    assert!(!allowed_in(
+        r#""a".replace("a", "\ud83d").size() == 1"#,
+        PRODUCTION
+    ));
+    assert!(allowed_in(
+        r#""a".replace("a", "\ud83d") == "\ud83d""#,
+        OFFICIAL
+    ));
+    assert!(allowed_in(r#""a\ud83d".split("a").size() == 2"#, OFFICIAL));
+    assert!(allowed_in(
+        r#""a\ud83db".split("\ud83d")[1] == "b""#,
+        OFFICIAL
+    ));
+    assert!(allowed_in(r#""ab".split("").size() == 4"#, PRODUCTION));
+    assert!(allowed_in(r#""a\ud83d".split("").size() == 4"#, OFFICIAL));
+}
+
+/// Where a lone unit already in the string, and a half cut from a pair, sit side by side.
+#[test]
+fn a_lone_unit_the_string_held_stays_when_a_pair_is_cut_next_to_it() {
+    for (condition, production, official) in [
+        (r#""\ud83d\ud83d"[1:2] == "\ud83d""#, true, true),
+        (r#""é\ud83d"[0:2] == "é\ud83d""#, true, true),
+        (r#""\ud83d😀"[0:2] == "\ud83d\ufffd""#, true, false),
+        (r#""\ud83d😀"[0:2] == "\ud83d\ud83d""#, false, true),
+        (r#""\ud83d😀"[1] == "\ufffd""#, true, false),
+        (r#""é😀"[1] == "\ud83d""#, false, true),
+    ] {
+        assert_eq!(
+            allowed_in(condition, PRODUCTION),
+            production,
+            "strict {condition}"
+        );
+        assert_eq!(
+            allowed_in(condition, OFFICIAL),
+            official,
+            "emulator {condition}"
+        );
+    }
+}
+
+#[test]
+fn a_nul_escape_and_the_other_simple_escapes_are_one_character() {
+    assert!(allowed("\"\\0\".size() == 1"));
+    assert!(allowed("\"a\\0b\".size() == 3"));
+}
+
+/// The parse error names a string literal, whatever it holds.
+#[test]
+fn a_parse_error_names_a_string_where_the_ruleset_expected_something_else() {
+    for source in [
+        r#"rules_version = "\ud83d";"#,
+        r#"service cloud.firestore { "x" }"#,
+    ] {
+        let error = parse_ruleset(source).unwrap_err();
+        assert!(
+            error.message.contains("found string"),
+            "{source}: {error:?}"
+        );
+    }
 }
 
 // ---- Storage Rules share the evaluator ----
@@ -374,10 +493,13 @@ proptest! {
                 let other = format!("\"{}\"[{i}] == \"\\u{:04x}\"", literal(&text), unit ^ 1);
                 prop_assert!(!allowed_in(&other, mode), "{}", other);
             }
-            // A unit is equal to itself, and different from every other unit.
+            // A unit is equal to itself. Two different halves are different units for the
+            // official emulator and both U+FFFD for production.
             for (j, other_unit) in units.iter().enumerate() {
                 let compare = format!("\"{}\"[{i}] == \"{}\"[{j}]", literal(&text), literal(&text));
-                prop_assert_eq!(allowed_in(&compare, mode), unit == other_unit, "{}", compare);
+                let both_halves = (0xD800..0xE000).contains(unit) && (0xD800..0xE000).contains(other_unit);
+                let expected = unit == other_unit || (!official && both_halves);
+                prop_assert_eq!(allowed_in(&compare, mode), expected, "{}", compare);
             }
         }
         let past = format!("\"{}\"[{}] == \"x\"", literal(&text), units.len() + extra);

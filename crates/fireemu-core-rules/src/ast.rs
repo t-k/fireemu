@@ -13,19 +13,21 @@ pub struct Span {
     pub offset: usize,
 }
 
-/// What a lone surrogate written as an escape in a rule string (`"\ud83d"`) is, which the
-/// compatibility profile decides.
+/// How the evaluator treats a half of a surrogate pair, which the compatibility profile decides.
 ///
-/// A string is read by UTF-16 unit, so `"é🔥x"[1]` is half of an emoji. In the recorded
-/// `string-escape#esc-high` row production answered `false` for `"é🔥x"[1] == "\ud83d"`
-/// (the ruleset compiled), where the official emulator answers `true`.
+/// A string is read by UTF-16 unit, so `"é🔥x"[1]` and `"é🔥x"[1:2]` are half of an emoji. The
+/// official emulator keeps that half as the lone unit `"\ud83d"` writes, so the two are equal.
+/// Production recorded `false` for `"é🔥x"[1] == "\ud83d"` (`string-escape#esc-high`), and
+/// `"\ud83d" == "\ufffd"` is false there too, so it holds the half as U+FFFD. Regular
+/// expression patterns and replacements that hold a lone surrogate are an error in production
+/// (`regex#rep-hi`, `split-hi`, `m-hi-lit`), where the official emulator matches them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum LoneSurrogateLiterals {
-    /// The escape is U+FFFD, which the half read by index is not: production.
+pub enum LoneSurrogates {
+    /// Production: a half cut from a pair is U+FFFD; a lone surrogate in a pattern is an error.
     #[default]
-    Replacement,
-    /// The escape is the same lone unit an index reads: the official emulator.
-    Unit,
+    Production,
+    /// The official emulator: a half cut from a pair is the lone unit an escape writes.
+    Official,
 }
 
 /// A parsed ruleset.
@@ -36,7 +38,7 @@ pub struct Ruleset {
     /// Services.
     pub services: Vec<Service>,
     pub(crate) value_dependencies: ValueDependencies,
-    pub(crate) lone_surrogate_literals: LoneSurrogateLiterals,
+    pub(crate) lone_surrogates: LoneSurrogates,
     pub(crate) function_scopes: Vec<Arc<crate::scope::ServiceScopes>>,
 }
 
@@ -45,7 +47,7 @@ impl PartialEq for Ruleset {
         self.version == other.version
             && self.services == other.services
             && self.value_dependencies == other.value_dependencies
-            && self.lone_surrogate_literals == other.lone_surrogate_literals
+            && self.lone_surrogates == other.lone_surrogates
     }
 }
 
@@ -73,14 +75,14 @@ impl ValueDependencies {
 impl Ruleset {
     /// What a lone surrogate escape in a rule string is.
     #[must_use]
-    pub const fn lone_surrogate_literals(&self) -> LoneSurrogateLiterals {
-        self.lone_surrogate_literals
+    pub const fn lone_surrogates(&self) -> LoneSurrogates {
+        self.lone_surrogates
     }
 
     /// This ruleset with `mode` as the meaning of a lone surrogate escape.
     #[must_use]
-    pub fn with_lone_surrogate_literals(mut self, mode: LoneSurrogateLiterals) -> Self {
-        self.lone_surrogate_literals = mode;
+    pub fn with_lone_surrogates(mut self, mode: LoneSurrogates) -> Self {
+        self.lone_surrogates = mode;
         self
     }
 
@@ -233,6 +235,9 @@ pub enum Literal {
     Float(f64),
     /// String.
     Str(String),
+    /// A string that holds a lone surrogate written as an escape (`"\ud83d"`): its UTF-16
+    /// units, never well-formed.
+    IllFormedStr(Vec<u16>),
 }
 
 /// Unary operators.

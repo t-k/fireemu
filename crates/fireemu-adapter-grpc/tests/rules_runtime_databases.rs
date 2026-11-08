@@ -15,7 +15,7 @@ use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_auth::store::AuthStore;
 use fireemu_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningContext};
 use fireemu_core_firestore::path::DocumentPath;
-use fireemu_core_rules::ast::LoneSurrogateLiterals;
+use fireemu_core_rules::ast::LoneSurrogates;
 use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::determinism::SplitMix64;
@@ -39,7 +39,7 @@ fn world(refuse_without_ruleset: bool, declared: &[(&str, &str)]) -> World {
 fn world_in(
     refuse_without_ruleset: bool,
     declared: &[(&str, &str)],
-    literals: Option<LoneSurrogateLiterals>,
+    literals: Option<LoneSurrogates>,
 ) -> World {
     let gateway = Gateway {
         enforce_limits: true,
@@ -70,7 +70,7 @@ fn world_in(
         .collect::<BTreeMap<_, _>>();
     let primary = RulesetSlot::new(LoadedRules::from_source(OPEN).unwrap());
     let primary = match literals {
-        Some(literals) => primary.with_lone_surrogate_literals(literals),
+        Some(literals) => primary.with_lone_surrogates(literals),
         None => primary,
     };
     let enforcer = RulesEnforcer::new(Arc::new(primary), auth, clock)
@@ -222,8 +222,8 @@ const LONE_ESCAPE: &str = r#"service cloud.firestore { match /databases/{databas
 #[test]
 fn a_runtime_database_takes_the_lone_surrogate_meaning_of_the_profile() {
     for (literals, allowed) in [
-        (LoneSurrogateLiterals::Unit, true),
-        (LoneSurrogateLiterals::Replacement, false),
+        (LoneSurrogates::Official, true),
+        (LoneSurrogates::Production, false),
     ] {
         let world = world_in(false, &[], Some(literals));
         world

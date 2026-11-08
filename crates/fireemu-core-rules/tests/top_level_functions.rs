@@ -125,3 +125,48 @@ fn a_top_level_function_may_also_follow_the_service() {
     let source = "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /notes/{id} { allow get: if late(); } } }\nfunction late() { return true; }";
     assert!(get_allowed(source));
 }
+
+/// A top-level function resolves the names it calls against the top level only (Sol, round 6).
+#[test]
+fn a_top_level_function_calls_resolve_in_the_top_level_scope() {
+    let source = "rules_version = '2';\nfunction permitted() { return false; }\nfunction check() { return permitted(); }\nservice cloud.firestore {\n  function permitted() { return true; }\n  match /databases/{db}/documents/{doc=**} { allow get: if check(); }\n}";
+    assert!(!get_allowed(source));
+    // The service's own call still reaches the service's declaration.
+    let source = source.replace("if check()", "if permitted()");
+    assert!(get_allowed(&source));
+}
+
+#[test]
+fn the_call_graph_keeps_the_top_level_and_the_service_apart() {
+    // No cycle: the service's f calls g, g calls the top-level f, which returns true.
+    let acyclic = "rules_version = '2';\nfunction f() { return true; }\nfunction g() { return f(); }\nservice cloud.firestore {\n  function f() { return g(); }\n  match /databases/{d}/documents { match /notes/{id} { allow get: if f(); } }\n}";
+    assert!(LoadedRules::from_source(acyclic).is_ok());
+    // A cycle among top-level functions stays one whatever the service declares.
+    let cyclic = "rules_version = '2';\nfunction f() { return g(); }\nfunction g() { return f(); }\nservice cloud.firestore {\n  function f() { return true; }\n  match /databases/{d}/documents { match /notes/{id} { allow get: if f(); } }\n}";
+    let error = LoadedRules::from_source(cyclic).unwrap_err();
+    assert!(error.message.contains("Recursive"), "{error:?}");
+}
+
+/// The scope the parser makes for top-level functions does not count as a `match` level: the
+/// depth at which the limit refuses a ruleset is the same with and without one.
+#[test]
+fn top_level_functions_do_not_use_up_the_match_depth_limit() {
+    let nest = |levels: usize, top_level: bool| {
+        let open = (0..levels).fold(String::new(), |out, i| out + &format!("match /m{i} {{ "));
+        let close = "} ".repeat(levels);
+        let function = if top_level {
+            "function t() { return true; }\n"
+        } else {
+            ""
+        };
+        format!(
+            "rules_version = '2';\n{function}service cloud.firestore {{ match /databases/{{d}}/documents {{ {open}allow get: if true; {close} }} }}"
+        )
+    };
+    let limit = (1..30)
+        .find(|levels| LoadedRules::from_source(&nest(*levels, false)).is_err())
+        .expect("the depth limit refuses a deep ruleset");
+    assert!(limit > 5, "{limit}");
+    assert!(LoadedRules::from_source(&nest(limit - 1, true)).is_ok());
+    assert!(LoadedRules::from_source(&nest(limit, true)).is_err());
+}

@@ -18,6 +18,9 @@ pub enum RulesValue {
     Float(f64),
     /// String.
     String(String),
+    /// A string that holds a lone surrogate (written as an escape, or cut out of a pair): its
+    /// UTF-16 units. A `String` cannot hold one, and no well-formed sequence is held here.
+    IllFormed(Vec<u16>),
     /// List.
     List(Vec<RulesValue>),
     /// `list.toSet()` and the key sets of `map.diff()`: members are unordered and distinct.
@@ -135,7 +138,7 @@ impl RulesValue {
             Self::Bool(_) => "bool",
             Self::Int(_) => "int",
             Self::Float(_) => "float",
-            Self::String(_) => "string",
+            Self::String(_) | Self::IllFormed(_) => "string",
             Self::List(_) | Self::PartialList(_) | Self::PartialListAny(_) => "list",
             Self::Set(_) => "set",
             Self::Map(_) | Self::PartialMap(_) | Self::PartialMapExcluding { .. } => "map",
@@ -189,6 +192,7 @@ impl fmt::Display for RulesValue {
             Self::Int(i) => write!(f, "{i}"),
             Self::Float(x) => write!(f, "{x}"),
             Self::String(s) => write!(f, "{s:?}"),
+            Self::IllFormed(units) => write!(f, "{:?}", String::from_utf16_lossy(units)),
             Self::List(items) => {
                 f.write_str("[")?;
                 for (i, item) in items.iter().enumerate() {
@@ -305,43 +309,67 @@ impl AuthContext {
     }
 }
 
-/// First scalar of the stand-ins for lone surrogates: Supplementary Private Use Area-B,
-/// U+10D800 to U+10DFFF, one for each of the 2048 surrogate units.
-const LONE_SURROGATE_BASE: u32 = 0x10_D800;
-
-/// A Rules string is a Rust `String`, which cannot hold half of a surrogate pair. A lone
-/// surrogate `unit` (U+D800 to U+DFFF) is held as a private-use stand-in that counts as one
-/// UTF-16 unit and equals only itself. A string that really holds one of these private-use
-/// scalars is read one unit short; none is assigned.
-#[must_use]
-pub(crate) fn lone_surrogate_char(unit: u32) -> char {
-    char::from_u32(LONE_SURROGATE_BASE + (unit - 0xD800)).unwrap_or(char::REPLACEMENT_CHARACTER)
+/// One position of a Rules string: a character, or a surrogate unit that no pair holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Piece {
+    Char(char),
+    Lone(u16),
 }
 
-/// Whether `c` is the stand-in of a lone surrogate.
-#[must_use]
-pub(crate) fn is_lone_surrogate_char(c: char) -> bool {
-    (LONE_SURROGATE_BASE..LONE_SURROGATE_BASE + 0x800).contains(&(c as u32))
+impl Piece {
+    pub(crate) fn push_units(self, units: &mut Vec<u16>) {
+        match self {
+            Self::Char(c) => {
+                let mut buffer = [0u16; 2];
+                units.extend_from_slice(c.encode_utf16(&mut buffer));
+            }
+            Self::Lone(unit) => units.push(unit),
+        }
+    }
 }
 
-/// The UTF-16 units of `text` as characters: a character outside the BMP is its two surrogate
-/// stand-ins, any other character itself (a stand-in is already one lone unit).
-pub(crate) fn utf16_units(text: &str) -> impl Iterator<Item = char> + '_ {
-    text.chars().flat_map(|c| {
-        let mut buffer = [0u16; 2];
-        let units = c.encode_utf16(&mut buffer);
-        // A stand-in is already one lone unit, though it is outside the BMP.
-        let pair = units.len() == 2 && !is_lone_surrogate_char(c);
-        let (high, low) = (units[0], units[units.len() - 1]);
-        [
-            Some(if pair {
-                lone_surrogate_char(u32::from(high))
-            } else {
-                c
-            }),
-            pair.then(|| lone_surrogate_char(u32::from(low))),
-        ]
-        .into_iter()
-        .flatten()
-    })
+/// The pieces of a UTF-16 sequence: a pair is one character, an unpaired surrogate is `Lone`.
+pub(crate) fn pieces(units: &[u16]) -> Vec<Piece> {
+    char::decode_utf16(units.iter().copied())
+        .map(|decoded| match decoded {
+            Ok(c) => Piece::Char(c),
+            Err(error) => Piece::Lone(error.unpaired_surrogate()),
+        })
+        .collect()
+}
+
+/// The string those pieces make: a `String` when every piece is a character, otherwise the
+/// ill-formed units (the only form a lone surrogate is held in).
+pub(crate) fn string_from_pieces(pieces: &[Piece]) -> RulesValue {
+    if let Some(text) = pieces
+        .iter()
+        .map(|piece| match piece {
+            Piece::Char(c) => Some(*c),
+            Piece::Lone(_) => None,
+        })
+        .collect::<Option<String>>()
+    {
+        return RulesValue::String(text);
+    }
+    let mut units = Vec::with_capacity(pieces.len());
+    for piece in pieces {
+        piece.push_units(&mut units);
+    }
+    RulesValue::IllFormed(units)
+}
+
+impl RulesValue {
+    /// The UTF-16 units of a string value of either form.
+    pub(crate) fn utf16_units(&self) -> Option<Vec<u16>> {
+        match self {
+            Self::String(text) => Some(text.encode_utf16().collect()),
+            Self::IllFormed(units) => Some(units.clone()),
+            _ => None,
+        }
+    }
+
+    /// A string value from UTF-16 units.
+    pub(crate) fn from_utf16_units(units: &[u16]) -> Self {
+        string_from_pieces(&pieces(units))
+    }
 }

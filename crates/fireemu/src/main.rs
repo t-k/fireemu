@@ -2413,10 +2413,8 @@ fn load_storage_rules_registry(
             Some(path) => read_storage_rules(path, compilations)?,
             None => LoadedRules::default(),
         };
-        let slot = Arc::new(
-            RulesetSlot::new(loaded)
-                .with_lone_surrogate_literals(cfg.profile.lone_surrogate_literals()),
-        );
+        let slot =
+            Arc::new(RulesetSlot::new(loaded).with_lone_surrogates(cfg.profile.lone_surrogates()));
         let watched = cfg
             .storage_rules_file
             .iter()
@@ -2437,7 +2435,7 @@ fn load_storage_rules_registry(
     for (target, path) in &cfg.storage_rules_by_target {
         let slot = Arc::new(
             RulesetSlot::new(read_storage_rules(path, compilations)?)
-                .with_lone_surrogate_literals(cfg.profile.lone_surrogate_literals()),
+                .with_lone_surrogates(cfg.profile.lone_surrogates()),
         );
         let buckets = cfg.storage_buckets_by_target.get(target).ok_or_else(|| {
             format!("Storage rules target {target:?} has no resolved bucket mapping")
@@ -3841,18 +3839,18 @@ mod config_reload_tests {
     /// surrogate escape (`string-escape#esc-high`), also after a reload.
     #[test]
     fn storage_slots_carry_the_profile_s_lone_surrogate_meaning() {
-        use fireemu_core_rules::ast::LoneSurrogateLiterals;
+        use fireemu_core_rules::ast::LoneSurrogates;
         let dir = scratch("storage-lone-surrogate");
         let path = dir.join("storage.rules").display().to_string();
         std::fs::write(&path, STORAGE_DENY).unwrap();
         for (profile, literals) in [
             (
                 config::CompatibilityProfile::Emulator,
-                LoneSurrogateLiterals::Unit,
+                LoneSurrogates::Official,
             ),
             (
                 config::CompatibilityProfile::Strict,
-                LoneSurrogateLiterals::Replacement,
+                LoneSurrogates::Production,
             ),
         ] {
             for per_target in [false, true] {
@@ -3874,14 +3872,14 @@ mod config_reload_tests {
                     load_storage_rules_registry(&cfg, &mut RulesCompilationCache::default())
                         .unwrap();
                 let slot = &loaded.watched[0].1;
-                assert_eq!(slot.lone_surrogate_literals(), Some(literals));
+                assert_eq!(slot.lone_surrogates(), Some(literals));
                 let held = |slot: &RulesetSlot| {
                     slot.snapshot()
                         .unwrap()
                         .ruleset
                         .as_ref()
                         .unwrap()
-                        .lone_surrogate_literals()
+                        .lone_surrogates()
                 };
                 assert_eq!(held(slot), literals);
                 slot.replace_source(STORAGE_ALLOW).unwrap();

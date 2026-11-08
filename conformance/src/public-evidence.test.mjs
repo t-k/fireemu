@@ -198,6 +198,57 @@ test("only the historical comparison root profileBinding bypasses the guard", as
   await assert.rejects(collectHistoricalReplay(directory, output));
 });
 
+test("the historical daemonLog may name only the binding's own paths", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "public-evidence-daemon-log-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const output = join(directory, "out");
+  mkdirSync(output);
+  const summaryPath = join(directory, "historical-production-comparison.json");
+  writeFileSync(join(directory, "fireemu-historical-production.json"), '{"rows":[]}');
+  const cwd = "/home/runner/work/fireemu/fireemu/conformance";
+  const config = `${cwd}/.runs/firestore-probe/strict-config-1.json`;
+  // The banner fireemu exec prints, as the strict historical replay records it (v0.45.0 run).
+  const daemonLog = [
+    `note: ${config}: firestore.rules is accepted but never read`,
+    "fireemu exec",
+    `  config:           ${config} (--config); ${cwd}/firebase.json in a parent directory is not loaded`,
+    "  control API:      http://127.0.0.1:64251/v1/  (health: /health/live)",
+    "  profile: strict (behaves like production Firebase where the official emulators do not)",
+    "",
+  ].join("\n");
+  const profileBinding = {
+    requestedProfile: "strict",
+    effectiveProfile: "strict",
+    daemonLog,
+    cwd,
+    // A relative argument is not a path the binding publishes, so it masks nothing.
+    argv: ["exec", "--config", config, "--", "node", "Users"],
+    binary: { path: "/tmp/fireemu-verify.x/fireemu try ✓/bin/fireemu" },
+    config: { path: config, sourcePath: `${cwd}/firestore-probe.fireemu.json` },
+    indexes: { path: `${cwd}/.runs/firestore-probe/strict-indexes-1.json` },
+  };
+  const bytes = Buffer.from(JSON.stringify({ profileBinding, rows: [] }));
+  writeFileSync(summaryPath, bytes);
+  await collectHistoricalReplay(directory, output);
+  assert.deepEqual(readFileSync(join(output, "R11-historical-production-comparison.json")), bytes);
+
+  for (const extra of [
+    "\n  logging: /home/runner/private.log\n",
+    "\n  note: /Users/someone/secret.json\n",
+    `\n  note: ${cwd}-other/secret.json\n`,
+    "\n  note: C:\\Users\\someone\\secret.json\n",
+    // Only the exact exempt path is masked: a dot in it matches no other character.
+    "\n  binary: /tmp/fireemu-verifyXx/fireemu try ✓/bin/fireemu\n",
+  ]) {
+    const binding = { ...profileBinding, daemonLog: `${daemonLog}${extra}` };
+    writeFileSync(summaryPath, JSON.stringify({ profileBinding: binding, rows: [] }));
+    await assert.rejects(collectHistoricalReplay(directory, output), extra);
+  }
+  // A daemonLog outside the root profileBinding gets no allowance.
+  writeFileSync(summaryPath, JSON.stringify({ profileBinding, rows: [{ daemonLog }] }));
+  await assert.rejects(collectHistoricalReplay(directory, output));
+});
+
 test("the API exception preserves finite EVENTARC channel query shapes and refuses unsafe queries", () => {
   const safe = {
     pageSize: { path: "/v1/projects/demo/locations/global/channels?pageSize=1" },

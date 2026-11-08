@@ -1143,21 +1143,43 @@ function parseUniqueJson(text) {
 const isPlainObject = (value) =>
   value !== null && typeof value === "object" && !Array.isArray(value);
 
+const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 /**
  * The historical judge requires absolute paths at these root binding fields, so only they leave
- * the public evidence check. Everything else in the binding is still checked.
+ * the public evidence check. Everything else in the binding is still checked. The judge also
+ * requires the daemon's banner (`daemonLog`), which names the config file and the cwd; only
+ * those exempt paths, each ending at a path boundary, are masked there before it is checked.
  */
 function withoutHistoricalBindingPaths(comparison) {
   if (!isPlainObject(comparison) || !isPlainObject(comparison.profileBinding)) return comparison;
-  const { cwd, argv, binary, config, indexes, ...binding } = comparison.profileBinding;
+  const { cwd, argv, binary, config, indexes, daemonLog, ...binding } = comparison.profileBinding;
   const withoutPaths = (value, ...names) =>
     isPlainObject(value)
       ? Object.fromEntries(Object.entries(value).filter(([name]) => !names.includes(name)))
       : value;
+  const exemptPaths = [
+    cwd,
+    ...(Array.isArray(argv) ? argv : []),
+    binary?.path,
+    config?.path,
+    config?.sourcePath,
+    indexes?.path,
+    indexes?.sourcePath,
+  ]
+    .filter((path) => typeof path === "string" && path.startsWith("/") && path.length > 1);
+  const maskedLog =
+    typeof daemonLog === "string" && exemptPaths.length > 0
+      ? daemonLog.replace(
+          new RegExp(`(?:${exemptPaths.map(escapeRegExp).join("|")})(?=$|[\\s/:()])`, "gm"),
+          "<binding-path>",
+        )
+      : daemonLog;
   return {
     ...comparison,
     profileBinding: {
       ...binding,
+      ...(daemonLog === undefined ? {} : { daemonLog: maskedLog }),
       cwd: typeof cwd === "string" ? undefined : cwd,
       argv: Array.isArray(argv) ? argv.filter((item) => typeof item !== "string") : argv,
       binary: withoutPaths(binary, "path"),

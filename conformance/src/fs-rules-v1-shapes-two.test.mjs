@@ -455,6 +455,8 @@ test("a step that one of the two recordings lacks is unknown, never the other re
     // Every other row, recorded the same twice, is still an answer.
     assert.equal(rows["queries#get-absent"].answer, "allowed", name);
   }
+  // The absent recording is written as a marker no answer can equal.
+  assert.deepEqual(build(out, lacking).programs[id].second, { "get-stored": { absent: true } });
   // Recorded the same twice, a step has no `second` entry at all.
   assert.equal(build(out, out).programs[id].second, undefined);
 });

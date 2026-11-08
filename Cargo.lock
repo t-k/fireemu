@@ -680,6 +680,7 @@ dependencies = [
 name = "fireemu-adapter-functions"
 version = "0.44.0"
 dependencies = [
+ "base64",
  "bytes",
  "chrono",
  "chrono-tz",
@@ -694,11 +695,13 @@ dependencies = [
  "fireemu-core-session",
  "fireemu-core-storage",
  "fireemu-core-types",
+ "fireemu-proto-firestore",
  "http-body-util",
  "hyper",
  "hyper-util",
  "process-wrap",
  "proptest",
+ "prost",
  "rustix",
  "serde_json",
  "tokio",

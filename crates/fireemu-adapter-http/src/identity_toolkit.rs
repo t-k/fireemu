@@ -1272,6 +1272,39 @@ fn str_field<'a>(body: &'a Value, key: &str) -> Option<&'a str> {
     body.get(key).and_then(Value::as_str)
 }
 
+/// Whether a Secure Token refresh body is read in the Android SDK's camelCase spelling
+/// (`grantType`, `refreshToken`): only when it carries neither `snake_case` field. The server
+/// drops the camelCase keys of a form body, so a form and a body mixing the spellings are read
+/// as `snake_case` only, as they were before the SDK's JSON shape was added.
+fn refresh_body_is_camel_case(body: &Value) -> bool {
+    body.get("grant_type").is_none() && body.get("refresh_token").is_none()
+}
+
+/// The refresh token a request carries, in the one spelling its body is read in: the store
+/// selection, the tenant checks and the exchange all call this, so they agree.
+fn request_refresh_token(body: &Value) -> Option<&str> {
+    str_field(
+        body,
+        if refresh_body_is_camel_case(body) {
+            "refreshToken"
+        } else {
+            "refresh_token"
+        },
+    )
+}
+
+/// The grant type a refresh request carries, read in the same spelling as its token.
+fn request_grant_type(body: &Value) -> Option<&str> {
+    str_field(
+        body,
+        if refresh_body_is_camel_case(body) {
+            "grantType"
+        } else {
+            "grant_type"
+        },
+    )
+}
+
 fn issue_tokens(
     store: &mut AuthStore,
     uid: &LocalId,
@@ -3721,8 +3754,7 @@ fn token_tenant_disagreement(
 
 /// What the request's refresh token (`refresh_token`, or `refreshToken`) says about its tenant.
 fn request_refresh_token_tenant(body: &Value) -> Option<RefreshTokenTenant> {
-    str_field(body, "refresh_token")
-        .or_else(|| str_field(body, "refreshToken"))
+    request_refresh_token(body)
         .filter(|token| !token.is_empty())
         .map(|token| {
             match fireemu_core_auth::store::AuthRegistry::decode_refresh_token_tenant(token) {
@@ -4055,9 +4087,10 @@ fn emulator_named_tenant(
     let Some(registry) = state.registry.as_ref() else {
         return Ok(());
     };
-    let account_api = path.starts_with("/identitytoolkit.googleapis.com/v1/")
+    let account_api = (path.starts_with("/identitytoolkit.googleapis.com/v1/")
         && !path.ends_with(":queryAccounts")
-        && !path.ends_with("/accounts:query");
+        && !path.ends_with("/accounts:query"))
+        || routes::apple_legacy_account_path(path);
     if !account_api {
         return Ok(());
     }
@@ -4182,9 +4215,10 @@ fn strict_named_tenant(
     // The Admin query (`accounts:query`, `:queryAccounts`) reads its tenant from the body with
     // rules of its own; production's answer to an unknown one there was not recorded, so it
     // keeps fireemu's.
-    let account_api = path.starts_with("/identitytoolkit.googleapis.com/v1/")
+    let account_api = (path.starts_with("/identitytoolkit.googleapis.com/v1/")
         && !path.ends_with(":queryAccounts")
-        && !path.ends_with("/accounts:query");
+        && !path.ends_with("/accounts:query"))
+        || routes::apple_legacy_account_path(path);
     let secure_token = path.starts_with("/securetoken.googleapis.com/");
     if !account_api && !secure_token {
         return Ok(None);
@@ -4259,7 +4293,7 @@ fn strict_refreshed_tenant(
     project: &str,
     body: &Value,
 ) -> Result<Option<Value>, JsonResponse> {
-    if let Some((token_project, tenant)) = str_field(body, "refresh_token")
+    if let Some((token_project, tenant)) = request_refresh_token(body)
         .and_then(fireemu_core_auth::store::AuthRegistry::refresh_token_tenant)
     {
         if token_project == project && registry.tenant_store(project, &tenant).is_none() {
@@ -9582,7 +9616,7 @@ fn select_store(
             .unwrap_or_else(|| state.store.clone()));
     }
     if exchanges_refresh_token && query_tenant.is_some() {
-        if let Some(token) = str_field(body, "refresh_token") {
+        if let Some(token) = request_refresh_token(body) {
             use fireemu_core_auth::store::RefreshTokenStoreMatch;
 
             if let RefreshTokenStoreMatch::Unique(store) = registry.store_for_refresh_token(token) {
@@ -9692,6 +9726,8 @@ fn select_store(
             return Ok(store);
         }
     }
+    // Any route: the camelCase spelling is the Secure Token exchange's alone, so a
+    // `refreshToken` member of another route's body never selects a store.
     if let Some(token) = str_field(body, "refresh_token") {
         use fireemu_core_auth::store::RefreshTokenStoreMatch;
 
@@ -9744,7 +9780,7 @@ fn tenant_store_issuing_refresh_token(
 ) -> Result<Option<Arc<Mutex<AuthStore>>>, JsonResponse> {
     use fireemu_core_auth::store::RefreshTokenStoreMatch;
 
-    let Some(token) = str_field(body, "refresh_token") else {
+    let Some(token) = request_refresh_token(body) else {
         return Ok(None);
     };
     let store = match registry.store_for_refresh_token(token) {
@@ -13369,12 +13405,12 @@ fn refresh(
     stateless_refresh_tokens: bool,
 ) -> JsonResponse {
     // An empty field is an absent one, as proto3 reads it (sandbox recording 2026-09-24).
-    match str_field(body, "grant_type") {
+    match request_grant_type(body) {
         None | Some("") => return error(400, "MISSING_GRANT_TYPE"),
         Some("refresh_token") => {}
         Some(_) => return error(400, "INVALID_GRANT_TYPE"),
     }
-    let Some(token) = str_field(body, "refresh_token").filter(|token| !token.is_empty()) else {
+    let Some(token) = request_refresh_token(body).filter(|token| !token.is_empty()) else {
         return error(400, "MISSING_REFRESH_TOKEN");
     };
     let session = match if stateless_refresh_tokens {
@@ -16338,6 +16374,247 @@ mod tests {
     use super::*;
     use fireemu_core_auth::mfa::TotpPolicy;
     use fireemu_core_types::determinism::SplitMix64;
+
+    fn apple_alias_state(strict: bool) -> AuthState {
+        let store = Arc::new(Mutex::new(AuthStore::new(
+            "demo-app",
+            SplitMix64::new(22),
+            TotpPolicy::default(),
+        )));
+        let registry = Arc::new(AuthRegistry::new("demo-app", store.clone()));
+        for tenant in ["tenant-a", "tenant-b", "7"] {
+            registry.ensure_tenant("demo-app", tenant).unwrap();
+        }
+        let state = AuthState {
+            store,
+            registry: Some(registry),
+            clock: Arc::new(Mutex::new(VirtualClock::new(
+                LogicalInstant::from_unix_seconds(1_788_004_860),
+            ))),
+            wall_clock: None,
+            totp_extension_enabled: false,
+            barrier: None,
+            events: None,
+            notices: None,
+            blocking: None,
+            operation_gate: Arc::new(Mutex::new(())),
+            control_token: None,
+            tenancy: None,
+            allow_routed_projects: false,
+            stateless_refresh_tokens: !strict,
+            custom_token_trust: None,
+            allow_unsigned_custom_tokens: true,
+            idp_assertions: IdpAssertionPolicy::Fixture,
+            query_limits: if strict {
+                AuthQueryLimits::ProductionBounded
+            } else {
+                AuthQueryLimits::EmulatorUnbounded
+            },
+            client_api_key: if strict {
+                ClientApiKeyPolicy::Required
+            } else {
+                ClientApiKeyPolicy::Optional
+            },
+            idp_continuations: IdpContinuationPolicy::Disabled,
+            fake_custom_token_expiry: FakeCustomTokenExpiry::Ignore,
+            app_check: None,
+            app_check_policy: None,
+        };
+        let headers = RequestHeaders {
+            authorization: Some("Bearer owner".to_owned()),
+            ..RequestHeaders::default()
+        };
+        let enabled = handle_with(&state, "PATCH", "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config?updateMask=multiTenant.allowTenants", &headers, &json!({"multiTenant":{"allowTenants":true}}));
+        assert_eq!(enabled.status, 200);
+        state
+    }
+
+    #[test]
+    fn apple_legacy_account_routes_keep_caller_and_method_refusals() {
+        for strict in [false, true] {
+            for (legacy, canonical) in [
+                ("signupNewUser", "accounts:signUp"),
+                ("verifyPassword", "accounts:signInWithPassword"),
+                ("getAccountInfo", "accounts:lookup"),
+            ] {
+                let state = apple_alias_state(strict);
+                let old_path =
+                    format!("/www.googleapis.com/identitytoolkit/v3/relyingparty/{legacy}");
+                let new_path = format!("/identitytoolkit.googleapis.com/v1/{canonical}");
+                for method in ["GET", "PUT"] {
+                    let old = handle(
+                        &state,
+                        method,
+                        &format!("{old_path}?key=fake-api-key"),
+                        &json!({}),
+                    );
+                    let new = handle(
+                        &state,
+                        method,
+                        &format!("{new_path}?key=fake-api-key"),
+                        &json!({}),
+                    );
+                    assert_eq!(old, new);
+                    assert_eq!(old.status, 405);
+                }
+                if strict {
+                    let old = handle(&state, "POST", &old_path, &json!({}));
+                    let new = handle(&state, "POST", &new_path, &json!({}));
+                    assert_eq!(old, new);
+                    assert_eq!(old.status, 403);
+                }
+                assert!(state.store.lock().unwrap().users_by_creation().is_empty());
+                assert_eq!(
+                    state.registry.as_ref().unwrap().tenants("demo-app").len(),
+                    3
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // Keep the finite tenant truth table beside its paired assertions.
+    fn apple_legacy_account_tenant_checks_match_canonical_in_both_profiles() {
+        for strict in [false, true] {
+            for (legacy, canonical) in [
+                ("signupNewUser", "accounts:signUp"),
+                ("verifyPassword", "accounts:signInWithPassword"),
+                ("getAccountInfo", "accounts:lookup"),
+            ] {
+                for (label, tenant, token_tenant, query, mismatch) in [
+                    ("absent", None, None, "", false),
+                    ("null", Some(Value::Null), None, "", false),
+                    ("empty", Some(json!("")), None, "", false),
+                    ("boolean", Some(json!(true)), None, "", false),
+                    ("object", Some(json!({})), None, "", false),
+                    ("array", Some(json!([])), None, "", false),
+                    ("number", Some(json!(7)), Some("7"), "", false),
+                    (
+                        "existing",
+                        Some(json!("tenant-a")),
+                        Some("tenant-a"),
+                        "",
+                        false,
+                    ),
+                    ("token-only", None, Some("tenant-a"), "", false),
+                    ("token-null", Some(Value::Null), Some("tenant-a"), "", false),
+                    ("token-empty", Some(json!("")), Some("tenant-a"), "", false),
+                    (
+                        "mismatch",
+                        Some(json!("tenant-b")),
+                        Some("tenant-a"),
+                        "",
+                        true,
+                    ),
+                    (
+                        "missing-mismatch",
+                        Some(json!("never-created")),
+                        Some("tenant-a"),
+                        "",
+                        true,
+                    ),
+                    ("missing", Some(json!("never-created")), None, "", false),
+                    (
+                        "query-conflict",
+                        Some(json!("tenant-a")),
+                        Some("tenant-a"),
+                        "&tenantId=tenant-b",
+                        false,
+                    ),
+                    ("empty-query", None, None, "&tenantId=", false),
+                ] {
+                    let mut observations = Vec::new();
+                    for path in [
+                        format!("/identitytoolkit.googleapis.com/v1/{canonical}"),
+                        format!("/www.googleapis.com/identitytoolkit/v3/relyingparty/{legacy}"),
+                    ] {
+                        let state = apple_alias_state(strict);
+                        let registry = state.registry.as_ref().unwrap();
+                        let mut tokens = BTreeMap::new();
+                        for namespace in [None, Some("tenant-a"), Some("tenant-b"), Some("7")] {
+                            let mut seed =
+                                json!({"email":"seed@example.invalid","password":"local-password"});
+                            if let Some(namespace) = namespace {
+                                seed["tenantId"] = json!(namespace);
+                            }
+                            let created = handle(&state, "POST", "/identitytoolkit.googleapis.com/v1/accounts:signUp?key=fake-api-key", &seed);
+                            assert_eq!(created.status, 200, "seed account creation failed");
+                            tokens.insert(namespace, created.body["idToken"].clone());
+                        }
+                        let mut body = if legacy == "signupNewUser" {
+                            json!({"email":"new@example.invalid","password":"local-password"})
+                        } else {
+                            json!({"email":"seed@example.invalid","password":"local-password"})
+                        };
+                        if legacy == "getAccountInfo" || mismatch {
+                            body["idToken"] = tokens[&token_tenant].clone();
+                        }
+                        if let Some(tenant) = &tenant {
+                            body["tenantId"] = tenant.clone();
+                        }
+                        eprintln!("apple-tenant-row:{strict}:{legacy}:{label}:{path}");
+                        let response = handle(
+                            &state,
+                            "POST",
+                            &format!("{path}?key=fake-api-key{query}"),
+                            &body,
+                        );
+                        if strict && ["boolean", "object", "array", "number"].contains(&label) {
+                            assert_eq!(
+                                response.body["error"]["message"], "INVALID_TENANT_ID",
+                                "{path}:{label}"
+                            );
+                        }
+                        if mismatch {
+                            assert_eq!(response.status, 400, "{path}:{label}");
+                            assert_eq!(
+                                response.body["error"]["message"],
+                                if strict {
+                                    "TENANT_ID_MISMATCH : Specified tenant ID mismatches with the ID token."
+                                } else {
+                                    "TENANT_ID_MISMATCH"
+                                }
+                            );
+                        }
+                        let counts: Vec<_> = [None, Some("tenant-a"), Some("tenant-b"), Some("7")]
+                            .into_iter()
+                            .map(|namespace| {
+                                let store = namespace.map_or_else(
+                                    || state.store.clone(),
+                                    |name| registry.tenant_store("demo-app", name).unwrap(),
+                                );
+                                let count = store.lock().unwrap().users_by_creation().len();
+                                count
+                            })
+                            .collect();
+                        if mismatch {
+                            assert_eq!(counts, vec![1, 1, 1, 1]);
+                            assert_eq!(registry.tenants("demo-app").len(), 3);
+                        }
+                        let identity = response.body.get("localId").cloned().or_else(|| {
+                            response
+                                .body
+                                .get("users")
+                                .and_then(|users| users.get(0))
+                                .and_then(|user| user.get("localId"))
+                                .cloned()
+                        });
+                        observations.push((
+                            response.status,
+                            response.body.get("error").cloned(),
+                            identity,
+                            counts,
+                            registry.tenants("demo-app"),
+                        ));
+                    }
+                    assert_eq!(
+                        observations[0], observations[1],
+                        "strict={strict} operation={legacy} case={label}"
+                    );
+                }
+            }
+        }
+    }
 
     /// A routed project another request installed between the creation's parent lookup and its
     /// install is the project the tenant is made in (`Existing`); a registered project is not

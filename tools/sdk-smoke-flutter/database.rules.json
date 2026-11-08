@@ -1,0 +1,1 @@
+{"rules":{"public":{".read":true,".write":true},"protected":{".read":false,".write":false}}}

@@ -368,6 +368,7 @@ fn parse_function(f: &Value) -> Result<FunctionSpec, String> {
                 },
             }
         }
+        "remoteConfig" => Trigger::RemoteConfig,
         "pubsub" => {
             let topic = s(trigger, "topic")
                 .ok_or_else(|| format!("manifest: function {name:?}: topic is required"))?;
@@ -589,6 +590,7 @@ fn ignored_to_json(ignored: &IgnoredFunction) -> Value {
 
 /// The manifest as canonical JSON (capabilities / status output).
 #[must_use]
+#[allow(clippy::too_many_lines)]
 pub fn manifest_to_json(m: &FunctionManifest) -> Value {
     let functions: Vec<Value> = m
         .functions
@@ -612,6 +614,7 @@ pub fn manifest_to_json(m: &FunctionManifest) -> Value {
                     document,
                     with_auth_context,
                 } => json!({"type": "firestore", "eventType": format!("{}{}", event.event_type(), if *with_auth_context { ".withAuthContext" } else { "" }), "database": database, "document": document.as_str()}),
+                Trigger::RemoteConfig => json!({"type": "remoteConfig"}),
                 Trigger::PubSub { topic } => json!({"type": "pubsub", "topic": topic}),
                 Trigger::TaskQueue { retry, rate_limits } => json!({
                     "type": "tasks",

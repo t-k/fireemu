@@ -9,6 +9,37 @@ import production_denominator_v2_auth_time as overlay
 
 
 ROOT = Path(__file__).parents[2]
+PENDING_TRIGGER_COMPARATOR = "tools/publish-auth-pending-triggers-comparison.py"
+
+
+@pytest.fixture
+def historical_comparator_source_view(monkeypatch):
+    """Use historical parent bytes for semantic tests, not as current-binding evidence."""
+    parent_value = load(v2.OUTPUT_PATH)
+    comparator_input = parent_value["evidence"][0]["comparator"]["inputs"]
+    assert len(comparator_input) == 1
+    assert comparator_input[0]["path"] == PENDING_TRIGGER_COMPARATOR
+    historical_sha = comparator_input[0]["sha256"]
+    mapping = load_mapping()
+    receipt = load(mapping["receipt"]["path"])
+    reevaluation_commit = receipt["production"]["reevaluatedWith"]["commit"]
+    assert v2.git_blob_digest(ROOT, reevaluation_commit, PENDING_TRIGGER_COMPARATOR) == historical_sha
+
+    original_file_digest = v2.file_digest
+    delegated_paths = set()
+
+    def file_digest(root, relative):
+        if relative == PENDING_TRIGGER_COMPARATOR:
+            return historical_sha
+        delegated_paths.add(relative)
+        return original_file_digest(root, relative)
+
+    monkeypatch.setattr(v2, "file_digest", file_digest)
+    baseline = load_auth_time_overlay()
+    overlay.validate_document(ROOT, baseline)
+    assert overlay.MAPPING_PATH in delegated_paths
+    assert "tools/compat-inventory/production_denominator_v2_auth_time.py" in delegated_paths
+    return baseline
 
 
 def load(path: str):
@@ -45,8 +76,10 @@ def test_auth_time_list_collection_ids_overlay_maps_only_observed_surfaces():
     assert len(value["bindings"]) == 3
 
 
-def test_auth_time_overlay_validation_rejects_unmapped_continuation_surface():
-    value = load_auth_time_overlay()
+def test_auth_time_overlay_validation_rejects_unmapped_continuation_surface(
+    historical_comparator_source_view,
+):
+    value = historical_comparator_source_view
     mutated = copy.deepcopy(value)
     target = next(
         target
@@ -55,12 +88,25 @@ def test_auth_time_overlay_validation_rejects_unmapped_continuation_surface():
     )
     target["coverage"] = "partial"
     target["bindingIds"] = ["firestore-list-collection-ids"]
-    with pytest.raises(overlay.ValidationError):
+    with pytest.raises(overlay.ValidationError, match="overlay target coverage mismatch"):
         overlay.validate_document(ROOT, mutated)
 
 
-def test_auth_time_overlay_rejects_provenance_and_report_mutations(tmp_path):
-    value = load_auth_time_overlay()
+def test_auth_time_overlay_validates_against_the_live_parent():
+    overlay.validate_document(ROOT, load_auth_time_overlay())
+
+
+def test_auth_time_overlay_rejects_provenance_and_report_mutations(
+    tmp_path, historical_comparator_source_view
+):
+    value = historical_comparator_source_view
+    expected_messages = {
+        "goal": "overlay parent metadata differs",
+        "definitions": "overlay parent metadata differs",
+        "sourceSnapshot": "overlay parent metadata differs",
+        "generator": "overlay generator identity mismatch",
+        "evidence": "overlay differs from canonical evidence",
+    }
     for field in ("goal", "definitions", "sourceSnapshot", "generator", "evidence"):
         mutated = copy.deepcopy(value)
         if field == "evidence":
@@ -73,7 +119,7 @@ def test_auth_time_overlay_rejects_provenance_and_report_mutations(tmp_path):
             mutated[field] = {}
         else:
             mutated[field] = "forged"
-        with pytest.raises(overlay.ValidationError):
+        with pytest.raises(overlay.ValidationError, match=expected_messages[field]):
             overlay.validate_document(ROOT, mutated)
 
     report = tmp_path / "report.md"

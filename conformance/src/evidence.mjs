@@ -44,6 +44,302 @@ const stable = (value) => {
   return value;
 };
 
+const PRIVATE_PATH_PARTS = ["docs.local", ".codex", "docs/superpowers"];
+const normalizedPathText = (value) => {
+  const parts = [];
+  for (const part of value.replaceAll("\\", "/").split("/")) {
+    if (!part || part === ".") continue;
+    if (part === "..") {
+      if (parts.length && parts.at(-1) !== "..") parts.pop();
+      else parts.push(part);
+    } else parts.push(part);
+  }
+  return parts.join("/");
+};
+const hasPrivatePath = (value) => {
+  const original = value.replaceAll("\\", "/");
+  const normalized = normalizedPathText(value);
+  return PRIVATE_PATH_PARTS.some((part) => original.includes(part) || normalized.includes(part));
+};
+const isUrl = (value) => /^https?:\/\/[^\s]+$/i.test(value);
+const isCanonicalBase64 = (value) =>
+  /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value) &&
+  Buffer.from(value, "base64").toString("base64") === value;
+// These selector roots are the finite roots observed in the tracked public JSON corpus.
+const JSON_SELECTOR_ROOTS = new Set([
+  "wire",
+  "publishes",
+  "evidence",
+  "rows",
+  "observations",
+  "localCapture",
+  "frames",
+  "originalEvidence",
+  "publications",
+  "groups",
+  "calls",
+  "manifest",
+  "segments",
+  "native",
+  "artifact",
+  "proofs",
+  "profile",
+  "production",
+  "fixtureSources",
+  "fixtureDigests",
+  "runs",
+  "comparisons",
+  "binary",
+  "sha256",
+  "result",
+  "cases",
+]);
+const selectorCharacter = /[\w~.()=:,; -]/;
+const apiPathname = (pathname) =>
+  /^\/v1(?:\/[A-Za-z0-9_().:-]+)+$/.test(pathname) ||
+  /^\/google\.[A-Za-z0-9_.]+\.[A-Za-z0-9_.]+\/[A-Za-z][A-Za-z0-9]+$/.test(pathname);
+const channelResource = "projects/[A-Za-z0-9_-]+/locations/[A-Za-z0-9_-]+/channels/[A-Za-z0-9_-]+";
+const safeQueryText = (value) => {
+  if (
+    [...value].some(
+      (character) => character.charCodeAt(0) < 0x20 || character.charCodeAt(0) === 0x7f,
+    )
+  )
+    return false;
+  return !/[?#]/.test(value);
+};
+const safeQueryScalar = (value) => safeQueryText(value) && !/[\\/]/.test(value);
+const safeChannelFilter = (value) => {
+  if (!safeQueryText(value)) return false;
+  if (!/[\\/]/.test(value)) return true;
+  return new RegExp(`^(?:name|channelId)=["']?${channelResource}["']?$`).test(value);
+};
+const isSafeChannelQuery = (query, pathname) => {
+  if (!query || /%(?![0-9A-Fa-f]{2})/.test(query)) return false;
+  const collection = /^\/v1\/projects\/[A-Za-z0-9_.:-]+\/locations\/[A-Za-z0-9_.:-]+\/channels$/;
+  if (!collection.test(pathname)) return false;
+  const seen = new Set();
+  for (const [key, value] of new URLSearchParams(query)) {
+    if (seen.has(key)) return false;
+    seen.add(key);
+    if (hasPrivatePath(value) || isFilesystemPath(value)) return false;
+    if (value.split("/").some((segment) => segment === "." || segment === "..")) return false;
+    if (["pageSize", "pageToken", "channelId"].includes(key) && safeQueryScalar(value)) continue;
+    if (key === "filter" && safeChannelFilter(value)) continue;
+    return false;
+  }
+  return seen.size > 0;
+};
+const isApiOrRpc = (key, value) => {
+  const allowedContexts = ["path", "requestPath", "rpcPath", "route"];
+  const queryIndex = value.indexOf("?");
+  const pathname = queryIndex < 0 ? value : value.slice(0, queryIndex);
+  const query = queryIndex < 0 ? null : value.slice(queryIndex + 1);
+  const segments = pathname.split("/");
+  if (
+    !allowedContexts.includes(key) ||
+    segments.some((segment) => segment === "." || segment === "..")
+  )
+    return false;
+  if (query !== null) return isSafeChannelQuery(query, pathname);
+  return apiPathname(pathname);
+};
+const isSelector = (key, value) =>
+  /selector|pointer/i.test(key) &&
+  value.startsWith("/") &&
+  (value === "/" ||
+    (JSON_SELECTOR_ROOTS.has(value.match(/^\/([A-Za-z][A-Za-z0-9_-]*)/)?.[1]) &&
+      [...value].every(
+        (character) =>
+          character === "/" ||
+          character === "[" ||
+          character === "]" ||
+          selectorCharacter.test(character),
+      ) &&
+      !/(?:^|\/)\.\.(?:\/|$)/.test(value) &&
+      value
+        .split(/[,;\s]+/)
+        .every((component) =>
+          JSON_SELECTOR_ROOTS.has(component.match(/^\/([A-Za-z][A-Za-z0-9_-]*)(?:\/|$)/)?.[1]),
+        )));
+const isPubsubCoordinate = (key, value) =>
+  key === "coordinate" && /^\/conditions\/\d+\/cases\/\d+$/.test(value);
+const isKnownDifferencePointer = (key, value) =>
+  key === "knownDifferences" && /^\/knownDifferences\/[A-Za-z0-9_-]+$/.test(value);
+const isKnownRootUrl = (key, value) => /url/i.test(key) && value === "/";
+const isRecordedRootRoute = (key, value) => ["production", "local"].includes(key) && value === "/";
+const isFilesystemPath = (value) => {
+  if (/^~(?:[\\/]|$)/.test(value)) return true;
+  if (/^file:/i.test(value) || /^[A-Za-z]:[\\/]/.test(value) || value.startsWith("\\\\"))
+    return true;
+  if (value.includes("\\") && /(?:^|[\\/])\.\.(?:[\\/]|$)/.test(value)) return true;
+  if (value.startsWith("/")) return true;
+  const parts = value.replaceAll("\\", "/").split("/");
+  let depth = 0;
+  for (const part of parts) {
+    if (!part || part === ".") continue;
+    if (part === "..") {
+      depth--;
+      if (depth < 0) return true;
+    } else depth++;
+  }
+  return false;
+};
+
+/** Refuse public evidence values or keys that can disclose private filesystem paths. */
+export function publicEvidence(value) {
+  const fail = (code) => {
+    const error = new Error("public evidence contains a disallowed filesystem path");
+    error.code = code;
+    throw error;
+  };
+  const walk = (current, key = "") => {
+    if (typeof current === "string") {
+      if (hasPrivatePath(current)) fail("PRIVATE_MARKER");
+      if (/selector|pointer/i.test(key) && current.includes("%")) {
+        let decoded;
+        try {
+          decoded = decodeURIComponent(current);
+        } catch {
+          fail("INVALID_SELECTOR");
+        }
+        walk(decoded, key);
+        return;
+      }
+      if (/bytesValue$/i.test(key) && isCanonicalBase64(current)) {
+        const decoded = Buffer.from(current, "base64");
+        const text = decoded.toString("utf8");
+        if (Buffer.from(text, "utf8").equals(decoded)) walk(text, "decodedText");
+        return;
+      }
+      if (isUrl(current)) {
+        if (/url|uri|link|origin|authority/i.test(key) || key === "source") return;
+        fail("URL_CONTEXT");
+      }
+      if (
+        isSelector(key, current) ||
+        isPubsubCoordinate(key, current) ||
+        isKnownDifferencePointer(key, current) ||
+        isApiOrRpc(key, current) ||
+        isKnownRootUrl(key, current) ||
+        isRecordedRootRoute(key, current)
+      )
+        return;
+      if (/^file:/i.test(current)) fail("FILE_URL");
+      if (isFilesystemPath(current))
+        fail(current.startsWith("..") ? "PARENT_ESCAPE" : "ABSOLUTE_PATH");
+      // Absolute paths embedded in prose are unsafe even when the whole string is not a path.
+      if (
+        /(?:^|\s)(?:\/(?:Users|home|tmp|private|var|etc|usr|opt|root|mnt|Volumes|System|Library|Applications|workspace|work)(?:\/|\s|$)|[A-Za-z]:\\)/.test(
+          current,
+        )
+      )
+        fail("EMBEDDED_ABSOLUTE");
+      return;
+    }
+    if (Array.isArray(current)) {
+      for (const item of current) walk(item, key);
+    } else if (current && typeof current === "object") {
+      for (const [childKey, child] of Object.entries(current)) {
+        walk(childKey, "dictionaryKey");
+        walk(child, childKey);
+      }
+    }
+  };
+  walk(value);
+  return value;
+}
+
+function rejectDuplicateObjectKeys(text) {
+  let index = 0;
+  const whitespace = () => {
+    while ([9, 10, 13, 32].includes(text.charCodeAt(index))) index += 1;
+  };
+  const fail = () => {
+    throw new Error("public evidence JSON structure is invalid");
+  };
+  const string = () => {
+    if (text[index] !== '"') fail();
+    const start = index++;
+    while (index < text.length) {
+      const character = text[index++];
+      if (character === "\\") index += 1;
+      else if (character === '"') return JSON.parse(text.slice(start, index));
+      else if (character.charCodeAt(0) < 0x20) fail();
+    }
+    fail();
+  };
+  const value = () => {
+    whitespace();
+    if (text[index] === '"') {
+      string();
+      return;
+    }
+    if (text[index] === "{") {
+      index += 1;
+      whitespace();
+      if (text[index] === "}") {
+        index += 1;
+        return;
+      }
+      const keys = new Set();
+      while (true) {
+        whitespace();
+        const key = string();
+        if (keys.has(key)) throw new Error("public evidence JSON has duplicate object keys");
+        keys.add(key);
+        whitespace();
+        if (text[index++] !== ":") fail();
+        value();
+        whitespace();
+        if (text[index] === "}") {
+          index += 1;
+          return;
+        }
+        if (text[index++] !== ",") fail();
+      }
+    }
+    if (text[index] === "[") {
+      index += 1;
+      whitespace();
+      if (text[index] === "]") {
+        index += 1;
+        return;
+      }
+      while (true) {
+        value();
+        whitespace();
+        if (text[index] === "]") {
+          index += 1;
+          return;
+        }
+        if (text[index++] !== ",") fail();
+      }
+    }
+    const start = index;
+    while (index < text.length && !/[\s,\]}]/.test(text[index])) index += 1;
+    if (start === index) fail();
+  };
+  value();
+  whitespace();
+  if (index !== text.length) fail();
+}
+
+/** Validate a retained UTF-8 JSON snapshot without changing or reserializing its bytes. */
+export function publicEvidenceBytes(bytes) {
+  if (!Buffer.isBuffer(bytes)) throw new TypeError("public evidence snapshot must be a Buffer");
+  let value;
+  try {
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    rejectDuplicateObjectKeys(text);
+    value = JSON.parse(text);
+  } catch {
+    throw new Error("public evidence JSON validation failed");
+  }
+  publicEvidence(value);
+  return bytes;
+}
+
 /** SHA-256 digest for a JSON identity value. */
 export const digestJson = (value) =>
   "sha256-" +

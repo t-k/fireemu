@@ -9,6 +9,7 @@
 // `check` runs `run.mjs local` with FIREEMU_BIN (or the workspace build), classifies each
 // recorded row and writes `.runs/auth-federation/comparison[-record-saml].json`.
 
+import { publicEvidence } from "../evidence.mjs";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
@@ -199,7 +200,7 @@ async function exportComparison(packet, out) {
   const comparison = JSON.parse(await readFile(path, "utf8"));
   const fixtureText = await readFile(join(CONFORMANCE_DIR, corpus.fixture), "utf8");
   const evidence = evidenceOf(corpus, comparison, fixtureText);
-  await writeFile(out, `${JSON.stringify(evidence, null, 2)}\n`);
+  await writeFile(out, `${JSON.stringify(publicEvidence(evidence), null, 2)}\n`);
   console.log(
     JSON.stringify(
       { out, summary: evidence.summary, fixtureSha256: evidence.fixtureSha256 },

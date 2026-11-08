@@ -3511,7 +3511,7 @@ impl fireemu_adapter_database::changes::ChangeSink for FunctionsDatabaseSink {
     fn capture_references_within(
         &self,
         namespace: &str,
-        before: &fireemu_adapter_database::changes::Tree,
+        before: fireemu_adapter_database::changes::ScopeView<'_>,
         after: &fireemu_adapter_database::changes::Tree,
         scope: &fireemu_adapter_database::changes::Path,
     ) -> Result<
@@ -3641,19 +3641,16 @@ impl DatabaseReferenceCapture {
     fn insert(
         &mut self,
         path: &fireemu_adapter_database::changes::Path,
-        before: Option<&fireemu_adapter_database::changes::Node>,
-        after: Option<&fireemu_adapter_database::changes::Node>,
+        before: Option<fireemu_adapter_database::changes::NodeView<'_>>,
+        after: Option<fireemu_adapter_database::changes::NodeView<'_>>,
     ) -> Result<(), fireemu_core_types::admission::EventAdmissionError> {
         if self.references.contains(path) {
             return Ok(());
         }
         // An event carries `before` as its data and, unless both sides are objects, `after`
         // whole as its delta.
-        let objects = |node: Option<&fireemu_adapter_database::changes::Node>| {
-            matches!(
-                node.map(|node| &node.content),
-                Some(fireemu_adapter_database::changes::Content::Children(_))
-            )
+        let objects = |node: Option<fireemu_adapter_database::changes::NodeView<'_>>| {
+            matches!(node.map(|node| node.leaf().is_none()), Some(true))
         };
         let mut bound = database_json_lower_bound(before, self.frame_limit);
         if !(objects(before) && objects(after)) {
@@ -3679,53 +3676,54 @@ impl DatabaseReferenceCapture {
 /// bytes plus the quotes, colons, commas and braces around them; every other leaf counts one
 /// byte, and priorities and escapes are left out. It stops counting once past `limit`.
 fn database_json_lower_bound(
-    node: Option<&fireemu_adapter_database::changes::Node>,
+    node: Option<fireemu_adapter_database::changes::NodeView<'_>>,
     limit: usize,
 ) -> usize {
-    use fireemu_adapter_database::changes::Content;
+    use fireemu_adapter_database::changes::Leaf;
     let Some(node) = node else {
-        return 4; // null
+        return 4;
     };
     let mut total = 0usize;
-    let mut pending = vec![node];
-    while let Some(node) = pending.pop() {
-        match &node.content {
-            Content::Leaf(fireemu_adapter_database::changes::Leaf::String(text)) => {
-                total = total.saturating_add(text.len() + 2);
-            }
-            Content::Leaf(_) => total = total.saturating_add(1),
-            Content::Children(children) => {
-                // Braces, and a key with its quotes, colon and comma per child.
-                total = total.saturating_add(2 + children.len().saturating_sub(1));
-                for (key, child) in children {
-                    total = total.saturating_add(key.len() + 3);
-                    pending.push(child);
+    // Iterator frames, rather than a stack containing every child, bound scratch
+    // space by depth even for a very wide ancestor rejected by its frame size.
+    let mut next = Some(node);
+    let mut children = Vec::new();
+    loop {
+        if let Some(node) = next.take() {
+            match node.leaf() {
+                Some(Leaf::String(text)) => total = total.saturating_add(text.len() + 2),
+                Some(_) => total = total.saturating_add(1),
+                None => {
+                    total = total.saturating_add(2 + node.child_count().saturating_sub(1));
+                    children.push(node.children().expect("a non-leaf has children"));
                 }
             }
         }
         if total > limit {
             break;
         }
+        match children.last_mut().and_then(Iterator::next) {
+            Some((key, child)) => {
+                total = total.saturating_add(key.len() + 3);
+                next = Some(child);
+            }
+            None => {
+                if children.pop().is_none() {
+                    break;
+                }
+            }
+        }
     }
     total
-}
-
-fn database_node_children(
-    node: Option<&fireemu_adapter_database::changes::Node>,
-) -> Option<&BTreeMap<String, fireemu_adapter_database::changes::Node>> {
-    match &node?.content {
-        fireemu_adapter_database::changes::Content::Children(children) => Some(children),
-        fireemu_adapter_database::changes::Content::Leaf(_) => None,
-    }
 }
 
 /// The changed trigger references of a write confined to `scope` (see
 /// `ChangeSink::capture_references_within`), and how many were left out because their
 /// snapshot can never fit `frame_limit`: above `scope` only the branch leading to it is
 /// followed, without comparing its unchanged siblings.
-fn capture_database_references(
+fn capture_database_references<'a>(
     patterns: &[fireemu_core_functions::manifest::DatabasePattern],
-    before: &fireemu_adapter_database::changes::Tree,
+    before: impl Into<fireemu_adapter_database::changes::ScopeView<'a>>,
     after: &fireemu_adapter_database::changes::Tree,
     scope: &fireemu_adapter_database::changes::Path,
     record_limit: usize,
@@ -3734,6 +3732,7 @@ fn capture_database_references(
     (Vec<fireemu_adapter_database::changes::Path>, usize),
     fireemu_core_types::admission::EventAdmissionError,
 > {
+    let before = before.into();
     let mut capture = DatabaseReferenceCapture {
         references: BTreeSet::new(),
         record_limit,
@@ -3760,7 +3759,9 @@ fn capture_database_references(
         walk_database_references(
             &prefixes,
             before.root(),
-            after.root(),
+            after
+                .root()
+                .map(fireemu_adapter_database::changes::NodeView::Borrowed),
             &fireemu_adapter_database::changes::Path::root(),
             scope,
             &mut capture,
@@ -3774,8 +3775,8 @@ fn capture_database_references(
 
 fn walk_database_references(
     prefixes: &[fireemu_core_functions::manifest::DatabasePattern],
-    before: Option<&fireemu_adapter_database::changes::Node>,
-    after: Option<&fireemu_adapter_database::changes::Node>,
+    before: Option<fireemu_adapter_database::changes::NodeView<'_>>,
+    after: Option<fireemu_adapter_database::changes::NodeView<'_>>,
     path: &fireemu_adapter_database::changes::Path,
     scope: &fireemu_adapter_database::changes::Path,
     capture: &mut DatabaseReferenceCapture,
@@ -3783,7 +3784,15 @@ fn walk_database_references(
     // Above the written scope, the node changed exactly when the scope did, which the caller
     // established; comparing would walk every unchanged sibling.
     let above_scope = path.depth() < scope.depth();
-    if !above_scope && before == after {
+    if !above_scope
+        && match (before, after) {
+            (None, None) => true,
+            (Some(before), Some(fireemu_adapter_database::changes::NodeView::Borrowed(after))) => {
+                before.equals(after)
+            }
+            _ => false,
+        }
+    {
         return Ok(());
     }
     if path.depth() == prefixes.len() {
@@ -3795,8 +3804,6 @@ fn walk_database_references(
         .rsplit('/')
         .next()
         .expect("a non-root prefix has a segment");
-    let old_children = database_node_children(before);
-    let new_children = database_node_children(after);
     let mut visit = |key: &str| {
         let child = path.child(key);
         if prefix.matches(&child.to_string()).is_none() {
@@ -3804,8 +3811,8 @@ fn walk_database_references(
         }
         walk_database_references(
             prefixes,
-            old_children.and_then(|children| children.get(key)),
-            new_children.and_then(|children| children.get(key)),
+            before.and_then(|node| node.child(key)),
+            after.and_then(|node| node.child(key)),
             &child,
             scope,
             capture,
@@ -3817,11 +3824,19 @@ fn walk_database_references(
     if !segment.contains(['{', '*']) {
         return visit(segment);
     }
-    for key in old_children.into_iter().flat_map(BTreeMap::keys) {
+    for (key, _) in before
+        .and_then(fireemu_adapter_database::changes::NodeView::children)
+        .into_iter()
+        .flatten()
+    {
         visit(key)?;
     }
-    for key in new_children.into_iter().flat_map(BTreeMap::keys) {
-        if old_children.is_none_or(|children| !children.contains_key(key)) {
+    for (key, _) in after
+        .and_then(fireemu_adapter_database::changes::NodeView::children)
+        .into_iter()
+        .flatten()
+    {
+        if before.and_then(|node| node.child(key)).is_none() {
             visit(key)?;
         }
     }
@@ -6796,6 +6811,21 @@ fn run_schedule_error(
 pub struct Hook(pub Arc<FunctionsRuntime>);
 
 impl FunctionsHook for Hook {
+    fn publish_remote_config(
+        &self,
+        body: &serde_json::Value,
+    ) -> Result<usize, fireemu_adapter_http::control::PublishEventError> {
+        use fireemu_adapter_functions::runtime::SourceEventAdmissionError;
+        use fireemu_adapter_http::control::PublishEventError;
+        self.0
+            .publish_remote_config(body)
+            .map_err(|error| match error {
+                SourceEventAdmissionError::InvalidEvent => PublishEventError::Invalid,
+                SourceEventAdmissionError::Capacity => PublishEventError::Capacity,
+                SourceEventAdmissionError::Unavailable => PublishEventError::Unavailable,
+            })
+    }
+
     fn validate_clock_target(
         &self,
         instant: fireemu_core_types::time::LogicalInstant,
@@ -7219,12 +7249,17 @@ while True:
         let after = database_bridge_tree(&json!({"users":{"a":1}}));
         let root = fireemu_adapter_database::changes::Path::root();
         assert!(sink
-            .capture_references_within("another-project-default-rtdb", &empty, &after, &root)
+            .capture_references_within(
+                "another-project-default-rtdb",
+                (&empty).into(),
+                &after,
+                &root
+            )
             .unwrap()
             .unwrap()
             .is_empty());
         assert!(other_region
-            .capture_references_within("demo-app-default-rtdb", &empty, &after, &root)
+            .capture_references_within("demo-app-default-rtdb", (&empty).into(), &after, &root)
             .unwrap()
             .unwrap()
             .is_empty());
@@ -7316,11 +7351,80 @@ while True:
     }
 
     #[test]
+    fn database_scope_overlay_matches_concrete_before_capture_and_frame_drops() {
+        use fireemu_adapter_database::changes::Path;
+        use fireemu_adapter_database::rest::{Database, Handled, HttpRequest, RestOptions};
+        use fireemu_core_functions::manifest::DatabasePattern;
+        let patterns = ["/", "/a", "/a/{child}", "/a/{child}/{deep}", "/b"]
+            .map(|pattern| DatabasePattern::parse(pattern).unwrap());
+        for value in [
+            json!(null),
+            json!({".value":"leaf",".priority":3}),
+            json!({"a":{".value":"leaf",".priority":2},".priority":1}),
+            json!({"a":{"x":{".value":1,".priority":3},".priority":2},".priority":1}),
+            json!({"a":{"x":1,"y":2},"b":"unchanged"}),
+        ] {
+            let before = database_bridge_tree(&value);
+            for scope in [
+                Path::root(),
+                Path::from_keys(["a"]),
+                Path::from_keys(["a", "x"]),
+                Path::from_keys(["a", "x", "deep"]),
+            ] {
+                for next in [json!(null), json!(9), json!({"z":true})] {
+                    let mut database = Database::new(RestOptions::default(), 1);
+                    assert_eq!(database_bridge_write(&mut database, &value), 200);
+                    let saved = before.save_scope(&scope);
+                    let response = database.handle(
+                        &HttpRequest {
+                            method: "PUT".into(),
+                            target: format!("{scope}.json?ns=demo-app-default-rtdb"),
+                            headers: Vec::new(),
+                            body: serde_json::to_vec(&next).unwrap(),
+                        },
+                        100_000,
+                    );
+                    assert!(
+                        matches!(response, Handled::Response { response, .. } if response.status == 200)
+                    );
+                    let after = database.tree("demo-app-default-rtdb").unwrap();
+                    if &before == after {
+                        continue;
+                    }
+                    for records in [0, 1, 8] {
+                        for frame in [0, 10, 1024] {
+                            let expected = super::capture_database_references(
+                                &patterns, &before, after, &scope, records, frame,
+                            );
+                            let actual = super::capture_database_references(
+                                &patterns,
+                                saved.view(after),
+                                after,
+                                &scope,
+                                records,
+                                frame,
+                            );
+                            assert_eq!(
+                                format!("{actual:?}"),
+                                format!("{expected:?}"),
+                                "scope {scope}, records {records}, frame {frame}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn database_json_lower_bound_counts_the_compact_json_of_keys_strings_and_punctuation() {
         use fireemu_adapter_database::changes::Path;
         let tree =
             database_bridge_tree(&json!({"s":"abc","o":{"a":1,"b":2},"p":{"a":"xx","b":"yy"}}));
-        let node = |key: &str| tree.get(&Path::from_keys([key]));
+        let node = |key: &str| {
+            tree.get(&Path::from_keys([key]))
+                .map(fireemu_adapter_database::changes::NodeView::Borrowed)
+        };
         assert_eq!(super::database_json_lower_bound(None, usize::MAX), 4); // null
         assert_eq!(super::database_json_lower_bound(node("s"), usize::MAX), 5); // "abc"
         assert_eq!(super::database_json_lower_bound(node("o"), usize::MAX), 13); // {"a":1,"b":2}

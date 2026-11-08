@@ -1,0 +1,12 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{collection}/{document} { allow read, write: if collection.matches('smoke-.*'); }
+    match /public/{document} { allow read: if true; }
+    match /profiles/{owner} { allow read, write: if request.auth != null && request.auth.uid == owner; }
+    match /notes/{document} {
+      allow read: if request.auth != null && resource.data.owner == request.auth.uid;
+      allow create: if request.auth != null && request.resource.data.owner == request.auth.uid;
+    }
+  }
+}

@@ -6,6 +6,7 @@
 use fireemu_adapter_grpc::encode::encode_document;
 use fireemu_adapter_grpc::rest::json::{document_to_json, shorten_fraction};
 use fireemu_core_auth::store::UserRecord;
+use fireemu_core_firestore::field_path::FieldPath;
 use fireemu_core_firestore::store::Document;
 use fireemu_core_functions::event::{
     auth_attributes, firestore_attributes, pubsub_attributes, schedule_attributes,
@@ -230,13 +231,21 @@ pub fn change_kind(before: Option<&Document>, after: Option<&Document>) -> Optio
 fn update_mask(before: &Document, after: &Document) -> Vec<String> {
     let mut paths: Vec<String> = Vec::new();
     for (k, v) in &after.fields {
-        if before.fields.get(k) != Some(v) {
-            paths.push(k.clone());
+        if !before.fields.get(k).is_some_and(|old| old.stored_eq(v)) {
+            paths.push(
+                FieldPath::from_segments([k.as_str()])
+                    .expect("valid stored field name")
+                    .canonical(),
+            );
         }
     }
     for k in before.fields.keys() {
         if !after.fields.contains_key(k) {
-            paths.push(k.clone());
+            paths.push(
+                FieldPath::from_segments([k.as_str()])
+                    .expect("valid stored field name")
+                    .canonical(),
+            );
         }
     }
     paths.sort();
@@ -356,6 +365,52 @@ pub fn firestore_event_data(before: Option<&Document>, after: Option<&Document>)
         );
     }
     Value::Object(data)
+}
+
+/// Firestore `CloudEvents` data, wire-compatible with google-cloudevents at `5427368e99996f3185f45d6eb444f8f7c1cd6e2d`, proto/google/events/cloud/firestore/v1/data.proto.
+/// The existing Firestore document and mask messages have the same field tags and wire types.
+#[derive(Clone, PartialEq, prost::Message)]
+pub(crate) struct DocumentEventData {
+    #[prost(message, optional, tag = "1")]
+    value: Option<fireemu_proto_firestore::google::firestore::v1::Document>,
+    #[prost(message, optional, tag = "2")]
+    old_value: Option<fireemu_proto_firestore::google::firestore::v1::Document>,
+    #[prost(message, optional, tag = "3")]
+    update_mask: Option<fireemu_proto_firestore::google::firestore::v1::DocumentMask>,
+}
+
+/// Encodes Firestore event data for the runner IPC. Binary data uses a base64 JSON string.
+/// This is an internal IPC convention, not a structured HTTP `CloudEvent`.
+#[must_use]
+pub fn firestore_event_data_encoded(
+    before: Option<&Document>,
+    after: Option<&Document>,
+    protobuf: bool,
+) -> Value {
+    use prost::Message as _;
+    if !protobuf {
+        return firestore_event_data(before, after);
+    }
+    #[cfg(test)]
+    if before.is_some() || after.is_some() {
+        probe_payload_encoding();
+    }
+    #[cfg(test)]
+    FIRESTORE_DOCUMENT_ENCODINGS.with(|count| {
+        count.set(count.get() + usize::from(before.is_some()) + usize::from(after.is_some()));
+    });
+    let message = DocumentEventData {
+        value: after.map(encode_document),
+        old_value: before.map(encode_document),
+        update_mask: before.zip(after).map(|(b, a)| {
+            fireemu_proto_firestore::google::firestore::v1::DocumentMask {
+                field_paths: update_mask(b, a),
+            }
+        }),
+    };
+    Value::String(fireemu_core_types::hash::base64_standard(
+        &message.encode_to_vec(),
+    ))
 }
 
 /// Object resource JSON (`StorageObjectData`), as the JSON API reports it.
@@ -2137,4 +2192,209 @@ fn database_delta(before: &Value, after: &Value) -> Value {
         }
     }
     Value::Object(delta)
+}
+
+/// Validates local fixture metadata against the published Functions SDK types, without
+/// filling absent fields. The caller supplies envelope identity and time: production's
+/// Remote Config envelopes have not been observed. This is not a template publishing API.
+#[allow(clippy::too_many_lines)]
+pub fn remote_config_events(
+    project: &str,
+    body: &Value,
+) -> Result<(Option<Value>, Option<Value>), String> {
+    let object = |value: &Value, allowed: &[&str]| -> Result<(), String> {
+        let map = value
+            .as_object()
+            .ok_or("Remote Config input must be an object")?;
+        if map.keys().any(|key| !allowed.contains(&key.as_str())) {
+            return Err("Remote Config input contains an unsupported field".into());
+        }
+        Ok(())
+    };
+    let text = |value: &Value, key: &str| -> Result<(), String> {
+        if value
+            .get(key)
+            .and_then(Value::as_str)
+            .is_some_and(|s| !s.is_empty())
+        {
+            Ok(())
+        } else {
+            Err(format!("Remote Config {key} must be a non-empty string"))
+        }
+    };
+    let timestamp = |value: &Value, key: &str| -> Result<(), String> {
+        value
+            .get(key)
+            .and_then(Value::as_str)
+            .and_then(|s| LogicalInstant::parse_rfc3339(s).ok())
+            .map(|_| ())
+            .ok_or_else(|| format!("Remote Config {key} must be an RFC3339 timestamp"))
+    };
+    let number =
+        |value: &Value| -> bool { value.as_u64().is_some_and(|n| n <= 9_007_199_254_740_991) };
+    object(body, &["data", "v1Context", "v2Context"])?;
+    let data = &body["data"];
+    object(
+        data,
+        &[
+            "versionNumber",
+            "updateTime",
+            "updateUser",
+            "description",
+            "updateOrigin",
+            "updateType",
+            "rollbackSource",
+        ],
+    )?;
+    if !number(&data["versionNumber"]) {
+        return Err("Remote Config versionNumber must be a non-negative safe integer".into());
+    }
+    timestamp(data, "updateTime")?;
+    for key in ["description", "updateOrigin", "updateType"] {
+        if data.get(key).is_some_and(|v| !v.is_string()) {
+            return Err(format!("Remote Config {key} must be a string"));
+        }
+    }
+    if let Some(user) = data.get("updateUser") {
+        object(user, &["name", "email", "imageUrl"])?;
+        text(user, "email")?;
+        for key in ["name", "imageUrl"] {
+            if user.get(key).is_some_and(|v| !v.is_string()) {
+                return Err(format!("Remote Config updateUser.{key} must be a string"));
+            }
+        }
+    }
+    if data.get("rollbackSource").is_some_and(|v| !number(v)) {
+        return Err("Remote Config rollbackSource must be a non-negative safe integer".into());
+    }
+    let resource = format!("projects/{project}");
+    let v1 = if let Some(context) = body.get("v1Context") {
+        object(context, &["eventId", "timestamp", "eventType", "resource"])?;
+        text(context, "eventId")?;
+        timestamp(context, "timestamp")?;
+        object(&context["resource"], &["service", "name"])?;
+        if context["eventType"] != "google.firebase.remoteconfig.update"
+            || context["resource"]["service"] != "firebaseremoteconfig.googleapis.com"
+            || context["resource"]["name"] != resource
+        {
+            return Err(
+                "Remote Config v1 context must name the update event and runtime project".into(),
+            );
+        }
+        Some(json!({"context": context, "data": data}))
+    } else {
+        None
+    };
+    let v2 = if let Some(context) = body.get("v2Context") {
+        object(
+            context,
+            &["specversion", "id", "source", "type", "time", "subject"],
+        )?;
+        text(context, "id")?;
+        timestamp(context, "time")?;
+        if context["specversion"] != "1.0"
+            || context["type"] != "google.firebase.remoteconfig.remoteConfig.v1.updated"
+            || context["source"] != format!("//firebaseremoteconfig.googleapis.com/{resource}")
+            || context
+                .get("subject")
+                .is_some_and(|subject| subject != &resource)
+        {
+            return Err(
+                "Remote Config v2 context must name the update event and runtime project".into(),
+            );
+        }
+        let mut event = context.clone();
+        event["data"] = data.clone();
+        Some(event)
+    } else {
+        None
+    };
+    Ok((v1, v2))
+}
+
+#[cfg(test)]
+mod remote_config_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    fn publication() -> Value {
+        json!({
+            "data": {"versionNumber": 7, "updateTime": "2026-01-02T03:04:05Z"},
+            "v1Context": {"eventId": "first", "timestamp": "2026-01-02T03:04:06Z", "eventType": "google.firebase.remoteconfig.update", "resource": {"service": "firebaseremoteconfig.googleapis.com", "name": "projects/demo-config"}},
+            "v2Context": {"specversion": "1.0", "id": "second", "time": "2026-01-02T03:04:07Z", "type": "google.firebase.remoteconfig.remoteConfig.v1.updated", "source": "//firebaseremoteconfig.googleapis.com/projects/demo-config"}
+        })
+    }
+
+    #[test]
+    fn remote_config_preserves_supplied_contexts_and_optional_absence() {
+        let input = publication();
+        let (v1, v2) = remote_config_events("demo-config", &input).unwrap();
+        assert_eq!(
+            v1.unwrap(),
+            json!({"data": input["data"], "context": input["v1Context"]})
+        );
+        let mut expected = input["v2Context"].clone();
+        expected["data"] = input["data"].clone();
+        assert_eq!(v2.unwrap(), expected);
+    }
+
+    #[test]
+    fn remote_config_rejects_invalid_shapes_without_coercion() {
+        for (pointer, bad) in [
+            ("/data/versionNumber", json!("7")),
+            ("/data/versionNumber", json!(1.25)),
+            ("/data/versionNumber", json!(9_007_199_254_740_992_u64)),
+            ("/data/updateTime", json!("not a time")),
+            ("/v1Context/eventId", json!("")),
+            ("/v1Context/resource/name", json!("projects/demo-other")),
+            (
+                "/v2Context/source",
+                json!("//firebaseremoteconfig.googleapis.com/projects/demo-other"),
+            ),
+            (
+                "/v2Context/type",
+                json!("google.firebase.remoteconfig.remoteConfig.v1.updated.extra"),
+            ),
+            ("/v2Context/specversion", json!("0.3")),
+        ] {
+            let mut input = publication();
+            *input.pointer_mut(pointer).unwrap() = bad;
+            assert!(
+                remote_config_events("demo-config", &input).is_err(),
+                "{pointer}: {input}"
+            );
+        }
+        for key in [
+            "updateUser",
+            "rollbackSource",
+            "description",
+            "updateOrigin",
+            "updateType",
+        ] {
+            let mut input = publication();
+            input["data"][key] = Value::Null;
+            assert!(
+                remote_config_events("demo-config", &input).is_err(),
+                "{key}"
+            );
+        }
+        for section in ["data", "v1Context", "v2Context"] {
+            let mut input = publication();
+            input[section]["invented"] = json!(true);
+            assert!(remote_config_events("demo-config", &input).is_err());
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(32))]
+        #[test]
+        fn remote_config_metadata_roundtrips(description in ".{0,80}", version in 0_u32..100_000) {
+            let mut input = publication();
+            input["data"]["description"] = json!(description);
+            input["data"]["versionNumber"] = json!(version);
+            let (v1, v2) = remote_config_events("demo-config", &input).unwrap();
+            prop_assert_eq!(&v1.unwrap()["data"], &input["data"]);
+            prop_assert_eq!(&v2.unwrap()["data"], &input["data"]);
+        }
+    }
 }

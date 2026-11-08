@@ -433,6 +433,25 @@ fn fault_plans_are_validated_installed_reported_and_removed() {
 struct FakeFunctions(Mutex<Vec<(String, Vec<Value>)>>);
 
 impl fireemu_adapter_http::control::FunctionsHook for FakeFunctions {
+    fn publish_remote_config(
+        &self,
+        body: &Value,
+    ) -> Result<usize, fireemu_adapter_http::control::PublishEventError> {
+        use fireemu_adapter_http::control::PublishEventError;
+        match body["failure"].as_str() {
+            Some("invalid") => Err(PublishEventError::Invalid),
+            Some("capacity") => Err(PublishEventError::Capacity),
+            Some("unavailable") => Err(PublishEventError::Unavailable),
+            _ => {
+                self.0
+                    .lock()
+                    .unwrap()
+                    .push(("remoteConfig".into(), vec![body.clone()]));
+                Ok(2)
+            }
+        }
+    }
+
     fn on_clock_changed(&self) {}
     fn run_schedule(
         &self,
@@ -3525,4 +3544,201 @@ fn latin_purpose_control_backfill_uses_index_analysis_for_real_source_postings()
     assert_eq!(search("iris"), ["products/copper"]);
     assert_eq!(search("creme"), ["products/silver"]);
     assert!(search("İris").is_empty());
+}
+
+#[test]
+fn remote_config_publication_always_requires_the_control_capability() {
+    let state = state(Arc::new(AtomicUsize::new(0)));
+    for origin in [
+        None,
+        Some("http://localhost:5173"),
+        Some("https://foreign.example"),
+    ] {
+        for token in [None, Some("Bearer wrong")] {
+            let headers = RequestHeaders {
+                origin: origin.map(str::to_owned),
+                authorization: token.map(str::to_owned),
+                ..RequestHeaders::default()
+            };
+            let response = handle_with(
+                &state,
+                "POST",
+                "/v1/sessions/default/functions/remoteConfig:publish",
+                &headers,
+                &Value::Null,
+            );
+            assert_eq!(
+                response.status, 403,
+                "{origin:?} {token:?}: {}",
+                response.body
+            );
+        }
+    }
+    let headers = RequestHeaders {
+        authorization: Some("Bearer test-token".to_owned()),
+        ..RequestHeaders::default()
+    };
+    assert_eq!(
+        handle_with(
+            &state,
+            "POST",
+            "/v1/sessions/default/functions/remoteConfig:publish",
+            &headers,
+            &Value::Null
+        )
+        .status,
+        404
+    );
+    let foreign = RequestHeaders {
+        origin: Some("https://foreign.example".into()),
+        ..headers
+    };
+    assert_eq!(
+        handle_with(
+            &state,
+            "POST",
+            "/v1/sessions/default/functions/remoteConfig:publish",
+            &foreign,
+            &Value::Null
+        )
+        .status,
+        403
+    );
+}
+
+#[test]
+fn remote_config_control_scopes_calls_and_preserves_refusal_status() {
+    let mut state = state(Arc::new(AtomicUsize::new(0)));
+    let hook = Arc::new(FakeFunctions(Mutex::new(Vec::new())));
+    state.functions = Some(hook.clone());
+    state.sessions.lock().unwrap().extend([
+        ("other".into(), "demo-other".into()),
+        ("alias".into(), "demo-app".into()),
+    ]);
+    let token = RequestHeaders {
+        authorization: Some("Bearer test-token".into()),
+        ..RequestHeaders::default()
+    };
+    let body = json!({"data": {"versionNumber": 7}});
+    for (method, session, status) in [
+        ("GET", "default", 404),
+        ("POST", "missing", 404),
+        ("POST", "other", 400),
+        ("POST", "alias", 400),
+    ] {
+        let response = handle_with(
+            &state,
+            method,
+            &format!("/v1/sessions/{session}/functions/remoteConfig:publish"),
+            &token,
+            &body,
+        );
+        assert_eq!(response.status, status, "{}", response.body);
+        assert!(hook.0.lock().unwrap().is_empty());
+    }
+    let path = "/v1/sessions/default/functions/remoteConfig:publish?fixture=1";
+    assert_eq!(
+        handle_with(&state, "POST", path, &RequestHeaders::default(), &body).status,
+        403
+    );
+    assert!(hook.0.lock().unwrap().is_empty());
+    for (failure, status) in [("invalid", 400), ("capacity", 429), ("unavailable", 503)] {
+        assert_eq!(
+            handle_with(&state, "POST", path, &token, &json!({"failure": failure})).status,
+            status
+        );
+        assert!(hook.0.lock().unwrap().is_empty());
+    }
+    let response = handle_with(&state, "POST", path, &token, &body);
+    assert_eq!(response.status, 200);
+    assert_eq!(response.body, json!({"deliveries": 2}));
+    assert_eq!(
+        *hook.0.lock().unwrap(),
+        [("remoteConfig".into(), vec![body])]
+    );
+}
+
+fn remote_config_wire_auth() -> fireemu_adapter_http::identity_toolkit::AuthState {
+    use fireemu_adapter_http::identity_toolkit::AuthState;
+    use fireemu_core_auth::{mfa::TotpPolicy, store::AuthStore};
+    use fireemu_core_types::determinism::SplitMix64;
+    AuthState {
+        store: Arc::new(Mutex::new(AuthStore::new(
+            "demo-app",
+            SplitMix64::new(5),
+            TotpPolicy::default(),
+        ))),
+        clock: Arc::new(Mutex::new(VirtualClock::new(
+            LogicalInstant::from_unix_seconds(1_788_004_860),
+        ))),
+        wall_clock: None,
+        totp_extension_enabled: false,
+        barrier: None,
+        events: None,
+        notices: None,
+        blocking: None,
+        operation_gate: Arc::new(Mutex::new(())),
+        control_token: None,
+        registry: None,
+        allow_routed_projects: false,
+        stateless_refresh_tokens: true,
+        idp_continuations: fireemu_adapter_http::identity_toolkit::IdpContinuationPolicy::Disabled,
+        query_limits: fireemu_adapter_http::identity_toolkit::AuthQueryLimits::EmulatorUnbounded,
+        client_api_key: fireemu_adapter_http::identity_toolkit::ClientApiKeyPolicy::Optional,
+        fake_custom_token_expiry:
+            fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Ignore,
+        custom_token_trust: None,
+        allow_unsigned_custom_tokens: true,
+        idp_assertions: fireemu_adapter_http::identity_toolkit::IdpAssertionPolicy::Fixture,
+        app_check: None,
+        app_check_policy: None,
+        tenancy: None,
+    }
+}
+
+#[tokio::test]
+async fn remote_config_wire_authentication_precedes_json_parsing() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut state = state(Arc::new(AtomicUsize::new(0)));
+    let hook = Arc::new(FakeFunctions(Mutex::new(Vec::new())));
+    state.functions = Some(hook.clone());
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(fireemu_adapter_http::server::serve_with_control(
+        listener,
+        Arc::new(remote_config_wire_auth()),
+        Arc::new(state),
+    ));
+    let mut responses = Vec::new();
+    for authorization in [
+        "",
+        "Authorization: Bearer wrong\r\n",
+        "Authorization: Bearer test-token\r\n",
+    ] {
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let request = format!("POST /v1/sessions/default/functions/remoteConfig:publish HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 1\r\n{authorization}\r\n{{");
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut response = Vec::new();
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            stream.read_to_end(&mut response),
+        )
+        .await;
+        responses.push((result, String::from_utf8(response).unwrap()));
+    }
+    server.abort();
+    let _ = server.await;
+    for ((result, response), expected) in responses.into_iter().zip([403, 403, 400]) {
+        result.unwrap().unwrap();
+        assert!(
+            response.starts_with(&format!("HTTP/1.1 {expected}")),
+            "{response}"
+        );
+    }
+    assert!(hook.0.lock().unwrap().is_empty());
+    tokio::net::TcpListener::bind(addr)
+        .await
+        .expect("the test listener was released");
 }

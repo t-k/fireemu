@@ -2250,7 +2250,11 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         apply_auth_password_policy_overrides(&cfg, &registry)?;
         apply_auth_config_overrides(&cfg, &registry)?;
         let mut compilations = RulesCompilationCache::default();
-        let rules = Arc::new(RulesetSlot::new(load_rules(&cfg, &mut compilations)?));
+        let rules_literals = cfg.profile.lone_surrogates();
+        let rules = Arc::new(
+            RulesetSlot::new(load_rules(&cfg, &mut compilations)?)
+                .with_lone_surrogates(rules_literals),
+        );
         let mut database_rules = std::collections::BTreeMap::new();
         for (database, files) in &cfg.firestore_databases {
             if database == fireemu_core_types::ids::DatabaseId::DEFAULT {
@@ -2266,7 +2270,10 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                 }
                 None => LoadedRules::default(),
             };
-            database_rules.insert(database.clone(), Arc::new(RulesetSlot::new(loaded)));
+            database_rules.insert(
+                database.clone(),
+                Arc::new(RulesetSlot::new(loaded).with_lone_surrogates(rules_literals)),
+            );
         }
         let storage_rules = load_storage_rules(&cfg, &mut compilations)?;
         drop(compilations);

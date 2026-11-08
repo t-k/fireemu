@@ -292,7 +292,10 @@ impl<'a> Walker<'_, 'a> {
                 }
                 Item::Match(m) => {
                     scope.push(i);
-                    self.match_block(m, scope, depth + 1, segments, captures);
+                    // The pathless blocks around a service hold its top-level functions (the
+                    // parser adds them); they are not a `match` the author wrote.
+                    let depth = depth + u64::from(!m.path.is_empty());
+                    self.match_block(m, scope, depth, segments, captures);
                     scope.pop();
                 }
             }

@@ -41,6 +41,8 @@ use tonic::Request;
 
 #[path = "rules/auth_atomicity.rs"]
 mod auth_atomicity;
+#[path = "rules/official_emulator_diffs.rs"]
+mod official_emulator_diffs;
 
 const DB: &str = "projects/demo-app/databases/(default)";
 const DOCS: &str = "projects/demo-app/databases/(default)/documents";

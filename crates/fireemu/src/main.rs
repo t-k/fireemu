@@ -2426,7 +2426,8 @@ fn load_storage_rules_registry(
             Some(path) => read_storage_rules(path, compilations)?,
             None => LoadedRules::default(),
         };
-        let slot = Arc::new(RulesetSlot::new(loaded));
+        let slot =
+            Arc::new(RulesetSlot::new(loaded).with_lone_surrogates(cfg.profile.lone_surrogates()));
         let watched = cfg
             .storage_rules_file
             .iter()
@@ -2445,7 +2446,10 @@ fn load_storage_rules_registry(
     let mut by_bucket = std::collections::BTreeMap::new();
     let mut watched = Vec::new();
     for (target, path) in &cfg.storage_rules_by_target {
-        let slot = Arc::new(RulesetSlot::new(read_storage_rules(path, compilations)?));
+        let slot = Arc::new(
+            RulesetSlot::new(read_storage_rules(path, compilations)?)
+                .with_lone_surrogates(cfg.profile.lone_surrogates()),
+        );
         let buckets = cfg.storage_buckets_by_target.get(target).ok_or_else(|| {
             format!("Storage rules target {target:?} has no resolved bucket mapping")
         })?;
@@ -3871,6 +3875,59 @@ mod config_reload_tests {
     const STORAGE_WRITE: &str = "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow write: if true; } } }";
     const INDEXES_ONE: &str = r#"{"indexes":[{"collectionGroup":"items","queryScope":"COLLECTION","fields":[{"fieldPath":"a","order":"ASCENDING"},{"fieldPath":"b","order":"DESCENDING"}]}],"fieldOverrides":[]}"#;
     const INDEXES_TWO: &str = r#"{"indexes":[{"collectionGroup":"other","queryScope":"COLLECTION","fields":[{"fieldPath":"c","order":"ASCENDING"},{"fieldPath":"d","order":"DESCENDING"}]}],"fieldOverrides":[]}"#;
+
+    /// Every ruleset slot the daemon creates at start carries the profile's meaning of a lone
+    /// surrogate escape (`string-escape#esc-high`), also after a reload.
+    #[test]
+    fn storage_slots_carry_the_profile_s_lone_surrogate_meaning() {
+        use fireemu_core_rules::ast::LoneSurrogates;
+        let dir = scratch("storage-lone-surrogate");
+        let path = dir.join("storage.rules").display().to_string();
+        std::fs::write(&path, STORAGE_DENY).unwrap();
+        for (profile, literals) in [
+            (
+                config::CompatibilityProfile::Emulator,
+                LoneSurrogates::Official,
+            ),
+            (
+                config::CompatibilityProfile::Strict,
+                LoneSurrogates::Production,
+            ),
+        ] {
+            for per_target in [false, true] {
+                let cfg = RuntimeConfig {
+                    profile,
+                    storage_rules_file: (!per_target).then(|| path.clone()),
+                    storage_rules_by_target: if per_target {
+                        std::collections::BTreeMap::from([("t".to_owned(), path.clone())])
+                    } else {
+                        std::collections::BTreeMap::new()
+                    },
+                    storage_buckets_by_target: std::collections::BTreeMap::from([(
+                        "t".to_owned(),
+                        vec!["t.test".to_owned()],
+                    )]),
+                    ..RuntimeConfig::default()
+                };
+                let loaded =
+                    load_storage_rules_registry(&cfg, &mut RulesCompilationCache::default())
+                        .unwrap();
+                let slot = &loaded.watched[0].1;
+                assert_eq!(slot.lone_surrogates(), Some(literals));
+                let held = |slot: &RulesetSlot| {
+                    slot.snapshot()
+                        .unwrap()
+                        .ruleset
+                        .as_ref()
+                        .unwrap()
+                        .lone_surrogates()
+                };
+                assert_eq!(held(slot), literals);
+                slot.replace_source(STORAGE_ALLOW).unwrap();
+                assert_eq!(held(slot), literals);
+            }
+        }
+    }
 
     #[test]
     fn storage_startup_keeps_identical_targets_independent_and_reports_the_failing_path() {

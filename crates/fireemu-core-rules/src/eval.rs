@@ -464,6 +464,9 @@ impl DocumentAccess for NoDocumentAccess {
 struct Evaluator<'a> {
     /// Current `eval` recursion depth.
     nesting: u32,
+    /// How a half of a surrogate pair and a lone surrogate in a pattern are treated:
+    /// production's way or the official emulator's.
+    lone_surrogates: crate::ast::LoneSurrogates,
     request: Arc<RulesValue>,
     resource: Arc<RulesValue>,
     /// Abstract resources are query proofs: equality filters preserve Firestore's numeric
@@ -684,6 +687,7 @@ fn evaluate_prepared(
         };
         let mut ev = Evaluator {
             nesting: 0,
+            lone_surrogates: ruleset.lone_surrogates,
             request: Arc::clone(request),
             resource: Arc::clone(resource),
             query_proof: ctx.abstract_path,
@@ -4209,6 +4213,7 @@ impl<'a> Evaluator<'a> {
                 Literal::Int(i) => RulesValue::Int(*i),
                 Literal::Float(f) => RulesValue::Float(*f),
                 Literal::Str(s) => RulesValue::String(s.clone()),
+                Literal::IllFormedStr(units) => RulesValue::IllFormed(units.clone()),
             }),
             ExprKind::Ident(name) => self
                 .lookup(name)?
@@ -4268,11 +4273,17 @@ impl<'a> Evaluator<'a> {
                         .and_then(|i| segments.get(i).cloned())
                         .map(RulesValue::String)
                         .ok_or_else(|| soft("path index out of range")),
-                    (RulesValue::String(s), RulesValue::Int(i)) => usize::try_from(i)
-                        .ok()
-                        .and_then(|i| s.chars().nth(i))
-                        .map(|c| RulesValue::String(c.to_string()))
-                        .ok_or_else(|| soft("string index out of range")),
+                    (
+                        text @ (RulesValue::String(_) | RulesValue::IllFormed(_)),
+                        RulesValue::Int(i),
+                    ) => {
+                        let units = text.utf16_units().unwrap_or_default();
+                        usize::try_from(i)
+                            .ok()
+                            .filter(|i| *i < units.len())
+                            .ok_or_else(|| soft("string index out of range"))
+                            .and_then(|i| select_units(&text, i, i + 1, self.lone_surrogates))
+                    }
                     (o, i) => Err(soft(format!(
                         "cannot index {} with {}",
                         o.type_name(),
@@ -4292,7 +4303,7 @@ impl<'a> Evaluator<'a> {
                 {
                     return Err(EvalError::Unknown);
                 }
-                slice(&obj, &lo, &hi)
+                slice(&obj, &lo, &hi, self.lone_surrogates)
             }
             ExprKind::Call {
                 callee,
@@ -4775,6 +4786,16 @@ impl<'a> Evaluator<'a> {
             | (BinaryOp::Sub, V::Duration(a), V::Duration(b)) => V::Duration(a - b),
             (BinaryOp::Add, V::Duration(a), V::Duration(b)) => V::Duration(a + b),
             (BinaryOp::Add, V::String(a), V::String(b)) => V::String(format!("{a}{b}")),
+            (
+                BinaryOp::Add,
+                a @ (V::String(_) | V::IllFormed(_)),
+                b @ (V::String(_) | V::IllFormed(_)),
+            ) => {
+                // A lone high surrogate and a lone low one that meet are one character.
+                let mut units = a.utf16_units().unwrap_or_default();
+                units.extend(b.utf16_units().unwrap_or_default());
+                V::from_utf16_units(&units)
+            }
             (BinaryOp::Add, V::List(a), V::List(b)) => {
                 V::List(a.iter().chain(b).cloned().collect())
             }
@@ -4993,7 +5014,14 @@ impl<'a> Evaluator<'a> {
                     .iter()
                     .map(|a| self.eval(a))
                     .collect::<Result<Vec<_>, _>>()?;
-                if matches!(receiver, RulesValue::String(_))
+                let ill_formed = matches!(receiver, RulesValue::IllFormed(_))
+                    || values.iter().any(|v| matches!(v, RulesValue::IllFormed(_)));
+                if ill_formed
+                    && matches!(receiver, RulesValue::String(_) | RulesValue::IllFormed(_))
+                    && matches!(name.as_str(), "matches" | "replace" | "split")
+                {
+                    self.ill_formed_string_call(&receiver, name, &values, compiled_regex)
+                } else if matches!(receiver, RulesValue::String(_))
                     && matches!(name.as_str(), "matches" | "replace")
                 {
                     self.string_regex_call(&receiver, name, &values, compiled_regex)
@@ -5020,6 +5048,28 @@ impl<'a> Evaluator<'a> {
                 }
             }
             _ => Err(soft("call target is not callable")),
+        }
+    }
+
+    /// The compiled pattern of a string value, which may hold a lone surrogate (a literal
+    /// that matches that unit alone).
+    fn regex_for_text(
+        &mut self,
+        pattern: &RulesValue,
+        compiled_regex: Option<&Arc<crate::regex::Regex>>,
+    ) -> Result<Arc<crate::regex::Regex>, EvalError> {
+        match pattern {
+            RulesValue::String(text) => self.regex_for(text, compiled_regex),
+            other => {
+                let pieces = crate::value::pieces(&other.utf16_units().unwrap_or_default());
+                crate::regex::Regex::from_pieces(&pieces)
+                    .map(Arc::new)
+                    .map_err(|error| {
+                        EvalError::Unsupported(crate::regex::escape_diagnostic_text(
+                            &error.to_string(),
+                        ))
+                    })
+            }
         }
     }
 
@@ -5102,6 +5152,57 @@ impl<'a> Evaluator<'a> {
             ("replace", [_, _]) => Err(soft("replace() expects a pattern and a replacement")),
             ("replace", _) => Err(soft("replace() takes 2 argument(s)")),
             _ => unreachable!("the caller checks the method name"),
+        }
+    }
+
+    /// `matches()`, `replace()` and `split()` where the subject or an argument holds a lone
+    /// surrogate.
+    ///
+    /// Recorded in production (`regex#*-hi*`, 2026-11-08): `"\ud83d".matches(".")` is true (a lone
+    /// unit is a character), while a pattern, a separator or a subject of `replace()` that
+    /// holds one made the rule fail (`rep-hi`, `split-hi`, `split-fire-by-hi*`, `m-hi-lit`).
+    /// The official emulator matches them, a lone unit only against a lone unit. Anything
+    /// production was not recorded with fails, as production does.
+    fn ill_formed_string_call(
+        &mut self,
+        receiver: &RulesValue,
+        name: &str,
+        args: &[RulesValue],
+        compiled_regex: Option<&Arc<crate::regex::Regex>>,
+    ) -> Result<RulesValue, EvalError> {
+        use RulesValue as V;
+        let production = self.lone_surrogates == crate::ast::LoneSurrogates::Production;
+        let is_text = |v: &V| matches!(v, V::String(_) | V::IllFormed(_));
+        let pieces_of = |text: &V| crate::value::pieces(&text.utf16_units().unwrap_or_default());
+        match (name, args) {
+            ("split", [separator]) if is_text(separator) => {
+                if production {
+                    return Err(soft("split() with a lone surrogate"));
+                }
+                Ok(split_pieces(receiver, separator))
+            }
+            ("split", _) => Err(soft("split() expects a string")),
+            ("matches", [pattern]) if is_text(pattern) => {
+                if production && matches!(pattern, V::IllFormed(_)) {
+                    return Err(soft("a lone surrogate in a pattern"));
+                }
+                let regex = self.regex_for_text(pattern, compiled_regex)?;
+                let subject = pieces_of(receiver);
+                let matched = regex.is_full_match_pieces(&subject);
+                Ok(V::Bool(matched.map_err(|e| self.regex_failure(e))?))
+            }
+            ("replace", [pattern, replacement]) if is_text(pattern) && is_text(replacement) => {
+                if production {
+                    return Err(soft("replace() with a lone surrogate"));
+                }
+                let regex = self.regex_for_text(pattern, None)?;
+                let replaced = regex
+                    .replace_all_pieces(&pieces_of(receiver), &pieces_of(replacement))
+                    .map_err(|e| self.regex_failure(e))?;
+                Ok(crate::value::string_from_pieces(&replaced))
+            }
+            ("matches", _) => Err(soft("matches() expects a string pattern")),
+            _ => Err(soft("replace() expects a pattern and a replacement")),
         }
     }
 
@@ -5622,17 +5723,23 @@ fn method_call(
             | V::PartialMapExcluding { .. },
             _,
         ) => return Err(EvalError::Unknown),
-        (V::String(s), "size") => {
+        (V::String(_) | V::IllFormed(_) | V::Fragment(_), "size") => {
             arity(0)?;
-            V::Int(i64::try_from(s.chars().count()).unwrap_or(i64::MAX))
+            V::Int(i64::try_from(utf16_len(receiver)).unwrap_or(i64::MAX))
+        }
+        (V::IllFormed(units), "lower" | "upper") => {
+            arity(0)?;
+            let lower = name == "lower";
+            V::from_utf16_units(&units_case(units, lower))
         }
         (V::String(s), "lower") => {
             arity(0)?;
-            V::String(s.to_lowercase())
+            // ASCII letters only: recorded in production (`unicode/case#*`, 2026-11-08).
+            V::String(s.to_ascii_lowercase())
         }
         (V::String(s), "upper") => {
             arity(0)?;
-            V::String(s.to_uppercase())
+            V::String(s.to_ascii_uppercase())
         }
         (V::String(s), "trim") => {
             arity(0)?;
@@ -5998,6 +6105,7 @@ fn slice(
     receiver: &RulesValue,
     start: &RulesValue,
     end: &RulesValue,
+    mode: crate::ast::LoneSurrogates,
 ) -> Result<RulesValue, EvalError> {
     use RulesValue as V;
     if undetermined(receiver) || undetermined(start) || undetermined(end) {
@@ -6012,7 +6120,7 @@ fn slice(
     };
     let len = match receiver {
         V::List(items) => items.len(),
-        V::String(s) => s.chars().count(),
+        V::String(_) | V::IllFormed(_) => utf16_len(receiver),
         other => {
             return Err(soft(format!(
                 "{} cannot be range indexed",
@@ -6030,9 +6138,125 @@ fn slice(
     );
     Ok(match receiver {
         V::List(items) => V::List(items[lo..hi].to_vec()),
-        V::String(s) => V::String(s.chars().skip(lo).take(hi - lo).collect()),
+        V::String(_) | V::IllFormed(_) => select_units(receiver, lo, hi, mode)?,
         _ => unreachable!("the length arm already rejected every other receiver"),
     })
+}
+
+/// The length of a string value in UTF-16 code units, which is what the Rules runtime counts
+/// (`string-index#size-4`: `"é🔥x".size() == 4`, recorded in production).
+fn utf16_len(text: &RulesValue) -> usize {
+    match text {
+        RulesValue::String(s) => s.encode_utf16().count(),
+        RulesValue::IllFormed(units) => units.len(),
+        RulesValue::Fragment(_) => 1,
+        _ => 0,
+    }
+}
+
+/// The units `lo..hi` of a string value (the caller checked the bounds), the way the Rules
+/// runtime reads a string: by UTF-16 unit (`string-index#idx0` to `idx4-*`,
+/// `strings#rng-*`).
+///
+/// A unit that was one half of a pair in `receiver` is what the profile says. The official
+/// emulator keeps the lone unit (`"é🔥x"[1] == "\ud83d"` is true); production recorded
+/// `false` there (`string-escape#esc-high`) and `true` for the size of `[1:2]` and for
+/// `"a\ud83dz"[1:2] == "\ud83d"`, so it holds the half of a pair as U+FFFD while a lone unit
+/// the string held already stays what it was.
+fn select_units(
+    receiver: &RulesValue,
+    lo: usize,
+    hi: usize,
+    mode: crate::ast::LoneSurrogates,
+) -> Result<RulesValue, EvalError> {
+    use crate::value::Piece;
+    let units = receiver.utf16_units().unwrap_or_default();
+    let mut original_lone = vec![false; units.len()];
+    let mut at = 0;
+    for piece in crate::value::pieces(&units) {
+        match piece {
+            Piece::Char(c) => at += c.len_utf16(),
+            Piece::Lone(_) => {
+                original_lone[at] = true;
+                at += 1;
+            }
+        }
+    }
+    let mut offset = lo;
+    let mut cut_halves = Vec::new();
+    let selected: Vec<Piece> = crate::value::pieces(&units[lo..hi])
+        .into_iter()
+        .inspect(|piece| match piece {
+            Piece::Char(c) => offset += c.len_utf16(),
+            Piece::Lone(unit) => {
+                if !original_lone[offset] {
+                    cut_halves.push(*unit);
+                }
+                offset += 1;
+            }
+        })
+        .collect();
+    if mode == crate::ast::LoneSurrogates::Production && !cut_halves.is_empty() {
+        // Not recorded beyond a half on its own: its size is one and it is not the lone unit
+        // an escape writes. A range that cuts a pair among other text fails the rule.
+        return match (selected.as_slice(), cut_halves.as_slice()) {
+            ([Piece::Lone(unit)], [_]) => Ok(RulesValue::Fragment(*unit)),
+            _ => Err(soft("a range cuts a surrogate pair")),
+        };
+    }
+    Ok(crate::value::string_from_pieces(&selected))
+}
+
+/// `lower()` or `upper()` of a string that holds a lone surrogate: ASCII letters change, every
+/// other unit stays (the mapping is ASCII-only, `unicode/case#*`).
+fn units_case(units: &[u16], lower: bool) -> Vec<u16> {
+    units
+        .iter()
+        .map(|unit| match u8::try_from(*unit) {
+            // A byte above 0x7f is not an ASCII letter and stays as it is.
+            Ok(byte) => u16::from(if lower {
+                byte.to_ascii_lowercase()
+            } else {
+                byte.to_ascii_uppercase()
+            }),
+            _ => *unit,
+        })
+        .collect()
+}
+
+/// `split()` where a lone surrogate is involved (the official emulator): the separator is
+/// searched for character by character, and a lone unit matches only a lone unit, never half
+/// of a pair (`regex#split-fire-by-hi-1`: `"a🔥b".split("\ud83d").size() == 1`).
+fn split_pieces(subject: &RulesValue, separator: &RulesValue) -> RulesValue {
+    let pieces_of =
+        |text: &RulesValue| crate::value::pieces(&text.utf16_units().unwrap_or_default());
+    let subject = pieces_of(subject);
+    let separator = pieces_of(separator);
+    let mut parts: Vec<RulesValue> = Vec::new();
+    let mut start = 0;
+    let mut at = 0;
+    if separator.is_empty() {
+        // Rust's `split("")` on an ordinary string: an empty part, each character, an empty part.
+        parts.push(RulesValue::String(String::new()));
+        parts.extend(
+            subject
+                .iter()
+                .map(|piece| crate::value::string_from_pieces(&[*piece])),
+        );
+        parts.push(RulesValue::String(String::new()));
+        return RulesValue::List(parts);
+    }
+    while at + separator.len() <= subject.len() {
+        if subject[at..at + separator.len()] == separator[..] {
+            parts.push(crate::value::string_from_pieces(&subject[start..at]));
+            at += separator.len();
+            start = at;
+        } else {
+            at += 1;
+        }
+    }
+    parts.push(crate::value::string_from_pieces(&subject[start..]));
+    RulesValue::List(parts)
 }
 
 /// Nanoseconds per day.

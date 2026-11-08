@@ -455,8 +455,15 @@ impl StorageRulesRegistry {
             .map_err(|_| "storage rules registry is poisoned".to_owned())?;
         match &*mode {
             StorageRulesMode::Global(slot) => return slot.replace_loaded(loaded).map(|_| ()),
-            StorageRulesMode::PerBucket(_) => {
-                *mode = StorageRulesMode::Global(Arc::new(RulesetSlot::new(loaded)));
+            StorageRulesMode::PerBucket(slots) => {
+                // The new global slot keeps the profile's meaning of a lone surrogate escape.
+                let literals = slots.values().find_map(|slot| slot.lone_surrogates());
+                let slot = RulesetSlot::new(loaded);
+                let slot = match literals {
+                    Some(literals) => slot.with_lone_surrogates(literals),
+                    None => slot,
+                };
+                *mode = StorageRulesMode::Global(Arc::new(slot));
             }
         }
         Ok(())
@@ -7306,6 +7313,46 @@ mod storage_rules_registry_tests {
             .slot_for_bucket("unknown.example.test")
             .unwrap()
             .is_none());
+    }
+
+    /// The global slot a control update makes out of a target configuration keeps the profile's
+    /// meaning of a lone surrogate escape (`string-escape#esc-high`).
+    #[test]
+    fn a_control_update_over_targets_keeps_the_lone_surrogate_meaning() {
+        use fireemu_core_rules::ast::LoneSurrogates;
+        for literals in [
+            Some(LoneSurrogates::Official),
+            Some(LoneSurrogates::Production),
+            None,
+        ] {
+            let target = slot(ALLOW);
+            let target = match literals {
+                Some(literals) => Arc::new(
+                    Arc::try_unwrap(target)
+                        .unwrap()
+                        .with_lone_surrogates(literals),
+                ),
+                None => target,
+            };
+            let registry = StorageRulesRegistry::per_bucket(BTreeMap::from([(
+                "one.example.test".to_owned(),
+                target,
+            )]));
+            registry.replace_source(DENY).unwrap();
+            let global = registry
+                .slot_for_bucket("any.example.test")
+                .unwrap()
+                .unwrap();
+            assert_eq!(global.lone_surrogates(), literals);
+            let held = global
+                .snapshot()
+                .unwrap()
+                .ruleset
+                .as_ref()
+                .unwrap()
+                .lone_surrogates();
+            assert_eq!(held, literals.unwrap_or_default());
+        }
     }
 
     #[test]

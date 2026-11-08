@@ -165,19 +165,26 @@ test("the runner's request caps are the scenario's, the breadth ones by default"
 async function runnerWith(options, observe) {
   const { browserRunner } = await import("./breadth-sdk.mjs");
   const path = await import("node:path");
+  const { readFileSync } = await import("node:fs");
+  const { fileURLToPath } = await import("node:url");
   const handlers = {};
+  const seen = { pageClosed: 0, serve: null };
   const page = {
     route: async () => {},
     on: (name, cb) => (handlers[name] = cb),
     goto: async () => {},
     waitForFunction: async () => {},
     evaluate: async () => ({ outcome: "ok" }),
-    close: async () => {},
+    close: async () => {
+      seen.pageClosed++;
+    },
   };
   const deps = {
     path,
     LAUNCH: {},
     createSdk,
+    readFileSync,
+    fileURLToPath,
     createRequire: () => () => ({
       chromium: {
         launch: async () => ({
@@ -186,28 +193,51 @@ async function runnerWith(options, observe) {
         }),
       },
     }),
-    createServer: () => ({
-      listen: (_p, _h, cb) => cb(),
-      address: () => ({ port: 1 }),
-      close: (cb) => cb(),
-    }),
+    createServer: (handler) => {
+      seen.serve = (url) => {
+        let body;
+        handler({ url }, { writeHead() {}, end: (text) => (body = text) });
+        return body;
+      };
+      return { listen: (_p, _h, cb) => cb(), address: () => ({ port: 1 }), close: (cb) => cb() };
+    },
   };
   const runner = new Function(
     ...Object.keys(deps),
-    `return (${browserRunner.toString().replaceAll("import.meta.url", JSON.stringify(import.meta.url))});`,
+    `return (${browserRunner.toString().replaceAll("import.meta.url", JSON.stringify(new URL("./breadth-sdk.mjs", import.meta.url).href))});`,
   )(...Object.values(deps))({ modules: ".", allowHost: () => true, ...options });
-  return runner({}, {}, (api) => observe(api, handlers));
+  const result = await runner({}, {}, (api) => observe(api, handlers, seen));
+  return { ...result, seen };
 }
 
 test("the runner's WebSocket cap is the scenario's", async () => {
-  const sockets = async (caps) => {
-    const result = await runnerWith({ caps }, async (_api, handlers) => {
-      for (let i = 0; i < 7; i++)
+  const closedAfter = async (caps, sockets) => {
+    const { seen } = await runnerWith({ caps }, async (_api, handlers) => {
+      for (let i = 0; i < sockets; i++)
         handlers.websocket({ url: () => "wss://s-gke.firebaseio.com/.ws" });
     });
-    return result.counts.ws;
+    return seen.pageClosed;
   };
-  assert.equal(await sockets({ http: 80, ws: 6 }), 7);
+  assert.equal(await closedAfter({ http: 80, ws: 6 }, 6), 0);
+  assert.equal(await closedAfter({ http: 80, ws: 6 }, 7), 1);
+  assert.equal(await closedAfter({ http: 80, ws: 2 }, 3), 1);
+});
+
+test("the page the runner serves is the scenario's, the breadth page by default", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const served = async (options) => {
+    let body;
+    await runnerWith(options, async (_api, _handlers, seen) => {
+      body = seen.serve("/page.js");
+      assert.match(seen.serve("/"), /<script type="module" src="\/page.js">/);
+    });
+    return body.toString();
+  };
+  const kinds = await readFile(KINDS_SCENARIO.sdk.pageFile, "utf8");
+  const breadth = await readFile(new URL("./breadth-sdk-page.js", import.meta.url), "utf8");
+  assert.notEqual(kinds, breadth);
+  assert.equal(await served({ pageFile: KINDS_SCENARIO.sdk.pageFile }), kinds);
+  assert.equal(await served({}), breadth);
 });
 
 test("the runner hands the scenario's ids to the SDK client", async () => {

@@ -466,7 +466,7 @@ fn assert_signature_reuse_equivalent(
     account: u8,
     clock_offset: i64,
 ) {
-    use fireemu_core_auth::jwt::{SignatureCheckedToken, encode_with};
+    use fireemu_core_auth::jwt::{encode_with, SignatureCheckedToken};
     use std::sync::atomic::{AtomicUsize, Ordering};
     let mut store = if tenant == 1 {
         AuthStore::new_tenant(
@@ -494,7 +494,7 @@ fn assert_signature_reuse_equivalent(
     }
     match fault {
         1 => claims.exp = claims.iat - 1,
-        2 => claims.aud = "demo-other".to_owned(),
+        2 => "demo-other".clone_into(&mut claims.aud),
         4 => claims.iat += 7200,
         _ => (),
     }
@@ -563,10 +563,13 @@ fn signature_reuse_replays_combinatorial_rows() {
             let values = row.split('\t').collect::<Vec<_>>();
             assert_eq!(values.len(), 5);
             let value = |column: usize, choices: &[&str]| {
-                choices
-                    .iter()
-                    .position(|choice| *choice == values[column])
-                    .unwrap() as u8
+                u8::try_from(
+                    choices
+                        .iter()
+                        .position(|choice| *choice == values[column])
+                        .unwrap(),
+                )
+                .unwrap()
             };
             assert_signature_reuse_equivalent(
                 values[0] == "Emulator",
@@ -599,7 +602,7 @@ fn signature_reuse_replays_combinatorial_rows() {
 
 #[test]
 fn signature_reuse_rechecks_a_distinct_signer_with_the_same_key() {
-    use fireemu_core_auth::jwt::{SignatureCheckedToken, encode_with};
+    use fireemu_core_auth::jwt::{encode_with, SignatureCheckedToken};
     use std::sync::atomic::{AtomicUsize, Ordering};
     let mut store = AuthStore::new("demo-app", SplitMix64::new(1), TotpPolicy::default());
     let calls = Arc::new(AtomicUsize::new(0));
@@ -619,17 +622,15 @@ fn signature_reuse_rechecks_a_distinct_signer_with_the_same_key() {
         key: 7,
         calls: calls.clone(),
     }));
-    assert!(
-        checked
-            .verify_for_project(&store, t0(), TokenAcceptance::Verified, "demo-app")
-            .is_ok()
-    );
+    assert!(checked
+        .verify_for_project(&store, t0(), TokenAcceptance::Verified, "demo-app")
+        .is_ok());
     assert_eq!(calls.load(Ordering::SeqCst), 2);
 }
 
 #[test]
 fn unsigned_signature_proof_cannot_bypass_a_newly_installed_signer() {
-    use fireemu_core_auth::jwt::{SignatureCheckedToken, encode_with};
+    use fireemu_core_auth::jwt::{encode_with, SignatureCheckedToken};
     let mut store = AuthStore::new("demo-app", SplitMix64::new(1), TotpPolicy::default());
     let uid = store
         .create_user(NewUser::email("install@example.test"), t0())
@@ -650,7 +651,7 @@ fn unsigned_signature_proof_cannot_bypass_a_newly_installed_signer() {
 
 #[test]
 fn signature_reuse_observes_session_reset_after_capture() {
-    use fireemu_core_auth::jwt::{SignatureCheckedToken, encode_with};
+    use fireemu_core_auth::jwt::{encode_with, SignatureCheckedToken};
     use std::sync::atomic::{AtomicUsize, Ordering};
     let registry = AuthRegistry::with_project_numbers_and_lifecycle_incarnation(
         "demo-default",
@@ -683,16 +684,14 @@ fn signature_reuse_observes_session_reset_after_capture() {
         let checked = SignatureCheckedToken::decode(&token, &store).unwrap();
         (token, checked)
     };
-    assert!(
-        checked
-            .verify_for_project(
-                &selected.lock().unwrap(),
-                t0(),
-                TokenAcceptance::Verified,
-                "demo-session"
-            )
-            .is_ok()
-    );
+    assert!(checked
+        .verify_for_project(
+            &selected.lock().unwrap(),
+            t0(),
+            TokenAcceptance::Verified,
+            "demo-session"
+        )
+        .is_ok());
     let reset = registry
         .prepare_project_reset("demo-session")
         .unwrap()
@@ -742,7 +741,7 @@ impl fireemu_core_auth::jwt::IdTokenSigner for MutableReuseSigner {
 
 #[test]
 fn same_arc_signature_reuse_observes_in_place_key_rotation() {
-    use fireemu_core_auth::jwt::{SignatureCheckedToken, encode_with};
+    use fireemu_core_auth::jwt::{encode_with, SignatureCheckedToken};
     use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
     let key = Arc::new(AtomicU8::new(7));
     let calls = Arc::new(AtomicUsize::new(0));
@@ -776,7 +775,7 @@ fn same_arc_signature_reuse_observes_in_place_key_rotation() {
 
 #[test]
 fn repeated_signature_reuse_rechecks_account_and_time() {
-    use fireemu_core_auth::jwt::{SignatureCheckedToken, encode_with};
+    use fireemu_core_auth::jwt::{encode_with, SignatureCheckedToken};
     use std::sync::atomic::{AtomicUsize, Ordering};
     let mut store = AuthStore::new("demo-app", SplitMix64::new(1), TotpPolicy::default());
     let calls = Arc::new(AtomicUsize::new(0));
@@ -790,11 +789,9 @@ fn repeated_signature_reuse_rechecks_account_and_time() {
     let claims = store.id_token_claims(&uid, None, t0()).unwrap();
     let token = encode_with(&claims, store.signer());
     let checked = SignatureCheckedToken::decode(&token, &store).unwrap();
-    assert!(
-        checked
-            .verify_for_project(&store, t0(), TokenAcceptance::Verified, "demo-app")
-            .is_ok()
-    );
+    assert!(checked
+        .verify_for_project(&store, t0(), TokenAcceptance::Verified, "demo-app")
+        .is_ok());
     store.user_mut(&uid).unwrap().disabled = true;
     assert!(checked.can_reuse_signature_for(&token, &store));
     assert_eq!(

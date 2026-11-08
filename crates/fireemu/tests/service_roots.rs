@@ -309,10 +309,7 @@ fn large_firestore_queries_do_not_stall_auth_or_another_database() {
     queries.finish();
 }
 
-#[test]
-fn large_storage_uploads_leave_real_services_responsive() {
-    use std::sync::Arc;
-
+fn start_storage_load_daemon() -> (Daemon, serde_json::Value, u16) {
     let hub_port = free_port();
     let child = Command::new(env!("CARGO_BIN_EXE_fireemu"))
         .env("FIREEMU_WORKER_THREADS", "2")
@@ -347,6 +344,14 @@ fn large_storage_uploads_leave_real_services_responsive() {
         .unwrap();
     let daemon = Daemon(child, "demo-storage-responsive");
     let emulators = discover(hub_port);
+    (daemon, emulators, hub_port)
+}
+
+#[test]
+fn large_storage_uploads_leave_real_services_responsive() {
+    use std::sync::Arc;
+
+    let (daemon, emulators, hub_port) = start_storage_load_daemon();
     let port = |name: &str| u16::try_from(emulators[name]["port"].as_u64().unwrap()).unwrap();
     let auth = port("auth");
     let firestore = port("firestore");
@@ -418,7 +423,7 @@ fn large_storage_uploads_leave_real_services_responsive() {
     // Join before asserting so a failed probe never leaves upload threads behind.
     let responses = clients
         .into_iter()
-        .map(|client| client.join())
+        .map(std::thread::JoinHandle::join)
         .collect::<Vec<_>>();
     drop(daemon);
     assert_eq!(

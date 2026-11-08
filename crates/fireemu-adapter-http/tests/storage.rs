@@ -6751,7 +6751,7 @@ fn resumable_finalization_verifies_each_distinct_immutable_token_once() {
                     (starter, other, a, b)
                 };
                 let authorization = format!("Firebase {starter_token}");
-                let started = handle(
+                let initiation_response = handle(
                     &s,
                     req(
                         "POST",
@@ -6767,8 +6767,8 @@ fn resumable_finalization_verifies_each_distinct_immutable_token_once() {
                         b"{}",
                     ),
                 );
-                assert_eq!(started.status, 200, "{acceptance:?}/{case}");
-                let session = header(&started, "x-goog-upload-url")
+                assert_eq!(initiation_response.status, 200, "{acceptance:?}/{case}");
+                let session = header(&initiation_response, "x-goog-upload-url")
                     .unwrap()
                     .strip_prefix("http://127.0.0.1:9199")
                     .unwrap()

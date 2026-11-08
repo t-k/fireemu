@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 263c6c30c9a3055ee62efcaf6a3909bbc65fb5cfe8c9b4422f1e3fa92a0f4a4a # shrinks to text = "😀", extra = 0
+cc b35e86a49e93716f0fbe710eec5ac4b34e9fb815aa81f97fe8d2629a6c60a3db # shrinks to text = "🔥", extra = 0, official = false

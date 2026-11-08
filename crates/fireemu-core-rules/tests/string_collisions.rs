@@ -183,17 +183,18 @@ fn ordinary_strings_keep_their_operations() {
 }
 
 /// Composition on halves: the official emulator rebuilds the pair and splits on characters;
-/// production, which holds a cut half as U+FFFD, does not rebuild it.
+/// production, whose cut half is a fragment that only compares and has a size, fails the rule.
 #[test]
 fn halves_of_a_pair_compose_by_profile() {
     for (condition, production, official) in [
         (r#""🔥"[0] + "🔥"[1] == "🔥""#, false, true),
-        (r#""🔥x".split("🔥x"[0]).size() == 1"#, true, true),
-        (r#""🔥x".replace("🔥x"[0], "!") == "🔥x""#, true, true),
-        (r#""🔥"[0] + "🔥"[1] != "🔥""#, true, false),
-        // Two halves of one character: different units for the official emulator, both
-        // U+FFFD in production (not recorded).
-        ("resource.data.s[0] != resource.data.s[1]", false, true),
+        (r#""🔥x".split("🔥x"[0]).size() == 1"#, false, true),
+        (r#""🔥x".replace("🔥x"[0], "!") == "🔥x""#, false, true),
+        (r#""🔥"[0] + "🔥"[1] != "🔥""#, false, false),
+        // Two halves of one character are different units (a fragment equals only itself).
+        ("resource.data.s[0] != resource.data.s[1]", true, true),
+        ("resource.data.s[0] == resource.data.s[0]", true, true),
+        ("resource.data.s[0].size() == 1", true, true),
     ] {
         assert_eq!(
             allowed_with(condition, LoneSurrogates::Production, &[("s", PUA)], &[]),
@@ -318,4 +319,362 @@ proptest! {
             }
         }
     }
+}
+
+// ---- Sol round 6, second review ----
+
+/// Matching never lets a pattern name a lone unit: it is not U+100000 or any other scalar.
+#[test]
+fn a_pattern_cannot_name_a_lone_unit() {
+    for mode in MODES {
+        for pattern in [
+            r"\\x{100000}",
+            r"\\x{10D800}",
+            r"\\x{10ffff}",
+            r"[\\x{100000}-\\x{10ffff}]",
+            r"[\\x{10D800}-\\x{10DFFF}]",
+            r"\\x{fffd}",
+            r"[\\x{e000}-\\x{ffff}]",
+            r"\\d",
+            r"\\w",
+            r"\\s",
+            r"[[:alpha:]]",
+            r"\\p{L}",
+            r"(?i)a",
+            r"[\\x{0}-\\x{10ffff}]",
+        ] {
+            let literal = format!(r#""\ud83d".matches("{pattern}")"#);
+            assert!(
+                !allowed_with(&literal, mode, &[], &[]),
+                "{mode:?} {literal}"
+            );
+            let claim = r#""\ud83d".matches(request.auth.token.p)"#;
+            let unescaped = pattern.replace(r"\\", r"\");
+            assert!(
+                !allowed_with(claim, mode, &[], &[("p", &unescaped)]),
+                "{mode:?} claim {unescaped}"
+            );
+        }
+    }
+}
+
+/// What a lone unit is: a character that `.` and the complement classes match.
+#[test]
+fn a_lone_unit_is_one_character_for_dot_and_the_complement_classes() {
+    for mode in MODES {
+        for pattern in [
+            ".",
+            "(?s).",
+            "[^a]",
+            r"\\D",
+            r"\\W",
+            r"\\S",
+            r"\\P{L}",
+            "[[:^alpha:]]",
+            "(?i).",
+            ".*",
+            ".{1}",
+            r"[^\\x{100000}]",
+            r"[^\\x{0}-\\x{10ffff}]",
+        ] {
+            let condition = format!(r#""\ud83d".matches("{pattern}")"#);
+            assert!(
+                allowed_with(&condition, mode, &[], &[]),
+                "{mode:?} {condition}"
+            );
+        }
+        // But not two of them, nor a newline.
+        assert!(!allowed_with(r#""\ud83d".matches("..")"#, mode, &[], &[]));
+        assert!(!allowed_with(
+            r#""\ud83d\ud83d".matches(".")"#,
+            mode,
+            &[],
+            &[]
+        ));
+        assert!(allowed_with(
+            r#""\ud83d\ud83d".matches("..")"#,
+            mode,
+            &[],
+            &[]
+        ));
+    }
+}
+
+/// Text that results from a replacement is the same text as when it is written directly.
+#[test]
+fn a_replacement_that_rejoins_a_pair_is_valid_text() {
+    let official = LoneSurrogates::Official;
+    for (condition, expected) in [
+        (r#""\ud83dX\ude00".replace("X", "") == "😀""#, true),
+        (r#""\ud83dX\ude00".replace("X", "") != "😀""#, false),
+        (r#""\ud83dX\ude00".replace("X", "").size() == 2"#, true),
+        (r#""😀" in ["\ud83dX\ude00".replace("X", "")]"#, true),
+        (r#"{"😀": true}["\ud83dX\ude00".replace("X", "")]"#, true),
+        (r#""\ud83dX\ude00".replace("X", "").lower() == "😀""#, true),
+        (r#""\ud83dX\ude00".replace("X", "") + "" == "😀""#, true),
+        (r#""a".replace("a", "\ud83d" + "\ude00") == "😀""#, true),
+        (r#""\ud83d".replace("\ud83d", "😀") == "😀""#, true),
+        (r#""\ud83dX\ude00".split("X")[0] + "\ude00" == "😀""#, true),
+        (r#""\ud83dX\ude00".split("X").size() == 2"#, true),
+    ] {
+        assert_eq!(
+            allowed_with(condition, official, &[], &[]),
+            expected,
+            "{condition}"
+        );
+    }
+    assert!(!allowed_with(
+        r#"resource.data.s != "\ud83dX\ude00".replace("X", "")"#,
+        official,
+        &[("s", "😀")],
+        &[]
+    ));
+    // Production fails a replace on a string that holds a lone surrogate (not recorded).
+    assert!(!allowed_with(
+        r#"resource.data.s != "\ud83dX\ude00".replace("X", "")"#,
+        LoneSurrogates::Production,
+        &[("s", "😀")],
+        &[]
+    ));
+}
+
+/// Strict does not take an indexed half for U+FFFD or any other valid text (not recorded).
+#[test]
+fn an_indexed_half_is_not_valid_text_in_either_profile() {
+    for mode in MODES {
+        for condition in [
+            r#"{"�": true}[resource.data.s[0]]"#,
+            r#"resource.data.s[0] == "�""#,
+            r#"resource.data.s[0] in ["�"]"#,
+            r#"resource.data.s[0] + "" == "�""#,
+        ] {
+            assert!(
+                !allowed_with(condition, mode, &[("s", "🔥")], &[]),
+                "{mode:?} {condition}"
+            );
+        }
+    }
+}
+
+// ---- regex over elements: escapes, classes and ranges never reach a lone unit ----
+
+/// One element of a subject: a character, or a lone surrogate unit.
+#[derive(Clone, Copy, Debug)]
+enum Element {
+    Char(char),
+    Lone(u16),
+}
+
+/// What the units of these elements read as: a lone high and a lone low next to each other are
+/// one character.
+fn read_as_text(elements: &[Element]) -> Vec<Element> {
+    let units: Vec<u16> = elements
+        .iter()
+        .flat_map(|element| match element {
+            Element::Char(c) => c.encode_utf16(&mut [0u16; 2]).to_vec(),
+            Element::Lone(unit) => vec![*unit],
+        })
+        .collect();
+    char::decode_utf16(units)
+        .map(|decoded| match decoded {
+            Ok(c) => Element::Char(c),
+            Err(error) => Element::Lone(error.unpaired_surrogate()),
+        })
+        .collect()
+}
+
+const ELEMENTS: [Element; 10] = [
+    Element::Char('a'),
+    Element::Char('5'),
+    Element::Char('é'),
+    Element::Char('\u{1F600}'),
+    Element::Char('\u{10D83D}'),
+    Element::Char('\u{10DE00}'),
+    Element::Char('\u{100000}'),
+    Element::Char('\u{FFFD}'),
+    Element::Lone(0xD83D),
+    Element::Lone(0xDE00),
+];
+
+fn element_source(element: Element) -> String {
+    match element {
+        Element::Char(c) => format!("\\U{:08x}", c as u32),
+        Element::Lone(unit) => format!("\\u{unit:04x}"),
+    }
+}
+
+/// A one-element pattern and what it matches among characters.
+#[derive(Clone, Copy, Debug)]
+enum Atom {
+    Escaped(char),
+    Range(char, char),
+    NotRange(char, char),
+    Dot,
+    NotDigit,
+    Digit,
+    NotLetter,
+    Everything,
+}
+
+const ATOM_CHARS: [char; 8] = [
+    '\u{100000}',
+    '\u{10D83D}',
+    '\u{10D800}',
+    '\u{FFFD}',
+    '\u{E000}',
+    '\u{1F600}',
+    'a',
+    '5',
+];
+
+impl Atom {
+    fn pattern(self) -> String {
+        match self {
+            Self::Escaped(c) => format!("\\\\x{{{:x}}}", c as u32),
+            Self::Range(lo, hi) => format!("[\\\\x{{{:x}}}-\\\\x{{{:x}}}]", lo as u32, hi as u32),
+            Self::NotRange(lo, hi) => {
+                format!("[^\\\\x{{{:x}}}-\\\\x{{{:x}}}]", lo as u32, hi as u32)
+            }
+            Self::Dot => ".".to_owned(),
+            Self::NotDigit => "\\\\D".to_owned(),
+            Self::Digit => "\\\\d".to_owned(),
+            Self::NotLetter => "\\\\P{L}".to_owned(),
+            Self::Everything => "[\\\\x{0}-\\\\x{10ffff}]".to_owned(),
+        }
+    }
+
+    fn matches(self, element: Element) -> bool {
+        match (self, element) {
+            (Self::Escaped(c), Element::Char(x)) => c == x,
+            (Self::Range(lo, hi), Element::Char(x)) => (lo..=hi).contains(&x),
+            (Self::NotRange(lo, hi), Element::Char(x)) => !(lo..=hi).contains(&x),
+            (Self::Dot, Element::Char(x)) => x != '\n',
+            (Self::NotDigit, Element::Char(x)) => !x.is_ascii_digit(),
+            (Self::Digit, Element::Char(x)) => x.is_ascii_digit(),
+            (Self::NotLetter, Element::Char(x)) => !x.is_alphabetic(),
+            // A lone unit is no scalar: only a complement or `.` takes it.
+            (
+                Self::Escaped(_) | Self::Range(..) | Self::Digit | Self::Everything,
+                Element::Lone(_),
+            ) => false,
+            (Self::Everything, Element::Char(_))
+            | (
+                Self::NotRange(..) | Self::Dot | Self::NotDigit | Self::NotLetter,
+                Element::Lone(_),
+            ) => true,
+        }
+    }
+}
+
+fn atom(kind: usize, a: usize, b: usize) -> Atom {
+    let (x, y) = (ATOM_CHARS[a % 8], ATOM_CHARS[b % 8]);
+    let (lo, hi) = if x <= y { (x, y) } else { (y, x) };
+    match kind % 8 {
+        0 => Atom::Escaped(x),
+        1 => Atom::Range(lo, hi),
+        2 => Atom::NotRange(lo, hi),
+        3 => Atom::Dot,
+        4 => Atom::NotDigit,
+        5 => Atom::Digit,
+        6 => Atom::NotLetter,
+        _ => Atom::Everything,
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(160))]
+
+    #[test]
+    fn a_pattern_reaches_a_lone_unit_only_through_dot_and_the_complements(
+        elements in prop::collection::vec(0usize..10, 1..4),
+        atoms in prop::collection::vec((0usize..8, 0usize..8, 0usize..8), 1..4),
+        official in any::<bool>(),
+    ) {
+        let mode = if official { LoneSurrogates::Official } else { LoneSurrogates::Production };
+        let written: Vec<Element> = elements.iter().map(|i| ELEMENTS[*i]).collect();
+        let subject = read_as_text(&written);
+        let atoms: Vec<Atom> = atoms.iter().map(|(k, a, b)| atom(*k, *a, *b)).collect();
+        let source: String = written.iter().map(|e| element_source(*e)).collect();
+        let pattern: String = atoms.iter().map(|a| a.pattern()).collect();
+        let expected = subject.len() == atoms.len()
+            && subject.iter().zip(&atoms).all(|(e, a)| a.matches(*e));
+        let literal = format!("\"{source}\".matches(\"{pattern}\")");
+        prop_assert_eq!(allowed_with(&literal, mode, &[], &[]), expected, "{}", literal);
+        // The same pattern from a claim reads the same.
+        let unescaped = pattern.replace("\\\\", "\\");
+        let claim = format!("\"{source}\".matches(request.auth.token.p)");
+        prop_assert_eq!(
+            allowed_with(&claim, mode, &[], &[("p", &unescaped)]),
+            expected,
+            "{} with {}", claim, unescaped
+        );
+    }
+
+    #[test]
+    fn replacing_what_an_atom_matches_leaves_the_rest_as_text(
+        elements in prop::collection::vec(0usize..10, 0..5),
+        kind in (0usize..8, 0usize..8, 0usize..8),
+    ) {
+        let written: Vec<Element> = elements.iter().map(|i| ELEMENTS[*i]).collect();
+        let subject = read_as_text(&written);
+        let atom = atom(kind.0, kind.1, kind.2);
+        let source: String = written.iter().map(|e| element_source(*e)).collect();
+        let kept: String = subject
+            .iter()
+            .filter(|e| !atom.matches(**e))
+            .map(|e| element_source(*e))
+            .collect();
+        let condition = format!(
+            "\"{source}\".replace(\"{}\", \"\") == \"{kept}\"",
+            atom.pattern()
+        );
+        // Only the official emulator replaces in a string that holds a lone unit.
+        let has_lone = subject.iter().any(|e| matches!(e, Element::Lone(_)));
+        prop_assert!(
+            allowed_with(&condition, LoneSurrogates::Official, &[], &[]),
+            "{}", condition
+        );
+        if !has_lone {
+            prop_assert!(allowed_with(&condition, LoneSurrogates::Production, &[], &[]), "{}", condition);
+        }
+        // What is left can be valid text again; it equals that text written directly.
+        let size = format!(
+            "\"{source}\".replace(\"{}\", \"\").size() == \"{kept}\".size()",
+            atom.pattern()
+        );
+        prop_assert!(allowed_with(&size, LoneSurrogates::Official, &[], &[]), "{}", size);
+    }
+}
+
+/// A lone surrogate is not a class member or a range end: no escape names one. The pattern
+/// does not compile, so the rule fails in either profile (not recorded).
+#[test]
+fn a_lone_surrogate_in_a_class_fails_the_rule() {
+    for mode in MODES {
+        for condition in [
+            r#""�".matches("[\ud83d]")"#,
+            r#""b".matches("[a-\ud83d]")"#,
+            r#""b".matches("[\ud83d-z]")"#,
+            r#""\ud83d".matches("[^\ud83d]")"#,
+            r#""\ud83d".matches("[a\ud83d]")"#,
+        ] {
+            assert!(
+                !allowed_with(condition, mode, &[], &[]),
+                "{mode:?} {condition}"
+            );
+        }
+    }
+    // The class without it is an ordinary class.
+    assert!(allowed_with(
+        r#""b".matches("[a-z]")"#,
+        LoneSurrogates::Official,
+        &[],
+        &[]
+    ));
+    assert!(allowed_with(
+        r#""\ud83d".matches("\ud83d")"#,
+        LoneSurrogates::Official,
+        &[],
+        &[]
+    ));
 }

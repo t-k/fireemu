@@ -176,13 +176,27 @@ fn the_official_emulator_keeps_the_two_halves_of_an_emoji_apart() {
     assert!(allowed_in(r#""😀"[0].size() == 1"#, OFFICIAL));
 }
 
-/// Not recorded: a half cut from a pair in production. It is U+FFFD, the reading that gives
-/// the recorded `esc-high` and `rng-12-size`, so two halves are equal there.
+/// Not recorded: what a half cut from a pair is in production. The recorded rows need it to
+/// differ from the lone escape, from every whole character, and to have size one; it is not
+/// taken for U+FFFD or any other text, and a range that cuts a pair among other text fails.
 #[test]
-fn production_holds_a_half_cut_from_a_pair_as_u_fffd() {
-    assert!(allowed_in(r#""😀"[0] == "\ufffd""#, PRODUCTION));
-    assert!(allowed_in(r#""😀"[1] == "😀"[0]"#, PRODUCTION));
-    assert!(allowed_in(r#""é😀"[0:2] == "é\ufffd""#, PRODUCTION));
+fn production_holds_a_half_cut_from_a_pair_as_a_fragment_of_no_text() {
+    for condition in [
+        r#""😀"[0] == "\ufffd""#,
+        r#""😀"[0] == "\ud83d""#,
+        r#""😀"[1] == "😀"[0]"#,
+        r#"{"\ufffd": true}["😀"[0]]"#,
+        r#""é😀"[0:2] == "é\ufffd""#,
+        r#""😀"[0] + "" == "\ufffd""#,
+        r#""😀"[0].lower() == "😀"[0]"#,
+    ] {
+        assert!(!allowed_in(condition, PRODUCTION), "{condition}");
+    }
+    assert!(allowed_in(r#""😀"[0] == "😀"[0]"#, PRODUCTION));
+    assert!(allowed_in(r#""😀"[0].size() == 1"#, PRODUCTION));
+    assert!(allowed_in(r#""😀"[0:1].size() == 1"#, PRODUCTION));
+    assert!(allowed_in(r#""😀"[0] != "😀"[1]"#, PRODUCTION));
+    // The official emulator keeps the lone unit of Java's string.
     assert!(!allowed_in(r#""😀"[0] == "\ufffd""#, OFFICIAL));
 }
 
@@ -392,9 +406,9 @@ fn a_lone_unit_the_string_held_stays_when_a_pair_is_cut_next_to_it() {
     for (condition, production, official) in [
         (r#""\ud83d\ud83d"[1:2] == "\ud83d""#, true, true),
         (r#""é\ud83d"[0:2] == "é\ud83d""#, true, true),
-        (r#""\ud83d😀"[0:2] == "\ud83d\ufffd""#, true, false),
+        (r#""\ud83d😀"[0:2] == "\ud83d\ufffd""#, false, false),
         (r#""\ud83d😀"[0:2] == "\ud83d\ud83d""#, false, true),
-        (r#""\ud83d😀"[1] == "\ufffd""#, true, false),
+        (r#""\ud83d😀"[1] == "\ufffd""#, false, false),
         (r#""é😀"[1] == "\ud83d""#, false, true),
     ] {
         assert_eq!(
@@ -497,8 +511,7 @@ proptest! {
             // official emulator and both U+FFFD for production.
             for (j, other_unit) in units.iter().enumerate() {
                 let compare = format!("\"{}\"[{i}] == \"{}\"[{j}]", literal(&text), literal(&text));
-                let both_halves = (0xD800..0xE000).contains(unit) && (0xD800..0xE000).contains(other_unit);
-                let expected = unit == other_unit || (!official && both_halves);
+                let expected = unit == other_unit;
                 prop_assert_eq!(allowed_in(&compare, mode), expected, "{}", compare);
             }
         }

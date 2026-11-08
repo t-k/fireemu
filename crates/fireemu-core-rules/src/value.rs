@@ -21,6 +21,11 @@ pub enum RulesValue {
     /// A string that holds a lone surrogate (written as an escape, or cut out of a pair): its
     /// UTF-16 units. A `String` cannot hold one, and no well-formed sequence is held here.
     IllFormed(Vec<u16>),
+    /// One half of a surrogate pair cut out by an index or a range, as production holds it
+    /// (strict profile). Recorded only: it is not the lone unit `"\ud83d"` writes, and a range of
+    /// it has size one. It equals another fragment of the same unit and nothing else, and no
+    /// other operation takes it.
+    Fragment(u16),
     /// List.
     List(Vec<RulesValue>),
     /// `list.toSet()` and the key sets of `map.diff()`: members are unordered and distinct.
@@ -138,7 +143,7 @@ impl RulesValue {
             Self::Bool(_) => "bool",
             Self::Int(_) => "int",
             Self::Float(_) => "float",
-            Self::String(_) | Self::IllFormed(_) => "string",
+            Self::String(_) | Self::IllFormed(_) | Self::Fragment(_) => "string",
             Self::List(_) | Self::PartialList(_) | Self::PartialListAny(_) => "list",
             Self::Set(_) => "set",
             Self::Map(_) | Self::PartialMap(_) | Self::PartialMapExcluding { .. } => "map",
@@ -193,6 +198,7 @@ impl fmt::Display for RulesValue {
             Self::Float(x) => write!(f, "{x}"),
             Self::String(s) => write!(f, "{s:?}"),
             Self::IllFormed(units) => write!(f, "{:?}", String::from_utf16_lossy(units)),
+            Self::Fragment(unit) => write!(f, "fragment({unit:#06x})"),
             Self::List(items) => {
                 f.write_str("[")?;
                 for (i, item) in items.iter().enumerate() {
@@ -338,24 +344,18 @@ pub(crate) fn pieces(units: &[u16]) -> Vec<Piece> {
         .collect()
 }
 
-/// The string those pieces make: a `String` when every piece is a character, otherwise the
-/// ill-formed units (the only form a lone surrogate is held in).
+/// The string those pieces make. A lone high surrogate next to a lone low one is a pair once
+/// they are joined, so the units are decoded again: the value is a `String` whenever the text
+/// is valid, and `IllFormed` (the only form a lone surrogate is held in) otherwise.
 pub(crate) fn string_from_pieces(pieces: &[Piece]) -> RulesValue {
-    if let Some(text) = pieces
-        .iter()
-        .map(|piece| match piece {
-            Piece::Char(c) => Some(*c),
-            Piece::Lone(_) => None,
-        })
-        .collect::<Option<String>>()
-    {
-        return RulesValue::String(text);
-    }
     let mut units = Vec::with_capacity(pieces.len());
     for piece in pieces {
         piece.push_units(&mut units);
     }
-    RulesValue::IllFormed(units)
+    match String::from_utf16(&units) {
+        Ok(text) => RulesValue::String(text),
+        Err(_) => RulesValue::IllFormed(units),
+    }
 }
 
 impl RulesValue {

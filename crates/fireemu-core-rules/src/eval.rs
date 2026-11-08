@@ -4281,8 +4281,8 @@ impl<'a> Evaluator<'a> {
                         usize::try_from(i)
                             .ok()
                             .filter(|i| *i < units.len())
-                            .map(|i| select_units(&text, i, i + 1, self.lone_surrogates))
                             .ok_or_else(|| soft("string index out of range"))
+                            .and_then(|i| select_units(&text, i, i + 1, self.lone_surrogates))
                     }
                     (o, i) => Err(soft(format!(
                         "cannot index {} with {}",
@@ -5051,6 +5051,28 @@ impl<'a> Evaluator<'a> {
         }
     }
 
+    /// The compiled pattern of a string value, which may hold a lone surrogate (a literal
+    /// that matches that unit alone).
+    fn regex_for_text(
+        &mut self,
+        pattern: &RulesValue,
+        compiled_regex: Option<&Arc<crate::regex::Regex>>,
+    ) -> Result<Arc<crate::regex::Regex>, EvalError> {
+        match pattern {
+            RulesValue::String(text) => self.regex_for(text, compiled_regex),
+            other => {
+                let pieces = crate::value::pieces(&other.utf16_units().unwrap_or_default());
+                crate::regex::Regex::from_pieces(&pieces)
+                    .map(Arc::new)
+                    .map_err(|error| {
+                        EvalError::Unsupported(crate::regex::escape_diagnostic_text(
+                            &error.to_string(),
+                        ))
+                    })
+            }
+        }
+    }
+
     fn regex_for(
         &mut self,
         pattern: &str,
@@ -5151,6 +5173,7 @@ impl<'a> Evaluator<'a> {
         use RulesValue as V;
         let production = self.lone_surrogates == crate::ast::LoneSurrogates::Production;
         let is_text = |v: &V| matches!(v, V::String(_) | V::IllFormed(_));
+        let pieces_of = |text: &V| crate::value::pieces(&text.utf16_units().unwrap_or_default());
         match (name, args) {
             ("split", [separator]) if is_text(separator) => {
                 if production {
@@ -5163,29 +5186,20 @@ impl<'a> Evaluator<'a> {
                 if production && matches!(pattern, V::IllFormed(_)) {
                     return Err(soft("a lone surrogate in a pattern"));
                 }
-                let (texts, restore) = lone_unit_stand_ins(&[receiver, pattern]);
-                let [subject, pattern] = &texts[..] else {
-                    unreachable!("two texts in, two texts out")
-                };
-                let regex = self.regex_for(pattern, None)?;
-                let matched = regex.is_full_match(subject);
-                drop(restore);
+                let regex = self.regex_for_text(pattern, compiled_regex)?;
+                let subject = pieces_of(receiver);
+                let matched = regex.is_full_match_pieces(&subject);
                 Ok(V::Bool(matched.map_err(|e| self.regex_failure(e))?))
             }
             ("replace", [pattern, replacement]) if is_text(pattern) && is_text(replacement) => {
                 if production {
                     return Err(soft("replace() with a lone surrogate"));
                 }
-                let (texts, restore) = lone_unit_stand_ins(&[receiver, pattern, replacement]);
-                let [subject, pattern, replacement] = &texts[..] else {
-                    unreachable!("three texts in, three texts out")
-                };
-                let _ = compiled_regex;
-                let regex = self.regex_for(pattern, None)?;
+                let regex = self.regex_for_text(pattern, None)?;
                 let replaced = regex
-                    .replace_all(subject, replacement)
+                    .replace_all_pieces(&pieces_of(receiver), &pieces_of(replacement))
                     .map_err(|e| self.regex_failure(e))?;
-                Ok(restore.value(&replaced))
+                Ok(crate::value::string_from_pieces(&replaced))
             }
             ("matches", _) => Err(soft("matches() expects a string pattern")),
             _ => Err(soft("replace() expects a pattern and a replacement")),
@@ -5709,7 +5723,7 @@ fn method_call(
             | V::PartialMapExcluding { .. },
             _,
         ) => return Err(EvalError::Unknown),
-        (V::String(_) | V::IllFormed(_), "size") => {
+        (V::String(_) | V::IllFormed(_) | V::Fragment(_), "size") => {
             arity(0)?;
             V::Int(i64::try_from(utf16_len(receiver)).unwrap_or(i64::MAX))
         }
@@ -6123,72 +6137,9 @@ fn slice(
     );
     Ok(match receiver {
         V::List(items) => V::List(items[lo..hi].to_vec()),
-        V::String(_) | V::IllFormed(_) => select_units(receiver, lo, hi, mode),
+        V::String(_) | V::IllFormed(_) => select_units(receiver, lo, hi, mode)?,
         _ => unreachable!("the length arm already rejected every other receiver"),
     })
-}
-
-/// What `lone_unit_stand_ins` put in place of lone units, to put them back.
-struct LoneUnits(Vec<(char, u16)>);
-
-impl LoneUnits {
-    /// The string value of a regex result, with the stand-in characters made lone units again.
-    fn value(&self, text: &str) -> RulesValue {
-        let pieces: Vec<crate::value::Piece> = text
-            .chars()
-            .map(|c| {
-                self.0
-                    .iter()
-                    .find(|(stand_in, _)| *stand_in == c)
-                    .map_or(crate::value::Piece::Char(c), |(_, unit)| {
-                        crate::value::Piece::Lone(*unit)
-                    })
-            })
-            .collect();
-        crate::value::string_from_pieces(&pieces)
-    }
-}
-
-/// The texts as `String`s a regular expression can read: each lone surrogate unit becomes a
-/// character none of the texts holds, so it matches itself and `.`, and no other character.
-fn lone_unit_stand_ins(texts: &[&RulesValue]) -> (Vec<String>, LoneUnits) {
-    let all: Vec<Vec<crate::value::Piece>> = texts
-        .iter()
-        .map(|text| crate::value::pieces(&text.utf16_units().unwrap_or_default()))
-        .collect();
-    let used: std::collections::BTreeSet<char> = all
-        .iter()
-        .flatten()
-        .filter_map(|piece| match piece {
-            crate::value::Piece::Char(c) => Some(*c),
-            crate::value::Piece::Lone(_) => None,
-        })
-        .collect();
-    let mut free = (0x10_0000u32..=0x10_FFFD)
-        .filter_map(char::from_u32)
-        .filter(|c| !used.contains(c));
-    let mut assigned: Vec<(char, u16)> = Vec::new();
-    let texts = all
-        .iter()
-        .map(|pieces| {
-            pieces
-                .iter()
-                .map(|piece| match piece {
-                    crate::value::Piece::Char(c) => *c,
-                    crate::value::Piece::Lone(unit) => {
-                        if let Some((c, _)) = assigned.iter().find(|(_, u)| u == unit) {
-                            *c
-                        } else {
-                            let c = free.next().unwrap_or(char::REPLACEMENT_CHARACTER);
-                            assigned.push((c, *unit));
-                            c
-                        }
-                    }
-                })
-                .collect::<String>()
-        })
-        .collect();
-    (texts, LoneUnits(assigned))
 }
 
 /// The length of a string value in UTF-16 code units, which is what the Rules runtime counts
@@ -6197,6 +6148,7 @@ fn utf16_len(text: &RulesValue) -> usize {
     match text {
         RulesValue::String(s) => s.encode_utf16().count(),
         RulesValue::IllFormed(units) => units.len(),
+        RulesValue::Fragment(_) => 1,
         _ => 0,
     }
 }
@@ -6215,39 +6167,43 @@ fn select_units(
     lo: usize,
     hi: usize,
     mode: crate::ast::LoneSurrogates,
-) -> RulesValue {
+) -> Result<RulesValue, EvalError> {
+    use crate::value::Piece;
     let units = receiver.utf16_units().unwrap_or_default();
     let mut original_lone = vec![false; units.len()];
     let mut at = 0;
     for piece in crate::value::pieces(&units) {
         match piece {
-            crate::value::Piece::Char(c) => at += c.len_utf16(),
-            crate::value::Piece::Lone(_) => {
+            Piece::Char(c) => at += c.len_utf16(),
+            Piece::Lone(_) => {
                 original_lone[at] = true;
                 at += 1;
             }
         }
     }
     let mut offset = lo;
-    let selected: Vec<crate::value::Piece> = crate::value::pieces(&units[lo..hi])
+    let mut cut_halves = Vec::new();
+    let selected: Vec<Piece> = crate::value::pieces(&units[lo..hi])
         .into_iter()
-        .map(|piece| match piece {
-            crate::value::Piece::Char(c) => {
-                offset += c.len_utf16();
-                piece
-            }
-            crate::value::Piece::Lone(_) => {
-                let cut_from_a_pair = !original_lone[offset];
-                offset += 1;
-                if cut_from_a_pair && mode == crate::ast::LoneSurrogates::Production {
-                    crate::value::Piece::Char(char::REPLACEMENT_CHARACTER)
-                } else {
-                    piece
+        .inspect(|piece| match piece {
+            Piece::Char(c) => offset += c.len_utf16(),
+            Piece::Lone(unit) => {
+                if !original_lone[offset] {
+                    cut_halves.push(*unit);
                 }
+                offset += 1;
             }
         })
         .collect();
-    crate::value::string_from_pieces(&selected)
+    if mode == crate::ast::LoneSurrogates::Production && !cut_halves.is_empty() {
+        // Not recorded beyond a half on its own: its size is one and it is not the lone unit
+        // an escape writes. A range that cuts a pair among other text fails the rule.
+        return match (selected.as_slice(), cut_halves.as_slice()) {
+            ([Piece::Lone(unit)], [_]) => Ok(RulesValue::Fragment(*unit)),
+            _ => Err(soft("a range cuts a surrogate pair")),
+        };
+    }
+    Ok(crate::value::string_from_pieces(&selected))
 }
 
 /// `lower()` or `upper()` of a string that holds a lone surrogate: the characters between the

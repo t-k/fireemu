@@ -692,6 +692,57 @@ if (process.env.PYCHECK_PROFILE !== "tasks") {
     assert.equal(second.result.readBackRequired, true);
   });
 
+  test("one refused queue leaves only that queue unconfirmed, and the other is shown by its own read", async () => {
+    const run = await go({ queueTombstones: new Set([RAW]), ...CLI_LEAVES_QUEUES });
+    assert.deepEqual(
+      run.result.unconfirmedCreates.map((c) => c.label),
+      [`queue-${RAW}`],
+    );
+    assert.equal(run.result.cli.deploy.exitCode, 2);
+    assert.equal(run.result.cli.deploy.errored, 1);
+    assert.deepEqual(
+      run.result.cli.deploy.cliWrites.map((w) => [w.requests, w.statuses]),
+      [[1, [400]]],
+    );
+    assert.equal(run.result.operations[`task-${SDK}`].status, 200);
+    assert.equal(
+      run.result.operations[`task-${RAW}`].status,
+      404,
+      "the refused queue does not exist",
+    );
+    assert.equal(run.result.closureReady, false);
+  });
+
+  test("the command line names the profile in its summary and pins it through the digest", async () => {
+    const { main } = await import("./main.mjs");
+    const out = [];
+    const code = await main(["check"], {
+      env: {},
+      deps: {},
+      out: (m) => out.push(m),
+      err: () => {},
+      digest: "d".repeat(64),
+    });
+    assert.equal(code, 2, "no arguments: nothing runs");
+    assert.deepEqual(JSON.parse(out[0]), {
+      project: "fireemu-oracle-events",
+      command: "check",
+      maxRequests: 500,
+      packetDigest: "d".repeat(64),
+      profile: "tasks",
+    });
+    const readback = [];
+    await main(["readback"], {
+      env: {},
+      deps: {},
+      out: (m) => readback.push(m),
+      err: () => {},
+      digest: "e".repeat(64),
+    });
+    assert.equal(JSON.parse(readback[0]).profile, "tasks");
+    assert.equal(JSON.parse(readback[0]).maxRequests, 130);
+  });
+
   test("the read-back (A2) of a clean run closes, and reads the profile's names only", async () => {
     const { world, result } = await go(CLI_LEAVES_QUEUES);
     const rows = [];

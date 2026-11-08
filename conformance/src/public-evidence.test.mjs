@@ -251,6 +251,10 @@ test("the historical daemonLog may name only the binding's own paths", async (t)
     `\n  note: ${cwd}:other/secret.json\n`,
     `\n  note: ${config}/secret.json\n`,
     `\n  note: ${cwd}/firebase.json.bak\n`,
+    // An exempt path inside a longer absolute path is not that path.
+    `\n  note: /tmp${cwd}\n`,
+    `\n  note: /work${cwd}/firebase.json\n`,
+    `\n  note: /tmp${config}: x\n`,
     "\n  note: C:\\Users\\someone\\secret.json\n",
     // Only the exact exempt path is masked: a dot in it matches no other character.
     "\n  binary: /tmp/fireemu-verifyXx/fireemu try ✓/bin/fireemu\n",

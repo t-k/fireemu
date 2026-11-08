@@ -1149,8 +1149,8 @@ const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
  * The historical judge requires absolute paths at these root binding fields, so only they leave
  * the public evidence check. Everything else in the binding is still checked. The judge also
  * requires the daemon's banner (`daemonLog`), which names the config file and `<cwd>/firebase.json`;
- * only those exempt paths, matched whole (longest first) and followed by the end of the log,
- * whitespace or a colon that ends a word, are masked there before it is checked.
+ * only those exempt paths, matched whole (longest first), preceded by a line start or whitespace
+ * and followed by the end of the log, whitespace or a colon that ends a word, are masked there before it is checked.
  */
 function withoutHistoricalBindingPaths(comparison) {
   if (!isPlainObject(comparison) || !isPlainObject(comparison.profileBinding)) return comparison;
@@ -1174,7 +1174,10 @@ function withoutHistoricalBindingPaths(comparison) {
   const maskedLog =
     typeof daemonLog === "string" && exemptPaths.length > 0
       ? daemonLog.replace(
-          new RegExp(`(?:${exemptPaths.map(escapeRegExp).join("|")})(?=$|\\s|:(?:\\s|$))`, "gm"),
+          new RegExp(
+            `(?<=^|\\s)(?:${exemptPaths.map(escapeRegExp).join("|")})(?=$|\\s|:(?:\\s|$))`,
+            "gm",
+          ),
           "<binding-path>",
         )
       : daemonLog;

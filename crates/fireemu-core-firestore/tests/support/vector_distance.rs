@@ -261,3 +261,55 @@ fn vector_threshold_adjacent_bits_rank_and_projection() {
         }
     }
 }
+
+fn special_component() -> impl Strategy<Value = f64> {
+    prop_oneof![
+        Just(f64::NAN),
+        Just(f64::INFINITY),
+        Just(f64::NEG_INFINITY),
+        Just(0.0),
+        Just(-0.0),
+        Just(f64::MAX),
+        Just(-f64::MAX),
+        Just(f64::MIN_POSITIVE),
+        Just(f64::from_bits(1)),
+        Just(1e-300),
+        Just(-1e-300),
+        Just(1e300),
+        Just(-1e300),
+        Just(1.0),
+        Just(-1.0),
+        any::<u64>().prop_map(f64::from_bits),
+        -1000.0f64..1000.0,
+    ]
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(2048))]
+    #[test]
+    fn generated_matched_vectors_match_frozen_reference(
+        (left, right) in (0usize..=12).prop_flat_map(|len| (
+            prop::collection::vec(special_component(), len),
+            prop::collection::vec(special_component(), len),
+        )),
+    ) {
+        check(&left, &right);
+        check(&right, &left);
+        check(&left, &left);
+    }
+
+    #[test]
+    fn generated_mismatched_vectors_are_refused_like_the_reference(
+        left in prop::collection::vec(special_component(), 0..=12),
+        right in prop::collection::vec(special_component(), 0..=12),
+    ) {
+        prop_assume!(left.len() != right.len());
+        for measure in [DistanceMeasure::Euclidean, DistanceMeasure::Cosine, DistanceMeasure::DotProduct] {
+            prop_assert_eq!(vector_distance(&left, &right, measure), None);
+            prop_assert_eq!(
+                PreparedVectorDistance::new(&right, measure).evaluate(&left),
+                None
+            );
+        }
+    }
+}

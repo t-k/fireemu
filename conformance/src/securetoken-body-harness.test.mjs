@@ -281,3 +281,311 @@ test("preflight does not list tenants while tenancy is off, and refuses a dirty 
   assert.ok(down.problems.some((p) => p.includes("config (HTTP 0)")));
   assert.ok(down.problems.some((p) => p.includes("project-level account")));
 });
+
+// ---- the requests, one by one ------------------------------------------------------------
+
+test("every reviewed request is exactly what the earlier recordings sent", () => {
+  const A = { id: "", api: "itk", auth: "admin" };
+  const password = "fireemu-stb-Password-1";
+  const mail = (n) => `fireemu-stb-${RUN}-${n}@example.com`;
+  const id = (n) => `stb-${RUN}-${n}`;
+  const T = "tenant-1";
+  const tenants = "v2/projects/{project}/tenants";
+  assert.deepEqual(R.createAccount(RUN, "a"), {
+    ...A,
+    id: "create-account",
+    method: "POST",
+    path: "v1/projects/{project}/accounts",
+    body: { localId: id("a"), email: mail("a"), password, emailVerified: true },
+  });
+  assert.deepEqual(R.createAccount(RUN, "t", T), {
+    ...A,
+    id: "create-account",
+    method: "POST",
+    path: `v1/projects/{project}/tenants/${T}/accounts`,
+    body: { localId: id("t"), email: mail("t"), password, emailVerified: true },
+  });
+  assert.deepEqual(R.deleteAccount(RUN, "b"), {
+    ...A,
+    id: "delete-account",
+    method: "POST",
+    path: "v1/projects/{project}/accounts:delete",
+    body: { localId: id("b") },
+  });
+  assert.deepEqual(R.deleteAccount(RUN, "t", T), {
+    ...A,
+    id: "delete-account",
+    method: "POST",
+    path: `v1/projects/{project}/tenants/${T}/accounts:delete`,
+    body: { localId: id("t") },
+  });
+  assert.deepEqual(R.lookupAccount(RUN, "b"), {
+    ...A,
+    id: "lookup-account",
+    method: "POST",
+    path: "v1/projects/{project}/accounts:lookup",
+    body: { localId: [id("b")] },
+  });
+  assert.deepEqual(R.lookupAccount(RUN, "t", T), {
+    ...A,
+    id: "lookup-account",
+    method: "POST",
+    path: `v1/projects/{project}/tenants/${T}/accounts:lookup`,
+    body: { localId: [id("t")] },
+  });
+  assert.deepEqual(R.signIn(RUN, "a"), {
+    id: "sign-in",
+    api: "itk",
+    auth: "key",
+    method: "POST",
+    path: "v1/accounts:signInWithPassword",
+    body: { email: mail("a"), password, returnSecureToken: true },
+  });
+  assert.deepEqual(R.signIn(RUN, "t", T).body, {
+    email: mail("t"),
+    password,
+    returnSecureToken: true,
+    tenantId: T,
+  });
+  assert.deepEqual(R.countAccounts(), {
+    ...A,
+    id: "count-accounts",
+    method: "POST",
+    path: "v1/projects/{project}/accounts:query",
+    body: { returnUserInfo: false },
+  });
+  assert.deepEqual(R.createTenant(RUN), {
+    ...A,
+    id: "create-tenant",
+    method: "POST",
+    path: tenants,
+    body: { displayName: `stb-${RUN}`, allowPasswordSignup: true },
+  });
+  assert.deepEqual(R.getTenant(T), {
+    ...A,
+    id: "get-tenant",
+    method: "GET",
+    path: `${tenants}/${T}`,
+  });
+  assert.deepEqual(R.deleteTenant(T), {
+    ...A,
+    id: "delete-tenant",
+    method: "DELETE",
+    path: `${tenants}/${T}`,
+  });
+  assert.deepEqual(R.listTenants(), {
+    ...A,
+    id: "list-tenants",
+    method: "GET",
+    path: tenants,
+    query: { pageSize: 100 },
+  });
+  assert.deepEqual(R.listTenants("tok").query, { pageSize: 100, pageToken: "tok" });
+  assert.deepEqual(R.readConfig(), {
+    ...A,
+    id: "read-config",
+    method: "GET",
+    path: "admin/v2/projects/{project}/config",
+  });
+  assert.deepEqual(R.writeTenancy(true), {
+    ...A,
+    id: "write-tenancy",
+    method: "PATCH",
+    path: "admin/v2/projects/{project}/config",
+    query: { updateMask: "multiTenant.allowTenants" },
+    body: { multiTenant: { allowTenants: true } },
+  });
+  assert.deepEqual(R.writeTenancy(false).body, { multiTenant: { allowTenants: false } });
+  assert.deepEqual(R.refresh({ contentType: "application/json", body: "{}" }), {
+    id: "refresh",
+    api: "securetoken",
+    auth: "key",
+    method: "POST",
+    path: "v1/token",
+    contentType: "application/json",
+    body: "{}",
+  });
+});
+
+test("buildRequest: defaults, headers per credential, and the refusal of an unknown credential", () => {
+  for (const ctx of [localCtx(RUN), production()]) {
+    const local = ctx.target.kind === "local";
+    // A key request carries no owner credential; an admin request carries one.
+    const keyed = buildRequest(ctx, { id: "x", path: "v1/x", auth: "key", body: {} });
+    assert.equal(keyed.init.headers.authorization, undefined);
+    assert.equal(keyed.init.headers["x-goog-user-project"], undefined);
+    assert.equal(
+      new URL(keyed.url).searchParams.get("key"),
+      local ? "fake-api-key" : "AIza-test-key",
+    );
+    const admin = buildRequest(ctx, { id: "x", path: "v1/x", auth: "admin" });
+    assert.equal(
+      admin.init.headers.authorization,
+      local ? "Bearer owner" : "Bearer ya29.test-owner",
+    );
+    assert.equal(admin.init.headers["x-goog-user-project"], local ? undefined : SANDBOX_PROJECT);
+    assert.equal(new URL(admin.url).searchParams.has("key"), false);
+    // No method means POST; no body means no content type and no body.
+    assert.equal(admin.init.method, "POST");
+    assert.equal(admin.init.body, undefined);
+    assert.equal(admin.init.headers["content-type"], undefined);
+    // The host is the identity toolkit unless a request says securetoken.
+    assert.ok(
+      admin.url.includes(
+        local
+          ? "/identitytoolkit.googleapis.com/v1/x"
+          : "https://identitytoolkit.googleapis.com/v1/x",
+      ),
+    );
+    const token = buildRequest(ctx, { id: "t", api: "securetoken", path: "v1/token", auth: "key" });
+    assert.ok(token.url.includes("securetoken.googleapis.com/v1/token?key="));
+    assert.throws(
+      () => buildRequest(ctx, { id: "x", path: "v1/x", auth: "none" }),
+      /auth must be key or admin/,
+    );
+    assert.throws(() => buildRequest(ctx, { id: "x", path: "v1/x" }), /auth must be key or admin/);
+    // A string body is sent as it is, an object as JSON, with the content type asked for or JSON.
+    const text = buildRequest(ctx, {
+      id: "x",
+      path: "p",
+      auth: "key",
+      body: "a=b",
+      contentType: "application/x-www-form-urlencoded",
+    });
+    assert.equal(text.init.body, "a=b");
+    assert.equal(text.init.headers["content-type"], "application/x-www-form-urlencoded");
+    const json = buildRequest(ctx, { id: "x", path: "p", auth: "key", body: { a: 1 } });
+    assert.equal(json.init.body, '{"a":1}');
+    assert.equal(json.init.headers["content-type"], "application/json");
+    // Query values are strings in the URL.
+    const queried = buildRequest(ctx, {
+      id: "x",
+      path: "p",
+      auth: "admin",
+      query: { pageSize: 100, k: "v w" },
+    });
+    assert.equal(new URL(queried.url).search, "?pageSize=100&k=v+w");
+  }
+});
+
+test("a project name is matched literally by the guard", () => {
+  const ctx = localCtx(RUN);
+  ctx.project = "my.project";
+  const at = (project) => ({
+    url: `http://127.0.0.1:1/identitytoolkit.googleapis.com/v1/projects/${project}/accounts:query`,
+    init: { method: "POST", headers: { "content-type": "application/json" }, body: "{}" },
+  });
+  guardRequest(at("my.project"), ctx);
+  assert.throws(() => guardRequest(at("myXproject"), ctx), /reviewed family/);
+});
+
+test("withProject fills every {project} and nothing else", () => {
+  assert.equal(withProject({ path: "a/{project}/b/{project}" }, "p").path, "a/p/b/p");
+  assert.deepEqual(withProject({ id: "i", path: "x" }, "p"), { id: "i", path: "x" });
+});
+
+test("the guard reads the path before the browser normalizes it, and the query not at all", () => {
+  const ctx = production();
+  const post = (url, body = "a=b") => ({ url, init: { method: "POST", headers: {}, body } });
+  // `new URL` collapses these to /v1/token, a reviewed family: only the raw check refuses them.
+  for (const url of [
+    "https://securetoken.googleapis.com/v1/x/../token?key=k",
+    "https://securetoken.googleapis.com/v1/x/%2e%2e/token?key=k",
+    "https://securetoken.googleapis.com/v1/./token?key=k",
+  ])
+    assert.throws(() => guardRequest(post(url), ctx), /not canonical/, url);
+  // An encoded slash after the question mark is a value, not a path.
+  guardRequest(post("https://securetoken.googleapis.com/v1/token?key=a%2fb"), ctx);
+  // A request with no method is a GET.
+  guardRequest(
+    {
+      url: `https://identitytoolkit.googleapis.com/v2/projects/${SANDBOX_PROJECT}/tenants`,
+      init: { headers: {} },
+    },
+    ctx,
+  );
+  assert.throws(
+    () =>
+      guardRequest(
+        {
+          url: `https://identitytoolkit.googleapis.com/v2/projects/${SANDBOX_PROJECT}/accounts`,
+          init: { headers: {} },
+        },
+        ctx,
+      ),
+    /reviewed family/,
+  );
+});
+
+test("the guard reads arrays and nested objects of a body, and bounds a refresh body", () => {
+  const ctx = localCtx(RUN);
+  ctx.tenantId = "tenant-1";
+  const lookup = (body) => ({
+    url: `http://127.0.0.1:1/identitytoolkit.googleapis.com/v1/projects/${SANDBOX_PROJECT}/accounts:lookup`,
+    init: {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  });
+  guardRequest(lookup({ localId: [localIdOf(RUN, "a"), localIdOf(RUN, "b")] }), ctx);
+  assert.throws(
+    () => guardRequest(lookup({ localId: [localIdOf(RUN, "a"), "stb-1-b"] }), ctx),
+    /localId/,
+  );
+  assert.throws(
+    () => guardRequest(lookup({ nested: { deep: [{ email: "x@gmail.com" }] } }), ctx),
+    /outside example.com|email/,
+  );
+  assert.throws(() => guardRequest(lookup({ nested: { deep: ["+16505550101"] } }), ctx), /phone/);
+  guardRequest(lookup({ nested: { deep: [{ note: "fine" }, 7, null, true] } }), ctx);
+  const refreshBody = (size) => ({
+    url: "http://127.0.0.1:1/securetoken.googleapis.com/v1/token?key=k",
+    init: {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: "x".repeat(size),
+    },
+  });
+  guardRequest(refreshBody(4096), ctx);
+  assert.throws(() => guardRequest(refreshBody(4097), ctx), /small/);
+  // The tenant a request names in its body must be the run's.
+  const signIn = (tenantId) => ({
+    url: "http://127.0.0.1:1/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=k",
+    init: {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: emailOf(RUN, "t"), password: "p", tenantId }),
+    },
+  });
+  guardRequest(signIn("tenant-1"), ctx);
+  assert.throws(() => guardRequest(signIn("tenant-2"), ctx), /tenant this run did not create/);
+});
+
+test("only a config PATCH with the one mask and the one field is admitted", () => {
+  const ctx = localCtx(RUN);
+  const config = (method, mask, body) => ({
+    url: `http://127.0.0.1:1/identitytoolkit.googleapis.com/admin/v2/projects/${SANDBOX_PROJECT}/config${mask ? `?updateMask=${mask}` : ""}`,
+    init: {
+      method,
+      headers: { "content-type": "application/json" },
+      body: body && JSON.stringify(body),
+    },
+  });
+  guardRequest(config("GET"), ctx);
+  guardRequest(
+    config("PATCH", "multiTenant.allowTenants", { multiTenant: { allowTenants: false } }),
+    ctx,
+  );
+  for (const bad of [
+    config("PATCH", undefined, { multiTenant: { allowTenants: true } }),
+    config("PATCH", "multiTenant", { multiTenant: { allowTenants: true } }),
+    config("PATCH", "multiTenant.allowTenants", { multiTenant: { allowTenants: true, x: 1 } }),
+    config("PATCH", "multiTenant.allowTenants", { multiTenant: {} }),
+    config("PATCH", "multiTenant.allowTenants", { other: 1 }),
+    config("PATCH", "multiTenant.allowTenants", { multiTenant: { allowTenants: true }, other: 1 }),
+    config("DELETE"),
+    config("POST", "multiTenant.allowTenants", { multiTenant: { allowTenants: true } }),
+  ])
+    assert.throws(() => guardRequest(bad, ctx), undefined, `${bad.init.method} ${bad.url}`);
+});

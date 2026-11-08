@@ -41,6 +41,7 @@ export function createWorld(options = {}) {
     number = "123456789012",
     faults = [],
     lateFaults = [],
+    apiKey = "fake-api-key",
   } = options;
   const world = {
     tenancy,
@@ -48,7 +49,7 @@ export function createWorld(options = {}) {
     accounts: new Map(),
     tokens: new Map(),
     log: [],
-    apiKey: "fake-api-key",
+    apiKey,
   };
 
   const issueToken = (account) => {

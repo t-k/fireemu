@@ -2,7 +2,7 @@
 // what it records, and what its cleanup does when a delete, a create or a switch answers badly.
 
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { mock, test } from "node:test";
 
 import { ROWS } from "./securetoken-body/corpus.mjs";
 import {
@@ -11,7 +11,9 @@ import {
   mergeRecordings,
   readRow,
 } from "./securetoken-body/judge.mjs";
-import { fakeSession } from "./securetoken-body/test-support.mjs";
+import { createContext, SANDBOX_PROJECT } from "./auth-account/harness.mjs";
+import { tenancyIs } from "./securetoken-body/session.mjs";
+import { fakeSession, NUMBER } from "./securetoken-body/test-support.mjs";
 
 const rowSpec = (id) => ROWS.find((r) => r.id === id);
 const reading = (recording, id) => readRow(rowSpec(id), mergeRecordings([recording.rows[id]]));
@@ -474,4 +476,241 @@ test("an unreadable 200 from the owner API stops the recording instead of readin
   const recording = await session.runRecording();
   assert.match(recording.failure, /unreadable body/);
   assert.equal(recording.fatal, true);
+});
+
+test("tenancyIs reads production's omitted false as off and only a true as on", () => {
+  for (const off of [
+    {},
+    { multiTenant: {} },
+    { multiTenant: { allowTenants: false } },
+    null,
+    undefined,
+  ]) {
+    assert.equal(tenancyIs(off, false), true);
+    assert.equal(tenancyIs(off, true), false);
+  }
+  const on = { multiTenant: { allowTenants: true } };
+  assert.equal(tenancyIs(on, true), true);
+  assert.equal(tenancyIs(on, false), false);
+  assert.equal(tenancyIs({ multiTenant: { allowTenants: "true" } }, true), false);
+});
+
+test("the defaults: a minute per request, 30 polls of 2 s before giving up", async () => {
+  const waits = [];
+  const timeouts = mock.method(AbortSignal, "timeout", AbortSignal.timeout);
+  try {
+    const { session, journal } = fakeSession({
+      world: {
+        tenancy: false,
+        lateFaults: [
+          (req) =>
+            req.method === "GET" && req.path.startsWith("admin/v2")
+              ? { status: 200, json: { multiTenant: {} } }
+              : undefined,
+        ],
+      },
+      // `undefined` leaves the session's own defaults in place.
+      session: { pollMs: undefined, pollLimit: undefined, sleep: async (ms) => waits.push(ms) },
+    });
+    const recording = await session.runRecording();
+    assert.match(recording.failure, /did not read back/);
+    // One read for the state, then 30 polls of the switch on; the restore is attempted and polls too.
+    assert.equal(journal.filter((e) => e.id === "read-config").length >= 31, true);
+    assert.equal(waits.filter((ms) => ms === 2000).length >= 30, true);
+    assert.ok(timeouts.mock.calls.length > 0);
+    assert.ok(timeouts.mock.calls.every((c) => c.arguments[0] === 60_000));
+  } finally {
+    timeouts.mock.restore();
+  }
+});
+
+test("in production the settle after a configuration change defaults to 5 s, locally to none", async () => {
+  const ctx = createContext({
+    run: "1794000000",
+    project: SANDBOX_PROJECT,
+    target: {
+      kind: "production",
+      apiKey: "AIza-test-key",
+      adminToken: "ya29.test",
+      quotaProject: SANDBOX_PROJECT,
+      projectNumber: NUMBER,
+    },
+  });
+  const { createWorld } = await import("./securetoken-body/test-world.mjs");
+  const { openOwnership } = await import("./shared/ownership.mjs");
+  const { createSession } = await import("./securetoken-body/session.mjs");
+  const { tempDir } = await import("./test-tmpdir.mjs");
+  const fake = createWorld({
+    project: SANDBOX_PROJECT,
+    number: NUMBER,
+    tenancy: false,
+    apiKey: "AIza-test-key",
+  });
+  const waits = [];
+  const hosts = [];
+  const transport = (url, init) => {
+    const parsed = new URL(url);
+    hosts.push(parsed.origin);
+    return fake.fetch(`http://127.0.0.1:1${parsed.pathname}${parsed.search}`, init);
+  };
+  const ownership = openOwnership({
+    path: `${tempDir("stb-")}/issued.jsonl`,
+    runId: "stb-1794000000",
+  });
+  const session = createSession(ctx, { transport, ownership, sleep: async (ms) => waits.push(ms) });
+  const recording = await session.runRecording();
+  assert.equal(recording.failure, undefined);
+  assert.equal(recording.closureReady, true);
+  assert.equal(Object.keys(recording.rows).length, ROWS.length);
+  assert.deepEqual(waits, [5000, 5000]);
+  assert.deepEqual([...new Set(hosts)].toSorted(), [
+    "https://identitytoolkit.googleapis.com",
+    "https://securetoken.googleapis.com",
+  ]);
+});
+
+test("a session without an ownership ledger is refused", async () => {
+  const { createSession } = await import("./securetoken-body/session.mjs");
+  assert.throws(
+    () =>
+      createSession(
+        createContext({
+          run: "1",
+          project: SANDBOX_PROJECT,
+          target: { kind: "local", origin: "http://127.0.0.1:1", projectNumber: NUMBER },
+        }),
+        {},
+      ),
+    /needs an ownership ledger/,
+  );
+});
+
+test("the secrets a session holds are distinct and never empty", async () => {
+  const { session } = fakeSession({
+    world: {
+      lateFaults: [
+        (req, res) => {
+          if (req.path !== "v1/accounts:signInWithPassword" || res.status !== 200) return undefined;
+          return { status: 200, json: { ...res.json, idToken: "" } };
+        },
+      ],
+    },
+  });
+  const { secrets } = await session.runRecording();
+  assert.ok(secrets.length >= 3);
+  assert.ok(secrets.every((secret) => typeof secret === "string" && secret.length > 0));
+  assert.equal(new Set(secrets).size, secrets.length);
+});
+
+test("the guard runs on every request of a session: a tenant it did not create is refused", async () => {
+  let armed = true;
+  const tampering = fakeSession({
+    world: {
+      faults: [
+        (req) => {
+          // After the first account is created, the context forgets which tenant is the run's own.
+          if (armed && req.path.endsWith("v1/projects/%P/accounts")) {
+            armed = false;
+            tampering.ctx.tenantId = "somebody-elses";
+          }
+          return undefined;
+        },
+      ],
+    },
+  });
+  const recording = await tampering.session.runRecording();
+  assert.match(recording.failure, /names a tenant this run did not create/);
+  assert.equal(Object.keys(recording.rows).length, 0);
+});
+
+test("the harness ceiling is its own: reaching it stops the recording and cleanup cannot exceed it", async () => {
+  const { session } = fakeSession({ session: { maxHarnessRequests: 4 } });
+  const recording = await session.runRecording();
+  assert.equal(recording.harnessRequests, 4);
+  assert.equal(recording.fatal, true);
+  assert.match(recording.failure, /harness request ceiling 4 reached/);
+  assert.equal(recording.requests, 0);
+  assert.equal(session.counts().harnessRequests, 4);
+});
+
+test("in production every management call renews the owner credential first, a row never does", async () => {
+  const { createWorld } = await import("./securetoken-body/test-world.mjs");
+  const { openOwnership } = await import("./shared/ownership.mjs");
+  const { createSession } = await import("./securetoken-body/session.mjs");
+  const { tempDir } = await import("./test-tmpdir.mjs");
+  const target = {
+    kind: "production",
+    apiKey: "AIza-test-key",
+    adminToken: "ya29.first",
+    quotaProject: SANDBOX_PROJECT,
+    projectNumber: NUMBER,
+    refreshes: 0,
+    async refresh() {
+      this.refreshes += 1;
+      this.adminToken = `ya29.renewed-${this.refreshes}`;
+    },
+  };
+  const ctx = createContext({ run: "1794000000", project: SANDBOX_PROJECT, target });
+  const fake = createWorld({
+    project: SANDBOX_PROJECT,
+    number: NUMBER,
+    apiKey: "AIza-test-key",
+    tenancy: true,
+  });
+  const bearers = [];
+  const signInHeaders = [];
+  const transport = (url, init) => {
+    const parsed = new URL(url);
+    if (init.headers.authorization) bearers.push(init.headers.authorization);
+    if (parsed.pathname.endsWith("signInWithPassword"))
+      signInHeaders.push(init.headers.authorization);
+    return fake.fetch(`http://127.0.0.1:1${parsed.pathname}${parsed.search}`, init);
+  };
+  const ownership = openOwnership({
+    path: `${tempDir("stb-")}/issued.jsonl`,
+    runId: "stb-1794000000",
+  });
+  const recording = await createSession(ctx, {
+    transport,
+    ownership,
+    sleep: async () => {},
+  }).runRecording();
+  assert.equal(recording.failure, undefined);
+  // 16 management calls (tenancy on); the 3 sign-ins are harness calls that carry the key alone.
+  assert.equal(recording.harnessRequests, 19);
+  assert.equal(bearers.length, 16);
+  assert.equal(target.refreshes, 16);
+  assert.ok(bearers.every((b) => b.startsWith("Bearer ya29.renewed-")));
+  assert.equal(new Set(bearers).size, 16);
+  assert.deepEqual(signInHeaders, [undefined, undefined, undefined]);
+});
+
+test("a credential that cannot be renewed stops the recording as fatal", async () => {
+  const { createWorld } = await import("./securetoken-body/test-world.mjs");
+  const { openOwnership } = await import("./shared/ownership.mjs");
+  const { createSession } = await import("./securetoken-body/session.mjs");
+  const { tempDir } = await import("./test-tmpdir.mjs");
+  const target = {
+    kind: "production",
+    apiKey: "AIza-test-key",
+    adminToken: "ya29.first",
+    quotaProject: SANDBOX_PROJECT,
+    projectNumber: NUMBER,
+    async refresh() {
+      throw new Error("gcloud is gone");
+    },
+  };
+  const ctx = createContext({ run: "1794000000", project: SANDBOX_PROJECT, target });
+  const fake = createWorld({ project: SANDBOX_PROJECT, number: NUMBER, apiKey: "AIza-test-key" });
+  const ownership = openOwnership({
+    path: `${tempDir("stb-")}/issued.jsonl`,
+    runId: "stb-1794000000",
+  });
+  const recording = await createSession(ctx, {
+    transport: fake.fetch,
+    ownership,
+    sleep: async () => {},
+  }).runRecording();
+  assert.equal(recording.fatal, true);
+  assert.match(recording.failure, /owner credential refresh failed: gcloud is gone/);
 });

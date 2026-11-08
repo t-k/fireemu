@@ -140,3 +140,96 @@ test("property: encoding keeps every field in order, and no token appears in the
     for (const token of Object.values(tokens)) assert.ok(!JSON.stringify(spec).includes(token));
   }
 });
+
+// The rows as the assignment and the review describe them, written out independently of corpus.mjs:
+// id, content type, then name=value pairs in order (an account token is `<account>`).
+const EXPECTED = {
+  "form-snake": ["form", "grant_type=refresh_token", "refresh_token=<a>"],
+  "json-snake": ["json", "grant_type=refresh_token", "refresh_token=<a>"],
+  "json-camel": ["json", "grantType=refresh_token", "refreshToken=<a>"],
+  "form-camel": ["form", "grantType=refresh_token", "refreshToken=<a>"],
+  "json-mixed-snake-grant-camel-token": ["json", "grant_type=refresh_token", "refreshToken=<a>"],
+  "json-mixed-camel-grant-snake-token": ["json", "grantType=refresh_token", "refresh_token=<a>"],
+  "form-mixed-snake-grant-camel-token": ["form", "grant_type=refresh_token", "refreshToken=<a>"],
+  "json-both-tokens-snake-first": [
+    "json",
+    "grant_type=refresh_token",
+    "refresh_token=<a>",
+    "refreshToken=<b>",
+  ],
+  "json-both-tokens-camel-first": [
+    "json",
+    "grant_type=refresh_token",
+    "refreshToken=<b>",
+    "refresh_token=<a>",
+  ],
+  "form-both-tokens": ["form", "grant_type=refresh_token", "refresh_token=<a>", "refreshToken=<b>"],
+  "json-both-grants-snake-first": [
+    "json",
+    "grant_type=refresh_token",
+    "grantType=password",
+    "refresh_token=<a>",
+  ],
+  "json-both-grants-camel-first": [
+    "json",
+    "grantType=password",
+    "grant_type=refresh_token",
+    "refresh_token=<a>",
+  ],
+  "json-snake-empty-camel-valid": [
+    "json",
+    "grant_type=refresh_token",
+    "refresh_token=",
+    "refreshToken=<a>",
+  ],
+  "json-camel-invalid-token": [
+    "json",
+    "grantType=refresh_token",
+    "refreshToken=not-a-refresh-token",
+  ],
+  "json-snake-invalid-token": [
+    "json",
+    "grant_type=refresh_token",
+    "refresh_token=not-a-refresh-token",
+  ],
+  "json-camel-wrong-grant": ["json", "grantType=password", "refreshToken=<a>"],
+  "json-camel-no-grant": ["json", "refreshToken=<a>"],
+  "json-camel-no-token": ["json", "grantType=refresh_token"],
+  "tenant-form-snake": ["form", "grant_type=refresh_token", "refresh_token=<t>"],
+  "tenant-json-snake": ["json", "grant_type=refresh_token", "refresh_token=<t>"],
+  "tenant-json-camel": ["json", "grantType=refresh_token", "refreshToken=<t>"],
+  "tenant-form-camel": ["form", "grantType=refresh_token", "refreshToken=<t>"],
+  "tenant-json-both-tokens": [
+    "json",
+    "grant_type=refresh_token",
+    "refresh_token=<a>",
+    "refreshToken=<t>",
+  ],
+  "json-snake-after": ["json", "grant_type=refresh_token", "refresh_token=<a>"],
+};
+
+test("every row is exactly the request the assignment names, in the order written", () => {
+  const written = Object.fromEntries(
+    ROWS.map((spec) => [
+      spec.id,
+      [
+        spec.contentType,
+        ...spec.fields.map(
+          ([name, value]) => `${name}=${value?.rt === undefined ? value : `<${value.rt}>`}`,
+        ),
+      ],
+    ]),
+  );
+  assert.deepEqual(written, EXPECTED);
+  assert.deepEqual(Object.keys(written), Object.keys(EXPECTED));
+});
+
+test("every row says what it asks, and the accounts are the project's and the tenant's", () => {
+  for (const spec of ROWS) {
+    assert.equal(typeof spec.question, "string", spec.id);
+    assert.ok(spec.question.length >= 10, spec.id);
+  }
+  assert.equal(new Set(ROWS.map((r) => r.question)).size, ROWS.length);
+  assert.deepEqual(ACCOUNTS, { a: { tenant: false }, b: { tenant: false }, t: { tenant: true } });
+  assert.ok(Object.isFrozen(ACCOUNTS) && Object.isFrozen(ROWS));
+});

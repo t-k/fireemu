@@ -328,3 +328,210 @@ test("ledger helpers: a recent abort, open runs of others, and the preflight pro
   assert.equal(preflightProblems({ ...clean, openRuns: ["X"] }).length, 1);
   assert.equal(preflightProblems({ ...clean, failedReads: ["config (HTTP 403)"] }).length, 1);
 });
+
+test("an unknown answer says why, in the words of the first check it fails", () => {
+  const ok = () => structuredClone(success("a").body);
+  const with200 = (change) => {
+    const body = ok();
+    change(body);
+    return { status: 200, body };
+  };
+  const refusal = (error) => ({ status: 400, body: { error } });
+  const cases = [
+    [undefined, "no answer"],
+    [null, "no answer"],
+    [{ status: 0, transport: "ETIMEDOUT" }, "transport failure"],
+    [{ status: 200, transport: "ETIMEDOUT", body: ok() }, "transport failure"],
+    [{ status: 0 }, "transport failure"],
+    [{ status: 200, nonJson: true }, "non-JSON body"],
+    [{ status: "200", body: ok() }, "no readable answer"],
+    [{ status: 200 }, "no readable answer"],
+    [{ body: ok() }, "no readable answer"],
+    [{ status: 200, body: null }, "200 without an object body"],
+    [{ status: 200, body: "x" }, "200 without an object body"],
+    [{ status: 200, body: [] }, "200 without an object body"],
+    [
+      with200((b) => (b.extra = 1)),
+      "200 with keys access_token,expires_in,extra,id_token,project_id,refresh_token,token_type,user_id",
+    ],
+    [with200((b) => (b.expires_in = "1")), "200 with another lifetime or token type"],
+    [with200((b) => (b.token_type = "x")), "200 with another lifetime or token type"],
+    [with200((b) => (b.refresh_token = "x")), "200 without a refresh token"],
+    [with200((b) => (b.project_id = "x")), "200 naming another project"],
+    [with200((b) => (b.user_id = "x")), "200 for an account this run did not create"],
+    [with200((b) => (b.user_id = "stb-<run>-z")), "200 for an account this run did not create"],
+    [with200((b) => (b.user_id = "xstb-<run>-a")), "200 for an account this run did not create"],
+    [with200((b) => (b.user_id = "stb-<run>-ab")), "200 for an account this run did not create"],
+    [with200((b) => (b.id_token = "x")), "200 with a token of another shape"],
+    [with200((b) => (b.access_token = "x")), "200 with a token of another shape"],
+    [
+      with200((b) => (b.id_token["<jwt>"].header.alg = "HS256")),
+      "200 with a token of another shape",
+    ],
+    [with200((b) => (b.id_token["<jwt>"].header.typ = "x")), "200 with a token of another shape"],
+    [
+      with200((b) => (b.id_token["<jwt>"].header.kid = "<absent>")),
+      "200 with a token of another shape",
+    ],
+    [
+      with200((b) => (b.id_token["<jwt>"].signature = "<absent>")),
+      "200 with a token of another shape",
+    ],
+    [
+      with200((b) => (b.access_token["<jwt>"].claims.aud = "x")),
+      "200 with a token that names another subject or project",
+    ],
+    [
+      with200((b) => (b.id_token["<jwt>"].claims.user_id = "stb-<run>-b")),
+      "200 with a token that names another subject or project",
+    ],
+    [
+      with200((b) => (b.id_token["<jwt>"].claims.firebase.tenant = "<tenant>")),
+      "200 with a tenant claim that does not match the account",
+    ],
+    [refusal(null), "400 with a body of another shape"],
+    [
+      refusal({ code: 400, message: "X", status: "INVALID_ARGUMENT", more: 1 }),
+      "400 with a body of another shape",
+    ],
+    [refusal({ code: 400, message: "X" }), "400 with a body of another shape"],
+    [
+      refusal({ code: 401, message: "X", status: "INVALID_ARGUMENT" }),
+      "400 with a body of another shape",
+    ],
+    [
+      {
+        status: 400,
+        body: { error: { code: 400, message: "X", status: "INVALID_ARGUMENT" }, e: 1 },
+      },
+      "400 with a body of another shape",
+    ],
+    [
+      refusal({ code: 400, message: "X", status: "INVALID_ARGUMENT" }),
+      "400 with a message no recording shows: X",
+    ],
+    [{ status: 403, body: {} }, "status 403 is not a recorded refresh answer"],
+    [{ status: 500, body: {} }, "status 500 is not a recorded refresh answer"],
+  ];
+  for (const [recorded, why] of cases) {
+    const c = classifyAnswer(recorded);
+    assert.equal(c.kind, "unknown", why);
+    assert.equal(c.why, why);
+  }
+  // Only the first 80 characters of an unseen message are quoted.
+  const long = classifyAnswer(
+    refusal({ code: 400, message: "M".repeat(200), status: "INVALID_ARGUMENT" }),
+  );
+  assert.equal(long.why, `400 with a message no recording shows: ${"M".repeat(80)}`);
+  // A 200 and a 400 that are exactly the recorded shapes are not unknown.
+  assert.equal(classifyAnswer({ status: 200, body: ok() }).kind, "accepted");
+});
+
+test("sameClassification and mergeRecordings state their edges", () => {
+  const rawA = success("a");
+  const rawB = success("b");
+  const rawR1 = {
+    status: 400,
+    body: { error: { code: 400, message: "INVALID_GRANT_TYPE", status: "INVALID_ARGUMENT" } },
+  };
+  const rawR2 = {
+    status: 400,
+    body: { error: { code: 400, message: "MISSING_GRANT_TYPE", status: "INVALID_ARGUMENT" } },
+  };
+  const a = classifyAnswer(rawA);
+  const b = classifyAnswer(rawB);
+  const t = classifyAnswer(success("t", true));
+  const r1 = classifyAnswer({
+    status: 400,
+    body: { error: { code: 400, message: "INVALID_GRANT_TYPE", status: "INVALID_ARGUMENT" } },
+  });
+  const r2 = classifyAnswer({
+    status: 400,
+    body: { error: { code: 400, message: "MISSING_GRANT_TYPE", status: "INVALID_ARGUMENT" } },
+  });
+  const unk = { kind: "unknown", why: "x" };
+  assert.equal(sameClassification(a, a), true);
+  assert.equal(sameClassification(a, b), false);
+  assert.equal(sameClassification(a, t), false);
+  assert.equal(sameClassification(r1, r1), true);
+  assert.equal(sameClassification(r1, r2), false);
+  assert.equal(sameClassification(a, r1), false);
+  assert.equal(sameClassification(r1, a), false);
+  assert.equal(sameClassification(unk, unk), false);
+  assert.equal(sameClassification({ ...unk }, { kind: "unknown", why: "x" }), false);
+  assert.deepEqual(mergeRecordings([]), { kind: "unknown", why: "not recorded" });
+  assert.equal(mergeRecordings([rawA, rawA, rawA]).kind, "accepted");
+  assert.match(
+    mergeRecordings([rawA, rawB]).why,
+    /^recordings differ \(accepted as a \/ accepted as b\)$/,
+  );
+  assert.match(
+    mergeRecordings([rawR1, rawR2]).why,
+    /^recordings differ \(refused INVALID_GRANT_TYPE \/ refused MISSING_GRANT_TYPE\)$/,
+  );
+  assert.equal(describe(r1), "refused INVALID_GRANT_TYPE");
+  assert.equal(describe(unk), "unknown (x)");
+});
+
+test("the digests are sha-256 of the sources and the ledger cost is a pure function of the count", async () => {
+  const { sha256, harnessDigest, HARNESS_FILES, estimatedUsd } =
+    await import("./securetoken-body/judge.mjs");
+  assert.equal(sha256("abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+  const read = async (file) => `<${file}>`;
+  const digest = await harnessDigest(read);
+  assert.equal(digest, sha256(HARNESS_FILES.map((f) => `<${f}>`).join("\n")));
+  const changed = await harnessDigest(async (file) =>
+    file.endsWith("judge.mjs") ? "x" : `<${file}>`,
+  );
+  assert.notEqual(changed, digest);
+  assert.ok(
+    HARNESS_FILES.includes("securetoken-body/judge.mjs") &&
+      HARNESS_FILES.includes("shared/ownership.mjs"),
+  );
+  assert.equal(estimatedUsd(0), 0.01);
+  assert.equal(estimatedUsd(94), 0.0102);
+});
+
+test("the harness digest covers exactly the sources the recording runs, read from disk", async () => {
+  const { sha256, harnessDigest, HARNESS_FILES } = await import("./securetoken-body/judge.mjs");
+  assert.deepEqual(HARNESS_FILES, [
+    "securetoken-body/corpus.mjs",
+    "securetoken-body/harness.mjs",
+    "securetoken-body/judge.mjs",
+    "securetoken-body/session.mjs",
+    "securetoken-body/record.mjs",
+    "securetoken-body/recording.mjs",
+    "securetoken-body/preflight.mjs",
+    "auth-account/harness.mjs",
+    "auth-credential/tokens.mjs",
+    "shared/ownership.mjs",
+  ]);
+  const sources = HARNESS_FILES.map((file) =>
+    readFileSync(join(CONFORMANCE_DIR, "src", file), "utf8"),
+  );
+  assert.equal(await harnessDigest(), sha256(sources.join("\n")));
+  assert.match(await harnessDigest(), /^[0-9a-f]{64}$/);
+});
+
+test("a first recording that is unknown decides the row before the others are read", () => {
+  const rawA = success("a");
+  const merged = mergeRecordings([{ status: 0, transport: "x" }, rawA]);
+  assert.deepEqual(merged, { kind: "unknown", why: "transport failure" });
+  assert.deepEqual(mergeRecordings([{ status: 500, body: {} }, rawA, rawA]), {
+    kind: "unknown",
+    why: "status 500 is not a recorded refresh answer",
+  });
+});
+
+test("a report with no local recording has nothing to compare, and keeps the production reading", () => {
+  const prod = { rows: Object.fromEntries(ROWS.map((r) => [r.id, success("a")])) };
+  const report = buildReport({ productionRecordings: [prod] });
+  assert.equal(report.length, ROWS.length);
+  for (const r of report) {
+    assert.equal(r.status, "no-claim");
+    assert.equal(r.fireemu, undefined);
+    assert.ok(typeof r.production === "string");
+    assert.equal(r.question, ROWS.find((x) => x.id === r.row).question);
+  }
+  assert.equal(report.find((r) => r.row === "json-camel").cite, CITATIONS.accepted.project);
+});

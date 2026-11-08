@@ -81,7 +81,8 @@ export function createSession(ctx, options = {}) {
       if (requestCount >= maxRequests) throw fatal(`request ceiling ${maxRequests} reached`);
       requestCount += 1;
     }
-    if (harness && ctx.target.kind === "production") {
+    // Only a call that carries the owner credential renews it; a sign-in carries the key alone.
+    if (spec.auth === "admin" && ctx.target.kind === "production") {
       try {
         await ctx.target.refresh?.();
       } catch (error) {

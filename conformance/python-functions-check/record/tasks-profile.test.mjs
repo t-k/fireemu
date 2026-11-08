@@ -62,6 +62,18 @@ if (process.env.PYCHECK_PROFILE !== "tasks") {
     assert.match(child.stdout, /ℹ fail 0/);
   });
 
+  test("the events world's CLI makes the Eventarc channel and its managed topic when the channel is absent", async () => {
+    const { createWorld } = await import("./world.mjs");
+    const absent = createWorld({ seedChannels: [] });
+    assert.equal(absent.channels.size, 0);
+    await absent.runCli({ action: "deploy" });
+    assert.ok(absent.channels.has("firebase"));
+    assert.ok(absent.topics.has("eventarc-channel-us-central1-firebase-450"));
+    const present = createWorld({ seedChannels: ["firebase"] });
+    await present.runCli({ action: "deploy" });
+    assert.ok(!present.topics.has("eventarc-channel-us-central1-firebase-450"));
+  });
+
   test("an unknown profile is refused when plan.mjs is imported", () => {
     const env = { ...process.env, PYCHECK_PROFILE: "everything" };
     delete env.NODE_TEST_CONTEXT;
@@ -71,7 +83,11 @@ if (process.env.PYCHECK_PROFILE !== "tasks") {
       { env, encoding: "utf8" },
     );
     assert.notEqual(child.status, 0);
-    assert.match(child.stderr, /PYCHECK_PROFILE/);
+    assert.match(
+      child.stderr,
+      /Error: PYCHECK_PROFILE is events or tasks, not "everything"\n/,
+      "the message itself, not the source line the stack prints",
+    );
   });
 } else {
   const { packetDigest, PACKET_FILES, packetFiles } = await import("./main.mjs");
@@ -466,7 +482,12 @@ if (process.env.PYCHECK_PROFILE !== "tasks") {
 
   // The CLI's functions:delete disables a task queue and leaves it (recorded in both passes: the recorder's own DELETE of
   // each queue answered 200), so the realistic world leaves the queues for the recorder to delete.
-  const CLI_LEAVES_QUEUES = { leaveOnDelete: [`queue:${SDK}`, `queue:${RAW}`] };
+  // At the baseline the channel `firebase` is absent (pass 2's A2 read channelsAfter []) and there is no App Engine app (404).
+  const CLI_LEAVES_QUEUES = {
+    leaveOnDelete: [`queue:${SDK}`, `queue:${RAW}`],
+    seedChannels: [],
+    appEngine: false,
+  };
 
   test("a clean run of the profile deploys two functions, creates two tasks, cleans up and reads every name back", async () => {
     const { world, result, journal } = await go(CLI_LEAVES_QUEUES);
@@ -478,6 +499,22 @@ if (process.env.PYCHECK_PROFILE !== "tasks") {
     assert.equal(world.functions.size + world.queues.size + world.packages.size, 0);
     assert.equal(world.topics.size, 0);
     assert.equal(result.cleanup.verified, true);
+    assert.equal(result.cli.deploy.exitCode, 0);
+    // The deploy made no event trigger, so it made no Eventarc channel: the run owns none and sends nothing to Eventarc.
+    assert.equal(world.channels.size, 0);
+    assert.equal(result.cleanup.channel.absentAlready, true);
+    assert.equal(result.cleanup.readBack.channel, true);
+    assert.deepEqual(
+      world.calls.filter((c) => /^(POST|PUT|DELETE|PATCH) eventarc/.test(c)),
+      [],
+    );
+    const queueDeletes = journal.filter(
+      (row) => /^delete-queue-/.test(row.id) && row.state === "response-persisted",
+    );
+    assert.deepEqual(
+      queueDeletes.map((row) => row.status),
+      [200, 200],
+    );
     const labels = Object.keys(result.cleanup.readBack).toSorted();
     for (const fn of [SDK, RAW]) {
       assert.ok(labels.includes("function-" + fn));
@@ -577,7 +614,7 @@ if (process.env.PYCHECK_PROFILE !== "tasks") {
 
   test("the profile's request count is the one the packet states, inside the ceilings", async () => {
     const { result } = await go(CLI_LEAVES_QUEUES);
-    assert.equal(result.attempted, 82, "the packet states 82 requests in the fake world");
+    assert.equal(result.attempted, 84, "the packet states 84 requests in the fake world");
     assert.ok(result.attempted < NORMAL_CEILING + CLEANUP_CEILING);
   });
 
@@ -636,6 +673,13 @@ if (process.env.PYCHECK_PROFILE !== "tasks") {
       [`queue-${RAW}`, `queue-${SDK}`].toSorted(),
     );
     assert.ok(second.result.unconfirmedCreates.every((c) => c.class === "cli-write-retried"));
+    // The recorded second pass: exit 2, two functions errored, the queue collection written twice and refused with 400 twice.
+    assert.equal(second.result.cli.deploy.exitCode, 2);
+    assert.equal(second.result.cli.deploy.errored, 2);
+    assert.deepEqual(
+      second.result.cli.deploy.cliWrites.map((w) => [w.method, w.requests, w.statuses, w.class]),
+      [["POST", 2, [400, 400], "retried"]],
+    );
     assert.equal(second.result.operations[`task-${RAW}`].sent, true);
     assert.equal(second.result.judged.cases["tasks-request"].status, "not-delivered");
     assert.equal(second.result.judged.complete, false);
@@ -676,7 +720,7 @@ if (process.env.PYCHECK_PROFILE !== "tasks") {
       "no function of the events profile is read",
     );
     assert.ok(!urls.some((u) => /\/jobs\/firebase-schedule/.test(u)));
-    assert.equal(back.attempted, 27, "the packet states 27 read-back requests in the fake world");
+    assert.equal(back.attempted, 28, "the packet states 28 read-back requests in the fake world");
     assert.ok(back.attempted <= READBACK_MAX_REQUESTS);
   });
 }

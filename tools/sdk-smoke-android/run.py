@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Run the real Android client on one disposable emulator against a local backend."""
 import argparse
+import errno
 import json
 import os
 from pathlib import Path
@@ -116,6 +117,30 @@ def cleanup(owned, children, leases, registry, work, temporary, observe, primary
             raise RuntimeError("Cleanup failures: " + json.dumps(failures))
 
 
+class PortUnavailable(RuntimeError):
+    pass
+
+
+def claim_emulator_pair(claim, release):
+    candidates = [5556] + [port for port in range(5554, 5585, 2) if port != 5556]
+    for console in candidates:
+        try:
+            claimed = claim("console", console)
+        except PortUnavailable:
+            continue
+        if claimed != console:
+            raise RuntimeError("registry returned a different console port")
+        try:
+            device_adb = claim("device-adb", console + 1)
+        except PortUnavailable:
+            release(console)
+            continue
+        if device_adb != console + 1:
+            raise RuntimeError("registry returned a different device ADB port")
+        return console
+    raise RuntimeError("no available emulator port pair")
+
+
 def run(args):
     sdk = Path(args.sdk).resolve()
     adb = str(sdk / "platform-tools/adb")
@@ -150,7 +175,12 @@ def run(args):
             if os.environ.get("CI") != "true":
                 raise ValueError("local runs require --portctl; OS allocation is only for an isolated CI job")
             with socket.socket() as handle:
-                handle.bind(("127.0.0.1", preferred or 0))
+                try:
+                    handle.bind(("127.0.0.1", preferred or 0))
+                except OSError as error:
+                    if preferred is not None and error.errno == errno.EADDRINUSE:
+                        raise PortUnavailable("exact port unavailable") from None
+                    raise
                 port = handle.getsockname()[1]
             if port in allocated:
                 raise RuntimeError("duplicate port allocation")
@@ -158,10 +188,26 @@ def run(args):
             return port
         command = registry + ["claim", "--service", "android-" + service, "--range", "10000-19999", "--ttl", "30m", "--format", "json"]
         if preferred is not None:
-            command = registry + ["claim", "--service", "android-" + service, "--range", "5554-5585", "--preferred", str(preferred), "--ttl", "30m", "--format", "json"]
-        value = json.loads(checked(command))
+            command = registry + ["claim", "--service", "android-" + service, "--range", str(preferred) + "-" + str(preferred), "--ttl", "30m", "--format", "json"]
+        try:
+            value = json.loads(checked(command))
+        except subprocess.CalledProcessError as error:
+            if preferred is not None and error.returncode == 2 and (error.stderr or "").startswith("portctl: No available port for service="):
+                print("Port unavailable:", service, preferred)
+                raise PortUnavailable("exact port unavailable") from None
+            raise
         leases.append(value)
+        print("Port claimed:", service, "requested", preferred, "returned", value["port"])
         return value["port"]
+
+    def release(port):
+        if registry is None:
+            allocated.remove(port)
+            return
+        lease = next(value for value in leases if value["port"] == port)
+        checked(registry + ["release", "--token", lease["token"]])
+        leases.remove(lease)
+        print("Port released:", port)
 
     def launch(command, log, process_env=None):
         stream = (work / log).open("w")
@@ -186,16 +232,12 @@ def run(args):
                 raise RuntimeError("8 GiB process RSS budget exceeded")
 
     try:
+        console = claim_emulator_pair(claim, release)
         adb_port = claim("adb-server")
         env.update(ANDROID_ADB_SERVER_PORT=str(adb_port), ADB_SERVER_SOCKET="tcp:127.0.0.1:" + str(adb_port))
         adb_env.update(ANDROID_ADB_SERVER_PORT=str(adb_port), ADB_SERVER_SOCKET="tcp:127.0.0.1:" + str(adb_port))
         # Foreground owned server makes lifecycle ownership explicit.
         server = launch([adb, "-L", "tcp:" + str(adb_port), "nodaemon", "server"], "adb.log", adb_env)
-        console = claim("console", 5556)
-        if console % 2:
-            raise RuntimeError("no even emulator console lease")
-        if claim("device-adb", console + 1) != console + 1:
-            raise RuntimeError("adjacent emulator ADB port unavailable")
         checked([str(sdk / "cmdline-tools/latest/bin/avdmanager"), "create", "avd", "--name", "fireemu-smoke", "--package", "system-images;android-34;default;" + args.arch, "--path", str(work / "device.avd")], input="no\n", env=env)
         emulator = launch([str(sdk / "emulator/emulator"), "-avd", "fireemu-smoke", "-port", str(console), "-no-window", "-no-audio", "-no-snapshot", "-no-boot-anim", "-memory", "2048", "-cores", "2", "-gpu", "swiftshader_indirect"], "emulator.log", adb_env)
         serial = "emulator-" + str(console)

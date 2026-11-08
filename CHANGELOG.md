@@ -8,6 +8,10 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Changed
+
+- Functions: building and delivering a Realtime Database trigger event copies a large snapshot less. The event is assembled member by member instead of copying each snapshot through `json!`, and the invocation frame serializes the queued event once straight into the frame instead of first copying it twice. The delivered event bytes are unchanged (pinned by frame digests).
+
 ### Fixed
 
 - Authentication: the Secure Token refresh accepts the JSON body with `grantType` and `refreshToken` that the Firebase Android SDK sends, as the official emulator does; before, it answered `400 MISSING_GRANT_TYPE`. A form body still uses the snake_case fields, and a body mixing both spellings is read as snake_case. Production has not been recorded for this body.

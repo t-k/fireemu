@@ -2045,8 +2045,17 @@ fn database_event_payload(
         "datacontenttype":"application/json",
         "firebasedatabasehost":commit.host, "instance":commit.instance,
         "location":commit.location, "ref":path.trim_start_matches('/'), "authtype":auth_type,
-        "data":{"@type":"type.googleapis.com/google.events.firebase.database.v1.ReferenceEventData", "data":before, "delta":database_delta(before, after)},
     });
+    // Built member by member: `json!` would copy each snapshot through `to_value` (about twice
+    // the cost of a clone) and then copy the finished `data` object again.
+    let mut data = Map::new();
+    data.insert(
+        "@type".to_owned(),
+        json!("type.googleapis.com/google.events.firebase.database.v1.ReferenceEventData"),
+    );
+    data.insert("data".to_owned(), before.clone());
+    data.insert("delta".to_owned(), database_delta(before, after));
+    payload["data"] = Value::Object(data);
     // Recorded: production sends no `datacontenttype`, and a 2nd gen event no auth for an admin or an
     // unauthenticated write; the SDK reports the type `unknown` and the context carries none.
     let names_no_auth = production

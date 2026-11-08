@@ -807,6 +807,28 @@ struct DeliveryDraft {
     parent: Option<String>,
 }
 
+/// Serializes an event as it is framed for a runner: its own members in key order, with the
+/// strict profile's `traceparent` set. The members are borrowed from the queued payload, so
+/// a multi-megabyte snapshot is not copied into a second `Value` first.
+fn event_frame_member(
+    event: &Value,
+    traceparent: Option<&Value>,
+) -> Box<serde_json::value::RawValue> {
+    let Some(traceparent) = traceparent else {
+        return serde_json::value::to_raw_value(event).expect("JSON value serializes");
+    };
+    let mut members: BTreeMap<&str, &Value> = BTreeMap::new();
+    match event {
+        Value::Object(map) => {
+            members.extend(map.iter().map(|(name, value)| (name.as_str(), value)));
+        }
+        Value::Null => {}
+        other => return serde_json::value::to_raw_value(other).expect("JSON value serializes"),
+    }
+    members.insert("traceparent", traceparent);
+    serde_json::value::to_raw_value(&members).expect("JSON value serializes")
+}
+
 /// Counts serialized IPC bytes without retaining another copy of a source snapshot.
 #[derive(Default)]
 struct FrameByteCount(usize);
@@ -6501,8 +6523,7 @@ impl FunctionsRuntime {
             Trigger::Eventarc { .. } => "eventarc",
             Trigger::TaskQueue { .. } => "tasks",
         };
-        let mut event = event.clone();
-        if self.profile == FunctionsHttpProfile::Strict
+        let traceparent = if self.profile == FunctionsHttpProfile::Strict
             && !matches!(spec.trigger, Trigger::RemoteConfig)
             && spec.generation == fireemu_core_functions::manifest::FunctionGeneration::Second
         {
@@ -6518,14 +6539,15 @@ impl FunctionsRuntime {
                 parent_id = fireemu_adapter_support::entropy::hex_128()?;
                 parent_id.truncate(16);
             }
-            event["traceparent"] = json!(format!("00-{trace_id}-{parent_id}-01"));
-        }
+            Some(Value::String(format!("00-{trace_id}-{parent_id}-01")))
+        } else {
+            None
+        };
         let request = json!({
             "invocationId": format!("{}-{attempt}", id.value()),
             "function": spec.name,
             "entryPoint": spec.entry_point,
             "trigger": trigger,
-            "event": event,
             "admittedAt": admitted_at.to_rfc3339().unwrap_or_default(),
             "deadline": deadline.to_rfc3339().unwrap_or_default(),
             "attempt": attempt,
@@ -6543,11 +6565,14 @@ impl FunctionsRuntime {
                 )
             })
             .collect();
-        if let Some(raw_data) = raw_data {
+        // The event, which can be megabytes, is serialized once, straight from the queued
+        // payload into the frame member; it is never copied into another `Value` first.
+        let event_member = if let Some(raw_data) = raw_data {
             let mut payload: BTreeMap<_, _> = event
                 .as_object()
                 .expect("custom event is an object")
                 .iter()
+                .filter(|(name, _)| name.as_str() != "data")
                 .map(|(name, value)| {
                     (
                         name.clone(),
@@ -6555,16 +6580,22 @@ impl FunctionsRuntime {
                     )
                 })
                 .collect();
+            if let Some(traceparent) = &traceparent {
+                payload.insert(
+                    "traceparent".to_owned(),
+                    serde_json::value::to_raw_value(traceparent).expect("JSON value serializes"),
+                );
+            }
             payload.insert(
                 "data".to_owned(),
                 serde_json::value::RawValue::from_string(raw_data.to_owned())
                     .expect("custom JSON data was validated before admission"),
             );
-            members.insert(
-                "event".to_owned(),
-                serde_json::value::to_raw_value(&payload).expect("raw event serializes"),
-            );
-        }
+            serde_json::value::to_raw_value(&payload).expect("raw event serializes")
+        } else {
+            event_frame_member(event, traceparent.as_ref())
+        };
+        members.insert("event".to_owned(), event_member);
         Ok(serde_json::value::to_raw_value(&members).expect("raw invocation serializes"))
     }
 
@@ -11633,5 +11664,69 @@ mod storage_event_instant_tests {
         );
         let _ = second;
         runtime.shutdown().await;
+    }
+}
+
+#[cfg(test)]
+mod event_frame_member_tests {
+    use super::event_frame_member;
+    use proptest::prelude::*;
+    use serde_json::{json, Value};
+
+    /// What the frame carried before the member was borrowed: a deep copy of the event with
+    /// `traceparent` assigned, then serialized.
+    fn copied(event: &Value, traceparent: Option<&Value>) -> String {
+        let mut event = event.clone();
+        if let Some(traceparent) = traceparent {
+            event["traceparent"] = traceparent.clone();
+        }
+        serde_json::value::to_raw_value(&event)
+            .unwrap()
+            .get()
+            .to_owned()
+    }
+
+    fn json_value() -> impl Strategy<Value = Value> {
+        let leaf = prop_oneof![
+            Just(Value::Null),
+            any::<bool>().prop_map(Value::Bool),
+            any::<i64>().prop_map(|n| json!(n)),
+            "[a-z\u{e9}\u{1F600}\"\\\\ ]{0,6}".prop_map(Value::String),
+        ];
+        leaf.prop_recursive(3, 24, 4, |inner| {
+            prop_oneof![
+                prop::collection::vec(inner.clone(), 0..4).prop_map(Value::Array),
+                // Keys on both sides of `traceparent`, and that very key.
+                prop::collection::btree_map(
+                    prop_oneof![
+                        Just("traceparent".to_owned()),
+                        Just("data".to_owned()),
+                        Just("zeta".to_owned()),
+                        Just("trace".to_owned()),
+                        Just("traceparent0".to_owned()),
+                        "[a-z]{0,4}".prop_map(String::from),
+                    ],
+                    inner,
+                    0..5
+                )
+                .prop_map(|map| Value::Object(map.into_iter().collect())),
+            ]
+        })
+    }
+
+    proptest! {
+        #[test]
+        fn the_borrowed_member_has_the_bytes_of_the_copied_event(
+            event in json_value(),
+            traceparent in prop::option::of(
+                "[0-9a-f]{32}-[0-9a-f]{16}".prop_map(|ids| Value::String(format!("00-{ids}-01")))
+            ),
+        ) {
+            // The old code panicked on a scalar or array event with a `traceparent`; events
+            // are objects (or null), so only those are compared.
+            prop_assume!(traceparent.is_none() || event.is_object() || event.is_null());
+            let borrowed = event_frame_member(&event, traceparent.as_ref());
+            prop_assert_eq!(borrowed.get(), copied(&event, traceparent.as_ref()));
+        }
     }
 }

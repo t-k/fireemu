@@ -74,13 +74,8 @@ def test_recorded_artifact_provenance_matches_its_source_commit_inputs():
 
 # Whether the binary of the current commit still answers as production recorded is no longer read from this record's build (its `artifact` and `profiles`
 # blocks are the last local regeneration, checked above against their own commit). The `txn04-replay` job of ci.yml replays both profiles on a binary built
-# from every commit and judges it against this record's projection (txn04_current_replay.py, tested in test_txn04_current_replay.py).
-def test_the_current_commit_is_replayed_by_ci_against_this_record():
-    workflow = (ROOT / ".github/workflows/ci.yml").read_text()
-    assert "\n  txn04-replay:\n" in workflow
-    assert "cargo build --locked -p fireemu --bin fireemu\n" in workflow
-    assert "tools/compat-broad/fs-write-txn/txn04_current_replay.py" in workflow
-    assert "--binary target/debug/fireemu --dep-info target/debug/fireemu.d" in workflow
+# from every dispatched SHA and judges it against this record's projection (txn04_current_replay.py, tested in test_txn04_current_replay.py); the parsed
+# workflow contract scripts/txn04-replay-contract.rb (run by the ci.yml lint job) keeps that job unskippable and failing the run when it fails.
 
 
 def test_no_bound_source_can_pull_a_file_of_an_excluded_tree_into_the_binary():

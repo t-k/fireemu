@@ -53,6 +53,9 @@ jobs:
         run: ruby scripts/ci-workflow-contract.rb
       - name: Kani workflow contract
         run: ruby scripts/kani-ci-contract.test.rb
+      # txn04-replay replaced a stored binary digest; this keeps it unskippable and failing the run on failure.
+      - name: Txn-04 replay job contract
+        run: ruby scripts/txn04-replay-contract.test.rb
       - name: heavy-verification workflow contract and helpers
         run: |
           ruby scripts/heavy-verification-contract.rb

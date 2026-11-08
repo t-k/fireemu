@@ -532,6 +532,15 @@ test("near misses of the offset form are unknown, never an allow", () => {
   unknown(query200(SKIPPED(), { done: true }), "done after the skipped entry");
   unknown(query200(SKIPPED(), {}), "an empty entry");
   unknown(query200(SKIPPED(), DOC(), { ...DOC(), extra: 1 }), "an extra key on a document");
+  unknown(
+    query200(SKIPPED(), { ...DOC(), document: { name: 5 } }),
+    "a document name that is not text",
+  );
+  unknown(query200(SKIPPED(), { ...DOC(), document: { fields: {} } }), "a document without a name");
+  unknown(
+    query200(SKIPPED(), { ...DOC(), document: { ...DOC().document, extra: 1 } }),
+    "an extra key in a document",
+  );
   unknown(query200(SKIPPED(), "x"), "a non-object entry");
   unknown(query200(SKIPPED(), null), "a null entry");
   unknown({ status: 200, body: [] }, "an empty body");
@@ -599,6 +608,17 @@ test("the fake production answers an offset the production way, so the offset ro
     "allowed",
     "the fake allows whatever has a rule",
   );
+});
+
+test("without an offset the fake answers a query that matches nothing with the bare readTime entry", async () => {
+  const programs = [{ ...SHAPES_TWO_PROGRAMS[0], seed: [] }];
+  const { out } = await record({ programs });
+  const steps = out.results["fs-rules-v1/shapes-two/queries"].steps;
+  assert.deepEqual(steps["ctl-allow"].body, [{ readTime: "2026-01-01T00:00:00Z" }]);
+  assert.deepEqual(classifyShapesAnswer("runQuery", steps["ctl-allow"]), {
+    kind: "allowed",
+    documents: 0,
+  });
 });
 
 test("the fake skips only what exists: an offset beyond the matches answers the skipped form alone", async () => {

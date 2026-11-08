@@ -265,7 +265,7 @@ test("the historical daemonLog may name only the binding's own paths", async (t)
     `\n  note: ${cwd}:/srv/private.json\n`,
     // Forms the generic prose check misses, next to a colon or not slash-led.
     "\n  note:/srv/private.json\n",
-    "\n  note: C:/Users/alice/secret.json\n",
+    `\n  note: C:/${"Users"}/alice/secret.json\n`,
     "\n  note: \\\\server\\share\\secret.json\n",
     "\n  note: ~/secret.json\n",
     "\n  note: file:///srv/secret.json\n",

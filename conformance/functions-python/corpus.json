@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "parent": "FUNCTIONS-PYTHON",
   "fixturePath": "conformance/functions-python/fixtures/observations.json",
-  "fixtureSha256": "856d8d8dcef774a41da6e8319072d87d0fc37d474df07bb968f904d6995541bd",
+  "fixtureSha256": "515fbf2c16de0a7e5c7b6b18f2c77c65d2845e786dcfa5554712e34b255de47a",
   "conditions": [
     {
       "id": "FUNCTIONS-PYTHON/firestore-events",
@@ -127,12 +127,17 @@
     {
       "alias": "pass-1",
       "fixturePath": "conformance/functions-python/fixtures/observations.json",
-      "fixtureSha256": "856d8d8dcef774a41da6e8319072d87d0fc37d474df07bb968f904d6995541bd"
+      "fixtureSha256": "515fbf2c16de0a7e5c7b6b18f2c77c65d2845e786dcfa5554712e34b255de47a"
     },
     {
       "alias": "pass-2",
       "fixturePath": "conformance/functions-python/fixtures/observations-pass2.json",
       "fixtureSha256": "cbba2bcc5b0e6802e03306579983c4dd711c2446bb938d6f4c0be66b80936940"
+    },
+    {
+      "alias": "tasks-pass-2",
+      "fixturePath": "conformance/functions-python/fixtures/observations-tasks-pass2.json",
+      "fixtureSha256": "c1678bfcc7391a8b65f2a01281dd5af17d18e3f81f0790734f84f3a0232f77b8"
     }
   ]
 }

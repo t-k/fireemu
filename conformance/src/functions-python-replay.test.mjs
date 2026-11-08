@@ -104,6 +104,9 @@ if (process.env.PYTHON_PARENT_PICT) {
         readFileSync(
           new URL("../functions-python/fixtures/observations-pass2.json", import.meta.url),
         ),
+        readFileSync(
+          new URL("../functions-python/fixtures/observations-tasks-pass2.json", import.meta.url),
+        ),
       );
       if (c.Decision === "answered") candidate.scopeDecisions[0].authority = "";
       else candidate.scopeDecisions[0].answer = "unapproved";
@@ -290,6 +293,9 @@ if (process.env.PYTHON_RECORDINGS_PICT) {
       const second = JSON.parse(
         readFileSync(
           new URL("../functions-python/fixtures/observations-pass2.json", import.meta.url),
+        ),
+        readFileSync(
+          new URL("../functions-python/fixtures/observations-tasks-pass2.json", import.meta.url),
         ),
       );
       const source = c.Pass === "pass-1" ? fixture : second;
@@ -496,6 +502,155 @@ test("equal task identifiers are masked by field and retain only intended layout
   }
 });
 
+function syntheticTasksPass(rename = { pctask: "pc3task", pctaskraw: "pc3taskraw" }) {
+  return editSyntheticRecording((entries) => {
+    for (let i = entries.length - 1; i >= 0; i -= 1) {
+      const f = JSON.parse(entries[i].textPayload.slice("PYCHECK_FRAME ".length));
+      if (!Object.hasOwn(rename, f.function)) entries.splice(i, 1);
+      else {
+        f.function = rename[f.function];
+        entries[i] = {
+          insertId: "tasks-" + entries[i].insertId,
+          textPayload: "PYCHECK_FRAME " + JSON.stringify(f),
+        };
+      }
+    }
+  });
+}
+
+test("a Tasks-only pass under fresh queue names projects only the Tasks family", async () => {
+  const tasks = await extractSynthetic(syntheticTasksPass(), "tasks-pass-2");
+  assert.equal(tasks.fixture.recording.profile, "tasks");
+  assert.equal(tasks.fixture.recording.eventFrames, 2);
+  assert.deepEqual(
+    tasks.fixture.observations.map((r) => [r.condition, r.coverage, r.observedPasses]),
+    [["tasks-events", "RECORDED", 1]],
+  );
+  const pass1 = await extractSynthetic(syntheticRecording(), "pass-1");
+  const expected = pass1.fixture.observations.find((r) => r.condition === "tasks-events");
+  assert.deepEqual(tasks.fixture.observations[0], expected);
+  assert.ok(!JSON.stringify(tasks.fixture).includes("DO-NOT-PROJECT"));
+});
+
+test("Tasks-pass names and events-pass names cannot cross profiles", async () => {
+  await assert.rejects(
+    extractSynthetic(
+      syntheticTasksPass({ pctask: "pctask", pctaskraw: "pctaskraw" }),
+      "tasks-pass-2",
+    ),
+    /unrecorded function/,
+  );
+  const events = editSyntheticRecording((entries) => {
+    for (const [i, e] of entries.entries()) {
+      const f = JSON.parse(e.textPayload.slice("PYCHECK_FRAME ".length));
+      if (f.function === "pctask") f.function = "pc3task";
+      entries[i] = { ...e, textPayload: "PYCHECK_FRAME " + JSON.stringify(f) };
+    }
+  });
+  await assert.rejects(extractSynthetic(events, "pass-1"), /unrecorded function/);
+  await assert.rejects(
+    extractSynthetic(syntheticTasksPass({ pctask: "pc3task" }), "tasks-pass-2"),
+    /incomplete recorded family/,
+  );
+  await assert.rejects(
+    extractSynthetic(syntheticTasksPass(), "pass-2"),
+    /incomplete recorded family|unrecorded function/,
+  );
+});
+
+test("a Tasks pass must not share original log entries with pass 1", async () => {
+  const { extractTasksPass } = await import("./functions-python/recordings.mjs");
+  const first = await extractSynthetic(syntheticRecording(), "pass-1");
+  const tasks = await extractSynthetic(syntheticTasksPass(), "tasks-pass-2");
+  assert.equal(extractTasksPass(first, tasks), tasks.fixture);
+  const shared = syntheticTasksPass();
+  const response = JSON.parse(Buffer.from(shared.rows[1].bodyBase64, "base64"));
+  const original = JSON.parse(Buffer.from(syntheticRecording().rows[1].bodyBase64, "base64"));
+  const source = original.entries.find((e) => e.textPayload.includes('"pctask"'));
+  response.entries[0].insertId = source.insertId;
+  shared.rows[1].bodyBase64 = Buffer.from(JSON.stringify(response)).toString("base64");
+  const overlapping = await extractSynthetic(shared, "tasks-pass-2");
+  assert.throws(() => extractTasksPass(first, overlapping), /overlapping original/);
+  assert.throws(() => extractTasksPass(tasks, first), /ordered independent aliases/);
+});
+
+test("a Tasks pass compares only Tasks with pass 1, by masked bytes and recorded length", async () => {
+  const { compareRecordings } = await import("./functions-python/recordings.mjs");
+  const first = await extractSynthetic(syntheticRecording(), "pass-1");
+  const tasks = await extractSynthetic(syntheticTasksPass(), "tasks-pass-2");
+  assert.deepEqual(compareRecordings(first.fixture, tasks.fixture), [
+    { condition: "tasks-events", status: "MATCH", observedPasses: 2, differences: [] },
+  ]);
+  for (const alter of [
+    (f) => {
+      f.originalBodyBytes += 1;
+    },
+    (f) => {
+      f.bodyText = f.bodyText.replace("{", "{ ");
+    },
+    (f) => {
+      f.request.headerNames.pop();
+    },
+  ]) {
+    const changed = structuredClone(tasks.fixture);
+    alter(changed.observations[0].frames.find((x) => x.bodyText));
+    assert.equal(compareRecordings(first.fixture, changed)[0].status, "DIFF");
+  }
+  const extra = structuredClone(tasks.fixture);
+  extra.observations.push(structuredClone(first.fixture.observations[0]));
+  assert.throws(() => compareRecordings(first.fixture, extra), /same family inventory/);
+});
+
+test("masked task values keep their recorded byte lengths, and only those may explain a body length change", async () => {
+  const { compareRecordings } = await import("./functions-python/recordings.mjs");
+  const body = '{"data":{"run":"run-value","label":"pctaskraw"}}';
+  const first = await extractSynthetic(syntheticTaskBody(body), "pass-1");
+  const raw = (f) =>
+    f.observations.find((r) => r.condition === "tasks-events").frames.find((x) => x.bodyText);
+  assert.deepEqual(raw(first.fixture).originalValueBytes, { run: 9, label: 9 });
+  const renamed = syntheticTasksPass();
+  const response = JSON.parse(Buffer.from(renamed.rows[1].bodyBase64, "base64"));
+  for (const e of response.entries) {
+    const f = JSON.parse(e.textPayload.slice("PYCHECK_FRAME ".length));
+    if (f.function === "pc3taskraw") {
+      f.request.body_text = body.replace("pctaskraw", "pc3taskraw");
+      f.request.body_length = Buffer.byteLength(f.request.body_text);
+      e.textPayload = "PYCHECK_FRAME " + JSON.stringify(f);
+    }
+  }
+  renamed.rows[1].bodyBase64 = Buffer.from(JSON.stringify(response)).toString("base64");
+  const tasks = await extractSynthetic(renamed, "tasks-pass-2");
+  assert.deepEqual(raw(tasks.fixture).originalValueBytes, { run: 9, label: 10 });
+  const [pair] = compareRecordings(first.fixture, tasks.fixture);
+  assert.equal(pair.status, "MATCH_LAYOUT");
+  assert.deepEqual(pair.differences.map((d) => d.path).sort(), [
+    "frames.0.originalBodyBytes",
+    "frames.0.originalValueBytes.label",
+  ]);
+  for (const alter of [
+    (f) => {
+      f.originalBodyBytes += 1;
+    },
+    (f) => {
+      f.originalValueBytes.run += 1;
+    },
+    (f) => {
+      f.originalValueBytes.label -= 1;
+      f.originalBodyBytes -= 2;
+    },
+    (f) => {
+      f.bodyText = f.bodyText.replace(":", ": ");
+    },
+    (f) => {
+      delete f.originalValueBytes.run;
+    },
+  ]) {
+    const changed = structuredClone(tasks.fixture);
+    alter(raw(changed));
+    assert.equal(compareRecordings(first.fixture, changed)[0].status, "DIFF");
+  }
+});
+
 if (process.env.PYTHON_CUSTODY_PICT) {
   const [head, ...rows] = readFileSync(process.env.PYTHON_CUSTODY_PICT, "utf8")
     .trim()
@@ -538,6 +693,66 @@ if (process.env.PYTHON_CUSTODY_PICT) {
       assert.deepEqual(JSON.parse(body), { data: { run: "fixture-run", label: "fixture-label" } });
       assert.ok(!body.includes("private"));
       assert.equal(body.indexOf('"' + fields[0] + '"') < body.indexOf('"' + fields[1] + '"'), true);
+    });
+  }
+}
+
+if (process.env.PYTHON_TASKS_PASS_PICT) {
+  const [head, ...rows] = readFileSync(process.env.PYTHON_TASKS_PASS_PICT, "utf8")
+    .trim()
+    .split(/\r?\n/)
+    .map((line) => line.split("\t"));
+  for (const [index, values] of rows.entries()) {
+    const c = Object.fromEntries(head.map((key, i) => [key, values[i]]));
+    test(`tasks pass PICT ${index}: ${values.join("/")}`, async () => {
+      const { compareRecordings, extractTasksPass } =
+        await import("./functions-python/recordings.mjs");
+      const firstBody = '{"data":{"run":"run-value","label":"pctaskraw"}}';
+      const bodies = {
+        equal: firstBody,
+        "label-longer": '{"data":{"run":"run-value","label":"pc3taskraw"}}',
+        "swapped-lengths": '{"data":{"run":"run-valu","label":"pc3taskraw"}}',
+        "layout-change": '{"data":{"run":"run-value", "label":"pctaskraw"}}',
+      };
+      const first = await extractSynthetic(syntheticTaskBody(firstBody), "pass-1");
+      const names = {
+        new: { pctask: "pc3task", pctaskraw: "pc3taskraw" },
+        old: { pctask: "pctask", pctaskraw: "pctaskraw" },
+        mixed: { pctask: "pc3task", pctaskraw: "pctaskraw" },
+      }[c.Names];
+      const input = syntheticTasksPass(names);
+      const response = JSON.parse(Buffer.from(input.rows[1].bodyBase64, "base64"));
+      const original = JSON.parse(Buffer.from(syntheticRecording().rows[1].bodyBase64, "base64"));
+      for (const e of response.entries) {
+        const f = JSON.parse(e.textPayload.slice("PYCHECK_FRAME ".length));
+        if (f.request) {
+          f.request.body_text = bodies[c.Body];
+          f.request.body_length = Buffer.byteLength(f.request.body_text);
+          e.textPayload = "PYCHECK_FRAME " + JSON.stringify(f);
+        }
+      }
+      if (c.Overlap === "one") response.entries[0].insertId = original.entries[0].insertId;
+      input.rows[1].bodyBase64 = Buffer.from(JSON.stringify(response)).toString("base64");
+      if (c.Names !== "new" || c.Alias !== "tasks-pass-2") {
+        await assert.rejects(
+          extractSynthetic(input, c.Alias),
+          /unrecorded function|incomplete recorded family|coverage incomplete/,
+        );
+        return;
+      }
+      const tasks = await extractSynthetic(input, c.Alias);
+      if (c.Overlap === "one") {
+        assert.throws(() => extractTasksPass(first, tasks), /overlapping original/);
+        return;
+      }
+      assert.equal(extractTasksPass(first, tasks), tasks.fixture);
+      const [pair] = compareRecordings(first.fixture, tasks.fixture);
+      assert.equal(
+        pair.status,
+        { equal: "MATCH", "label-longer": "MATCH_LAYOUT", "swapped-lengths": "MATCH_LAYOUT" }[
+          c.Body
+        ] ?? "DIFF",
+      );
     });
   }
 }

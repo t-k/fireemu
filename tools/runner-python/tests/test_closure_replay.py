@@ -22,8 +22,9 @@ from fireemu_runner.serve import RunnerRouter
 ROOT = Path(__file__).resolve().parents[3]
 OBSERVATIONS = json.loads((ROOT / "conformance/functions-python/fixtures/observations.json").read_text())["observations"]
 SECOND = json.loads((ROOT / "conformance/functions-python/fixtures/observations-pass2.json").read_text())["observations"]
-RECORDINGS = [OBSERVATIONS, SECOND]
-CASES = [(f"pass-{n + 1}/{r['condition']}", i, c) for n, rows in enumerate(RECORDINGS) for r in rows for i, c in enumerate(r["sdkCases"])]
+TASKS_PASS = json.loads((ROOT / "conformance/functions-python/fixtures/observations-tasks-pass2.json").read_text())["observations"]
+RECORDINGS = {"pass-1": OBSERVATIONS, "pass-2": SECOND, "tasks-pass-2": TASKS_PASS}
+CASES = [(f"{alias}/{r['condition']}", i, c) for alias, rows in RECORDINGS.items() for r in rows for i, c in enumerate(r["sdkCases"])]
 
 
 class _Anonymous(credentials.Base):
@@ -201,8 +202,9 @@ def test_actual_replay_refuses_removed_or_widened_declarations_and_neighbor_diff
                 assert_declared_replay(profile, differences | {field + "-neighbor"}, RECORD)
 
 
-def test_recorded_task_bytes_survive_current_http_router():
-    row = next(r for r in OBSERVATIONS if r["condition"] == "tasks-events")
+@pytest.mark.parametrize("alias", ["pass-1", "tasks-pass-2"])
+def test_recorded_task_bytes_survive_current_http_router(alias):
+    row = next(r for r in RECORDINGS[alias] if r["condition"] == "tasks-events")
     body = next(f["bodyText"] for f in row["frames"] if "bodyText" in f)
     seen = []
     def handler(request):
@@ -272,11 +274,12 @@ def test_second_recording_actual_differences_bind_the_same_declarations(profile,
     assert tasks["sdkCases"] == [] and tasks["frames"] == []
 
 
-def test_two_recording_replay_inventory_keeps_tasks_single_pass():
-    assert len(CASES) == 15
+def test_replay_inventory_runs_every_family_from_two_passes():
+    assert len(CASES) == 16
     assert sum(family.startswith("pass-1/") for family, _, _ in CASES) == 8
     assert sum(family.startswith("pass-2/") for family, _, _ in CASES) == 7
-    assert [family for family, _, _ in CASES if family.endswith("/tasks-events")] == ["pass-1/tasks-events"]
+    assert [family for family, _, _ in CASES if family.endswith("/tasks-events")] == ["pass-1/tasks-events", "tasks-pass-2/tasks-events"]
+    assert [r["condition"] for r in TASKS_PASS] == ["tasks-events"]
 
 
 @pytest.mark.parametrize("profile", ["strict", "emulator"])

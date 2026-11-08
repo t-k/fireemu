@@ -647,6 +647,10 @@
           },
           "bodyText": "{\"data\":{\"run\":\"fixture-run\",\"label\":\"fixture-label\"}}",
           "originalBodyBytes": 61,
+          "originalValueBytes": {
+            "run": 22,
+            "label": 9
+          },
           "layoutVerifiedAgainstRecordedLength": true
         }
       ],

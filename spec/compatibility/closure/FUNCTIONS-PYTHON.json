@@ -59,8 +59,9 @@
         "emulator": "NO_PRODUCTION_CLAIM"
       },
       "fixturePath": "conformance/functions-python/fixtures/observations.json",
-      "fixtureSha256": "856d8d8dcef774a41da6e8319072d87d0fc37d474df07bb968f904d6995541bd",
+      "fixtureSha256": "515fbf2c16de0a7e5c7b6b18f2c77c65d2845e786dcfa5554712e34b255de47a",
       "observedPasses": 2,
+      "passComparison": "MATCH",
       "recordingAliases": [
         "pass-1",
         "pass-2"
@@ -86,8 +87,9 @@
         "emulator": "NO_PRODUCTION_CLAIM"
       },
       "fixturePath": "conformance/functions-python/fixtures/observations.json",
-      "fixtureSha256": "856d8d8dcef774a41da6e8319072d87d0fc37d474df07bb968f904d6995541bd",
+      "fixtureSha256": "515fbf2c16de0a7e5c7b6b18f2c77c65d2845e786dcfa5554712e34b255de47a",
       "observedPasses": 2,
+      "passComparison": "MATCH",
       "recordingAliases": [
         "pass-1",
         "pass-2"
@@ -113,8 +115,9 @@
         "emulator": "NO_PRODUCTION_CLAIM"
       },
       "fixturePath": "conformance/functions-python/fixtures/observations.json",
-      "fixtureSha256": "856d8d8dcef774a41da6e8319072d87d0fc37d474df07bb968f904d6995541bd",
+      "fixtureSha256": "515fbf2c16de0a7e5c7b6b18f2c77c65d2845e786dcfa5554712e34b255de47a",
       "observedPasses": 2,
+      "passComparison": "MATCH",
       "recordingAliases": [
         "pass-1",
         "pass-2"
@@ -140,8 +143,9 @@
         "emulator": "NO_PRODUCTION_CLAIM"
       },
       "fixturePath": "conformance/functions-python/fixtures/observations.json",
-      "fixtureSha256": "856d8d8dcef774a41da6e8319072d87d0fc37d474df07bb968f904d6995541bd",
+      "fixtureSha256": "515fbf2c16de0a7e5c7b6b18f2c77c65d2845e786dcfa5554712e34b255de47a",
       "observedPasses": 2,
+      "passComparison": "MATCH",
       "recordingAliases": [
         "pass-1",
         "pass-2"
@@ -167,8 +171,9 @@
         "emulator": "NO_PRODUCTION_CLAIM"
       },
       "fixturePath": "conformance/functions-python/fixtures/observations.json",
-      "fixtureSha256": "856d8d8dcef774a41da6e8319072d87d0fc37d474df07bb968f904d6995541bd",
+      "fixtureSha256": "515fbf2c16de0a7e5c7b6b18f2c77c65d2845e786dcfa5554712e34b255de47a",
       "observedPasses": 2,
+      "passComparison": "MATCH",
       "recordingAliases": [
         "pass-1",
         "pass-2"
@@ -188,16 +193,18 @@
       "generations": [
         2
       ],
-      "note": "SDK data without auth/app context and masked raw body order. Replay exercises HTTP pass-through, not daemon task-name/header generation or retries. Pass 2 is UNOBSERVED for Tasks: no task delivery frame was recorded; this does not establish correct no-delivery behavior.",
+      "note": "SDK data without auth/app context and masked raw body order. Replay exercises HTTP pass-through, not daemon task-name/header generation or retries. The events pass 2 recorded no task frame (production refused to recreate the queue names); the separate Tasks pass (tasks-pass-2) recorded the same handlers under new queue names. Its projection matches pass 1 in header names, fixed header values, SDK context and masked body bytes; only the masked label length differs, by the one character the queue rename added, with equal layout bytes.",
       "profiles": {
         "strict": "LIMITED_TO_RECORDED_CASES",
         "emulator": "NO_PRODUCTION_CLAIM"
       },
       "fixturePath": "conformance/functions-python/fixtures/observations.json",
-      "fixtureSha256": "856d8d8dcef774a41da6e8319072d87d0fc37d474df07bb968f904d6995541bd",
-      "observedPasses": 1,
+      "fixtureSha256": "515fbf2c16de0a7e5c7b6b18f2c77c65d2845e786dcfa5554712e34b255de47a",
+      "observedPasses": 2,
+      "passComparison": "MATCH_LAYOUT",
       "recordingAliases": [
-        "pass-1"
+        "pass-1",
+        "tasks-pass-2"
       ]
     },
     {
@@ -218,7 +225,7 @@
         "emulator": "NO_PRODUCTION_CLAIM"
       },
       "fixturePath": "conformance/functions-python/fixtures/observations.json",
-      "fixtureSha256": "856d8d8dcef774a41da6e8319072d87d0fc37d474df07bb968f904d6995541bd"
+      "fixtureSha256": "515fbf2c16de0a7e5c7b6b18f2c77c65d2845e786dcfa5554712e34b255de47a"
     },
     {
       "conditionId": "FUNCTIONS-PYTHON/deployment",
@@ -238,7 +245,7 @@
         "emulator": "NO_PRODUCTION_CLAIM"
       },
       "fixturePath": "conformance/functions-python/fixtures/observations.json",
-      "fixtureSha256": "856d8d8dcef774a41da6e8319072d87d0fc37d474df07bb968f904d6995541bd"
+      "fixtureSha256": "515fbf2c16de0a7e5c7b6b18f2c77c65d2845e786dcfa5554712e34b255de47a"
     }
   ],
   "releaseRegressions": [
@@ -247,7 +254,7 @@
     "tools/runner-python/tests/test_closure_replay.py"
   ],
   "limitations": [
-    "One production pass; no one-pass exception has been granted.",
+    "Two production passes per event family: pass 1 and pass 2 for five families, pass 1 and the separate Tasks pass for Tasks. Passes compare only the selected finite projections; complete payloads, log resources and network totals are not compared.",
     "Synthetic identity and timestamp aliases preserve selected types and formats; they do not establish identity parity.",
     "Runner replay does not establish daemon delivery, deployment or OIDC verification parity.",
     "HTTP/callable, secret isolation, async handlers, reload and before-sign-in are unobserved by this parent."
@@ -344,7 +351,7 @@
     }
   ],
   "corpusPath": "conformance/functions-python/corpus.json",
-  "corpusSha256": "c0db98e91f1acd766361efdff435eca17655d1344bfeaff4246287bc3df80db0",
+  "corpusSha256": "7461fc824ee9b430d8c08e75882479316a169adee9274ac394f20c07a7add6ac",
   "uncomparedObligations": [
     {
       "id": "task-delivery",
@@ -385,12 +392,17 @@
     {
       "alias": "pass-1",
       "fixturePath": "conformance/functions-python/fixtures/observations.json",
-      "fixtureSha256": "856d8d8dcef774a41da6e8319072d87d0fc37d474df07bb968f904d6995541bd"
+      "fixtureSha256": "515fbf2c16de0a7e5c7b6b18f2c77c65d2845e786dcfa5554712e34b255de47a"
     },
     {
       "alias": "pass-2",
       "fixturePath": "conformance/functions-python/fixtures/observations-pass2.json",
       "fixtureSha256": "cbba2bcc5b0e6802e03306579983c4dd711c2446bb938d6f4c0be66b80936940"
+    },
+    {
+      "alias": "tasks-pass-2",
+      "fixturePath": "conformance/functions-python/fixtures/observations-tasks-pass2.json",
+      "fixtureSha256": "c1678bfcc7391a8b65f2a01281dd5af17d18e3f81f0790734f84f3a0232f77b8"
     }
   ]
 }

@@ -25,6 +25,16 @@ const functionFamilies = {
   pctaskraw: "tasks-events",
 };
 const families = [...new Set(Object.values(functionFamilies))];
+// The separate Tasks pass deployed the same handlers under queue names never used before
+// (Cloud Tasks refuses to recreate a deleted queue name for days); queue = function id.
+const tasksPassFunctions = { pc3task: "tasks-events", pc3taskraw: "tasks-events" };
+const rawTaskFunctions = new Set(["pctaskraw", "pc3taskraw"]);
+const sdkTaskFunctions = new Set(["pctask", "pc3task"]);
+const profiles = {
+  "pass-1": { name: "events", functions: functionFamilies, families },
+  "pass-2": { name: "events", functions: functionFamilies, families },
+  "tasks-pass-2": { name: "tasks", functions: tasksPassFunctions, families: ["tasks-events"] },
+};
 const headerNames = new Set(
   "accept accept-encoding authorization content-length content-type forwarded from function-execution-id host traceparent user-agent x-cloud-trace-context x-forwarded-for x-forwarded-proto ce-database ce-dataschema ce-document ce-id ce-location ce-namespace ce-project ce-source ce-specversion ce-subject ce-time ce-type ce-bucket x-cloudtasks-queuename x-cloudtasks-tasketa x-cloudtasks-taskexecutioncount x-cloudtasks-taskname x-cloudtasks-taskretrycount x-cloudscheduler x-cloudscheduler-jobname x-cloudscheduler-scheduletime".split(
     " ",
@@ -145,7 +155,7 @@ function rawProjection(frame) {
     }
     out.fractionalTime = timeAlias(a.time).includes(".");
   }
-  if (frame.function === "pctaskraw") {
+  if (rawTaskFunctions.has(frame.function)) {
     const body = frame.request.body_text;
     check(
       typeof body === "string" && Buffer.byteLength(body) === frame.request.body_length,
@@ -175,9 +185,14 @@ function rawProjection(frame) {
       "masked task payload mismatch",
     );
     out.originalBodyBytes = frame.request.body_length;
+    // Lengths of the masked string tokens (without quotes): a mask hides values, not lengths.
+    out.originalValueBytes = {
+      [lexical[2]]: Buffer.byteLength(lexical[3]) - 2,
+      [lexical[5]]: Buffer.byteLength(lexical[6]) - 2,
+    };
     out.layoutVerifiedAgainstRecordedLength = true;
   }
-  if (frame.function === "pctask") {
+  if (sdkTaskFunctions.has(frame.function)) {
     check(
       typeof frame.has_app === "boolean" && typeof frame.has_auth === "boolean",
       "task context types",
@@ -299,7 +314,8 @@ function sdkProjection(f, family) {
 
 /** Receipts remain private: callers must never include privateCustody in a public fixture. */
 export function extractRecording(journalText, resultText, alias) {
-  check(["pass-1", "pass-2"].includes(alias), "recording alias");
+  check(Object.hasOwn(profiles, alias), "recording alias");
+  const profile = profiles[alias];
   const rows = journalText
       .trim()
       .split(/\r?\n/)
@@ -336,7 +352,7 @@ export function extractRecording(journalText, resultText, alias) {
   check(frames.length > 0, "no recorded frames");
   const counts = {};
   for (const f of frames) {
-    check(Object.hasOwn(functionFamilies, f.function), "unrecorded function");
+    check(Object.hasOwn(profile.functions, f.function), "unrecorded function");
     counts[f.function] = (counts[f.function] ?? 0) + 1;
   }
   check(
@@ -344,8 +360,8 @@ export function extractRecording(journalText, resultText, alias) {
       Object.entries(counts).every(([k, v]) => result.frames[k] === v),
     "result/frame count disagreement",
   );
-  const observations = families.map((family) => {
-    const selected = frames.filter((f) => functionFamilies[f.function] === family);
+  const observations = profile.families.map((family) => {
+    const selected = frames.filter((f) => profile.functions[f.function] === family);
     const row = {
       condition: family,
       origin: "masked-production-projection",
@@ -377,7 +393,10 @@ export function extractRecording(journalText, resultText, alias) {
       expectedSdk = [2, 2, 1, 1, 1, 1][index];
     check(
       (row.frames.length === expectedFrames && row.sdkCases.length === expectedSdk) ||
-        (row.condition === "tasks-events" && row.frames.length === 0 && row.sdkCases.length === 0),
+        (profile.name === "events" &&
+          row.condition === "tasks-events" &&
+          row.frames.length === 0 &&
+          row.sdkCases.length === 0),
       "incomplete recorded family",
     );
   }
@@ -386,6 +405,7 @@ export function extractRecording(journalText, resultText, alias) {
       schemaVersion: 1,
       recording: {
         alias,
+        ...(profile.name === "events" ? {} : { profile: profile.name }),
         accounting,
         eventFrames: frames.length,
         functionFrameCategories: Object.keys(counts).length,
@@ -425,6 +445,24 @@ export function extractPair(first, second) {
   return [first.fixture, second.fixture];
 }
 
+/** The Tasks-only pass counts as independent only if no original log entry is shared with pass 1. */
+export function extractTasksPass(first, tasks) {
+  check(
+    first.fixture.recording.alias === "pass-1" && tasks.fixture.recording.alias === "tasks-pass-2",
+    "ordered independent aliases required",
+  );
+  check(
+    first.privateCustody.journalSha256 !== tasks.privateCustody.journalSha256,
+    "same original recording cannot count twice",
+  );
+  const firstEntries = new Set(first.privateCustody.entryIdentityHashes);
+  check(
+    tasks.privateCustody.entryIdentityHashes.every((id) => !firstEntries.has(id)),
+    "overlapping original recordings cannot count twice",
+  );
+  return tasks.fixture;
+}
+
 /** CLI: two explicit journal/result pairs; only the safe pair is written to stdout. */
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   try {
@@ -436,6 +474,32 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
       const a = JSON.parse(readFileSync(process.argv[3], "utf8")),
         b = JSON.parse(readFileSync(process.argv[4], "utf8"));
       process.stdout.write(JSON.stringify(compareRecordings(a, b), null, 2) + "\n");
+    } else if (process.argv[2] === "--tasks") {
+      check(
+        process.argv.length === 8,
+        "usage: recordings.mjs --tasks FIRST_JOURNAL FIRST_RESULT TASKS_JOURNAL TASKS_RESULT PRIVATE_CUSTODY",
+      );
+      const args = process.argv.slice(3),
+        custody = resolve(args[4]);
+      check(
+        custody.split(/[\\/]/).includes("docs.local"),
+        "custody output must be inside docs.local",
+      );
+      const a = extractRecording(
+        readFileSync(args[0], "utf8"),
+        readFileSync(args[1], "utf8"),
+        "pass-1",
+      );
+      const t = extractRecording(
+        readFileSync(args[2], "utf8"),
+        readFileSync(args[3], "utf8"),
+        "tasks-pass-2",
+      );
+      const fixture = extractTasksPass(a, t);
+      writeFileSync(custody, JSON.stringify([a.privateCustody, t.privateCustody], null, 2) + "\n", {
+        flag: "wx",
+      });
+      process.stdout.write(JSON.stringify(fixture, null, 2) + "\n");
     } else {
       check(
         process.argv.length === 7,
@@ -471,12 +535,41 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   }
 }
 
+/**
+ * True when every difference is a masked task value length and the remaining body bytes
+ * (keys, punctuation, whitespace, quotes) are equal in both recordings.
+ */
+function valueLengthsOnly(a, b, differences) {
+  const pattern = /^frames\.(\d+)\.(originalBodyBytes|originalValueBytes\.(run|label))$/;
+  if (!differences.every((d) => pattern.test(d.path))) return false;
+  const indexes = new Set(differences.map((d) => Number(d.path.match(pattern)[1])));
+  const layout = (f) =>
+    f.originalBodyBytes - Object.values(f.originalValueBytes).reduce((sum, n) => sum + n, 0);
+  return [...indexes].every((i) => {
+    const x = a.frames[i],
+      y = b.frames[i];
+    return (
+      x.bodyText === y.bodyText &&
+      Object.keys(x.originalValueBytes).toSorted().join() === "label,run" &&
+      Object.keys(y.originalValueBytes).toSorted().join() === "label,run" &&
+      layout(x) === layout(y)
+    );
+  });
+}
+
 export function compareRecordings(first, second) {
   check(first.recording.alias !== second.recording.alias, "distinct aliases required");
+  check(
+    second.recording.profile === undefined || second.recording.profile === "tasks",
+    "known recording profile required",
+  );
+  const tasksOnly = second.recording.profile === "tasks";
   first = {
     ...first,
     observations: first.observations.filter(
-      (r) => !["auth-blocking", "deployment"].includes(r.condition),
+      (r) =>
+        !["auth-blocking", "deployment"].includes(r.condition) &&
+        (!tasksOnly || r.condition === "tasks-events"),
     ),
   };
   second = {
@@ -530,10 +623,19 @@ export function compareRecordings(first, second) {
           ? { wholeSecondSdkFrames: r.wholeSecondSdkFrames, wholeSecondInput: r.wholeSecondInput }
           : {}),
       });
-    const differences = observedPasses === 2 ? compare(projection(a), projection(b), "strict") : [];
+    const pa = projection(a),
+      pb = projection(b);
+    const differences = observedPasses === 2 ? compare(pa, pb, "strict") : [];
     return {
       condition: a.condition,
-      status: observedPasses < 2 ? "UNOBSERVED" : differences.length ? "DIFF" : "MATCH",
+      status:
+        observedPasses < 2
+          ? "UNOBSERVED"
+          : !differences.length
+            ? "MATCH"
+            : valueLengthsOnly(pa, pb, differences)
+              ? "MATCH_LAYOUT"
+              : "DIFF",
       observedPasses,
       differences,
     };

@@ -13,17 +13,58 @@ export const families = [
 ];
 const frameCounts = [3, 4, 2, 3, 2, 2, 1, 0];
 const sdkCounts = [2, 2, 1, 1, 1, 1, 0, 0];
+/** Fixed recorded inventory of each accepted recording, in alias order. */
+const recordingKinds = [
+  {
+    alias: "pass-1",
+    file: "observations.json",
+    accounting: {
+      recorderRequests: 160,
+      cliWriteRows: 28,
+      cliWriteAttempts: 44,
+      accountedRequests: 204,
+    },
+    eventFrames: 16,
+    functionFrameCategories: 13,
+    conditions: families,
+    unobserved: [],
+  },
+  {
+    alias: "pass-2",
+    file: "observations-pass2.json",
+    accounting: {
+      recorderRequests: 172,
+      cliWriteRows: 26,
+      cliWriteAttempts: 42,
+      accountedRequests: 214,
+    },
+    eventFrames: 14,
+    functionFrameCategories: 11,
+    conditions: families.slice(0, 6),
+    unobserved: ["tasks-events"],
+  },
+  {
+    alias: "tasks-pass-2",
+    profile: "tasks",
+    file: "observations-tasks-pass2.json",
+    accounting: {
+      recorderRequests: 81,
+      cliWriteRows: 10,
+      cliWriteAttempts: 12,
+      accountedRequests: 93,
+    },
+    eventFrames: 2,
+    functionFrameCategories: 2,
+    conditions: ["tasks-events"],
+    unobserved: [],
+  },
+];
 export const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
 /** A candidate inventory, never a promotion operation or an acceptance of differences. */
-export function validate(record, corpus, fixtureBytes, secondBytes) {
+export function validate(record, corpus, fixtureBytes, secondBytes, tasksBytes) {
   assert.equal(record.parent, "FUNCTIONS-PYTHON");
   assert.equal(record.parentStatus, "IMPLEMENTING", "parent must remain pending");
-  assert.deepEqual(
-    record.recordingPolicy,
-    { observedPasses: corpus.recordings.length, requiredPasses: 2, waiver: null },
-    "independent recordings are not a waiver",
-  );
   assert.equal(record.closureReview.decision, "PENDING");
   assert.deepEqual(
     record.scopeDecisions.map((d) => d.id),
@@ -49,17 +90,19 @@ export function validate(record, corpus, fixtureBytes, secondBytes) {
   );
   assert.equal(corpus.fixtureSha256, digest(fixtureBytes), "fixture digest");
   assert.deepEqual(record.recordings, corpus.recordings, "recording provenance inventory");
-  assert.ok([1, 2].includes(corpus.recordings.length), "one or two independent recordings");
+  assert.ok(
+    [1, 2, 3].includes(corpus.recordings.length),
+    "one or two independent events recordings and an optional Tasks pass",
+  );
+  const kinds = recordingKinds.slice(0, corpus.recordings.length);
   assert.deepEqual(
     corpus.recordings.map((r) => r.alias),
-    ["pass-1", "pass-2"].slice(0, corpus.recordings.length),
+    kinds.map((k) => k.alias),
   );
-  const allBytes = corpus.recordings.length === 2 ? [fixtureBytes, secondBytes] : [fixtureBytes];
+  const allBytes = [fixtureBytes, secondBytes, tasksBytes].slice(0, kinds.length);
   for (const [index, item] of corpus.recordings.entries()) {
-    assert.equal(
-      item.fixturePath,
-      `conformance/functions-python/fixtures/observations${index ? "-pass2" : ""}.json`,
-    );
+    const kind = kinds[index];
+    assert.equal(item.fixturePath, `conformance/functions-python/fixtures/${kind.file}`);
     assert.ok(allBytes[index], "recording fixture required");
     assert.equal(item.fixtureSha256, digest(allBytes[index]), "recording fixture digest");
     const observed = JSON.parse(allBytes[index]);
@@ -67,31 +110,21 @@ export function validate(record, corpus, fixtureBytes, secondBytes) {
       observed.recording,
       {
         alias: item.alias,
-        accounting: index
-          ? {
-              recorderRequests: 172,
-              cliWriteRows: 26,
-              cliWriteAttempts: 42,
-              accountedRequests: 214,
-            }
-          : {
-              recorderRequests: 160,
-              cliWriteRows: 28,
-              cliWriteAttempts: 44,
-              accountedRequests: 204,
-            },
-        eventFrames: index ? 14 : 16,
-        functionFrameCategories: index ? 11 : 13,
+        ...(kind.profile ? { profile: kind.profile } : {}),
+        accounting: kind.accounting,
+        eventFrames: kind.eventFrames,
+        functionFrameCategories: kind.functionFrameCategories,
       },
       "recorded accounting and frame inventory",
     );
     assert.deepEqual(
       observed.observations.map((r) => r.condition),
-      index ? families.slice(0, 6) : families,
+      kind.conditions,
     );
-    for (let i = 0; i < 6; i += 1) {
-      const row = observed.observations[i],
-        present = !(index === 1 && i === 5);
+    for (const row of observed.observations) {
+      const i = families.indexOf(row.condition);
+      if (i > 5) continue;
+      const present = !kind.unobserved.includes(row.condition);
       assert.equal(row.coverage, present ? "RECORDED" : "UNOBSERVED");
       assert.equal(row.observedPasses, present ? 1 : 0);
       assert.equal(row.frames.length, present ? frameCounts[i] : 0);
@@ -110,14 +143,32 @@ export function validate(record, corpus, fixtureBytes, secondBytes) {
         assert.equal(c.inputIdentity, "synthetic");
         assert.ok(Object.keys(c.expected).length);
       }
+      if (row.condition === "eventarc-custom-events") assert.equal(row.wholeSecondSdkFrames, 0);
     }
-    assert.equal(observed.observations[3].wholeSecondSdkFrames, 0);
   }
+  const familyPasses = [];
   for (let i = 0; i < 6; i += 1) {
-    const aliases = i === 5 ? ["pass-1"] : corpus.recordings.map((r) => r.alias);
+    const aliases = kinds
+      .filter((k) => k.conditions.includes(families[i]) && !k.unobserved.includes(families[i]))
+      .map((k) => k.alias);
     assert.deepEqual(record.conditions[i].recordingAliases, aliases, "family recording provenance");
     assert.equal(record.conditions[i].observedPasses, aliases.length, "family recording count");
+    // A two-pass family states its comparison; the closure test recomputes it from the fixtures.
+    if (aliases.length === 2)
+      assert.ok(
+        ["MATCH", "MATCH_LAYOUT"].includes(record.conditions[i].passComparison),
+        "pass comparison",
+      );
+    else assert.equal(record.conditions[i].passComparison, undefined, "pass comparison");
+    familyPasses.push(aliases.length);
   }
+  for (const condition of record.conditions.slice(6))
+    assert.equal(condition.passComparison, undefined, "pass comparison");
+  assert.deepEqual(
+    record.recordingPolicy,
+    { observedPasses: Math.min(...familyPasses), requiredPasses: 2, waiver: null },
+    "independent recordings are not a waiver",
+  );
   const fixture = JSON.parse(fixtureBytes);
   assert.deepEqual(
     fixture.observations.map((r) => r.condition),

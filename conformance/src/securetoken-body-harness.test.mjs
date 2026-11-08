@@ -2,7 +2,7 @@
 // the process, where, and with which credential.
 
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { mock, test } from "node:test";
 
 import { SANDBOX_PROJECT, createContext } from "./auth-account/harness.mjs";
 import { encodeBody, ROWS } from "./securetoken-body/corpus.mjs";
@@ -589,4 +589,20 @@ test("only a config PATCH with the one mask and the one field is admitted", () =
     config("POST", "multiTenant.allowTenants", { multiTenant: { allowTenants: true } }),
   ])
     assert.throws(() => guardRequest(bad, ctx), undefined, `${bad.init.method} ${bad.url}`);
+});
+
+test("a preflight read waits a minute at most", async () => {
+  const timeouts = mock.method(AbortSignal, "timeout", AbortSignal.timeout);
+  try {
+    const fake = createWorld({ project: SANDBOX_PROJECT, number: NUMBER, tenancy: true });
+    const fetchImpl = (url, init) => {
+      const parsed = new URL(url);
+      return fake.fetch(`http://127.0.0.1:1${parsed.pathname}${parsed.search}`, init);
+    };
+    await preflight(production(), "", { fetchImpl });
+    assert.equal(timeouts.mock.calls.length, 3);
+    assert.ok(timeouts.mock.calls.every((c) => c.arguments[0] === 60_000));
+  } finally {
+    timeouts.mock.restore();
+  }
 });

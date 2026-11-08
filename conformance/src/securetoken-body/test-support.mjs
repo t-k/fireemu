@@ -32,7 +32,7 @@ export function fakeSession({ world: worldOptions = {}, run, session: sessionOpt
     journal: (entry) => journal.push(entry),
     ...sessionOptions,
   });
-  return { ctx, session, ownership, journal, ...fake };
+  return { ctx, session, ownership, ledgerPath: `${dir}/issued.jsonl`, journal, ...fake };
 }
 
 /** mulberry32: a small seeded generator; a failing case is reproduced by its seed. */

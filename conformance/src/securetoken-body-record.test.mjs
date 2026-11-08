@@ -2,6 +2,8 @@
 // refused before anything is written, the ledger lines, the stop signal, and what may reach a file.
 
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { test } from "node:test";
 
 import { scanFixture } from "./auth-account/fixture-scan.mjs";
@@ -263,4 +265,267 @@ test("run ids never repeat within a process, even inside one second", () => {
 test("the ceilings leave room for the rows and the harness of a recording that polls", () => {
   assert.deepEqual(ceilings(), { maxRequests: ROWS.length, maxHarnessRequests: 160 });
   assert.equal(ceilings([1, 2, 3]).maxRequests, 3);
+});
+
+// ---- order, exact lines and the fixture text ----------------------------------------------------
+
+/** Wraps every effect so that it finishes a tick after it starts, records itself, and fails the test if another starts meanwhile. */
+function slowly(d) {
+  const events = [];
+  let running = null;
+  const slow = {};
+  for (const [name, fn] of Object.entries(d)) {
+    if (
+      typeof fn !== "function" ||
+      ["recordOnce", "warn", "log", "now", "installSignals"].includes(name)
+    ) {
+      slow[name] = fn;
+      continue;
+    }
+    slow[name] = async (...args) => {
+      if (running) events.push(`OVERLAP ${running} / ${name}`);
+      running = name;
+      await new Promise((resolve) => setImmediate(resolve));
+      const value = await fn(...args);
+      events.push(name === "writeRunFile" ? `${name}:${args[1]}` : name);
+      running = null;
+      return value;
+    };
+  }
+  return { slow, events };
+}
+
+test("the effects run one at a time, in the order that makes every refusal come first", async () => {
+  const d = deps();
+  const { slow, events } = slowly(d);
+  const result = await recordProduction(ENV, slow);
+  assert.equal(result.outcome, "recorded");
+  assert.deepEqual(
+    events.filter((e) => e.startsWith("OVERLAP")),
+    [],
+  );
+  const head = events.slice(0, events.indexOf("appendLedger") + 1);
+  assert.deepEqual(head, [
+    "assertCleanTree",
+    "readLedger",
+    "sandboxWebConfig",
+    "productionTarget",
+    "preflight",
+    "gitSha",
+    "harnessDigest",
+    "clockOffset",
+    "assertIgnored",
+    "makeRunDir",
+    "appendLedger",
+  ]);
+  // Then each recording is scanned before it is written, then the meta, the scan and write of the fixture, and the closing line.
+  assert.deepEqual(events.slice(head.length), [
+    "scanFixture",
+    "writeRunFile:recording-1.json",
+    "scanFixture",
+    "writeRunFile:recording-2.json",
+    "writeRunFile:meta.json",
+    "scanFixture",
+    "writeFixture",
+    "appendLedger",
+  ]);
+});
+
+test("a refusal by preflight names every problem, and the run directory has no colon", async () => {
+  const d = deps({ problems: ["a tenant exists", "an account exists"] });
+  await assert.rejects(
+    recordProduction(ENV, d),
+    /^Error: preflight: a tenant exists; an account exists$/,
+  );
+  const ok = deps();
+  const dirs = [];
+  ok.assertIgnored = async (dir) => dirs.push(["ignored", dir]);
+  ok.makeRunDir = async (dir) => dirs.push(["made", dir]);
+  await recordProduction(ENV, ok);
+  assert.deepEqual(dirs[0], ["ignored", "/private"]);
+  assert.deepEqual(dirs[1], ["made", "/private/securetoken-body-2026-11-08T120000.000Z"]);
+});
+
+test("the fixture is two-space JSON that says what it is", () => {
+  const text = fixtureText({
+    recordings: [{ rows: { a: 1 } }, { rows: { a: 2 } }],
+    meta: { sha: "s", corpusDigest: "c", harness: "h", startedAt: "2026-11-08T12:00:00.000Z" },
+  });
+  assert.ok(text.startsWith('{\n  "version": 1,\n  "recordedAgainst": {\n    "target": '));
+  const fixture = JSON.parse(text);
+  assert.equal(fixture.version, 1);
+  assert.equal(fixture.recordedAgainst.task, "SECURETOKEN-BODY");
+  assert.match(
+    fixture.recordedAgainst.target,
+    /Identity Toolkit and Secure Token REST, Identity Platform sandbox/,
+  );
+  assert.match(
+    fixture.recordedAgainst.target,
+    /multi-tenancy switched on for each recording and restored/,
+  );
+  assert.match(
+    fixture.recordedAgainst.note,
+    /^Tokens, the API key, the project id and its number never appear\./,
+  );
+  assert.match(fixture.recordedAgainst.note, /user_id is the run's own account \(a, b or t\)\.$/);
+  assert.equal(fixture.recordedAt, "2026-11-08T12:00:00.000Z");
+  assert.equal(fixture.recordings.length, 2);
+});
+
+// ---- signals, aborts and what is said about them ------------------------------------------------
+
+const stub = (extra = {}) => ({
+  run: "1",
+  rows: {},
+  requests: 3,
+  harnessRequests: 4,
+  cleanupErrors: [],
+  unknowns: [],
+  closureReady: true,
+  secrets: [],
+  ...extra,
+});
+
+test("a signal says what happens next once, and says that cleanup is not interrupted the second time", async () => {
+  const d = deps();
+  const warnings = [];
+  d.warn = (text) => warnings.push(text);
+  let seen;
+  d.recordOnce = async (n, _web, options) => {
+    if (n === 1) {
+      d.signal("SIGINT");
+      d.signal("SIGTERM");
+      seen = options;
+    }
+    return stub();
+  };
+  const result = await recordProduction(ENV, d);
+  assert.equal(result.outcome, "aborted-fatal");
+  assert.deepEqual(warnings, [
+    "SIGINT: stopping at the next step; cleanup follows",
+    "SIGTERM again: cleanup is running and is not interrupted. A kill -9 now leaves accounts, a tenant and the multi-tenancy switch for hand cleanup (see the private run directory).",
+  ]);
+  assert.equal(seen.runDir, "/private/securetoken-body-2026-11-08T120000.000Z");
+  assert.equal(typeof seen.shouldStop, "function");
+  assert.equal(seen.shouldStop(), true);
+});
+
+test("shouldStop is false until a signal arrives", async () => {
+  const d = deps();
+  const observed = [];
+  d.recordOnce = async (n, _web, options) => {
+    observed.push(options.shouldStop());
+    return stub();
+  };
+  await recordProduction(ENV, d);
+  assert.deepEqual(observed, [false, false]);
+});
+
+test("a recording that fails ends the run aborted, or aborted-fatal when it says so", async () => {
+  for (const [fatal, outcome] of [
+    [false, "aborted"],
+    [true, "aborted-fatal"],
+  ]) {
+    const d = deps();
+    d.recordOnce = async () => stub({ failure: "it broke", fatal });
+    const result = await recordProduction(ENV, d);
+    assert.deepEqual(result, { outcome, exitCode: 1, error: "it broke" });
+    assert.equal(d.ledger.at(-1).outcome, outcome);
+    assert.equal(d.ledger.at(-1).error, "it broke");
+    assert.equal(d.ledger.at(-1).recordings, 1);
+    assert.equal(d.ledger.at(-1).closureReady, false);
+  }
+});
+
+test("a recording that throws is aborted; a partial recording it carries is kept in the count", async () => {
+  const d = deps();
+  d.recordOnce = async () => {
+    throw Object.assign(new Error("lost the sandbox"), {
+      fatal: true,
+      partial: stub({ requests: 10, harnessRequests: 5 }),
+    });
+  };
+  const result = await recordProduction(ENV, d);
+  assert.deepEqual(result, { outcome: "aborted-fatal", exitCode: 1, error: "lost the sandbox" });
+  assert.equal(d.ledger.at(-1).requests, 15);
+  assert.equal(d.ledger.at(-1).recordings, 1);
+  // A plain string and an error without the flag are both read as an abort, with the text kept.
+  const e = deps();
+  e.recordOnce = async () => {
+    throw "a plain string";
+  };
+  const second = await recordProduction(ENV, e);
+  assert.deepEqual(second, { outcome: "aborted", exitCode: 1, error: "a plain string" });
+  assert.equal(e.ledger.at(-1).recordings, 0);
+});
+
+test("meta.json says how the run ended, in two-space JSON, and what was cleaned or not is warned about", async () => {
+  const d = deps();
+  const warnings = [];
+  d.warn = (text) => warnings.push(text);
+  d.recordOnce = async () =>
+    stub({
+      cleanupErrors: ["account a: gone wrong"],
+      unknowns: [{ call: "delete account:stb-1-a", answer: "server-error" }],
+      closureReady: false,
+    });
+  await recordProduction(ENV, d);
+  const text = d.writes.get("meta.json");
+  assert.ok(text.startsWith('{\n  "sha": '));
+  const meta = JSON.parse(text);
+  assert.equal(meta.outcome, "recorded");
+  assert.equal(meta.sha, "a".repeat(40));
+  assert.equal(meta.harness, "b".repeat(64));
+  assert.equal(meta.corpusDigest, corpusDigest());
+  assert.deepEqual(meta.preflight, { fake: true });
+  assert.equal(meta.clockOffsetSeconds, 0.01);
+  assert.equal(meta.startedAt, "2026-11-08T12:00:00.000Z");
+  assert.equal(
+    warnings.at(-1),
+    "NOT CLOSURE-READY on fireemu-oracle-idp:\n  account a: gone wrong\n  account a: gone wrong\n  unknown answer to delete account:stb-1-a: server-error\n  unknown answer to delete account:stb-1-a: server-error",
+  );
+});
+
+test("an error thrown while the fixture is written is reported with where the recordings are kept", async () => {
+  const d = deps();
+  d.writeFixture = async () => {
+    throw new Error("disk full");
+  };
+  const result = await recordProduction(ENV, d);
+  assert.equal(result.outcome, "not-written");
+  assert.equal(
+    result.error,
+    "disk full (recordings kept in /private/securetoken-body-2026-11-08T120000.000Z)",
+  );
+  assert.equal(d.ledger.at(-1).error, result.error);
+  assert.equal(d.ledger.at(-1).outcome, "not-written");
+});
+
+test("a run id is the second of the clock when it can be, and one more than the last when it cannot", () => {
+  const far = Date.parse("2100-01-01T00:00:00Z");
+  assert.equal(nextRun(far), String(Math.floor(far / 1000)));
+  assert.equal(nextRun(far), String(Math.floor(far / 1000) + 1));
+  assert.equal(nextRun(far + 999), String(Math.floor(far / 1000) + 2));
+  assert.equal(nextRun(far + 5000), String(Math.floor(far / 1000) + 5));
+});
+
+test("a recording releases its ownership ledger, so the same directory can be used again", async () => {
+  const dir = tempDir("stb-lock-");
+  const fake = createWorld({ project: "fireemu-oracle-idp", number: NUMBER });
+  const options = { transport: fake.fetch, sleep: async () => {}, pollMs: 0 };
+  const target = { kind: "local", origin: "http://127.0.0.1:1", projectNumber: NUMBER };
+  const first = await recordWith(target, dir, 1, options);
+  assert.equal(first.closureReady, true);
+  assert.ok(existsSync(join(dir, "issued-1.jsonl")));
+  assert.ok(!existsSync(join(dir, "issued-1.jsonl.lock")));
+  assert.ok(existsSync(join(dir, "journal-1.jsonl")));
+  // Even a recording that throws releases it.
+  const failing = {
+    ...options,
+    transport: () => {
+      throw new Error("no network");
+    },
+  };
+  await recordWith(target, dir, 2, failing);
+  assert.ok(!existsSync(join(dir, "issued-2.jsonl.lock")));
 });

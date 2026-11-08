@@ -229,6 +229,8 @@ test("an account create whose answer was lost but took effect is settled by a lo
   assert.equal(recording.failure, undefined);
   assert.equal(recording.closureReady, true);
   assert.equal(world.accounts.size, 0);
+  // The lookup that settled the create is a harness request, not a counted row.
+  assert.equal(recording.requests, 24);
   assert.equal(recording.ownership.a2Required, true);
   assert.equal(recording.ownership.unknownAnswers[0].settledBy, "present");
   assert.equal(recording.ownership.unknownAnswers[0].settled, true);
@@ -1042,6 +1044,7 @@ test("a tenant create answered with a status that may be a lost answer is looked
       failure: recording.failure,
       listed: journal.filter((e) => e.id === "list-tenants").length,
       unknowns: recording.unknowns.length,
+      reason: recording.unknowns[0]?.answer,
     };
   };
   for (const status of [400, 403, 409, 429]) {
@@ -1059,6 +1062,14 @@ test("a tenant create answered with a status that may be a lost answer is looked
     );
     assert.equal(r.unknowns, 1, String(status));
     assert.equal(r.listed, 3, String(status)); // before, the search for the lost create, the audit
+    const reasons = {
+      408: "request-timeout",
+      499: "cancelled",
+      500: "server-error",
+      502: "server-error",
+      503: "server-error",
+    };
+    assert.equal(r.reason, reasons[status], String(status));
   }
 });
 
@@ -1096,4 +1107,459 @@ test("a run that never asked for a tenant does not audit for one", async () => {
   assert.equal(journal.filter((e) => e.id === "list-tenants").length, 0);
   assert.deepEqual(recording.cleanupErrors, []);
   assert.equal(recording.closureReady, true);
+});
+
+// ---- finding a tenant whose create answer was lost --------------------------------------------
+
+const ledgerRows = (path) =>
+  readFileSync(path, "utf8")
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+
+/** A world whose first tenant create is applied but answered `lost`; `edit` may change what lists and reads say. */
+function lostTenantCreate({ lost = "throw", edit = () => undefined } = {}) {
+  let first = true;
+  return fakeSession({
+    world: {
+      lateFaults: [
+        (req, res) => {
+          if (
+            first &&
+            req.method === "POST" &&
+            req.path.endsWith("tenants") &&
+            res.status === 200
+          ) {
+            first = false;
+            return lost;
+          }
+          return edit(req, res);
+        },
+      ],
+    },
+  });
+}
+
+test("a lost tenant create is found with one list and one read, counted as harness requests", async () => {
+  const { session, journal, ledgerPath } = lostTenantCreate();
+  const recording = await session.runRecording();
+  assert.equal(recording.failure, undefined);
+  assert.equal(recording.closureReady, true);
+  assert.equal(
+    journal.filter((e) => e.id === "get-tenant" && e.method === "GET").length >= 1,
+    true,
+  );
+  // The reads of the search are harness requests: the rows are the only counted ones.
+  assert.equal(recording.requests, 24);
+  const rows = ledgerRows(ledgerPath).filter((r) => r.name === "tenant:stb-1794000000");
+  const answer = rows.find((r) => r.phase === "answer" && r.action === "create");
+  assert.equal(answer.class, "unknown");
+  assert.equal(answer.reason, "transport-error");
+  const read = rows.find((r) => r.phase === "read");
+  assert.equal(read.observed, "present");
+  assert.equal(read.status, 200);
+});
+
+test("a tenant with the right name but another display name is read, and is not taken as the run's own", async () => {
+  const { session, journal } = fakeSession({
+    world: {
+      lateFaults: [
+        (req, res) =>
+          req.method === "POST" && req.path.endsWith("tenants") && res.status === 200
+            ? { status: 200, json: { ...res.json, displayName: "someone-else" } }
+            : undefined,
+      ],
+    },
+  });
+  const recording = await session.runRecording();
+  // The answer named another display name, so the tenant is looked up by its real display name and read.
+  assert.equal(journal.filter((e) => e.id === "get-tenant").length >= 1, true);
+  assert.equal(recording.failure, undefined);
+  assert.equal(recording.closureReady, true);
+});
+
+test("a candidate whose name has no tenant id is skipped, the next one is read", async () => {
+  const run = "1794000000";
+  const { session, journal } = lostTenantCreate({
+    edit: (req, res) =>
+      req.method === "GET" && req.path.endsWith("tenants") && res.json?.tenants
+        ? {
+            status: 200,
+            json: {
+              tenants: [
+                { name: "projects/1/garbled", displayName: `stb-${run}` },
+                ...res.json.tenants,
+              ],
+            },
+          }
+        : undefined,
+  });
+  const recording = await session.runRecording();
+  assert.equal(recording.failure, undefined);
+  assert.equal(recording.closureReady, true);
+  assert.ok(journal.every((e) => !e.path.endsWith("/tenants/undefined")));
+});
+
+test("a read that shows another display name, or no tenant, does not settle a lost create", async () => {
+  for (const reply of [
+    { status: 200, json: { name: "projects/1/tenants/x", displayName: "someone-else" } },
+    {
+      status: 404,
+      json: { error: { code: 404, message: "TENANT_NOT_FOUND", status: "NOT_FOUND" } },
+    },
+    { status: 200, json: {} },
+  ]) {
+    const { session, ctx, ledgerPath } = lostTenantCreate({
+      edit: (req) => (req.method === "GET" && /tenants\/[^/]+$/.test(req.path) ? reply : undefined),
+    });
+    const recording = await session.runRecording();
+    assert.match(
+      recording.failure,
+      /the answer to the tenant create is unknown and no read shows it/,
+    );
+    assert.equal(recording.closureReady, false);
+    assert.equal(ctx.tenantId, undefined);
+    const reads = ledgerRows(ledgerPath).filter((r) => r.phase === "read");
+    assert.ok(reads.every((r) => r.observed !== "present"));
+    assert.ok(recording.ownership.reasons.some((r) => r.startsWith("unsettled-create:tenant:")));
+  }
+});
+
+// ---- the read-back of a deleted account, answer by answer ------------------------------------
+
+/** Every lookup of account b (only the cleanup makes one) is answered `reply`; the delete itself works. */
+function readBackAs(reply) {
+  return fakeSession({
+    world: {
+      faults: [
+        (req) =>
+          req.path.endsWith("accounts:lookup") && JSON.parse(req.body).localId[0].endsWith("-b")
+            ? reply
+            : undefined,
+      ],
+    },
+  });
+}
+
+test("a read-back that is not a clean 'no such account' leaves the delete unverified", async () => {
+  const cases = [
+    ["a server error", { status: 500, json: {} }, "unknown", "server-error"],
+    ["a refusal", { status: 403, json: { error: { code: 403 } } }, "unknown", null],
+    ["a garbled 200", { status: 200, text: "not json" }, "unknown", null],
+    ["a lost answer", "throw", "unknown", "transport-error"],
+    [
+      "another account",
+      { status: 200, json: { users: [{ localId: "someone-else" }] } },
+      "unknown",
+      null,
+    ],
+    ["users that is not a list", { status: 200, json: { users: "x" } }, "unknown", null],
+  ];
+  for (const [name, reply, observed, reason] of cases) {
+    const { session, ledgerPath } = readBackAs(reply);
+    const recording = await session.runRecording();
+    assert.equal(recording.closureReady, false, name);
+    assert.ok(
+      recording.ownership.reasons.some((r) => r === "deleted-unverified:account:stb-1794000000-b"),
+      name,
+    );
+    const read = ledgerRows(ledgerPath).find(
+      (r) => r.phase === "read" && r.name === "account:stb-1794000000-b",
+    );
+    assert.equal(read.observed, observed, name);
+    if (reason) assert.equal(read.reason, reason, name);
+  }
+});
+
+test("a read-back that lists the account itself says present, a clean empty one says gone", async () => {
+  const present = readBackAs({ status: 200, json: { users: [{ localId: "stb-1794000000-b" }] } });
+  const a = await present.session.runRecording();
+  assert.ok(a.ownership.reasons.includes("deleted-but-present:account:stb-1794000000-b"));
+  const read = ledgerRows(present.ledgerPath).find(
+    (r) => r.phase === "read" && r.name === "account:stb-1794000000-b",
+  );
+  assert.equal(read.observed, "present");
+  assert.equal(read.status, 200);
+  for (const gone of [
+    { status: 200, json: {} },
+    { status: 200, json: { users: [] } },
+  ]) {
+    const { session, ledgerPath } = readBackAs(gone);
+    const recording = await session.runRecording();
+    assert.equal(recording.closureReady, true);
+    const row = ledgerRows(ledgerPath).find(
+      (r) => r.phase === "read" && r.name === "account:stb-1794000000-b",
+    );
+    assert.equal(row.observed, "absent");
+    assert.equal(row.status, 404);
+  }
+});
+
+// ---- account creation and sign-in, answer by answer -------------------------------------------
+
+test("a refused account create stops the recording: nothing owned, nothing looked up, nothing to delete", async () => {
+  const { session, world, journal } = fakeSession({
+    world: {
+      faults: [
+        (req) =>
+          req.path.endsWith("v1/projects/%P/accounts") && req.method === "POST"
+            ? { status: 400, json: { error: { code: 400, message: "DUPLICATE_LOCAL_ID" } } }
+            : undefined,
+      ],
+    },
+  });
+  const recording = await session.runRecording();
+  assert.equal(recording.failure, "account a was not created (HTTP 400)");
+  assert.equal(journal.filter((e) => e.id === "lookup-account").length, 0);
+  assert.equal(journal.filter((e) => e.id === "delete-account").length, 0);
+  assert.deepEqual(recording.ownership.owned, []);
+  assert.equal(world.accounts.size, 0);
+});
+
+test("a sign-in that does not hand back a refresh token stops the recording, whatever else it says", async () => {
+  const bad = [
+    [
+      "no token",
+      (res) => ({ status: 200, json: { ...res.json, refreshToken: undefined } }),
+      /answered 200/,
+    ],
+    [
+      "an empty token",
+      (res) => ({ status: 200, json: { ...res.json, refreshToken: "" } }),
+      /answered 200/,
+    ],
+    [
+      "a number",
+      (res) => ({ status: 200, json: { ...res.json, refreshToken: 7 } }),
+      /answered 200/,
+    ],
+    [
+      "a refusal that still carries one",
+      (res) => ({ status: 400, json: res.json }),
+      /answered 400/,
+    ],
+    ["a lost answer", () => "throw", /answered ETIMEDOUT/],
+  ];
+  for (const [name, change, pattern] of bad) {
+    const { session, world } = fakeSession({
+      world: {
+        lateFaults: [
+          (req, res) =>
+            req.path === "v1/accounts:signInWithPassword" && res.status === 200
+              ? change(res)
+              : undefined,
+        ],
+      },
+    });
+    const recording = await session.runRecording();
+    assert.match(recording.failure, pattern, name);
+    assert.match(recording.failure, /^sign-in of account a /, name);
+    assert.equal(Object.keys(recording.rows).length, 0, name);
+    assert.equal(world.accounts.size, 0, name);
+    assert.equal(recording.closureReady, true, name);
+  }
+});
+
+// ---- what a row keeps of an answer --------------------------------------------------------------
+
+test("a row keeps only what is safe whatever the answer looks like", async () => {
+  const answers = {
+    "json-camel": { status: 200, text: "<html>not json</html>" },
+    "form-camel": { status: 200, text: "null" },
+    "json-snake": { status: 200, text: "[1,2]" },
+    "form-snake": {
+      status: 200,
+      json: { id_token: 7, access_token: "short", refresh_token: "rotated-token" },
+    },
+  };
+  let n = 0;
+  const order = ROWS.map((r) => r.id);
+  const { session } = fakeSession({
+    world: {
+      lateFaults: [
+        (req) => {
+          if (req.path !== "v1/token") return undefined;
+          return answers[order[n++]];
+        },
+      ],
+    },
+  });
+  const { rows, secrets } = await session.runRecording();
+  // Not JSON and `null`: no token facts; a list has none to count. None of them crashes the row.
+  assert.deepEqual(rows["json-camel"].facts, {});
+  assert.equal(rows["json-camel"].nonJson, true);
+  assert.deepEqual(rows["form-camel"].facts, {});
+  assert.deepEqual(rows["json-snake"].facts, { tokens: {} });
+  assert.equal(rows["json-camel"].request.contentType, "json");
+  // Only the string tokens have a length; a refresh token the run never issued is `new`.
+  assert.deepEqual(rows["form-snake"].facts, {
+    tokens: { access_token: { length: 5 }, refresh_token: { length: 13 } },
+    refreshTokenReturned: "new",
+  });
+  assert.ok(secrets.includes("rotated-token") && secrets.includes("short"));
+  // An answer with no refresh token claims none.
+  assert.equal("refreshTokenReturned" in rows["json-camel-no-grant"].facts, false);
+});
+
+test("an answer that returns the token of another account says whose it is", async () => {
+  const { session } = fakeSession({ world: { precedence: "snake" } });
+  const { rows } = await session.runRecording();
+  assert.equal(rows["json-camel"].facts.refreshTokenReturned, "a");
+  assert.equal(rows["tenant-json-camel"].facts.refreshTokenReturned, "t");
+  assert.equal(rows["json-both-tokens-camel-first"].facts.refreshTokenReturned, "a");
+});
+
+// ---- masks and cleanup messages ------------------------------------------------------------------
+
+test("the tenant id is masked whether or not it contains the run id", async () => {
+  for (const tenantIdOf of [(name) => `${name}-abcde`, () => "ZGlmZmVyZW50"]) {
+    const { session, world } = fakeSession({ world: { tenantIdOf } });
+    const recording = await session.runRecording();
+    assert.equal(recording.closureReady, true);
+    const text = JSON.stringify(recording.rows);
+    assert.ok(text.includes('"tenant":"<tenant>"'));
+    assert.ok(!text.includes("abcde") && !text.includes("ZGlmZmVyZW50"));
+    assert.equal(world.tenants.size, 0);
+  }
+});
+
+test("a failed restore is reported as not restored, with the thrown text as it is", async () => {
+  let patches = 0;
+  let lag = false;
+  const { session, world } = fakeSession({
+    world: {
+      tenancy: false,
+      lateFaults: [
+        (req, res) => {
+          if (req.method === "PATCH" && ++patches === 2) lag = true;
+          // After the restore PATCH the switch keeps reading back as on.
+          if (lag && req.method === "GET" && req.path.startsWith("admin/v2"))
+            return { status: 200, json: { ...res.json, multiTenant: { allowTenants: true } } };
+          return undefined;
+        },
+      ],
+    },
+    session: {
+      pollLimit: 2,
+      sleep: async () => {
+        throw "the sleep broke";
+      },
+    },
+  });
+  const recording = await session.runRecording();
+  assert.equal(recording.tenancy.restored, false);
+  assert.equal(recording.closureReady, false);
+  assert.ok(
+    recording.cleanupErrors.includes("restore multi-tenancy: the sleep broke"),
+    JSON.stringify(recording.cleanupErrors),
+  );
+  assert.equal(world.tenancy, false);
+});
+
+// ---- cleanup that cannot finish, and a tenant read-back, answer by answer --------------------------
+
+test("when the harness budget ends inside cleanup, each step that could not run says so by name", async () => {
+  // Tenancy already on: 9 setup requests, then t, b, a (delete + lookup each), the tenant, the audits.
+  const run = async (maxHarnessRequests) => {
+    const { session } = fakeSession({ world: { tenancy: true }, session: { maxHarnessRequests } });
+    return session.runRecording();
+  };
+  const early = await run(11);
+  assert.deepEqual(
+    early.cleanupErrors.map((e) => e.split(":")[0]),
+    ["account b", "account a", "tenant", "tenant audit", "account audit"],
+  );
+  assert.ok(early.cleanupErrors.every((e) => e.endsWith("harness request ceiling 11 reached")));
+  const late = await run(15);
+  assert.deepEqual(
+    late.cleanupErrors.map((e) => e.split(":")[0]),
+    ["tenant", "tenant audit", "account audit"],
+  );
+  assert.equal(early.closureReady || late.closureReady, false);
+});
+
+test("a tenant read-back shows present only for the run's own display name", async () => {
+  const afterDelete = (reply) =>
+    fakeSession({
+      world: {
+        faults: [
+          (req) => (req.method === "GET" && /tenants\/[^/]+$/.test(req.path) ? reply : undefined),
+        ],
+      },
+    });
+  // The tenant reads as itself after its delete: present, and the delete is not verified.
+  const own = afterDelete({
+    status: 200,
+    json: { name: "projects/1/tenants/x", displayName: "stb-1794000000" },
+  });
+  const a = await own.session.runRecording();
+  assert.ok(a.ownership.reasons.includes("deleted-but-present:tenant:stb-1794000000"));
+  const row = ledgerRows(own.ledgerPath).find(
+    (r) => r.phase === "read" && r.name === "tenant:stb-1794000000",
+  );
+  assert.equal(row.observed, "present");
+  assert.equal(row.status, 200);
+  // Another display name proves nothing about this tenant: the delete stays unverified.
+  const other = afterDelete({
+    status: 200,
+    json: { name: "projects/1/tenants/x", displayName: "someone-else" },
+  });
+  const b = await other.session.runRecording();
+  assert.ok(b.ownership.reasons.includes("deleted-unverified:tenant:stb-1794000000"));
+  const read = ledgerRows(other.ledgerPath).find(
+    (r) => r.phase === "read" && r.name === "tenant:stb-1794000000",
+  );
+  assert.equal(read.observed, "unknown");
+});
+
+// ---- the account audit, the accounts a corpus needs, and the project name in messages ----------------
+
+test("an account count that is missing or not zero is an audit error", async () => {
+  const count = (reply) =>
+    fakeSession({
+      world: { faults: [(req) => (req.path.endsWith("accounts:query") ? reply : undefined)] },
+    });
+  for (const [reply, text] of [
+    [{ status: 200, json: {} }, "undefined project-level account(s) remain"],
+    [{ status: 200, json: { recordsCount: "2" } }, "2 project-level account(s) remain"],
+    [{ status: 200, json: { recordsCount: 1 } }, "1 project-level account(s) remain"],
+  ]) {
+    const recording = await count(reply).session.runRecording();
+    assert.ok(
+      recording.cleanupErrors.includes(`account audit: ${text}`),
+      JSON.stringify(recording.cleanupErrors),
+    );
+    assert.equal(recording.closureReady, false);
+  }
+  const zero = await count({ status: 200, json: { recordsCount: "0" } }).session.runRecording();
+  assert.deepEqual(zero.cleanupErrors, []);
+});
+
+test("a session creates only the accounts its rows name", async () => {
+  const only = ROWS.filter((r) => r.id === "json-camel");
+  const { session, journal, world } = fakeSession({ session: { rows: only } });
+  const recording = await session.runRecording();
+  assert.equal(journal.filter((e) => e.id === "create-account").length, 1);
+  assert.equal(journal.filter((e) => e.id === "sign-in").length, 1);
+  assert.equal(Object.keys(recording.rows).length, 1);
+  assert.equal(recording.closureReady, true);
+  assert.equal(world.accounts.size, 0);
+});
+
+test("the project id never appears in a message the record keeps", async () => {
+  const { session } = fakeSession({
+    world: {
+      tenancy: false,
+      faults: [(req) => (req.method === "PATCH" ? { status: 200, json: {} } : undefined)],
+    },
+    session: {
+      pollLimit: 2,
+      sleep: async () => {
+        throw new Error(`broke while talking to ${SANDBOX_PROJECT}`);
+      },
+    },
+  });
+  const recording = await session.runRecording();
+  assert.equal(recording.failure, "broke while talking to <project>");
+  assert.ok(!JSON.stringify(recording).includes(SANDBOX_PROJECT));
 });

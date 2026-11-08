@@ -24,6 +24,7 @@ const error = (status, message, extra = {}) => ({
  * @param {boolean} [options.mixed] whether spellings of different fields mix
  * @param {boolean} [options.tenancy] the starting value of multiTenant.allowTenants
  * @param {string} [options.project] the project id
+ * @param {(displayName: string) => string} [options.tenantIdOf] how the server names a tenant
  * @param {string} [options.number] the project number in answers
  * @param {Array<(req: object, world: object) => (object|string|undefined)>} [options.faults]
  * answered instead of the request, which is not applied ("throw" is a transport failure)
@@ -42,6 +43,7 @@ export function createWorld(options = {}) {
     faults = [],
     lateFaults = [],
     apiKey = "fake-api-key",
+    tenantIdOf = (displayName) => `${displayName}-${randomBytes(3).toString("hex")}`,
   } = options;
   const world = {
     tenancy,
@@ -212,7 +214,7 @@ export function createWorld(options = {}) {
           400,
           "INVALID_DISPLAY_NAME : display_name should start with a letter and only consist of letters, digits and hyphens with 4-20 characters.",
         );
-      const id = `${payload.displayName}-${randomBytes(3).toString("hex")}`;
+      const id = tenantIdOf(payload.displayName);
       const tenant = {
         name: `projects/${number}/tenants/${id}`,
         displayName: payload.displayName,

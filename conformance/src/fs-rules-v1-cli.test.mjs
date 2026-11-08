@@ -210,7 +210,7 @@ test("unicode-report prints one line per row of the Unicode family, none recorde
   const result = run(["unicode-report"]);
   assert.equal(result.status, 0, result.stderr);
   const lines = result.stdout.trimEnd().split("\n");
-  assert.equal(lines.length, 49);
+  assert.equal(lines.length, 59);
   assert.match(
     lines[0],
     /^unknown {8}unknown {8}units#publishes {20}missing \(official: compiled, fixes: compiled\) \[not recorded\]$/,

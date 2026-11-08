@@ -919,7 +919,9 @@ export const SHAPES_TWO_PROGRAMS = [
 // by a variation selector from the supplementary plane, a joined (ZWJ) family and a skin-tone
 // emoji; whether a precomposed letter equals its decomposed spelling, in a literal and in a stored
 // field; the full case mapping where the length changes (sharp s, dotted capital I, the ligature
-// fi) and the locale-sensitive ones (capital I, final sigma); and whether `.` of matches() stands
+// fi) and the locale-sensitive ones (capital I, final sigma), each beside a twin that is true only
+// under the simple, one-to-one mapping (a Rules error is a 403 too, so a refusal of the full-mapping
+// row alone could not tell a simple mapping from an error); and whether `.` of matches() stands
 // for one UTF-16 unit, one code point or one grapheme.
 //
 // Every case is a Rules expression in an `allow get` rule of its own collection, read with a REST
@@ -949,6 +951,10 @@ const U_DOTTED = "\u0130";
 const U_FI = "\ufb01";
 const U_SIGMA_UP = "\u0391\u03a3"; // Greek capital alpha, capital sigma
 const U_SIGMA_LOW = "\u03b1\u03c2"; // alpha, final sigma
+const U_ALPHA_UP = "\u0391"; // Greek capital alpha
+const U_ALPHA_LOW = "\u03b1"; // Greek small alpha
+const U_E_UP = "\u00c9"; // E with acute, capital
+const U_SIGMA_SIMPLE = "\u03b1\u03c3"; // alpha, ordinary small sigma
 
 const q = (text) => `"${text}"`;
 const UNICODE_UNITS_CASES = [
@@ -969,11 +975,20 @@ const UNICODE_CASE_CASES = [
   ["ctl-true", `${q("abc")}.upper() == ${q("ABC")}`],
   ["ctl-false", `${q("abc")}.upper() == ${q("abc")}`],
   ["sharp-eq", `${q(U_SHARP)}.upper() == ${q("SS")}`],
+  ["sharp-simple", `${q(U_SHARP)}.upper() == ${q(U_SHARP)}`],
   ["sharp-size", `${q(U_SHARP)}.upper().size() == 2`],
   ["dotted-size", `${q(U_DOTTED)}.lower().size() == 2`],
+  ["dotted-simple", `${q(U_DOTTED)}.lower().size() == 1`],
+  ["dotted-same", `${q(U_DOTTED)}.lower() == ${q(U_DOTTED)}`],
   ["fi-size", `${q(U_FI)}.upper().size() == 2`],
+  ["fi-simple", `${q(U_FI)}.upper().size() == 1`],
   ["lower-i", `${q("I")}.lower() == ${q("i")}`],
   ["sigma", `${q(U_SIGMA_UP)}.lower() == ${q(U_SIGMA_LOW)}`],
+  ["sigma-simple", `${q(U_SIGMA_UP)}.lower() == ${q(U_SIGMA_SIMPLE)}`],
+  // Whether a non-ASCII letter is mapped at all: unchanged, or a one-letter Greek / Latin mapping.
+  ["sigma-same", `${q(U_SIGMA_UP)}.lower() == ${q(U_SIGMA_UP)}`],
+  ["greek-lower", `${q(U_ALPHA_UP)}.lower() == ${q(U_ALPHA_LOW)}`],
+  ["acute-upper", `${q(U_E_NFC)}.upper() == ${q(U_E_UP)}`],
 ];
 const UNICODE_REGEX_CASES = [
   ["ctl-true", `${q("abc")}.matches(${q("a.c")})`],
@@ -1001,7 +1016,9 @@ const UNICODE_STORED_CASES = [
   ["zwj-size", `${U_DATA}.zwj.size() == 8`],
   ["skin-size", `${U_DATA}.skin.size() == 4`],
   ["sharp-upper-size", `${U_DATA}.sharp.upper().size() == 2`],
+  ["sharp-upper-simple", `${U_DATA}.sharp.upper().size() == 1`],
   ["dotted-lower-size", `${U_DATA}.dotted.lower().size() == 2`],
+  ["dotted-lower-simple", `${U_DATA}.dotted.lower().size() == 1`],
 ];
 
 const unicodeRules = (prefix, cases) =>

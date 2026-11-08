@@ -90,7 +90,7 @@ const hex = (text) => Buffer.from(text, "utf8").toString("hex");
 
 // ---- the corpus -----------------------------------------------------------------------------
 
-test("the corpus is four programs of 45 get and list rows, valid and under the cap", () => {
+test("the corpus is four programs of 55 get and list rows, valid and under the cap", () => {
   assert.deepEqual(
     UNICODE_PROGRAMS.map((p) => p.id),
     [
@@ -106,12 +106,12 @@ test("the corpus is four programs of 45 get and list rows, valid and under the c
     "unicode-regex",
     "unicode-stored",
   ]);
-  assert.equal(validateCorpus(UNICODE_PROGRAMS), 45);
-  assert.equal(countRequests(UNICODE_PROGRAMS), 45);
-  assert.ok(45 <= REQUEST_CAP);
+  assert.equal(validateCorpus(UNICODE_PROGRAMS), 55);
+  assert.equal(countRequests(UNICODE_PROGRAMS), 55);
+  assert.ok(55 <= REQUEST_CAP);
   assert.deepEqual(
     UNICODE_PROGRAMS.map((p) => rowsOf(p).length),
-    [12, 8, 8, 17],
+    [12, 16, 8, 19],
   );
   for (const p of UNICODE_PROGRAMS)
     assert.deepEqual(p.steps[0], { id: "publishes", publish: true });
@@ -136,11 +136,19 @@ test("the row ids are exactly these, and every program has a true and a false co
     "ctl-true",
     "ctl-false",
     "sharp-eq",
+    "sharp-simple",
     "sharp-size",
     "dotted-size",
+    "dotted-simple",
+    "dotted-same",
     "fi-size",
+    "fi-simple",
     "lower-i",
     "sigma",
+    "sigma-simple",
+    "sigma-same",
+    "greek-lower",
+    "acute-upper",
   ]);
   assert.deepEqual(ids("regex"), [
     "ctl-true",
@@ -165,7 +173,9 @@ test("the row ids are exactly these, and every program has a true and a false co
     "zwj-size",
     "skin-size",
     "sharp-upper-size",
+    "sharp-upper-simple",
     "dotted-lower-size",
+    "dotted-lower-simple",
     "q-nfd",
     "q-nfc",
     "lq-nfd",
@@ -202,11 +212,19 @@ test("the literal rules are exactly these expressions, each in its own collectio
       ["ctl-true", `"abc".upper() == "ABC"`],
       ["ctl-false", `"abc".upper() == "abc"`],
       ["sharp-eq", `"\u{df}".upper() == "SS"`],
+      ["sharp-simple", `"\u{df}".upper() == "\u{df}"`],
       ["sharp-size", `"\u{df}".upper().size() == 2`],
       ["dotted-size", `"\u{130}".lower().size() == 2`],
+      ["dotted-simple", `"\u{130}".lower().size() == 1`],
+      ["dotted-same", `"\u{130}".lower() == "\u{130}"`],
       ["fi-size", `"\u{fb01}".upper().size() == 2`],
+      ["fi-simple", `"\u{fb01}".upper().size() == 1`],
       ["lower-i", `"I".lower() == "i"`],
       ["sigma", `"\u{391}\u{3a3}".lower() == "\u{3b1}\u{3c2}"`],
+      ["sigma-simple", `"\u{391}\u{3a3}".lower() == "\u{3b1}\u{3c3}"`],
+      ["sigma-same", `"\u{391}\u{3a3}".lower() == "\u{391}\u{3a3}"`],
+      ["greek-lower", `"\u{391}".lower() == "\u{3b1}"`],
+      ["acute-upper", `"\u{e9}".upper() == "\u{c9}"`],
     ],
     regex: [
       ["ctl-true", `"abc".matches("a.c")`],
@@ -252,7 +270,9 @@ test("the stored rules read the stored document with get(), and the list rules r
     ["zwj-size", `${DATA}.zwj.size() == 8`],
     ["skin-size", `${DATA}.skin.size() == 4`],
     ["sharp-upper-size", `${DATA}.sharp.upper().size() == 2`],
+    ["sharp-upper-simple", `${DATA}.sharp.upper().size() == 1`],
     ["dotted-lower-size", `${DATA}.dotted.lower().size() == 2`],
+    ["dotted-lower-simple", `${DATA}.dotted.lower().size() == 1`],
   ];
   for (const [id, condition] of cases) {
     assert.deepEqual(rule(source, `fsr9-us-${id}`), { kind: "get", condition }, id);
@@ -406,7 +426,7 @@ test("a recording leaves the sandbox as it found it, with the request counts the
   assert.deepEqual(out.cleanupErrors, []);
   assert.deepEqual(out.failures, []);
   assert.deepEqual(out.unknowns, []);
-  assert.equal(out.requests, 45);
+  assert.equal(out.requests, 55);
   assert.equal(out.harnessRequests, 676);
   assert.equal(out.publications.length, 4);
   assert.equal(world.releases.size, 0);
@@ -569,7 +589,7 @@ test("the fixture keeps the other corpora and adds the four programs", async () 
   assert.deepEqual(fixture.programs["fs-rules-v1/shapes/queries"], { keep: true });
   assert.equal(Object.keys(fixture.programs).length, 5);
   const rows = unicodeReport(fixture);
-  assert.equal(rows.length, 49);
+  assert.equal(rows.length, 59);
   assert.ok(rows.every((r) => ["allowed", "denied", "compiled"].includes(r.answer)));
 });
 
@@ -604,7 +624,7 @@ const ALL_ROWS = UNICODE_PROGRAMS.flatMap((p) =>
 );
 
 test("the official and fireemu answers cover every row, and are answers", () => {
-  assert.equal(ALL_ROWS.length, 49);
+  assert.equal(ALL_ROWS.length, 59);
   assert.deepEqual(Object.keys(OFFICIAL).toSorted(), ALL_ROWS.toSorted());
   assert.deepEqual(Object.keys(FIXES).toSorted(), ALL_ROWS.toSorted());
   for (const table of [OFFICIAL, FIXES])
@@ -622,7 +642,7 @@ test("the controls behave as named in both measured tables", () => {
   }
 });
 
-test("the measured tables: the official emulator maps case by code point and fireemu with the full mapping, and they agree on everything else", () => {
+test("the measured tables: the official emulator maps only ASCII letters, fireemu the whole Unicode mapping, and they agree on everything else", () => {
   const refusedByBoth = [
     "units#ctl-false",
     "units#hfish-1",
@@ -630,6 +650,7 @@ test("the measured tables: the official emulator maps case by code point and fir
     "units#e-eq",
     "units#ga-eq",
     "case#ctl-false",
+    "case#sigma-simple",
     "regex#ctl-false",
     "regex#fire-dotdot",
     "regex#fire-two",
@@ -640,14 +661,28 @@ test("the measured tables: the official emulator maps case by code point and fir
     "stored#nfd-nfc-field-eq",
     "stored#lq-nfc",
   ];
-  const caseMapping = [
+  // True only when a non-ASCII letter is mapped (full or one-to-one): fireemu allows, the official
+  // emulator refuses.
+  const mappedOnly = [
     "case#sharp-eq",
     "case#sharp-size",
     "case#dotted-size",
     "case#fi-size",
     "case#sigma",
+    "case#greek-lower",
+    "case#acute-upper",
     "stored#sharp-upper-size",
     "stored#dotted-lower-size",
+  ];
+  // True only when the letter is left alone, or mapped one to one without a length change.
+  const unmappedOnly = [
+    "case#sharp-simple",
+    "case#dotted-simple",
+    "case#dotted-same",
+    "case#fi-simple",
+    "case#sigma-same",
+    "stored#sharp-upper-simple",
+    "stored#dotted-lower-simple",
   ];
   const expected = (denied) =>
     Object.fromEntries(
@@ -656,8 +691,8 @@ test("the measured tables: the official emulator maps case by code point and fir
         row.endsWith("#publishes") ? "compiled" : denied.includes(row) ? "denied" : "allowed",
       ]),
     );
-  assert.deepEqual(OFFICIAL, expected([...refusedByBoth, ...caseMapping]));
-  assert.deepEqual(FIXES, expected(refusedByBoth));
+  assert.deepEqual(OFFICIAL, expected([...refusedByBoth, ...mappedOnly]));
+  assert.deepEqual(FIXES, expected([...refusedByBoth, ...unmappedOnly]));
 });
 
 test("the report compares each answer with the official emulator and with fireemu", () => {

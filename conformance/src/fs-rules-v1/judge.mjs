@@ -204,9 +204,14 @@ export function fixtureText({ programs, recordings, meta, existing }) {
     const one = first.results[program.id];
     const two = second.results[program.id];
     if (!one || !two) continue;
-    const differing = Object.fromEntries(
-      Object.entries(two.steps).filter(([id, rec]) => !sameRecording(rec, one.steps[id])),
-    );
+    // A step that only one recording holds is a difference, not an agreement: the other
+    // recording is marked `{ absent: true }`, which no answer equals.
+    const differing = Object.fromEntries([
+      ...Object.entries(two.steps).filter(([id, rec]) => !sameRecording(rec, one.steps[id])),
+      ...Object.keys(one.steps)
+        .filter((id) => !Object.hasOwn(two.steps, id))
+        .map((id) => [id, { absent: true }]),
+    ]);
     fixture.programs[program.id] = {
       corpusDigest: programDigest(program),
       harnessDigest: meta.harness,

@@ -432,6 +432,33 @@ test("the fixture keeps the other corpora and adds the two programs", async () =
   assert.ok(rows.every((r) => ["allowed", "compiled"].includes(r.answer)));
 });
 
+test("a step that one of the two recordings lacks is unknown, never the other recording's answer", async () => {
+  const { out } = await record();
+  const id = "fs-rules-v1/shapes-two/queries";
+  const lacking = structuredClone(out);
+  delete lacking.results[id].steps["get-stored"];
+  const build = (first, second) =>
+    JSON.parse(
+      fixtureText({
+        programs: SHAPES_TWO_PROGRAMS,
+        recordings: [first, second],
+        meta: { harness: "h", startedAt: "t", sha: "s" },
+      }),
+    );
+  for (const [first, second, name, answer] of [
+    [out, lacking, "second lacks it", "unknown"],
+    [lacking, out, "first lacks it", "missing"],
+  ]) {
+    const rows = Object.fromEntries(shapesTwoReport(build(first, second)).map((r) => [r.row, r]));
+    assert.equal(rows["queries#get-stored"].answer, answer, name);
+    assert.equal(rows["queries#get-stored"].verdict, "unknown", name);
+    // Every other row, recorded the same twice, is still an answer.
+    assert.equal(rows["queries#get-absent"].answer, "allowed", name);
+  }
+  // Recorded the same twice, a step has no `second` entry at all.
+  assert.equal(build(out, out).programs[id].second, undefined);
+});
+
 // ---- the report ------------------------------------------------------------------------------
 
 test("the official and fireemu answers cover every row, and are answers", () => {

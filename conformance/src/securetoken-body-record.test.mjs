@@ -677,3 +677,36 @@ test("a closure-ready recording still lets the second one run", async () => {
   assert.deepEqual(numbers, [1, 2]);
   assert.equal(result.outcome, "recorded");
 });
+
+test("a failed recording that left a name open is needs-recovery, and meta.json says what the ledger says", async () => {
+  const cases = [
+    [
+      "a failure with an open name and nothing else",
+      stub({ failure: "it broke", fatal: true, closureReady: false }),
+      "needs-recovery",
+    ],
+    [
+      "a failure with a cleanup error",
+      stub({ failure: "it broke", closureReady: false, cleanupErrors: ["x"] }),
+      "needs-recovery",
+    ],
+    [
+      "a failure after a clean close",
+      stub({ failure: "it broke", fatal: true, closureReady: true }),
+      "aborted-fatal",
+    ],
+    [
+      "a clean close with a settled unknown answer",
+      stub({ unknowns: [{ call: "create x", answer: "server-error" }], closureReady: true }),
+      "needs-recovery",
+    ],
+  ];
+  for (const [name, recording, outcome] of cases) {
+    const d = deps();
+    d.recordOnce = async () => recording;
+    const result = await recordProduction(ENV, d);
+    assert.equal(result.outcome, outcome, name);
+    assert.equal(d.ledger.at(-1).outcome, outcome, name);
+    assert.equal(JSON.parse(d.writes.get("meta.json")).outcome, outcome, name);
+  }
+});

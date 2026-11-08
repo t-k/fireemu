@@ -114,7 +114,6 @@ export async function recordProduction(env, deps) {
       // A recording that left a name open or tenancy on is the last: the next one would take what is left
       // as its starting state, and the preflight has not re-read the sandbox.
       if (recording.closureReady !== true) {
-        outcome = "needs-recovery";
         error = `recording ${n} is not closure-ready; recording ${n + 1} is not started`;
         break;
       }
@@ -124,20 +123,21 @@ export async function recordProduction(env, deps) {
     error = String(caught.message ?? caught);
     if (caught.partial) recordings.push(publicRecording(caught.partial));
   }
-  await deps.writeRunFile(
-    runDir,
-    "meta.json",
-    JSON.stringify({ ...meta, outcome, error }, null, 2),
-  );
   const requests = recordings.reduce((n, r) => n + r.requests + r.harnessRequests, 0);
   const cleanupErrors = recordings.flatMap((r) => r.cleanupErrors ?? []);
   const unknowns = recordings.flatMap((r) => r.unknowns ?? []);
-  if (cleanupErrors.length || unknowns.length) {
+  // Anything left open, or an answer that was ever unknown, is for recovery first: it outranks an abort.
+  if (cleanupErrors.length || unknowns.length || recordings.some((r) => r.closureReady !== true)) {
     outcome = "needs-recovery";
     deps.warn(
       `NOT CLOSURE-READY on ${SANDBOX_PROJECT}:\n  ${[...cleanupErrors, ...unknowns.map((u) => `unknown answer to ${u.call}: ${u.answer}`)].join("\n  ")}`,
     );
   }
+  await deps.writeRunFile(
+    runDir,
+    "meta.json",
+    JSON.stringify({ ...meta, outcome, error }, null, 2),
+  );
   try {
     if (!error && outcome === "recorded") {
       const text = fixtureText({ recordings, meta });

@@ -393,6 +393,21 @@ describe("storage rules s9 judge details", () => {
     assert.equal(mask("aaa", [["a", "bb"]]), "bbbbbb");
   });
 
+  it("shows a row that was not evaluated with a dash for its status", () => {
+    const skipped = {
+      recording: 1,
+      program: "s9",
+      id: "z",
+      op: "meta",
+      plan: "allow",
+      class: "not-evaluated",
+      why: "x",
+      answer: { status: null },
+    };
+    const table = renderTable([{ label: "run", rows: [skipped], loads: [] }]).split("\n");
+    assert.equal(table[1], "z\tallow\tnot-evaluated/-");
+  });
+
   it("renders missing cells and failed loads", () => {
     const row = (id, status, recording = 1) =>
       rowRecord({

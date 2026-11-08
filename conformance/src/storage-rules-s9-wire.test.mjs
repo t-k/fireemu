@@ -192,4 +192,16 @@ describe("storage rules s9 wire", () => {
     assert.deepEqual(answer.headers, {});
     assert.equal(answer.body.length, 0);
   });
+
+  it("reads a status that is not an integer as a transport failure", () => {
+    for (const status of [Number.NaN, undefined, 1.5, "503", null]) {
+      const error = new UnknownAnswer("x", status);
+      assert.ok(Number.isNaN(error.status), `${status}`);
+      assert.equal(error.message, "unknown answer: x (transport)");
+      assert.equal(error.label, "x");
+    }
+    assert.equal(new UnknownAnswer("x", 503).status, 503);
+    assert.equal(new UnknownAnswer("x", 0).status, 0);
+    assert.equal(new UnknownAnswer("x", 0).message, "unknown answer: x (0)");
+  });
 });

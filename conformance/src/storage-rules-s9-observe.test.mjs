@@ -626,7 +626,53 @@ describe("storage rules s9 observation details", () => {
     assert.equal(result.report.reportingErrors[0], "journal: journal 0");
   });
 
-  it("keeps each problem once and at most sixty", async () => {
+  it("sends no more than the total cap, cleanup included", async () => {
+    const { report, world } = await run({ caps: { main: 40, total: 60 } });
+    assert.match(report.stopped, /request budget exhausted/);
+    assert.ok(world.calls.length <= 60, `${world.calls.length}`);
+    assert.equal(report.requests, world.calls.length);
+    assert.equal(report.closureReady, false);
+  });
+
+  it("does not count an object as unconfirmed when its create was refused before it was sent", async () => {
+    // Preflight takes 6 requests; four creates fit in a main cap of 10, the fifth is refused by the budget.
+    const { world, report } = await run({ caps: { main: 10, total: 200 } });
+    assert.match(report.stopped, /request budget exhausted/);
+    const names = Object.keys(OBJECTS).map((id) => objectName(id, P1));
+    const fifth = names[4];
+    assert.ok(
+      !world.calls.some((c) => c.url.includes(encodeURIComponent(fifth))),
+      "nothing was sent for the refused create, and no cleanup read follows",
+    );
+    assert.ok(
+      world.calls.some((c) => c.url.includes(encodeURIComponent(names[3]))),
+      "the fourth object was created, so it is read in cleanup",
+    );
+  });
+
+  it("stops on a 200 answer that is not JSON where the recorded one is", async () => {
+    const asText = (match) => ({
+      ...on("GET", match),
+      answer: { status: 200, headers: {}, body: Buffer.from("<html>") },
+    });
+    const bucketFault = asText((r) => r.url.pathname.endsWith(`/b/${bucket}`));
+    const first = await run({ faults: [bucketFault] });
+    assert.match(first.report.stopped, /the bucket is not the expected one/);
+    assert.equal(
+      first.world.calls.filter((c) => c.method !== "GET").length,
+      0,
+      "nothing was written",
+    );
+    const rulesetFault = {
+      ...on("POST", (r) => r.url.pathname.endsWith("/rulesets")),
+      answer: { status: 200, headers: {}, body: Buffer.from("not json") },
+    };
+    const second = await run({ faults: [rulesetFault] });
+    assert.match(second.report.stopped, /the created ruleset has an unrecorded name/);
+    assert.deepEqual(second.world.release, { rulesetName: baselineName });
+  });
+
+  it("keeps each problem once", async () => {
     const fake = createWorld({ project, bucket, baseline: baselineName, lag: 0 });
     // Every object create is refused with its own status text; the same problem text appears for both recordings.
     const inner = fake.net;

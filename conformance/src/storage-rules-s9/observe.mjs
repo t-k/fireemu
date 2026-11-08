@@ -16,6 +16,7 @@ import {
   compareRecordings,
   compileRecord,
   parseCreated,
+  parseJson,
   parseObjectList,
   parseRelease,
   parseRulesetList,
@@ -114,10 +115,9 @@ export async function observe({
   let released = false; // this run changed the bucket release
   let lastMarker = null;
   let stopped = null;
-  let cleanupPhase = false;
 
   const problem = (text) => {
-    if (problems.length < 60 && !problems.includes(text)) problems.push(text);
+    if (!problems.includes(text)) problems.push(text);
   };
   const json = (value) => Buffer.from(JSON.stringify(value));
   const jsonHeaders = { "content-type": "application/json" };
@@ -249,7 +249,7 @@ export async function observe({
       { admin: true },
     );
     if (res.status === 200) {
-      const body = JSON.parse(res.body.toString("utf8"));
+      const body = parseJson(res.body);
       if (
         !new RegExp(`^projects/${target.project}/rulesets/[A-Za-z0-9_-]{1,128}$`).test(
           body?.name ?? "",
@@ -331,8 +331,7 @@ export async function observe({
       },
       { admin: true },
     );
-    const bucketBody =
-      bucketRes.status === 200 ? JSON.parse(bucketRes.body.toString("utf8")) : null;
+    const bucketBody = bucketRes.status === 200 ? parseJson(bucketRes.body) : null;
     if (bucketBody?.name !== bucket) throw new StopRun("the bucket is not the expected one");
     const release = await readRelease("preflight/release");
     if (release === null) throw new StopRun("the bucket release read is not a recorded shape");
@@ -723,7 +722,6 @@ export async function observe({
       await guardedStep(`rec${recording}/restore`, () => restore(`rec${recording}/restore`, P));
     }
   } finally {
-    cleanupPhase = true;
     budget.cleanup = true;
     // Whatever stopped the run, the release goes back, own rulesets and objects go, and the rest is read.
     if (released) await guardedStep("cleanup/restore", () => restore("cleanup/restore", currentP));
@@ -758,7 +756,6 @@ export async function observe({
     agreement,
     disagreeing: agreement.filter((r) => !r.agree).map((r) => r.id),
     entryRulesets: entryRulesets === null ? null : entryRulesets.length,
-    cleanupPhase,
   };
   out.save("results.json", { rows: rowsAll, loads, publications, agreement });
   return { report };

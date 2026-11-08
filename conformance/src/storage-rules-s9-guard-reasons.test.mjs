@@ -680,4 +680,66 @@ describe("storage rules s9 guard reasons", () => {
       GuardError,
     );
   });
+
+  it("allows the characters of ordinary names: spaces, punctuation and dots inside a segment", () => {
+    for (const ok of [
+      `${root}a b`,
+      `${root}a!b`,
+      `${root}file.png`,
+      `${root}.hidden`,
+      `${root}a..b`,
+      `/${root}x y`,
+      `${root}\u00e9`,
+      `${root}\u{1F525}`,
+    ]) {
+      assert.equal(
+        classifyRequest(production, { method: "GET", url: v0(`/o/${enc(ok)}`) }, state()),
+        "v0-meta",
+        ok,
+      );
+    }
+    for (const ok of [`${root}a b/`, `${root}file.png`, `/${root}a!`, root]) {
+      assert.equal(
+        classifyRequest(production, { method: "GET", url: v0(`/o?prefix=${enc(ok)}`) }, state()),
+        "v0-list",
+        ok,
+      );
+    }
+    refuses(/dot segment in prefix/, {
+      method: "GET",
+      url: v0(`/o?prefix=${enc(`${root}a/./b`)}`),
+    });
+    refuses(/dot segment in prefix/, { method: "GET", url: v0(`/o?prefix=${enc(`${root}..`)}`) });
+    refuses(/control character in prefix/, {
+      method: "GET",
+      url: v0(`/o?prefix=${enc(`${root}\u001f`)}`),
+    });
+  });
+
+  it("refuses an upload path that only partly matches", () => {
+    const good = `?uploadType=media&name=${enc(name)}&ifGenerationMatch=0`;
+    for (const path of [
+      `/x/storage/v1/b/${bucket}/o`,
+      `/upload/x/v1/b/${bucket}/o`,
+      `/upload/storage/v2/b/${bucket}/o`,
+      `/up/storage/v1/b/${bucket}/o`,
+    ]) {
+      refuses(/path/, {
+        method: "POST",
+        url: `https://storage.googleapis.com${path}${good}`,
+        headers: owner,
+      });
+    }
+    for (const path of [
+      `/storage/v2/b/${bucket}`,
+      `/x/v1/b/${bucket}`,
+      `/y/storage/v1/b/${bucket}`,
+    ]) {
+      refuses(/path/, {
+        method: "GET",
+        url: `https://storage.googleapis.com${path}`,
+        headers: owner,
+      });
+    }
+  });
 });

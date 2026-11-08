@@ -6,7 +6,8 @@ import { isUnknownStatus } from "./guard.mjs";
 
 const text = (body) => Buffer.from(body ?? []).toString("utf8");
 
-function parseJson(body) {
+/** The body as a JSON object, or null for anything else (an array, a scalar, text, nothing). */
+export function parseJson(body) {
   try {
     const value = JSON.parse(text(body));
     return value !== null && typeof value === "object" && !Array.isArray(value) ? value : null;
@@ -197,9 +198,13 @@ export function parseRulesetList({ status, body }) {
   for (const entry of rulesets) {
     const services = entry?.metadata?.services;
     if (typeof entry?.name !== "string" || !Array.isArray(services)) return null;
-    out.push({ name: entry.name, services: [...services].sort() });
+    out.push({ name: entry.name, services: services.toSorted() });
   }
-  return out.sort((x, y) => (x.name < y.name ? -1 : x.name > y.name ? 1 : 0));
+  // Any fixed order compares two lists; sorting the JSON text of each entry needs no comparator.
+  return out
+    .map((entry) => JSON.stringify(entry))
+    .toSorted()
+    .map((line) => JSON.parse(line));
 }
 
 export const sameRulesetList = (a, b) => JSON.stringify(a) === JSON.stringify(b);

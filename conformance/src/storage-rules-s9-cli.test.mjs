@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
 
+import { requireCleanCheckout } from "./storage-rules-s9/run.mjs";
 import { createLocalDeps, createProductionDeps, fetchNet } from "./storage-rules-s9/deps.mjs";
 import { LOCAL_BUCKET, ROWS } from "./storage-rules-s9/plan.mjs";
 import { createWorld } from "./storage-rules-s9/world.fake.mjs";
@@ -84,6 +85,18 @@ describe("storage rules s9 command line", () => {
         join(scratch, "e"),
       ]).stderr,
       /baseline is neither/,
+    );
+  });
+
+  it("pins a production run to a commit of a clean worktree", () => {
+    assert.doesNotThrow(() => requireCleanCheckout({ gitSha: "a".repeat(40), dirty: false }));
+    assert.throws(
+      () => requireCleanCheckout({ gitSha: "a".repeat(40), dirty: true }),
+      /uncommitted or untracked/,
+    );
+    assert.throws(
+      () => requireCleanCheckout({ gitSha: null, dirty: null }),
+      /git state is unavailable/,
     );
   });
 

@@ -74,17 +74,36 @@ function newOutDir(path) {
   };
 }
 
+function gitState() {
+  try {
+    return {
+      gitSha: execFileSync("git", ["-C", HERE, "rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
+      // The whole checkout: the lock library and the tests are inputs too.
+      dirty:
+        execFileSync("git", ["-C", HERE, "status", "--porcelain"], { encoding: "utf8" }).trim() !==
+        "",
+    };
+  } catch {
+    return { gitSha: null, dirty: null };
+  }
+}
+
+/** A production run is pinned to a commit of a clean worktree. */
+export function requireCleanCheckout(pin) {
+  if (pin.gitSha === null) throw new Error("the recorder's git state is unavailable");
+  if (pin.dirty)
+    throw new Error(
+      "the recorder's checkout (the whole worktree) has uncommitted or untracked files",
+    );
+}
+
 function pins() {
   const digest = (file) =>
     createHash("sha256")
       .update(readFileSync(join(HERE, file)))
       .digest("hex");
   return {
-    gitSha: execFileSync("git", ["-C", HERE, "rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
-    // The whole checkout: the lock library and the tests are inputs too.
-    dirty:
-      execFileSync("git", ["-C", HERE, "status", "--porcelain"], { encoding: "utf8" }).trim() !==
-      "",
+    ...gitState(),
     modules: Object.fromEntries(MODULES.map((file) => [file, digest(file)])),
     node: process.version,
   };
@@ -127,10 +146,7 @@ async function recordProduction() {
   const baseline = validateBaseline(required("baseline"), PROJECT);
   const runId = newRunId();
   const pin = pins();
-  if (pin.dirty)
-    throw new Error(
-      "the recorder's checkout (the whole worktree) has uncommitted or untracked files",
-    );
+  requireCleanCheckout(pin);
   const out = newOutDir(required("out"));
   const startedAt = new Date().toISOString();
   installEgressGuard(PRODUCTION_HOSTS);

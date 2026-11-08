@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { FIXTURE_HANDLERS, NAMED_CONTEXT_MEMBERS, NAMED_EVENT_MEMBERS } from "./kinds-frames.mjs";
 import { judgeRun } from "./kinds-judge.mjs";
-import { buildSteps, observe } from "./kinds-sequence.mjs";
+import { buildSteps, matchFrame, observe } from "./kinds-sequence.mjs";
 import { perfectFrames } from "./kinds-world.fake.mjs";
 
 const steps = buildSteps("N");
@@ -211,4 +211,93 @@ test("replays the CV14 production frames: every member is a recorded shape for i
     judgeRun({ report: { steps: [], totals: {} }, frames: wrong, writes: {}, ignored: {} }).length >
       0,
   );
+});
+
+test("steps never reached have no write and raise nothing", () => {
+  // the run stopped after k2: the later steps have no answer and no frames
+  const early = new Set(["k1", "k2"]);
+  const writes = Object.fromEntries([...early].map((id) => [id, { outcome: "ok", status: 200 }]));
+  const frames = frameSet().filter((f) => early.has(matchFrame(f, steps).step));
+  assert.ok(frames.length > 0 && frames.length < 20);
+  assert.deepEqual(
+    judgeRun({
+      report: observe({ writes, frames, steps }),
+      frames,
+      writes,
+      ignored: {},
+      deployed: all,
+    }),
+    [],
+  );
+});
+
+test("an unknown write answer is not a refusal and expects nothing", () => {
+  const writes = { ...okWrites, k1: { outcome: "unknown" } };
+  const frames = frameSet().filter(
+    (f) =>
+      !(
+        f.event.params?.id === "a1" &&
+        f.event.params?.group === "ga" &&
+        ["k9CreatedV1", "k9CreatedV2", "k9AnyWrittenV2"].includes(f.handler)
+      ),
+  );
+  const reasons = judgeRun({
+    report: observe({ writes, frames, steps }),
+    frames,
+    writes,
+    ignored: {},
+    deployed: all,
+  });
+  assert.ok(
+    reasons.every((r) => !r.startsWith("write k1")),
+    reasons.join(),
+  );
+  assert.ok(!reasons.some((r) => r.startsWith("missing delivery: k1 ")), reasons.join());
+});
+
+test("an undeployed optional item handler is not expected", () => {
+  const without = frameSet().filter((f) => f.handler !== "k9AnyWrittenV2");
+  assert.ok(judge(without).length > 0);
+  assert.deepEqual(judge(without, { deployed: all.filter((n) => n !== "k9AnyWrittenV2") }), []);
+});
+
+test("members are read from the key lists and from the extras, each on its own generation", () => {
+  const onlyKeys = frameSet();
+  const v1 = onlyKeys.find((f) => f.handler === "k9CreatedV1");
+  v1.event.context.contextKeys = ["mystery"];
+  assert.deepEqual(judge(onlyKeys), ["frames carry unnamed members: mystery"]);
+  v1.event.context.contextKeys = [];
+  // a member of the 2nd gen list is not looked up in the 1st gen context
+  v1.event.context.eventKeys = ["mystery"];
+  assert.deepEqual(judge(onlyKeys), []);
+  const v2 = onlyKeys.find((f) => f.handler === "k9CreatedV2");
+  v2.event.eventKeys = ["mystery-event"];
+  assert.deepEqual(judge(onlyKeys), ["frames carry unnamed members: mystery-event"]);
+  v2.event.eventKeys = [];
+  v2.event.extras = { "only-extra": 1 };
+  assert.deepEqual(judge(onlyKeys), ["frames carry unnamed members: only-extra"]);
+  // a 2nd gen key list on a 1st gen frame is not read
+  v2.event.extras = {};
+  v1.event.eventKeys = ["mystery"];
+  assert.deepEqual(judge(onlyKeys), []);
+});
+
+test("several unnamed members are listed once each, sorted", () => {
+  const frames = frameSet();
+  frames.find((f) => f.handler === "k9CreatedV2").event.extras = { zeta: 1, alpha: 1 };
+  frames.find((f) => f.handler === "k9UpdatedV2").event.extras = { alpha: 1, beta: 1 };
+  assert.deepEqual(judge(frames), ["frames carry unnamed members: alpha, beta, zeta"]);
+});
+
+test("a frame's auth is read from the generation's own holder", () => {
+  const frames = frameSet();
+  const v2 = frames.find((f) => f.handler === "k9CreatedV2");
+  v2.event.context = { auth: { uid: "other" } };
+  assert.deepEqual(judge(frames, { userUid: "owner" }), []);
+  const v1 = frames.find((f) => f.handler === "k9CreatedV1");
+  v1.event.authId = "other";
+  assert.deepEqual(judge(frames, { userUid: "owner" }), []);
+  // a v2 authId that is null (admin writes) is nobody
+  v2.event.authId = null;
+  assert.deepEqual(judge(frames, { userUid: "owner" }), []);
 });

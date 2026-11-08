@@ -62,7 +62,10 @@ test("a missing row, an extra row and a changed member are differences", () => {
   const production = base();
   const withoutOne = production.filter((_, i) => i !== 5);
   assert.equal(compareRecordings({ production, local: withoutOne }).totals.difference, 1);
-  assert.equal(compareRecordings({ production: withoutOne, local: production }).totals.difference, 1);
+  assert.equal(
+    compareRecordings({ production: withoutOne, local: production }).totals.difference,
+    1,
+  );
   const local = base();
   const v2 = local.findIndex((f) => f.generation === 2 && f.handler === "k9UpdatedV2");
   local[v2].event.extras.surprise = true;
@@ -132,8 +135,8 @@ test("the user is masked and token keys compare as a set; claim values compare e
     make("two", ["a", "b", "c"], { k9n: 3 }),
   ])
     assert.equal(
-      compareRecordings({ production: [make("one", ["a", "b"], { k9n: 3 })], local: [local] }).totals
-        .difference,
+      compareRecordings({ production: [make("one", ["a", "b"], { k9n: 3 })], local: [local] })
+        .totals.difference,
       1,
     );
   const normalized = normalizeFrame(make("secret-uid", ["x"], {}));

@@ -9,6 +9,17 @@ export const FIREBASE_TOOLS_VERSION = "15.28.2";
 export const FIREBASE_FUNCTIONS_PY_VERSION = "0.6.0";
 export const PYTHON_RUNTIME = "python312";
 
+/**
+ * The profile of the recording: `events` is the thirteen functions of the first two passes (the default); `tasks` is the
+ * Cloud Tasks family alone, under queue names no recording has used. The queue name is the function name, and Cloud Tasks
+ * refuses to create a queue name that was deleted within the last three days (it answered 400 "existed too recently" on
+ * 2026-11-07 to the names the first pass had deleted), so the second Tasks recording uses new names. The profile is read once,
+ * here, and the packet digest names the fixture files of the profile, so a launch under the other profile has another digest.
+ */
+export const PROFILE = process.env.PYCHECK_PROFILE ?? "events";
+if (!["events", "tasks"].includes(PROFILE))
+  throw new Error("PYCHECK_PROFILE is events or tasks, not " + JSON.stringify(PROFILE));
+
 /** The SDK functions, each beside the raw function that takes the same delivery before the SDK parses it. */
 export const FAMILIES = Object.freeze({
   firestoreCreated: { sdk: "pcfsc", raw: "pcfscraw" },
@@ -17,14 +28,32 @@ export const FAMILIES = Object.freeze({
   storage: { sdk: "pcst", raw: "pcstraw" },
   eventarc: { sdk: "pcea", raw: "pcearaw" },
   scheduler: { sdk: "pcsch", raw: "pcschraw" },
-  tasks: { sdk: "pctask", raw: "pctaskraw" },
+  tasks:
+    PROFILE === "tasks"
+      ? { sdk: "pc3task", raw: "pc3taskraw" }
+      : { sdk: "pctask", raw: "pctaskraw" },
 });
-export const ALL_FUNCTIONS = Object.freeze(
-  Object.values(FAMILIES).flatMap((f) => [f.sdk, ...(f.raw ? [f.raw] : [])]),
+/** The families the profile deploys and exercises. */
+export const SELECTED_FAMILIES = Object.freeze(
+  PROFILE === "tasks" ? ["tasks"] : Object.keys(FAMILIES),
 );
+export const isSelected = (family) => SELECTED_FAMILIES.includes(family);
+export const ALL_FUNCTIONS = Object.freeze(
+  SELECTED_FAMILIES.flatMap((name) => [
+    FAMILIES[name].sdk,
+    ...(FAMILIES[name].raw ? [FAMILIES[name].raw] : []),
+  ]),
+);
+/** The source directory and the Firebase configuration of the profile, relative to conformance/python-functions-check. */
+export const FIXTURE_DIR = PROFILE === "tasks" ? "fixture-tasks" : "fixture";
+export const FIREBASE_JSON = PROFILE === "tasks" ? "firebase-tasks.json" : "firebase.json";
 /** Functions whose delivery is a Scheduler job run, and those that are Cloud Tasks queues. */
-export const SCHEDULER_FUNCTIONS = Object.freeze([FAMILIES.scheduler.sdk, FAMILIES.scheduler.raw]);
-export const TASK_FUNCTIONS = Object.freeze([FAMILIES.tasks.sdk, FAMILIES.tasks.raw]);
+export const SCHEDULER_FUNCTIONS = Object.freeze(
+  isSelected("scheduler") ? [FAMILIES.scheduler.sdk, FAMILIES.scheduler.raw] : [],
+);
+export const TASK_FUNCTIONS = Object.freeze(
+  isSelected("tasks") ? [FAMILIES.tasks.sdk, FAMILIES.tasks.raw] : [],
+);
 
 export const TOPIC = "pycheck-orders";
 export const COLLECTION = "pycheck-src";

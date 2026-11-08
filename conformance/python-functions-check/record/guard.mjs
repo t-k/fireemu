@@ -28,7 +28,8 @@ const decodeName = (text) => {
   }
 };
 const esc = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-const alt = (names) => "(?:" + names.map(esc).join("|") + ")";
+// An empty list matches nothing (a bare `(?:)` would match the empty id, so `jobs/` would be allowed when the profile has no job).
+const alt = (names) => (names.length === 0 ? "(?!)" : "(?:" + names.map(esc).join("|") + ")");
 const OPERATION_ID = "[A-Za-z0-9._-]+";
 const BUILD_ID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 // The project's default bucket, in either of the two forms Firebase gives it; no other bucket is ever touched.

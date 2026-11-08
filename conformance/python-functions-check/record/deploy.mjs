@@ -17,8 +17,12 @@ import {
   CODEBASE,
   FAMILIES,
   FIREBASE_FUNCTIONS_PY_VERSION,
+  FIXTURE_DIR,
+  FIREBASE_JSON,
   PROJECT,
   REGION,
+  SCHEDULER_FUNCTIONS,
+  TASK_FUNCTIONS,
   functionName,
 } from "./plan.mjs";
 
@@ -47,9 +51,9 @@ export function prepareSource({ repoRoot, commit, target, venvDir }) {
     maxBuffer: 64 * 1024 * 1024,
   });
   execFileSync("tar", ["-x", "-C", target], { input: archive });
-  const fixtureDir = join(target, DIRECTORY, "fixture");
+  const fixtureDir = join(target, DIRECTORY, FIXTURE_DIR);
   if (venvDir) symlinkSync(realpathSync(venvDir), join(fixtureDir, "venv"));
-  return { configPath: join(target, DIRECTORY, "firebase.json"), fixtureDir };
+  return { configPath: join(target, DIRECTORY, FIREBASE_JSON), fixtureDir };
 }
 
 const DISCOVERY = `
@@ -125,13 +129,13 @@ export function declarationProblems(endpoints) {
     if (name in EVENT_TYPES && e.eventType !== EVENT_TYPES[name])
       problems.push(`${name}: event type ${e.eventType}`);
   }
-  for (const fn of [FAMILIES.scheduler.sdk, FAMILIES.scheduler.raw]) {
+  for (const fn of SCHEDULER_FUNCTIONS) {
     if (endpoints[fn].schedule !== "0 0 1 1 *")
       problems.push(`${fn}: schedule ${endpoints[fn].schedule}`);
     if (endpoints[fn].timeZone !== "UTC")
       problems.push(`${fn}: time zone ${endpoints[fn].timeZone}`);
   }
-  for (const fn of [FAMILIES.tasks.sdk, FAMILIES.tasks.raw]) {
+  for (const fn of TASK_FUNCTIONS) {
     if (endpoints[fn].taskQueue !== true) problems.push(`${fn}: not a task queue function`);
     if (endpoints[fn].maxAttempts !== 1)
       problems.push(`${fn}: max attempts ${endpoints[fn].maxAttempts}`);
@@ -140,7 +144,9 @@ export function declarationProblems(endpoints) {
     if (endpoints[fn].taskInvoker !== null && endpoints[fn].taskInvoker !== undefined)
       problems.push(`${fn}: task queue invoker ${JSON.stringify(endpoints[fn].taskInvoker)}`);
   }
-  for (const fn of [FAMILIES.pubsub.sdk, FAMILIES.pubsub.raw])
+  for (const fn of [FAMILIES.pubsub.sdk, FAMILIES.pubsub.raw].filter((name) =>
+    wanted.includes(name),
+  ))
     if (endpoints[fn].filters?.topic !== "pycheck-orders")
       problems.push(`${fn}: topic ${endpoints[fn].filters?.topic}`);
   return problems;

@@ -50,6 +50,7 @@ import {
   ENABLE_SERVICES,
   REQUIRED_SERVICES,
   isOwnUploadObject,
+  isSelected,
   sourceBuckets,
   uploadBucket,
   STEP_GAP_SECONDS,
@@ -1645,7 +1646,7 @@ export async function record({
     }
     out.stage = "setup";
     // The topic is created before the topic is used; a failed create is a clean stop only if nothing was created.
-    const topicReady = await setup();
+    const topicReady = isSelected("pubsub") ? await setup() : true;
     if (!topicReady) {
       out.stoppedBecause = "the topic could not be created";
       created = issued.has("topic");

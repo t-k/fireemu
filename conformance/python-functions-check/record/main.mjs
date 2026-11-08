@@ -36,14 +36,17 @@ import {
   sourceProblems,
   withCliLog,
 } from "./deploy.mjs";
-import { FIREBASE_TOOLS_VERSION, NODE_VERSION, PROJECT, RUN_ID } from "./plan.mjs";
+import { FIREBASE_TOOLS_VERSION, NODE_VERSION, PROFILE, PROJECT, RUN_ID } from "./plan.mjs";
 import { READBACK_MAX_REQUESTS, SETTLE_MS, readbackRun, uploadObjectEntries } from "./readback.mjs";
 import { MAX_REQUESTS, record } from "./run.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, "..");
-/** The files whose bytes are the packet, relative to conformance/python-functions-check. */
-export const PACKET_FILES = [
+/**
+ * The files whose bytes are the packet of a profile, relative to conformance/python-functions-check. The last three are the
+ * fixture's source, its requirements and the Firebase configuration, which are the profile's own.
+ */
+export const packetFiles = (profile = PROFILE) => [
   "record/plan.mjs",
   "record/script.mjs",
   "record/guard.mjs",
@@ -58,18 +61,19 @@ export const PACKET_FILES = [
   "../scheduled-delivery/record/deploy.mjs",
   "../scheduled-delivery/record/plan.mjs",
   "../scheduled-delivery/record/token.mjs",
-  "fixture/main.py",
-  "fixture/requirements.txt",
-  "firebase.json",
+  ...(profile === "tasks"
+    ? ["fixture-tasks/main.py", "fixture-tasks/requirements.txt", "firebase-tasks.json"]
+    : ["fixture/main.py", "fixture/requirements.txt", "firebase.json"]),
 ];
+export const PACKET_FILES = packetFiles();
 
 /** The digest of the packet files, each by name and sha256 (the order is fixed). */
-export function packetDigest(read = (name) => readFileSync(join(root, name))) {
+export function packetDigest(read = (name) => readFileSync(join(root, name)), profile = PROFILE) {
   return createHash("sha256")
     .update(
-      PACKET_FILES.map(
-        (name) => name + "\t" + createHash("sha256").update(read(name)).digest("hex") + "\n",
-      ).join(""),
+      packetFiles(profile)
+        .map((name) => name + "\t" + createHash("sha256").update(read(name)).digest("hex") + "\n")
+        .join(""),
     )
     .digest("hex");
 }
@@ -344,6 +348,9 @@ async function readbackCommand({ values, env, deps, out, err, digest }) {
   }
 }
 
+/** The profile is named in the printed summary when it is not the default, so a launch shows which packet it is. */
+const profileMember = PROFILE === "events" ? {} : { profile: PROFILE };
+
 export async function main(
   argv,
   {
@@ -363,7 +370,13 @@ export async function main(
   if (command === "readback") {
     out(
       JSON.stringify(
-        { project: PROJECT, command, maxRequests: READBACK_MAX_REQUESTS, packetDigest: digest },
+        {
+          project: PROJECT,
+          command,
+          maxRequests: READBACK_MAX_REQUESTS,
+          packetDigest: digest,
+          ...profileMember,
+        },
         null,
         2,
       ),
@@ -372,7 +385,13 @@ export async function main(
   }
   out(
     JSON.stringify(
-      { project: PROJECT, command, maxRequests: MAX_REQUESTS, packetDigest: digest },
+      {
+        project: PROJECT,
+        command,
+        maxRequests: MAX_REQUESTS,
+        packetDigest: digest,
+        ...profileMember,
+      },
       null,
       2,
     ),

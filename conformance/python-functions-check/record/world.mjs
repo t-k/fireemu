@@ -10,11 +10,13 @@ import { fileURLToPath } from "node:url";
 import { frameOrigin, parseFramesFromText } from "./logs.mjs";
 import {
   ALL_FUNCTIONS,
+  FAMILIES,
   FRAME_MARK,
   JOB_IDS,
   PROJECT,
   QUEUE_IDS,
   REGION,
+  isSelected,
   SCHEDULER_FUNCTIONS,
   TOPIC,
   functionName,
@@ -49,8 +51,11 @@ const gcsNotFound = (what) =>
 const badRequest = (message) =>
   reply(400, { error: { code: 400, message, status: "INVALID_ARGUMENT" } });
 const iso = (ms) => new Date(ms).toISOString();
+/** The golden frames are the events profile's: another profile's task functions get the same frames under their names. */
+const renamed = (text) =>
+  text.replaceAll("pctaskraw", FAMILIES.tasks.raw).replaceAll("pctask", FAMILIES.tasks.sdk);
 const GOLDEN = parseFramesFromText(
-  readFileSync(join(here, "../local/golden-frames.txt"), "utf8"),
+  renamed(readFileSync(join(here, "../local/golden-frames.txt"), "utf8")),
 ).frames.map((f) => f.frame);
 
 /** The dry run's frames reshaped to what the check expects of production, so a clean run judges all-as-expected. */
@@ -69,8 +74,8 @@ function productionShaped(frame) {
     f.request.headers["content-length"] = "0";
     f.request.headers.host = "us-central1-" + PROJECT + ".cloudfunctions.net";
   }
-  if (f.function === "pctaskraw") {
-    f.request.headers["x-cloudtasks-queuename"] = "pctaskraw";
+  if (f.function === FAMILIES.tasks.raw) {
+    f.request.headers["x-cloudtasks-queuename"] = FAMILIES.tasks.raw;
     f.request.authorization = { scheme: "Bearer", segments: 3 };
   }
   return f;
@@ -100,6 +105,8 @@ const REQUIRED = [
  * `hooks` maps "METHOD host/path" (or "METHOD /path") to a function returning a Response, "throw", or nothing.
  * `leaveOnDelete` names functions the fake CLI's delete leaves behind. `failDeploy` makes the deploy exit 1 without
  * creating anything. `publicInvokers` names functions whose Cloud Run service the CLI makes public (`allUsers`).
+ * `queueTombstones` is a set of queue names Cloud Tasks will not create again because they were deleted (shared between worlds
+ * to model a second run: the deploy then exits 2, the CLI's queue creates answer 400 twice, and the queue never exists).
  * `uploadLines` is "normal", "none" (no receipt in the CLI log), "refused" (the upload PUT answered 403) or "extra" (a second
  * receipt for an object nobody made). `failSources` names source operation keys the world answers with 500 after applying them.
  */
@@ -128,6 +135,7 @@ export function createWorld({
   notifications = [],
   propagationReads = 0,
   invokerBindings = undefined,
+  queueTombstones = new Set(),
 } = {}) {
   const w = {
     runId,
@@ -228,6 +236,9 @@ export function createWorld({
     w.now += ms;
   };
 
+  const hasEventTriggers = ALL_FUNCTIONS.some(
+    (fn) => !SCHEDULER_FUNCTIONS.includes(fn) && !QUEUE_IDS.includes(fn),
+  );
   const createDeployed = () => {
     for (const fn of ALL_FUNCTIONS) {
       const name = functionName(fn);
@@ -260,11 +271,20 @@ export function createWorld({
         runs: 0,
       });
     for (const id of QUEUE_IDS)
-      w.queues.set(id, { name: queueName(id), state: "RUNNING", retryConfig: { maxAttempts: 1 } });
-    w.topics.add(TOPIC);
-    w.channels.add("firebase");
-    if (!w.topics.has(CHANNEL_TOPIC) && !seedChannels.includes("firebase"))
-      w.topics.add(CHANNEL_TOPIC);
+      if (!queueTombstones.has(id))
+        w.queues.set(id, {
+          name: queueName(id),
+          state: "RUNNING",
+          retryConfig: { maxAttempts: 1 },
+        });
+    // The topic is the recorder's own, and the channel is made by the CLI for an event trigger: a profile without those
+    // families makes neither.
+    if (isSelected("pubsub")) w.topics.add(TOPIC);
+    if (hasEventTriggers) {
+      w.channels.add("firebase");
+      if (!w.topics.has(CHANNEL_TOPIC) && !seedChannels.includes("firebase"))
+        w.topics.add(CHANNEL_TOPIC);
+    }
     for (const fn of ALL_FUNCTIONS)
       if (!SCHEDULER_FUNCTIONS.includes(fn) && !QUEUE_IDS.includes(fn))
         w.subscriptions.add(`eventarc-${REGION}-${fn}-123-sub-000`);
@@ -301,7 +321,8 @@ export function createWorld({
       if (!leaveSubscriptions) w.subscriptions.delete(`eventarc-${REGION}-${fn}-123-sub-000`);
     }
     for (const id of JOB_IDS) if (!leaveOnDelete.includes("job:" + id)) w.jobs.delete(id);
-    for (const id of QUEUE_IDS) if (!leaveOnDelete.includes("queue:" + id)) w.queues.delete(id);
+    for (const id of QUEUE_IDS)
+      if (!leaveOnDelete.includes("queue:" + id) && w.queues.delete(id)) queueTombstones.add(id);
   };
 
   /** The fake CLI: returns what `runCli` returns. */
@@ -343,16 +364,30 @@ export function createWorld({
         : action === "deploy"
           ? []
           : undefined;
+    // Queues Cloud Tasks refuses to create again (the recorded second pass: exit 2, two functions errored, the queue POST
+    // answered 400 twice).
+    const refused = action === "deploy" ? QUEUE_IDS.filter((id) => queueTombstones.has(id)) : [];
     return {
       action,
-      exitCode: 0,
+      exitCode: refused.length > 0 ? 2 : 0,
       signal: null,
       timedOut: false,
       error: null,
-      errored: 0,
+      errored: refused.length,
       unknownWrites: [],
       ...(uploadEvents ? { uploadEvents } : {}),
-      cliWrites: cliWrites ?? [],
+      cliWrites:
+        refused.length > 0
+          ? [
+              {
+                method: "POST",
+                url: `cloudtasks.googleapis.com/v2/projects/${PROJECT}/locations/${REGION}/queues`,
+                requests: refused.length,
+                statuses: refused.map(() => 400),
+                class: "retried",
+              },
+            ]
+          : (cliWrites ?? []),
       durationMs: 1,
     };
   };
@@ -611,8 +646,11 @@ export function createWorld({
       const m = /\/queues\/([^/:]+)$/.exec(path);
       if (m && method === "GET")
         return w.queues.has(m[1]) ? reply(200, w.queues.get(m[1])) : notFound("Queue");
-      if (m && method === "DELETE")
-        return w.queues.delete(m[1]) ? reply(200, {}) : notFound("Queue");
+      if (m && method === "DELETE") {
+        if (!w.queues.delete(m[1])) return notFound("Queue");
+        queueTombstones.add(m[1]);
+        return reply(200, {});
+      }
     }
     if (host === "pubsub.googleapis.com") {
       if (path.endsWith("/topics"))

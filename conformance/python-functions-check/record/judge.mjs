@@ -12,6 +12,7 @@ import {
   FIREBASE_FUNCTIONS_PY_VERSION,
   PROJECT,
   REGION,
+  isSelected,
   jobId,
   runMarker,
 } from "./plan.mjs";
@@ -84,11 +85,24 @@ function onlyFrame(frames, label) {
 const labelOf = (frame) =>
   frame?.data?.value?.message?.attributes?.label ?? frame?.data?.value?.label ?? null;
 
+/** The family each case id belongs to, by prefix (`sdk-versions` belongs to none: it is judged in every profile). */
+const CASE_FAMILIES = [
+  ["firestore-", "firestoreCreated"],
+  ["pubsub-", "pubsub"],
+  ["storage-", "storage"],
+  ["eventarc-", "eventarc"],
+  ["scheduler-", "scheduler"],
+  ["tasks-", "tasks"],
+];
+
 export function judge({ runId, frames, errors = [], sent = {}, mode = "production" }) {
   const run = runMarker(runId);
   const cases = {};
   const sentOk = (...keys) => keys.every((k) => sent[k] !== undefined);
   const needSent = (id, keys, body) => {
+    // A case of a family the profile does not deploy is not judged: it is not a case that was sent and missed.
+    const family = CASE_FAMILIES.find(([prefix]) => id.startsWith(prefix))?.[1];
+    if (family !== undefined && !isSelected(family)) return;
     cases[id] = sentOk(...keys)
       ? body()
       : result(
@@ -321,7 +335,7 @@ export function judge({ runId, frames, errors = [], sent = {}, mode = "productio
     );
   });
 
-  needSent("tasks-request", ["task-pctaskraw"], () => {
+  needSent("tasks-request", ["task-" + FAMILIES.tasks.raw], () => {
     const fn = FAMILIES.tasks.raw;
     const f = framesOf(frames, fn, run).find((x) => x.kind === "raw-request");
     if (!f) return result("not-delivered", null, null, ["no raw frame"]);

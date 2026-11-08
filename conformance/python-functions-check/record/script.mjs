@@ -11,6 +11,7 @@ import {
   PROJECT,
   REGION,
   TOPIC,
+  isSelected,
   jobId,
   runMarker,
 } from "./plan.mjs";
@@ -181,7 +182,8 @@ export function operations({ runId, bucket, targets }) {
       needs: target ? [] : ["task-target:" + fn],
     });
   }
-  return list;
+  // Only the families the profile deploys have a function to receive their delivery.
+  return list.filter((op) => isSelected(op.family));
 }
 
 /** The operations that undo the sources, run in the cleanup. */

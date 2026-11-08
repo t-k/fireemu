@@ -217,7 +217,7 @@ service firebase.storage {
       allow list: if false;
     }
     match /storage-rules-s9/sr-0123abcd/rec1/l3/{file=**} {
-      allow list: if request.path == /b/\$(bucket)/o/storage-rules-s9/sr-0123abcd/rec1/l3;
+      allow list: if request.path == /b/$(bucket)/o/storage-rules-s9/sr-0123abcd/rec1/l3;
     }
     match /storage-rules-s9/sr-0123abcd/rec1/l4/{file} {
       allow list: if true;

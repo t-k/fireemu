@@ -53,7 +53,6 @@ export const kindOf = (before, after) =>
         ? "delete"
         : "update";
 
-const SMALL = BLOB_SIZES.small;
 export function buildSteps(nonce) {
   const mark = (value) => (nonce === undefined ? value : { ...value, run: nonce });
   const blob = (n) => "x".repeat(n);
@@ -89,7 +88,7 @@ export function buildSteps(nonce) {
       "k11",
       "PUT",
       "gl/items/l1",
-      mark({ value: 1, blob: blob(SMALL) }),
+      mark({ value: 1, blob: blob(BLOB_SIZES.small) }),
       "admin",
       { observeOnly: true },
     ],
@@ -251,12 +250,10 @@ export function observe({ writes = {}, frames = [], steps = STEPS }) {
       });
       continue;
     }
-    const handler = handlerOf(frame.handler, frame.generation);
     const params = frame.generation === 1 ? frame.event.context.params : frame.event.params;
     const key = JSON.stringify([match.step, frame.handler, params.group, params.id ?? null]);
     if (!collected.has(key)) collected.set(key, []);
     collected.get(key).push(frame);
-    void handler;
   }
   const tally = (stepId, handler, group, id) => {
     const frames = collected.get(JSON.stringify([stepId, handler.name, group, id])) ?? [];

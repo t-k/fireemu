@@ -122,10 +122,10 @@ test("admission checks the kinds fixture directory for files git does not track"
   };
   const ok = await run("!! conformance/src/rtdb-functions/fixtures-kinds/node_modules/\n");
   assert.equal(ok.outcome, "admitted");
+  assert.ok(ok.seen.some((args) => args.includes("conformance/src/rtdb-functions/fixtures-kinds")));
   assert.ok(
-    ok.seen.some((args) => args.includes("conformance/src/rtdb-functions/fixtures-kinds")),
+    !ok.seen.some((args) => args.includes("conformance/src/rtdb-functions/fixtures-breadth")),
   );
-  assert.ok(!ok.seen.some((args) => args.includes("conformance/src/rtdb-functions/fixtures-breadth")));
   // an ignored file elsewhere in the directory, or the breadth node_modules entry, is refused
   for (const line of [
     "!! conformance/src/rtdb-functions/fixtures-kinds/.env\n",
@@ -196,11 +196,7 @@ test("the kinds entry plugs the scenario into the budget, CLI, user, SDK and run
   const source = recordBreadth
     .toString()
     .replaceAll("import.meta.url", JSON.stringify(import.meta.url));
-  const entry = new Function(
-    ...Object.keys(deps),
-    "scenario",
-    `return (${source})(scenario);`,
-  );
+  const entry = new Function(...Object.keys(deps), "scenario", `return (${source})(scenario);`);
   await entry(...Object.values(deps), KINDS_SCENARIO);
   assert.equal(seen.budgetScenario, KINDS_SCENARIO);
   assert.equal(seen.cliScenario, KINDS_SCENARIO);

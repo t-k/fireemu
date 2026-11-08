@@ -5,8 +5,8 @@ import { FIXTURE_HANDLERS, PREFIX } from "./kinds-frames.mjs";
 import {
   STEPS,
   buildSteps,
-  canon,
   kindOf,
+  plain,
   matchFrame,
   observe,
   reduceBig,
@@ -59,7 +59,10 @@ test("priority, .value and subtree steps are modelled as nodes with a priority",
   assert.deepEqual(leafList(t.k8), ["update gp/p1"]);
   assert.deepEqual(t.k8.leaves[0].before, { value: 1, run: "N", ".priority": 7 });
   assert.deepEqual(t.k8.leaves[0].after, { value: 1, run: "N", ".priority": 9 });
+  // the priority-only write leaves the plain form of the node as it was
+  assert.deepEqual(t.k8.leaves[0].plainBefore, t.k8.leaves[0].plainAfter);
   assert.deepEqual(t.k9.leaves[0].after, { ".value": 3, ".priority": 2 });
+  assert.equal(t.k9.leaves[0].plainAfter, 3);
   assert.deepEqual(leafList(t.k10), ["delete gp/p1", "delete gp/p2"]);
 });
 
@@ -105,7 +108,7 @@ test("no transition repeats across steps, so a frame names one step", () => {
   const seen = new Map();
   for (const x of t)
     for (const l of x.leaves) {
-      const key = JSON.stringify([l.group, l.id, l.before, l.after]);
+      const key = JSON.stringify([l.group, l.id, l.plainBefore, l.plainAfter]);
       assert.ok(!seen.has(key), `${key} repeats in ${seen.get(key)} and ${x.step}`);
       seen.set(key, x.step);
     }
@@ -118,40 +121,31 @@ test("no transition repeats across steps, so a frame names one step", () => {
     }
 });
 
-test("kindOf, canon and reduceBig", () => {
+test("kindOf, plain and reduceBig", () => {
   assert.equal(kindOf(null, { a: 1 }), "create");
   assert.equal(kindOf({ a: 1 }, null), "delete");
   assert.equal(kindOf({ a: 1 }, { a: 2 }), "update");
   assert.equal(kindOf({ a: 1 }, { a: 1 }), null);
   assert.equal(kindOf(null, null), null);
-  assert.equal(canon({ exists: false, value: null, priority: null }), null);
-  assert.deepEqual(canon({ exists: true, value: { a: 1 }, priority: null }), { a: 1 });
-  assert.deepEqual(canon({ exists: true, value: { a: 1 }, priority: 3 }), { a: 1, ".priority": 3 });
-  assert.deepEqual(canon({ exists: true, value: 5, priority: "p" }), {
-    ".value": 5,
-    ".priority": "p",
+  assert.deepEqual(plain({ a: 1, ".priority": 3 }), { a: 1 });
+  assert.equal(plain({ ".value": 5, ".priority": "p" }), 5);
+  assert.deepEqual(plain({ x: { ".value": 5, ".priority": 1 }, y: { z: 1, ".priority": 2 } }), {
+    x: 5,
+    y: { z: 1 },
   });
-  assert.equal(canon({ exists: true, value: 5, priority: null }), 5);
+  assert.equal(plain(null), null);
+  assert.equal(plain(4), 4);
   assert.equal(reduceBig("x".repeat(256)), "x".repeat(256));
   assert.deepEqual(reduceBig("x".repeat(257)), { type: "string", length: 257 });
   assert.deepEqual(reduceBig({ a: ["y".repeat(300)] }), { a: [{ type: "string", length: 300 }] });
 });
 
-const frameFor = (handler, leaf, extra = {}) => {
+// Frames show the node as the service sent it: `.priority` and `.value` members stay in the value.
+const frameFor = (handler, leaf, { strip = false } = {}) => {
   const snap = (v) =>
     v === null
-      ? { exists: false, key: leaf.id, value: null, priority: null }
-      : {
-          exists: true,
-          key: leaf.id,
-          value: v && typeof v === "object" && ".value" in v ? v[".value"] : stripPriority(v),
-          priority: v && typeof v === "object" ? (v[".priority"] ?? null) : null,
-        };
-  const stripPriority = (v) => {
-    if (v === null || typeof v !== "object" || Array.isArray(v)) return v;
-    const { [".priority"]: _, ...rest } = v;
-    return rest;
-  };
+      ? { exists: false, key: leaf.id, value: null }
+      : { exists: true, key: leaf.id, value: strip ? plain(v) : v };
   const params = { group: leaf.group, id: leaf.id };
   const data =
     handler.event === "create"
@@ -163,7 +157,6 @@ const frameFor = (handler, leaf, extra = {}) => {
     handler: handler.name,
     generation: handler.generation,
     event: handler.generation === 1 ? { context: { params }, data } : { params, data },
-    ...extra,
   };
 };
 
@@ -174,8 +167,14 @@ test("every expected delivery of the plan is attributed to its own step", () => 
       for (const handler of FIXTURE_HANDLERS.filter(
         (h) => h.level === "item" && (h.event === "write" || h.event === leaf.kind),
       )) {
-        const match = matchFrame(frameFor(handler, leaf), steps);
-        assert.equal(match.step, x.step, `${handler.name} ${x.step} ${leaf.group}/${leaf.id}`);
+        for (const strip of [false, true]) {
+          const match = matchFrame(frameFor(handler, leaf, { strip }), steps);
+          assert.equal(
+            match.step,
+            x.step,
+            `${handler.name} ${x.step} ${leaf.group}/${leaf.id} strip=${strip}`,
+          );
+        }
       }
 });
 

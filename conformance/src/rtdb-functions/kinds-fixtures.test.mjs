@@ -16,12 +16,7 @@ import { reduceBig } from "./kinds-sequence.mjs";
 const require = createRequire(import.meta.url);
 const frames = require("./fixtures-kinds/frames.js");
 
-const snap = (value, priority = null) => ({
-  exists: () => value !== null,
-  val: () => value,
-  getPriority: () => priority,
-  key: "a",
-});
+const snap = (value) => ({ exists: () => value !== null, val: () => value, key: "a" });
 
 function load() {
   const calls = [];
@@ -119,7 +114,7 @@ test("a v2 created event prints one typed frame with the data of the new node", 
       params: { group: "ga", id: "a" },
       authType: "unknown",
       authId: null,
-      data: snap({ value: 1, blob: "y".repeat(300) }, 7),
+      data: snap({ value: 1, blob: "y".repeat(300), ".priority": 7 }),
     });
   } finally {
     out.restore();
@@ -130,8 +125,7 @@ test("a v2 created event prints one typed frame with the data of the new node", 
   assert.deepEqual(printed.event.data, {
     exists: true,
     key: "a",
-    value: { value: 1, blob: { type: "string", length: 300 } },
-    priority: 7,
+    value: { value: 1, blob: { type: "string", length: 300 }, ".priority": 7 },
   });
   assert.deepEqual(printed.event.params, { group: "ga", id: "a" });
   assert.equal("attempt" in printed, false);
@@ -149,20 +143,16 @@ test("a v1 update prints before and after; a v1 delete prints the old node", () 
     authType: "ADMIN",
   };
   try {
-    exports.k9UpdatedV1.handler(
-      { before: snap({ value: 1 }), after: snap({ value: 2 }, 3) },
-      context,
-    );
+    exports.k9UpdatedV1.handler({ before: snap({ value: 1 }), after: snap({ value: 2 }) }, context);
     const update = frame(out.lines);
     assert.deepEqual(update.event.data.before.value, { value: 1 });
-    assert.equal(update.event.data.after.priority, 3);
+    assert.deepEqual(update.event.data.after.value, { value: 2 });
     exports.k9DeletedV1.handler(snap({ value: 2 }), context);
     const deleted = frame(out.lines);
     assert.deepEqual(deleted.event.data, {
       exists: true,
       key: "a",
       value: { value: 2 },
-      priority: null,
     });
   } finally {
     out.restore();

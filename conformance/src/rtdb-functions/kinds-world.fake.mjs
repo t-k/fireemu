@@ -2,9 +2,7 @@ import { FIXTURE_HANDLERS } from "./kinds-frames.mjs";
 import { transitions } from "./kinds-sequence.mjs";
 
 const snap = (v) =>
-  v === null
-    ? { exists: false, key: "k", value: null, priority: null }
-    : { exists: true, key: "k", value: v, priority: null };
+  v === null ? { exists: false, key: "k", value: null } : { exists: true, key: "k", value: v };
 export function perfectFrames(steps, only = FIXTURE_HANDLERS.map((h) => h.name)) {
   const frames = [];
   let n = 0;

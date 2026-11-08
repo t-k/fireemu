@@ -1,10 +1,11 @@
 // Prints one typed frame per event on stdout (Cloud Logging carries it back to the recorder). Same
-// projection as the breadth fixture, with three additions for the kinds recording:
-//   - a snapshot carries the node's priority (`getPriority()`), because `val()` drops it;
+// projection as the breadth fixture, with two additions for the kinds recording:
 //   - every string above 256 characters inside a value is reduced to its length, so a large write
 //     never makes a log entry that Cloud Logging would truncate (the model reduces the same way);
 //   - a 1st gen `auth` carries the value of each custom claim named `k9*` (an allow-listed prefix of
 //     the claims the run sets on its own user), besides the token key names.
+// The snapshot does not carry a priority: the Functions SDK's `getPriority()` is a constant 0, and `val()`
+// shows whatever members (`.priority`, `.value`) the service put into the event's data.
 // Values outside a snapshot are metadata only (a string of at most 256 characters, a number, a boolean
 // or null as is; anything else is reduced to its type and size or key names).
 const MARKER = "G9_FRAME ";
@@ -72,13 +73,7 @@ function reduce(value) {
 function snapshot(value) {
   if (!value) return null;
   const exists = typeof value.exists === "function" ? value.exists() : null;
-  return {
-    exists,
-    key: value.key ?? null,
-    value: exists === false ? null : reduce(value.val()),
-    priority:
-      exists === false || typeof value.getPriority !== "function" ? null : value.getPriority(),
-  };
+  return { exists, key: value.key ?? null, value: exists === false ? null : reduce(value.val()) };
 }
 
 function data(value) {

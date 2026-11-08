@@ -28,17 +28,12 @@ export function reduceBig(value) {
   return value;
 }
 
-/** A snapshot as the fixture prints it, in the tree's own form: the value with its priority. */
-export function canon(snapshot) {
-  if (!snapshot || snapshot.exists !== true) return null;
-  const { value, priority } = snapshot;
-  if (priority === null || priority === undefined) return value;
-  if (value !== null && typeof value === "object" && !Array.isArray(value))
-    return { ...value, ".priority": priority };
-  return { ".value": value, ".priority": priority };
-}
-
-/** What `val()` shows of a tree node: priorities and `.value` wrappers of descendants are not visible. */
+/**
+ * What a snapshot's value shows of a tree node when priorities and `.value` wrappers are not counted.
+ * The Functions SDK has no priority: its `getPriority()` is a constant 0, and `val()` is the event's data
+ * as the service sent it, so a frame may or may not carry `.priority` and `.value` members. Frames are
+ * attributed on this form, and the members themselves are compared between runs.
+ */
 export function plain(node) {
   if (node === null || typeof node !== "object" || Array.isArray(node)) return node;
   if (".value" in node) return node[".value"];
@@ -179,6 +174,8 @@ function computeTransitions(steps) {
             kind,
             before: reduceBig(clone(before)),
             after: reduceBig(clone(after)),
+            plainBefore: reduceBig(clone(plain(before))),
+            plainAfter: reduceBig(clone(plain(after))),
           });
       }
     }
@@ -189,14 +186,13 @@ function computeTransitions(steps) {
 const handlerOf = (name, generation) =>
   FIXTURE_HANDLERS.find((h) => h.name === name && h.generation === generation);
 
-/** What a frame says the node was before and after, in the tree's form (a node, or the group's visible value). */
+/** What a frame says the node was before and after, in the plain form. */
 function frameSides(handler, data) {
-  const snap = (s) => (handler.level === "group" ? (s?.exists ? canonGroup(s) : null) : canon(s));
-  if (handler.event === "create") return { before: null, after: snap(data) };
-  if (handler.event === "delete") return { before: snap(data), after: null };
-  return { before: snap(data?.before), after: snap(data?.after) };
+  const side = (s) => reduceBig(plain(s?.exists ? s.value : null));
+  if (handler.event === "create") return { before: null, after: side(data) };
+  if (handler.event === "delete") return { before: side(data), after: null };
+  return { before: side(data?.before), after: side(data?.after) };
 }
-const canonGroup = (s) => (s.priority == null ? s.value : { ...s.value, ".priority": s.priority });
 
 export function matchFrame(frame, steps) {
   const handler = handlerOf(frame?.handler, frame?.generation);
@@ -220,15 +216,15 @@ export function matchFrame(frame, steps) {
         ? t.groups.some(
             (g) =>
               g.group === params.group &&
-              isDeepStrictEqual(g.before, reduceBig(before)) &&
-              isDeepStrictEqual(g.after, reduceBig(after)),
+              isDeepStrictEqual(g.before, before) &&
+              isDeepStrictEqual(g.after, after),
           )
         : t.leaves.some(
             (l) =>
               l.group === params.group &&
               l.id === params.id &&
-              isDeepStrictEqual(l.before, reduceBig(before)) &&
-              isDeepStrictEqual(l.after, reduceBig(after)),
+              isDeepStrictEqual(l.plainBefore, before) &&
+              isDeepStrictEqual(l.plainAfter, after),
           ),
     )
     .map((t) => t.step);

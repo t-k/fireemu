@@ -1,0 +1,2373 @@
+{
+  "kind": "rtdb-production-comparison-v1",
+  "parent": "RTDB",
+  "comparison": "sdk-rest",
+  "conditions": [
+    "RTDB/rest-options-and-refusals"
+  ],
+  "production": {
+    "recording": "RTDB-REST-20261104-01",
+    "project": "fireemu-oracle-query",
+    "instance": "fireemu-q-rtdb2",
+    "recordedOn": "2026-11-04",
+    "suite": "rest",
+    "observations": 144,
+    "requests": {
+      "requests": 154,
+      "direct": 150,
+      "reserve": 4,
+      "adc": 1,
+      "overflow": 0
+    },
+    "scriptSha256": "b59f62398d85f65e34f9412913ff3fe4add9855bc5ee00c3e40597c269a781e3",
+    "sourceHead": "7434eac45baf1292ee80e43dff2d0b4a1de7b867",
+    "packetSha256": "35ed0d0574671a7b038fe926f9f537d7c0a0e965215105e91811666490e618ba",
+    "approvals": [
+      2231,
+      2232
+    ],
+    "sandboxLedger": {
+      "booking": 1254,
+      "close": 1255
+    }
+  },
+  "fixture": {
+    "path": "tools/sdk-smoke-database/fixtures/production-sdk-rest.json",
+    "sha256": "d3fb07dedd12c1a066c39ea167eda6ef948e3c43e2e4eb97ed8453eb5e16d7bb"
+  },
+  "tool": [
+    {
+      "path": "tools/sdk-smoke-database/rtdb-sdk-rest.mjs",
+      "sha256": "e78ae2ca99ed7376c7e9c9aca7e7b066847a4f7cda053c8ebe918a82ff522315"
+    },
+    {
+      "path": "tools/sdk-smoke-database/rtdb-sdk-rest-fixture.mjs",
+      "sha256": "ef921f82157f9db3bab99e911b2b09d2df7430dd7ac63bbaf3cebfeafc0f04d6"
+    },
+    {
+      "path": "tools/sdk-smoke-database/rtdb-sdk-rest-judge.mjs",
+      "sha256": "b711bdada495ba5bb992ca977d0e328cb7ae37e8d5e568e6556942d9e20c262c"
+    },
+    {
+      "path": "tools/sdk-smoke-database/sdk-observer/rest-suite.mjs",
+      "sha256": "582fb84a791fd545ecb0e373a12855755563f93385ec4c1efa0e2e1e448ceab8"
+    },
+    {
+      "path": "tools/sdk-smoke-database/sdk-observer/lib.mjs",
+      "sha256": "6459e3ecae58a36f0b2037dab03c2490f96d93c707de681cb7e585822d89a7ab"
+    },
+    {
+      "path": "tools/sdk-smoke-database/sdk-observer/observer.mjs",
+      "sha256": "4a071f4e19c36e5f528a939cc9a19e7ea57ebdf38fbb89818029b8a89c2e2765"
+    }
+  ],
+  "observerManifestSha256": "9c2cb8b9d9a25e56e1458e04cddfa2f09e963a464cee4d958300687c2d52ebf2",
+  "command": "node tools/sdk-smoke-database/rtdb-sdk-rest.mjs local --fireemu <binary> --out <dir> --profile strict|emulator --against tools/sdk-smoke-database/fixtures/production-sdk-rest.json",
+  "binding": {
+    "release": "closure-build",
+    "releaseAsset": "unpublished release-profile build of source commit d0e81b04377f08f7d32597e809eeca318b49af2a (cargo build --release --locked -p fireemu, RUSTC_WRAPPER empty, fresh worktree-local target directory)",
+    "releaseAssetSha256": "28c8708cd9245eef82c4e4f315f7ddf63fade919800c31f5a873235e9e0a46f2",
+    "sourceCommit": "d0e81b04377f08f7d32597e809eeca318b49af2a",
+    "tagObject": null,
+    "binarySha256": "28c8708cd9245eef82c4e4f315f7ddf63fade919800c31f5a873235e9e0a46f2",
+    "version": "fireemu 0.43.0",
+    "toolCommit": "d0e81b04377f08f7d32597e809eeca318b49af2a",
+    "host": "Darwin arm64",
+    "productionRequests": 0
+  },
+  "profiles": {
+    "strict": {
+      "profile": "strict",
+      "binarySha256": "28c8708cd9245eef82c4e4f315f7ddf63fade919800c31f5a873235e9e0a46f2",
+      "match": true,
+      "counts": {
+        "MATCH": 144,
+        "MISMATCH": 0,
+        "NEEDS_REVIEW": 0
+      },
+      "rows": [
+        {
+          "profile": "r1-rest",
+          "case": "setup-mix",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "setup-ints",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "setup-leaf",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "setup-emptied",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "setup-etag",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "timeout-5s",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "timeout-5",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "timeout-abc",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "timeout-0s",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "wsl-tiny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "wsl-medium",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "wsl-large",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "wsl-unlimited",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "wsl-foo",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "wsl-10",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "print-pretty-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "print-pretty-put",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "print-bogus-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "print-silent-delete",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "post-scalar",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "post-scalar-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "post-priority",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "post-priority-export",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "post-null",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "post-null-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "post-array",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "post-array-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "post-sv",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "post-sv-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "sv-patch",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "sv-patch-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "sv-fraction",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "sv-fraction-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "sv-bogus",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "sv-overflow-put",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "sv-overflow-patch",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "sv-overflow-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "order-priority",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "order-priority-range",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "order-value-first",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "order-value-last",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "order-key-first",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "order-key-ints",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "order-key-start-end",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "order-key-equal",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "order-key-start-number",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "order-value-unindexed",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "limit-first",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "limit-last",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "order-priority-export",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "shallow-leaf",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "shallow-missing",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "shallow-orderby",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "shallow-limit",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "etag-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "etag-inm-match",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "etag-inm-bogus",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "etag-inm-put",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "etag-inm-shallow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "override-put",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "override-put-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "override-delete",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "override-delete-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "callback-cb",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "callback-script",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "callback-alert",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "callback-digit",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "download-file",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "emptied-patch",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "emptied-export",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "malformed-zz",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "end-delete",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "setup-mix",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "setup-ints",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "setup-leaf",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "setup-emptied",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "setup-etag",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "timeout-5s",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "timeout-5",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "timeout-abc",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "timeout-0s",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "wsl-tiny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "wsl-medium",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "wsl-large",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "wsl-unlimited",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "wsl-foo",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "wsl-10",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "print-pretty-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "print-pretty-put",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "print-bogus-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "print-silent-delete",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "post-scalar",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "post-scalar-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "post-priority",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "post-priority-export",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "post-null",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "post-null-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "post-array",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "post-array-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "post-sv",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "post-sv-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "sv-patch",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "sv-patch-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "sv-fraction",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "sv-fraction-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "sv-bogus",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "sv-overflow-put",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "sv-overflow-patch",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "sv-overflow-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "order-priority",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "order-priority-range",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "order-value-first",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "order-value-last",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "order-key-first",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "order-key-ints",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "order-key-start-end",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "order-key-equal",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "order-key-start-number",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "order-value-unindexed",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "limit-first",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "limit-last",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "order-priority-export",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "shallow-leaf",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "shallow-missing",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "shallow-orderby",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "shallow-limit",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "etag-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "etag-inm-match",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "etag-inm-bogus",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "etag-inm-put",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "etag-inm-shallow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "override-put",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "override-put-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "override-delete",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "override-delete-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "callback-cb",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "callback-script",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "callback-alert",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "callback-digit",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "download-file",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "emptied-patch",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "emptied-export",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "malformed-zz",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "end-delete",
+          "verdict": "MATCH"
+        }
+      ],
+      "journalSha256": "cf24cba2951f2b2eee8ca944cabfb77ba4f816991f8784d068edfb0d378291a8"
+    },
+    "emulator": {
+      "profile": "emulator",
+      "binarySha256": "28c8708cd9245eef82c4e4f315f7ddf63fade919800c31f5a873235e9e0a46f2",
+      "match": false,
+      "counts": {
+        "MATCH": 138,
+        "MISMATCH": 6,
+        "NEEDS_REVIEW": 0
+      },
+      "rows": [
+        {
+          "profile": "r1-rest",
+          "case": "setup-mix",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "setup-ints",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "setup-leaf",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "setup-emptied",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "setup-etag",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "timeout-5s",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "timeout-5",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "timeout-abc",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "timeout-0s",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "wsl-tiny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "wsl-medium",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "wsl-large",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "wsl-unlimited",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "wsl-foo",
+          "verdict": "MISMATCH",
+          "differences": [
+            "body"
+          ]
+        },
+        {
+          "profile": "r1-rest",
+          "case": "wsl-10",
+          "verdict": "MISMATCH",
+          "differences": [
+            "body"
+          ]
+        },
+        {
+          "profile": "r1-rest",
+          "case": "print-pretty-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "print-pretty-put",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "print-bogus-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "print-silent-delete",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "post-scalar",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "post-scalar-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "post-priority",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "post-priority-export",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "post-null",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "post-null-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "post-array",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "post-array-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "post-sv",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "post-sv-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "sv-patch",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "sv-patch-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "sv-fraction",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "sv-fraction-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "sv-bogus",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "sv-overflow-put",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "sv-overflow-patch",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "sv-overflow-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "order-priority",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "order-priority-range",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "order-value-first",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "order-value-last",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "order-key-first",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "order-key-ints",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "order-key-start-end",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "order-key-equal",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "order-key-start-number",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "order-value-unindexed",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "limit-first",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "limit-last",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "order-priority-export",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "shallow-leaf",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "shallow-missing",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "shallow-orderby",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "shallow-limit",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "etag-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "etag-inm-match",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "etag-inm-bogus",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "etag-inm-put",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "etag-inm-shallow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "override-put",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "override-put-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "override-delete",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "override-delete-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "callback-cb",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "callback-script",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "callback-alert",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "callback-digit",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "download-file",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "emptied-patch",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "emptied-export",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "malformed-zz",
+          "verdict": "MISMATCH",
+          "differences": [
+            "header:content-type",
+            "header:content-length",
+            "header:+access-control-allow-origin",
+            "body",
+            "bodyBytes"
+          ]
+        },
+        {
+          "profile": "r1-rest",
+          "case": "end-delete",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "setup-mix",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "setup-ints",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "setup-leaf",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "setup-emptied",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "setup-etag",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "timeout-5s",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "timeout-5",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "timeout-abc",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "timeout-0s",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "wsl-tiny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "wsl-medium",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "wsl-large",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "wsl-unlimited",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "wsl-foo",
+          "verdict": "MISMATCH",
+          "differences": [
+            "body"
+          ]
+        },
+        {
+          "profile": "r2-rest",
+          "case": "wsl-10",
+          "verdict": "MISMATCH",
+          "differences": [
+            "body"
+          ]
+        },
+        {
+          "profile": "r2-rest",
+          "case": "print-pretty-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "print-pretty-put",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "print-bogus-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "print-silent-delete",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "post-scalar",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "post-scalar-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "post-priority",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "post-priority-export",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "post-null",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "post-null-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "post-array",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "post-array-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "post-sv",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "post-sv-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "sv-patch",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "sv-patch-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "sv-fraction",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "sv-fraction-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "sv-bogus",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "sv-overflow-put",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "sv-overflow-patch",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "sv-overflow-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "order-priority",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "order-priority-range",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "order-value-first",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "order-value-last",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "order-key-first",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "order-key-ints",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "order-key-start-end",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "order-key-equal",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "order-key-start-number",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "order-value-unindexed",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "limit-first",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "limit-last",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "order-priority-export",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "shallow-leaf",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "shallow-missing",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "shallow-orderby",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "shallow-limit",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "etag-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "etag-inm-match",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "etag-inm-bogus",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "etag-inm-put",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "etag-inm-shallow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "override-put",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "override-put-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "override-delete",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "override-delete-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "callback-cb",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "callback-script",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "callback-alert",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "callback-digit",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "download-file",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "emptied-patch",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "emptied-export",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "malformed-zz",
+          "verdict": "MISMATCH",
+          "differences": [
+            "header:content-type",
+            "header:content-length",
+            "header:+access-control-allow-origin",
+            "body",
+            "bodyBytes"
+          ]
+        },
+        {
+          "profile": "r2-rest",
+          "case": "end-delete",
+          "verdict": "MATCH"
+        }
+      ],
+      "journalSha256": "814e135a0fcdbb2ce9a2bdb27f45aab5c8310119b8f24d8af20d8d8937303dc9"
+    }
+  },
+  "official": {
+    "jar": {
+      "name": "firebase-database-emulator",
+      "version": "4.11.2",
+      "sha256": "b70d99344caf17c98b6f910fa8f6edf32a7c016cb1035e8915f70d38901eb97f"
+    },
+    "fixture": {
+      "path": "tools/sdk-smoke-database/fixtures/jar-sdk-rest.json",
+      "sha256": "4199724a4c3cccfec9c3c30a1c0d86f29cde4570b1bd5a583181297c2dddc130"
+    },
+    "tool": [
+      {
+        "path": "tools/sdk-smoke-database/rtdb-sdk-jar.mjs",
+        "sha256": "6a90a1cef5dec0dd7a2d9d164b1ed71c08cd4c8fa854604c15637b63dd7f614d"
+      },
+      {
+        "path": "tools/sdk-smoke-database/jar.mjs",
+        "sha256": "2648dbdb0fc0312bd92e61a5ac7f6edb6e36737be003b439884cb666a8885801"
+      }
+    ],
+    "officialVsProduction": {
+      "counts": {
+        "MATCH": 136,
+        "MISMATCH": 8,
+        "NEEDS_REVIEW": 0
+      }
+    },
+    "emulatorVsOfficial": {
+      "counts": {
+        "MATCH": 142,
+        "MISMATCH": 2,
+        "NEEDS_REVIEW": 0
+      },
+      "rows": [
+        {
+          "profile": "r1-rest",
+          "case": "setup-mix",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "setup-ints",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "setup-leaf",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "setup-emptied",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "setup-etag",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "timeout-5s",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "timeout-5",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "timeout-abc",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "timeout-0s",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "wsl-tiny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "wsl-medium",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "wsl-large",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "wsl-unlimited",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "wsl-foo",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "wsl-10",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "print-pretty-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "print-pretty-put",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "print-bogus-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "print-silent-delete",
+          "verdict": "MISMATCH",
+          "differences": [
+            "header:content-length"
+          ]
+        },
+        {
+          "profile": "r1-rest",
+          "case": "post-scalar",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "post-scalar-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "post-priority",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "post-priority-export",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "post-null",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "post-null-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "post-array",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "post-array-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "post-sv",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "post-sv-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "sv-patch",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "sv-patch-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "sv-fraction",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "sv-fraction-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "sv-bogus",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "sv-overflow-put",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "sv-overflow-patch",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "sv-overflow-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "order-priority",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "order-priority-range",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "order-value-first",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "order-value-last",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "order-key-first",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "order-key-ints",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "order-key-start-end",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "order-key-equal",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "order-key-start-number",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "order-value-unindexed",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "limit-first",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "limit-last",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "order-priority-export",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "shallow-leaf",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "shallow-missing",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "shallow-orderby",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "shallow-limit",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "etag-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "etag-inm-match",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "etag-inm-bogus",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "etag-inm-put",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "etag-inm-shallow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "override-put",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "override-put-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "override-delete",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "override-delete-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "callback-cb",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "callback-script",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "callback-alert",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "callback-digit",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "download-file",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "emptied-patch",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "emptied-export",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "malformed-zz",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rest",
+          "case": "end-delete",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "setup-mix",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "setup-ints",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "setup-leaf",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "setup-emptied",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "setup-etag",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "timeout-5s",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "timeout-5",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "timeout-abc",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "timeout-0s",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "wsl-tiny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "wsl-medium",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "wsl-large",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "wsl-unlimited",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "wsl-foo",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "wsl-10",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "print-pretty-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "print-pretty-put",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "print-bogus-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "print-silent-delete",
+          "verdict": "MISMATCH",
+          "differences": [
+            "header:content-length"
+          ]
+        },
+        {
+          "profile": "r2-rest",
+          "case": "post-scalar",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "post-scalar-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "post-priority",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "post-priority-export",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "post-null",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "post-null-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "post-array",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "post-array-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "post-sv",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "post-sv-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "sv-patch",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "sv-patch-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "sv-fraction",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "sv-fraction-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "sv-bogus",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "sv-overflow-put",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "sv-overflow-patch",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "sv-overflow-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "order-priority",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "order-priority-range",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "order-value-first",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "order-value-last",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "order-key-first",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "order-key-ints",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "order-key-start-end",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "order-key-equal",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "order-key-start-number",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "order-value-unindexed",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "limit-first",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "limit-last",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "order-priority-export",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "shallow-leaf",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "shallow-missing",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "shallow-orderby",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "shallow-limit",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "etag-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "etag-inm-match",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "etag-inm-bogus",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "etag-inm-put",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "etag-inm-shallow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "override-put",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "override-put-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "override-delete",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "override-delete-get",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "callback-cb",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "callback-script",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "callback-alert",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "callback-digit",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "download-file",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "emptied-patch",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "emptied-export",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "malformed-zz",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rest",
+          "case": "end-delete",
+          "verdict": "MATCH"
+        }
+      ]
+    },
+    "emulatorDifferencesFromProduction": [
+      {
+        "profile": "r1-rest",
+        "case": "wsl-foo",
+        "emulatorMatchesOfficialEmulator": true,
+        "officialEmulatorMatchesProduction": false
+      },
+      {
+        "profile": "r1-rest",
+        "case": "wsl-10",
+        "emulatorMatchesOfficialEmulator": true,
+        "officialEmulatorMatchesProduction": false
+      },
+      {
+        "profile": "r1-rest",
+        "case": "malformed-zz",
+        "emulatorMatchesOfficialEmulator": true,
+        "officialEmulatorMatchesProduction": false
+      },
+      {
+        "profile": "r2-rest",
+        "case": "wsl-foo",
+        "emulatorMatchesOfficialEmulator": true,
+        "officialEmulatorMatchesProduction": false
+      },
+      {
+        "profile": "r2-rest",
+        "case": "wsl-10",
+        "emulatorMatchesOfficialEmulator": true,
+        "officialEmulatorMatchesProduction": false
+      },
+      {
+        "profile": "r2-rest",
+        "case": "malformed-zz",
+        "emulatorMatchesOfficialEmulator": true,
+        "officialEmulatorMatchesProduction": false
+      }
+    ]
+  }
+}

@@ -1,0 +1,22 @@
+[
+ {
+  "segments": 30,
+  "status": "ok",
+  "message": null
+ },
+ {
+  "segments": 31,
+  "status": "ok",
+  "message": null
+ },
+ {
+  "segments": 32,
+  "status": "invalid_parameters",
+  "message": "Path specified exceeds the maximum depth that can be written (32)."
+ },
+ {
+  "segments": 33,
+  "status": "invalid_parameters",
+  "message": "Path specified exceeds the maximum depth that can be written (32)."
+ }
+]

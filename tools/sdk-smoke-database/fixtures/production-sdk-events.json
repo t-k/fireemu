@@ -1,0 +1,6163 @@
+{
+ "kind": "rtdb-sdk-events-journal-v1",
+ "suite": "events+admin",
+ "result": {
+  "status": "complete",
+  "observed": 52,
+  "exit": 0,
+  "cleanup": {
+   "prefix": "verified",
+   "rules": "verified"
+  }
+ },
+ "faults": [],
+ "profiles": [
+  {
+   "name": "r1-ws",
+   "suite": "events",
+   "rows": [
+    {
+     "id": "startup",
+     "ok": true
+    },
+    {
+     "id": "startup-observer",
+     "ok": true
+    },
+    {
+     "id": "seed",
+     "ok": true
+    },
+    {
+     "id": "key_window",
+     "ok": true,
+     "steps": [
+      {
+       "step": "attach",
+       "observer": [
+        {
+         "l": "Q1",
+         "e": "child_added",
+         "k": "b",
+         "p": null,
+         "v": 1
+        },
+        {
+         "l": "Q1",
+         "e": "child_added",
+         "k": "c",
+         "p": "b",
+         "v": 1
+        },
+        {
+         "l": "Q1",
+         "e": "value",
+         "k": "kw",
+         "v": {
+          "children": [
+           [
+            "b",
+            1
+           ],
+           [
+            "c",
+            1
+           ]
+          ]
+         }
+        },
+        {
+         "l": "Q2",
+         "e": "child_added",
+         "k": "d",
+         "p": null,
+         "v": 1
+        },
+        {
+         "l": "Q2",
+         "e": "child_added",
+         "k": "e",
+         "p": "d",
+         "v": 1
+        },
+        {
+         "l": "Q2",
+         "e": "value",
+         "k": "kw",
+         "v": {
+          "children": [
+           [
+            "d",
+            1
+           ],
+           [
+            "e",
+            1
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ready": true,
+       "quiet": true
+      },
+      {
+       "step": "set-a",
+       "observer": [
+        {
+         "l": "Q1",
+         "e": "child_removed",
+         "k": "c",
+         "v": 1
+        },
+        {
+         "l": "Q1",
+         "e": "child_added",
+         "k": "a",
+         "p": null,
+         "v": 1
+        },
+        {
+         "l": "Q1",
+         "e": "value",
+         "k": "kw",
+         "v": {
+          "children": [
+           [
+            "a",
+            1
+           ],
+           [
+            "b",
+            1
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "set-f",
+       "observer": [
+        {
+         "l": "Q2",
+         "e": "child_removed",
+         "k": "d",
+         "v": 1
+        },
+        {
+         "l": "Q2",
+         "e": "child_added",
+         "k": "f",
+         "p": "e",
+         "v": 1
+        },
+        {
+         "l": "Q2",
+         "e": "value",
+         "k": "kw",
+         "v": {
+          "children": [
+           [
+            "e",
+            1
+           ],
+           [
+            "f",
+            1
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "remove-a",
+       "observer": [
+        {
+         "l": "Q1",
+         "e": "child_removed",
+         "k": "a",
+         "v": 1
+        },
+        {
+         "l": "Q1",
+         "e": "child_added",
+         "k": "c",
+         "p": "b",
+         "v": 1
+        },
+        {
+         "l": "Q1",
+         "e": "value",
+         "k": "kw",
+         "v": {
+          "children": [
+           [
+            "b",
+            1
+           ],
+           [
+            "c",
+            1
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "set-b",
+       "observer": [
+        {
+         "l": "Q1",
+         "e": "child_changed",
+         "k": "b",
+         "p": null,
+         "v": 2
+        },
+        {
+         "l": "Q1",
+         "e": "value",
+         "k": "kw",
+         "v": {
+          "children": [
+           [
+            "b",
+            2
+           ],
+           [
+            "c",
+            1
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      }
+     ]
+    },
+    {
+     "id": "priority_window",
+     "ok": true,
+     "steps": [
+      {
+       "step": "attach",
+       "observer": [
+        {
+         "l": "P",
+         "e": "child_added",
+         "k": "x",
+         "p": null,
+         "v": {
+          ".value": 1,
+          ".priority": 1
+         }
+        },
+        {
+         "l": "P",
+         "e": "child_added",
+         "k": "y",
+         "p": "x",
+         "v": {
+          ".value": 2,
+          ".priority": 2
+         }
+        },
+        {
+         "l": "P",
+         "e": "value",
+         "k": "pw",
+         "v": {
+          "children": [
+           [
+            "x",
+            {
+             ".value": 1,
+             ".priority": 1
+            }
+           ],
+           [
+            "y",
+            {
+             ".value": 2,
+             ".priority": 2
+            }
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ready": true,
+       "quiet": true
+      },
+      {
+       "step": "priority-z-0",
+       "observer": [
+        {
+         "l": "P",
+         "e": "child_removed",
+         "k": "y",
+         "v": {
+          ".value": 2,
+          ".priority": 2
+         }
+        },
+        {
+         "l": "P",
+         "e": "child_added",
+         "k": "z",
+         "p": null,
+         "v": {
+          ".value": 3,
+          ".priority": 0
+         }
+        },
+        {
+         "l": "P",
+         "e": "value",
+         "k": "pw",
+         "v": {
+          "children": [
+           [
+            "z",
+            {
+             ".value": 3,
+             ".priority": 0
+            }
+           ],
+           [
+            "x",
+            {
+             ".value": 1,
+             ".priority": 1
+            }
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "priority-x-10",
+       "observer": [
+        {
+         "l": "P",
+         "e": "child_removed",
+         "k": "x",
+         "v": {
+          ".value": 1,
+          ".priority": 1
+         }
+        },
+        {
+         "l": "P",
+         "e": "child_added",
+         "k": "y",
+         "p": "z",
+         "v": {
+          ".value": 2,
+          ".priority": 2
+         }
+        },
+        {
+         "l": "P",
+         "e": "value",
+         "k": "pw",
+         "v": {
+          "children": [
+           [
+            "z",
+            {
+             ".value": 3,
+             ".priority": 0
+            }
+           ],
+           [
+            "y",
+            {
+             ".value": 2,
+             ".priority": 2
+            }
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "add-v-1.5",
+       "observer": [
+        {
+         "l": "P",
+         "e": "child_removed",
+         "k": "y",
+         "v": {
+          ".value": 2,
+          ".priority": 2
+         }
+        },
+        {
+         "l": "P",
+         "e": "child_added",
+         "k": "v",
+         "p": "z",
+         "v": {
+          ".value": 5,
+          ".priority": 1.5
+         }
+        },
+        {
+         "l": "P",
+         "e": "value",
+         "k": "pw",
+         "v": {
+          "children": [
+           [
+            "z",
+            {
+             ".value": 3,
+             ".priority": 0
+            }
+           ],
+           [
+            "v",
+            {
+             ".value": 5,
+             ".priority": 1.5
+            }
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "remove-y",
+       "observer": [],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      }
+     ]
+    },
+    {
+     "id": "value_range",
+     "ok": true,
+     "steps": [
+      {
+       "step": "attach",
+       "observer": [
+        {
+         "l": "V",
+         "e": "child_added",
+         "k": "b",
+         "p": null,
+         "v": 5
+        },
+        {
+         "l": "V",
+         "e": "value",
+         "k": "vr",
+         "v": {
+          "children": [
+           [
+            "b",
+            5
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ready": true,
+       "quiet": true
+      },
+      {
+       "step": "set-a-6",
+       "observer": [
+        {
+         "l": "V",
+         "e": "child_added",
+         "k": "a",
+         "p": "b",
+         "v": 6
+        },
+        {
+         "l": "V",
+         "e": "value",
+         "k": "vr",
+         "v": {
+          "children": [
+           [
+            "b",
+            5
+           ],
+           [
+            "a",
+            6
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "set-b-20",
+       "observer": [
+        {
+         "l": "V",
+         "e": "child_removed",
+         "k": "b",
+         "v": 5
+        },
+        {
+         "l": "V",
+         "e": "value",
+         "k": "vr",
+         "v": {
+          "children": [
+           [
+            "a",
+            6
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "set-c-5",
+       "observer": [
+        {
+         "l": "V",
+         "e": "child_added",
+         "k": "c",
+         "p": null,
+         "v": 5
+        },
+        {
+         "l": "V",
+         "e": "value",
+         "k": "vr",
+         "v": {
+          "children": [
+           [
+            "c",
+            5
+           ],
+           [
+            "a",
+            6
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "remove-c",
+       "observer": [
+        {
+         "l": "V",
+         "e": "child_removed",
+         "k": "c",
+         "v": 5
+        },
+        {
+         "l": "V",
+         "e": "value",
+         "k": "vr",
+         "v": {
+          "children": [
+           [
+            "a",
+            6
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      }
+     ]
+    },
+    {
+     "id": "equal_events",
+     "ok": true,
+     "steps": [
+      {
+       "step": "attach",
+       "observer": [
+        {
+         "l": "T",
+         "e": "child_added",
+         "k": "q",
+         "p": null,
+         "v": {
+          "t": 2
+         }
+        },
+        {
+         "l": "T",
+         "e": "value",
+         "k": "eq",
+         "v": {
+          "children": [
+           [
+            "q",
+            {
+             "t": 2
+            }
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ready": true,
+       "quiet": true
+      },
+      {
+       "step": "set-p-t-2",
+       "observer": [
+        {
+         "l": "T",
+         "e": "child_added",
+         "k": "p",
+         "p": null,
+         "v": {
+          "t": 2
+         }
+        },
+        {
+         "l": "T",
+         "e": "value",
+         "k": "eq",
+         "v": {
+          "children": [
+           [
+            "p",
+            {
+             "t": 2
+            }
+           ],
+           [
+            "q",
+            {
+             "t": 2
+            }
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "set-q-t-3",
+       "observer": [
+        {
+         "l": "T",
+         "e": "child_removed",
+         "k": "q",
+         "v": {
+          "t": 2
+         }
+        },
+        {
+         "l": "T",
+         "e": "value",
+         "k": "eq",
+         "v": {
+          "children": [
+           [
+            "p",
+            {
+             "t": 2
+            }
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "set-p-t-2-again",
+       "observer": [],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "set-p",
+       "observer": [
+        {
+         "l": "T",
+         "e": "child_changed",
+         "k": "p",
+         "p": null,
+         "v": {
+          "t": 2,
+          "u": 1
+         }
+        },
+        {
+         "l": "T",
+         "e": "value",
+         "k": "eq",
+         "v": {
+          "children": [
+           [
+            "p",
+            {
+             "t": 2,
+             "u": 1
+            }
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      }
+     ]
+    },
+    {
+     "id": "cursor_pair",
+     "ok": true,
+     "steps": [
+      {
+       "step": "get",
+       "observer": [],
+       "writer": [],
+       "result": {
+        "exists": true,
+        "v": {
+         "children": [
+          [
+           "b",
+           {
+            "s": 1
+           }
+          ],
+          [
+           "c",
+           {
+            "s": 1
+           }
+          ]
+         ]
+        }
+       },
+       "quiet": true
+      },
+      {
+       "step": "attach",
+       "observer": [
+        {
+         "l": "C",
+         "e": "child_added",
+         "k": "b",
+         "p": null,
+         "v": {
+          "s": 1
+         }
+        },
+        {
+         "l": "C",
+         "e": "child_added",
+         "k": "c",
+         "p": "b",
+         "v": {
+          "s": 1
+         }
+        },
+        {
+         "l": "C",
+         "e": "value",
+         "k": "cp",
+         "v": {
+          "children": [
+           [
+            "b",
+            {
+             "s": 1
+            }
+           ],
+           [
+            "c",
+            {
+             "s": 1
+            }
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ready": true,
+       "quiet": true
+      },
+      {
+       "step": "set-b2",
+       "observer": [
+        {
+         "l": "C",
+         "e": "child_added",
+         "k": "b2",
+         "p": "b",
+         "v": {
+          "s": 1
+         }
+        },
+        {
+         "l": "C",
+         "e": "value",
+         "k": "cp",
+         "v": {
+          "children": [
+           [
+            "b",
+            {
+             "s": 1
+            }
+           ],
+           [
+            "b2",
+            {
+             "s": 1
+            }
+           ],
+           [
+            "c",
+            {
+             "s": 1
+            }
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      }
+     ]
+    },
+    {
+     "id": "fanout",
+     "ok": true,
+     "steps": [
+      {
+       "step": "attach",
+       "observer": [
+        {
+         "l": "FX",
+         "e": "child_added",
+         "k": "n",
+         "p": null,
+         "v": 1
+        },
+        {
+         "l": "FX",
+         "e": "value",
+         "k": "x",
+         "v": {
+          "children": [
+           [
+            "n",
+            1
+           ]
+          ]
+         }
+        },
+        {
+         "l": "FY",
+         "e": "value",
+         "k": "y",
+         "v": {
+          "children": [
+           [
+            "n",
+            1
+           ]
+          ]
+         }
+        },
+        {
+         "l": "FO",
+         "e": "value",
+         "k": "fo",
+         "v": {
+          "children": [
+           [
+            "x",
+            {
+             "n": 1
+            }
+           ],
+           [
+            "y",
+            {
+             "n": 1
+            }
+           ],
+           [
+            "z",
+            1
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ready": true,
+       "quiet": true
+      },
+      {
+       "step": "update-root",
+       "observer": [
+        {
+         "l": "FX",
+         "e": "child_changed",
+         "k": "n",
+         "p": null,
+         "v": 2
+        },
+        {
+         "l": "FX",
+         "e": "value",
+         "k": "x",
+         "v": {
+          "children": [
+           [
+            "n",
+            2
+           ]
+          ]
+         }
+        },
+        {
+         "l": "FY",
+         "e": "value",
+         "k": "y",
+         "v": {
+          "children": [
+           [
+            "n",
+            2
+           ]
+          ]
+         }
+        },
+        {
+         "l": "FO",
+         "e": "value",
+         "k": "fo",
+         "v": {
+          "children": [
+           [
+            "x",
+            {
+             "n": 2
+            }
+           ],
+           [
+            "y",
+            {
+             "n": 2
+            }
+           ],
+           [
+            "z",
+            2
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "set-fo",
+       "observer": [
+        {
+         "l": "FX",
+         "e": "child_changed",
+         "k": "n",
+         "p": null,
+         "v": 3
+        },
+        {
+         "l": "FX",
+         "e": "value",
+         "k": "x",
+         "v": {
+          "children": [
+           [
+            "n",
+            3
+           ]
+          ]
+         }
+        },
+        {
+         "l": "FY",
+         "e": "value",
+         "k": "y",
+         "v": {
+          "leaf": null
+         }
+        },
+        {
+         "l": "FO",
+         "e": "value",
+         "k": "fo",
+         "v": {
+          "children": [
+           [
+            "w",
+            1
+           ],
+           [
+            "x",
+            {
+             "n": 3
+            }
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      }
+     ]
+    },
+    {
+     "id": "transactions",
+     "ok": true,
+     "steps": [
+      {
+       "step": "attach",
+       "observer": [
+        {
+         "l": "TA",
+         "e": "value",
+         "k": "ta",
+         "v": {
+          "leaf": null
+         }
+        },
+        {
+         "l": "TB",
+         "e": "value",
+         "k": "tb",
+         "v": {
+          "children": [
+           [
+            "v",
+            7
+           ]
+          ]
+         }
+        },
+        {
+         "l": "TC",
+         "e": "value",
+         "k": "tc",
+         "v": {
+          "children": [
+           [
+            "n",
+            1
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ready": true,
+       "quiet": true
+      },
+      {
+       "step": "absent",
+       "observer": [
+        {
+         "l": "TA",
+         "e": "value",
+         "k": "ta",
+         "v": {
+          "leaf": 1
+         }
+        }
+       ],
+       "writer": [
+        {
+         "l": "W",
+         "e": "value",
+         "k": "ta",
+         "v": {
+          "leaf": null
+         }
+        },
+        {
+         "l": "W",
+         "e": "value",
+         "k": "ta",
+         "v": {
+          "leaf": 1
+         }
+        },
+        {
+         "l": "txn",
+         "e": "resolved"
+        }
+       ],
+       "ready": true,
+       "result": {
+        "inputs": [
+         null
+        ],
+        "committed": true,
+        "snapshot": {
+         "leaf": 1
+        }
+       },
+       "quiet": true
+      },
+      {
+       "step": "abort",
+       "observer": [],
+       "writer": [
+        {
+         "l": "W",
+         "e": "value",
+         "k": "tb",
+         "v": {
+          "children": [
+           [
+            "v",
+            7
+           ]
+          ]
+         }
+        },
+        {
+         "l": "txn",
+         "e": "resolved"
+        }
+       ],
+       "ready": true,
+       "result": {
+        "inputs": [
+         {
+          "v": 7
+         }
+        ],
+        "committed": false,
+        "snapshot": {
+         "children": [
+          [
+           "v",
+           7
+          ]
+         ]
+        }
+       },
+       "quiet": true
+      },
+      {
+       "step": "object",
+       "observer": [
+        {
+         "l": "TC",
+         "e": "value",
+         "k": "tc",
+         "v": {
+          "children": [
+           [
+            "n",
+            2
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [
+        {
+         "l": "W",
+         "e": "value",
+         "k": "tc",
+         "v": {
+          "children": [
+           [
+            "n",
+            1
+           ]
+          ]
+         }
+        },
+        {
+         "l": "W",
+         "e": "value",
+         "k": "tc",
+         "v": {
+          "children": [
+           [
+            "n",
+            2
+           ]
+          ]
+         }
+        },
+        {
+         "l": "txn",
+         "e": "resolved"
+        }
+       ],
+       "ready": true,
+       "result": {
+        "inputs": [
+         {
+          "n": 1
+         }
+        ],
+        "committed": true,
+        "snapshot": {
+         "children": [
+          [
+           "n",
+           2
+          ]
+         ]
+        }
+       },
+       "quiet": true
+      }
+     ]
+    },
+    {
+     "id": "get_exists",
+     "ok": true,
+     "steps": [
+      {
+       "step": "get-window",
+       "observer": [],
+       "writer": [],
+       "result": {
+        "exists": true,
+        "v": {
+         "children": [
+          [
+           "a",
+           1
+          ],
+          [
+           "b",
+           2
+          ]
+         ]
+        }
+       },
+       "quiet": true
+      },
+      {
+       "step": "get-missing",
+       "observer": [],
+       "writer": [],
+       "result": {
+        "exists": false,
+        "v": {
+         "leaf": null
+        }
+       },
+       "quiet": true
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "name": "r1-lp",
+   "suite": "events",
+   "rows": [
+    {
+     "id": "startup",
+     "ok": true
+    },
+    {
+     "id": "startup-observer",
+     "ok": true
+    },
+    {
+     "id": "seed",
+     "ok": true
+    },
+    {
+     "id": "key_window",
+     "ok": true,
+     "steps": [
+      {
+       "step": "attach",
+       "observer": [
+        {
+         "l": "Q1",
+         "e": "child_added",
+         "k": "b",
+         "p": null,
+         "v": 1
+        },
+        {
+         "l": "Q1",
+         "e": "child_added",
+         "k": "c",
+         "p": "b",
+         "v": 1
+        },
+        {
+         "l": "Q1",
+         "e": "value",
+         "k": "kw",
+         "v": {
+          "children": [
+           [
+            "b",
+            1
+           ],
+           [
+            "c",
+            1
+           ]
+          ]
+         }
+        },
+        {
+         "l": "Q2",
+         "e": "child_added",
+         "k": "d",
+         "p": null,
+         "v": 1
+        },
+        {
+         "l": "Q2",
+         "e": "child_added",
+         "k": "e",
+         "p": "d",
+         "v": 1
+        },
+        {
+         "l": "Q2",
+         "e": "value",
+         "k": "kw",
+         "v": {
+          "children": [
+           [
+            "d",
+            1
+           ],
+           [
+            "e",
+            1
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ready": true,
+       "quiet": true
+      },
+      {
+       "step": "set-a",
+       "observer": [
+        {
+         "l": "Q1",
+         "e": "child_removed",
+         "k": "c",
+         "v": 1
+        },
+        {
+         "l": "Q1",
+         "e": "child_added",
+         "k": "a",
+         "p": null,
+         "v": 1
+        },
+        {
+         "l": "Q1",
+         "e": "value",
+         "k": "kw",
+         "v": {
+          "children": [
+           [
+            "a",
+            1
+           ],
+           [
+            "b",
+            1
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "set-f",
+       "observer": [
+        {
+         "l": "Q2",
+         "e": "child_removed",
+         "k": "d",
+         "v": 1
+        },
+        {
+         "l": "Q2",
+         "e": "child_added",
+         "k": "f",
+         "p": "e",
+         "v": 1
+        },
+        {
+         "l": "Q2",
+         "e": "value",
+         "k": "kw",
+         "v": {
+          "children": [
+           [
+            "e",
+            1
+           ],
+           [
+            "f",
+            1
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "remove-a",
+       "observer": [
+        {
+         "l": "Q1",
+         "e": "child_removed",
+         "k": "a",
+         "v": 1
+        },
+        {
+         "l": "Q1",
+         "e": "child_added",
+         "k": "c",
+         "p": "b",
+         "v": 1
+        },
+        {
+         "l": "Q1",
+         "e": "value",
+         "k": "kw",
+         "v": {
+          "children": [
+           [
+            "b",
+            1
+           ],
+           [
+            "c",
+            1
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "set-b",
+       "observer": [
+        {
+         "l": "Q1",
+         "e": "child_changed",
+         "k": "b",
+         "p": null,
+         "v": 2
+        },
+        {
+         "l": "Q1",
+         "e": "value",
+         "k": "kw",
+         "v": {
+          "children": [
+           [
+            "b",
+            2
+           ],
+           [
+            "c",
+            1
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      }
+     ]
+    },
+    {
+     "id": "priority_window",
+     "ok": true,
+     "steps": [
+      {
+       "step": "attach",
+       "observer": [
+        {
+         "l": "P",
+         "e": "child_added",
+         "k": "x",
+         "p": null,
+         "v": {
+          ".value": 1,
+          ".priority": 1
+         }
+        },
+        {
+         "l": "P",
+         "e": "child_added",
+         "k": "y",
+         "p": "x",
+         "v": {
+          ".value": 2,
+          ".priority": 2
+         }
+        },
+        {
+         "l": "P",
+         "e": "value",
+         "k": "pw",
+         "v": {
+          "children": [
+           [
+            "x",
+            {
+             ".value": 1,
+             ".priority": 1
+            }
+           ],
+           [
+            "y",
+            {
+             ".value": 2,
+             ".priority": 2
+            }
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ready": true,
+       "quiet": true
+      },
+      {
+       "step": "priority-z-0",
+       "observer": [
+        {
+         "l": "P",
+         "e": "child_removed",
+         "k": "y",
+         "v": {
+          ".value": 2,
+          ".priority": 2
+         }
+        },
+        {
+         "l": "P",
+         "e": "child_added",
+         "k": "z",
+         "p": null,
+         "v": {
+          ".value": 3,
+          ".priority": 0
+         }
+        },
+        {
+         "l": "P",
+         "e": "value",
+         "k": "pw",
+         "v": {
+          "children": [
+           [
+            "z",
+            {
+             ".value": 3,
+             ".priority": 0
+            }
+           ],
+           [
+            "x",
+            {
+             ".value": 1,
+             ".priority": 1
+            }
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "priority-x-10",
+       "observer": [
+        {
+         "l": "P",
+         "e": "child_removed",
+         "k": "x",
+         "v": {
+          ".value": 1,
+          ".priority": 1
+         }
+        },
+        {
+         "l": "P",
+         "e": "child_added",
+         "k": "y",
+         "p": "z",
+         "v": {
+          ".value": 2,
+          ".priority": 2
+         }
+        },
+        {
+         "l": "P",
+         "e": "value",
+         "k": "pw",
+         "v": {
+          "children": [
+           [
+            "z",
+            {
+             ".value": 3,
+             ".priority": 0
+            }
+           ],
+           [
+            "y",
+            {
+             ".value": 2,
+             ".priority": 2
+            }
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "add-v-1.5",
+       "observer": [
+        {
+         "l": "P",
+         "e": "child_removed",
+         "k": "y",
+         "v": {
+          ".value": 2,
+          ".priority": 2
+         }
+        },
+        {
+         "l": "P",
+         "e": "child_added",
+         "k": "v",
+         "p": "z",
+         "v": {
+          ".value": 5,
+          ".priority": 1.5
+         }
+        },
+        {
+         "l": "P",
+         "e": "value",
+         "k": "pw",
+         "v": {
+          "children": [
+           [
+            "z",
+            {
+             ".value": 3,
+             ".priority": 0
+            }
+           ],
+           [
+            "v",
+            {
+             ".value": 5,
+             ".priority": 1.5
+            }
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "remove-y",
+       "observer": [],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      }
+     ]
+    },
+    {
+     "id": "value_range",
+     "ok": true,
+     "steps": [
+      {
+       "step": "attach",
+       "observer": [
+        {
+         "l": "V",
+         "e": "child_added",
+         "k": "b",
+         "p": null,
+         "v": 5
+        },
+        {
+         "l": "V",
+         "e": "value",
+         "k": "vr",
+         "v": {
+          "children": [
+           [
+            "b",
+            5
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ready": true,
+       "quiet": true
+      },
+      {
+       "step": "set-a-6",
+       "observer": [
+        {
+         "l": "V",
+         "e": "child_added",
+         "k": "a",
+         "p": "b",
+         "v": 6
+        },
+        {
+         "l": "V",
+         "e": "value",
+         "k": "vr",
+         "v": {
+          "children": [
+           [
+            "b",
+            5
+           ],
+           [
+            "a",
+            6
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "set-b-20",
+       "observer": [
+        {
+         "l": "V",
+         "e": "child_removed",
+         "k": "b",
+         "v": 5
+        },
+        {
+         "l": "V",
+         "e": "value",
+         "k": "vr",
+         "v": {
+          "children": [
+           [
+            "a",
+            6
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "set-c-5",
+       "observer": [
+        {
+         "l": "V",
+         "e": "child_added",
+         "k": "c",
+         "p": null,
+         "v": 5
+        },
+        {
+         "l": "V",
+         "e": "value",
+         "k": "vr",
+         "v": {
+          "children": [
+           [
+            "c",
+            5
+           ],
+           [
+            "a",
+            6
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "remove-c",
+       "observer": [
+        {
+         "l": "V",
+         "e": "child_removed",
+         "k": "c",
+         "v": 5
+        },
+        {
+         "l": "V",
+         "e": "value",
+         "k": "vr",
+         "v": {
+          "children": [
+           [
+            "a",
+            6
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      }
+     ]
+    },
+    {
+     "id": "equal_events",
+     "ok": true,
+     "steps": [
+      {
+       "step": "attach",
+       "observer": [
+        {
+         "l": "T",
+         "e": "child_added",
+         "k": "q",
+         "p": null,
+         "v": {
+          "t": 2
+         }
+        },
+        {
+         "l": "T",
+         "e": "value",
+         "k": "eq",
+         "v": {
+          "children": [
+           [
+            "q",
+            {
+             "t": 2
+            }
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ready": true,
+       "quiet": true
+      },
+      {
+       "step": "set-p-t-2",
+       "observer": [
+        {
+         "l": "T",
+         "e": "child_added",
+         "k": "p",
+         "p": null,
+         "v": {
+          "t": 2
+         }
+        },
+        {
+         "l": "T",
+         "e": "value",
+         "k": "eq",
+         "v": {
+          "children": [
+           [
+            "p",
+            {
+             "t": 2
+            }
+           ],
+           [
+            "q",
+            {
+             "t": 2
+            }
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "set-q-t-3",
+       "observer": [
+        {
+         "l": "T",
+         "e": "child_removed",
+         "k": "q",
+         "v": {
+          "t": 2
+         }
+        },
+        {
+         "l": "T",
+         "e": "value",
+         "k": "eq",
+         "v": {
+          "children": [
+           [
+            "p",
+            {
+             "t": 2
+            }
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "set-p-t-2-again",
+       "observer": [],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "set-p",
+       "observer": [
+        {
+         "l": "T",
+         "e": "child_changed",
+         "k": "p",
+         "p": null,
+         "v": {
+          "t": 2,
+          "u": 1
+         }
+        },
+        {
+         "l": "T",
+         "e": "value",
+         "k": "eq",
+         "v": {
+          "children": [
+           [
+            "p",
+            {
+             "t": 2,
+             "u": 1
+            }
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      }
+     ]
+    },
+    {
+     "id": "cursor_pair",
+     "ok": true,
+     "steps": [
+      {
+       "step": "get",
+       "observer": [],
+       "writer": [],
+       "result": {
+        "exists": true,
+        "v": {
+         "children": [
+          [
+           "b",
+           {
+            "s": 1
+           }
+          ],
+          [
+           "c",
+           {
+            "s": 1
+           }
+          ]
+         ]
+        }
+       },
+       "quiet": true
+      },
+      {
+       "step": "attach",
+       "observer": [
+        {
+         "l": "C",
+         "e": "child_added",
+         "k": "b",
+         "p": null,
+         "v": {
+          "s": 1
+         }
+        },
+        {
+         "l": "C",
+         "e": "child_added",
+         "k": "c",
+         "p": "b",
+         "v": {
+          "s": 1
+         }
+        },
+        {
+         "l": "C",
+         "e": "value",
+         "k": "cp",
+         "v": {
+          "children": [
+           [
+            "b",
+            {
+             "s": 1
+            }
+           ],
+           [
+            "c",
+            {
+             "s": 1
+            }
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ready": true,
+       "quiet": true
+      },
+      {
+       "step": "set-b2",
+       "observer": [
+        {
+         "l": "C",
+         "e": "child_added",
+         "k": "b2",
+         "p": "b",
+         "v": {
+          "s": 1
+         }
+        },
+        {
+         "l": "C",
+         "e": "value",
+         "k": "cp",
+         "v": {
+          "children": [
+           [
+            "b",
+            {
+             "s": 1
+            }
+           ],
+           [
+            "b2",
+            {
+             "s": 1
+            }
+           ],
+           [
+            "c",
+            {
+             "s": 1
+            }
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      }
+     ]
+    },
+    {
+     "id": "fanout",
+     "ok": true,
+     "steps": [
+      {
+       "step": "attach",
+       "observer": [
+        {
+         "l": "FX",
+         "e": "child_added",
+         "k": "n",
+         "p": null,
+         "v": 1
+        },
+        {
+         "l": "FX",
+         "e": "value",
+         "k": "x",
+         "v": {
+          "children": [
+           [
+            "n",
+            1
+           ]
+          ]
+         }
+        },
+        {
+         "l": "FY",
+         "e": "value",
+         "k": "y",
+         "v": {
+          "children": [
+           [
+            "n",
+            1
+           ]
+          ]
+         }
+        },
+        {
+         "l": "FO",
+         "e": "value",
+         "k": "fo",
+         "v": {
+          "children": [
+           [
+            "x",
+            {
+             "n": 1
+            }
+           ],
+           [
+            "y",
+            {
+             "n": 1
+            }
+           ],
+           [
+            "z",
+            1
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ready": true,
+       "quiet": true
+      },
+      {
+       "step": "update-root",
+       "observer": [
+        {
+         "l": "FX",
+         "e": "child_changed",
+         "k": "n",
+         "p": null,
+         "v": 2
+        },
+        {
+         "l": "FX",
+         "e": "value",
+         "k": "x",
+         "v": {
+          "children": [
+           [
+            "n",
+            2
+           ]
+          ]
+         }
+        },
+        {
+         "l": "FY",
+         "e": "value",
+         "k": "y",
+         "v": {
+          "children": [
+           [
+            "n",
+            2
+           ]
+          ]
+         }
+        },
+        {
+         "l": "FO",
+         "e": "value",
+         "k": "fo",
+         "v": {
+          "children": [
+           [
+            "x",
+            {
+             "n": 2
+            }
+           ],
+           [
+            "y",
+            {
+             "n": 2
+            }
+           ],
+           [
+            "z",
+            2
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "set-fo",
+       "observer": [
+        {
+         "l": "FX",
+         "e": "child_changed",
+         "k": "n",
+         "p": null,
+         "v": 3
+        },
+        {
+         "l": "FX",
+         "e": "value",
+         "k": "x",
+         "v": {
+          "children": [
+           [
+            "n",
+            3
+           ]
+          ]
+         }
+        },
+        {
+         "l": "FY",
+         "e": "value",
+         "k": "y",
+         "v": {
+          "leaf": null
+         }
+        },
+        {
+         "l": "FO",
+         "e": "value",
+         "k": "fo",
+         "v": {
+          "children": [
+           [
+            "w",
+            1
+           ],
+           [
+            "x",
+            {
+             "n": 3
+            }
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      }
+     ]
+    },
+    {
+     "id": "transactions",
+     "ok": true,
+     "steps": [
+      {
+       "step": "attach",
+       "observer": [
+        {
+         "l": "TA",
+         "e": "value",
+         "k": "ta",
+         "v": {
+          "leaf": null
+         }
+        },
+        {
+         "l": "TB",
+         "e": "value",
+         "k": "tb",
+         "v": {
+          "children": [
+           [
+            "v",
+            7
+           ]
+          ]
+         }
+        },
+        {
+         "l": "TC",
+         "e": "value",
+         "k": "tc",
+         "v": {
+          "children": [
+           [
+            "n",
+            1
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ready": true,
+       "quiet": true
+      },
+      {
+       "step": "absent",
+       "observer": [
+        {
+         "l": "TA",
+         "e": "value",
+         "k": "ta",
+         "v": {
+          "leaf": 1
+         }
+        }
+       ],
+       "writer": [
+        {
+         "l": "W",
+         "e": "value",
+         "k": "ta",
+         "v": {
+          "leaf": null
+         }
+        },
+        {
+         "l": "W",
+         "e": "value",
+         "k": "ta",
+         "v": {
+          "leaf": 1
+         }
+        },
+        {
+         "l": "txn",
+         "e": "resolved"
+        }
+       ],
+       "ready": true,
+       "result": {
+        "inputs": [
+         null
+        ],
+        "committed": true,
+        "snapshot": {
+         "leaf": 1
+        }
+       },
+       "quiet": true
+      },
+      {
+       "step": "abort",
+       "observer": [],
+       "writer": [
+        {
+         "l": "W",
+         "e": "value",
+         "k": "tb",
+         "v": {
+          "children": [
+           [
+            "v",
+            7
+           ]
+          ]
+         }
+        },
+        {
+         "l": "txn",
+         "e": "resolved"
+        }
+       ],
+       "ready": true,
+       "result": {
+        "inputs": [
+         {
+          "v": 7
+         }
+        ],
+        "committed": false,
+        "snapshot": {
+         "children": [
+          [
+           "v",
+           7
+          ]
+         ]
+        }
+       },
+       "quiet": true
+      },
+      {
+       "step": "object",
+       "observer": [
+        {
+         "l": "TC",
+         "e": "value",
+         "k": "tc",
+         "v": {
+          "children": [
+           [
+            "n",
+            2
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [
+        {
+         "l": "W",
+         "e": "value",
+         "k": "tc",
+         "v": {
+          "children": [
+           [
+            "n",
+            1
+           ]
+          ]
+         }
+        },
+        {
+         "l": "W",
+         "e": "value",
+         "k": "tc",
+         "v": {
+          "children": [
+           [
+            "n",
+            2
+           ]
+          ]
+         }
+        },
+        {
+         "l": "txn",
+         "e": "resolved"
+        }
+       ],
+       "ready": true,
+       "result": {
+        "inputs": [
+         {
+          "n": 1
+         }
+        ],
+        "committed": true,
+        "snapshot": {
+         "children": [
+          [
+           "n",
+           2
+          ]
+         ]
+        }
+       },
+       "quiet": true
+      }
+     ]
+    },
+    {
+     "id": "get_exists",
+     "ok": true,
+     "steps": [
+      {
+       "step": "get-window",
+       "observer": [],
+       "writer": [],
+       "result": {
+        "exists": true,
+        "v": {
+         "children": [
+          [
+           "a",
+           1
+          ],
+          [
+           "b",
+           2
+          ]
+         ]
+        }
+       },
+       "quiet": true
+      },
+      {
+       "step": "get-missing",
+       "observer": [],
+       "writer": [],
+       "result": {
+        "exists": false,
+        "v": {
+         "leaf": null
+        }
+       },
+       "quiet": true
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "name": "r2-ws",
+   "suite": "events",
+   "rows": [
+    {
+     "id": "startup",
+     "ok": true
+    },
+    {
+     "id": "startup-observer",
+     "ok": true
+    },
+    {
+     "id": "seed",
+     "ok": true
+    },
+    {
+     "id": "key_window",
+     "ok": true,
+     "steps": [
+      {
+       "step": "attach",
+       "observer": [
+        {
+         "l": "Q1",
+         "e": "child_added",
+         "k": "b",
+         "p": null,
+         "v": 1
+        },
+        {
+         "l": "Q1",
+         "e": "child_added",
+         "k": "c",
+         "p": "b",
+         "v": 1
+        },
+        {
+         "l": "Q1",
+         "e": "value",
+         "k": "kw",
+         "v": {
+          "children": [
+           [
+            "b",
+            1
+           ],
+           [
+            "c",
+            1
+           ]
+          ]
+         }
+        },
+        {
+         "l": "Q2",
+         "e": "child_added",
+         "k": "d",
+         "p": null,
+         "v": 1
+        },
+        {
+         "l": "Q2",
+         "e": "child_added",
+         "k": "e",
+         "p": "d",
+         "v": 1
+        },
+        {
+         "l": "Q2",
+         "e": "value",
+         "k": "kw",
+         "v": {
+          "children": [
+           [
+            "d",
+            1
+           ],
+           [
+            "e",
+            1
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ready": true,
+       "quiet": true
+      },
+      {
+       "step": "set-a",
+       "observer": [
+        {
+         "l": "Q1",
+         "e": "child_removed",
+         "k": "c",
+         "v": 1
+        },
+        {
+         "l": "Q1",
+         "e": "child_added",
+         "k": "a",
+         "p": null,
+         "v": 1
+        },
+        {
+         "l": "Q1",
+         "e": "value",
+         "k": "kw",
+         "v": {
+          "children": [
+           [
+            "a",
+            1
+           ],
+           [
+            "b",
+            1
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "set-f",
+       "observer": [
+        {
+         "l": "Q2",
+         "e": "child_removed",
+         "k": "d",
+         "v": 1
+        },
+        {
+         "l": "Q2",
+         "e": "child_added",
+         "k": "f",
+         "p": "e",
+         "v": 1
+        },
+        {
+         "l": "Q2",
+         "e": "value",
+         "k": "kw",
+         "v": {
+          "children": [
+           [
+            "e",
+            1
+           ],
+           [
+            "f",
+            1
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "remove-a",
+       "observer": [
+        {
+         "l": "Q1",
+         "e": "child_removed",
+         "k": "a",
+         "v": 1
+        },
+        {
+         "l": "Q1",
+         "e": "child_added",
+         "k": "c",
+         "p": "b",
+         "v": 1
+        },
+        {
+         "l": "Q1",
+         "e": "value",
+         "k": "kw",
+         "v": {
+          "children": [
+           [
+            "b",
+            1
+           ],
+           [
+            "c",
+            1
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "set-b",
+       "observer": [
+        {
+         "l": "Q1",
+         "e": "child_changed",
+         "k": "b",
+         "p": null,
+         "v": 2
+        },
+        {
+         "l": "Q1",
+         "e": "value",
+         "k": "kw",
+         "v": {
+          "children": [
+           [
+            "b",
+            2
+           ],
+           [
+            "c",
+            1
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      }
+     ]
+    },
+    {
+     "id": "priority_window",
+     "ok": true,
+     "steps": [
+      {
+       "step": "attach",
+       "observer": [
+        {
+         "l": "P",
+         "e": "child_added",
+         "k": "x",
+         "p": null,
+         "v": {
+          ".value": 1,
+          ".priority": 1
+         }
+        },
+        {
+         "l": "P",
+         "e": "child_added",
+         "k": "y",
+         "p": "x",
+         "v": {
+          ".value": 2,
+          ".priority": 2
+         }
+        },
+        {
+         "l": "P",
+         "e": "value",
+         "k": "pw",
+         "v": {
+          "children": [
+           [
+            "x",
+            {
+             ".value": 1,
+             ".priority": 1
+            }
+           ],
+           [
+            "y",
+            {
+             ".value": 2,
+             ".priority": 2
+            }
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ready": true,
+       "quiet": true
+      },
+      {
+       "step": "priority-z-0",
+       "observer": [
+        {
+         "l": "P",
+         "e": "child_removed",
+         "k": "y",
+         "v": {
+          ".value": 2,
+          ".priority": 2
+         }
+        },
+        {
+         "l": "P",
+         "e": "child_added",
+         "k": "z",
+         "p": null,
+         "v": {
+          ".value": 3,
+          ".priority": 0
+         }
+        },
+        {
+         "l": "P",
+         "e": "value",
+         "k": "pw",
+         "v": {
+          "children": [
+           [
+            "z",
+            {
+             ".value": 3,
+             ".priority": 0
+            }
+           ],
+           [
+            "x",
+            {
+             ".value": 1,
+             ".priority": 1
+            }
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "priority-x-10",
+       "observer": [
+        {
+         "l": "P",
+         "e": "child_removed",
+         "k": "x",
+         "v": {
+          ".value": 1,
+          ".priority": 1
+         }
+        },
+        {
+         "l": "P",
+         "e": "child_added",
+         "k": "y",
+         "p": "z",
+         "v": {
+          ".value": 2,
+          ".priority": 2
+         }
+        },
+        {
+         "l": "P",
+         "e": "value",
+         "k": "pw",
+         "v": {
+          "children": [
+           [
+            "z",
+            {
+             ".value": 3,
+             ".priority": 0
+            }
+           ],
+           [
+            "y",
+            {
+             ".value": 2,
+             ".priority": 2
+            }
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "add-v-1.5",
+       "observer": [
+        {
+         "l": "P",
+         "e": "child_removed",
+         "k": "y",
+         "v": {
+          ".value": 2,
+          ".priority": 2
+         }
+        },
+        {
+         "l": "P",
+         "e": "child_added",
+         "k": "v",
+         "p": "z",
+         "v": {
+          ".value": 5,
+          ".priority": 1.5
+         }
+        },
+        {
+         "l": "P",
+         "e": "value",
+         "k": "pw",
+         "v": {
+          "children": [
+           [
+            "z",
+            {
+             ".value": 3,
+             ".priority": 0
+            }
+           ],
+           [
+            "v",
+            {
+             ".value": 5,
+             ".priority": 1.5
+            }
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "remove-y",
+       "observer": [],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      }
+     ]
+    },
+    {
+     "id": "value_range",
+     "ok": true,
+     "steps": [
+      {
+       "step": "attach",
+       "observer": [
+        {
+         "l": "V",
+         "e": "child_added",
+         "k": "b",
+         "p": null,
+         "v": 5
+        },
+        {
+         "l": "V",
+         "e": "value",
+         "k": "vr",
+         "v": {
+          "children": [
+           [
+            "b",
+            5
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ready": true,
+       "quiet": true
+      },
+      {
+       "step": "set-a-6",
+       "observer": [
+        {
+         "l": "V",
+         "e": "child_added",
+         "k": "a",
+         "p": "b",
+         "v": 6
+        },
+        {
+         "l": "V",
+         "e": "value",
+         "k": "vr",
+         "v": {
+          "children": [
+           [
+            "b",
+            5
+           ],
+           [
+            "a",
+            6
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "set-b-20",
+       "observer": [
+        {
+         "l": "V",
+         "e": "child_removed",
+         "k": "b",
+         "v": 5
+        },
+        {
+         "l": "V",
+         "e": "value",
+         "k": "vr",
+         "v": {
+          "children": [
+           [
+            "a",
+            6
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "set-c-5",
+       "observer": [
+        {
+         "l": "V",
+         "e": "child_added",
+         "k": "c",
+         "p": null,
+         "v": 5
+        },
+        {
+         "l": "V",
+         "e": "value",
+         "k": "vr",
+         "v": {
+          "children": [
+           [
+            "c",
+            5
+           ],
+           [
+            "a",
+            6
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "remove-c",
+       "observer": [
+        {
+         "l": "V",
+         "e": "child_removed",
+         "k": "c",
+         "v": 5
+        },
+        {
+         "l": "V",
+         "e": "value",
+         "k": "vr",
+         "v": {
+          "children": [
+           [
+            "a",
+            6
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      }
+     ]
+    },
+    {
+     "id": "equal_events",
+     "ok": true,
+     "steps": [
+      {
+       "step": "attach",
+       "observer": [
+        {
+         "l": "T",
+         "e": "child_added",
+         "k": "q",
+         "p": null,
+         "v": {
+          "t": 2
+         }
+        },
+        {
+         "l": "T",
+         "e": "value",
+         "k": "eq",
+         "v": {
+          "children": [
+           [
+            "q",
+            {
+             "t": 2
+            }
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ready": true,
+       "quiet": true
+      },
+      {
+       "step": "set-p-t-2",
+       "observer": [
+        {
+         "l": "T",
+         "e": "child_added",
+         "k": "p",
+         "p": null,
+         "v": {
+          "t": 2
+         }
+        },
+        {
+         "l": "T",
+         "e": "value",
+         "k": "eq",
+         "v": {
+          "children": [
+           [
+            "p",
+            {
+             "t": 2
+            }
+           ],
+           [
+            "q",
+            {
+             "t": 2
+            }
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "set-q-t-3",
+       "observer": [
+        {
+         "l": "T",
+         "e": "child_removed",
+         "k": "q",
+         "v": {
+          "t": 2
+         }
+        },
+        {
+         "l": "T",
+         "e": "value",
+         "k": "eq",
+         "v": {
+          "children": [
+           [
+            "p",
+            {
+             "t": 2
+            }
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "set-p-t-2-again",
+       "observer": [],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "set-p",
+       "observer": [
+        {
+         "l": "T",
+         "e": "child_changed",
+         "k": "p",
+         "p": null,
+         "v": {
+          "t": 2,
+          "u": 1
+         }
+        },
+        {
+         "l": "T",
+         "e": "value",
+         "k": "eq",
+         "v": {
+          "children": [
+           [
+            "p",
+            {
+             "t": 2,
+             "u": 1
+            }
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      }
+     ]
+    },
+    {
+     "id": "cursor_pair",
+     "ok": true,
+     "steps": [
+      {
+       "step": "get",
+       "observer": [],
+       "writer": [],
+       "result": {
+        "exists": true,
+        "v": {
+         "children": [
+          [
+           "b",
+           {
+            "s": 1
+           }
+          ],
+          [
+           "c",
+           {
+            "s": 1
+           }
+          ]
+         ]
+        }
+       },
+       "quiet": true
+      },
+      {
+       "step": "attach",
+       "observer": [
+        {
+         "l": "C",
+         "e": "child_added",
+         "k": "b",
+         "p": null,
+         "v": {
+          "s": 1
+         }
+        },
+        {
+         "l": "C",
+         "e": "child_added",
+         "k": "c",
+         "p": "b",
+         "v": {
+          "s": 1
+         }
+        },
+        {
+         "l": "C",
+         "e": "value",
+         "k": "cp",
+         "v": {
+          "children": [
+           [
+            "b",
+            {
+             "s": 1
+            }
+           ],
+           [
+            "c",
+            {
+             "s": 1
+            }
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ready": true,
+       "quiet": true
+      },
+      {
+       "step": "set-b2",
+       "observer": [
+        {
+         "l": "C",
+         "e": "child_added",
+         "k": "b2",
+         "p": "b",
+         "v": {
+          "s": 1
+         }
+        },
+        {
+         "l": "C",
+         "e": "value",
+         "k": "cp",
+         "v": {
+          "children": [
+           [
+            "b",
+            {
+             "s": 1
+            }
+           ],
+           [
+            "b2",
+            {
+             "s": 1
+            }
+           ],
+           [
+            "c",
+            {
+             "s": 1
+            }
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      }
+     ]
+    },
+    {
+     "id": "fanout",
+     "ok": true,
+     "steps": [
+      {
+       "step": "attach",
+       "observer": [
+        {
+         "l": "FX",
+         "e": "child_added",
+         "k": "n",
+         "p": null,
+         "v": 1
+        },
+        {
+         "l": "FX",
+         "e": "value",
+         "k": "x",
+         "v": {
+          "children": [
+           [
+            "n",
+            1
+           ]
+          ]
+         }
+        },
+        {
+         "l": "FY",
+         "e": "value",
+         "k": "y",
+         "v": {
+          "children": [
+           [
+            "n",
+            1
+           ]
+          ]
+         }
+        },
+        {
+         "l": "FO",
+         "e": "value",
+         "k": "fo",
+         "v": {
+          "children": [
+           [
+            "x",
+            {
+             "n": 1
+            }
+           ],
+           [
+            "y",
+            {
+             "n": 1
+            }
+           ],
+           [
+            "z",
+            1
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ready": true,
+       "quiet": true
+      },
+      {
+       "step": "update-root",
+       "observer": [
+        {
+         "l": "FX",
+         "e": "child_changed",
+         "k": "n",
+         "p": null,
+         "v": 2
+        },
+        {
+         "l": "FX",
+         "e": "value",
+         "k": "x",
+         "v": {
+          "children": [
+           [
+            "n",
+            2
+           ]
+          ]
+         }
+        },
+        {
+         "l": "FY",
+         "e": "value",
+         "k": "y",
+         "v": {
+          "children": [
+           [
+            "n",
+            2
+           ]
+          ]
+         }
+        },
+        {
+         "l": "FO",
+         "e": "value",
+         "k": "fo",
+         "v": {
+          "children": [
+           [
+            "x",
+            {
+             "n": 2
+            }
+           ],
+           [
+            "y",
+            {
+             "n": 2
+            }
+           ],
+           [
+            "z",
+            2
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "set-fo",
+       "observer": [
+        {
+         "l": "FX",
+         "e": "child_changed",
+         "k": "n",
+         "p": null,
+         "v": 3
+        },
+        {
+         "l": "FX",
+         "e": "value",
+         "k": "x",
+         "v": {
+          "children": [
+           [
+            "n",
+            3
+           ]
+          ]
+         }
+        },
+        {
+         "l": "FY",
+         "e": "value",
+         "k": "y",
+         "v": {
+          "leaf": null
+         }
+        },
+        {
+         "l": "FO",
+         "e": "value",
+         "k": "fo",
+         "v": {
+          "children": [
+           [
+            "w",
+            1
+           ],
+           [
+            "x",
+            {
+             "n": 3
+            }
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      }
+     ]
+    },
+    {
+     "id": "transactions",
+     "ok": true,
+     "steps": [
+      {
+       "step": "attach",
+       "observer": [
+        {
+         "l": "TA",
+         "e": "value",
+         "k": "ta",
+         "v": {
+          "leaf": null
+         }
+        },
+        {
+         "l": "TB",
+         "e": "value",
+         "k": "tb",
+         "v": {
+          "children": [
+           [
+            "v",
+            7
+           ]
+          ]
+         }
+        },
+        {
+         "l": "TC",
+         "e": "value",
+         "k": "tc",
+         "v": {
+          "children": [
+           [
+            "n",
+            1
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ready": true,
+       "quiet": true
+      },
+      {
+       "step": "absent",
+       "observer": [
+        {
+         "l": "TA",
+         "e": "value",
+         "k": "ta",
+         "v": {
+          "leaf": 1
+         }
+        }
+       ],
+       "writer": [
+        {
+         "l": "W",
+         "e": "value",
+         "k": "ta",
+         "v": {
+          "leaf": null
+         }
+        },
+        {
+         "l": "W",
+         "e": "value",
+         "k": "ta",
+         "v": {
+          "leaf": 1
+         }
+        },
+        {
+         "l": "txn",
+         "e": "resolved"
+        }
+       ],
+       "ready": true,
+       "result": {
+        "inputs": [
+         null
+        ],
+        "committed": true,
+        "snapshot": {
+         "leaf": 1
+        }
+       },
+       "quiet": true
+      },
+      {
+       "step": "abort",
+       "observer": [],
+       "writer": [
+        {
+         "l": "W",
+         "e": "value",
+         "k": "tb",
+         "v": {
+          "children": [
+           [
+            "v",
+            7
+           ]
+          ]
+         }
+        },
+        {
+         "l": "txn",
+         "e": "resolved"
+        }
+       ],
+       "ready": true,
+       "result": {
+        "inputs": [
+         {
+          "v": 7
+         }
+        ],
+        "committed": false,
+        "snapshot": {
+         "children": [
+          [
+           "v",
+           7
+          ]
+         ]
+        }
+       },
+       "quiet": true
+      },
+      {
+       "step": "object",
+       "observer": [
+        {
+         "l": "TC",
+         "e": "value",
+         "k": "tc",
+         "v": {
+          "children": [
+           [
+            "n",
+            2
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [
+        {
+         "l": "W",
+         "e": "value",
+         "k": "tc",
+         "v": {
+          "children": [
+           [
+            "n",
+            1
+           ]
+          ]
+         }
+        },
+        {
+         "l": "W",
+         "e": "value",
+         "k": "tc",
+         "v": {
+          "children": [
+           [
+            "n",
+            2
+           ]
+          ]
+         }
+        },
+        {
+         "l": "txn",
+         "e": "resolved"
+        }
+       ],
+       "ready": true,
+       "result": {
+        "inputs": [
+         {
+          "n": 1
+         }
+        ],
+        "committed": true,
+        "snapshot": {
+         "children": [
+          [
+           "n",
+           2
+          ]
+         ]
+        }
+       },
+       "quiet": true
+      }
+     ]
+    },
+    {
+     "id": "get_exists",
+     "ok": true,
+     "steps": [
+      {
+       "step": "get-window",
+       "observer": [],
+       "writer": [],
+       "result": {
+        "exists": true,
+        "v": {
+         "children": [
+          [
+           "a",
+           1
+          ],
+          [
+           "b",
+           2
+          ]
+         ]
+        }
+       },
+       "quiet": true
+      },
+      {
+       "step": "get-missing",
+       "observer": [],
+       "writer": [],
+       "result": {
+        "exists": false,
+        "v": {
+         "leaf": null
+        }
+       },
+       "quiet": true
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "name": "r2-lp",
+   "suite": "events",
+   "rows": [
+    {
+     "id": "startup",
+     "ok": true
+    },
+    {
+     "id": "startup-observer",
+     "ok": true
+    },
+    {
+     "id": "seed",
+     "ok": true
+    },
+    {
+     "id": "key_window",
+     "ok": true,
+     "steps": [
+      {
+       "step": "attach",
+       "observer": [
+        {
+         "l": "Q1",
+         "e": "child_added",
+         "k": "b",
+         "p": null,
+         "v": 1
+        },
+        {
+         "l": "Q1",
+         "e": "child_added",
+         "k": "c",
+         "p": "b",
+         "v": 1
+        },
+        {
+         "l": "Q1",
+         "e": "value",
+         "k": "kw",
+         "v": {
+          "children": [
+           [
+            "b",
+            1
+           ],
+           [
+            "c",
+            1
+           ]
+          ]
+         }
+        },
+        {
+         "l": "Q2",
+         "e": "child_added",
+         "k": "d",
+         "p": null,
+         "v": 1
+        },
+        {
+         "l": "Q2",
+         "e": "child_added",
+         "k": "e",
+         "p": "d",
+         "v": 1
+        },
+        {
+         "l": "Q2",
+         "e": "value",
+         "k": "kw",
+         "v": {
+          "children": [
+           [
+            "d",
+            1
+           ],
+           [
+            "e",
+            1
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ready": true,
+       "quiet": true
+      },
+      {
+       "step": "set-a",
+       "observer": [
+        {
+         "l": "Q1",
+         "e": "child_removed",
+         "k": "c",
+         "v": 1
+        },
+        {
+         "l": "Q1",
+         "e": "child_added",
+         "k": "a",
+         "p": null,
+         "v": 1
+        },
+        {
+         "l": "Q1",
+         "e": "value",
+         "k": "kw",
+         "v": {
+          "children": [
+           [
+            "a",
+            1
+           ],
+           [
+            "b",
+            1
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "set-f",
+       "observer": [
+        {
+         "l": "Q2",
+         "e": "child_removed",
+         "k": "d",
+         "v": 1
+        },
+        {
+         "l": "Q2",
+         "e": "child_added",
+         "k": "f",
+         "p": "e",
+         "v": 1
+        },
+        {
+         "l": "Q2",
+         "e": "value",
+         "k": "kw",
+         "v": {
+          "children": [
+           [
+            "e",
+            1
+           ],
+           [
+            "f",
+            1
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "remove-a",
+       "observer": [
+        {
+         "l": "Q1",
+         "e": "child_removed",
+         "k": "a",
+         "v": 1
+        },
+        {
+         "l": "Q1",
+         "e": "child_added",
+         "k": "c",
+         "p": "b",
+         "v": 1
+        },
+        {
+         "l": "Q1",
+         "e": "value",
+         "k": "kw",
+         "v": {
+          "children": [
+           [
+            "b",
+            1
+           ],
+           [
+            "c",
+            1
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "set-b",
+       "observer": [
+        {
+         "l": "Q1",
+         "e": "child_changed",
+         "k": "b",
+         "p": null,
+         "v": 2
+        },
+        {
+         "l": "Q1",
+         "e": "value",
+         "k": "kw",
+         "v": {
+          "children": [
+           [
+            "b",
+            2
+           ],
+           [
+            "c",
+            1
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      }
+     ]
+    },
+    {
+     "id": "priority_window",
+     "ok": true,
+     "steps": [
+      {
+       "step": "attach",
+       "observer": [
+        {
+         "l": "P",
+         "e": "child_added",
+         "k": "x",
+         "p": null,
+         "v": {
+          ".value": 1,
+          ".priority": 1
+         }
+        },
+        {
+         "l": "P",
+         "e": "child_added",
+         "k": "y",
+         "p": "x",
+         "v": {
+          ".value": 2,
+          ".priority": 2
+         }
+        },
+        {
+         "l": "P",
+         "e": "value",
+         "k": "pw",
+         "v": {
+          "children": [
+           [
+            "x",
+            {
+             ".value": 1,
+             ".priority": 1
+            }
+           ],
+           [
+            "y",
+            {
+             ".value": 2,
+             ".priority": 2
+            }
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ready": true,
+       "quiet": true
+      },
+      {
+       "step": "priority-z-0",
+       "observer": [
+        {
+         "l": "P",
+         "e": "child_removed",
+         "k": "y",
+         "v": {
+          ".value": 2,
+          ".priority": 2
+         }
+        },
+        {
+         "l": "P",
+         "e": "child_added",
+         "k": "z",
+         "p": null,
+         "v": {
+          ".value": 3,
+          ".priority": 0
+         }
+        },
+        {
+         "l": "P",
+         "e": "value",
+         "k": "pw",
+         "v": {
+          "children": [
+           [
+            "z",
+            {
+             ".value": 3,
+             ".priority": 0
+            }
+           ],
+           [
+            "x",
+            {
+             ".value": 1,
+             ".priority": 1
+            }
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "priority-x-10",
+       "observer": [
+        {
+         "l": "P",
+         "e": "child_removed",
+         "k": "x",
+         "v": {
+          ".value": 1,
+          ".priority": 1
+         }
+        },
+        {
+         "l": "P",
+         "e": "child_added",
+         "k": "y",
+         "p": "z",
+         "v": {
+          ".value": 2,
+          ".priority": 2
+         }
+        },
+        {
+         "l": "P",
+         "e": "value",
+         "k": "pw",
+         "v": {
+          "children": [
+           [
+            "z",
+            {
+             ".value": 3,
+             ".priority": 0
+            }
+           ],
+           [
+            "y",
+            {
+             ".value": 2,
+             ".priority": 2
+            }
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "add-v-1.5",
+       "observer": [
+        {
+         "l": "P",
+         "e": "child_removed",
+         "k": "y",
+         "v": {
+          ".value": 2,
+          ".priority": 2
+         }
+        },
+        {
+         "l": "P",
+         "e": "child_added",
+         "k": "v",
+         "p": "z",
+         "v": {
+          ".value": 5,
+          ".priority": 1.5
+         }
+        },
+        {
+         "l": "P",
+         "e": "value",
+         "k": "pw",
+         "v": {
+          "children": [
+           [
+            "z",
+            {
+             ".value": 3,
+             ".priority": 0
+            }
+           ],
+           [
+            "v",
+            {
+             ".value": 5,
+             ".priority": 1.5
+            }
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "remove-y",
+       "observer": [],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      }
+     ]
+    },
+    {
+     "id": "value_range",
+     "ok": true,
+     "steps": [
+      {
+       "step": "attach",
+       "observer": [
+        {
+         "l": "V",
+         "e": "child_added",
+         "k": "b",
+         "p": null,
+         "v": 5
+        },
+        {
+         "l": "V",
+         "e": "value",
+         "k": "vr",
+         "v": {
+          "children": [
+           [
+            "b",
+            5
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ready": true,
+       "quiet": true
+      },
+      {
+       "step": "set-a-6",
+       "observer": [
+        {
+         "l": "V",
+         "e": "child_added",
+         "k": "a",
+         "p": "b",
+         "v": 6
+        },
+        {
+         "l": "V",
+         "e": "value",
+         "k": "vr",
+         "v": {
+          "children": [
+           [
+            "b",
+            5
+           ],
+           [
+            "a",
+            6
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "set-b-20",
+       "observer": [
+        {
+         "l": "V",
+         "e": "child_removed",
+         "k": "b",
+         "v": 5
+        },
+        {
+         "l": "V",
+         "e": "value",
+         "k": "vr",
+         "v": {
+          "children": [
+           [
+            "a",
+            6
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "set-c-5",
+       "observer": [
+        {
+         "l": "V",
+         "e": "child_added",
+         "k": "c",
+         "p": null,
+         "v": 5
+        },
+        {
+         "l": "V",
+         "e": "value",
+         "k": "vr",
+         "v": {
+          "children": [
+           [
+            "c",
+            5
+           ],
+           [
+            "a",
+            6
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "remove-c",
+       "observer": [
+        {
+         "l": "V",
+         "e": "child_removed",
+         "k": "c",
+         "v": 5
+        },
+        {
+         "l": "V",
+         "e": "value",
+         "k": "vr",
+         "v": {
+          "children": [
+           [
+            "a",
+            6
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      }
+     ]
+    },
+    {
+     "id": "equal_events",
+     "ok": true,
+     "steps": [
+      {
+       "step": "attach",
+       "observer": [
+        {
+         "l": "T",
+         "e": "child_added",
+         "k": "q",
+         "p": null,
+         "v": {
+          "t": 2
+         }
+        },
+        {
+         "l": "T",
+         "e": "value",
+         "k": "eq",
+         "v": {
+          "children": [
+           [
+            "q",
+            {
+             "t": 2
+            }
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ready": true,
+       "quiet": true
+      },
+      {
+       "step": "set-p-t-2",
+       "observer": [
+        {
+         "l": "T",
+         "e": "child_added",
+         "k": "p",
+         "p": null,
+         "v": {
+          "t": 2
+         }
+        },
+        {
+         "l": "T",
+         "e": "value",
+         "k": "eq",
+         "v": {
+          "children": [
+           [
+            "p",
+            {
+             "t": 2
+            }
+           ],
+           [
+            "q",
+            {
+             "t": 2
+            }
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "set-q-t-3",
+       "observer": [
+        {
+         "l": "T",
+         "e": "child_removed",
+         "k": "q",
+         "v": {
+          "t": 2
+         }
+        },
+        {
+         "l": "T",
+         "e": "value",
+         "k": "eq",
+         "v": {
+          "children": [
+           [
+            "p",
+            {
+             "t": 2
+            }
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "set-p-t-2-again",
+       "observer": [],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "set-p",
+       "observer": [
+        {
+         "l": "T",
+         "e": "child_changed",
+         "k": "p",
+         "p": null,
+         "v": {
+          "t": 2,
+          "u": 1
+         }
+        },
+        {
+         "l": "T",
+         "e": "value",
+         "k": "eq",
+         "v": {
+          "children": [
+           [
+            "p",
+            {
+             "t": 2,
+             "u": 1
+            }
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      }
+     ]
+    },
+    {
+     "id": "cursor_pair",
+     "ok": true,
+     "steps": [
+      {
+       "step": "get",
+       "observer": [],
+       "writer": [],
+       "result": {
+        "exists": true,
+        "v": {
+         "children": [
+          [
+           "b",
+           {
+            "s": 1
+           }
+          ],
+          [
+           "c",
+           {
+            "s": 1
+           }
+          ]
+         ]
+        }
+       },
+       "quiet": true
+      },
+      {
+       "step": "attach",
+       "observer": [
+        {
+         "l": "C",
+         "e": "child_added",
+         "k": "b",
+         "p": null,
+         "v": {
+          "s": 1
+         }
+        },
+        {
+         "l": "C",
+         "e": "child_added",
+         "k": "c",
+         "p": "b",
+         "v": {
+          "s": 1
+         }
+        },
+        {
+         "l": "C",
+         "e": "value",
+         "k": "cp",
+         "v": {
+          "children": [
+           [
+            "b",
+            {
+             "s": 1
+            }
+           ],
+           [
+            "c",
+            {
+             "s": 1
+            }
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ready": true,
+       "quiet": true
+      },
+      {
+       "step": "set-b2",
+       "observer": [
+        {
+         "l": "C",
+         "e": "child_added",
+         "k": "b2",
+         "p": "b",
+         "v": {
+          "s": 1
+         }
+        },
+        {
+         "l": "C",
+         "e": "value",
+         "k": "cp",
+         "v": {
+          "children": [
+           [
+            "b",
+            {
+             "s": 1
+            }
+           ],
+           [
+            "b2",
+            {
+             "s": 1
+            }
+           ],
+           [
+            "c",
+            {
+             "s": 1
+            }
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      }
+     ]
+    },
+    {
+     "id": "fanout",
+     "ok": true,
+     "steps": [
+      {
+       "step": "attach",
+       "observer": [
+        {
+         "l": "FX",
+         "e": "child_added",
+         "k": "n",
+         "p": null,
+         "v": 1
+        },
+        {
+         "l": "FX",
+         "e": "value",
+         "k": "x",
+         "v": {
+          "children": [
+           [
+            "n",
+            1
+           ]
+          ]
+         }
+        },
+        {
+         "l": "FY",
+         "e": "value",
+         "k": "y",
+         "v": {
+          "children": [
+           [
+            "n",
+            1
+           ]
+          ]
+         }
+        },
+        {
+         "l": "FO",
+         "e": "value",
+         "k": "fo",
+         "v": {
+          "children": [
+           [
+            "x",
+            {
+             "n": 1
+            }
+           ],
+           [
+            "y",
+            {
+             "n": 1
+            }
+           ],
+           [
+            "z",
+            1
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ready": true,
+       "quiet": true
+      },
+      {
+       "step": "update-root",
+       "observer": [
+        {
+         "l": "FX",
+         "e": "child_changed",
+         "k": "n",
+         "p": null,
+         "v": 2
+        },
+        {
+         "l": "FX",
+         "e": "value",
+         "k": "x",
+         "v": {
+          "children": [
+           [
+            "n",
+            2
+           ]
+          ]
+         }
+        },
+        {
+         "l": "FY",
+         "e": "value",
+         "k": "y",
+         "v": {
+          "children": [
+           [
+            "n",
+            2
+           ]
+          ]
+         }
+        },
+        {
+         "l": "FO",
+         "e": "value",
+         "k": "fo",
+         "v": {
+          "children": [
+           [
+            "x",
+            {
+             "n": 2
+            }
+           ],
+           [
+            "y",
+            {
+             "n": 2
+            }
+           ],
+           [
+            "z",
+            2
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "set-fo",
+       "observer": [
+        {
+         "l": "FX",
+         "e": "child_changed",
+         "k": "n",
+         "p": null,
+         "v": 3
+        },
+        {
+         "l": "FX",
+         "e": "value",
+         "k": "x",
+         "v": {
+          "children": [
+           [
+            "n",
+            3
+           ]
+          ]
+         }
+        },
+        {
+         "l": "FY",
+         "e": "value",
+         "k": "y",
+         "v": {
+          "leaf": null
+         }
+        },
+        {
+         "l": "FO",
+         "e": "value",
+         "k": "fo",
+         "v": {
+          "children": [
+           [
+            "w",
+            1
+           ],
+           [
+            "x",
+            {
+             "n": 3
+            }
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      }
+     ]
+    },
+    {
+     "id": "transactions",
+     "ok": true,
+     "steps": [
+      {
+       "step": "attach",
+       "observer": [
+        {
+         "l": "TA",
+         "e": "value",
+         "k": "ta",
+         "v": {
+          "leaf": null
+         }
+        },
+        {
+         "l": "TB",
+         "e": "value",
+         "k": "tb",
+         "v": {
+          "children": [
+           [
+            "v",
+            7
+           ]
+          ]
+         }
+        },
+        {
+         "l": "TC",
+         "e": "value",
+         "k": "tc",
+         "v": {
+          "children": [
+           [
+            "n",
+            1
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ready": true,
+       "quiet": true
+      },
+      {
+       "step": "absent",
+       "observer": [
+        {
+         "l": "TA",
+         "e": "value",
+         "k": "ta",
+         "v": {
+          "leaf": 1
+         }
+        }
+       ],
+       "writer": [
+        {
+         "l": "W",
+         "e": "value",
+         "k": "ta",
+         "v": {
+          "leaf": null
+         }
+        },
+        {
+         "l": "W",
+         "e": "value",
+         "k": "ta",
+         "v": {
+          "leaf": 1
+         }
+        },
+        {
+         "l": "txn",
+         "e": "resolved"
+        }
+       ],
+       "ready": true,
+       "result": {
+        "inputs": [
+         null
+        ],
+        "committed": true,
+        "snapshot": {
+         "leaf": 1
+        }
+       },
+       "quiet": true
+      },
+      {
+       "step": "abort",
+       "observer": [],
+       "writer": [
+        {
+         "l": "W",
+         "e": "value",
+         "k": "tb",
+         "v": {
+          "children": [
+           [
+            "v",
+            7
+           ]
+          ]
+         }
+        },
+        {
+         "l": "txn",
+         "e": "resolved"
+        }
+       ],
+       "ready": true,
+       "result": {
+        "inputs": [
+         {
+          "v": 7
+         }
+        ],
+        "committed": false,
+        "snapshot": {
+         "children": [
+          [
+           "v",
+           7
+          ]
+         ]
+        }
+       },
+       "quiet": true
+      },
+      {
+       "step": "object",
+       "observer": [
+        {
+         "l": "TC",
+         "e": "value",
+         "k": "tc",
+         "v": {
+          "children": [
+           [
+            "n",
+            2
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [
+        {
+         "l": "W",
+         "e": "value",
+         "k": "tc",
+         "v": {
+          "children": [
+           [
+            "n",
+            1
+           ]
+          ]
+         }
+        },
+        {
+         "l": "W",
+         "e": "value",
+         "k": "tc",
+         "v": {
+          "children": [
+           [
+            "n",
+            2
+           ]
+          ]
+         }
+        },
+        {
+         "l": "txn",
+         "e": "resolved"
+        }
+       ],
+       "ready": true,
+       "result": {
+        "inputs": [
+         {
+          "n": 1
+         }
+        ],
+        "committed": true,
+        "snapshot": {
+         "children": [
+          [
+           "n",
+           2
+          ]
+         ]
+        }
+       },
+       "quiet": true
+      }
+     ]
+    },
+    {
+     "id": "get_exists",
+     "ok": true,
+     "steps": [
+      {
+       "step": "get-window",
+       "observer": [],
+       "writer": [],
+       "result": {
+        "exists": true,
+        "v": {
+         "children": [
+          [
+           "a",
+           1
+          ],
+          [
+           "b",
+           2
+          ]
+         ]
+        }
+       },
+       "quiet": true
+      },
+      {
+       "step": "get-missing",
+       "observer": [],
+       "writer": [],
+       "result": {
+        "exists": false,
+        "v": {
+         "leaf": null
+        }
+       },
+       "quiet": true
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "name": "r1-admin",
+   "suite": "admin",
+   "rows": [
+    {
+     "id": "startup",
+     "ok": true
+    },
+    {
+     "id": "set",
+     "ok": true,
+     "steps": [
+      {
+       "step": "set",
+       "observer": [],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      }
+     ]
+    },
+    {
+     "id": "get",
+     "ok": true,
+     "steps": [
+      {
+       "step": "get",
+       "observer": [],
+       "writer": [],
+       "result": {
+        "exists": true,
+        "v": {
+         "children": [
+          [
+           "x",
+           1
+          ],
+          [
+           "y",
+           {
+            "z": 2
+           }
+          ]
+         ]
+        }
+       },
+       "quiet": true
+      }
+     ]
+    },
+    {
+     "id": "update",
+     "ok": true,
+     "steps": [
+      {
+       "step": "update",
+       "observer": [],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "get",
+       "observer": [],
+       "writer": [],
+       "result": {
+        "exists": true,
+        "v": {
+         "children": [
+          [
+           "w",
+           4
+          ],
+          [
+           "x",
+           2
+          ],
+          [
+           "y",
+           {
+            "z": 3
+           }
+          ]
+         ]
+        }
+       },
+       "quiet": true
+      }
+     ]
+    },
+    {
+     "id": "push",
+     "ok": true,
+     "steps": [
+      {
+       "step": "push",
+       "observer": [],
+       "writer": [],
+       "result": {
+        "key": "push-id",
+        "v": {
+         "leaf": "p1"
+        }
+       },
+       "quiet": true
+      }
+     ]
+    },
+    {
+     "id": "transaction_absent",
+     "ok": true,
+     "steps": [
+      {
+       "step": "absent",
+       "observer": [],
+       "writer": [
+        {
+         "l": "W",
+         "e": "value",
+         "k": "ta",
+         "v": {
+          "leaf": null
+         }
+        },
+        {
+         "l": "W",
+         "e": "value",
+         "k": "ta",
+         "v": {
+          "leaf": 1
+         }
+        },
+        {
+         "l": "txn",
+         "e": "resolved"
+        }
+       ],
+       "ready": true,
+       "result": {
+        "inputs": [
+         null
+        ],
+        "committed": true,
+        "snapshot": {
+         "leaf": 1
+        }
+       },
+       "quiet": true
+      }
+     ]
+    },
+    {
+     "id": "transaction_object",
+     "ok": true,
+     "steps": [
+      {
+       "step": "seed",
+       "observer": [],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "object",
+       "observer": [],
+       "writer": [
+        {
+         "l": "W",
+         "e": "value",
+         "k": "tc",
+         "v": {
+          "children": [
+           [
+            "n",
+            1
+           ]
+          ]
+         }
+        },
+        {
+         "l": "W",
+         "e": "value",
+         "k": "tc",
+         "v": {
+          "children": [
+           [
+            "n",
+            2
+           ]
+          ]
+         }
+        },
+        {
+         "l": "txn",
+         "e": "resolved"
+        }
+       ],
+       "ready": true,
+       "result": {
+        "inputs": [
+         {
+          "n": 1
+         }
+        ],
+        "committed": true,
+        "snapshot": {
+         "children": [
+          [
+           "n",
+           2
+          ]
+         ]
+        }
+       },
+       "quiet": true
+      }
+     ]
+    },
+    {
+     "id": "transaction_abort",
+     "ok": true,
+     "steps": [
+      {
+       "step": "abort",
+       "observer": [],
+       "writer": [
+        {
+         "l": "W",
+         "e": "value",
+         "k": "tc",
+         "v": {
+          "children": [
+           [
+            "n",
+            2
+           ]
+          ]
+         }
+        },
+        {
+         "l": "txn",
+         "e": "resolved"
+        }
+       ],
+       "ready": true,
+       "result": {
+        "inputs": [
+         {
+          "n": 2
+         }
+        ],
+        "committed": false,
+        "snapshot": {
+         "children": [
+          [
+           "n",
+           2
+          ]
+         ]
+        }
+       },
+       "quiet": true
+      }
+     ]
+    },
+    {
+     "id": "remove",
+     "ok": true,
+     "steps": [
+      {
+       "step": "remove",
+       "observer": [],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "get",
+       "observer": [],
+       "writer": [],
+       "result": {
+        "exists": false,
+        "v": {
+         "leaf": null
+        }
+       },
+       "quiet": true
+      }
+     ]
+    },
+    {
+     "id": "listen_window",
+     "ok": true,
+     "steps": [
+      {
+       "step": "seed",
+       "observer": [],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "attach",
+       "observer": [
+        {
+         "l": "S",
+         "e": "child_added",
+         "k": "b",
+         "p": null,
+         "v": {
+          "s": 1
+         }
+        },
+        {
+         "l": "S",
+         "e": "child_added",
+         "k": "c",
+         "p": "b",
+         "v": {
+          "s": 2
+         }
+        },
+        {
+         "l": "S",
+         "e": "value",
+         "k": "w",
+         "v": {
+          "children": [
+           [
+            "b",
+            {
+             "s": 1
+            }
+           ],
+           [
+            "c",
+            {
+             "s": 2
+            }
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ready": true,
+       "quiet": true
+      },
+      {
+       "step": "set-d",
+       "observer": [
+        {
+         "l": "S",
+         "e": "child_added",
+         "k": "d",
+         "p": null,
+         "v": {
+          "s": 0
+         }
+        },
+        {
+         "l": "S",
+         "e": "value",
+         "k": "w",
+         "v": {
+          "children": [
+           [
+            "d",
+            {
+             "s": 0
+            }
+           ],
+           [
+            "b",
+            {
+             "s": 1
+            }
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      }
+     ]
+    },
+    {
+     "id": "get_denied",
+     "ok": true,
+     "steps": [
+      {
+       "step": "seed",
+       "observer": [],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "get",
+       "observer": [],
+       "writer": [],
+       "result": {
+        "exists": true,
+        "v": {
+         "children": [
+          [
+           "secret",
+           1
+          ]
+         ]
+        }
+       },
+       "quiet": true
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "name": "r2-admin",
+   "suite": "admin",
+   "rows": [
+    {
+     "id": "startup",
+     "ok": true
+    },
+    {
+     "id": "set",
+     "ok": true,
+     "steps": [
+      {
+       "step": "set",
+       "observer": [],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      }
+     ]
+    },
+    {
+     "id": "get",
+     "ok": true,
+     "steps": [
+      {
+       "step": "get",
+       "observer": [],
+       "writer": [],
+       "result": {
+        "exists": true,
+        "v": {
+         "children": [
+          [
+           "x",
+           1
+          ],
+          [
+           "y",
+           {
+            "z": 2
+           }
+          ]
+         ]
+        }
+       },
+       "quiet": true
+      }
+     ]
+    },
+    {
+     "id": "update",
+     "ok": true,
+     "steps": [
+      {
+       "step": "update",
+       "observer": [],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "get",
+       "observer": [],
+       "writer": [],
+       "result": {
+        "exists": true,
+        "v": {
+         "children": [
+          [
+           "w",
+           4
+          ],
+          [
+           "x",
+           2
+          ],
+          [
+           "y",
+           {
+            "z": 3
+           }
+          ]
+         ]
+        }
+       },
+       "quiet": true
+      }
+     ]
+    },
+    {
+     "id": "push",
+     "ok": true,
+     "steps": [
+      {
+       "step": "push",
+       "observer": [],
+       "writer": [],
+       "result": {
+        "key": "push-id",
+        "v": {
+         "leaf": "p1"
+        }
+       },
+       "quiet": true
+      }
+     ]
+    },
+    {
+     "id": "transaction_absent",
+     "ok": true,
+     "steps": [
+      {
+       "step": "absent",
+       "observer": [],
+       "writer": [
+        {
+         "l": "W",
+         "e": "value",
+         "k": "ta",
+         "v": {
+          "leaf": null
+         }
+        },
+        {
+         "l": "W",
+         "e": "value",
+         "k": "ta",
+         "v": {
+          "leaf": 1
+         }
+        },
+        {
+         "l": "txn",
+         "e": "resolved"
+        }
+       ],
+       "ready": true,
+       "result": {
+        "inputs": [
+         null
+        ],
+        "committed": true,
+        "snapshot": {
+         "leaf": 1
+        }
+       },
+       "quiet": true
+      }
+     ]
+    },
+    {
+     "id": "transaction_object",
+     "ok": true,
+     "steps": [
+      {
+       "step": "seed",
+       "observer": [],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "object",
+       "observer": [],
+       "writer": [
+        {
+         "l": "W",
+         "e": "value",
+         "k": "tc",
+         "v": {
+          "children": [
+           [
+            "n",
+            1
+           ]
+          ]
+         }
+        },
+        {
+         "l": "W",
+         "e": "value",
+         "k": "tc",
+         "v": {
+          "children": [
+           [
+            "n",
+            2
+           ]
+          ]
+         }
+        },
+        {
+         "l": "txn",
+         "e": "resolved"
+        }
+       ],
+       "ready": true,
+       "result": {
+        "inputs": [
+         {
+          "n": 1
+         }
+        ],
+        "committed": true,
+        "snapshot": {
+         "children": [
+          [
+           "n",
+           2
+          ]
+         ]
+        }
+       },
+       "quiet": true
+      }
+     ]
+    },
+    {
+     "id": "transaction_abort",
+     "ok": true,
+     "steps": [
+      {
+       "step": "abort",
+       "observer": [],
+       "writer": [
+        {
+         "l": "W",
+         "e": "value",
+         "k": "tc",
+         "v": {
+          "children": [
+           [
+            "n",
+            2
+           ]
+          ]
+         }
+        },
+        {
+         "l": "txn",
+         "e": "resolved"
+        }
+       ],
+       "ready": true,
+       "result": {
+        "inputs": [
+         {
+          "n": 2
+         }
+        ],
+        "committed": false,
+        "snapshot": {
+         "children": [
+          [
+           "n",
+           2
+          ]
+         ]
+        }
+       },
+       "quiet": true
+      }
+     ]
+    },
+    {
+     "id": "remove",
+     "ok": true,
+     "steps": [
+      {
+       "step": "remove",
+       "observer": [],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "get",
+       "observer": [],
+       "writer": [],
+       "result": {
+        "exists": false,
+        "v": {
+         "leaf": null
+        }
+       },
+       "quiet": true
+      }
+     ]
+    },
+    {
+     "id": "listen_window",
+     "ok": true,
+     "steps": [
+      {
+       "step": "seed",
+       "observer": [],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "attach",
+       "observer": [
+        {
+         "l": "S",
+         "e": "child_added",
+         "k": "b",
+         "p": null,
+         "v": {
+          "s": 1
+         }
+        },
+        {
+         "l": "S",
+         "e": "child_added",
+         "k": "c",
+         "p": "b",
+         "v": {
+          "s": 2
+         }
+        },
+        {
+         "l": "S",
+         "e": "value",
+         "k": "w",
+         "v": {
+          "children": [
+           [
+            "b",
+            {
+             "s": 1
+            }
+           ],
+           [
+            "c",
+            {
+             "s": 2
+            }
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ready": true,
+       "quiet": true
+      },
+      {
+       "step": "set-d",
+       "observer": [
+        {
+         "l": "S",
+         "e": "child_added",
+         "k": "d",
+         "p": null,
+         "v": {
+          "s": 0
+         }
+        },
+        {
+         "l": "S",
+         "e": "value",
+         "k": "w",
+         "v": {
+          "children": [
+           [
+            "d",
+            {
+             "s": 0
+            }
+           ],
+           [
+            "b",
+            {
+             "s": 1
+            }
+           ]
+          ]
+         }
+        }
+       ],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      }
+     ]
+    },
+    {
+     "id": "get_denied",
+     "ok": true,
+     "steps": [
+      {
+       "step": "seed",
+       "observer": [],
+       "writer": [],
+       "ack": "ok",
+       "quiet": true
+      },
+      {
+       "step": "get",
+       "observer": [],
+       "writer": [],
+       "result": {
+        "exists": true,
+        "v": {
+         "children": [
+          [
+           "secret",
+           1
+          ]
+         ]
+        }
+       },
+       "quiet": true
+      }
+     ]
+    }
+   ]
+  }
+ ],
+ "provenance": {
+  "runId": "RTDB-EVENTS-20261104-01",
+  "target": "production",
+  "project": "fireemu-oracle-query",
+  "instance": "fireemu-q-rtdb2",
+  "suite": "events+admin",
+  "recordedOn": "2026-11-04",
+  "startedAt": "2026-11-04T02:02:35.785Z",
+  "endedAt": "2026-11-04T02:05:50.755Z",
+  "scriptSha256": "ffb061388fae0e1266e7ff0a84d68d9aa028f45ad6148ea607d3839fd76b3a76",
+  "sourceHead": "dcffbc656d75d5d10ddd49206102f6df3507a50e",
+  "packetSha256": "f42694b0837166d04aa17961d18323ff832b4b5f7a2383fe5e8f643a8b7d2147",
+  "sdk": {
+   "firebase": "12.18.0",
+   "database": "1.1.5",
+   "playwright": "1.62.1",
+   "firebaseAdmin": "14.3.0"
+  },
+  "caseSources": {
+   "events-actor.mjs": "b0c289c54544d8ea7807dab1ca4a2eada726b5062ea0b98383937c242147d2e4",
+   "events-sequence.mjs": "0914a161bbee86a293fd1cac2821438ecccea30cfc8ab48b1f93a047207ba9c9",
+   "events-rules.mjs": "7ccf8b379feeb2786ddd31e7678714fed8119cb5a60c0f0fee3aa4f32705337d",
+   "events-page.mjs": "8f8f7d46767bcc35c9c90f97b7c0301a39b851503ab5d7cbfb7715def86028ee",
+   "events-page.html": "ed68fba377c3133508742e41229961444870e681cfb10e62d6a2cdf5e44c97ee",
+   "admin-suite.mjs": "f823f0467df868c655bbff018358a3718741af99d780dffd92175e305072f010"
+  },
+  "counts": {
+   "requests": 188,
+   "direct": 184,
+   "reserve": 4,
+   "adc": 1,
+   "overflow": 0
+  },
+  "caps": {
+   "direct": 200,
+   "reserve": 12,
+   "adc": 1
+  },
+  "maxInFlight": {
+   "r1-lp": 7,
+   "r2-lp": 7
+  },
+  "adminStartup": {
+   "r1-admin": true,
+   "r2-admin": true
+  },
+  "credential": "the gcloud user OAuth access token of the operator, passed to firebase-admin 14.3.0 as a custom credential; not a service account",
+  "cleanup": {
+   "prefix": "verified",
+   "rules": "verified"
+  },
+  "observations": 52,
+  "sandboxLedger": {
+   "booking": 1252,
+   "close": 1253
+  },
+  "approvals": [
+   2227,
+   2228
+  ],
+  "journalSha256": "bcdd80ce6fe1727df27c2596726b09b9e05c3d35f993fac33ecc8aa4c404b56e",
+  "resultSha256": "35be3a442c110a39ea87d0bfa3b85af2406f8119c0e886ae984b414a74354632"
+ }
+}

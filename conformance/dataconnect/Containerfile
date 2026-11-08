@@ -1,0 +1,9 @@
+# Development-only oracle image. The Google toolkit is supplied separately.
+FROM docker.io/library/postgres@sha256:73bedc9eaa0121b92b9b26bb52e5141b3f6f37479c7ef913c0160455763ca80a
+COPY node-v24.14.0-linux-x64.tar.xz /tmp/node.tar.xz
+RUN test "$(cat /sys/fs/cgroup/memory.max)" = 4294967296 && test "$(cat /sys/fs/cgroup/memory.swap.max)" = 0 && echo '41cd79bb7877c81605a9e68ec4c91547774f46a40c67a17e34d7179ef11729df  /tmp/node.tar.xz' | sha256sum -c - && tar -xJf /tmp/node.tar.xz --strip-components=1 -C /usr/local && rm /tmp/node.tar.xz
+RUN test "$(cat /sys/fs/cgroup/memory.max)" = 4294967296 && test "$(cat /sys/fs/cgroup/memory.swap.max)" = 0 && npm install --global pnpm@10.32.1
+WORKDIR /suite
+COPY package.json pnpm-lock.yaml ./
+RUN test "$(cat /sys/fs/cgroup/memory.max)" = 4294967296 && test "$(cat /sys/fs/cgroup/memory.swap.max)" = 0 && pnpm install --frozen-lockfile --ignore-scripts
+ENTRYPOINT ["node"]

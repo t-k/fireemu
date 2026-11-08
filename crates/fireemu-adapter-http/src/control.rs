@@ -78,6 +78,17 @@ impl IdleScope {
     }
 }
 
+/// Why a local event could not be admitted. No target has received it on refusal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PublishEventError {
+    /// The supplied metadata or required generation context is invalid.
+    Invalid,
+    /// The complete fanout exceeds the shared queue budget.
+    Capacity,
+    /// The runtime is shutting down or unavailable.
+    Unavailable,
+}
+
 /// The functions runtime as the control API sees it (spec 10.5 `await-idle`, 11.2 clock
 /// operations, manual schedule runs).
 pub trait FunctionsHook: Send + Sync {
@@ -130,6 +141,10 @@ pub trait FunctionsHook: Send + Sync {
     /// Publishes Pub/Sub messages (`{data, attributes, orderingKey}` each) on `topic`;
     /// returns the message IDs.
     fn publish(&self, topic: &str, messages: &[Value]) -> Result<Vec<String>, String>;
+    /// Injects one caller-described Remote Config update; no template is persisted.
+    fn publish_remote_config(&self, _body: &Value) -> Result<usize, PublishEventError> {
+        Err(PublishEventError::Unavailable)
+    }
     /// The project the functions belong to (the Pub/Sub REST path must name it).
     fn project(&self) -> String;
 }
@@ -768,6 +783,7 @@ pub async fn handle_async(
 /// Routes one control request with its headers: browser requests from non-loopback origins
 /// are refused (the control API mutates runtime state).
 #[must_use]
+#[allow(clippy::too_many_lines)]
 pub fn handle_with(
     state: &ControlState,
     method: &str,
@@ -779,6 +795,9 @@ pub fn handle_with(
         return refusal;
     }
     let path = path.split('?').next().unwrap_or(path);
+    if let Some(refusal) = remote_config_guard(state, method, path, headers) {
+        return refusal;
+    }
     if let Some(refusal) = diagnostics_guard(state, path, headers) {
         return refusal;
     }
@@ -946,11 +965,12 @@ fn rules_requests_route(state: &ControlState, method: &str, is_default: bool) ->
         ExprValue::Bool(b) => json!({"kind": "bool", "bool": b}),
         ExprValue::Int(i) => json!({"kind": "int", "int": i.to_string()}),
         ExprValue::Float(f) => json!({"kind": "float", "float": f}),
-        ExprValue::String(s) | ExprValue::TruncatedString(s) => {
-            json!({"kind": "string", "string": s})
+        ExprValue::String(s) => json!({"kind": "string", "string": s}),
+        ExprValue::TruncatedString(s) => {
+            json!({"kind": "string", "string": s, "truncated": true})
         }
         ExprValue::Composite(t) => json!({"kind": "composite", "type": t}),
-        ExprValue::Undefined(cause) | ExprValue::TruncatedUndefined(cause) => json!({
+        ExprValue::Undefined(cause) => json!({
             "kind": "undefined",
             "cause": {
                 "line": cause.span.line,
@@ -959,6 +979,17 @@ fn rules_requests_route(state: &ControlState, method: &str, is_default: bool) ->
                 "endOffset": cause.end,
                 "message": cause.message,
             },
+        }),
+        ExprValue::TruncatedUndefined(cause) => json!({
+            "kind": "undefined",
+            "cause": {
+                "line": cause.span.line,
+                "column": cause.span.column,
+                "currentOffset": cause.span.offset,
+                "endOffset": cause.end,
+                "message": cause.message,
+            },
+            "truncated": true,
         }),
     };
     let requests: Vec<Value> = diagnostics
@@ -974,16 +1005,23 @@ fn rules_requests_route(state: &ControlState, method: &str, is_default: bool) ->
                 "allowed": trace.allowed,
                 "reason": trace.reason,
                 "uid": trace.uid,
-                "expressions": trace.expressions.iter().map(|e| json!({
-                    "line": e.span.line,
-                    "column": e.span.column,
-                    "currentOffset": e.span.offset,
-                    "endOffset": e.end,
-                    "values": e.values.iter().map(|(v, count)| json!({
-                        "value": value(v),
-                        "count": count,
-                    })).collect::<Vec<_>>(),
-                })).collect::<Vec<_>>(),
+                "expressions": trace.expressions.iter().map(|e| {
+                    let mut expression = json!({
+                        "line": e.span.line,
+                        "column": e.span.column,
+                        "currentOffset": e.span.offset,
+                        "endOffset": e.end,
+                        "values": e.values.iter().map(|(v, count)| json!({
+                            "value": value(v),
+                            "count": count,
+                        })).collect::<Vec<_>>(),
+                    });
+                    if e.omitted > 0 {
+                        expression["valuesOmitted"] = json!(e.omitted);
+                        expression["valuesCountMayBeLower"] = json!(true);
+                    }
+                    expression
+                }).collect::<Vec<_>>(),
             })
         })
         .collect();
@@ -1343,6 +1381,7 @@ fn app_check_observations(
     }))
 }
 
+#[allow(clippy::too_many_lines)]
 fn session_route(state: &ControlState, method: &str, path: &str, body: &Value) -> JsonResponse {
     let rest = &path["/v1/sessions/".len()..];
     let (session, action) = rest.split_once('/').map_or((rest, ""), |(s, a)| (s, a));
@@ -1439,6 +1478,12 @@ fn session_route(state: &ControlState, method: &str, path: &str, body: &Value) -
         return error(
             400,
             "FAILED_PRECONDITION : functions and Pub/Sub topics belong to the default session; use /v1/sessions/default/...",
+        );
+    }
+    if action == "functions/remoteConfig:publish" && session != "default" {
+        return error(
+            400,
+            "FAILED_PRECONDITION : Remote Config injection belongs to the default session",
         );
     }
     if let Some(rest) = action.strip_prefix("functions") {
@@ -2861,6 +2906,21 @@ fn functions_route(state: &ControlState, method: &str, rest: &str, body: &Value)
     };
     match (method, rest) {
         ("GET", "") => ok(functions.status()),
+        ("POST", "/remoteConfig:publish") => match functions.publish_remote_config(body) {
+            Ok(deliveries) => ok(json!({"deliveries": deliveries})),
+            Err(PublishEventError::Invalid) => error(
+                400,
+                "INVALID_ARGUMENT : Remote Config metadata or generation context is invalid",
+            ),
+            Err(PublishEventError::Capacity) => error(
+                429,
+                "RESOURCE_EXHAUSTED : the functions event queue is at capacity",
+            ),
+            Err(PublishEventError::Unavailable) => error(
+                503,
+                "UNAVAILABLE : the functions runtime cannot admit events",
+            ),
+        },
         ("POST", r) => match r.strip_prefix('/').and_then(|r| r.strip_suffix(":run")) {
             // A task-queue function has no schedule to run: `:run` releases the Cloud Tasks
             // that wait for their `scheduleTime` (all of them, or the one named by `task`).
@@ -2977,6 +3037,34 @@ fn base64_encode(data: &[u8]) -> String {
         }
     }
     out
+}
+
+/// Authenticates the local Remote Config injection before its body is collected or parsed.
+/// Every transport and the in-process router share this decision; other routes are unchanged.
+#[must_use]
+pub fn remote_config_guard(
+    state: &ControlState,
+    method: &str,
+    path: &str,
+    headers: &RequestHeaders,
+) -> Option<JsonResponse> {
+    let path = path.split('?').next().unwrap_or(path);
+    if !path.starts_with("/v1/sessions/") || !path.ends_with("/functions/remoteConfig:publish") {
+        return None;
+    }
+    if let Some(refusal) = browser_guard(state, method, path, headers) {
+        return Some(refusal);
+    }
+    let presented = headers
+        .authorization
+        .as_deref()
+        .and_then(|value| value.strip_prefix("Bearer "));
+    (!token_matches(presented, &state.control_token)).then(|| {
+        error(
+            403,
+            "CONTROL_TOKEN_REQUIRED : Remote Config injection requires the control capability",
+        )
+    })
 }
 
 /// The browser policy of every control route (also applied by the asynchronous

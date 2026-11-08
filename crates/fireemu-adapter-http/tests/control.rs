@@ -433,6 +433,25 @@ fn fault_plans_are_validated_installed_reported_and_removed() {
 struct FakeFunctions(Mutex<Vec<(String, Vec<Value>)>>);
 
 impl fireemu_adapter_http::control::FunctionsHook for FakeFunctions {
+    fn publish_remote_config(
+        &self,
+        body: &Value,
+    ) -> Result<usize, fireemu_adapter_http::control::PublishEventError> {
+        use fireemu_adapter_http::control::PublishEventError;
+        match body["failure"].as_str() {
+            Some("invalid") => Err(PublishEventError::Invalid),
+            Some("capacity") => Err(PublishEventError::Capacity),
+            Some("unavailable") => Err(PublishEventError::Unavailable),
+            _ => {
+                self.0
+                    .lock()
+                    .unwrap()
+                    .push(("remoteConfig".into(), vec![body.clone()]));
+                Ok(2)
+            }
+        }
+    }
+
     fn on_clock_changed(&self) {}
     fn run_schedule(
         &self,
@@ -1875,7 +1894,7 @@ fn the_rules_request_trace_lists_decided_requests_newest_first_with_their_expres
             request_query: None,
         };
         let (_, coverage) = evaluate_request_traced(&ruleset, &ctx, None);
-        let expressions = coverage.entries().into_iter().cloned().collect();
+        let expressions = coverage.trace_entries();
         let rules = s.rules.snapshot().unwrap();
         rules
             .diagnostics
@@ -1934,6 +1953,235 @@ fn the_rules_request_trace_lists_decided_requests_newest_first_with_their_expres
     );
     let after = handle(&s, "GET", "/v1/sessions/default/rules/requests", &json!({}));
     assert_eq!(after.body["requests"], json!([]));
+}
+
+#[test]
+fn rules_request_trace_keeps_omitted_counts_and_truncation_markers() {
+    use fireemu_core_rules::ast::Span;
+    use fireemu_core_rules::coverage::{
+        Coverage, ExprValue, RequestTrace, UndefinedCause, COVERAGE_STRING_BYTES_PER_VALUE,
+    };
+
+    let s = state(Arc::new(AtomicUsize::new(0)));
+    let active = s.rules.snapshot().unwrap();
+    let mut coverage = Coverage::default();
+    for index in 0..65 {
+        coverage.record(
+            Span {
+                line: 1,
+                column: 1,
+                offset: 10,
+            },
+            11,
+            ExprValue::String(format!("value-{index}")),
+        );
+    }
+    for index in 0..64 {
+        coverage.record(
+            Span {
+                line: 1,
+                column: 20,
+                offset: 20,
+            },
+            21,
+            ExprValue::String(format!("kept-{index}")),
+        );
+    }
+    let prefix = "x".repeat(COVERAGE_STRING_BYTES_PER_VALUE);
+    coverage.record(
+        Span {
+            line: 1,
+            column: 30,
+            offset: 30,
+        },
+        31,
+        ExprValue::String(format!("{prefix}cut")),
+    );
+    coverage.record(
+        Span {
+            line: 1,
+            column: 40,
+            offset: 40,
+        },
+        41,
+        ExprValue::Undefined(UndefinedCause {
+            span: Span {
+                line: 1,
+                column: 40,
+                offset: 40,
+            },
+            end: 41,
+            message: format!("{prefix}cause"),
+        }),
+    );
+    let mut diagnostics = active.diagnostics.lock().unwrap();
+    diagnostics.enable_request_traces();
+    diagnostics.push(&coverage, |sequence| RequestTrace {
+        sequence,
+        method: "get",
+        path: "notes/synthetic".to_owned(),
+        allowed: true,
+        reason: String::new(),
+        uid: None,
+        expressions: coverage.trace_entries(),
+    });
+    drop(diagnostics);
+
+    let response = handle(&s, "GET", "/v1/sessions/default/rules/requests", &json!({}));
+    assert_eq!(response.status, 200, "{}", response.body);
+    let expressions = response.body["requests"][0]["expressions"]
+        .as_array()
+        .unwrap();
+    let at = |offset| {
+        expressions
+            .iter()
+            .find(|e| e["currentOffset"] == json!(offset))
+            .unwrap()
+    };
+
+    assert_eq!(at(10)["values"].as_array().unwrap().len(), 64);
+    assert_eq!(at(10)["valuesOmitted"], 1);
+    assert_eq!(at(10)["valuesCountMayBeLower"], true);
+    assert_eq!(at(20)["values"].as_array().unwrap().len(), 64);
+    assert!(at(20).get("valuesOmitted").is_none());
+    assert_eq!(at(30)["values"][0]["value"]["truncated"], true);
+    assert_eq!(at(40)["values"][0]["value"]["truncated"], true);
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn rules_request_trace_matches_all_seeded_pict_combinations() {
+    use fireemu_core_rules::ast::Span;
+    use fireemu_core_rules::coverage::{
+        Coverage, ExprValue, RequestTrace, UndefinedCause, COVERAGE_STRING_BYTES_PER_VALUE,
+        COVERAGE_VALUES_PER_EXPRESSION,
+    };
+
+    let cases = [
+        (false, "ordinary", true),
+        (true, "ordinary", true),
+        (true, "truncated-string", true),
+        (true, "truncated-undefined", true),
+        (true, "ordinary", false),
+        (true, "truncated-undefined", false),
+        (false, "truncated-undefined", false),
+        (false, "truncated-string", false),
+    ];
+    let s = state(Arc::new(AtomicUsize::new(0)));
+    let active = s.rules.snapshot().unwrap();
+    let mut diagnostics = active.diagnostics.lock().unwrap();
+    diagnostics.enable_request_traces();
+
+    for (index, &(omitted, representation, allowed)) in cases.iter().enumerate() {
+        let span = Span {
+            line: 1,
+            column: 2,
+            offset: 10 + index * 10,
+        };
+        let mut coverage = Coverage::default();
+        let target = match representation {
+            "ordinary" => ExprValue::String("ordinary".to_owned()),
+            "truncated-string" => ExprValue::String(format!(
+                "{}cut",
+                "x".repeat(COVERAGE_STRING_BYTES_PER_VALUE)
+            )),
+            "truncated-undefined" => ExprValue::Undefined(UndefinedCause {
+                span,
+                end: span.offset + 1,
+                message: format!("{}cause", "x".repeat(COVERAGE_STRING_BYTES_PER_VALUE)),
+            }),
+            _ => unreachable!("covered by the PICT model"),
+        };
+        coverage.record(span, span.offset + 1, target);
+        if omitted {
+            for value in 0..COVERAGE_VALUES_PER_EXPRESSION {
+                coverage.record(
+                    span,
+                    span.offset + 1,
+                    ExprValue::String(format!("other-{index}-{value}")),
+                );
+            }
+        }
+        let path = format!("notes/pict-{index}");
+        diagnostics.push(&coverage, |sequence| RequestTrace {
+            sequence,
+            method: "get",
+            path,
+            allowed,
+            reason: if allowed {
+                String::new()
+            } else {
+                "denied".to_owned()
+            },
+            uid: None,
+            expressions: coverage.trace_entries(),
+        });
+    }
+    drop(diagnostics);
+
+    let response = handle(&s, "GET", "/v1/sessions/default/rules/requests", &json!({}));
+    assert_eq!(response.status, 200, "{}", response.body);
+    let requests = response.body["requests"].as_array().unwrap();
+    assert_eq!(requests.len(), cases.len());
+    for (index, &(omitted, representation, allowed)) in cases.iter().enumerate() {
+        let path = format!("notes/pict-{index}");
+        let request = requests
+            .iter()
+            .find(|request| request["path"] == path)
+            .unwrap();
+        assert_eq!(request["allowed"], allowed, "{path}");
+        assert_eq!(
+            request["reason"],
+            if allowed { "" } else { "denied" },
+            "{path}"
+        );
+        let expression = &request["expressions"][0];
+        assert_eq!(expression.get("valuesOmitted").is_some(), omitted, "{path}");
+        assert_eq!(
+            expression.get("valuesCountMayBeLower").is_some(),
+            omitted,
+            "{path}"
+        );
+        if omitted {
+            assert_eq!(expression["valuesOmitted"], 1, "{path}");
+            assert_eq!(expression["valuesCountMayBeLower"], true, "{path}");
+        }
+        assert_eq!(
+            expression["values"][0]["value"].get("truncated").is_some(),
+            representation != "ordinary",
+            "{path}"
+        );
+    }
+
+    let small = requests
+        .iter()
+        .find(|request| request["path"] == "notes/pict-0")
+        .unwrap();
+    assert_eq!(
+        small,
+        &json!({
+            "sequence": 1,
+            "service": "firestore",
+            "method": "get",
+            "path": "notes/pict-0",
+            "allowed": true,
+            "reason": "",
+            "uid": null,
+            "expressions": [{
+                "line": 1,
+                "column": 2,
+                "currentOffset": 10,
+                "endOffset": 11,
+                "values": [{"value": {"kind": "string", "string": "ordinary"}, "count": 1}],
+            }],
+        }),
+        "the complete small trace remains byte-shape compatible"
+    );
+    assert_eq!(
+        small.to_string(),
+        r#"{"allowed":true,"expressions":[{"column":2,"currentOffset":10,"endOffset":11,"line":1,"values":[{"count":1,"value":{"kind":"string","string":"ordinary"}}]}],"method":"get","path":"notes/pict-0","reason":"","sequence":1,"service":"firestore","uid":null}"#,
+        "the serialized small trace remains byte-identical"
+    );
 }
 
 /// FAULTH-1 on the route: the fired history is a bounded ring, so `GET faultPlan` says how
@@ -3167,7 +3415,7 @@ fn diagnostics_clear_releases_coverage_and_ring_without_reloading_or_disabling_t
                 allowed: true,
                 reason: String::new(),
                 uid: None,
-                expressions: coverage.entries().into_iter().cloned().collect(),
+                expressions: coverage.trace_entries(),
             });
     };
     record();
@@ -3296,4 +3544,201 @@ fn latin_purpose_control_backfill_uses_index_analysis_for_real_source_postings()
     assert_eq!(search("iris"), ["products/copper"]);
     assert_eq!(search("creme"), ["products/silver"]);
     assert!(search("İris").is_empty());
+}
+
+#[test]
+fn remote_config_publication_always_requires_the_control_capability() {
+    let state = state(Arc::new(AtomicUsize::new(0)));
+    for origin in [
+        None,
+        Some("http://localhost:5173"),
+        Some("https://foreign.example"),
+    ] {
+        for token in [None, Some("Bearer wrong")] {
+            let headers = RequestHeaders {
+                origin: origin.map(str::to_owned),
+                authorization: token.map(str::to_owned),
+                ..RequestHeaders::default()
+            };
+            let response = handle_with(
+                &state,
+                "POST",
+                "/v1/sessions/default/functions/remoteConfig:publish",
+                &headers,
+                &Value::Null,
+            );
+            assert_eq!(
+                response.status, 403,
+                "{origin:?} {token:?}: {}",
+                response.body
+            );
+        }
+    }
+    let headers = RequestHeaders {
+        authorization: Some("Bearer test-token".to_owned()),
+        ..RequestHeaders::default()
+    };
+    assert_eq!(
+        handle_with(
+            &state,
+            "POST",
+            "/v1/sessions/default/functions/remoteConfig:publish",
+            &headers,
+            &Value::Null
+        )
+        .status,
+        404
+    );
+    let foreign = RequestHeaders {
+        origin: Some("https://foreign.example".into()),
+        ..headers
+    };
+    assert_eq!(
+        handle_with(
+            &state,
+            "POST",
+            "/v1/sessions/default/functions/remoteConfig:publish",
+            &foreign,
+            &Value::Null
+        )
+        .status,
+        403
+    );
+}
+
+#[test]
+fn remote_config_control_scopes_calls_and_preserves_refusal_status() {
+    let mut state = state(Arc::new(AtomicUsize::new(0)));
+    let hook = Arc::new(FakeFunctions(Mutex::new(Vec::new())));
+    state.functions = Some(hook.clone());
+    state.sessions.lock().unwrap().extend([
+        ("other".into(), "demo-other".into()),
+        ("alias".into(), "demo-app".into()),
+    ]);
+    let token = RequestHeaders {
+        authorization: Some("Bearer test-token".into()),
+        ..RequestHeaders::default()
+    };
+    let body = json!({"data": {"versionNumber": 7}});
+    for (method, session, status) in [
+        ("GET", "default", 404),
+        ("POST", "missing", 404),
+        ("POST", "other", 400),
+        ("POST", "alias", 400),
+    ] {
+        let response = handle_with(
+            &state,
+            method,
+            &format!("/v1/sessions/{session}/functions/remoteConfig:publish"),
+            &token,
+            &body,
+        );
+        assert_eq!(response.status, status, "{}", response.body);
+        assert!(hook.0.lock().unwrap().is_empty());
+    }
+    let path = "/v1/sessions/default/functions/remoteConfig:publish?fixture=1";
+    assert_eq!(
+        handle_with(&state, "POST", path, &RequestHeaders::default(), &body).status,
+        403
+    );
+    assert!(hook.0.lock().unwrap().is_empty());
+    for (failure, status) in [("invalid", 400), ("capacity", 429), ("unavailable", 503)] {
+        assert_eq!(
+            handle_with(&state, "POST", path, &token, &json!({"failure": failure})).status,
+            status
+        );
+        assert!(hook.0.lock().unwrap().is_empty());
+    }
+    let response = handle_with(&state, "POST", path, &token, &body);
+    assert_eq!(response.status, 200);
+    assert_eq!(response.body, json!({"deliveries": 2}));
+    assert_eq!(
+        *hook.0.lock().unwrap(),
+        [("remoteConfig".into(), vec![body])]
+    );
+}
+
+fn remote_config_wire_auth() -> fireemu_adapter_http::identity_toolkit::AuthState {
+    use fireemu_adapter_http::identity_toolkit::AuthState;
+    use fireemu_core_auth::{mfa::TotpPolicy, store::AuthStore};
+    use fireemu_core_types::determinism::SplitMix64;
+    AuthState {
+        store: Arc::new(Mutex::new(AuthStore::new(
+            "demo-app",
+            SplitMix64::new(5),
+            TotpPolicy::default(),
+        ))),
+        clock: Arc::new(Mutex::new(VirtualClock::new(
+            LogicalInstant::from_unix_seconds(1_788_004_860),
+        ))),
+        wall_clock: None,
+        totp_extension_enabled: false,
+        barrier: None,
+        events: None,
+        notices: None,
+        blocking: None,
+        operation_gate: Arc::new(Mutex::new(())),
+        control_token: None,
+        registry: None,
+        allow_routed_projects: false,
+        stateless_refresh_tokens: true,
+        idp_continuations: fireemu_adapter_http::identity_toolkit::IdpContinuationPolicy::Disabled,
+        query_limits: fireemu_adapter_http::identity_toolkit::AuthQueryLimits::EmulatorUnbounded,
+        client_api_key: fireemu_adapter_http::identity_toolkit::ClientApiKeyPolicy::Optional,
+        fake_custom_token_expiry:
+            fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Ignore,
+        custom_token_trust: None,
+        allow_unsigned_custom_tokens: true,
+        idp_assertions: fireemu_adapter_http::identity_toolkit::IdpAssertionPolicy::Fixture,
+        app_check: None,
+        app_check_policy: None,
+        tenancy: None,
+    }
+}
+
+#[tokio::test]
+async fn remote_config_wire_authentication_precedes_json_parsing() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut state = state(Arc::new(AtomicUsize::new(0)));
+    let hook = Arc::new(FakeFunctions(Mutex::new(Vec::new())));
+    state.functions = Some(hook.clone());
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(fireemu_adapter_http::server::serve_with_control(
+        listener,
+        Arc::new(remote_config_wire_auth()),
+        Arc::new(state),
+    ));
+    let mut responses = Vec::new();
+    for authorization in [
+        "",
+        "Authorization: Bearer wrong\r\n",
+        "Authorization: Bearer test-token\r\n",
+    ] {
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let request = format!("POST /v1/sessions/default/functions/remoteConfig:publish HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 1\r\n{authorization}\r\n{{");
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut response = Vec::new();
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            stream.read_to_end(&mut response),
+        )
+        .await;
+        responses.push((result, String::from_utf8(response).unwrap()));
+    }
+    server.abort();
+    let _ = server.await;
+    for ((result, response), expected) in responses.into_iter().zip([403, 403, 400]) {
+        result.unwrap().unwrap();
+        assert!(
+            response.starts_with(&format!("HTTP/1.1 {expected}")),
+            "{response}"
+        );
+    }
+    assert!(hook.0.lock().unwrap().is_empty());
+    tokio::net::TcpListener::bind(addr)
+        .await
+        .expect("the test listener was released");
 }

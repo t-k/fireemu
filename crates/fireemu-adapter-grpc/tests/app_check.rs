@@ -39,6 +39,7 @@ use fireemu_proto_firestore::google::firestore::v1 as pb;
 use fireemu_proto_firestore::google::firestore::v1::firestore_client::FirestoreClient;
 use fireemu_proto_firestore::google::firestore::v1::firestore_server::FirestoreServer;
 use tokio_stream::wrappers::TcpListenerStream;
+use tokio_stream::StreamExt;
 use tonic::metadata::MetadataValue;
 use tonic::{Code, Request};
 
@@ -1100,6 +1101,53 @@ fn channel_full(r: ChannelResponse) -> (u16, Vec<(&'static str, String)>, String
     }
 }
 
+async fn channel_terminal(h: &Harness, sid: &str) -> serde_json::Value {
+    let response = h.hub.handle(&ChannelRequest {
+        kind: StreamKind::Listen,
+        method: "GET".to_owned(),
+        params: channel_params(&[
+            ("SID", sid),
+            ("RID", "terminal"),
+            ("AID", "0"),
+            ("CI", "1"),
+            ("TO", "1000"),
+            ("TYPE", "xmlhttp"),
+        ]),
+        authorization: None,
+        app_check: Vec::new(),
+        origin: None,
+        body: String::new(),
+    });
+    let ChannelResponse::Stream { mut body, .. } = response else {
+        panic!("expected a terminal backchannel stream");
+    };
+    let bytes = tokio::time::timeout(std::time::Duration::from_secs(2), body.next())
+        .await
+        .expect("terminal response timed out")
+        .expect("terminal response must contain a chunk")
+        .expect("terminal response chunk must be valid");
+    assert!(
+        body.next().await.is_none(),
+        "terminal response is one chunk"
+    );
+    let text = std::str::from_utf8(&bytes).expect("terminal response is UTF-8");
+    let (_, json) = text.split_once('\n').expect("chunk has a length prefix");
+    serde_json::from_str(json).expect("terminal response is JSON")
+}
+
+fn acknowledge_channel_terminal(h: &Harness, sid: &str) {
+    let (status, _, body) = channel_full(h.hub.handle(&ChannelRequest {
+        kind: StreamKind::Listen,
+        method: "POST".to_owned(),
+        params: channel_params(&[("SID", sid), ("RID", "ack-terminal"), ("AID", "1")]),
+        authorization: None,
+        app_check: Vec::new(),
+        origin: None,
+        body: channel_form(&[("count", "0"), ("ofs", "1")]),
+    }));
+    assert_eq!(status, 200, "terminal acknowledgement failed: {body}");
+}
+
 fn listen_target_json() -> String {
     serde_json::json!({
         "database": DATABASE,
@@ -1179,20 +1227,19 @@ fn channel_envelope(
 }
 
 #[tokio::test]
-async fn an_enforced_webchannel_handshake_without_app_check_never_opens_a_channel() {
+async fn an_enforced_webchannel_handshake_without_app_check_delivers_a_terminal_error() {
     let h = start(BaselineMode::Enforced).await;
     let (status, sid, body) = channel_handshake(&h, None);
-    assert_eq!(status, 403, "{body}");
-    assert!(sid.is_empty(), "no channel was opened");
-    let parsed: serde_json::Value = serde_json::from_str(&body).expect("a JSON error envelope");
-    assert_eq!(parsed["error"]["status"], "PERMISSION_DENIED");
-    assert!(
-        !parsed["error"]["message"]
-            .as_str()
-            .unwrap_or_default()
-            .contains(RULES_DENIAL),
-        "an App Check denial is not a rules denial: {body}"
-    );
+    assert_eq!(status, 200, "{body}");
+    assert!(!sid.is_empty(), "the refusal uses a WebChannel session");
+    assert!(body.contains("[0,"), "expected the `c` handshake: {body}");
+    let terminal = channel_terminal(&h, &sid).await;
+    assert_eq!(terminal[0][1][0]["error"]["status"], "PERMISSION_DENIED");
+    assert!(!terminal[0][1][0]["error"]["message"]
+        .as_str()
+        .unwrap_or_default()
+        .contains(RULES_DENIAL));
+    acknowledge_channel_terminal(&h, &sid);
 
     let token = h.token();
     let (status, sid, _) = channel_handshake(&h, Some(&token));
@@ -1201,7 +1248,7 @@ async fn an_enforced_webchannel_handshake_without_app_check_never_opens_a_channe
     h.handle.abort();
 }
 
-/// Firestore scenario 4: a replacement token for another app closes the channel. The token is
+/// Firestore scenario 4: a replacement token for another app terminates the channel. The token is
 /// perfectly valid — same project, current epoch, correct signature — so this is exactly the
 /// case that re-admitting each envelope on its own merits would wave through.
 #[tokio::test]
@@ -1218,13 +1265,24 @@ async fn a_webchannel_rejects_a_replacement_token_from_another_app() {
 
     let intruder = h.other_app_token();
     let (status, body) = channel_envelope(&h, &sid, "3", "2", Some(&intruder));
-    assert_eq!(status, 403, "{body}");
-    let parsed: serde_json::Value = serde_json::from_str(&body).expect("a JSON error envelope");
-    assert_eq!(parsed["error"]["status"], "PERMISSION_DENIED");
+    assert_eq!(status, 200, "{body}");
 
-    // The channel is gone: the session no longer answers.
+    // The refusal is replayed until the terminal envelope is acknowledged.
     let (status, body) = channel_envelope(&h, &sid, "4", "3", Some(&token));
-    assert_eq!(status, 400, "the channel was closed: {body}");
+    assert_eq!(
+        status, 200,
+        "the terminal response remains fetchable: {body}"
+    );
+    let terminal = channel_terminal(&h, &sid).await;
+    assert_eq!(terminal[0][1][0]["error"]["status"], "PERMISSION_DENIED");
+    assert_eq!(
+        channel_terminal(&h, &sid).await,
+        terminal,
+        "unacked refusal replays"
+    );
+    acknowledge_channel_terminal(&h, &sid);
+    let (status, body) = channel_envelope(&h, &sid, "5", "4", Some(&token));
+    assert_eq!(status, 400, "acknowledged refusal must be removed: {body}");
     h.handle.abort();
 }
 
@@ -1241,8 +1299,11 @@ async fn an_admitted_webchannel_keeps_serving_envelopes_without_a_token() {
     assert_eq!(status, 200, "{body}");
 
     // Presenting the now-expired token, though, is an invalid replacement.
-    let (status, _) = channel_envelope(&h, &sid, "3", "2", Some(&token));
-    assert_eq!(status, 403);
+    let (status, body) = channel_envelope(&h, &sid, "3", "2", Some(&token));
+    assert_eq!(status, 200, "{body}");
+    let terminal = channel_terminal(&h, &sid).await;
+    assert_eq!(terminal[0][1][0]["error"]["status"], "PERMISSION_DENIED");
+    acknowledge_channel_terminal(&h, &sid);
     h.handle.abort();
 }
 
@@ -1266,7 +1327,7 @@ async fn the_webchannel_transport_refuses_duplicate_app_check_fields() {
     let token = h.token();
     let block = format!("X-Firebase-AppCheck:{token}\r\nx-firebase-appcheck:{token}\r\n");
     let first = listen_target_json();
-    let (status, _, _) = channel_full(h.hub.handle(&ChannelRequest {
+    let (status, headers, body) = channel_full(h.hub.handle(&ChannelRequest {
         kind: StreamKind::Listen,
         method: "POST".to_owned(),
         params: channel_params(&[("database", DATABASE), ("VER", "8"), ("RID", "1")]),
@@ -1280,11 +1341,19 @@ async fn the_webchannel_transport_refuses_duplicate_app_check_fields() {
             ("req0___data__", &first),
         ]),
     }));
-    assert_eq!(status, 403, "two instances in the init block are ambiguous");
+    assert_eq!(status, 200, "{body}");
+    let sid = headers
+        .iter()
+        .find(|(name, _)| *name == "x-http-session-id")
+        .map(|(_, sid)| sid.as_str())
+        .expect("denied handshake needs a terminal session");
+    let terminal = channel_terminal(&h, sid).await;
+    assert_eq!(terminal[0][1][0]["error"]["status"], "PERMISSION_DENIED");
+    acknowledge_channel_terminal(&h, sid);
 
     // One in the init block and one as a real HTTP field is the same ambiguity.
     let block = format!("X-Firebase-AppCheck:{token}\r\n");
-    let (status, _, _) = channel_full(h.hub.handle(&ChannelRequest {
+    let (status, headers, body) = channel_full(h.hub.handle(&ChannelRequest {
         kind: StreamKind::Listen,
         method: "POST".to_owned(),
         params: channel_params(&[("database", DATABASE), ("VER", "8"), ("RID", "1")]),
@@ -1298,7 +1367,15 @@ async fn the_webchannel_transport_refuses_duplicate_app_check_fields() {
             ("req0___data__", &first),
         ]),
     }));
-    assert_eq!(status, 403, "two sources are two instances");
+    assert_eq!(status, 200, "{body}");
+    let sid = headers
+        .iter()
+        .find(|(name, _)| *name == "x-http-session-id")
+        .map(|(_, sid)| sid.as_str())
+        .expect("denied handshake needs a terminal session");
+    let terminal = channel_terminal(&h, sid).await;
+    assert_eq!(terminal[0][1][0]["error"]["status"], "PERMISSION_DENIED");
+    acknowledge_channel_terminal(&h, sid);
     h.handle.abort();
 }
 
@@ -1311,7 +1388,7 @@ async fn a_webchannel_opened_for_another_project_is_denied() {
     let token = h.token();
     let first = listen_target_json();
     let block = format!("X-Firebase-AppCheck:{token}\r\n");
-    let (status, _, _) = channel_full(h.hub.handle(&ChannelRequest {
+    let (status, headers, body) = channel_full(h.hub.handle(&ChannelRequest {
         kind: StreamKind::Listen,
         method: "POST".to_owned(),
         params: channel_params(&[
@@ -1329,10 +1406,20 @@ async fn a_webchannel_opened_for_another_project_is_denied() {
             ("req0___data__", &first),
         ]),
     }));
-    assert_eq!(
-        status, 403,
-        "a demo-app token does not authorize a demo-other channel"
+    assert_eq!(status, 200, "a refusal is delivered on the channel: {body}");
+    assert!(
+        headers.iter().any(|(name, _)| *name == "x-http-session-id"),
+        "a refused opening needs a session to deliver the terminal envelope"
     );
+    let sid = headers
+        .iter()
+        .find(|(name, _)| *name == "x-http-session-id")
+        .unwrap()
+        .1
+        .as_str();
+    let terminal = channel_terminal(&h, sid).await;
+    assert_eq!(terminal[0][1][0]["error"]["status"], "PERMISSION_DENIED");
+    acknowledge_channel_terminal(&h, sid);
     h.handle.abort();
 }
 

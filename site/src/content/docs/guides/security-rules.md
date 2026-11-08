@@ -40,7 +40,9 @@ note: firestore: Security Rules denied get on "notes/n1" in "database (default)"
 ```
 
 - Set `rules.denialLog` to `"off"` in `fireemu.toml` to silence these lines, for example in a suite that asserts many denials. The answer to the client is the same either way.
-- When the UI is running, its Rules page lists the decided requests from the start of the run, with what every expression evaluated to. The control API serves the same trace at `GET /v1/sessions/default/rules/requests`.
+- The Rules page and `GET /v1/sessions/default/rules/requests` show the newest 100 traced Firestore decisions. Tracing starts with the UI or the first control-API read; loading a new ruleset clears the history. This is a debugging view, not a complete request log.
+
+Firestore and Storage Rules diagnostics keep at most 64 distinct values per expression. String values and error messages are cut at a character boundary within 1,024 UTF-8 bytes. Firestore coverage JSON/HTML and control request traces mark cut values with `truncated: true`; omitted observations add `valuesOmitted` and `valuesCountMayBeLower: true`. Displayed counts can therefore be lower than the actual count for a value. These bounds affect diagnostics only, not allow/deny decisions.
 
 ## `get()` and `exists()` on a path that is not a document
 

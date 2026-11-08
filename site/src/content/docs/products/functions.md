@@ -43,6 +43,8 @@ Where it differs from production and from the Firebase CLI:
 - `--inspect-functions` is ignored with a warning, as the Firebase CLI does.
 - App Check for a Python callable is checked by the Python SDK itself, as in production: it verifies the `X-Firebase-AppCheck` token with the Admin SDK, and Fireemu points that check at the App Check emulator's keys, so only a token the emulator signed is accepted and an `enforce_app_check=True` callable answers 401 to every other call. The runner fetches those keys itself, from a loopback address only, without following redirects or using a proxy. Beyond the SDK's checks it requires an expiry and an issuer of exactly the form the emulator issues, and its project number must agree with the `projects/<number>` audience; the audience rule is the SDK's own (`projects/<project id>`). This needs PyJWT 2.10.1 or later, which the Admin SDK's own constraint already implies; with an older one nothing is announced and the header is removed. It works when the run has an App Check emulator, which the strict profile starts with Functions. Without one the header is removed before the function and no callable sees a token. Differences from Node: the Python SDK checks the token against the keys alone, so unlike a Node callable (whose tokens the daemon also checks against the project's current epoch and app state) a token stays valid after you reset the project or disable the app until it expires; there is no start-up self-test of the SDK; the SDK checks the token's times against real time while the emulator signs them on its own clock, so a token minted after you moved the clock ahead of real time is refused as not yet valid; limited-use token consumption (`verify_token(..., consume=True)`) is refused; and a configuration that turns App Check on explicitly (`appCheck` in the configuration file) refuses to start with a Python codebase.
 
+CloudEvent handlers can read `flask.request`: it represents the delivering `POST /`, including binary-mode `ce-*` headers, content type, length and body. Firestore uses a protobuf body. Under `strict`, Pub/Sub uses sorted compact JSON with a newline, Storage uses its recorded indented JSON layout, Eventarc preserves the publisher's JSON body text, and trace context is a plain `traceparent` header rather than a CloudEvent attribute. Firestore has `dataschema` only under `strict` (recorded for created events; other event types are unobserved). For JSON event bodies, the emulator profile keeps the daemon's framed JSON value text, except that Pub/Sub adds the SDK's snake-case aliases and compacts the body. Realtime Database body layout is unrecorded; Cloud Run authorization and identity headers such as `Function-Execution-Id`, `Forwarded` and `X-Forwarded-For` are not reproduced.
+
 ## Supported triggers
 
 See the [Functions support inventory](https://github.com/t-k/fireemu/blob/main/docs/functions-export-inventory.md) for support by trigger type and export.
@@ -59,11 +61,11 @@ See the [Functions support inventory](https://github.com/t-k/fireemu/blob/main/d
 | Realtime Database | `database.ref()` and `database.instance().ref()` `onCreate`, `onUpdate`, `onDelete`, `onWrite` | `onValueCreated`, `Updated`, `Deleted`, `Written` |
 | Eventarc and alerts | | `onCustomEventPublished`, `onAlertPublished` |
 
-Local Realtime Database instances are in `us-central1`, so a 2nd-gen database trigger in another region does not fire, and a warning at load says so. [Local Functions triggers](../realtime-database/#local-functions-triggers) describes how a write and its events are admitted. Production observations cover a fixed sequence of administrator and unauthenticated writes; end-user writes and other delivery cases remain unverified.
+Local Realtime Database instances are in `us-central1`, so a 2nd-gen database trigger in another region does not fire, and a warning at load says so. [Local Functions triggers](../realtime-database/#local-functions-triggers) describes how a write and its events are admitted. Production observations cover fixed administrator and unauthenticated sequences, plus 12 writes by an email/password user over REST and the web SDK, including ancestor and multi-path writes and redelivery after a failed invocation. Delivery timing, other providers and unrecorded write or handler shapes remain unverified.
 
 Storage archive events fire only for a bucket whose versioning was turned on (`PATCH /storage/v1/b/{bucket}` with `{"versioning":{"enabled":true}}`), and their shape is unrecorded.
 
-Triggers for products Fireemu does not deliver events for, such as Remote Config (deferred) and Data Connect (deferred), cannot run. By default discovery refuses a codebase that exports one; set `functions.unservedTriggers` to `"report"` to report each one and load the rest. The Functions page of the [Emulator UI](../../guides/ui/) and `GET /v1/sessions/default/functions` on the control API list every ignored export with the reason.
+Triggers for products Fireemu does not deliver events for, such as Data Connect (deferred), cannot run. Remote Config handlers run only through the local injection action, and its production event shape is unobserved. By default discovery refuses a codebase that exports one; set `functions.unservedTriggers` to `"report"` to report each one and load the rest. The Functions page of the [Emulator UI](../../guides/ui/) and `GET /v1/sessions/default/functions` on the control API list every ignored export with the reason.
 
 ## Parameters and secrets
 
@@ -78,6 +80,8 @@ A function whose `invoker` is `"private"` or a list of service accounts, and eve
 ## Task queues
 
 A task enqueued with a `scheduleTime` (or `scheduleDelaySeconds`) waits until then under `strict`, as it does in Cloud Tasks, and a `scheduleTime` that is not RFC 3339, or more than 30 days ahead, is refused with 400. The `emulator` profile dispatches at once, as the official emulator does. To test a delayed task without waiting, set `functions.clock.tasks` to `"virtual"` and move the clock (see [Time and scheduled functions](../../guides/time/)), or release the waiting tasks: the Functions page of the Emulator UI lists them with their due time and a **Run now** button, and the control API takes `POST /v1/sessions/default/functions/{queue}:run` (all waiting tasks) or the same with `{"task": "<task id>"}` (one task). Rate limits and concurrency still apply to a released task.
+
+In both profiles, task dispatch preserves the enqueued JSON body's bytes, including member order and whitespace; non-JSON bodies are still refused. Under `strict`, `X-CloudTasks-QueueName` is the bare queue ID, `X-CloudTasks-TaskETA` is Unix seconds with six decimal places, and `User-Agent` is `Google-Cloud-Tasks`. Task-supplied headers cannot override that user agent or the `X-CloudTasks-*`, `X-Google-*` and `X-AppEngine-*` families. The `emulator` profile retains the official emulator's internal queue name and header overrides.
 
 For a test that only needs current work to settle, send `POST /v1/sessions/default:awaitIdle` with `{ "scope": "runnable" }` (v0.26.0+). Future schedules and retry backoff do not block this scope; due tasks waiting on rate/concurrency and active HTTP requests still do. Omitting the scope waits for all work. See [waiting for runnable work](../../guides/time/#wait-for-runnable-work).
 
@@ -135,13 +139,19 @@ A schedule runs on Fireemu's virtual clock. Unless you pin a start time with `da
 
 ## App Check in callables
 
-`enforceAppCheck` on callable functions works with no configuration: get a token from the debug-token exchange with any UUIDv4 and send it in `X-Firebase-AppCheck`. A call without a token, or with a malformed one, is refused with 401. `consumeAppCheckToken` is honored when App Check is enabled. See [App Check](../app-check/).
+`enforceAppCheck` on callable functions works with no configuration: get a token from the debug-token exchange with any UUIDv4 and send it in `X-Firebase-AppCheck`. A call without a token, or with a malformed one, is refused with 401. Replay consumption is unavailable: a valid token on a Node callable with `consumeAppCheckToken: true` is refused with `APP_CHECK_REPLAY_UNSUPPORTED`. Python callables use the [verification and restrictions above](#python-codebases). See [App Check](../app-check/).
 
 Under the `strict` profile the daemon also verifies a callable's `Authorization` bearer before it forwards the call, for Node and Python codebases alike. A request that carries more than one `Authorization` header is refused with 401 before anything is forwarded.
 
 ## Runner output
 
 Function logs and runner standard error are forwarded to the local logs. If the runner exits before its startup handshake, diagnostics also include its exit status, captured standard error and a bounded tail of standard output. Application-written output is not automatically scrubbed of arbitrary secrets; avoid printing credentials or dumping the environment in function code.
+
+## Source reload
+
+Node codebases reload source changes automatically. Already-admitted invocations finish on their selected generation, subject to their invocation deadlines. A retired generation that does not finish is stopped one second after its latest outstanding invocation deadline, except in debugger mode. Edits before the watcher's first scan are detected, and reload snapshots are removed at shutdown. Changing the discovered trigger manifest requires restarting Fireemu; a rejected reload normally keeps the previous generation. A fixed `--inspect-functions <port>` is an exception: the previous runner must stop before the replacement can bind that port. Python codebases still require a restart.
+
+On Windows, reload snapshots are created with a protected DACL before source or local secret files are copied. Fireemu checks the snapshot directory, temporary parent and ancestors for unsafe permissions or reparse points, and refuses the snapshot if it cannot verify them. This requires Windows PowerShell; see [Troubleshooting](../../guides/troubleshooting/).
 
 ## Debugging
 

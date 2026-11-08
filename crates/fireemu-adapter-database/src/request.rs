@@ -278,10 +278,12 @@ pub fn has_query(params: &BTreeMap<String, String>) -> bool {
 
 /// Reads the query of a `GET` that is not shallow, in the order the official emulator checks
 /// it: the order, the pairs that exclude each other, the bounds, then (`check_timeout`, a
-/// plain read) the `timeout`, then the limits.
+/// plain read) the `timeout`, then the limits. `lenient` is the emulator profile, which reads a lone
+/// surrogate escape in a bound as `?`.
 pub fn query(
     params: &BTreeMap<String, String>,
     check_timeout: bool,
+    lenient: bool,
 ) -> Result<Option<QueryParams>, Refusal> {
     if !has_query(params) {
         if check_timeout {
@@ -318,7 +320,7 @@ pub fn query(
     let bound = |name: &str| -> Result<Option<(Json, Option<String>)>, Refusal> {
         params
             .get(name)
-            .map(|text| bound_value(text, key_order))
+            .map(|text| bound_value(text, key_order, lenient))
             .transpose()
     };
     if let Some((value, key)) = bound("equalTo")? {
@@ -627,11 +629,15 @@ fn limit(params: &BTreeMap<String, String>, name: &str) -> Result<Option<u32>, R
 
 /// A bound parameter: a JSON primitive, optionally followed by `,` and a JSON string key.
 /// An object or array value is read as `null`, as the official emulator reads `{}`.
-fn bound_value(text: &str, key_order: bool) -> Result<(Json, Option<String>), Refusal> {
+fn bound_value(
+    text: &str,
+    key_order: bool,
+    lenient: bool,
+) -> Result<(Json, Option<String>), Refusal> {
     let not_primitive = || Refusal::bad("Constraint index field must be a JSON primitive");
-    let (value, key) = match parse(text) {
+    let (value, key) = match parse_bound(text, lenient) {
         Ok(value) => (value, None),
-        Err(_) => split_bound(text).ok_or_else(not_primitive)?,
+        Err(_) => split_bound(text, lenient).ok_or_else(not_primitive)?,
     };
     if key_order {
         if key.is_some() {
@@ -650,12 +656,26 @@ fn bound_value(text: &str, key_order: bool) -> Result<(Json, Option<String>), Re
     Ok((value, key))
 }
 
+/// A bound's JSON value. The emulator profile reads a lone surrogate escape in a string as `?`, as the
+/// official emulator does; the strict profile refuses it.
+fn parse_bound(text: &str, lenient: bool) -> Result<Json, crate::json_parse::ParseError> {
+    if lenient {
+        crate::json_parse::parse_replacing(text, '?').map(|(json, _)| json)
+    } else {
+        parse(text)
+    }
+}
+
 /// `value,"key"`: a JSON value, a comma and a JSON string key.
-fn split_bound(text: &str) -> Option<(Json, Option<String>)> {
+fn split_bound(text: &str, lenient: bool) -> Option<(Json, Option<String>)> {
     // One pass: the value ends where its grammar ends, then a comma and a JSON string.
-    let (value, end) = crate::json_parse::parse_prefix(text).ok()?;
+    let (value, end) = if lenient {
+        crate::json_parse::parse_prefix_replacing(text, '?').ok()?
+    } else {
+        crate::json_parse::parse_prefix(text).ok()?
+    };
     let rest = text[end..].trim_start().strip_prefix(',')?;
-    match parse(rest).ok()? {
+    match parse_bound(rest, lenient).ok()? {
         Json::String(key) => Some((value, Some(key))),
         _ => None,
     }

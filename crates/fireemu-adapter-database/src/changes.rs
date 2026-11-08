@@ -2,9 +2,9 @@
 
 use std::fmt;
 
-use fireemu_core_database::DatabaseError;
 /// Database types required by source-event capture implementations.
-pub use fireemu_core_database::{Content, Leaf, Node, Path, Tree};
+pub use fireemu_core_database::{Content, Leaf, Node, NodeView, Path, ScopeView, Tree};
+use fireemu_core_database::{DatabaseError, ScopeSnapshot};
 use fireemu_core_types::admission::EventAdmissionError;
 use serde_json::Value;
 
@@ -92,7 +92,7 @@ pub trait ChangeSink: fmt::Debug + Send + Sync {
     fn capture_references(
         &self,
         _namespace: &str,
-        _before: &Tree,
+        _before: ScopeView<'_>,
         _after: &Tree,
     ) -> Result<Option<Vec<Path>>, EventAdmissionError> {
         Ok(None)
@@ -103,7 +103,7 @@ pub trait ChangeSink: fmt::Debug + Send + Sync {
     fn capture_references_within(
         &self,
         namespace: &str,
-        before: &Tree,
+        before: ScopeView<'_>,
         after: &Tree,
         _scope: &Path,
     ) -> Result<Option<Vec<Path>>, EventAdmissionError> {
@@ -124,23 +124,22 @@ pub enum ChangeError {
     /// The event runtime could not reserve the complete fanout.
     Admission(EventAdmissionError),
 }
-/// A tree candidate and its unpublished event reservation.
+/// An unpublished event reservation for source data already applied in place.
+/// Dropping it cancels publication, but does not undo a successful preparation.
 pub struct PreparedChange {
-    tree: Tree,
     publication: Option<Box<dyn Publication>>,
 }
 impl PreparedChange {
-    /// Publishes source data before activating its already admitted events.
-    pub fn commit(self, tree: &mut Tree) {
-        *tree = self.tree;
+    /// Activates admitted events after source data has been applied.
+    pub fn commit(self) {
         if let Some(publication) = self.publication {
             publication.publish();
         }
     }
 }
-/// Builds a complete candidate without touching the visible source tree.
+/// Applies an operation in place, restoring the tree on any returned refusal or unwind.
 pub fn prepare<R>(
-    tree: &Tree,
+    tree: &mut Tree,
     context: ChangeContext,
     sink: Option<&dyn ChangeSink>,
     operation: impl FnOnce(&mut Tree) -> Result<R, DatabaseError>,
@@ -148,101 +147,138 @@ pub fn prepare<R>(
     prepare_within(tree, &Path::root(), context, sink, operation)
 }
 
-/// [`prepare`] for an operation that changes only the node at `scope`, its descendants and
-/// whether its ancestors exist (a set or an update at `scope`): whether anything changed is
-/// read at `scope` alone, never by comparing the whole tree.
+/// Applies a scoped operation in place. The operation must change only `scope`,
+/// its descendants, and structural ancestors; priority paths denote their parent.
+/// Every operation/capture/reservation error or unwind restores exact source data.
+/// The caller retains exclusive source access through preparation and publication.
 pub fn prepare_within<R>(
-    tree: &Tree,
+    tree: &mut Tree,
     scope: &Path,
     context: ChangeContext,
     sink: Option<&dyn ChangeSink>,
     operation: impl FnOnce(&mut Tree) -> Result<R, DatabaseError>,
 ) -> Result<(R, PreparedChange), ChangeError> {
-    let mut candidate = tree.clone();
-    let result = operation(&mut candidate).map_err(ChangeError::Database)?;
-    let publication = if tree.get(scope) == candidate.get(scope) {
-        None
-    } else if let Some(sink) = sink {
-        let data = match sink
-            .capture_references_within(&context.namespace, tree, &candidate, scope)
-            .map_err(ChangeError::Admission)?
-        {
-            None => ChangeData::Whole {
-                before: export_value(tree, &Path::root()),
-                after: export_value(&candidate, &Path::root()),
-            },
-            Some(paths) => {
-                let paths: std::collections::BTreeSet<_> = paths.into_iter().collect();
-                let references = paths
-                    .into_iter()
-                    .filter(|path| tree.get(path) != candidate.get(path))
-                    .map(|reference| ReferenceChange {
-                        before: export_value(tree, &reference),
-                        after: export_value(&candidate, &reference),
-                        reference,
-                    })
-                    .collect();
-                ChangeData::References(references)
+    struct Rollback<'a> {
+        tree: &'a mut Tree,
+        snapshot: Option<ScopeSnapshot>,
+    }
+    impl Drop for Rollback<'_> {
+        fn drop(&mut self) {
+            if let Some(snapshot) = self.snapshot.take() {
+                self.tree.restore_scope(snapshot);
             }
-        };
-        if matches!(&data, ChangeData::References(references) if references.is_empty()) {
-            None
-        } else {
-            Some(
-                sink.reserve(&CommittedChange { context, data })
-                    .map_err(ChangeError::Admission)?,
-            )
         }
+    }
+
+    let scope = if scope.is_priority() {
+        scope.parent().unwrap_or_default()
     } else {
-        None
+        scope.clone()
     };
-    Ok((
-        result,
-        PreparedChange {
-            tree: candidate,
-            publication,
-        },
-    ))
+    let snapshot = tree.save_scope(&scope);
+    let mut rollback = Rollback {
+        tree,
+        snapshot: Some(snapshot),
+    };
+    let result = (|| {
+        let tree = &mut *rollback.tree;
+        let result = operation(tree).map_err(ChangeError::Database)?;
+        let before = rollback
+            .snapshot
+            .as_ref()
+            .expect("armed rollback guard")
+            .view(tree);
+        let publication = if same_node(before.get(&scope), tree.get(&scope)) {
+            None
+        } else if let Some(sink) = sink {
+            let data = match sink
+                .capture_references_within(&context.namespace, before, tree, &scope)
+                .map_err(ChangeError::Admission)?
+            {
+                None => ChangeData::Whole {
+                    before: export_value(before, &Path::root()),
+                    after: export_value(ScopeView::from(&*tree), &Path::root()),
+                },
+                Some(paths) => {
+                    let paths: std::collections::BTreeSet<_> = paths.into_iter().collect();
+                    let references = paths
+                        .into_iter()
+                        .filter(|path| {
+                            path.contains(&scope) || !same_node(before.get(path), tree.get(path))
+                        })
+                        .map(|reference| ReferenceChange {
+                            before: export_value(before, &reference),
+                            after: export_value(ScopeView::from(&*tree), &reference),
+                            reference,
+                        })
+                        .collect();
+                    ChangeData::References(references)
+                }
+            };
+            if matches!(&data, ChangeData::References(references) if references.is_empty()) {
+                None
+            } else {
+                Some(
+                    sink.reserve(&CommittedChange { context, data })
+                        .map_err(ChangeError::Admission)?,
+                )
+            }
+        } else {
+            None
+        };
+        Ok((result, PreparedChange { publication }))
+    })();
+    if result.is_ok() {
+        rollback.snapshot = None;
+    }
+    result
+}
+
+fn same_node(before: Option<NodeView<'_>>, after: Option<&Node>) -> bool {
+    match (before, after) {
+        (None, None) => true,
+        (Some(before), Some(after)) => before.equals(after),
+        _ => false,
+    }
 }
 
 /// The export JSON of the value at `path` (`null` when absent), written from the tree into a
 /// `Value` without rendering text: the same `Value` that parsing the compact export text
 /// gives, so the trigger event body keeps its bytes. No `.priority` path reaches here: no
 /// child has that key, so such a reference never differs between the trees.
-fn export_value(tree: &Tree, path: &Path) -> Value {
+fn export_value(tree: ScopeView<'_>, path: &Path) -> Value {
     tree.get(path).map_or(Value::Null, node_value)
 }
 
 /// [`Node::to_json`] in the export format, as a `Value`.
-fn node_value(node: &Node) -> Value {
+fn node_value(node: NodeView<'_>) -> Value {
     use fireemu_core_database::node::VALUE_KEY;
     use fireemu_core_database::path::PRIORITY_KEY;
-    let priority = node.priority.as_ref().map(priority_value);
-    match &node.content {
-        Content::Leaf(leaf) => {
-            let value = match leaf {
-                Leaf::Bool(value) => Value::Bool(*value),
-                Leaf::Number(number) => number_value(*number),
-                Leaf::String(value) => Value::String(value.clone()),
-            };
-            match priority {
-                None => value,
-                Some(priority) => Value::Object(serde_json::Map::from_iter([
-                    (VALUE_KEY.to_owned(), value),
-                    (PRIORITY_KEY.to_owned(), priority),
-                ])),
-            }
+    let priority = node.priority().map(priority_value);
+    if let Some(leaf) = node.leaf() {
+        let value = match leaf {
+            Leaf::Bool(value) => Value::Bool(*value),
+            Leaf::Number(number) => number_value(*number),
+            Leaf::String(value) => Value::String(value.clone()),
+        };
+        match priority {
+            None => value,
+            Some(priority) => Value::Object(serde_json::Map::from_iter([
+                (VALUE_KEY.to_owned(), value),
+                (PRIORITY_KEY.to_owned(), priority),
+            ])),
         }
-        Content::Children(children) => {
-            let mut map: serde_json::Map<String, Value> = children
-                .iter()
-                .map(|(key, child)| (key.clone(), node_value(child)))
-                .collect();
-            if let Some(priority) = priority {
-                map.insert(PRIORITY_KEY.to_owned(), priority);
-            }
-            Value::Object(map)
+    } else {
+        let mut map: serde_json::Map<String, Value> = node
+            .children()
+            .into_iter()
+            .flatten()
+            .map(|(key, child)| (key.to_owned(), node_value(child)))
+            .collect();
+        if let Some(priority) = priority {
+            map.insert(PRIORITY_KEY.to_owned(), priority);
         }
+        Value::Object(map)
     }
 }
 

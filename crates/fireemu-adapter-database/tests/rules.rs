@@ -230,6 +230,294 @@ fn rules_put_answers_the_recorded_production_load_bytes() {
     }
 }
 
+/// A Rules string that holds a lone surrogate (`'\uD83D'`) loads (PUT 200) and is judged by its UTF-16 units, as the official
+/// emulator judges it (owner row 2270; 250 rows of the core test). Production has not answered these shapes; both profiles follow
+/// the jar. A path or key that holds one names nothing (owner 2270 (2), completed in 2276): `child` reads absent, `hasChild` is false and an index is
+/// undefined, so the negated forms read 200 as on the jar.
+#[test]
+fn a_lone_surrogate_string_in_a_rule_loads_and_decides_by_utf16_units() {
+    let rows: [(&str, u16); 15] = [
+        ("'\\uD83D'.length == 1", 200),
+        ("!('\\uD83D'.length == 1)", 401),
+        ("'\\uD83D' + '\\uDE00' == '😀'", 200),
+        ("'\\uDE00'.length == 1", 200),
+        ("'a\\uD83D'.length == 2", 200),
+        ("'\\uD83D' == '\\uDE00'", 401),
+        ("'\\uD83D\\uDE00'.length == 1", 401),
+        ("root.child('\\uD83D').exists()", 401),
+        // A path or key that holds a lone surrogate names nothing: absent, not an error.
+        ("!root.child('\\uD83D').exists()", 200),
+        ("!data.hasChild('a\\uD83D')", 200),
+        ("!data.hasChildren(['\\uD83D'])", 200),
+        ("auth['\\uD83D'] == null", 200),
+        ("auth.token['\\uD83D'] != null", 401),
+        ("'😀'.replace('', 'x').length == 5", 200),
+        ("!('😀'.replace('', 'x').length == 5)", 401),
+    ];
+    for strict in [false, true] {
+        for (expression, read) in rows {
+            let options = RestOptions {
+                production_shapes: strict,
+                ..RestOptions::default()
+            };
+            let mut database = Database::new(options, 7);
+            let rules = format!(
+                r#"{{"rules":{{".read":"{}"}}}}"#,
+                expression.replace('\\', "\\\\").replace('"', "\\\"")
+            );
+            let put = call(
+                &mut database,
+                "PUT",
+                "/.settings/rules.json?ns=t",
+                OWNER,
+                &rules,
+            );
+            assert_eq!(
+                put,
+                (200, r#"{"status":"ok"}"#.to_owned()),
+                "strict={strict} {expression}"
+            );
+            let got = call(&mut database, "GET", "/x.json?ns=t", &[], "");
+            assert_eq!(got.0, read, "strict={strict} {expression}");
+        }
+    }
+}
+
+/// A regular expression's `\W`, `\D` and escaped letters are read as the official emulator reads them on the emulator profile
+/// only (owner 2276); the strict profile keeps them errors, so the rule is false negated or not (production has not
+/// answered them). The strict column is the refusal of today: nothing is allowed there that was not.
+#[test]
+fn complement_classes_and_escaped_letters_are_read_on_the_emulator_profile_only() {
+    let rows: [(&str, u16, u16); 8] = [
+        ("'ab'.matches(/^\\W$/)", 200, 401),
+        ("!('ab'.matches(/^\\W$/))", 401, 401),
+        ("!('a'.matches(/^\\W$/))", 200, 401),
+        ("'1'.matches(/^\\D$/)", 401, 401),
+        ("'a'.matches(/^[\\uD800-\\uDFFF]$/)", 200, 401),
+        ("!('a'.matches(/^[\\uD800-\\uDFFF]$/))", 401, 401),
+        ("'!'.matches(/^[^\\W]$/)", 401, 401),
+        ("'a'.matches(/^\\w$/)", 200, 200),
+    ];
+    for (strict, column) in [(false, 1), (true, 2)] {
+        for row in rows {
+            let read = if column == 1 { row.1 } else { row.2 };
+            let options = RestOptions {
+                production_shapes: strict,
+                ..RestOptions::default()
+            };
+            let mut database = Database::new(options, 7);
+            let rules = format!(
+                r#"{{"rules":{{".read":"{}"}}}}"#,
+                row.0.replace('\\', "\\\\").replace('"', "\\\"")
+            );
+            load(&mut database, "t", &rules);
+            let got = call(&mut database, "GET", "/x.json?ns=t", &[], "");
+            assert_eq!(got.0, read, "strict={strict} {}", row.0);
+        }
+    }
+}
+
+/// A query value that holds a lone surrogate (`startAt="\ud83d"`) decides as the official emulator does on the
+/// emulator profile (owner row "RTDB closure lone surrogates in claims and query values", 2026-11-06, kept by line
+/// 2291): it reads as `?`, as a body value does. 42 jar rows (`docs.local/runs/rtdb-lone-surrogate/jar-claims.json`,
+/// probe-rows.mjs). The strict profile keeps today's answers: it refuses the query value with 400 `Constraint index
+/// field must be a JSON primitive`.
+#[test]
+fn lone_surrogates_in_query_values_decide_as_the_official_emulator() {
+    let rows: Vec<serde_json::Value> = serde_json::from_str(include_str!(
+        "fixtures/rules-lone-query-values-official-emulator-4.11.2.json"
+    ))
+    .unwrap();
+    let seed = r#"{"a":{"b":1},"c":{"b":2},"x":"v"}"#;
+    let mut failures = Vec::new();
+    assert_eq!(rows.len(), 42);
+    for row in &rows {
+        let expression = row["expr"].as_str().unwrap();
+        let query = row["query"].as_str().unwrap_or("");
+        let expected = u16::try_from(row["read"].as_u64().unwrap()).unwrap();
+        for strict in [false, true] {
+            let options = RestOptions {
+                production_shapes: strict,
+                credentials: fireemu_adapter_database::rest::Credentials {
+                    strict,
+                    ..Default::default()
+                },
+                ..RestOptions::default()
+            };
+            let mut database = Database::new(options, 7);
+            call(&mut database, "PUT", "/t.json?ns=t", OWNER, seed);
+            let rules = format!(
+                r#"{{"rules":{{"t":{{".read":"{}"}}}}}}"#,
+                expression.replace('\\', "\\\\").replace('"', "\\\"")
+            );
+            load(&mut database, "t", &rules);
+            let target = format!("/t.json?ns=t&{query}");
+            let got = call(&mut database, "GET", &target, &[], "");
+            // A bound with a lone surrogate (not a valid pair) is what the strict profile refuses.
+            let lone_bound = query.contains("%5Cud83d%22") || query.contains("a%5Cude00%22");
+            let want = if !strict {
+                expected
+            } else if lone_bound {
+                400
+            } else {
+                expected
+            };
+            if got.0 != want {
+                failures.push(format!(
+                    "strict={strict} {expression} {query}: {} vs {want}",
+                    got.0
+                ));
+            }
+            if strict && lone_bound {
+                assert!(
+                    got.1
+                        .contains("Constraint index field must be a JSON primitive"),
+                    "{expression} {query}: {got:?}"
+                );
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} rows differ: {failures:#?}",
+        failures.len()
+    );
+}
+
+/// A token whose claims hold a lone surrogate is not read, on either profile, as before 2286 (owner ledger line 2291:
+/// a declared difference; the official emulator keeps the surrogate in the claims and decides the 34 rows of
+/// `rules-lone-claims-official-emulator-4.11.2.json` by it). The strict profile refuses the token (401); the emulator
+/// profile judges the request as an anonymous one, whatever the rule says of `auth`.
+#[test]
+fn a_token_whose_claims_hold_a_lone_surrogate_is_not_read() {
+    let rows: Vec<serde_json::Value> = serde_json::from_str(include_str!(
+        "fixtures/rules-lone-claims-official-emulator-4.11.2.json"
+    ))
+    .unwrap();
+    assert_eq!(rows.len(), 34);
+    let mut lone = 0;
+    let seed = r#"{"a":{"b":1},"c":{"b":2},"x":"v"}"#;
+    for row in &rows {
+        let expression = row["expr"].as_str().unwrap();
+        let claims = row["claims"].as_str().unwrap();
+        let rules = format!(
+            r#"{{"rules":{{"t":{{".read":"{}"}}}}}}"#,
+            expression.replace('\\', "\\\\").replace('"', "\\\"")
+        );
+        let answer = |strict: bool, auth: Option<&str>| {
+            let options = RestOptions {
+                production_shapes: strict,
+                credentials: fireemu_adapter_database::rest::Credentials {
+                    strict,
+                    ..Default::default()
+                },
+                ..RestOptions::default()
+            };
+            let mut database = Database::new(options, 7);
+            call(&mut database, "PUT", "/t.json?ns=t", OWNER, seed);
+            load(&mut database, "t", &rules);
+            let mut target = String::from("/t.json?ns=t");
+            if let Some(auth) = auth {
+                target.push_str("&auth=");
+                target.push_str(auth);
+            }
+            call(&mut database, "GET", &target, &[], "").0
+        };
+        let with_token = token(claims);
+        let rest = claims.replace("\\ud83d\\ude00", "");
+        if rest.contains("\\ud83d") || rest.contains("\\ude00") {
+            lone += 1;
+            assert_eq!(answer(true, Some(&with_token)), 401, "strict {expression}");
+            assert_eq!(
+                answer(false, Some(&with_token)),
+                answer(false, None),
+                "emulator {expression}"
+            );
+        } else {
+            // A pair and a plain claim are read as always, and decide as the jar does.
+            let expected = u16::try_from(row["read"].as_u64().unwrap()).unwrap();
+            for strict in [false, true] {
+                assert_eq!(
+                    answer(strict, Some(&with_token)),
+                    expected,
+                    "strict={strict} {expression}"
+                );
+            }
+        }
+    }
+    assert!(lone > 20, "{lone}");
+}
+
+/// An administrator's `auth_variable_override` is an ordinary document: a valid string that looks like any internal
+/// encoding is only itself (U+10FFFF followed by `a` is three units and is not `a`), in both profiles (coordinator
+/// review of 985528f1c).
+#[test]
+fn an_auth_variable_override_with_reserved_looking_characters_is_ordinary() {
+    for strict in [false, true] {
+        for (rule, read) in [
+            ("auth.x == auth.y", 401),
+            ("auth.y.length == 3", 200),
+            ("auth.y == auth.z", 200),
+            ("auth.x.length == 1", 200),
+        ] {
+            let options = RestOptions {
+                production_shapes: strict,
+                credentials: fireemu_adapter_database::rest::Credentials {
+                    strict,
+                    ..Default::default()
+                },
+                ..RestOptions::default()
+            };
+            let mut database = Database::new(options, 7);
+            load(
+                &mut database,
+                "t",
+                &format!(r#"{{"rules":{{".read":"{rule}"}}}}"#),
+            );
+            let target = "/x.json?ns=t&auth_variable_override=%7B%22x%22%3A%22a%22%2C%22y%22%3A%22%5CuDBFF%5CuDFFFa%22%2C%22z%22%3A%22%5CuDBFF%5CuDFFFa%22%7D";
+            let got = call(
+                &mut database,
+                "GET",
+                target,
+                &[("Authorization", "Bearer admin")],
+                "",
+            );
+            // The strict profile refuses a non-owner bearer token, which these requests carry.
+            assert_eq!(
+                got.0,
+                if strict { 401 } else { read },
+                "strict={strict} {rule}"
+            );
+        }
+    }
+}
+
+/// `query.orderBy` loads and is not null on a plain read, a stream or a listen, and null on a shallow read (the
+/// official emulator's answers, owner 2276; rows in `docs.local/runs/rtdb-lone-surrogate/jar-q1.json`, `jar-q3.json`
+/// and, for a write, the rules-cells corpus). Both profiles.
+#[test]
+fn query_order_by_is_not_null_on_a_plain_read_and_null_on_a_shallow_one() {
+    for strict in [false, true] {
+        for (expression, target, read) in [
+            ("query.orderBy != null", "/x.json?ns=t", 200),
+            ("query.orderBy == null", "/x.json?ns=t", 401),
+            ("query.orderBy == query.orderBy", "/x.json?ns=t", 200),
+            ("query.orderBy != null", "/x.json?ns=t&shallow=true", 401),
+            ("query.orderBy == null", "/x.json?ns=t&shallow=true", 200),
+        ] {
+            let options = RestOptions {
+                production_shapes: strict,
+                ..RestOptions::default()
+            };
+            let mut database = Database::new(options, 7);
+            let rules = format!(r#"{{"rules":{{".read":"{expression}"}}}}"#);
+            load(&mut database, "t", &rules);
+            let got = call(&mut database, "GET", target, &[], "");
+            assert_eq!(got.0, read, "strict={strict} {expression} {target}");
+        }
+    }
+}
+
 /// Every Rules document of the local probe of firebase-database-emulator v4.11.2 (illegal
 /// characters at every position and expression kind, which errors are reported together and in
 /// which order, index names, duplicates) is answered byte for byte as the jar answered it, in

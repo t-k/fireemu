@@ -165,7 +165,7 @@ pub fn priority_at(tree: &Tree, path: &Path) -> Json {
 pub fn written_priority_at(tree: &Tree, path: &Path) -> Json {
     let parent = path.parent().unwrap_or_default();
     tree.get(&parent)
-        .and_then(|node| node.priority.as_ref())
+        .and_then(|node| node.priority.as_deref())
         .map_or(Json::Null, Priority::to_json)
 }
 

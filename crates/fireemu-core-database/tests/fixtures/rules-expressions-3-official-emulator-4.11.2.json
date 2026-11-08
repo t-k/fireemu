@@ -6654,64 +6654,56 @@
   "query": "",
   "load": 200,
   "error": null,
-  "read": 200,
-  "fireemu": "refuses"
+  "read": 200
  },
  {
   "expr": "!('\\uD83DA'.length == 2)",
   "query": "",
   "load": 200,
   "error": null,
-  "read": 401,
-  "fireemu": "refuses"
+  "read": 401
  },
  {
   "expr": "'\\uD83D' + '\\uDE00' == '😀'",
   "query": "",
   "load": 200,
   "error": null,
-  "read": 200,
-  "fireemu": "refuses"
+  "read": 200
  },
  {
   "expr": "!('\\uD83D' + '\\uDE00' == '😀')",
   "query": "",
   "load": 200,
   "error": null,
-  "read": 401,
-  "fireemu": "refuses"
+  "read": 401
  },
  {
   "expr": "'\\uDE00'.length == 1",
   "query": "",
   "load": 200,
   "error": null,
-  "read": 200,
-  "fireemu": "refuses"
+  "read": 200
  },
  {
   "expr": "!('\\uDE00'.length == 1)",
   "query": "",
   "load": 200,
   "error": null,
-  "read": 401,
-  "fireemu": "refuses"
+  "read": 401
  },
  {
   "expr": "'a\\uD83D'.length == 2",
   "query": "",
   "load": 200,
   "error": null,
-  "read": 200,
-  "fireemu": "refuses"
+  "read": 200
  },
  {
   "expr": "!('a\\uD83D'.length == 2)",
   "query": "",
   "load": 200,
   "error": null,
-  "read": 401,
-  "fireemu": "refuses"
+  "read": 401
  },
  {
   "expr": "'a'.matches(/^[^]$/)",

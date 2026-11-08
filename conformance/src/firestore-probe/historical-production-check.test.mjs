@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 
 import {
   checkHistoricalProduction,
@@ -135,6 +137,42 @@ test("the historical check records the artifact it ran and refuses one that chan
   );
 });
 
+test("outside artifacts are projected without exposing their path and private repo paths refuse", () => {
+  const directory = mkdtempSync(join(tmpdir(), "historical-artifact-path-"));
+  const root = join(directory, "repo");
+  const outside = join(directory, "external", "fireemu");
+  const inside = join(root, "target", "release", "fireemu");
+  const outsideLink = join(root, "target", "release", "external-link");
+  mkdirSync(join(root, "target", "release"), { recursive: true });
+  mkdirSync(join(directory, "external"), { recursive: true });
+  writeFileSync(inside, "inside");
+  writeFileSync(outside, "outside");
+  symlinkSync(outside, outsideLink);
+  const sha = "a".repeat(64);
+  const identity = (binary) =>
+    historicalArtifactIdentity({ root, binary, before: sha, after: sha, version: "fireemu 1\n" });
+  try {
+    assert.deepEqual(identity(inside), {
+      path: "target/release/fireemu",
+      sha256Before: sha,
+      sha256After: sha,
+      version: "fireemu 1",
+    });
+    for (const binary of [outside, outsideLink]) {
+      assert.deepEqual(identity(binary), {
+        path: null,
+        outsideRepository: true,
+        sha256Before: sha,
+        sha256After: sha,
+        version: "fireemu 1",
+      });
+    }
+    assert.throws(() => identity(join(root, ".codex", "private", "fireemu")));
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("an artifact is measured by its bytes and its --version answer", async () => {
   // The running Node binary stands in for fireemu: both answer --version on stdout.
   const measured = await measureArtifact(process.execPath);
@@ -168,8 +206,6 @@ test("historical production launch validates explicit strict selection before la
 });
 
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
 
 test("strict probe generates a pinned config while preserving settings and rules resolution", async (t) => {
   assert.equal(typeof probeRunner.createFireemuProbeLaunch, "function");

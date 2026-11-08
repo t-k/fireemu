@@ -539,7 +539,11 @@
         "docs.local/issues/open/close-security-rules-runtime-and-diagnostics-gaps.md"
       ],
       "notes": [],
-      "gaps": [],
+      "gaps": [
+        "Enterprise pipelines implement only supported finite read stages and expressions. Both gRPC and REST serve finite documents, collection and collection_group inputs with a read time, an existing or new transaction, and transaction auto-commit in recorded shapes; selectors on database, union or search inputs and read time with auto-commit remain refused. Write stages and proxy/record-only execution are unsupported; other selector and execution shapes remain unverified",
+        "Enterprise text search is a bounded local lexical approximation, not production-equivalent analysis, scoring or errors; geo search and general boolean search trees, transaction/read_time search and full Admin text-index management are unsupported; see FS-TEXT-VAL-1",
+        "Limit enforcement covers the cataloged implemented subset, not quota accounting or every production limit; aggregate field-value size and request-boundary error shapes include documented assumptions rather than production observations; see FS-LIM-1"
+      ],
       "prohibitedClaimTerms": [],
       "claims": [
         {
@@ -1044,7 +1048,9 @@
               "crates/fireemu-adapter-grpc/tests/local.rs",
               "crates/fireemu-adapter-grpc/tests/pipeline_replay.rs",
               "conformance/src/fs-pipeline-closure.test.mjs",
-              "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json"
+              "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
+              "crates/fireemu-adapter-grpc/src/rest/pipeline_selector_tests.rs",
+              "crates/fireemu-adapter-grpc/src/service/tests/pipeline_selector_tests.rs"
             ],
             "conformance": []
           },
@@ -1161,8 +1167,9 @@
       ],
       "notes": [],
       "gaps": [
-        "raw inbound OAuth credentials reach beforeCreate and beforeSignIn handlers only when auth.forwardInboundCredentials is enabled (default off) and only the token kinds the function's options request; the default emulator accepts the provider assertion and exposes its normalized claims, and the raw material is never retained in snapshots or exports. The per-token-kind matrix against real Node SDK handlers and the production expectation are still open in the Authentication parent issue",
-        "Android, Apple and Unity SDK matrices are outside the current Node/Web/REST/gRPC compatibility scope"
+        "raw inbound OAuth credentials reach beforeCreate and beforeSignIn handlers only when auth.forwardInboundCredentials is enabled (default off) and only the token kinds the function's options request; the default emulator accepts the provider assertion and exposes its normalized claims, and the raw material is never retained in snapshots or exports. Local real-Node handler tests cover token-kind option combinations; the production expectation remains unobserved and full Auth-to-handler forwarding coverage is separate from the direct runner matrix",
+        "Android, Apple and Unity SDK matrices are outside the current Node/Web/REST/gRPC compatibility scope",
+        "External identity-provider traffic, hosted authorization-code exchange and live key discovery/rotation are not served. Local configured signed OIDC/SAML verification is supported under the strict signed-assertion path: auth.idpSigners supplies OIDC public keys and enabled SAML providers supply configured certificates. This finite local support does not establish general production federation parity"
       ],
       "prohibitedClaimTerms": [],
       "claims": [
@@ -1390,12 +1397,12 @@
               "precision": "exact-for-local-semantics"
             },
             {
-              "behaviour": "with auth.idpAssertions = signed (strict only; its default under productionExact or with auth.idpSigners, while the development default of both profiles is the official emulator's fixture IdP, owner decision 1396), the strict profile's signInWithIdp accepts only an ID token of an enabled oidc.* provider that a key auth.idpSigners lists for the provider's issuer verifies (selected by kid, RS256, with the same issuer, audience, time and nonce checks), or a SAMLResponse of an enabled saml.* provider whose XML signature (enveloped, exclusive canonicalization, on the response, the assertion or both) one of the provider's configured certificates verifies, reading only an assertion that signature covers; a SAML signature that does not verify, or none, is refused with production's INVALID_IDP_RESPONSE : Failed to verify the signature in SAMLResponse (sandbox recording 2026-09-27) and a missing NameID is refused, while audience, destination, validity window and InResponseTo are not checked (unobserved); it re-verifies when a blocking function commits and when a pendingToken resumes, and refuses the fixture IdP, the built-in providers and every OIDC IdP without a configured key with INVALID_IDP_RESPONSE (AUTH-FEDERATION owner decisions O4 and O5; production's refusal codes for these cases are not yet observed); no key is fetched from an issuer; the emulator profile keeps the official emulator's fixture IdP",
+              "behaviour": "with auth.idpAssertions = signed (strict only; its default under productionExact or with auth.idpSigners, while the development default of both profiles is the official emulator's fixture IdP, owner decision 1396), the strict profile's signInWithIdp accepts only an ID token of an enabled oidc.* provider that a key auth.idpSigners lists for the provider's issuer verifies (selected by kid, RS256, with the same issuer, audience, time and nonce checks), or a SAMLResponse of an enabled saml.* provider whose XML signature (enveloped, exclusive canonicalization, on the response, the assertion or both) one of the provider's configured certificates verifies, reading only an assertion that signature covers; a SAML signature that does not verify, or none, is refused with production's INVALID_IDP_RESPONSE : Failed to verify the signature in SAMLResponse (sandbox recording 2026-09-27) and a missing NameID is refused, and checks status, destination, issuer, audience restrictions and validity windows when present, plus InResponseTo for a known daemon-issued request; absent elements, unparseable times and other unrecorded combinations remain unobserved, and a resumed continuation rechecks live configuration without repeating InResponseTo; it re-verifies when a blocking function commits and when a pendingToken resumes, and refuses the fixture IdP, the built-in providers and every OIDC IdP without a configured key with INVALID_IDP_RESPONSE (AUTH-FEDERATION owner decisions O4 and O5; production's refusal codes for these cases are not yet observed); no key is fetched from an issuer; the emulator profile keeps the official emulator's fixture IdP",
               "precision": "exact-for-local-semantics"
             }
           ],
           "productionOnly": [
-            "production provider configuration and discovery, hosted redirects, authorization-code exchange, SAML, key rotation and external identity-provider behavior"
+            "Live provider discovery and key rotation, hosted authorization-code exchange and external identity-provider traffic are not emulated; OIDC/SAML shapes beyond the finite configured verification paths remain unobserved"
           ],
           "preview": []
         },
@@ -1409,7 +1416,9 @@
             }
           ],
           "evidence": {
-            "tests": [],
+            "tests": [
+              "blocking_identity_exports_have_a_synchronous_runner_endpoint"
+            ],
             "integration": [
               "crates/fireemu-adapter-http/tests/auth_blocking_config.rs",
               "crates/fireemu-adapter-http/tests/auth_blocking_send_email.rs",
@@ -1547,7 +1556,10 @@
       "notes": [
         "import and export of the official Storage emulator artifacts are claimed by CLI-CLAIM-IMPORT-EXPORT under the cli surface (DATA-1 / DATA-2)"
       ],
-      "gaps": [],
+      "gaps": [
+        "Signed URL and POST policy signatures are not cryptographically verified; expiry and supported policy conditions are checked",
+        "Object ACLs beyond allUsers read, IAM, object composition and notification configuration are not served; storage.publicBuckets is a local declaration rather than bucket IAM emulation"
+      ],
       "prohibitedClaimTerms": [],
       "claims": [
         {
@@ -1692,10 +1704,13 @@
       ],
       "notes": [],
       "gaps": [
-        "Remote Config triggers",
-        "Python and Dart codebases",
-        "hot reload of a codebase's source",
-        "protobuf CloudEvents payloads"
+        "Remote Config template storage and publishing service are not implemented. Capability-protected local injection runs v1/v2 Remote Config handlers with caller-supplied metadata in both profiles; production envelope, metadata, retry and ordering parity remain unobserved.",
+        "Data Connect triggers are deferred; Firebase AI Logic blocking triggers are not planned",
+        "Dart codebases and Python runtimes outside python310 through python314 are not supported",
+        "Python source changes are not reloaded; restart fireemu. Python handlers run in real time in one process per codebase on macOS and Linux, without the Node virtual clock or per-function process isolation",
+        "general protobuf CloudEvents ingress is not supported; Python Firestore events reach the SDK as protobuf DocumentEventData, and Node 2nd-gen Firestore events arrive as protobuf under strict",
+        "Python callable App Check uses the SDK key verifier rather than the Node project-epoch and app-state checks; limited-use consumption and explicitly enabled App Check configuration with Python remain unsupported",
+        "Storage archive event payload parity remains unobserved; local delivery does not establish the production payload shape"
       ],
       "prohibitedClaimTerms": [],
       "claims": [
@@ -1775,7 +1790,8 @@
               "crates/fireemu-adapter-functions/tests/runtime.rs",
               "crates/fireemu-core-events/tests/state_machine.rs",
               "crates/fireemu-core-events/tests/outbox.rs",
-              "crates/fireemu-adapter-functions/src/task_scheduler.rs"
+              "crates/fireemu-adapter-functions/src/task_scheduler.rs",
+              "crates/fireemu/tests/functions_remote_config.rs"
             ],
             "conformance": []
           },
@@ -1856,7 +1872,7 @@
         },
         {
           "id": "FN-CLAIM-DISCOVERY",
-          "statement": "Every export a codebase declares is accounted for: served, or named with the reason it is not, every codebase a firebase.json declares is loaded on a runner of its own, and SIGINT or SIGTERM shuts those runners and their descendants down cleanly.",
+          "statement": "Every export a codebase declares is accounted for: served, or named with the reason it is not, every codebase a firebase.json declares is loaded on a runner of its own, and SIGINT or SIGTERM shuts those runners and their descendants down cleanly. Node codebases reload source changes while retaining in-flight invocations when no fixed inspector port is configured; with a fixed inspector port (--inspect-functions), reload kills the existing runner and interrupts its in-flight invocations. Python codebases (python310 through python314, or requirements.txt detection without package.json) execute with their own venv but require a restart for source changes.",
           "capabilities": [
             {
               "id": "FN-DISCOVERY-1",
@@ -1865,11 +1881,17 @@
           ],
           "evidence": {
             "tests": [
-              "sigterm_and_sigint_gracefully_shutdown_real_node_runners_and_their_children"
+              "sigterm_and_sigint_gracefully_shutdown_real_node_runners_and_their_children",
+              "http_callable_stream_and_task_requests_finish_across_two_reloads",
+              "a_change_made_while_the_watcher_takes_its_first_scan_is_reloaded",
+              "a_python_codebase_serves_http_callables_and_event_triggers_in_both_profiles"
             ],
             "integration": [
               "crates/fireemu/tests/functions_discovery.rs",
-              "crates/fireemu/tests/functions_codebases.rs"
+              "crates/fireemu/tests/functions_codebases.rs",
+              "crates/fireemu/tests/functions_environment.rs",
+              "crates/fireemu/tests/functions_python.rs",
+              "tools/runner-python/tests/test_firestore_events.py"
             ],
             "conformance": []
           },
@@ -1882,7 +1904,7 @@
               "precision": "conservative"
             },
             {
-              "behaviour": "a codebase whose declared runtime is not nodejs* is refused with the language named rather than handed to node",
+              "behaviour": "a codebase whose declared runtime is neither nodejs<major> nor python310 through python314 is refused with the language named rather than handed to Node",
               "precision": "conservative"
             }
           ],
@@ -1938,7 +1960,9 @@
       "notes": [
         "the official emulators are the oracle for what they do not do: every enforced-denial row that would need a real project is recorded pending in conformance/DEBT.md"
       ],
-      "gaps": [],
+      "gaps": [
+        "Production attestation providers (Play Integrity, App Attest, DeviceCheck and reCAPTCHA) and limited-use replay protection are unsupported; limited-use token requests fail closed rather than returning reusable tokens"
+      ],
       "prohibitedClaimTerms": [],
       "claims": [
         {
@@ -2123,7 +2147,10 @@
       "docs": [],
       "issues": [],
       "notes": [],
-      "gaps": [],
+      "gaps": [
+        "Sessions share clocks, rules, Functions and the admission barrier; per-session isolation of those resources and causal fences across sessions are not implemented",
+        "Snapshots are retained in memory with per-session count and byte budgets, not durable files; outstanding Functions work is not captured, and awaitIdle does not wait for Text Index work"
+      ],
       "prohibitedClaimTerms": [],
       "claims": [
         {
@@ -2240,7 +2267,8 @@
       ],
       "notes": [],
       "gaps": [
-        "an export carries the Firestore, Auth, Storage and Realtime Database sections only: SQL Connect is deferred, so its section is refused rather than written"
+        "an export carries the Firestore, Auth, Storage and Realtime Database sections only: SQL Connect is deferred, so its section is refused rather than written",
+        "exec accepts an argv command after -- rather than the official CLI positional shell string; emulators.singleProjectMode is metadata rather than an enforcement switch"
       ],
       "prohibitedClaimTerms": [],
       "claims": [
@@ -2396,14 +2424,12 @@
         "docs.local/issues/closed/match-firebase-cli-config-and-emulator-hub.md"
       ],
       "notes": [],
-      "gaps": [
-        "the export trigger the CLI drives through the hub (POST /_admin/export answers 501)"
-      ],
+      "gaps": [],
       "prohibitedClaimTerms": [],
       "claims": [
         {
           "id": "HUB-CLAIM-DISCOVERY",
-          "statement": "Official tooling discovers the running suite through the Emulator Hub on the official port without being told a host or port, and the hub's background-trigger switch drops events exactly like firebase-tools 15.28.2.",
+          "statement": "Official tooling discovers the running suite through the Emulator Hub on the official port without being told a host or port, and the hub's background-trigger switch drops events exactly like firebase-tools 15.28.2. POST /_admin/export writes the live state through the export runner; it requires the per-run control token and refuses browser Origin headers.",
           "capabilities": [
             {
               "id": "CLI-03",
@@ -2415,7 +2441,10 @@
             }
           ],
           "evidence": {
-            "tests": [],
+            "tests": [
+              "the_export_route_requires_the_control_capability_and_refuses_browser_origins",
+              "the_export_route_writes_a_bare_relative_path_under_the_daemon_working_directory"
+            ],
             "integration": [
               "crates/fireemu/tests/hub.rs",
               "crates/fireemu-adapter-logging/tests/websocket_client.rs",
@@ -2429,6 +2458,10 @@
           "fireemuOnly": [
             {
               "behaviour": "a loopback-Host guard on the hub routes (the official hub has none)",
+              "precision": "exact-for-local-semantics"
+            },
+            {
+              "behaviour": "POST /_admin/export requires the per-run control token even without browser metadata; a tokenless export is refused with 403",
               "precision": "exact-for-local-semantics"
             }
           ],
@@ -2552,7 +2585,9 @@
         "REST/JSON transcoding on the Pub/Sub port implements the documented topic, subscription, snapshot, publish, pull, acknowledge, modify-ack-deadline and seek subset over the same broker state as gRPC; unsupported fields and update-mask paths are diagnosed explicitly",
         "Avro/protobuf schema management and BigQuery / Cloud Storage subscription delivery remain outside the active implementation; the official emulator's documented unsupported delivery limitations are preserved"
       ],
-      "gaps": [],
+      "gaps": [
+        "Schemas, BigQuery/Cloud Storage/Bigtable subscription delivery, exactly-once delivery and message transforms are unsupported; UpdateTopic supports only the labels update mask and DetachSubscription is unimplemented"
+      ],
       "prohibitedClaimTerms": [],
       "claims": [
         {
@@ -2779,7 +2814,7 @@
         "useEmulator"
       ],
       "state": "gap",
-      "decision": "Served. Two separate statuses apply. Against the official emulator (firebase-database-emulator v4.11.2, the parity this contract tracks) the surface is an open gap: no official-emulator parity claim is registered yet, although the REST `.json` transport with event streams, the realtime protocol over WebSocket and long polling, listens and queries, transactions, onDisconnect writes, namespace routing, Rules coverage reports (`/.inspect/coverage`, `/.inspect/coverage.json`), local v1 and v2 Functions database triggers and the Emulator UI database view are implemented and compared with it through the pinned SDKs in tools/sdk-smoke-database. Against production, the RTDB parent remains IMPLEMENTING; only the finite recorded cases have VERIFIED evidence in spec/compatibility/closure/RTDB.json, without establishing whole-parent compatibility: REST PUT/GET/PATCH values, priorities, format=export, orderBy with startAt/limitToFirst/limitToLast, ETag/if-match and the recorded errors; Rules loading and owner/UID .read/.write evaluation; anonymous event streams; and the web SDK's value listeners, goOffline/goOnline with queued writes, the child and value event order of two orderByChild windows with query-scoped unsubscribe and cancellation, onDisconnect set, remove, update, cancel and re-register with server values and a Rules change before firing, and the onDisconnect update a connection drops when a child of a value registered with a numeric priority is cancelled (the recorded shape), one transaction schedule and email/password Auth over WebSocket and long polling; RTDB-triggered Functions 1st and 2nd gen created, updated, deleted and written handlers over the recorded administrator and unauthenticated writes. Unverified in production, following the official emulator and provisional: REST POST/push ids, DELETE, server values (.sv), shallow, print=silent, equalTo/endAt/startAfter/endBefore, $priority ordering, timeout and writeSizeLimit; Security Rules .validate, cascading, data/newData/root, query-based rules, auth.token claims and .indexOn refusal texts beyond the recorded query; SDK child events and queries beyond the two recorded orderByChild windows, update/push and multi-location updates beyond the recorded merge, SDK server values beyond the onDisconnect update, onDisconnect priorities beyond the recorded shape (healing, nested and string priorities), and Functions trigger delivery beyond the recorded CV14 shapes, including end-user context, wildcard and ancestor fanout, ordering and redelivery. `--only database`, `emulators.database` and `--database-port` start it on 9000. Export and import use the firebase-tools database_export format. Security rules are loaded from firebase.json as firebase-tools loads them.",
+      "decision": "Served. Two separate statuses apply. Against the official emulator (firebase-database-emulator v4.11.2, the parity this contract tracks) the surface is an open gap: no official-emulator parity claim is registered yet, although the REST `.json` transport with event streams, the realtime protocol over WebSocket and long polling, listens and queries, transactions, onDisconnect writes, namespace routing, Rules coverage reports (`/.inspect/coverage`, `/.inspect/coverage.json`), local v1 and v2 Functions database triggers and the Emulator UI database view are implemented and compared with it through the pinned SDKs in tools/sdk-smoke-database. Against production, the RTDB parent is COMPAT_VERIFIED for the finite recorded cases only, which spec/compatibility/closure/RTDB.json enumerates without establishing whole-parent compatibility: REST PUT/GET/PATCH values, priorities, format=export, orderBy with startAt/limitToFirst/limitToLast, ETag/if-match and the recorded errors; REST POST of a child with a generated key, DELETE, shallow=true, print=silent on PUT and PATCH, writeSizeLimit=small, orderBy with equalTo/endAt/startAfter/endBefore, and the recorded `.sv` timestamp and increment writes (four PUTs and one multi-path PATCH); Rules loading, owner/UID .read/.write evaluation, the recorded cascade, .validate and data/newData/root cases, query-based Rules, Rules-language, method and operator cases and seven Rules identity cells; anonymous event streams; and the web SDK's value listeners, goOffline/goOnline with queued writes, the child and value event order of two orderByChild windows with query-scoped unsubscribe and cancellation, one-shot get of orderByKey startAt/endAt, orderByValue equalTo and orderByPriority startAfter/endBefore queries, push, update, a multi-path update, serverTimestamp and increment, child events with prevName on orderByKey limitToFirst/limitToLast windows and an orderByPriority limitToFirst window, an orderByValue startAt/endAt range and an orderByChild equalTo window, startAt(value, key)/endAt(value, key) on tied values, a parent and child listener fan-out on a multi-path update, transactions on an absent node, an object and an abort, get of a window and of a missing path, onDisconnect set, remove, update, cancel and re-register with server values and a Rules change before firing, the onDisconnect update a connection drops when a child of a value registered with a numeric priority is cancelled, re-registration after that cancel and a nested and a string priority, one transaction schedule and email/password Auth over WebSocket and long polling; the Node Admin SDK (firebase-admin 14.3.0) over WebSocket under deny-all Rules for set, get, update, push, transactions, remove, a listener window and a denied get, recorded with a user OAuth access token as its credential (a service-account credential is not claimed); RTDB-triggered Functions 1st and 2nd gen created, updated, deleted and written handlers over the recorded administrator and unauthenticated writes. Recorded on 2026-11-04 and 2026-11-05 and replayed on the closure build: REST timeout, writeSizeLimit, print, POST and push forms, `.sv` increments, orderBy and shallow windows, ETag, method override, callback and download (72 cases); Rules auth.token claims, .indexOn variants, cascade grammar, query members, numeric string concatenation, conditional writes and load texts (70 cases) and seven further Rules documents; generated invalid credentials as auth=, access_token and Bearer over REST (27 cases; the strict profile matches production, the emulator profile follows the official emulator and is declared); and RTDB-triggered Functions for a real end user's write over REST and the web SDK, ancestor and multi-path writes and redelivery of a failed invocation (12 writes). Unverified in production, following the official emulator and provisional (the closure record's outOfScope lists them): SDK windows, cursors, query combinations and transactions beyond the recorded cases; the Node Admin SDK with a service-account credential and beyond the recorded cases; REST options beyond the recorded cases (other writeSizeLimit values, print values, push-ID forms, the settings path with a non-administrator credential); Rules cascade grammar, query members and load texts beyond the recorded cases and a rejected WebSocket auth falling back to anonymous; genuine ID tokens that are expired, revoked, tampered or for another project, and the WebSocket auth texts; and Functions trigger delivery beyond the recorded shapes (a wildcard instance, per-kind handlers under an ancestor write, latency, retry timing and ordering across handlers). `--only database`, `emulators.database` and `--database-port` start it on 9000. Export and import use the firebase-tools database_export format. Security rules are loaded from firebase.json as firebase-tools loads them.",
       "docs": [
         "https://firebase.google.com/docs/emulator-suite/connect_rtdb"
       ],
@@ -2792,11 +2827,12 @@
         "credentials: under the emulator profile any Bearer or access_token is an administrator, as on the official emulator; under strict only the owner credential is, auth= must be a token fireemu's Auth verifies, and other credentials are refused with 401 (the refusal body is provisional)"
       ],
       "gaps": [
-        "no official-emulator parity claim is registered for the surface yet (production evidence is separate: the parent remains IMPLEMENTING, with VERIFIED evidence only for finite recorded cases in spec/compatibility/closure/RTDB.json)",
-        "not observed in production: REST POST/push ids, DELETE, server values (.sv), shallow, print=silent, equalTo/endAt/startAfter/endBefore, $priority ordering, timeout and writeSizeLimit",
-        "not observed in production: Security Rules .validate, cascading, data/newData/root, query-based rules, auth.token claims and .indexOn refusal texts beyond the recorded query",
-        "not observed in production: SDK child events and queries beyond the two recorded orderByChild windows, update/push and multi-location updates beyond the recorded merge, SDK server values beyond the onDisconnect update, and Functions trigger delivery beyond the recorded CV14 shapes",
-        "Android, Apple, Unity and the Java and Python Admin SDKs are outside the current Node and Web scope"
+        "no official-emulator parity claim is registered for the surface yet (production evidence is separate: the parent is COMPAT_VERIFIED for the finite recorded cases only, as spec/compatibility/closure/RTDB.json enumerates them)",
+        "not observed in production: SDK windows, cursors, query combinations and transactions beyond the recorded cases (applyLocally false among them); the Node Admin SDK with a service-account credential and beyond the recorded cases",
+        "not observed in production: REST options beyond the recorded cases (other writeSizeLimit values, print values and push-ID forms, `.sv` through `.priority`, format=export with a window, and the settings path with a non-administrator credential)",
+        "not observed in production: Rules cascade grammar, query members and load texts beyond the recorded cases, and a rejected WebSocket auth falling back to anonymous",
+        "not observed in production: a genuine ID token that is expired, revoked, tampered or for another project, the WebSocket auth texts, and Functions trigger delivery beyond the recorded shapes (a wildcard instance, per-kind handlers under an ancestor write, delivery latency, retry timing and ordering across handlers)",
+        "Android, Apple, Unity and the Java and Python Admin SDKs are outside the current Node and Web scope (owner 1471 Q8); latency, throughput, quotas and billing are not behaviour parity"
       ],
       "prohibitedClaimTerms": [
         "Realtime Database"

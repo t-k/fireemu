@@ -989,4 +989,36 @@ test("the command copies the build record next to the evidence, pins its digest 
     JSON.parse(readFileSync(bad.closure, "utf8")).conditions[2].status,
     "PENDING_CORPUS",
   );
+
+  const unsafeRecord = options(
+    buildRecord({ cargoVersion: "cargo 1.94 docs.local/private-build" }),
+    {
+      out: join(dir, "unsafe-record-comparison.json"),
+      "build-record-out": join(dir, "unsafe-record-copy.json"),
+    },
+  );
+  writeFileSync(unsafeRecord.out, "keep comparison sentinel");
+  writeFileSync(unsafeRecord["build-record-out"], "keep build sentinel");
+  refuses(
+    () => closureEvidenceCommand(unsafeRecord, { loadFixture, log: () => {} }),
+    /public evidence/i,
+  );
+  assert.equal(readFileSync(unsafeRecord.out, "utf8"), "keep comparison sentinel");
+  assert.equal(readFileSync(unsafeRecord["build-record-out"], "utf8"), "keep build sentinel");
+
+  const unsafeClosure = options(buildRecord(), {
+    "comparison-path": "docs.local/private-comparison.json",
+    out: join(dir, "unsafe-closure-comparison.json"),
+    "build-record-out": join(dir, "unsafe-closure-build.json"),
+  });
+  const originalClosure = readFileSync(unsafeClosure.closure, "utf8");
+  writeFileSync(unsafeClosure.out, "keep comparison sentinel");
+  writeFileSync(unsafeClosure["build-record-out"], "keep build sentinel");
+  refuses(
+    () => closureEvidenceCommand(unsafeClosure, { loadFixture, log: () => {} }),
+    /public evidence/i,
+  );
+  assert.equal(readFileSync(unsafeClosure.out, "utf8"), "keep comparison sentinel");
+  assert.equal(readFileSync(unsafeClosure["build-record-out"], "utf8"), "keep build sentinel");
+  assert.equal(readFileSync(unsafeClosure.closure, "utf8"), originalClosure);
 });

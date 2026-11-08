@@ -23,7 +23,7 @@ const V1: &str = "/identitytoolkit.googleapis.com/v1";
 const REFRESH: &str = "/securetoken.googleapis.com/v1/token";
 const FORM: &str = "application/x-www-form-urlencoded";
 
-fn auth_state() -> Arc<AuthState> {
+fn auth_state(stateless_refresh_tokens: bool) -> Arc<AuthState> {
     Arc::new(AuthState {
         store: Arc::new(Mutex::new(AuthStore::new(
             "demo-app",
@@ -43,7 +43,7 @@ fn auth_state() -> Arc<AuthState> {
         control_token: None,
         registry: None,
         allow_routed_projects: false,
-        stateless_refresh_tokens: true,
+        stateless_refresh_tokens,
         idp_continuations: fireemu_adapter_http::identity_toolkit::IdpContinuationPolicy::Disabled,
         query_limits: fireemu_adapter_http::identity_toolkit::AuthQueryLimits::EmulatorUnbounded,
         client_api_key: fireemu_adapter_http::identity_toolkit::ClientApiKeyPolicy::Optional,
@@ -66,9 +66,16 @@ struct Server {
 
 impl Server {
     async fn start() -> Self {
+        Self::start_with(true).await
+    }
+
+    async fn start_with(stateless_refresh_tokens: bool) -> Self {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let task = tokio::spawn(fireemu_adapter_http::server::serve(listener, auth_state()));
+        let task = tokio::spawn(fireemu_adapter_http::server::serve(
+            listener,
+            auth_state(stateless_refresh_tokens),
+        ));
         Self { addr, task }
     }
 
@@ -325,4 +332,164 @@ async fn malformed_escapes_and_invalid_utf8_are_refused_with_a_json_4xx() {
     // The server kept serving after every refusal: the valid form still refreshes.
     let (status, body) = server.post_form(REFRESH, &valid).await;
     assert_id_token(status, &body);
+}
+
+/// The pinned Firebase Android SDK (firebase-auth 23.2.0) posts the refresh as
+/// `application/json; charset=UTF-8` with camelCase members (`grantType`, `refreshToken`) to
+/// `<emulator>/securetoken.googleapis.com/v1/token?key=<apiKey>`. The official emulator
+/// camel-cases every body key, so it accepts this and the `snake_case` form alike; the SDK itself
+/// is what is known to work against production (production's own reading of the camelCase JSON
+/// was not recorded here). Both profiles answer it.
+#[tokio::test]
+async fn android_sdk_camel_case_json_refresh_returns_an_id_token_in_both_profiles() {
+    for stateless in [true, false] {
+        let server = Server::start_with(stateless).await;
+        let refresh = server.sign_up("android@example.com", "password1").await;
+
+        let (status, body) = server
+            .post(
+                &format!("{REFRESH}?key=fake-api-key"),
+                "application/json; charset=UTF-8",
+                json!({"grantType": "refresh_token", "refreshToken": refresh})
+                    .to_string()
+                    .as_bytes(),
+            )
+            .await;
+        assert_id_token(status, &body);
+        assert_eq!(
+            body["refresh_token"],
+            refresh.as_str(),
+            "stateless={stateless}"
+        );
+        assert!(body["user_id"].is_string(), "{body}");
+    }
+}
+
+/// Which spelling of the refresh fields is read, by body kind. camelCase is read only from a
+/// JSON body that uses it alone (the Android SDK's recorded shape); a form keeps `snake_case`
+/// only, and a body that mixes the spellings is read as `snake_case` only, as before.
+#[tokio::test]
+async fn refresh_field_spelling_table_by_body_kind_in_both_profiles() {
+    const OK: &str = "";
+    for stateless in [true, false] {
+        let server = Server::start_with(stateless).await;
+        let t = server.sign_up("table@example.com", "password1").await;
+        let json_cases: Vec<(&str, Value, &str)> = vec![
+            (
+                "json snake",
+                json!({"grant_type": "refresh_token", "refresh_token": t}),
+                OK,
+            ),
+            (
+                "json camel",
+                json!({"grantType": "refresh_token", "refreshToken": t}),
+                OK,
+            ),
+            (
+                "json mixed grant snake, token camel",
+                json!({"grant_type": "refresh_token", "refreshToken": t}),
+                "MISSING_REFRESH_TOKEN",
+            ),
+            (
+                "json mixed grant camel, token snake",
+                json!({"grantType": "refresh_token", "refresh_token": t}),
+                "MISSING_GRANT_TYPE",
+            ),
+            (
+                "json empty snake token hides the camel one",
+                json!({"grant_type": "refresh_token", "refresh_token": "", "refreshToken": t}),
+                "MISSING_REFRESH_TOKEN",
+            ),
+            (
+                "json snake grant type wins",
+                json!({"grant_type": "password", "grantType": "refresh_token", "refresh_token": t}),
+                "INVALID_GRANT_TYPE",
+            ),
+            (
+                "json snake token wins over a bad camel one",
+                json!({"grant_type": "refresh_token", "refresh_token": t, "refreshToken": "bogus"}),
+                OK,
+            ),
+            (
+                "json bad snake token is not rescued by camel",
+                json!({"grant_type": "refresh_token", "refresh_token": "bogus", "refreshToken": t}),
+                "INVALID_REFRESH_TOKEN",
+            ),
+        ];
+        for (name, body, expected) in json_cases {
+            let (status, got) = server.post_json(REFRESH, &body).await;
+            check_refresh_outcome(name, stateless, status, &got, expected);
+        }
+        let form_cases: Vec<(&str, String, &str)> = vec![
+            (
+                "form snake",
+                format!("grant_type=refresh_token&refresh_token={t}"),
+                OK,
+            ),
+            (
+                "form camel",
+                format!("grantType=refresh_token&refreshToken={t}"),
+                "MISSING_GRANT_TYPE",
+            ),
+            (
+                "form mixed grant snake, token camel",
+                format!("grant_type=refresh_token&refreshToken={t}"),
+                "MISSING_REFRESH_TOKEN",
+            ),
+            (
+                "form mixed grant camel, token snake",
+                format!("grantType=refresh_token&refresh_token={t}"),
+                "MISSING_GRANT_TYPE",
+            ),
+        ];
+        for (name, body, expected) in form_cases {
+            let (status, got) = server.post_form(REFRESH, body).await;
+            check_refresh_outcome(name, stateless, status, &got, expected);
+        }
+    }
+}
+
+fn check_refresh_outcome(name: &str, stateless: bool, status: u16, body: &Value, expected: &str) {
+    if expected.is_empty() {
+        assert_id_token(status, body);
+    } else {
+        assert_eq!(status, 400, "{name} stateless={stateless}: {body}");
+        assert!(
+            body["error"]["message"]
+                .as_str()
+                .is_some_and(|m| m.starts_with(expected)),
+            "{name} stateless={stateless}: expected {expected}: {body}"
+        );
+    }
+}
+/// The camelCase reading adds no leniency: a wrong grant type or an empty token is still refused
+/// with the Secure Token's own messages.
+#[tokio::test]
+async fn camel_case_json_refresh_keeps_its_refusals() {
+    let server = Server::start().await;
+    let refresh = server.sign_up("android2@example.com", "password1").await;
+    for (body, message) in [
+        (json!({"refreshToken": refresh}), "MISSING_GRANT_TYPE"),
+        (
+            json!({"grantType": "password", "refreshToken": refresh}),
+            "INVALID_GRANT_TYPE",
+        ),
+        (
+            json!({"grantType": "refresh_token"}),
+            "MISSING_REFRESH_TOKEN",
+        ),
+        (
+            json!({"grantType": "refresh_token", "refreshToken": ""}),
+            "MISSING_REFRESH_TOKEN",
+        ),
+    ] {
+        let (status, got) = server.post_json(REFRESH, &body).await;
+        assert_eq!(status, 400, "{body}: {got}");
+        assert!(
+            got["error"]["message"]
+                .as_str()
+                .is_some_and(|m| m.starts_with(message)),
+            "{body}: {got}"
+        );
+    }
 }

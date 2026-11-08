@@ -33,4 +33,4 @@ pub use number::Number;
 pub use path::Path;
 pub use query::{Bound, BoundKey, Limit, OrderBy, QueryParams};
 pub use server_value::ServerValueContext;
-pub use tree::Tree;
+pub use tree::{NodeView, ScopeSnapshot, ScopeView, Tree, ViewChildren};

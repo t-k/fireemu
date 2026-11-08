@@ -159,12 +159,21 @@ function rawProjection(frame) {
       "unrecorded task body",
     );
     payload(value.data);
-    out.bodyText = body;
-    for (const key of ["run", "label"])
-      out.bodyText = out.bodyText.replaceAll(
-        JSON.stringify(value.data[key]),
-        JSON.stringify(`fixture-${key}`),
-      );
+    // JSON.parse above already rejects literal control characters inside string values.
+    const lexical = body.match(
+      /^(\s*\{\s*"data"\s*:\s*\{\s*"(run|label)"\s*:\s*)("[^"\\]*")(\s*,\s*"(run|label)"\s*:\s*)("[^"\\]*")(\s*\}\s*\}\s*)$/,
+    );
+    check(lexical && lexical[2] !== lexical[5], "unsupported task body lexical shape");
+    out.bodyText =
+      lexical[1] +
+      JSON.stringify(`fixture-${lexical[2]}`) +
+      lexical[4] +
+      JSON.stringify(`fixture-${lexical[5]}`) +
+      lexical[7];
+    check(
+      compare({ data: payload(value.data) }, JSON.parse(out.bodyText), "strict").length === 0,
+      "masked task payload mismatch",
+    );
     out.originalBodyBytes = frame.request.body_length;
     out.layoutVerifiedAgainstRecordedLength = true;
   }
@@ -392,6 +401,7 @@ export function extractRecording(journalText, resultText, alias) {
       journalSha256: sha(journalText),
       resultSha256: sha(resultText),
       selectedLogEntries: entries.size,
+      entryIdentityHashes: [...entries.keys()].map((id) => sha(id)).sort(),
       entryIdentitySha256: sha(JSON.stringify([...entries.keys()].sort())),
     },
   };
@@ -402,6 +412,11 @@ export function extractPair(first, second) {
     first.privateCustody.journalSha256 !== second.privateCustody.journalSha256 &&
       first.privateCustody.entryIdentitySha256 !== second.privateCustody.entryIdentitySha256,
     "same original recording cannot count twice",
+  );
+  const firstEntries = new Set(first.privateCustody.entryIdentityHashes);
+  check(
+    second.privateCustody.entryIdentityHashes.every((id) => !firstEntries.has(id)),
+    "overlapping original recordings cannot count twice",
   );
   check(
     first.fixture.recording.alias === "pass-1" && second.fixture.recording.alias === "pass-2",

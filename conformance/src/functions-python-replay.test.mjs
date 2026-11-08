@@ -419,3 +419,125 @@ test("frame and case arrival normalization never sorts a semantic payload array 
   second.observations[0].sdkCases[0].expected.frames.reverse();
   assert.equal(compareRecordings(first, second)[0].status, "DIFF");
 });
+
+function editSyntheticRecording(change) {
+  const input = syntheticRecording();
+  const response = JSON.parse(Buffer.from(input.rows[1].bodyBase64, "base64"));
+  change(response.entries);
+  input.rows[1].bodyBase64 = Buffer.from(JSON.stringify(response)).toString("base64");
+  input.result.frames = {};
+  for (const e of response.entries) {
+    const f = JSON.parse(e.textPayload.slice("PYCHECK_FRAME ".length));
+    input.result.frames[f.function] = (input.result.frames[f.function] ?? 0) + 1;
+  }
+  return input;
+}
+async function extractSynthetic(input, alias) {
+  const { extractRecording } = await import("./functions-python/recordings.mjs");
+  return extractRecording(
+    input.rows.map((r) => JSON.stringify(r)).join("\n"),
+    JSON.stringify(input.result),
+    alias,
+  );
+}
+
+test("a second recording derived by dropping Tasks still overlaps its original", async () => {
+  const { extractPair } = await import("./functions-python/recordings.mjs");
+  const first = await extractSynthetic(syntheticRecording(), "pass-1");
+  const subset = editSyntheticRecording((entries) => {
+    for (let i = entries.length - 1; i >= 0; i -= 1) {
+      const f = JSON.parse(entries[i].textPayload.slice("PYCHECK_FRAME ".length));
+      if (["pctask", "pctaskraw"].includes(f.function)) entries.splice(i, 1);
+    }
+  });
+  const second = await extractSynthetic(subset, "pass-2");
+  assert.equal(second.fixture.recording.eventFrames, 14);
+  assert.throws(() => extractPair(first, second), /overlapping original/);
+});
+
+function syntheticTaskBody(body) {
+  return editSyntheticRecording((entries) => {
+    const entry = entries.find(
+      (e) => JSON.parse(e.textPayload.slice("PYCHECK_FRAME ".length)).function === "pctaskraw",
+    );
+    const frame = JSON.parse(entry.textPayload.slice("PYCHECK_FRAME ".length));
+    frame.request.body_text = body;
+    frame.request.body_length = Buffer.byteLength(body);
+    entry.textPayload = "PYCHECK_FRAME " + JSON.stringify(frame);
+  });
+}
+
+test("task masking rejects Unicode escapes and duplicate identifiers before publication", async () => {
+  for (const body of [
+    '{"data":{"run":"private-\\u006fwner","label":"label"}}',
+    '{"data":{"run":"private-original","run":"selected","label":"label"}}',
+    '{"data":{"run":"run","label":"private-original","label":"selected"}}',
+    '{"data":{"run":"private-original","label":"old"},"data":{"run":"selected","label":"label"}}',
+  ])
+    await assert.rejects(
+      extractSynthetic(syntheticTaskBody(body), "pass-1"),
+      /unsupported task body lexical shape/,
+    );
+});
+
+test("equal task identifiers are masked by field and retain only intended layout", async () => {
+  for (const body of [
+    '{"data":{"run":"same-original","label":"same-original"}}',
+    '{ "data" : { "label" : "same-original", "run" : "same-original" } }',
+  ]) {
+    const extracted = await extractSynthetic(syntheticTaskBody(body), "pass-1");
+    const row = extracted.fixture.observations.find((r) => r.condition === "tasks-events");
+    const frame = row.frames.find((f) => f.bodyText);
+    assert.deepEqual(JSON.parse(frame.bodyText), {
+      data: { run: "fixture-run", label: "fixture-label" },
+    });
+    assert.ok(!frame.bodyText.includes("same-original"));
+    assert.equal(frame.originalBodyBytes, Buffer.byteLength(body));
+  }
+});
+
+if (process.env.PYTHON_CUSTODY_PICT) {
+  const [head, ...rows] = readFileSync(process.env.PYTHON_CUSTODY_PICT, "utf8")
+    .trim()
+    .split(/\r?\n/)
+    .map((line) => line.split("\t"));
+  for (const [index, values] of rows.entries()) {
+    const c = Object.fromEntries(head.map((key, i) => [key, values[i]]));
+    test(`custody PICT ${index}: ${values.join("/")}`, async () => {
+      const { extractPair } = await import("./functions-python/recordings.mjs");
+      const first = await extractSynthetic(syntheticRecording(), "pass-1");
+      const fields = c.Order === "run-first" ? ["run", "label"] : ["label", "run"];
+      const value = c.Body === "equal" ? "same-private" : "private-value";
+      let members = fields.map((key) => JSON.stringify(key) + ":" + JSON.stringify(value));
+      if (c.Body === "escape") members[0] = JSON.stringify(fields[0]) + ':"private-\\u006fwner"';
+      if (c.Body === "duplicate") members.push(JSON.stringify(fields[0]) + ':"second-private"');
+      const input = syntheticTaskBody('{"data":{' + members.join(", ") + "}}");
+      const response = JSON.parse(Buffer.from(input.rows[1].bodyBase64, "base64"));
+      response.entries.forEach((e, i) => {
+        if (c.Overlap === "none" || (c.Overlap === "one" && i > 0))
+          e.insertId = "second-" + e.insertId;
+      });
+      input.rows[1].bodyBase64 = Buffer.from(JSON.stringify(response)).toString("base64");
+      if (["escape", "duplicate"].includes(c.Body)) {
+        await assert.rejects(
+          extractSynthetic(input, "pass-2"),
+          /unsupported task body lexical shape/,
+        );
+        return;
+      }
+      const second = await extractSynthetic(input, "pass-2");
+      if (c.Overlap === "none") assert.equal(extractPair(first, second).length, 2);
+      else
+        assert.throws(
+          () => extractPair(first, second),
+          /same original recording|overlapping original/,
+        );
+      const body = second.fixture.observations
+        .find((r) => r.condition === "tasks-events")
+        .frames.find((f) => f.bodyText).bodyText;
+      assert.deepEqual(JSON.parse(body), { data: { run: "fixture-run", label: "fixture-label" } });
+      assert.ok(!body.includes("private"));
+      assert.equal(body.indexOf('"' + fields[0] + '"') < body.indexOf('"' + fields[1] + '"'), true);
+    });
+  }
+}

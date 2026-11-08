@@ -901,7 +901,10 @@ fn call<'a>(
 /// negated or not (recorded on the official emulator).
 fn ordering_path(text: &str) -> Option<Vec<String>> {
     let joined: Vec<&str> = text.split('/').filter(|s| !s.is_empty()).collect();
-    if joined.is_empty() {
+    if joined.is_empty()
+        || joined[0] == ".info"
+        || joined.len() > crate::limits::Limits::default().max_depth
+    {
         return None;
     }
     let path = Path::parse(&joined.join("/"), &crate::limits::Limits::default()).ok()?;
@@ -1347,6 +1350,7 @@ fn equal(l: &Value<'_>, r: &Value<'_>) -> bool {
         // Every root auth value in one evaluation comes from the same scope.
         (Value::Auth(_), Value::Auth(_))
         | (Value::Query, Value::Query)
+        | (Value::Http, Value::Http)
         | (Value::Null | Value::AuthEmpty, Value::Null | Value::AuthEmpty) => true,
         (Value::Bool(a), Value::Bool(b)) => a == b,
         (Value::Num(a), Value::Num(b)) => a == b,

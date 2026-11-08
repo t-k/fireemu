@@ -1683,6 +1683,77 @@ proptest::proptest! {
 }
 
 #[test]
+fn query_path_arguments_reject_invalid_paths_even_when_negated() {
+    let tree = seed();
+    let auth = auth();
+    let requester = Requester {
+        auth: &auth,
+        now: 0,
+    };
+    let paths = [
+        (".info".to_owned(), false),
+        (".info/child".to_owned(), false),
+        (vec!["a"; 32].join("/"), true),
+        (vec!["a"; 33].join("/"), false),
+        ("normal".to_owned(), true),
+    ];
+    for (path, valid) in paths {
+        for negated in [false, true] {
+            let text = format!(
+                "{}query.isOrderByChild('{path}')",
+                if negated { "!" } else { "" }
+            );
+            let mut spec = read_rule_at_t(&text);
+            let t = spec.children.get_mut("t").unwrap();
+            t.write = t.read.clone();
+            for jar_dialect in [false, true] {
+                let rules = Rules::compile(&spec).unwrap().with_jar_dialect(jar_dialect);
+                let expected = valid && negated;
+                assert_eq!(
+                    rules.can_read(tree.root(), &p("/t"), None, &requester),
+                    expected,
+                    "read {text}, profile {jar_dialect}"
+                );
+                assert_eq!(
+                    rules.can_write(tree.root(), tree.root(), &[p("/t")], &requester),
+                    expected,
+                    "write {text}, profile {jar_dialect}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn http_identity_through_ternaries_applies_to_reads_and_writes() {
+    let tree = seed();
+    let auth = auth();
+    let requester = Requester {
+        auth: &auth,
+        now: 0,
+    };
+    for (op, expected) in [("==", true), ("!=", false)] {
+        let text = format!("(true ? http : null) {op} (true ? http : null)");
+        let mut spec = read_rule_at_t(&text);
+        let t = spec.children.get_mut("t").unwrap();
+        t.write = t.read.clone();
+        for jar_dialect in [false, true] {
+            let rules = Rules::compile(&spec).unwrap().with_jar_dialect(jar_dialect);
+            assert_eq!(
+                rules.can_read(tree.root(), &p("/t"), None, &requester),
+                expected,
+                "read {text}, profile {jar_dialect}"
+            );
+            assert_eq!(
+                rules.can_write(tree.root(), tree.root(), &[p("/t")], &requester),
+                expected,
+                "write {text}, profile {jar_dialect}"
+            );
+        }
+    }
+}
+
+#[test]
 fn query_equals_itself_through_a_ternary() {
     let tree = seed();
     let auth = auth();

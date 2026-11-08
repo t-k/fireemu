@@ -379,6 +379,20 @@ async fn refresh_rejects_invalid_raw_value_payload() {
     assert_eq!(body["error"]["message"], "INVALID_JSON_PAYLOAD");
 }
 
+#[tokio::test]
+async fn refresh_treats_raw_value_marker_as_an_unknown_field() {
+    let server = Server::start().await;
+    let (status, body) = server
+        .post(
+            REFRESH,
+            "application/json",
+            br#"{"$serde_json::private::RawValue":"{\"grant_type\":\"invalid\"}"}"#,
+        )
+        .await;
+    assert_eq!(status, 400);
+    assert_eq!(body["error"]["message"], "MISSING_GRANT_TYPE");
+}
+
 /// SECURETOKEN-BODY production rows, preserving the recorded wire order.
 #[allow(clippy::too_many_lines)]
 #[tokio::test]

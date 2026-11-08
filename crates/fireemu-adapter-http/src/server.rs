@@ -200,6 +200,7 @@ async fn respond(
                     path.starts_with("/securetoken.googleapis.com/"),
                 ))
             } else if path.starts_with("/securetoken.googleapis.com/") {
+                // Read fields in wire order so serde_json's RawValue marker remains an ordinary field.
                 serde_json::from_slice(&bytes)
                     .ok()
                     .map(|value| ordered_refresh_json(&bytes).unwrap_or(value))

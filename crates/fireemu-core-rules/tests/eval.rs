@@ -1382,15 +1382,68 @@ fn undetermined_values_never_prove_a_condition() {
     // recording 2026-11-08, `fs-rules-v1/diffs/queries#blocked-nofilter`); a constrained one is.
     assert!(allows(&rules("!('blocked' in resource.data)"), &known));
     assert!(allows(&rules("'owner' in resource.data"), &known));
-    // Its key set is the constrained keys (FS-RULES-SHAPES 2026-11-08: keys(), size() and
-    // get() with a default answer from them).
+    // Only the recorded key-set reads are answered (FS-RULES-SHAPES 2026-11-08): a negated
+    // `keys().hasAny`, `keys().hasAll` of constrained keys, `size()` bounded below by the
+    // constrained keys, and `get()` of an unconstrained key answering its default. An exact
+    // key set or size was not recorded and stays unprovable (review 2026-11-08 r2).
     assert!(allows(
-        &rules("resource.data.keys().hasOnly(['owner'])"),
+        &rules("!resource.data.keys().hasAny(['flag'])"),
         &known
     ));
-    assert!(allows(&rules("resource.data.size() == 1"), &known));
+    assert!(allows(
+        &rules("resource.data.keys().hasAll(['owner'])"),
+        &known
+    ));
+    assert!(allows(&rules("resource.data.size() > 0"), &known));
     assert!(allows(
         &rules("resource.data.get('flag', false) == false"),
+        &known
+    ));
+    for cond in [
+        "resource.data.keys().hasOnly(['owner'])",
+        "resource.data.size() == 1",
+        "resource.data.size() < 2",
+        "resource.data.keys().size() == 1",
+        "!('flag' in resource.data.keys())",
+        "resource.data.keys() == ['owner']",
+    ] {
+        assert!(!allows(&rules(cond), &known), "{cond} must not be provable");
+    }
+    // The query resource is recognized by where it came from, not by its value: a map
+    // literal equal to it, built from failing reads, is not provably non-null (review
+    // 2026-11-08 r2).
+    assert!(!allows(
+        &rules("{'data': resource.data, 'id': resource.data.secret, '__name__': resource.data.secret} != null"),
+        &known
+    ));
+    assert!(!allows(
+        &rules("{'data': resource.data, 'id': resource.id, '__name__': resource.__name__} != null"),
+        &known
+    ));
+    assert!(allows(&rules("resource != null"), &known));
+    assert!(allows(&rules("null != resource"), &known));
+    // A constrained key answers `hasAny` positively, beside unconstrained ones.
+    assert!(allows(
+        &rules("resource.data.keys().hasAny(['flag', 'owner'])"),
+        &known
+    ));
+    // Only `keys()` of `resource.data` itself is answered that way: not its `values()`, and
+    // not the keys of a map literal.
+    assert!(!allows(
+        &rules("!resource.data.values().hasAny(['zz'])"),
+        &known
+    ));
+    assert!(!allows(
+        &rules("!{'flag': 1}.keys().hasAny(['flag'])"),
+        &known
+    ));
+    assert!(!allows(
+        &rules("!resource.data.size().hasAny(['zz'])"),
+        &known
+    ));
+    // Only `resource.data` itself answers its key set: a look-alike map does not.
+    assert!(!allows(
+        &rules("!{'owner': 'u1'}.merge(resource.data).keys().hasAny(['flag'])"),
         &known
     ));
     // A nested map the query constrains in part holds its constrained keys only for `in`

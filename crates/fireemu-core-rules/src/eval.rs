@@ -30,7 +30,7 @@ use crate::ast::{
 };
 use crate::coverage::{Coverage, ExprValue, UndefinedCause};
 use crate::scope::{FunctionEnvironment, FunctionScopes, ServiceScopes};
-use crate::value::{AuthContext, MapDiff, RulesValue, ValueRange};
+use crate::value::{AuthContext, MapDiff, RangeBound, RulesValue, ValueRange};
 
 /// Namespaces callable as `namespace.function(...)` unless shadowed by a binding.
 const NAMESPACES: [&str; 6] = [
@@ -1714,34 +1714,54 @@ impl<'a> Evaluator<'a> {
             .any(|binding| binding.name == name)
     }
 
-    /// `keys()`, `size()` and `get(key, default)` of a query proof's top-level `resource.data`,
-    /// which production answers from the keys the query constrains alone (FS-RULES-SHAPES
-    /// 2026-11-08: `!keys().hasAny(["blocked"])`, `get("blocked", false) == false` allowed
-    /// without a filter; `keys().hasAll(["a"])`, `size() > 0`, `get("a", 0) == 1` refused
-    /// without a filter and allowed with `a == 1`). `None` for every other call, which keeps
-    /// its ordinary answer (a nested map's key set stays undetermined).
+    /// The key-set reads of a query proof's `resource.data` that production answered
+    /// (FS-RULES-SHAPES 2026-11-08), each only in the form recorded:
+    /// - `resource.data.keys()` holds every constrained key (`keys().hasAll(["a"])` refused
+    ///   without a filter, allowed with `a == 1`), and other keys may exist: a partial list;
+    /// - `resource.data.keys().hasAny(keys)` is false when no key is constrained
+    ///   (`!keys().hasAny(["blocked"])` allowed with and without a filter);
+    /// - `resource.data.size()` is at least the number of constrained keys (`size() > 0`
+    ///   refused without a filter, allowed with one);
+    /// - `resource.data.get(key, default)` of an unconstrained key is the default
+    ///   (`get("blocked", false) == false` allowed, `get("a", 0) == 1` refused without a
+    ///   filter).
+    ///
+    /// An exact key set or size was not recorded and stays undetermined (review 2026-11-08
+    /// r2). The receiver must be `resource.data` itself (see
+    /// [`Self::is_query_resource_data_expr`]). `None` for every other call, which keeps its
+    /// ordinary answer.
     fn closed_query_data_call(
         &self,
+        object: &Expr,
         receiver: &RulesValue,
         name: &str,
         args: &[RulesValue],
     ) -> Option<Result<RulesValue, EvalError>> {
+        if name == "hasAny" {
+            return self.closed_query_keys_has_any(object, args);
+        }
         let RulesValue::PartialMap(fields) = receiver else {
             return None;
         };
-        if !matches!(name, "keys" | "size" | "get") || !self.is_query_resource_data(receiver) {
+        if !matches!(name, "keys" | "size" | "get") || !self.is_query_resource_data_expr(object) {
             return None;
         }
         if args.iter().any(undetermined) {
             return Some(Err(EvalError::Unknown));
         }
         Some(match (name, args) {
-            ("keys", []) => Ok(RulesValue::List(
+            ("keys", []) => Ok(RulesValue::PartialList(
                 fields.keys().cloned().map(RulesValue::String).collect(),
             )),
-            ("size", []) => Ok(RulesValue::Int(
-                i64::try_from(fields.len()).unwrap_or(i64::MAX),
-            )),
+            ("size", []) => Ok(RulesValue::Range(ValueRange {
+                lower: Some(RangeBound {
+                    value: Box::new(RulesValue::Int(
+                        i64::try_from(fields.len()).unwrap_or(i64::MAX),
+                    )),
+                    inclusive: true,
+                }),
+                upper: None,
+            })),
             ("get", [RulesValue::String(key), default]) => {
                 Ok(fields.get(key).cloned().unwrap_or_else(|| default.clone()))
             }
@@ -1749,21 +1769,62 @@ impl<'a> Evaluator<'a> {
         })
     }
 
-    /// Whether `value` is a query proof's `resource` itself (a document that exists).
-    fn is_query_resource(&self, value: &RulesValue) -> bool {
-        self.query_proof && self.resource.as_ref() == value
+    /// `resource.data.keys().hasAny(keys)` in a query proof: true when a wanted key is
+    /// constrained, false when none is (see [`Self::closed_query_data_call`]).
+    fn closed_query_keys_has_any(
+        &self,
+        object: &Expr,
+        args: &[RulesValue],
+    ) -> Option<Result<RulesValue, EvalError>> {
+        let ExprKind::Call {
+            callee,
+            args: call_args,
+            ..
+        } = object.kind()
+        else {
+            return None;
+        };
+        let ExprKind::Member { object: data, name } = callee.kind() else {
+            return None;
+        };
+        if name != "keys" || !call_args.is_empty() || !self.is_query_resource_data_expr(data) {
+            return None;
+        }
+        let RulesValue::Map(resource) = self.resource.as_ref() else {
+            return None;
+        };
+        let Some(RulesValue::PartialMap(fields)) = resource.get("data") else {
+            return None;
+        };
+        let [RulesValue::List(wanted)] = args else {
+            return Some(Err(EvalError::Unknown));
+        };
+        let mut found = false;
+        for key in wanted {
+            let RulesValue::String(key) = key else {
+                return Some(Err(EvalError::Unknown));
+            };
+            found |= fields.contains_key(key);
+        }
+        Some(Ok(RulesValue::Bool(found)))
     }
 
-    /// Whether `value` is the top-level `data` map of a query proof's `resource`. Every
-    /// partial map of a list proof comes from the query resource, and a nested one can never
-    /// equal the map that holds it, so value equality identifies `resource.data` however the
-    /// rule reached it (a binding, a function argument).
-    fn is_query_resource_data(&self, value: &RulesValue) -> bool {
+    /// Whether `expr` is the identifier `resource` of a query proof, not shadowed by a
+    /// binding: the query's resource itself, recognized by where the value comes from rather
+    /// than by its value, which a map literal could reproduce (review 2026-11-08 r2).
+    fn is_query_resource_expr(&self, expr: &Expr) -> bool {
         self.query_proof
-            && matches!(
-                self.resource.as_ref(),
-                RulesValue::Map(fields) if fields.get("data") == Some(value)
-            )
+            && matches!(expr.kind(), ExprKind::Ident(name) if name == "resource")
+            && !self.has_binding("resource")
+    }
+
+    /// Whether `expr` is `resource.data` of a query proof (see
+    /// [`Self::is_query_resource_expr`]).
+    fn is_query_resource_data_expr(&self, expr: &Expr) -> bool {
+        matches!(
+            expr.kind(),
+            ExprKind::Member { object, name } if name == "data" && self.is_query_resource_expr(object)
+        )
     }
 
     fn query_derived_expression(&self, expr: &Expr) -> bool {
@@ -4830,8 +4891,12 @@ impl<'a> Evaluator<'a> {
             // query determines. A container holding `Unknown` stays undetermined: building it
             // from a stored document may fail on a missing field.
             (BinaryOp::Eq | BinaryOp::Ne, c @ (V::Map(_) | V::List(_) | V::Set(_)), V::Null)
-            | (BinaryOp::Eq | BinaryOp::Ne, V::Null, c @ (V::Map(_) | V::List(_) | V::Set(_)))
-                if self.is_query_resource(c) || !holds_unknown(c) =>
+                if self.is_query_resource_expr(left) || !holds_unknown(c) =>
+            {
+                V::Bool(op == BinaryOp::Ne)
+            }
+            (BinaryOp::Eq | BinaryOp::Ne, V::Null, c @ (V::Map(_) | V::List(_) | V::Set(_)))
+                if self.is_query_resource_expr(right) || !holds_unknown(c) =>
             {
                 V::Bool(op == BinaryOp::Ne)
             }
@@ -5093,7 +5158,9 @@ impl<'a> Evaluator<'a> {
                     && matches!(name.as_str(), "matches" | "replace")
                 {
                     self.string_regex_call(&receiver, name, &values, compiled_regex)
-                } else if let Some(answer) = self.closed_query_data_call(&receiver, name, &values) {
+                } else if let Some(answer) =
+                    self.closed_query_data_call(object, &receiver, name, &values)
+                {
                     answer
                 } else {
                     let query_derived_receiver = self.query_derived_expression(object);

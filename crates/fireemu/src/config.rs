@@ -333,6 +333,15 @@ impl CompatibilityProfile {
     pub const fn end_user_transactions(self) -> bool {
         matches!(self, Self::Emulator)
     }
+
+    /// Whether a named document decides its branch of an `OR` query that also has a branch
+    /// naming no document. The official emulator allows such a query branch by branch;
+    /// production answered it with a missing-index error (FS-RULES-SHAPES, 2026-11-08), so its
+    /// Rules answer is unknown and `strict` proves every branch from its constraints.
+    #[must_use]
+    pub const fn mixed_named_or_branches(self) -> bool {
+        matches!(self, Self::Emulator)
+    }
 }
 
 /// The Emulator Hub's official default port (`firebase-tools` `Constants.getDefaultPort`).
@@ -7275,6 +7284,7 @@ mod tests {
         assert!(emulator.implicit_database_creation);
         assert!(!emulator.refuse_without_ruleset);
         assert!(emulator.end_user_transactions);
+        assert!(emulator.profile.mixed_named_or_branches());
         assert!(!emulator.listen_stream_lifetime);
 
         // strict: every one of those becomes production's refusal, including a missing
@@ -7286,6 +7296,7 @@ mod tests {
         assert!(!strict.implicit_database_creation);
         assert!(strict.refuse_without_ruleset);
         assert!(!strict.end_user_transactions);
+        assert!(!strict.profile.mixed_named_or_branches());
         // The one-hour Listen lifetime is a development default (owner decision 2026-10-13).
         assert!(!strict.listen_stream_lifetime);
     }

@@ -51,6 +51,7 @@ async fn start_profiles() -> [(&'static str, Harness); 2] {
     let strict = start_with_enforcer(TokenAcceptance::Verified, IndexSet::default(), |e| {
         e.with_refusal_without_ruleset(true)
             .with_end_user_transactions(false)
+            .with_mixed_named_or_branches(false)
     })
     .await;
     let emulator = start_with(TokenAcceptance::EmulatorMock).await;
@@ -286,23 +287,36 @@ async fn one_named_document_decides_its_branch() {
 
 /// Row `fs-rules-v1/shapes/queries#or-named-unnamed` (`documentId() == <own> OR owner == uid`):
 /// production answered 400 for a missing composite index (`FAILED_PRECONDITION`), so its Rules
-/// answer is not recorded; the official emulator allows it. Each branch is authorized on its
-/// own (the named branch by its document, the other by its constraint proof), so both profiles
-/// allow it as the official emulator does; a branch neither check proves refuses.
+/// answer is not recorded; the official emulator allows it. The `emulator` profile authorizes
+/// each branch on its own (the named branch by its document, the other by its constraint
+/// proof) and allows it as the official emulator does; `strict` does not allow what
+/// production has not shown and proves every branch from its constraints, so it refuses.
+/// A branch neither check proves refuses in both.
 #[tokio::test]
-async fn each_branch_of_an_or_is_authorized_on_its_own() {
+async fn an_or_mixing_a_named_and_an_unnamed_branch_follows_each_profile() {
     for (profile, mut h) in start_profiles().await {
         let (alice, token) = seed_tasks(&mut h).await;
         let either = |second: sq::Filter| tasks_where(Some(or(vec![name_filter("mine"), second])));
+        let expected = if profile == "strict" {
+            Err(tonic::Code::PermissionDenied)
+        } else {
+            Ok(vec![doc_name("tasks/mine")])
+        };
         assert_eq!(
             run(&mut h, either(owner_filter(&alice)), &token).await,
-            Ok(vec![doc_name("tasks/mine")]),
+            expected,
             "{profile} or-named-unnamed"
         );
         assert_eq!(
             run(&mut h, either(owner_filter("other-owner")), &token).await,
             Err(tonic::Code::PermissionDenied),
             "{profile} a branch the filters do not prove"
+        );
+        // Every branch names one document: each is decided by it, in both profiles.
+        assert_eq!(
+            run(&mut h, either(name_filter("mine")), &token).await,
+            Ok(vec![doc_name("tasks/mine")]),
+            "{profile} two named branches"
         );
         assert_eq!(
             run(&mut h, either(name_filter("missing")), &token).await,
@@ -763,5 +777,74 @@ async fn the_query_resource_data_holds_the_constrained_keys_only() {
 fn bool_value(value: bool) -> pb::Value {
     pb::Value {
         value_type: Some(pb::value::ValueType::BooleanValue(value)),
+    }
+}
+
+/// The review's cases (2026-11-08 r2), each over a stored document the rule would refuse if it
+/// were evaluated: an exact key set or size and a look-alike of the query resource are not
+/// proven; the recorded key-set reads (`get` with a default, `in` on a map the query
+/// constrains in part) stay allowed, since production authorizes a query from its constraints,
+/// not from the stored documents (`blk-stored-nofilter`, `has-owner-nofilter`).
+#[tokio::test]
+async fn unrecorded_key_set_reads_and_look_alike_resources_are_not_proven() {
+    use sq::field_filter::Operator as Op;
+    const REVIEW_RULES: &str = r"rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /has-only/{id} { allow list: if resource.data.keys().hasOnly(['a']); }
+    match /size-one/{id} { allow list: if resource.data.size() == 1; }
+    match /get-default/{id} { allow list: if resource.data.get('blocked', false) == false; }
+    match /nested/{id} { allow list: if !('blocked' in resource.data.meta); }
+    match /look-alike/{id} { allow list: if {'data': resource.data, 'id': resource.data.secret, '__name__': resource.data.secret} != null; }
+  }
+}";
+    for (profile, mut h) in start_profiles().await {
+        let (_alice, token) = h.user("alice@example.com");
+        let a_blocked =
+            |path: &str| set_write(path, &[("a", integer(1)), ("blocked", bool_value(true))]);
+        h.client
+            .commit(with_bearer(
+                commit(vec![
+                    a_blocked("has-only/d"),
+                    a_blocked("size-one/d"),
+                    a_blocked("get-default/d"),
+                    set_write(
+                        "nested/d",
+                        &[(
+                            "meta",
+                            map(&[("a", integer(1)), ("blocked", bool_value(true))]),
+                        )],
+                    ),
+                    set_write("look-alike/d", &[("a", integer(1))]),
+                ]),
+                "owner",
+            ))
+            .await
+            .unwrap();
+        h.rules.replace_source(REVIEW_RULES).unwrap();
+        let filtered = |collection: &str, field: &str| {
+            let mut request = list(collection);
+            query_mut(&mut request).r#where = Some(field_filter(field, Op::Equal, integer(1)));
+            request
+        };
+        let rows = [
+            ("has-only", filtered("has-only", "a"), false),
+            ("size-one", filtered("size-one", "a"), false),
+            ("look-alike", filtered("look-alike", "a"), false),
+            ("get-default", filtered("get-default", "a"), true),
+            ("nested", filtered("nested", "meta.a"), true),
+        ];
+        for (row, request, allowed) in rows {
+            let answer = run(&mut h, request, &token).await;
+            assert_eq!(answer.is_ok(), allowed, "{profile} {row}: {answer:?}");
+            if !allowed {
+                assert_eq!(
+                    answer,
+                    Err(tonic::Code::PermissionDenied),
+                    "{profile} {row}"
+                );
+            }
+        }
+        h.handle.abort();
     }
 }

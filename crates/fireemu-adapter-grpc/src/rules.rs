@@ -469,6 +469,12 @@ pub struct RulesEnforcer {
     /// Whether an end user may open a read-write transaction: production refuses it with the
     /// ordinary denial (the `strict` profile); the official emulator opens it.
     end_user_transactions: bool,
+    /// Whether an `OR` query mixing a branch that names one document with a branch that names
+    /// none lets the named document decide its branch: the official emulator does (the
+    /// `emulator` profile); production's Rules answer was not recorded (it asked for a
+    /// composite index first), so the `strict` profile proves every branch from its
+    /// constraints too.
+    mixed_named_or_branches: bool,
     /// Which ID-token checks apply (see [`TokenSemantics`]).
     token_semantics: TokenSemantics,
     /// The wall time an unpinned strict session follows; `None` keeps the clock where it is
@@ -514,6 +520,7 @@ impl RulesEnforcer {
             unsigned_id_tokens: None,
             refuse_without_ruleset: false,
             end_user_transactions: true,
+            mixed_named_or_branches: true,
             token_semantics: TokenSemantics::default(),
             wall_clock: None,
             listen_stream_lifetime: false,
@@ -642,6 +649,14 @@ impl RulesEnforcer {
     #[must_use]
     pub const fn with_end_user_transactions(mut self, allowed: bool) -> Self {
         self.end_user_transactions = allowed;
+        self
+    }
+
+    /// Sets whether a named document decides its branch of an `OR` query that also has a
+    /// branch naming no document (see the field).
+    #[must_use]
+    pub const fn with_mixed_named_or_branches(mut self, decided: bool) -> Self {
+        self.mixed_named_or_branches = decided;
         self
     }
 
@@ -1215,10 +1230,17 @@ impl RulesEnforcer {
         };
         let list_max = multi_total_max();
         let disjunctions = query.dnf();
-        let plans: Vec<NamePlan> = disjunctions
+        let mut plans: Vec<NamePlan> = disjunctions
             .iter()
             .map(|disjunction| name_plan(parent, query, disjunction))
             .collect();
+        if !self.mixed_named_or_branches && plans.iter().any(|plan| plan.names.is_empty()) {
+            // A branch naming no document beside a named one: production's Rules answer was
+            // not recorded, so every branch is proven from its constraints too.
+            for plan in &mut plans {
+                plan.decides = false;
+            }
+        }
         let candidates: Vec<DocumentPath> = plans
             .iter()
             .flat_map(|plan| plan.names.iter().cloned())

@@ -1818,6 +1818,14 @@ impl<'a> Evaluator<'a> {
             && !self.has_binding("resource")
     }
 
+    /// Whether `expr` is the identifier `request` or `resource`, unshadowed by a binding: a
+    /// map that exists rather than one the rule builds. (Every map read from them holds only
+    /// values the query determines or concrete ones.)
+    fn is_request_or_resource_ident(&self, expr: &Expr) -> bool {
+        matches!(expr.kind(), ExprKind::Ident(name)
+            if matches!(name.as_str(), "request" | "resource") && !self.has_binding(name))
+    }
+
     /// Whether `expr` is `resource.data` of a query proof (see
     /// [`Self::is_query_resource_expr`]).
     fn is_query_resource_data_expr(&self, expr: &Expr) -> bool {
@@ -5181,6 +5189,7 @@ impl<'a> Evaluator<'a> {
                         &values,
                         query_derived,
                         query_join_stringification_sensitive,
+                        self.is_request_or_resource_ident(object),
                     )
                 }
             }
@@ -5686,16 +5695,21 @@ fn method_call(
     args: &[RulesValue],
     query_derived: bool,
     query_join_stringification_sensitive: bool,
+    receiver_exists: bool,
 ) -> Result<RulesValue, EvalError> {
     use RulesValue as V;
     // An exact list / map holding an undetermined member, or an undetermined argument,
     // cannot be searched, joined or compared with a definite result (query proofs). The
     // partially known containers have their own arms below.
     //
-    // `keys()` and `size()` of a map are the exception: both read the key set, which an
-    // undetermined *value* leaves fully known. `request.keys()` depends on it, because
-    // `request.auth` is undetermined while a query is being proven.
-    let shape_only = matches!(receiver, V::Map(_)) && matches!(name, "keys" | "size");
+    // `keys()` and `size()` of `request` and `resource` are the exception
+    // (`receiver_exists`): both read the key set, which an undetermined *value*
+    // leaves fully known, and such a map always exists. `request.keys()` depends on it,
+    // because `request.path` is undetermined while a query is being proven. A map the rule
+    // builds from an undetermined value is not: building it from a stored document can fail
+    // on a missing field (review 2026-11-08 r3).
+    let shape_only =
+        receiver_exists && matches!(receiver, V::Map(_)) && matches!(name, "keys" | "size");
     if (!shape_only
         && matches!(receiver, V::List(_) | V::Set(_) | V::Map(_))
         && undetermined(receiver))

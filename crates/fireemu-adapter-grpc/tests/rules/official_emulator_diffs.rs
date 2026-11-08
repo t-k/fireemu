@@ -848,3 +848,70 @@ service cloud.firestore {
         h.handle.abort();
     }
 }
+
+/// The review's case (2026-11-08 r3): a map or list the rule builds from a field the query does
+/// not constrain may fail to build on a stored document lacking it, so no shape operation on
+/// it is proven, in either profile. Shape reads of `request` and `resource` stay proven.
+#[tokio::test]
+async fn shape_operations_on_a_built_container_do_not_hide_a_missing_field() {
+    const SHAPE_RULES: &str = r"rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /map-size/{id} { allow list: if {'k': resource.data.secret}.size() == 1; }
+    match /map-keys/{id} { allow list: if {'k': resource.data.secret}.keys().hasOnly(['k']); }
+    match /list-size/{id} { allow list: if [resource.data.secret].size() == 1; }
+    match /request-keys/{id} { allow list: if request.keys().hasAll(['auth', 'path']); }
+    match /resource-keys/{id} { allow list: if resource.keys().hasAll(['data', 'id']); }
+  }
+}";
+    for (profile, mut h) in start_profiles().await {
+        let (_alice, token) = h.user("alice@example.com");
+        let a1 = |path: &str| set_write(path, &[("a", integer(1))]);
+        h.client
+            .commit(with_bearer(
+                commit(vec![
+                    a1("map-size/d"),
+                    a1("map-keys/d"),
+                    a1("list-size/d"),
+                    a1("request-keys/d"),
+                    a1("resource-keys/d"),
+                ]),
+                "owner",
+            ))
+            .await
+            .unwrap();
+        h.rules.replace_source(SHAPE_RULES).unwrap();
+        let a_is_1 = |collection: &str| {
+            let mut request = list(collection);
+            query_mut(&mut request).r#where = Some(field_filter(
+                "a",
+                sq::field_filter::Operator::Equal,
+                integer(1),
+            ));
+            request
+        };
+        let rows = [
+            ("map-size", false),
+            ("map-keys", false),
+            ("list-size", false),
+            ("request-keys", true),
+            ("resource-keys", true),
+        ];
+        for (collection, allowed) in rows {
+            let answer = run(&mut h, a_is_1(collection), &token).await;
+            assert_eq!(
+                answer.is_ok(),
+                allowed,
+                "{profile} {collection}: {answer:?}"
+            );
+            if !allowed {
+                assert_eq!(
+                    answer,
+                    Err(tonic::Code::PermissionDenied),
+                    "{profile} {collection}"
+                );
+            }
+        }
+        h.handle.abort();
+    }
+}

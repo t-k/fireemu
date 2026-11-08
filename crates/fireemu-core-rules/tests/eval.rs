@@ -1533,6 +1533,56 @@ fn undetermined_values_never_prove_a_condition() {
     }
 }
 
+/// A list or map built from a value the query leaves undetermined (an unconstrained field may
+/// be missing from a stored document, so building it can fail) gives no definite answer to
+/// any shape operation (review 2026-11-08 r3). Only `request` and `resource` themselves, which
+/// always exist, answer `keys()` and `size()` with undetermined values inside.
+#[test]
+fn shape_operations_on_built_containers_keep_failing_reads_undetermined() {
+    let rules = |cond: &str| {
+        format!("rules_version = '2';\nservice cloud.firestore {{ match /databases/{{d}}/documents {{ match /notes/{{id}} {{ allow list: if {cond}; }} }} }}")
+    };
+    let query = abstract_ctx(
+        "/databases/(default)/documents/notes/fireemu-placeholder",
+        vec![
+            ("a", RulesValue::Int(1)),
+            (
+                "role",
+                RulesValue::OneOf(vec![RulesValue::Int(1), RulesValue::Int(2)]),
+            ),
+        ],
+    );
+    for cond in [
+        "{'k': resource.data.secret}.size() == 1",
+        "{'k': resource.data.secret}.keys().hasOnly(['k'])",
+        "{'k': resource.data.secret}.keys().hasAll(['k'])",
+        "{'k': resource.data.secret}.keys().hasAny(['k'])",
+        "{'k': resource.data.secret}.keys().size() == 1",
+        "'k' in {'k': resource.data.secret}.keys()",
+        "{'k': resource.data.secret}.values().size() == 1",
+        "{'k': resource.data.secret}.get('k', 0) != 7",
+        "'k' in {'k': resource.data.secret}",
+        "[resource.data.secret].size() == 1",
+        "1 in [resource.data.secret, 1]",
+        "[resource.data.secret, 1].hasAll([1])",
+        "{'k': resource.data.role}.size() == 1",
+        "{'k': resource.id}.keys().hasOnly(['k'])",
+    ] {
+        assert!(!allows(&rules(cond), &query), "{cond} must not be provable");
+    }
+    // A binding named `resource` is not the query's resource.
+    let shadowed = "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { function count(resource) { return resource.keys().size() == 1; } match /notes/{id} { allow list: if count({'k': resource.data.secret}); } } }";
+    assert!(!allows(shadowed, &query));
+    // `request` and `resource` always exist: their key sets stay known.
+    for cond in [
+        "request.keys().hasAll(['auth', 'path'])",
+        "resource.keys().hasAll(['data', 'id'])",
+        "{'k': resource.data.a}.size() == 1",
+    ] {
+        assert!(allows(&rules(cond), &query), "{cond} must hold");
+    }
+}
+
 /// `keys()` is the only method whose result is read as its receiver's for the numeric
 /// stringification guard (a map's keys are field names); any other method with a
 /// query-derived number in its arguments stays representation-sensitive.

@@ -80,11 +80,25 @@ export function complete({ report, deployed, result }) {
   );
 }
 
+/**
+ * The reviewed sources the deploy uploads and the run reads (relative to this directory). The recorder
+ * refuses to start when one of them differs; kinds-record.test.mjs checks these against the files.
+ */
+export const KINDS_PINS = Object.freeze({
+  "firebase-kinds.json": "f250225c7fa799b1c041e925b910b7fa05bfb613ea21931eea9464e720fc2ef8",
+  "fixtures-kinds/index.js": "a123b78fd592a920bedb74e4c8052ea3d4f0b64e88c594db8ea5af187146b09d",
+  "fixtures-kinds/frames.js": "730dc11de387df1278cc5c035a4f36665875c4ab0c846426cb568466d1444711",
+  "fixtures-kinds/package.json": "7da22ccd9851e3119b81462c2c1e071fc0d72f0196415c52acd69e1b12ebdd1e",
+  "fixtures-kinds/package-lock.json":
+    "c492afe0fa1e5336d78be6f1fa76e594d357e0412cacfd9d963d2569389b7dea",
+});
+
 export const KINDS_SCENARIO = Object.freeze({
   id: "kinds",
   codebase: CODEBASE,
   config: "firebase-kinds.json",
   fixtureDir: "fixtures-kinds",
+  pins: KINDS_PINS,
   runDirPrefix: "kinds",
   prefix: PREFIX,
   handlers: FIXTURE_HANDLERS,

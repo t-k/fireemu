@@ -277,7 +277,11 @@ describe("storage rules s9 journal labels", () => {
     }
     // Every local rules load is an owner request with the PUT body the emulators read.
     const puts = fake.world.calls.filter((c) => c.method === "PUT");
-    assert.ok(puts.length >= 8);
+    assert.equal(
+      puts.length,
+      8,
+      "one baseline load, three programs, three load-only sources and the restore",
+    );
     for (const put of puts) {
       assert.equal(put.headers.authorization, "Bearer owner");
       assert.equal(put.headers["content-type"], "application/json");

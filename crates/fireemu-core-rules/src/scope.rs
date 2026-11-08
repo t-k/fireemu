@@ -463,6 +463,24 @@ mod scope_plan_tests {
                 super::measure_operation(&format!("{label} cached-plan"), || {
                     black_box(cached.plan());
                 });
+                if condition == "inner()" {
+                    let crate::ast::Item::Match(documents) = &items[1] else {
+                        unreachable!()
+                    };
+                    let crate::ast::Item::Function(inner) = &documents.items[0] else {
+                        unreachable!()
+                    };
+                    let scopes = super::FunctionScopes::new(items, compiled);
+                    let environment = scopes.get(inner).unwrap();
+                    assert_eq!(environment.function("top").unwrap().name, "top");
+                    super::measure_operation(&format!("{label} checked-get"), || {
+                        let scopes = super::FunctionScopes::new(black_box(items), black_box(compiled));
+                        black_box(scopes.get(black_box(inner)));
+                    });
+                    super::measure_operation(&format!("{label} live-outer-lookup"), || {
+                        black_box(environment.function(black_box("top")));
+                    });
+                }
             }
         }
     }

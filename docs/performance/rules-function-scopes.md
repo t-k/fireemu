@@ -1,8 +1,8 @@
-# Rules function scope baseline
+# Rules function scope setup
 
-The evaluator at `485597bc09899fc4f55efa0d1768abbb42dfc551` already retains compiled lexical scope plans in each parsed ruleset. It does not rebuild every function environment before matching a request. This report records the current implementation and measurements from 2026-11-07; it introduces no evaluator change and claims no before/after improvement.
+The evaluator already retained compiled lexical scope plans in each parsed ruleset, but its first function lookup still checked the entire service against the live AST. The follow-up replaces that global check with checked declaration paths and lexical ancestry. Public AST mutations remain supported through live name/order lookup and a request-local replacement plan when needed. The measurements below distinguish the original baseline, residual-cost investigation and implementation comparison; loaded-host timings do not establish a fixed end-to-end speedup.
 
-## Current behavior
+## Baseline behavior before the follow-up
 
 [`parse_ruleset`](../../crates/fireemu-core-rules/src/parse.rs) prepares one `ServiceScopes` plan per service. [`Ruleset`](../../crates/fireemu-core-rules/src/ast.rs) owns those plans through `Arc`. The plans contain structural paths and declaration offsets, rather than retained AST addresses or request bindings.
 
@@ -107,10 +107,49 @@ cargo test -p fireemu-core-rules --release --lib --locked --offline eval::tests:
 
 The ordinary benchmark used the earlier `cargo bench` command and five executions at the follow-up source revision. Its binary SHA-256 was `0895154ec4dff253419a070be2ee4cfeb70d5644691c463d1302c132b5448725`.
 
-## Limits and next step
+## Checked declaration lookup
 
-The original whole-service reconstruction optimization is already present. The measured residual agreement walk warrants further investigation while preserving public AST mutation semantics. This report does not justify stopping on a claim that setup cost is negligible, and it does not establish a speedup or an isolated contribution percentage. Capture creation remains inconclusive under the observed load. No allocation profile was measured.
+The implementation at `4b69e9bbb374dc6c0e64351e1a56ec7e0ebdc028` searches every candidate for a declaration offset, checks its live path and pointer identity, and verifies that each stored parent is the corresponding live structural prefix. An offset collision does not discard later candidates. A miss or invalid structure triggers one replacement plan per evaluation, followed by the same complete candidate search. Previously returned environments keep their own plan and the immutable AST borrow.
 
-The generation follow-up now covers function captures across retained snapshots, fresh parsing and reuse of existing plans. Its finite cases do not cover every possible program or publication sequence. No new production observation was performed.
+Function names and declaration order are read from the live AST in reverse order at each lexical scope. This preserves shadowing when an ancestor or sibling gains, loses, renames or reorders a same-name declaration while the called declaration keeps its path and offset. Match patterns and request captures continue through the existing evaluator. The live sibling scan remains linear in the number of items in the scopes searched; this change removes the separate whole-service agreement walk.
 
-The follow-up adds tests, test-only observation and opt-in measurements. It does not change production evaluator behavior or claim a performance improvement.
+`canonical_function_calls_skip_global_scope_agreement_walks` first failed because three requests performed three agreement walks at each of 0, 100 and 1,000 unrelated blocks. It now passes with zero agreement walks, rebuilds and capture-table constructions in that fixture. A 42-row pairwise table, including 22 mandatory combinations and both capture values per row, covers 19 mutation variants across service and concrete/query requests. A 128-case property varies live ancestor names and ordering. These cases compare complete traced reports, including expression counts and maximum call depth, with legacy and eager references. Direct tests cover later declarations with duplicate offsets, foreign declaration pointers and truncated paths.
+
+The full Rules suite passed 292 tests with six skipped; all-target/all-feature clippy passed. An unchanged mutation control passed, and five compiling semantic mutants were detected: inspecting only the first offset candidate, omitting pointer identity, omitting fallback rebuilding, reversing shadow precedence and restoring the global agreement check. A restored focused run passed all eight selected tests. A separate bounded ancestry model explored 16,128 distinct states without invariant violations; it abstracts paths and reuse, rather than proving the Rust implementation.
+
+### Paired release comparison
+
+The saved release baseline from `342022267e06141060576898d3064e2e5d75999a` and the candidate used the unchanged benchmark fixture and 2,000 evaluations per row. Both builds finished before measurement. Five samples of each executable ran serially, alternating which version ran first. The Linux/arm64 container limits remained four CPUs, 6GiB memory and zero swap. Concurrent host work included two Rust mutation jobs and a Python mutation harness; the one-minute host load average ranged from 21.11 to 23.88 on 18 logical CPUs. Holders and load were recorded before and after every process.
+
+Results are µs/evaluation, with the full range of five samples:
+
+| Condition | Unrelated blocks | Baseline median (range) | Candidate median (range) |
+| --- | ---: | ---: | ---: |
+| Literal | 0 | 3.94 (2.48–4.56) | 3.23 (2.13–3.37) |
+| Literal | 100 | 4.42 (2.72–5.18) | 3.80 (2.58–4.07) |
+| Literal | 1,000 | 11.71 (6.46–13.90) | 10.62 (8.80–13.20) |
+| Function | 0 | 4.11 (2.45–4.56) | 3.63 (3.03–4.64) |
+| Function | 100 | 5.12 (2.93–6.18) | 4.27 (3.66–5.07) |
+| Function | 1,000 | 19.25 (12.52–24.61) | 13.69 (10.31–16.25) |
+
+All medians decreased, but the ranges overlap and individual pairs reverse. In the fifth pair, the 1,000-block function row changed from 12.52 to 16.25µs, while the literal control also changed from 6.46 to 10.92µs. These data cannot distinguish a reliable end-to-end improvement or regression from the concurrent-load variation. No quiet retry or favorable-sample selection was performed. The candidate benchmark binary SHA-256 was `98b2754b1e98a1640ee6deea32eed253acc42dbec99ef04d60f5c0fc3bda7c18`; the baseline hash is recorded above. Reproduction uses the same benchmark build command at each revision, then runs the printed executable paths in alternating order for five samples.
+
+### Direct lookup and remaining sibling scan
+
+The existing opt-in scope measurement additionally times a fresh checked declaration lookup and an outer-function name lookup from the resulting environment. It uses the same function fixture and retains the old first-plan and agreement operations as test-only controls. Parsing, fixture checks and compilation remain outside timing. Five samples follow the existing bounded pilot; the short checked lookup reaches the iteration cap before 200ms.
+
+Results are µs/operation, with all five samples' ranges:
+
+| Unrelated blocks | Legacy first-plan control | Current checked lookup | Live outer-function lookup |
+| ---: | ---: | ---: | ---: |
+| 0 | 0.0244 (0.0231–0.0498) | 0.0304 (0.0293–0.0305) | 0.0081 (0.0074–0.0087) |
+| 100 | 0.4529 (0.4269–0.4697) | 0.0337 (0.0301–0.0367) | 0.0634 (0.0578–0.0647) |
+| 1,000 | 6.6867 (6.3451–16.1481) | 0.0294 (0.0288–0.0310) | 0.9357 (0.7647–1.5302) |
+
+Checked lookup stayed approximately constant in this fixed-depth fixture, while the retained live sibling scan grew with block count. The legacy control includes the global agreement walk but excludes declaration search; these are distinct operations, timed in separate batches, so their ratio is not an end-to-end speedup. The direct agreement control at 1,000 blocks measured 6.3230µs (5.9319–6.5252). Host load rose from 21.57 before the process to 30.99 afterward; even complete evaluation of the zero-block fixture ranged from 6.60 to 22.32µs within this run. The direct results support removal of the global setup work and identify the remaining scan, while preserving the uncertainty of the paired request timings. This additional run was planned separately and was not a retry of the paired comparison.
+
+The command is the same `scope::scope_plan_tests::measure_residual_scope_resolution` release command shown above. The two added output labels are `checked-get` and `live-outer-lookup`; `first-plan` is now a test-only legacy control.
+
+## Remaining limits
+
+The original whole-service reconstruction optimization was already present; the new change targets the residual agreement walk identified by measurement. Request-local capture creation remains unchanged, and the earlier capture timing remains inconclusive. No allocation profile was measured. The finite mutation cases, models and properties do not cover every possible rules program, extreme call depth or publication sequence. In particular, the constant checked-lookup measurements hold depth and call count fixed; they do not establish constant cost as either grows. No new production observation was performed.

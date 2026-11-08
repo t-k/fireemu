@@ -4434,10 +4434,13 @@ impl<'a> Evaluator<'a> {
             ExprKind::Map(entries) => {
                 let mut m = BTreeMap::new();
                 for (k, v) in entries {
-                    m.insert(k.clone(), self.eval(v)?);
-                }
-                if self.query_proof && m.values().any(undetermined) {
-                    return Err(EvalError::Unknown);
+                    let value = self.eval(v)?;
+                    // Checked per entry: a later duplicate key would overwrite it (review
+                    // 2026-11-08 r5).
+                    if self.query_proof && undetermined(&value) {
+                        return Err(EvalError::Unknown);
+                    }
+                    m.insert(k.clone(), value);
                 }
                 Ok(RulesValue::Map(m))
             }
@@ -4935,6 +4938,14 @@ impl<'a> Evaluator<'a> {
                         .iter()
                         .map(|a| self.eval(a))
                         .collect::<Result<Vec<_>, _>>()?;
+                    // Arguments are evaluated before the call: an argument read from a field the
+                    // query does not constrain may be a missing-field error for a stored
+                    // document, whatever the function does with it (review 2026-11-08 r5).
+                    // `resource` and other existing values carry undetermined members, not an
+                    // undetermined whole, and pass (`f(resource)`, FS-RULES-SHAPES-TWO).
+                    if self.query_proof && values.iter().any(|v| matches!(v, RulesValue::Unknown)) {
+                        return Err(EvalError::Unknown);
+                    }
                     let query_provenance = args
                         .iter()
                         .map(|argument| {

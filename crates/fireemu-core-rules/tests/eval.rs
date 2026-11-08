@@ -1623,6 +1623,38 @@ fn shape_operations_on_built_containers_keep_failing_reads_undetermined() {
     ] {
         assert!(!allows(&rules(cond), &query), "{cond} must not be provable");
     }
+    // A duplicate key does not hide an earlier undetermined entry (review 2026-11-08 r5).
+    for cond in [
+        "{'k': resource.data.secret, 'k': true}.k",
+        "{'k': resource.data.secret, 'k': true} is map",
+        "{'k': resource.data.secret, 'k': true} != null",
+        "{'k': resource.data.secret, 'k': true}.size() == 1",
+        "{'k': resource.data.secret, 'k': true}.keys().hasOnly(['k'])",
+    ] {
+        assert!(!allows(&rules(cond), &query), "{cond} must not be provable");
+    }
+    // A function argument read from an unconstrained field may fail before the function runs,
+    // whatever the function returns (review 2026-11-08 r5); `f(resource)` stays proven.
+    let with_functions = |call: &str| {
+        format!("rules_version = '2';\nservice cloud.firestore {{ match /databases/{{d}}/documents {{ function ignore(x) {{ return true; }} function helper(x) {{ return {{'ok': true}}; }} function f(r) {{ return r != null; }} match /notes/{{id}} {{ allow list: if {call}; }} }} }}")
+    };
+    for call in [
+        "ignore(resource.data.secret)",
+        "helper(resource.data.secret).ok",
+        "ignore(resource.data.a) && ignore(resource.data.secret)",
+    ] {
+        assert!(
+            !allows(&with_functions(call), &query),
+            "{call} must not be provable"
+        );
+    }
+    for call in [
+        "ignore(resource.data.a)",
+        "helper(resource.data.role).ok",
+        "f(resource)",
+    ] {
+        assert!(allows(&with_functions(call), &query), "{call} must hold");
+    }
     // Only the key set of a map holding undetermined values is known: not its values.
     assert!(!allows(&rules("resource.values().size() == 3"), &query));
     assert!(!allows(&rules("request.values().size() > 0"), &query));

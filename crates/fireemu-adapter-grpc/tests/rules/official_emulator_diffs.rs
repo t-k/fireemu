@@ -857,12 +857,17 @@ async fn shape_operations_on_a_built_container_do_not_hide_a_missing_field() {
     const SHAPE_RULES: &str = r"rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    function ignore(x) { return true; }
+    function helper(x) { return {'ok': true}; }
     match /map-size/{id} { allow list: if {'k': resource.data.secret}.size() == 1; }
     match /map-keys/{id} { allow list: if {'k': resource.data.secret}.keys().hasOnly(['k']); }
     match /list-size/{id} { allow list: if [resource.data.secret].size() == 1; }
     match /map-is/{id} { allow list: if {'k': resource.data.secret} is map; }
     match /list-is/{id} { allow list: if [resource.data.secret] is list; }
     match /map-member/{id} { allow list: if {'bad': resource.data.secret, 'ok': true}.ok; }
+    match /map-duplicate/{id} { allow list: if {'k': resource.data.secret, 'k': true}.k; }
+    match /fn-ignore/{id} { allow list: if ignore(resource.data.secret); }
+    match /fn-helper/{id} { allow list: if helper(resource.data.secret).ok; }
     match /request-keys/{id} { allow list: if request.keys().hasAll(['auth', 'path']); }
     match /resource-keys/{id} { allow list: if resource.keys().hasAll(['data', 'id']); }
   }
@@ -879,6 +884,9 @@ service cloud.firestore {
                     a1("map-is/d"),
                     a1("list-is/d"),
                     a1("map-member/d"),
+                    a1("map-duplicate/d"),
+                    a1("fn-ignore/d"),
+                    a1("fn-helper/d"),
                     a1("request-keys/d"),
                     a1("resource-keys/d"),
                 ]),
@@ -903,6 +911,9 @@ service cloud.firestore {
             ("map-is", false),
             ("list-is", false),
             ("map-member", false),
+            ("map-duplicate", false),
+            ("fn-ignore", false),
+            ("fn-helper", false),
             ("request-keys", true),
             ("resource-keys", true),
         ];

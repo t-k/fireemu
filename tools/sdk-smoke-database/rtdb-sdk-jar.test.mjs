@@ -12,7 +12,7 @@ import { SUITES, parse, run } from './rtdb-sdk-jar.mjs';
 const here = path.dirname(fileURLToPath(import.meta.url));
 
 test('parse: a known suite and --out are required; the timeout has a default', () => {
-  assert.deepEqual(Object.keys(SUITES), ['rest', 'rules', 'tokens', 'rules-load']);
+  assert.deepEqual(Object.keys(SUITES), ['rest', 'rules', 'tokens', 'rules-load', 'rules-syntax']);
   assert.throws(() => parse([]), /usage/); assert.throws(() => parse(['nope', '--out', 'x']), /usage/); assert.throws(() => parse(['rest']), /--out is required/);
   const o = parse(['tokens', '--out', 'out', '--timeout', '1000']);
   assert.deepEqual([o.suite, o.timeout, path.isAbsolute(o.out)], ['tokens', 1000, true]);
@@ -57,7 +57,7 @@ test('run: a failed child or reduction still stops the jar, and the failure is n
 });
 
 test('the committed jar reductions are complete, clean runs of their suites', () => {
-  for (const [suite, observed] of [['rest', 144], ['tokens', 54], ['rules-load', 14]]) {
+  for (const [suite, observed] of [['rest', 144], ['tokens', 54], ['rules-load', 14], ['rules-syntax', 86]]) {
     const doc = JSON.parse(readFileSync(path.join(here, 'fixtures', `jar-sdk-${suite}.json`), 'utf8'));
     assert.equal(doc.suite, suite);
     assert.deepEqual([doc.result.status, doc.result.observed, doc.result.exit, doc.faults], ['complete', observed, 0, []], suite);
@@ -68,7 +68,7 @@ test('the committed jar reductions are complete, clean runs of their suites', ()
 test('live: each suite on the jar reproduces the committed reduction (RTDB_JAR_LIVE=1)', { skip: process.env.RTDB_JAR_LIVE !== '1', timeout: 30 * 60 * 1000 }, async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'sdk-jar-live-'));
   try {
-    for (const suite of ['rest', 'tokens', 'rules-load']) {
+    for (const suite of ['rest', 'tokens', 'rules-load', 'rules-syntax']) {
       const out = path.join(dir, suite);
       assert.equal(await run({ suite, out, timeout: 9 * 60 * 1000 }), 0, suite);
       assert.ok(existsSync(path.join(out, 'journal.json')), suite);

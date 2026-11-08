@@ -3,6 +3,7 @@
   "ignorePatterns": [
     "node_modules",
     "fixtures",
+    "hosting-fixtures",
     ".runs",
     "pnpm-lock.yaml",
     "*-matrix.json",
@@ -30,6 +31,7 @@
     "auth-federation-saml-production.json",
     "auth-fs-cross-stage2-production.json",
     "auth-tenant-blocking-production.json",
+    "securetoken-body-production.json",
     "src/auth-federation/corpus-saml.mjs",
     "src/auth-federation/corpus.mjs",
     "src/auth-federation/saml.mjs",

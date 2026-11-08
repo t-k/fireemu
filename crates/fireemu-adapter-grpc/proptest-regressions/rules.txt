@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 7cdbf527bb29f38d11bb28ceb0951ef059a361d323ae6e914db8710bac8e6d85 # shrinks to atoms = [Unary { field: FieldPath { segments: ["__name__"] }, op: IsNull }], ordered = []
+cc 9786abb9875fed29b8ab79662c2e5bf276a62f6cceb8e71b465faf76f6fe235c # shrinks to atoms = [Field { field: FieldPath { segments: ["x"] }, op: Equal, value: Map({}) }, Field { field: FieldPath { segments: ["x", "y"] }, op: LessThan, value: Integer(1) }], ordered = []

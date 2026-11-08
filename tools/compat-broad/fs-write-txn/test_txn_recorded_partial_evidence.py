@@ -12,7 +12,7 @@ import txn_expiry_cases as cases
 import txn_expiry_comparison as comparison
 import txn_expiry_plan as plan
 from broad_contract import digest
-from evidence_common import BINARY_INPUTS_SCHEME, binary_inputs, binary_inputs_at_commit, source_files_including_test_only_trees
+from evidence_common import BINARY_INPUTS_SCHEME, binary_inputs_at_commit, source_files_including_test_only_trees
 
 ROOT = Path(__file__).resolve().parents[3]
 PATH = ROOT / "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-recorded-comparison-v1.json"
@@ -72,10 +72,10 @@ def test_recorded_artifact_provenance_matches_its_source_commit_inputs():
     assert artifact["uiBundled"] is False
 
 
-def test_recorded_artifact_rust_inputs_are_current():
-    artifact = evidence()["artifact"]
-    current = binary_inputs(ROOT)
-    assert current == binary_inputs_at_commit(artifact["sourceCommit"], ROOT)
+# Whether the binary of the current commit still answers as production recorded is no longer read from this record's build (its `artifact` and `profiles`
+# blocks are the last local regeneration, checked above against their own commit). The `txn04-replay` job of ci.yml replays both profiles on a binary built
+# from every dispatched SHA and judges it against this record's projection (txn04_current_replay.py, tested in test_txn04_current_replay.py); the parsed
+# workflow contract scripts/txn04-replay-contract.rb (run by the ci.yml lint job) keeps that job unskippable and failing the run when it fails.
 
 
 def test_no_bound_source_can_pull_a_file_of_an_excluded_tree_into_the_binary():

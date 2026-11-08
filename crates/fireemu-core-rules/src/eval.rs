@@ -381,6 +381,11 @@ struct Binding<'a> {
     query_numeric_error_source: bool,
     query_float_zero_ambiguous: bool,
     query_numeric_stringification_sensitive: bool,
+    /// The binding holds the query's resource itself (see `is_query_resource_expr`).
+    query_resource: bool,
+    /// Resolving the binding read a key the query does not constrain (see
+    /// `Evaluator::absent_reads`); every later read of it counts as such a read again.
+    absent_read: bool,
     state: BindingState<'a>,
 }
 
@@ -404,6 +409,8 @@ impl Binding<'_> {
             query_numeric_error_source: false,
             query_float_zero_ambiguous: false,
             query_numeric_stringification_sensitive: false,
+            query_resource: false,
+            absent_read: false,
             state: BindingState::Value(value),
         }
     }
@@ -426,6 +433,8 @@ impl Binding<'_> {
             query_numeric_error_source,
             query_float_zero_ambiguous,
             query_numeric_stringification_sensitive,
+            query_resource: false,
+            absent_read: false,
             state: BindingState::Value(value),
         }
     }
@@ -493,6 +502,11 @@ struct Evaluator<'a> {
     /// [`REGEX_EXHAUSTIONS_PER_REQUEST_MAX`]).
     regex_exhaustions: u64,
     projected_member_reads: u64,
+    /// Reads in a query proof of a key the query does not constrain (a member or index of a
+    /// partial map that lacks it): such a read may be a missing-field error for a stored
+    /// document, unlike an undetermined value that exists (`resource.id`, a field the query
+    /// orders by). A call whose argument is undetermined because of one is undetermined.
+    absent_reads: u64,
     doc_reads_max: u64,
     /// `rules_version = '2'`: `**` matches zero or more segments.
     wildcard_zero_or_more: bool,
@@ -704,6 +718,7 @@ fn evaluate_prepared(
             regex_exhaustions: 0,
             regex_diagnostics: RegexEvaluationDiagnostics::default(),
             projected_member_reads: 0,
+            absent_reads: 0,
             doc_reads_max: limit_max(match ctx.service {
                 // A query's rule may read as many documents as a multi-document request
                 // (20: production and the official emulator allow 20 and refuse 21, FS-RULES).
@@ -1710,6 +1725,103 @@ impl<'a> Evaluator<'a> {
             .iter()
             .rev()
             .any(|binding| binding.name == name)
+    }
+
+    /// `keys()`, `size()` and `get(key, default)` of a query proof's `resource.data`, which
+    /// production answers from the keys the query constrains alone, whatever the stored
+    /// documents hold (FS-RULES-SHAPES and FS-RULES-SHAPES-TWO, 2026-11-08: `!keys().hasAny(
+    /// ["blocked"])`, `keys().hasOnly(["a"])`, `size() == 1` and `get("blocked", false) ==
+    /// false` allowed with `a == 1` also over documents that store another key;
+    /// `keys().hasOnly(["b"])`, `size() == 0`, `size() > 0` unfiltered and `get("a", 0) == 1`
+    /// unfiltered refused). The receiver must be `resource.data` itself (see
+    /// [`Self::is_query_resource_data_expr`]). `None` for every other call, which keeps its
+    /// ordinary answer.
+    fn closed_query_data_call(
+        &self,
+        object: &Expr,
+        receiver: &RulesValue,
+        name: &str,
+        args: &[RulesValue],
+    ) -> Option<Result<RulesValue, EvalError>> {
+        let RulesValue::PartialMap(fields) = receiver else {
+            return None;
+        };
+        if !matches!(name, "keys" | "size" | "get") || !self.is_query_resource_data_expr(object) {
+            return None;
+        }
+        if args.iter().any(undetermined) {
+            return Some(Err(EvalError::Unknown));
+        }
+        Some(match (name, args) {
+            ("keys", []) => Ok(RulesValue::List(
+                fields.keys().cloned().map(RulesValue::String).collect(),
+            )),
+            ("size", []) => Ok(RulesValue::Int(
+                i64::try_from(fields.len()).unwrap_or(i64::MAX),
+            )),
+            ("get", [RulesValue::String(key), default]) => {
+                Ok(fields.get(key).cloned().unwrap_or_else(|| default.clone()))
+            }
+            _ => Err(EvalError::Unknown),
+        })
+    }
+
+    /// Evaluates a container member or a function argument, which concrete evaluation
+    /// evaluates eagerly: in a query proof, a value undetermined because it read a field the
+    /// query does not constrain (an absent read not absorbed, see `absent_reads`) may be a
+    /// missing-field error for a stored document, so it is undetermined here too.
+    fn eval_operand_that_cannot_fail(&mut self, expr: &Expr) -> Result<RulesValue, EvalError> {
+        let absent_before = self.absent_reads;
+        let value = self.eval(expr)?;
+        if self.query_proof
+            && matches!(value, RulesValue::Unknown)
+            && self.absent_reads > absent_before
+        {
+            return Err(EvalError::Unknown);
+        }
+        Ok(value)
+    }
+
+    /// A member or index read of a partial map: the value of a constrained key, or `Unknown`
+    /// for a key the query does not constrain, which is counted (see `absent_reads`).
+    fn partial_read(&mut self, value: Option<&RulesValue>) -> RulesValue {
+        value.cloned().unwrap_or_else(|| {
+            self.absent_reads += 1;
+            RulesValue::Unknown
+        })
+    }
+
+    /// Whether `expr` is the query's resource in a query proof: the identifier `resource`
+    /// unshadowed, or a binding (a function parameter, a `let`) bound to it. It is recognized
+    /// by where the value comes from rather than by its value (review 2026-11-08 r2), so that
+    /// only `resource.data` itself answers its key set (`Self::closed_query_data_call`), also
+    /// through `f(resource)` (FS-RULES-SHAPES-TWO 2026-11-08 recorded `f(resource)` with
+    /// `f(r) = r != null` allowed).
+    fn is_query_resource_expr(&self, expr: &Expr) -> bool {
+        if !self.query_proof {
+            return false;
+        }
+        let ExprKind::Ident(name) = expr.kind() else {
+            return false;
+        };
+        match self
+            .scope
+            .bindings
+            .iter()
+            .rposition(|binding| binding.name == *name)
+        {
+            Some(index) => self.scope.bindings[index].query_resource,
+            None => name == "resource",
+        }
+    }
+
+    /// Whether `expr` is `resource.data` of a query proof (see
+    /// [`Self::is_query_resource_expr`]).
+    fn is_query_resource_data_expr(&self, expr: &Expr) -> bool {
+        matches!(
+            expr.kind(),
+            ExprKind::Member { object, name } if name == "data" && self.is_query_resource_expr(object)
+        )
     }
 
     fn query_derived_expression(&self, expr: &Expr) -> bool {
@@ -3092,6 +3204,10 @@ impl<'a> Evaluator<'a> {
                 ExprKind::Member { object, name } if name == "size" => {
                     self.query_numeric_stringification_sensitive_with(object)
                 }
+                // A map's keys are field names, never a stringified value.
+                ExprKind::Member { object, name } if name == "keys" => {
+                    self.query_numeric_stringification_sensitive_with(object)
+                }
                 ExprKind::Member { object, name } if name == "join" => {
                     self.query_numeric_expression_source(object)
                         || self.query_numeric_stringification_sensitive_with(object)
@@ -3833,6 +3949,9 @@ impl<'a> Evaluator<'a> {
             }
             BindingState::Resolved { result, cause } => {
                 self.cause.clone_from(&cause);
+                if self.scope.bindings[index].absent_read {
+                    self.absent_reads += 1;
+                }
                 self.scope.bindings[index].state = BindingState::Resolved {
                     result: result.clone(),
                     cause,
@@ -3846,7 +3965,9 @@ impl<'a> Evaluator<'a> {
             BindingState::Lazy(expr) => {
                 let visible_before = self.scope.bindings[index].visible_before;
                 let mut hidden = self.scope.bindings.split_off(visible_before);
+                let absent_before = self.absent_reads;
                 let result = self.eval(expr);
+                hidden[index - visible_before].absent_read = self.absent_reads > absent_before;
                 hidden[index - visible_before].state = BindingState::Resolved {
                     result: result.clone(),
                     cause: self.cause.clone(),
@@ -4240,11 +4361,9 @@ impl<'a> Evaluator<'a> {
                         .cloned()
                         .ok_or_else(|| soft(format!("missing member {name}"))),
                     // A key the query does not constrain may or may not exist.
-                    RulesValue::PartialMap(m) => {
-                        Ok(m.get(name).cloned().unwrap_or(RulesValue::Unknown))
-                    }
+                    RulesValue::PartialMap(m) => Ok(self.partial_read(m.get(name))),
                     RulesValue::PartialMapExcluding { fields, .. } => {
-                        Ok(fields.get(name).cloned().unwrap_or(RulesValue::Unknown))
+                        Ok(self.partial_read(fields.get(name)))
                     }
                     RulesValue::Unknown => Err(EvalError::Unknown),
                     RulesValue::Null => Err(soft(format!("member {name} of null"))),
@@ -4272,10 +4391,10 @@ impl<'a> Evaluator<'a> {
                         .cloned()
                         .ok_or_else(|| soft(format!("missing key {k}"))),
                     (RulesValue::PartialMap(m), RulesValue::String(k)) => {
-                        Ok(m.get(&k).cloned().unwrap_or(RulesValue::Unknown))
+                        Ok(self.partial_read(m.get(&k)))
                     }
                     (RulesValue::PartialMapExcluding { fields, .. }, RulesValue::String(k)) => {
-                        Ok(fields.get(&k).cloned().unwrap_or(RulesValue::Unknown))
+                        Ok(self.partial_read(fields.get(&k)))
                     }
                     (o, i) if undetermined(&o) || undetermined(&i) => Err(EvalError::Unknown),
                     (RulesValue::List(items), RulesValue::Int(i)) => usize::try_from(i)
@@ -4361,16 +4480,26 @@ impl<'a> Evaluator<'a> {
                     self.eval(otherwise)
                 }
             }
-            ExprKind::List(items) => Ok(RulesValue::List(
-                items
+            // In a query proof, a list or map the rule builds from a member that may fail to
+            // evaluate for a stored document (a read of a field the query does not constrain)
+            // is undetermined as a whole, so no operation on it (a type test, a member, a shape
+            // read, a comparison) can be proven (reviews 2026-11-08 r3 and r4). A member that
+            // exists but is undetermined (`resource.id`, a Storage path capture) cannot fail
+            // (coordinator ruling A, 2026-11-09). See `eval_operand_that_cannot_fail`.
+            ExprKind::List(items) => {
+                let values = items
                     .iter()
-                    .map(|i| self.eval(i))
-                    .collect::<Result<_, _>>()?,
-            )),
+                    .map(|i| self.eval_operand_that_cannot_fail(i))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(RulesValue::List(values))
+            }
             ExprKind::Map(entries) => {
                 let mut m = BTreeMap::new();
                 for (k, v) in entries {
-                    m.insert(k.clone(), self.eval(v)?);
+                    // Checked per entry: a later duplicate key would overwrite it (review
+                    // 2026-11-08 r5).
+                    let value = self.eval_operand_that_cannot_fail(v)?;
+                    m.insert(k.clone(), value);
                 }
                 Ok(RulesValue::Map(m))
             }
@@ -4525,9 +4654,16 @@ impl<'a> Evaluator<'a> {
             // ends the request, and the second is fireemu admitting it cannot evaluate the
             // operand, which must never be allowed to read as a permissive answer.
             let mut deferred: Option<EvalError> = None;
+            // A definite answer absorbed every absent read of its operands (see
+            // `absent_reads`): none of them can fail the expression any more (review
+            // 2026-11-08 r7b).
+            let absent_before = self.absent_reads;
             for operand in operands.into_iter().rev() {
                 match self.eval(operand).and_then(|v| truthy(&v)) {
-                    Ok(b) if b == stop_on => return Ok(RulesValue::Bool(stop_on)),
+                    Ok(b) if b == stop_on => {
+                        self.absent_reads = absent_before;
+                        return Ok(RulesValue::Bool(stop_on));
+                    }
                     Ok(_) => {}
                     Err(e @ (EvalError::Budget { .. } | EvalError::Unsupported(_))) => {
                         return Err(e)
@@ -4606,6 +4742,16 @@ impl<'a> Evaluator<'a> {
             (BinaryOp::In, V::String(k), V::PartialMap(m)) => {
                 if m.contains_key(k) {
                     V::Bool(true)
+                } else if self.query_proof {
+                    // Production answers a key the query does not constrain as absent from
+                    // `resource.data` and from a map of it the query constrains in part
+                    // (FS-RULES-DIFFS and FS-RULES-SHAPES 2026-11-08: `!("blocked" in
+                    // resource.data)` allowed also when stored documents hold `blocked`,
+                    // `"owner" in resource.data` refused without a filter, `!("blocked" in
+                    // resource.data.meta)` allowed with a `meta.a` filter). Every partial map
+                    // of a list proof comes from the query resource, and every field a result
+                    // must hold is one of its keys.
+                    V::Bool(false)
                 } else {
                     return Err(EvalError::Unknown);
                 }
@@ -4764,13 +4910,13 @@ impl<'a> Evaluator<'a> {
                     return Err(EvalError::Unknown);
                 }
             }
-            // A list literal is never null, whatever its members are. The members were evaluated
-            // above, so a read that can fail has already ended the evaluation; what is left is a
-            // capture, which cannot fail. Storage only: the Firestore query proofs decide their own.
-            (BinaryOp::Eq | BinaryOp::Ne, V::List(_), V::Null)
-            | (BinaryOp::Eq | BinaryOp::Ne, V::Null, V::List(_))
-                if self.service == RulesService::Storage =>
-            {
+            // A map, list or set is never null, whatever undetermined members it holds: the
+            // query `resource` is a document (FS-RULES-DIFFS 2026-11-08, `resource != null`
+            // allowed). Such a container is always one that exists (`request`, `resource`,
+            // a binding of them): one the rule builds from an undetermined value is
+            // undetermined as a whole (see `ExprKind::List` in `eval_inner`).
+            (BinaryOp::Eq | BinaryOp::Ne, V::Map(_) | V::List(_) | V::Set(_), V::Null)
+            | (BinaryOp::Eq | BinaryOp::Ne, V::Null, V::Map(_) | V::List(_) | V::Set(_)) => {
                 V::Bool(op == BinaryOp::Ne)
             }
             (_, a, b) if undetermined(a) || undetermined(b) => return Err(EvalError::Unknown),
@@ -4864,9 +5010,15 @@ impl<'a> Evaluator<'a> {
         match callee.kind() {
             ExprKind::Ident(name) => {
                 if let Some(f) = self.function(name) {
+                    // Arguments are evaluated before the call: an argument undetermined because
+                    // it read a field the query does not constrain may be a missing-field
+                    // error for a stored document, whatever the function does with it (review
+                    // 2026-11-08 r5). An undetermined value that exists (`resource.id`, a field
+                    // the query orders by) and `resource` itself pass (review r6;
+                    // `f(resource)`, FS-RULES-SHAPES-TWO).
                     let values = args
                         .iter()
-                        .map(|a| self.eval(a))
+                        .map(|argument| self.eval_operand_that_cannot_fail(argument))
                         .collect::<Result<Vec<_>, _>>()?;
                     let query_provenance = args
                         .iter()
@@ -4889,13 +5041,17 @@ impl<'a> Evaluator<'a> {
                         .iter()
                         .map(|argument| self.query_numeric_error_source(argument))
                         .collect();
+                    let resource_provenance = args
+                        .iter()
+                        .map(|argument| self.is_query_resource_expr(argument))
+                        .collect();
                     return self.call_user(
                         f,
                         values,
                         query_provenance,
                         stringification_provenance,
                         numeric_source_provenance,
-                        numeric_error_provenance,
+                        (numeric_error_provenance, resource_provenance),
                     );
                 }
                 match name.as_str() {
@@ -5048,6 +5204,10 @@ impl<'a> Evaluator<'a> {
                     && matches!(name.as_str(), "matches" | "replace")
                 {
                     self.string_regex_call(&receiver, name, &values, compiled_regex)
+                } else if let Some(answer) =
+                    self.closed_query_data_call(object, &receiver, name, &values)
+                {
+                    answer
                 } else {
                     let query_derived_receiver = self.query_derived_expression(object);
                     let query_derived = query_derived_receiver
@@ -5236,7 +5396,7 @@ impl<'a> Evaluator<'a> {
         query_provenance: Vec<QueryFloatZeroProvenance>,
         stringification_provenance: Vec<bool>,
         numeric_source_provenance: Vec<bool>,
-        numeric_error_provenance: Vec<bool>,
+        (numeric_error_provenance, resource_provenance): (Vec<bool>, Vec<bool>),
     ) -> Result<RulesValue, EvalError> {
         if values.len() != f.params.len() {
             return Err(soft(format!(
@@ -5285,6 +5445,14 @@ impl<'a> Evaluator<'a> {
                 stringification_sensitive,
             ));
         }
+        // The parameters are the last bindings pushed.
+        let parameters = self.scope.bindings.len() - f.params.len();
+        for (binding, query_resource) in self.scope.bindings[parameters..]
+            .iter_mut()
+            .zip(resource_provenance)
+        {
+            binding.query_resource = query_resource;
+        }
         let result = {
             for l in &f.lets {
                 let visible_before = self.scope.bindings.len();
@@ -5299,6 +5467,7 @@ impl<'a> Evaluator<'a> {
                     self.query_numeric_stringification_sensitive(&l.value);
                 let query_numeric_source = self.query_numeric_expression_source(&l.value);
                 let query_numeric_error_source = self.query_numeric_error_source(&l.value);
+                let query_resource = self.is_query_resource_expr(&l.value);
                 self.scope.bindings.push(Binding {
                     name: l.name.clone(),
                     visible_before,
@@ -5307,6 +5476,8 @@ impl<'a> Evaluator<'a> {
                     query_numeric_error_source,
                     query_float_zero_ambiguous,
                     query_numeric_stringification_sensitive,
+                    query_resource,
+                    absent_read: false,
                     state: BindingState::Lazy(&l.value),
                 });
             }
@@ -5653,7 +5824,9 @@ fn method_call(
     //
     // `keys()` and `size()` of a map are the exception: both read the key set, which an
     // undetermined *value* leaves fully known. `request.keys()` depends on it, because
-    // `request.auth` is undetermined while a query is being proven.
+    // `request.path` is undetermined while a query is being proven. Such a map always exists
+    // (`request`, `resource`): one the rule builds from an undetermined value is undetermined
+    // as a whole (see `ExprKind::List` in `eval_inner`).
     let shape_only = matches!(receiver, V::Map(_)) && matches!(name, "keys" | "size");
     if (!shape_only
         && matches!(receiver, V::List(_) | V::Set(_) | V::Map(_))
@@ -7168,6 +7341,321 @@ service cloud.firestore {
     }
 
     #[test]
+    fn canonical_function_calls_skip_global_scope_agreement_walks() {
+        let observed: Vec<_> = [0, 100, 1_000]
+            .into_iter()
+            .map(|unrelated| {
+                let tree = early_allow_rules(unrelated, "top()");
+                scope_setup_work(&tree, 3)
+            })
+            .collect();
+        assert_eq!(observed, vec![(0, 0, 0); 3]);
+    }
+
+    fn mutation_scope_items<'a>(
+        items: &'a mut Vec<crate::ast::Item>,
+        path: &[usize],
+    ) -> &'a mut Vec<crate::ast::Item> {
+        let Some((&position, rest)) = path.split_first() else {
+            return items;
+        };
+        let crate::ast::Item::Match(block) = &mut items[position] else {
+            panic!("fixture scope path");
+        };
+        mutation_scope_items(&mut block.items, rest)
+    }
+
+    fn mutation_function<'a>(
+        tree: &'a mut crate::ast::Ruleset,
+        path: &[usize],
+        position: usize,
+    ) -> &'a mut crate::ast::FunctionDecl {
+        let crate::ast::Item::Function(function) =
+            &mut mutation_scope_items(&mut tree.services[0].items, path)[position]
+        else {
+            panic!("fixture declaration");
+        };
+        function
+    }
+
+    fn mutation_body(expression: &str) -> crate::ast::Expr {
+        let tree = parse_ruleset(&format!(
+            "service cloud.firestore {{ function expression() {{ return {expression}; }} }}"
+        ))
+        .unwrap();
+        let crate::ast::Item::Function(function) = &tree.services[0].items[0] else {
+            unreachable!()
+        };
+        function.body.clone()
+    }
+
+    fn mutation_helper(tree: &mut crate::ast::Ruleset, body: &str) -> crate::ast::Item {
+        let mut helper = mutation_function(tree, &[0, 0], 1).clone();
+        helper.body = mutation_body(body);
+        crate::ast::Item::Function(helper)
+    }
+
+    fn mutate_scope_structure(tree: &mut crate::ast::Ruleset, mutation: u8) {
+        let yes = mutation_helper(tree, "true");
+        let no = mutation_helper(tree, "false");
+        match mutation {
+            1..=3 => {
+                mutation_scope_items(&mut tree.services[0].items, &[0, 0]).remove(1);
+                let parent = mutation_scope_items(&mut tree.services[0].items, &[0]);
+                match mutation {
+                    1 => parent.push(yes),
+                    2 => {
+                        parent.remove(1);
+                    }
+                    _ => {
+                        parent.push(yes);
+                        let last = parent.len() - 1;
+                        parent.swap(1, last);
+                    }
+                }
+            }
+            4 => mutation_scope_items(&mut tree.services[0].items, &[0, 0]).push(no),
+            5 => {
+                mutation_scope_items(&mut tree.services[0].items, &[0, 0]).remove(1);
+            }
+            6 => {
+                let own = mutation_scope_items(&mut tree.services[0].items, &[0, 0]);
+                own.push(no);
+                let last = own.len() - 1;
+                own.swap(1, last);
+            }
+            7 => mutation_scope_items(&mut tree.services[0].items, &[0, 2]).push(yes),
+            8 => mutation_scope_items(&mut tree.services[0].items, &[0]).swap(0, 2),
+            9 => mutation_scope_items(&mut tree.services[0].items, &[0]).insert(0, no),
+            10 => {
+                let target = mutation_scope_items(&mut tree.services[0].items, &[0, 0]).remove(0);
+                mutation_scope_items(&mut tree.services[0].items, &[0]).push(target);
+            }
+            _ => {}
+        }
+    }
+
+    fn mutate_scope_values(tree: &mut crate::ast::Ruleset, mutation: u8) {
+        match mutation {
+            11 | 12 | 18 => {
+                let crate::ast::Item::Match(notes) =
+                    &mut mutation_scope_items(&mut tree.services[0].items, &[0])[0]
+                else {
+                    unreachable!()
+                };
+                match mutation {
+                    11 => notes.path[0] = PathSegment::Literal("renamed".into()),
+                    12 => {
+                        let PathSegment::Capture { name, .. } = &mut notes.path[1] else {
+                            unreachable!()
+                        };
+                        *name = "renamed".into();
+                    }
+                    _ => {
+                        let PathSegment::Capture { name, span } = notes.path[1].clone() else {
+                            unreachable!()
+                        };
+                        notes.path[1] = PathSegment::RecursiveWildcard { name, span };
+                    }
+                }
+                if mutation == 12 {
+                    mutation_function(tree, &[0, 0], 1).body = mutation_body("renamed == 'yes'");
+                }
+            }
+            14 => {
+                let crate::ast::Item::Function(mut added) = mutation_helper(tree, "true") else {
+                    unreachable!()
+                };
+                added.name = "added".into();
+                mutation_function(tree, &[0, 0], 0).body = mutation_body("helper() && added()");
+                mutation_scope_items(&mut tree.services[0].items, &[0, 0])
+                    .push(crate::ast::Item::Function(added));
+            }
+            15 => {
+                let offset = mutation_function(tree, &[0, 0], 0).span.offset;
+                mutation_function(tree, &[0, 0], 1).span.offset = offset;
+            }
+            16 | 17 => {
+                mutation_function(tree, &[0, 0], 1).params.push(
+                    if mutation == 16 {
+                        "parameter"
+                    } else {
+                        "renamed"
+                    }
+                    .into(),
+                );
+                mutation_function(tree, &[0, 0], 1).body = mutation_body("parameter == 'yes'");
+                mutation_function(tree, &[0, 0], 0).body = mutation_body("helper(id)");
+            }
+            _ => {}
+        }
+    }
+
+    fn scope_mutation_tree(service: RulesService) -> crate::ast::Ruleset {
+        parse_ruleset(&format!("rules_version = '2'; service {} {{ match /databases/{{db}}/documents {{ match /notes/{{id}} {{ function target() {{ return helper(); }} function helper() {{ return id == 'yes'; }} allow get: if target(); match /child/{{tail}} {{ function helper() {{ return false; }} allow get: if target(); }} }} function helper() {{ return false; }} match /siblings/{{id}} {{ function helper() {{ return true; }} allow get: if helper(); }} }} function helper() {{ return true; }} }}", service.name())).unwrap()
+    }
+
+    fn scope_reference_report(
+        tree: &crate::ast::Ruleset,
+        context: &RequestContext,
+    ) -> super::EvaluationReport {
+        crate::scope::LEGACY_EVALUATION.with(|enabled| enabled.set(true));
+        let legacy = super::evaluate_request_traced(tree, context, None);
+        crate::scope::LEGACY_EVALUATION.with(|enabled| enabled.set(false));
+        crate::scope::EAGER_SCOPE_SETUP.with(|enabled| enabled.set(true));
+        let eager = super::evaluate_request_traced(tree, context, None);
+        crate::scope::EAGER_SCOPE_SETUP.with(|enabled| enabled.set(false));
+        let actual = super::evaluate_request_traced(tree, context, None);
+        assert_eq!(format!("{actual:?}"), format!("{legacy:?}"), "{context:?}");
+        assert_eq!(format!("{actual:?}"), format!("{eager:?}"), "{context:?}");
+        actual.0
+    }
+
+    fn assert_mutated_scope_report(
+        tree: &crate::ast::Ruleset,
+        context: &RequestContext,
+        mutation: u8,
+        yes: bool,
+    ) {
+        let actual = scope_reference_report(tree, context);
+        if !context.abstract_path {
+            let allow = match mutation {
+                1 | 2 => true,
+                3 | 4 | 5 | 10 | 17 | 18 => false,
+                _ => yes,
+            };
+            assert_eq!(
+                matches!(actual.decision, Decision::Allow),
+                allow,
+                "mutation {mutation}, {actual:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn public_scope_mutations_preserve_lexical_ancestry_and_reports() {
+        // Pairwise rows: mutation, Storage service, abstract query, captured value is yes.
+        let cases: &[(u8, bool, bool, bool)] = &[
+            (0, false, false, true),
+            (1, false, false, true),
+            (2, false, false, true),
+            (3, false, false, true),
+            (4, false, false, true),
+            (5, false, false, true),
+            (6, false, false, true),
+            (7, false, false, true),
+            (8, false, false, true),
+            (9, false, false, true),
+            (10, false, false, true),
+            (11, false, false, true),
+            (12, false, false, true),
+            (13, false, false, true),
+            (14, false, false, true),
+            (15, false, false, true),
+            (16, false, false, true),
+            (17, false, false, true),
+            (18, false, false, true),
+            (0, true, true, false),
+            (14, true, false, true),
+            (15, false, true, false),
+            (5, true, true, false),
+            (12, true, false, false),
+            (8, true, true, true),
+            (9, true, true, false),
+            (8, false, true, false),
+            (18, true, true, false),
+            (1, true, true, false),
+            (16, true, true, false),
+            (12, true, true, false),
+            (11, true, true, false),
+            (10, true, true, false),
+            (17, true, true, false),
+            (15, true, false, false),
+            (14, true, true, false),
+            (7, true, true, false),
+            (3, true, true, false),
+            (4, true, true, false),
+            (6, true, true, false),
+            (2, true, true, false),
+            (13, true, true, false),
+        ];
+        for &(mutation, storage, query, selected_yes) in cases {
+            let service = if storage {
+                RulesService::Storage
+            } else {
+                RulesService::Firestore
+            };
+            let mut tree = scope_mutation_tree(service);
+            let target_offset = mutation_function(&mut tree, &[0, 0], 0).span.offset;
+            mutate_scope_structure(&mut tree, mutation);
+            mutate_scope_values(&mut tree, mutation);
+            if !matches!(mutation, 8..=10) {
+                assert_eq!(
+                    mutation_function(&mut tree, &[0, 0], 0).span.offset,
+                    target_offset,
+                    "target path and offset remain unchanged"
+                );
+            }
+            for yes in [selected_yes, !selected_yes] {
+                let context = RequestContext {
+                    service,
+                    method: Method::Get,
+                    path: format!(
+                        "/databases/(default)/documents/{}/{}{}",
+                        if mutation == 11 { "renamed" } else { "notes" },
+                        if yes { "yes" } else { "no" },
+                        if mutation == 13 { "/child/tail" } else { "" }
+                    ),
+                    auth: None,
+                    resource: None,
+                    request_resource: None,
+                    time_unix_nanos: 0,
+                    abstract_path: query,
+                    request_query: None,
+                };
+                assert_mutated_scope_report(&tree, &context, mutation, yes);
+            }
+        }
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config::with_cases(128))]
+        #[test]
+        fn generated_live_ancestor_names_and_order_match_reference(
+            levels in proptest::collection::vec(proptest::collection::vec((proptest::bool::ANY, proptest::bool::ANY), 0..6), 3),
+            storage in proptest::bool::ANY,
+            query in proptest::bool::ANY,
+        ) {
+            let service = if storage { RulesService::Storage } else { RulesService::Firestore };
+            let mut tree = scope_mutation_tree(service);
+            let template = mutation_function(&mut tree, &[0, 0], 1).clone();
+            let target_offset = mutation_function(&mut tree, &[0, 0], 0).span.offset;
+            for (path, declarations) in [vec![], vec![0], vec![0, 0]].iter().zip(&levels) {
+                let items = mutation_scope_items(&mut tree.services[0].items, path);
+                items.retain(|item| !matches!(item, crate::ast::Item::Function(function) if function.name == "helper"));
+                for &(helper, allowed) in declarations {
+                    let mut declaration = template.clone();
+                    declaration.name = if helper { "helper" } else { "other" }.into();
+                    declaration.body = crate::ast::Expr::new(crate::ast::ExprKind::Literal(crate::ast::Literal::Bool(allowed)), declaration.body.span, declaration.body.end);
+                    items.push(crate::ast::Item::Function(declaration));
+                }
+            }
+            proptest::prop_assert_eq!(mutation_function(&mut tree, &[0, 0], 0).span.offset, target_offset);
+            let request = RequestContext {
+                service, method: Method::Get,
+                path: "/databases/(default)/documents/notes/yes".into(),
+                auth: None, resource: None, request_resource: None, time_unix_nanos: 0,
+                abstract_path: query, request_query: None,
+            };
+            let report = scope_reference_report(&tree, &request);
+            if !query {
+                let allowed = levels.iter().rev().find_map(|declarations| declarations.iter().rev().find_map(|&(helper, allowed)| helper.then_some(allowed))).unwrap_or(false);
+                proptest::prop_assert_eq!(matches!(report.decision, Decision::Allow), allowed);
+            }
+        }
+    }
+
+    #[test]
     fn unrelated_blocks_add_no_per_request_scope_setup_to_an_early_allow() {
         for unrelated in [0, 100, 1_000] {
             let literal = early_allow_rules(unrelated, "true");
@@ -7176,12 +7664,11 @@ service cloud.firestore {
                 (0, 0, 0),
                 "literal allow, {unrelated} unrelated blocks"
             );
-            // A call checks the compiled plan against the AST once per request, never rebuilds
-            // it, and the allowing block declares nothing to capture.
+            // A call validates its live ancestry without a global agreement walk or rebuild; the allowing block declares nothing to capture.
             let call = early_allow_rules(unrelated, "top()");
             assert_eq!(
                 scope_setup_work(&call, 3),
-                (3, 0, 0),
+                (0, 0, 0),
                 "function allow, {unrelated} unrelated blocks"
             );
         }
@@ -7314,6 +7801,64 @@ service cloud.firestore {
             );
         }
         assert_eq!(crate::scope::PLAN_BUILDS.with(core::cell::Cell::get), 0);
+    }
+
+    #[test]
+    #[ignore = "bounded release paired measurement of unused declaration and capture setup"]
+    fn measure_unused_declaration_capture_setup() {
+        use std::hint::black_box;
+
+        for depth in [1, 4] {
+            for value_length in [1, 256] {
+                let mut base = String::from("rules_version = '2'; service cloud.firestore {");
+                for level in 0..depth {
+                    let _ = write!(base, " match /{{w{level}}} {{");
+                }
+                base.push_str(" allow get: if true;");
+                let closing = "}".repeat(depth + 1);
+                let absent = parse_ruleset(&format!("{base}{closing}")).unwrap();
+                let present = parse_ruleset(&format!(
+                    "{base} function unused() {{ return w0; }}{closing}"
+                ))
+                .unwrap();
+                let context = RequestContext {
+                    service: RulesService::Firestore,
+                    method: Method::Get,
+                    path: format!("/{}", vec!["x".repeat(value_length); depth].join("/")),
+                    auth: None,
+                    resource: None,
+                    request_resource: None,
+                    time_unix_nanos: 0,
+                    abstract_path: false,
+                    request_query: None,
+                };
+                super::CAPTURE_TABLES.with(|count| count.set(0));
+                let expected = super::evaluate_request_traced(&absent, &context, None);
+                assert_eq!(expected.0.decision, Decision::Allow);
+                assert_eq!(super::CAPTURE_TABLES.with(core::cell::Cell::get), 0);
+                let actual = super::evaluate_request_traced(&present, &context, None);
+                assert_eq!(super::CAPTURE_TABLES.with(core::cell::Cell::get), 1);
+                assert_eq!(format!("{actual:?}"), format!("{expected:?}"));
+                let iterations = crate::scope::measurement_iterations(|| {
+                    black_box(evaluate_request(black_box(&present), black_box(&context)));
+                });
+                for sample in 0..5 {
+                    let order = if sample % 2 == 0 {
+                        [(&absent, "absent"), (&present, "present")]
+                    } else {
+                        [(&present, "present"), (&absent, "absent")]
+                    };
+                    for (tree, declaration) in order {
+                        let label = format!(
+                            "capture depth={depth} bytes={value_length} declaration={declaration}"
+                        );
+                        crate::scope::measurement_sample(&label, sample, iterations, || {
+                            black_box(evaluate_request(black_box(tree), black_box(&context)));
+                        });
+                    }
+                }
+            }
+        }
     }
 
     #[test]

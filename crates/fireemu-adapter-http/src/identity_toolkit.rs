@@ -1272,37 +1272,13 @@ fn str_field<'a>(body: &'a Value, key: &str) -> Option<&'a str> {
     body.get(key).and_then(Value::as_str)
 }
 
-/// Whether a Secure Token refresh body is read in the Android SDK's camelCase spelling
-/// (`grantType`, `refreshToken`): only when it carries neither `snake_case` field. The server
-/// drops the camelCase keys of a form body, so a form and a body mixing the spellings are read
-/// as `snake_case` only, as they were before the SDK's JSON shape was added.
-fn refresh_body_is_camel_case(body: &Value) -> bool {
-    body.get("grant_type").is_none() && body.get("refresh_token").is_none()
-}
-
-/// The refresh token a request carries, in the one spelling its body is read in: the store
-/// selection, the tenant checks and the exchange all call this, so they agree.
+/// Store selection, tenant checks and exchange read the same refresh token.
 fn request_refresh_token(body: &Value) -> Option<&str> {
-    str_field(
-        body,
-        if refresh_body_is_camel_case(body) {
-            "refreshToken"
-        } else {
-            "refresh_token"
-        },
-    )
+    str_field(body, "refresh_token").or_else(|| str_field(body, "refreshToken"))
 }
 
-/// The grant type a refresh request carries, read in the same spelling as its token.
 fn request_grant_type(body: &Value) -> Option<&str> {
-    str_field(
-        body,
-        if refresh_body_is_camel_case(body) {
-            "grantType"
-        } else {
-            "grant_type"
-        },
-    )
+    str_field(body, "grant_type").or_else(|| str_field(body, "grantType"))
 }
 
 fn issue_tokens(

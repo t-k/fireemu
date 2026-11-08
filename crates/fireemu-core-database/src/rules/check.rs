@@ -42,7 +42,9 @@ enum Tok {
     Regex,
     /// The `query` object.
     Query,
-    /// An ordering (`query.orderByChild`).
+    /// The `http` object, whose one member is `encodeURL`.
+    Http,
+    /// An ordering (`query.orderByChild`, `OrderByKey`).
     OrderBy,
     /// A method not yet called (`data.child`).
     Method(&'static str),
@@ -120,7 +122,7 @@ struct Checker<'a> {
     wildcards: &'a BTreeSet<String>,
 }
 
-const SNAPSHOT_METHODS: [&str; 10] = [
+pub(super) const SNAPSHOT_METHODS: [&str; 10] = [
     "val",
     "child",
     "parent",
@@ -133,7 +135,7 @@ const SNAPSHOT_METHODS: [&str; 10] = [
     "isBoolean",
 ];
 
-const STRING_METHODS: [&str; 7] = [
+pub(super) const STRING_METHODS: [&str; 7] = [
     "contains",
     "beginsWith",
     "endsWith",
@@ -277,6 +279,10 @@ impl Checker<'_> {
             )),
             "root" | "data" | "newData" => Ok(Types::one(Tok::Data)),
             "query" => Ok(Types::one(Tok::Query)),
+            "http" => Ok(Types::one(Tok::Http)),
+            // The orderings of a query by key, by value and by priority, as production and the
+            // official emulator name them (recorded RTDB-RULES-SYNTAX-20261108-01).
+            "OrderByKey" | "OrderByValue" | "OrderByPriority" => Ok(Types::one(Tok::OrderBy)),
             _ if self.wildcards.contains(name) => Ok(Types::one(Tok::Str)),
             _ => Err(ExprError::new(at, format!("Unknown variable '{name}'."))),
         }
@@ -309,14 +315,20 @@ impl Checker<'_> {
                 .ok_or_else(|| no_such(at, name));
         }
         if object.has(Tok::Query) {
-            // As the official emulator types them; `endBefore` and `isOrderByChild` are not
-            // served here, so a rule naming them is refused. `orderBy` is typed as `orderByChild`
-            // is: an ordering.
+            // As production and the official emulator type them. `orderBy` is typed as
+            // `orderByChild` is: an ordering.
             return match name {
                 "orderByChild" | "orderBy" => Ok(Types::one(Tok::OrderBy)),
                 "orderByKey" | "orderByValue" | "orderByPriority" => Ok(Types::one(Tok::Bool)),
                 "limitToFirst" | "limitToLast" => Ok(Types::one(Tok::Num)),
-                "startAt" | "endAt" | "equalTo" => Ok(Types::of(&DATA_VALUE)),
+                "startAt" | "endAt" | "endBefore" | "equalTo" => Ok(Types::of(&DATA_VALUE)),
+                "isOrderByChild" => Ok(Types::one(Tok::Method("isOrderByChild"))),
+                _ => Err(no_such(at, name)),
+            };
+        }
+        if object.has(Tok::Http) {
+            return match name {
+                "encodeURL" => Ok(Types::one(Tok::Method("encodeURL"))),
                 _ => Err(no_such(at, name)),
             };
         }
@@ -329,16 +341,12 @@ impl Checker<'_> {
         callee: &mut Expr,
         arguments: &mut [Expr],
     ) -> Result<Types, ExprError> {
-        if !matches!(callee.kind, ExprKind::Member(..)) {
-            self.ty(callee)?;
-            return Err(ExprError::new(
-                at,
-                "Type error: function call on a non-function.",
-            ));
-        }
+        // Any callee whose type holds a method may be called, a ternary or a parenthesised
+        // member included; the call takes the first method in the type, as there.
+        let member = matches!(callee.kind, ExprKind::Member(..));
         let Some(method) = self.ty(callee)?.method() else {
             return Err(ExprError::new(
-                at,
+                if member { at } else { callee.at },
                 "Type error: Function call on target that is not a function.",
             ));
         };
@@ -525,7 +533,7 @@ impl CallSite<'_, '_> {
             "exists" | "isNumber" | "isString" | "isBoolean" => {
                 self.arity(0).map(|()| Types::one(Tok::Bool))
             }
-            "contains" | "beginsWith" | "endsWith" => {
+            "contains" | "beginsWith" | "endsWith" | "isOrderByChild" => {
                 self.arity(1)?;
                 self.string_argument(0, &expects_string)?;
                 Ok(Types::one(Tok::Bool))
@@ -537,6 +545,16 @@ impl CallSite<'_, '_> {
                 Ok(Types::one(Tok::Str))
             }
             "toLowerCase" | "toUpperCase" => self.arity(0).map(|()| Types::one(Tok::Str)),
+            "encodeURL" => {
+                if self.arguments.len() != 1 {
+                    return Err(ExprError::new(
+                        self.at,
+                        "encodeURL() expects 1 argument (the string to escape).",
+                    ));
+                }
+                self.string_argument(0, "Argument 1 of encodeURL() must be a string.")?;
+                Ok(Types::one(Tok::Str))
+            }
             _ => {
                 if self.arguments.len() != 1 {
                     return Err(ExprError::new(

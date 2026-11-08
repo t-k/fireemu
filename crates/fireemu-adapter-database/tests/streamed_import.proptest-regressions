@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc c60725a14e6ef0c189e761a6935d5f42c61279f6ff8e9b20d6b76185c0dff96d # shrinks to text = "{\"1\":{\"\":null},\"1\":null}", limits = Limits { max_depth: 32, max_path_bytes: 768, max_string_bytes: 10485760 }, lone = None

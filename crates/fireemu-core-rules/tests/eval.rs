@@ -1350,6 +1350,7 @@ fn allows(rules: &str, ctx: &RequestContext) -> bool {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn undetermined_values_never_prove_a_condition() {
     let rules = |cond: &str| {
         format!("rules_version = '2';\nservice cloud.firestore {{ match /databases/{{d}}/documents {{ match /notes/{{id}} {{ allow list: if {cond}; }} }} }}")
@@ -1364,10 +1365,11 @@ fn undetermined_values_never_prove_a_condition() {
     // cannot be proven.
     for cond in [
         "resource.data.secret == null",
-        "!('blocked' in resource.data)",
-        "resource.data.keys().hasOnly(['owner'])",
-        "resource.data.size() == 1",
-        "resource.data.get('flag', false) == false",
+        "'blocked' in resource.data",
+        "resource.data.keys().hasOnly(['other'])",
+        "resource.data.size() == 2",
+        "resource.data.get('flag', true) == false",
+        "resource.data == {'owner': 'u1'}",
         "id != 'secret'",
         "resource.id != 'secret'",
         "request.path[3] == 'notes'",
@@ -1376,6 +1378,136 @@ fn undetermined_values_never_prove_a_condition() {
     ] {
         assert!(!allows(&rules(cond), &known), "{cond} must not be provable");
     }
+    // A key the query does not constrain is not in `resource.data` (FS-RULES-DIFFS production
+    // recording 2026-11-08, `fs-rules-v1/diffs/queries#blocked-nofilter`); a constrained one is.
+    assert!(allows(&rules("!('blocked' in resource.data)"), &known));
+    assert!(allows(&rules("'owner' in resource.data"), &known));
+    // Its key set is exactly the constrained keys, whatever the stored documents hold
+    // (FS-RULES-SHAPES and FS-RULES-SHAPES-TWO 2026-11-08: get-stored, keys-stored,
+    // only-extra and size-extra allowed with another key stored; only-b-deny and
+    // size-zero-deny refused).
+    assert!(allows(
+        &rules("!resource.data.keys().hasAny(['flag'])"),
+        &known
+    ));
+    assert!(allows(
+        &rules("resource.data.keys().hasAll(['owner'])"),
+        &known
+    ));
+    assert!(allows(&rules("resource.data.size() > 0"), &known));
+    assert!(allows(
+        &rules("resource.data.get('flag', false) == false"),
+        &known
+    ));
+    for cond in [
+        "resource.data.keys().hasOnly(['owner'])",
+        "resource.data.size() == 1",
+        "resource.data.size() < 2",
+        "resource.data.keys().size() == 1",
+        "!('flag' in resource.data.keys())",
+        "resource.data.keys() == ['owner']",
+    ] {
+        assert!(allows(&rules(cond), &known), "{cond} must hold");
+    }
+    for cond in [
+        "resource.data.keys().hasOnly(['flag'])",
+        "resource.data.size() == 0",
+        "resource.data.size() == 2",
+    ] {
+        assert!(!allows(&rules(cond), &known), "{cond} must not hold");
+    }
+    // `resource` passed to a function or bound by `let` is still the query's resource
+    // (FS-RULES-SHAPES-TWO `fn-resource` allowed, `fn-null-deny` refused); a map literal
+    // passed the same way is not.
+    let through = |body: &str, call: &str| {
+        format!("rules_version = '2';\nservice cloud.firestore {{ match /databases/{{d}}/documents {{ function f(r) {{ {body} }} match /notes/{{id}} {{ allow list: if {call}; }} }} }}")
+    };
+    assert!(allows(&through("return r != null;", "f(resource)"), &known));
+    assert!(!allows(
+        &through("return r == null;", "f(resource)"),
+        &known
+    ));
+    assert!(allows(
+        &through("let s = r; return s != null;", "f(resource)"),
+        &known
+    ));
+    assert!(!allows(
+        &through(
+            "return r != null;",
+            "f({'data': resource.data, 'id': resource.data.secret})"
+        ),
+        &known
+    ));
+    assert!(!allows(
+        &through(
+            "let resource = {'k': r}; return resource != null;",
+            "f(resource.data.secret)"
+        ),
+        &known
+    ));
+    // The query resource is recognized by where it came from, not by its value: a map
+    // literal equal to it, built from failing reads, is not provably non-null (review
+    // 2026-11-08 r2).
+    assert!(!allows(
+        &rules("{'data': resource.data, 'id': resource.data.secret, '__name__': resource.data.secret} != null"),
+        &known
+    ));
+    assert!(!allows(
+        &rules("{'data': resource.data, 'id': resource.id, '__name__': resource.__name__} != null"),
+        &known
+    ));
+    assert!(allows(&rules("resource != null"), &known));
+    assert!(allows(&rules("null != resource"), &known));
+    // A constrained key answers `hasAny` positively, beside unconstrained ones.
+    assert!(allows(
+        &rules("resource.data.keys().hasAny(['flag', 'owner'])"),
+        &known
+    ));
+    // Only `keys()` of `resource.data` itself is answered that way: not its `values()`, and
+    // not the keys of a map literal.
+    assert!(!allows(
+        &rules("!resource.data.values().hasAny(['zz'])"),
+        &known
+    ));
+    assert!(!allows(
+        &rules("!{'flag': 1}.keys().hasAny(['flag'])"),
+        &known
+    ));
+    assert!(!allows(
+        &rules("!resource.data.size().hasAny(['zz'])"),
+        &known
+    ));
+    // Only `resource.data` itself answers its key set: a look-alike map does not.
+    assert!(!allows(
+        &rules("!{'owner': 'u1'}.merge(resource.data).keys().hasAny(['flag'])"),
+        &known
+    ));
+    // A nested map the query constrains in part holds its constrained keys only for `in`
+    // (`nested-neg-filtered` allowed); its other key-set reads stay undetermined.
+    let nested = abstract_ctx(
+        "/databases/(default)/documents/notes/fireemu-placeholder",
+        vec![(
+            "meta",
+            RulesValue::PartialMap(BTreeMap::from([(
+                "owner".to_owned(),
+                RulesValue::String("u1".into()),
+            )])),
+        )],
+    );
+    assert!(allows(&rules("'owner' in resource.data.meta"), &nested));
+    assert!(allows(
+        &rules("!('blocked' in resource.data.meta)"),
+        &nested
+    ));
+    assert!(!allows(&rules("resource.data.meta.size() == 1"), &nested));
+    assert!(!allows(
+        &rules("resource.data.meta.keys().hasOnly(['owner'])"),
+        &nested
+    ));
+    assert!(!allows(
+        &rules("resource.data.meta.get('flag', false) == false"),
+        &nested
+    ));
     // Left to right: a deciding operand ends the evaluation, an undetermined one (which may
     // be a runtime error for some document) makes the expression undetermined.
     assert!(allows(
@@ -1400,8 +1532,16 @@ fn undetermined_values_never_prove_a_condition() {
         &rules("resource.data.secret == 1 ? true : true"),
         &known
     ));
-    // Containers holding an undetermined member are undetermined too.
+    // Containers holding an undetermined member are undetermined too, also against null:
+    // building one from the stored document may fail on the missing field.
     assert!(!allows(&rules("[resource.data.secret] != [null]"), &known));
+    assert!(!allows(&rules("[resource.data.secret] != null"), &known));
+    assert!(!allows(
+        &rules("{'k': resource.data.secret} != null"),
+        &known
+    ));
+    assert!(allows(&rules("[resource.data.owner] != null"), &known));
+    assert!(allows(&rules("resource != null"), &known));
     assert!(!allows(
         &rules("{'k': resource.data.secret} == {'k': 1}"),
         &known
@@ -1427,6 +1567,223 @@ fn undetermined_values_never_prove_a_condition() {
     ] {
         assert!(!allows(&rules(cond), &tags), "{cond} must not be provable");
     }
+}
+
+/// A list or map built from a value the query leaves undetermined (an unconstrained field may
+/// be missing from a stored document, so building it can fail) gives no definite answer to
+/// any shape operation (review 2026-11-08 r3). Only `request` and `resource` themselves, which
+/// always exist, answer `keys()` and `size()` with undetermined values inside.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn shape_operations_on_built_containers_keep_failing_reads_undetermined() {
+    let rules = |cond: &str| {
+        format!("rules_version = '2';\nservice cloud.firestore {{ match /databases/{{d}}/documents {{ match /notes/{{id}} {{ allow list: if {cond}; }} }} }}")
+    };
+    let query = abstract_ctx(
+        "/databases/(default)/documents/notes/fireemu-placeholder",
+        vec![
+            ("a", RulesValue::Int(1)),
+            (
+                "role",
+                RulesValue::OneOf(vec![RulesValue::Int(1), RulesValue::Int(2)]),
+            ),
+        ],
+    );
+    for cond in [
+        "{'k': resource.data.secret}.size() == 1",
+        "{'k': resource.data.secret}.keys().hasOnly(['k'])",
+        "{'k': resource.data.secret}.keys().hasAll(['k'])",
+        "{'k': resource.data.secret}.keys().hasAny(['k'])",
+        "{'k': resource.data.secret}.keys().size() == 1",
+        "'k' in {'k': resource.data.secret}.keys()",
+        "{'k': resource.data.secret}.values().size() == 1",
+        "{'k': resource.data.secret}.get('k', 0) != 7",
+        "'k' in {'k': resource.data.secret}",
+        "[resource.data.secret].size() == 1",
+        "1 in [resource.data.secret, 1]",
+        "[resource.data.secret, 1].hasAll([1])",
+    ] {
+        assert!(!allows(&rules(cond), &query), "{cond} must not be provable");
+    }
+    // Every other operation on such a container is undetermined too: a type test, a member
+    // or index projection (of another, determined member), equality, a ternary over it, or
+    // passing it to a function (review 2026-11-08 r4).
+    for cond in [
+        "{'k': resource.data.secret} is map",
+        "[resource.data.secret] is list",
+        "!({'k': resource.data.secret} is string)",
+        "{'bad': resource.data.secret, 'ok': true}.ok",
+        "{'bad': resource.data.secret, 'ok': true}['ok']",
+        "[resource.data.secret, true][1]",
+        "[resource.data.secret, 1][0:1] == [resource.data.secret]",
+        "{'k': resource.data.secret} != {'k': 1}",
+        "[resource.data.secret] != [1]",
+    ] {
+        assert!(!allows(&rules(cond), &query), "{cond} must not be provable");
+    }
+    // A duplicate key does not hide an earlier undetermined entry (review 2026-11-08 r5).
+    for cond in [
+        "{'k': resource.data.secret, 'k': true}.k",
+        "{'k': resource.data.secret, 'k': true} is map",
+        "{'k': resource.data.secret, 'k': true} != null",
+        "{'k': resource.data.secret, 'k': true}.size() == 1",
+        "{'k': resource.data.secret, 'k': true}.keys().hasOnly(['k'])",
+    ] {
+        assert!(!allows(&rules(cond), &query), "{cond} must not be provable");
+    }
+    // A function argument read from an unconstrained field may fail before the function runs,
+    // whatever the function returns (review 2026-11-08 r5); `f(resource)` stays proven.
+    let with_functions = |call: &str| {
+        format!("rules_version = '2';\nservice cloud.firestore {{ match /databases/{{d}}/documents {{ function ignore(x) {{ return true; }} function helper(x) {{ return {{'ok': true}}; }} function f(r) {{ return r != null; }} match /notes/{{id}} {{ allow list: if {call}; }} }} }}")
+    };
+    for call in [
+        "ignore(resource.data.secret)",
+        "helper(resource.data.secret).ok",
+        "ignore(resource.data.a) && ignore(resource.data.secret)",
+    ] {
+        assert!(
+            !allows(&with_functions(call), &query),
+            "{call} must not be provable"
+        );
+    }
+    for call in [
+        "ignore(resource.data.a)",
+        "helper(resource.data.role).ok",
+        "f(resource)",
+    ] {
+        assert!(allows(&with_functions(call), &query), "{call} must hold");
+    }
+    // A value that exists but is undetermined (`resource.id`, a field the query only orders
+    // by) is no failing read: the helper's own answer decides (review 2026-11-08 r6). A
+    // missing-field read reached through a `let` is still one, also when the binding was
+    // already resolved.
+    let present = abstract_ctx(
+        "/databases/(default)/documents/notes/fireemu-placeholder",
+        vec![("createdAt", RulesValue::Unknown)],
+    );
+    for call in [
+        "ignore(resource.id)",
+        "ignore(resource.data.createdAt)",
+        "helper(resource.data.createdAt).ok",
+    ] {
+        assert!(allows(&with_functions(call), &present), "{call} must hold");
+    }
+    let through_let = |body: &str| {
+        format!("rules_version = '2';\nservice cloud.firestore {{ match /databases/{{d}}/documents {{ function ignore(x) {{ return true; }} function g(r) {{ {body} }} match /notes/{{id}} {{ allow list: if g(resource.data); }} }} }}")
+    };
+    for body in [
+        "let s = r.secret; return ignore(s);",
+        "let s = r.secret; return s == s || ignore(s);",
+        "let s = r.secret; return ignore(s) && ignore(s);",
+    ] {
+        assert!(
+            !allows(&through_let(body), &present),
+            "{body} must not be provable"
+        );
+    }
+    for body in [
+        "let s = r.createdAt; return ignore(s);",
+        "let s = r.createdAt; return ignore(s) && ignore(s);",
+    ] {
+        assert!(allows(&through_let(body), &present), "{body} must hold");
+    }
+    // A read whose error a deciding operand absorbed cannot fail any more, also inside a
+    // condition that picks the argument (review 2026-11-08 r7b); an unabsorbed one can.
+    let present_with_auth = {
+        let mut ctx = present.clone();
+        ctx.auth = Some(AuthContext {
+            uid: "u1".into(),
+            token: BTreeMap::from([("admin".to_owned(), RulesValue::Bool(true))]),
+        });
+        ctx
+    };
+    let can_read = |call: &str| {
+        format!("rules_version = '2';\nservice cloud.firestore {{ match /databases/{{d}}/documents {{ function canRead(id) {{ return request.auth.token.admin == true || id == request.auth.uid; }} match /notes/{{id}} {{ allow list: if {call}; }} }} }}")
+    };
+    for call in [
+        "canRead((resource.data.secret == 1 || true) ? resource.id : resource.id)",
+        "canRead((resource.data.secret == 1 && false) ? resource.id : resource.id)",
+        "canRead(resource.id)",
+    ] {
+        assert!(
+            allows(&can_read(call), &present_with_auth),
+            "{call} must hold"
+        );
+    }
+    for call in [
+        "canRead((resource.data.secret == 1 && true) ? resource.id : resource.id)",
+        "canRead((resource.data.secret == 1 || false) ? resource.id : resource.id)",
+        "canRead(resource.data.secret)",
+        "canRead((true || resource.data.secret == 1) ? resource.data.secret : resource.id)",
+    ] {
+        assert!(
+            !allows(&can_read(call), &present_with_auth),
+            "{call} must not be provable"
+        );
+    }
+    // Restoring the count keeps the reads made before the absorbed operand: the later
+    // `canRead(s)` still reads `s = r.secret`, an unabsorbed failing read.
+    let earlier_reads = "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { function canRead(id) { return request.auth.token.admin == true || id == request.auth.uid; } function g(r) { let s = r.secret; return r.other == 1 || canRead(((r.x == 1) || true) ? s : s); } match /notes/{id} { allow list: if g(resource.data); } } }";
+    assert!(!allows(earlier_reads, &present_with_auth));
+    // An argument whose absent read is absorbed (`error || true` is true) is no failing
+    // argument.
+    assert!(allows(
+        &with_functions("ignore(resource.data.secret || true)"),
+        &query
+    ));
+    // Only the key set of a map holding undetermined values is known: not its values.
+    assert!(!allows(&rules("resource.values().size() == 3"), &query));
+    assert!(!allows(&rules("request.values().size() > 0"), &query));
+    // A container of determined values answers as before, and so does one holding a value
+    // that exists but is undetermined (`resource.id`, a role filtered with `in`): building it
+    // cannot fail (coordinator ruling A, 2026-11-09).
+    for cond in [
+        "{'k': resource.id}.size() == 1",
+        "{'k': resource.id} is map",
+        "{'k': resource.data.role}.size() == 1",
+        "{'bad': resource.id, 'ok': true}.ok",
+        "{'k': resource.id}.keys().hasOnly(['k'])",
+        "{'bad': resource.data.role, 'ok': true}.ok",
+        "{'k': resource.data.a} is map",
+        "{'k': resource.data.a, 'ok': true}.ok",
+        "[resource.data.a, true][1]",
+    ] {
+        assert!(allows(&rules(cond), &query), "{cond} must hold");
+    }
+    // A binding named `resource` is not the query's resource.
+    let shadowed = "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { function count(resource) { return resource.keys().size() == 1; } match /notes/{id} { allow list: if count({'k': resource.data.secret}); } } }";
+    assert!(!allows(shadowed, &query));
+    // `request` and `resource` always exist: their key sets stay known.
+    for cond in [
+        "request.keys().hasAll(['auth', 'path'])",
+        "resource.keys().hasAll(['data', 'id'])",
+        "{'k': resource.data.a}.size() == 1",
+    ] {
+        assert!(allows(&rules(cond), &query), "{cond} must hold");
+    }
+}
+
+/// `keys()` is the only method whose result is read as its receiver's for the numeric
+/// stringification guard (a map's keys are field names); any other method with a
+/// query-derived number in its arguments stays representation-sensitive.
+#[test]
+fn only_keys_looks_through_to_its_receiver_for_stringified_numbers() {
+    let rules = |cond: &str| {
+        format!("rules_version = '2';\nservice cloud.firestore {{ match /databases/{{d}}/documents {{ match /notes/{{id}} {{ allow list: if {cond}; }} }} }}")
+    };
+    let query = abstract_ctx(
+        "/databases/(default)/documents/notes/fireemu-placeholder",
+        vec![("n", RulesValue::Int(1)), ("a", RulesValue::Int(1))],
+    );
+    // A stored 1.0 also matches `n == 1` and splits "a1.0b" differently.
+    assert!(!allows(
+        &rules("'a1b'.split(string(resource.data.n)).size() == 2"),
+        &query
+    ));
+    assert!(allows(
+        &rules("resource.data.keys().hasAll(['a', 'n'])"),
+        &query
+    ));
 }
 
 #[test]

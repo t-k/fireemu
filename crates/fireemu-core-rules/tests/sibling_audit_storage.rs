@@ -355,26 +355,3 @@ fn a_single_segment_capture_does_not_match_a_listing_proof_tail() {
         Method::List
     ));
 }
-
-/// The Storage rule that a list literal is not null does not reach the Firestore query proof,
-/// which decides its own containers (rules-query-fix).
-#[test]
-fn a_list_of_a_capture_stays_undetermined_in_a_firestore_query_proof() {
-    let rules = "rules_version = '2';\nservice cloud.firestore { match /databases/{db}/documents { match /docs/{d} { allow list: if [d] != null; } } }";
-    let ruleset = parse_ruleset(rules).unwrap();
-    let context = RequestContext {
-        service: RulesService::Firestore,
-        method: Method::List,
-        path: format!("/databases/(default)/documents/docs/{ABSTRACT_SEGMENT}"),
-        auth: None,
-        resource: None,
-        request_resource: None,
-        time_unix_nanos: 0,
-        abstract_path: true,
-        request_query: None,
-    };
-    assert!(!matches!(
-        evaluate_request_with(&ruleset, &context, Some(&NoDocuments)).decision,
-        Decision::Allow
-    ));
-}

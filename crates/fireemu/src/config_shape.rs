@@ -923,6 +923,7 @@ mod tests {
                             match branch {
                                 Some("eventarc") => "/emulators/eventarc",
                                 Some("tasks") => "/emulators/tasks",
+                                Some("hosting") => "/emulators/hosting",
                                 Some("ui") => "/emulators/ui",
                                 _ => {
                                     missing.insert(format!("unmapped emulator branch: {branch:?}"));

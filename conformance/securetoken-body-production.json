@@ -1,0 +1,3760 @@
+{
+  "version": 1,
+  "recordedAgainst": {
+    "target": "production Identity Toolkit and Secure Token REST, Identity Platform sandbox; multi-tenancy switched on for each recording and restored",
+    "task": "SECURETOKEN-BODY",
+    "note": "Tokens, the API key, the project id and its number never appear. A refresh answer is its normalized body; a token is recorded as its presence and length. user_id is the run's own account (a, b or t)."
+  },
+  "gitSha": "94d97b520b5291b1eea7fc06b7aa408b93836033",
+  "corpusDigest": "8aa728b1dedbee17aba013649a776130d3e5224c0d2c1e2d326eeb58933841de",
+  "harnessDigest": "c22bcbafccb4e44c4f4d02570da5a212eab6e45d611aa69248d58d8b4c6aacfe",
+  "recordedAt": "2026-11-08T11:58:35.325Z",
+  "recordings": [
+    {
+      "rows": {
+        "form-snake": {
+          "status": 200,
+          "body": {
+            "access_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-a",
+                  "sub": "stb-<run>-a",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-a@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-a@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "expires_in": "3600",
+            "token_type": "Bearer",
+            "refresh_token": "<refresh_token>",
+            "id_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-a",
+                  "sub": "stb-<run>-a",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-a@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-a@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "user_id": "stb-<run>-a",
+            "project_id": "<project-number>"
+          },
+          "request": {
+            "contentType": "form",
+            "bodyBytes": 286,
+            "fields": [
+              "grant_type",
+              "refresh_token"
+            ]
+          },
+          "facts": {
+            "tokens": {
+              "access_token": {
+                "length": 944
+              },
+              "id_token": {
+                "length": 944
+              },
+              "refresh_token": {
+                "length": 247
+              }
+            },
+            "refreshTokenReturned": "a"
+          }
+        },
+        "json-snake": {
+          "status": 200,
+          "body": {
+            "access_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-a",
+                  "sub": "stb-<run>-a",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-a@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-a@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "expires_in": "3600",
+            "token_type": "Bearer",
+            "refresh_token": "<refresh_token>",
+            "id_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-a",
+                  "sub": "stb-<run>-a",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-a@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-a@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "user_id": "stb-<run>-a",
+            "project_id": "<project-number>"
+          },
+          "request": {
+            "contentType": "json",
+            "bodyBytes": 296,
+            "fields": [
+              "grant_type",
+              "refresh_token"
+            ]
+          },
+          "facts": {
+            "tokens": {
+              "access_token": {
+                "length": 944
+              },
+              "id_token": {
+                "length": 944
+              },
+              "refresh_token": {
+                "length": 247
+              }
+            },
+            "refreshTokenReturned": "a"
+          }
+        },
+        "json-camel": {
+          "status": 200,
+          "body": {
+            "access_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-a",
+                  "sub": "stb-<run>-a",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-a@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-a@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "expires_in": "3600",
+            "token_type": "Bearer",
+            "refresh_token": "<refresh_token>",
+            "id_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-a",
+                  "sub": "stb-<run>-a",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-a@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-a@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "user_id": "stb-<run>-a",
+            "project_id": "<project-number>"
+          },
+          "request": {
+            "contentType": "json",
+            "bodyBytes": 294,
+            "fields": [
+              "grantType",
+              "refreshToken"
+            ]
+          },
+          "facts": {
+            "tokens": {
+              "access_token": {
+                "length": 944
+              },
+              "id_token": {
+                "length": 944
+              },
+              "refresh_token": {
+                "length": 247
+              }
+            },
+            "refreshTokenReturned": "a"
+          }
+        },
+        "form-camel": {
+          "status": 200,
+          "body": {
+            "access_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-a",
+                  "sub": "stb-<run>-a",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-a@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-a@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "expires_in": "3600",
+            "token_type": "Bearer",
+            "refresh_token": "<refresh_token>",
+            "id_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-a",
+                  "sub": "stb-<run>-a",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-a@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-a@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "user_id": "stb-<run>-a",
+            "project_id": "<project-number>"
+          },
+          "request": {
+            "contentType": "form",
+            "bodyBytes": 284,
+            "fields": [
+              "grantType",
+              "refreshToken"
+            ]
+          },
+          "facts": {
+            "tokens": {
+              "access_token": {
+                "length": 944
+              },
+              "id_token": {
+                "length": 944
+              },
+              "refresh_token": {
+                "length": 247
+              }
+            },
+            "refreshTokenReturned": "a"
+          }
+        },
+        "json-mixed-snake-grant-camel-token": {
+          "status": 200,
+          "body": {
+            "access_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-a",
+                  "sub": "stb-<run>-a",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-a@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-a@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "expires_in": "3600",
+            "token_type": "Bearer",
+            "refresh_token": "<refresh_token>",
+            "id_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-a",
+                  "sub": "stb-<run>-a",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-a@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-a@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "user_id": "stb-<run>-a",
+            "project_id": "<project-number>"
+          },
+          "request": {
+            "contentType": "json",
+            "bodyBytes": 295,
+            "fields": [
+              "grant_type",
+              "refreshToken"
+            ]
+          },
+          "facts": {
+            "tokens": {
+              "access_token": {
+                "length": 944
+              },
+              "id_token": {
+                "length": 944
+              },
+              "refresh_token": {
+                "length": 247
+              }
+            },
+            "refreshTokenReturned": "a"
+          }
+        },
+        "json-mixed-camel-grant-snake-token": {
+          "status": 200,
+          "body": {
+            "access_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-a",
+                  "sub": "stb-<run>-a",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-a@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-a@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "expires_in": "3600",
+            "token_type": "Bearer",
+            "refresh_token": "<refresh_token>",
+            "id_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-a",
+                  "sub": "stb-<run>-a",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-a@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-a@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "user_id": "stb-<run>-a",
+            "project_id": "<project-number>"
+          },
+          "request": {
+            "contentType": "json",
+            "bodyBytes": 295,
+            "fields": [
+              "grantType",
+              "refresh_token"
+            ]
+          },
+          "facts": {
+            "tokens": {
+              "access_token": {
+                "length": 944
+              },
+              "id_token": {
+                "length": 944
+              },
+              "refresh_token": {
+                "length": 247
+              }
+            },
+            "refreshTokenReturned": "a"
+          }
+        },
+        "form-mixed-snake-grant-camel-token": {
+          "status": 200,
+          "body": {
+            "access_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-a",
+                  "sub": "stb-<run>-a",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-a@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-a@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "expires_in": "3600",
+            "token_type": "Bearer",
+            "refresh_token": "<refresh_token>",
+            "id_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-a",
+                  "sub": "stb-<run>-a",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-a@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-a@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "user_id": "stb-<run>-a",
+            "project_id": "<project-number>"
+          },
+          "request": {
+            "contentType": "form",
+            "bodyBytes": 285,
+            "fields": [
+              "grant_type",
+              "refreshToken"
+            ]
+          },
+          "facts": {
+            "tokens": {
+              "access_token": {
+                "length": 944
+              },
+              "id_token": {
+                "length": 944
+              },
+              "refresh_token": {
+                "length": 247
+              }
+            },
+            "refreshTokenReturned": "a"
+          }
+        },
+        "json-both-tokens-snake-first": {
+          "status": 200,
+          "body": {
+            "access_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-b",
+                  "sub": "stb-<run>-b",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-b@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-b@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "expires_in": "3600",
+            "token_type": "Bearer",
+            "refresh_token": "<refresh_token>",
+            "id_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-b",
+                  "sub": "stb-<run>-b",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-b@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-b@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "user_id": "stb-<run>-b",
+            "project_id": "<project-number>"
+          },
+          "request": {
+            "contentType": "json",
+            "bodyBytes": 561,
+            "fields": [
+              "grant_type",
+              "refresh_token",
+              "refreshToken"
+            ]
+          },
+          "facts": {
+            "tokens": {
+              "access_token": {
+                "length": 944
+              },
+              "id_token": {
+                "length": 944
+              },
+              "refresh_token": {
+                "length": 247
+              }
+            },
+            "refreshTokenReturned": "b"
+          }
+        },
+        "json-both-tokens-camel-first": {
+          "status": 200,
+          "body": {
+            "access_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-a",
+                  "sub": "stb-<run>-a",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-a@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-a@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "expires_in": "3600",
+            "token_type": "Bearer",
+            "refresh_token": "<refresh_token>",
+            "id_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-a",
+                  "sub": "stb-<run>-a",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-a@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-a@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "user_id": "stb-<run>-a",
+            "project_id": "<project-number>"
+          },
+          "request": {
+            "contentType": "json",
+            "bodyBytes": 561,
+            "fields": [
+              "grant_type",
+              "refreshToken",
+              "refresh_token"
+            ]
+          },
+          "facts": {
+            "tokens": {
+              "access_token": {
+                "length": 944
+              },
+              "id_token": {
+                "length": 944
+              },
+              "refresh_token": {
+                "length": 247
+              }
+            },
+            "refreshTokenReturned": "a"
+          }
+        },
+        "form-both-tokens": {
+          "status": 200,
+          "body": {
+            "access_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-b",
+                  "sub": "stb-<run>-b",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-b@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-b@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "expires_in": "3600",
+            "token_type": "Bearer",
+            "refresh_token": "<refresh_token>",
+            "id_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-b",
+                  "sub": "stb-<run>-b",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-b@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-b@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "user_id": "stb-<run>-b",
+            "project_id": "<project-number>"
+          },
+          "request": {
+            "contentType": "form",
+            "bodyBytes": 547,
+            "fields": [
+              "grant_type",
+              "refresh_token",
+              "refreshToken"
+            ]
+          },
+          "facts": {
+            "tokens": {
+              "access_token": {
+                "length": 944
+              },
+              "id_token": {
+                "length": 944
+              },
+              "refresh_token": {
+                "length": 247
+              }
+            },
+            "refreshTokenReturned": "b"
+          }
+        },
+        "json-both-grants-snake-first": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_GRANT_TYPE",
+              "status": "INVALID_ARGUMENT"
+            }
+          },
+          "request": {
+            "contentType": "json",
+            "bodyBytes": 319,
+            "fields": [
+              "grant_type",
+              "grantType",
+              "refresh_token"
+            ]
+          },
+          "facts": {
+            "tokens": {}
+          }
+        },
+        "json-both-grants-camel-first": {
+          "status": 200,
+          "body": {
+            "access_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-a",
+                  "sub": "stb-<run>-a",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-a@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-a@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "expires_in": "3600",
+            "token_type": "Bearer",
+            "refresh_token": "<refresh_token>",
+            "id_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-a",
+                  "sub": "stb-<run>-a",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-a@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-a@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "user_id": "stb-<run>-a",
+            "project_id": "<project-number>"
+          },
+          "request": {
+            "contentType": "json",
+            "bodyBytes": 319,
+            "fields": [
+              "grantType",
+              "grant_type",
+              "refresh_token"
+            ]
+          },
+          "facts": {
+            "tokens": {
+              "access_token": {
+                "length": 944
+              },
+              "id_token": {
+                "length": 944
+              },
+              "refresh_token": {
+                "length": 247
+              }
+            },
+            "refreshTokenReturned": "a"
+          }
+        },
+        "json-snake-empty-camel-valid": {
+          "status": 200,
+          "body": {
+            "access_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-a",
+                  "sub": "stb-<run>-a",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-a@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-a@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "expires_in": "3600",
+            "token_type": "Bearer",
+            "refresh_token": "<refresh_token>",
+            "id_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-a",
+                  "sub": "stb-<run>-a",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-a@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-a@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "user_id": "stb-<run>-a",
+            "project_id": "<project-number>"
+          },
+          "request": {
+            "contentType": "json",
+            "bodyBytes": 314,
+            "fields": [
+              "grant_type",
+              "refresh_token",
+              "refreshToken"
+            ]
+          },
+          "facts": {
+            "tokens": {
+              "access_token": {
+                "length": 944
+              },
+              "id_token": {
+                "length": 944
+              },
+              "refresh_token": {
+                "length": 247
+              }
+            },
+            "refreshTokenReturned": "a"
+          }
+        },
+        "json-camel-invalid-token": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_REFRESH_TOKEN",
+              "status": "INVALID_ARGUMENT"
+            }
+          },
+          "request": {
+            "contentType": "json",
+            "bodyBytes": 66,
+            "fields": [
+              "grantType",
+              "refreshToken"
+            ]
+          },
+          "facts": {
+            "tokens": {}
+          }
+        },
+        "json-snake-invalid-token": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_REFRESH_TOKEN",
+              "status": "INVALID_ARGUMENT"
+            }
+          },
+          "request": {
+            "contentType": "json",
+            "bodyBytes": 68,
+            "fields": [
+              "grant_type",
+              "refresh_token"
+            ]
+          },
+          "facts": {
+            "tokens": {}
+          }
+        },
+        "json-camel-wrong-grant": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_GRANT_TYPE",
+              "status": "INVALID_ARGUMENT"
+            }
+          },
+          "request": {
+            "contentType": "json",
+            "bodyBytes": 289,
+            "fields": [
+              "grantType",
+              "refreshToken"
+            ]
+          },
+          "facts": {
+            "tokens": {}
+          }
+        },
+        "json-camel-no-grant": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "MISSING_GRANT_TYPE",
+              "status": "INVALID_ARGUMENT"
+            }
+          },
+          "request": {
+            "contentType": "json",
+            "bodyBytes": 266,
+            "fields": [
+              "refreshToken"
+            ]
+          },
+          "facts": {
+            "tokens": {}
+          }
+        },
+        "json-camel-no-token": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "MISSING_REFRESH_TOKEN",
+              "status": "INVALID_ARGUMENT"
+            }
+          },
+          "request": {
+            "contentType": "json",
+            "bodyBytes": 29,
+            "fields": [
+              "grantType"
+            ]
+          },
+          "facts": {
+            "tokens": {}
+          }
+        },
+        "tenant-form-snake": {
+          "status": 200,
+          "body": {
+            "access_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-t",
+                  "sub": "stb-<run>-t",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-t@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-t@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password",
+                    "tenant": "<tenant>"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "expires_in": "3600",
+            "token_type": "Bearer",
+            "refresh_token": "<refresh_token>",
+            "id_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-t",
+                  "sub": "stb-<run>-t",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-t@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-t@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password",
+                    "tenant": "<tenant>"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "user_id": "stb-<run>-t",
+            "project_id": "<project-number>"
+          },
+          "request": {
+            "contentType": "form",
+            "bodyBytes": 307,
+            "fields": [
+              "grant_type",
+              "refresh_token"
+            ]
+          },
+          "facts": {
+            "tokens": {
+              "access_token": {
+                "length": 986
+              },
+              "id_token": {
+                "length": 986
+              },
+              "refresh_token": {
+                "length": 268
+              }
+            },
+            "refreshTokenReturned": "t"
+          }
+        },
+        "tenant-json-snake": {
+          "status": 200,
+          "body": {
+            "access_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-t",
+                  "sub": "stb-<run>-t",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-t@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-t@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password",
+                    "tenant": "<tenant>"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "expires_in": "3600",
+            "token_type": "Bearer",
+            "refresh_token": "<refresh_token>",
+            "id_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-t",
+                  "sub": "stb-<run>-t",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-t@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-t@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password",
+                    "tenant": "<tenant>"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "user_id": "stb-<run>-t",
+            "project_id": "<project-number>"
+          },
+          "request": {
+            "contentType": "json",
+            "bodyBytes": 317,
+            "fields": [
+              "grant_type",
+              "refresh_token"
+            ]
+          },
+          "facts": {
+            "tokens": {
+              "access_token": {
+                "length": 986
+              },
+              "id_token": {
+                "length": 986
+              },
+              "refresh_token": {
+                "length": 268
+              }
+            },
+            "refreshTokenReturned": "t"
+          }
+        },
+        "tenant-json-camel": {
+          "status": 200,
+          "body": {
+            "access_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-t",
+                  "sub": "stb-<run>-t",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-t@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-t@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password",
+                    "tenant": "<tenant>"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "expires_in": "3600",
+            "token_type": "Bearer",
+            "refresh_token": "<refresh_token>",
+            "id_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-t",
+                  "sub": "stb-<run>-t",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-t@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-t@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password",
+                    "tenant": "<tenant>"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "user_id": "stb-<run>-t",
+            "project_id": "<project-number>"
+          },
+          "request": {
+            "contentType": "json",
+            "bodyBytes": 315,
+            "fields": [
+              "grantType",
+              "refreshToken"
+            ]
+          },
+          "facts": {
+            "tokens": {
+              "access_token": {
+                "length": 986
+              },
+              "id_token": {
+                "length": 986
+              },
+              "refresh_token": {
+                "length": 268
+              }
+            },
+            "refreshTokenReturned": "t"
+          }
+        },
+        "tenant-form-camel": {
+          "status": 200,
+          "body": {
+            "access_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-t",
+                  "sub": "stb-<run>-t",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-t@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-t@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password",
+                    "tenant": "<tenant>"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "expires_in": "3600",
+            "token_type": "Bearer",
+            "refresh_token": "<refresh_token>",
+            "id_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-t",
+                  "sub": "stb-<run>-t",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-t@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-t@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password",
+                    "tenant": "<tenant>"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "user_id": "stb-<run>-t",
+            "project_id": "<project-number>"
+          },
+          "request": {
+            "contentType": "form",
+            "bodyBytes": 305,
+            "fields": [
+              "grantType",
+              "refreshToken"
+            ]
+          },
+          "facts": {
+            "tokens": {
+              "access_token": {
+                "length": 986
+              },
+              "id_token": {
+                "length": 986
+              },
+              "refresh_token": {
+                "length": 268
+              }
+            },
+            "refreshTokenReturned": "t"
+          }
+        },
+        "tenant-json-both-tokens": {
+          "status": 200,
+          "body": {
+            "access_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-t",
+                  "sub": "stb-<run>-t",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-t@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-t@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password",
+                    "tenant": "<tenant>"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "expires_in": "3600",
+            "token_type": "Bearer",
+            "refresh_token": "<refresh_token>",
+            "id_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-t",
+                  "sub": "stb-<run>-t",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-t@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-t@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password",
+                    "tenant": "<tenant>"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "user_id": "stb-<run>-t",
+            "project_id": "<project-number>"
+          },
+          "request": {
+            "contentType": "json",
+            "bodyBytes": 582,
+            "fields": [
+              "grant_type",
+              "refresh_token",
+              "refreshToken"
+            ]
+          },
+          "facts": {
+            "tokens": {
+              "access_token": {
+                "length": 986
+              },
+              "id_token": {
+                "length": 986
+              },
+              "refresh_token": {
+                "length": 268
+              }
+            },
+            "refreshTokenReturned": "t"
+          }
+        },
+        "json-snake-after": {
+          "status": 200,
+          "body": {
+            "access_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-a",
+                  "sub": "stb-<run>-a",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-a@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-a@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "expires_in": "3600",
+            "token_type": "Bearer",
+            "refresh_token": "<refresh_token>",
+            "id_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-a",
+                  "sub": "stb-<run>-a",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-a@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-a@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "user_id": "stb-<run>-a",
+            "project_id": "<project-number>"
+          },
+          "request": {
+            "contentType": "json",
+            "bodyBytes": 296,
+            "fields": [
+              "grant_type",
+              "refresh_token"
+            ]
+          },
+          "facts": {
+            "tokens": {
+              "access_token": {
+                "length": 944
+              },
+              "id_token": {
+                "length": 944
+              },
+              "refresh_token": {
+                "length": 247
+              }
+            },
+            "refreshTokenReturned": "a"
+          }
+        }
+      }
+    },
+    {
+      "rows": {
+        "form-snake": {
+          "status": 200,
+          "body": {
+            "access_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-a",
+                  "sub": "stb-<run>-a",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-a@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-a@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "expires_in": "3600",
+            "token_type": "Bearer",
+            "refresh_token": "<refresh_token>",
+            "id_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-a",
+                  "sub": "stb-<run>-a",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-a@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-a@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "user_id": "stb-<run>-a",
+            "project_id": "<project-number>"
+          },
+          "request": {
+            "contentType": "form",
+            "bodyBytes": 286,
+            "fields": [
+              "grant_type",
+              "refresh_token"
+            ]
+          },
+          "facts": {
+            "tokens": {
+              "access_token": {
+                "length": 944
+              },
+              "id_token": {
+                "length": 944
+              },
+              "refresh_token": {
+                "length": 247
+              }
+            },
+            "refreshTokenReturned": "a"
+          }
+        },
+        "json-snake": {
+          "status": 200,
+          "body": {
+            "access_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-a",
+                  "sub": "stb-<run>-a",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-a@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-a@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "expires_in": "3600",
+            "token_type": "Bearer",
+            "refresh_token": "<refresh_token>",
+            "id_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-a",
+                  "sub": "stb-<run>-a",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-a@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-a@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "user_id": "stb-<run>-a",
+            "project_id": "<project-number>"
+          },
+          "request": {
+            "contentType": "json",
+            "bodyBytes": 296,
+            "fields": [
+              "grant_type",
+              "refresh_token"
+            ]
+          },
+          "facts": {
+            "tokens": {
+              "access_token": {
+                "length": 944
+              },
+              "id_token": {
+                "length": 944
+              },
+              "refresh_token": {
+                "length": 247
+              }
+            },
+            "refreshTokenReturned": "a"
+          }
+        },
+        "json-camel": {
+          "status": 200,
+          "body": {
+            "access_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-a",
+                  "sub": "stb-<run>-a",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-a@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-a@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "expires_in": "3600",
+            "token_type": "Bearer",
+            "refresh_token": "<refresh_token>",
+            "id_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-a",
+                  "sub": "stb-<run>-a",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-a@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-a@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "user_id": "stb-<run>-a",
+            "project_id": "<project-number>"
+          },
+          "request": {
+            "contentType": "json",
+            "bodyBytes": 294,
+            "fields": [
+              "grantType",
+              "refreshToken"
+            ]
+          },
+          "facts": {
+            "tokens": {
+              "access_token": {
+                "length": 944
+              },
+              "id_token": {
+                "length": 944
+              },
+              "refresh_token": {
+                "length": 247
+              }
+            },
+            "refreshTokenReturned": "a"
+          }
+        },
+        "form-camel": {
+          "status": 200,
+          "body": {
+            "access_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-a",
+                  "sub": "stb-<run>-a",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-a@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-a@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "expires_in": "3600",
+            "token_type": "Bearer",
+            "refresh_token": "<refresh_token>",
+            "id_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-a",
+                  "sub": "stb-<run>-a",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-a@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-a@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "user_id": "stb-<run>-a",
+            "project_id": "<project-number>"
+          },
+          "request": {
+            "contentType": "form",
+            "bodyBytes": 284,
+            "fields": [
+              "grantType",
+              "refreshToken"
+            ]
+          },
+          "facts": {
+            "tokens": {
+              "access_token": {
+                "length": 944
+              },
+              "id_token": {
+                "length": 944
+              },
+              "refresh_token": {
+                "length": 247
+              }
+            },
+            "refreshTokenReturned": "a"
+          }
+        },
+        "json-mixed-snake-grant-camel-token": {
+          "status": 200,
+          "body": {
+            "access_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-a",
+                  "sub": "stb-<run>-a",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-a@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-a@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "expires_in": "3600",
+            "token_type": "Bearer",
+            "refresh_token": "<refresh_token>",
+            "id_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-a",
+                  "sub": "stb-<run>-a",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-a@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-a@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "user_id": "stb-<run>-a",
+            "project_id": "<project-number>"
+          },
+          "request": {
+            "contentType": "json",
+            "bodyBytes": 295,
+            "fields": [
+              "grant_type",
+              "refreshToken"
+            ]
+          },
+          "facts": {
+            "tokens": {
+              "access_token": {
+                "length": 944
+              },
+              "id_token": {
+                "length": 944
+              },
+              "refresh_token": {
+                "length": 247
+              }
+            },
+            "refreshTokenReturned": "a"
+          }
+        },
+        "json-mixed-camel-grant-snake-token": {
+          "status": 200,
+          "body": {
+            "access_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-a",
+                  "sub": "stb-<run>-a",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-a@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-a@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "expires_in": "3600",
+            "token_type": "Bearer",
+            "refresh_token": "<refresh_token>",
+            "id_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-a",
+                  "sub": "stb-<run>-a",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-a@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-a@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "user_id": "stb-<run>-a",
+            "project_id": "<project-number>"
+          },
+          "request": {
+            "contentType": "json",
+            "bodyBytes": 295,
+            "fields": [
+              "grantType",
+              "refresh_token"
+            ]
+          },
+          "facts": {
+            "tokens": {
+              "access_token": {
+                "length": 944
+              },
+              "id_token": {
+                "length": 944
+              },
+              "refresh_token": {
+                "length": 247
+              }
+            },
+            "refreshTokenReturned": "a"
+          }
+        },
+        "form-mixed-snake-grant-camel-token": {
+          "status": 200,
+          "body": {
+            "access_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-a",
+                  "sub": "stb-<run>-a",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-a@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-a@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "expires_in": "3600",
+            "token_type": "Bearer",
+            "refresh_token": "<refresh_token>",
+            "id_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-a",
+                  "sub": "stb-<run>-a",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-a@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-a@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "user_id": "stb-<run>-a",
+            "project_id": "<project-number>"
+          },
+          "request": {
+            "contentType": "form",
+            "bodyBytes": 285,
+            "fields": [
+              "grant_type",
+              "refreshToken"
+            ]
+          },
+          "facts": {
+            "tokens": {
+              "access_token": {
+                "length": 944
+              },
+              "id_token": {
+                "length": 944
+              },
+              "refresh_token": {
+                "length": 247
+              }
+            },
+            "refreshTokenReturned": "a"
+          }
+        },
+        "json-both-tokens-snake-first": {
+          "status": 200,
+          "body": {
+            "access_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-b",
+                  "sub": "stb-<run>-b",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-b@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-b@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "expires_in": "3600",
+            "token_type": "Bearer",
+            "refresh_token": "<refresh_token>",
+            "id_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-b",
+                  "sub": "stb-<run>-b",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-b@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-b@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "user_id": "stb-<run>-b",
+            "project_id": "<project-number>"
+          },
+          "request": {
+            "contentType": "json",
+            "bodyBytes": 561,
+            "fields": [
+              "grant_type",
+              "refresh_token",
+              "refreshToken"
+            ]
+          },
+          "facts": {
+            "tokens": {
+              "access_token": {
+                "length": 944
+              },
+              "id_token": {
+                "length": 944
+              },
+              "refresh_token": {
+                "length": 247
+              }
+            },
+            "refreshTokenReturned": "b"
+          }
+        },
+        "json-both-tokens-camel-first": {
+          "status": 200,
+          "body": {
+            "access_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-a",
+                  "sub": "stb-<run>-a",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-a@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-a@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "expires_in": "3600",
+            "token_type": "Bearer",
+            "refresh_token": "<refresh_token>",
+            "id_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-a",
+                  "sub": "stb-<run>-a",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-a@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-a@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "user_id": "stb-<run>-a",
+            "project_id": "<project-number>"
+          },
+          "request": {
+            "contentType": "json",
+            "bodyBytes": 561,
+            "fields": [
+              "grant_type",
+              "refreshToken",
+              "refresh_token"
+            ]
+          },
+          "facts": {
+            "tokens": {
+              "access_token": {
+                "length": 944
+              },
+              "id_token": {
+                "length": 944
+              },
+              "refresh_token": {
+                "length": 247
+              }
+            },
+            "refreshTokenReturned": "a"
+          }
+        },
+        "form-both-tokens": {
+          "status": 200,
+          "body": {
+            "access_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-b",
+                  "sub": "stb-<run>-b",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-b@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-b@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "expires_in": "3600",
+            "token_type": "Bearer",
+            "refresh_token": "<refresh_token>",
+            "id_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-b",
+                  "sub": "stb-<run>-b",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-b@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-b@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "user_id": "stb-<run>-b",
+            "project_id": "<project-number>"
+          },
+          "request": {
+            "contentType": "form",
+            "bodyBytes": 547,
+            "fields": [
+              "grant_type",
+              "refresh_token",
+              "refreshToken"
+            ]
+          },
+          "facts": {
+            "tokens": {
+              "access_token": {
+                "length": 944
+              },
+              "id_token": {
+                "length": 944
+              },
+              "refresh_token": {
+                "length": 247
+              }
+            },
+            "refreshTokenReturned": "b"
+          }
+        },
+        "json-both-grants-snake-first": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_GRANT_TYPE",
+              "status": "INVALID_ARGUMENT"
+            }
+          },
+          "request": {
+            "contentType": "json",
+            "bodyBytes": 319,
+            "fields": [
+              "grant_type",
+              "grantType",
+              "refresh_token"
+            ]
+          },
+          "facts": {
+            "tokens": {}
+          }
+        },
+        "json-both-grants-camel-first": {
+          "status": 200,
+          "body": {
+            "access_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-a",
+                  "sub": "stb-<run>-a",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-a@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-a@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "expires_in": "3600",
+            "token_type": "Bearer",
+            "refresh_token": "<refresh_token>",
+            "id_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-a",
+                  "sub": "stb-<run>-a",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-a@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-a@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "user_id": "stb-<run>-a",
+            "project_id": "<project-number>"
+          },
+          "request": {
+            "contentType": "json",
+            "bodyBytes": 319,
+            "fields": [
+              "grantType",
+              "grant_type",
+              "refresh_token"
+            ]
+          },
+          "facts": {
+            "tokens": {
+              "access_token": {
+                "length": 944
+              },
+              "id_token": {
+                "length": 944
+              },
+              "refresh_token": {
+                "length": 247
+              }
+            },
+            "refreshTokenReturned": "a"
+          }
+        },
+        "json-snake-empty-camel-valid": {
+          "status": 200,
+          "body": {
+            "access_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-a",
+                  "sub": "stb-<run>-a",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-a@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-a@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "expires_in": "3600",
+            "token_type": "Bearer",
+            "refresh_token": "<refresh_token>",
+            "id_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-a",
+                  "sub": "stb-<run>-a",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-a@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-a@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "user_id": "stb-<run>-a",
+            "project_id": "<project-number>"
+          },
+          "request": {
+            "contentType": "json",
+            "bodyBytes": 314,
+            "fields": [
+              "grant_type",
+              "refresh_token",
+              "refreshToken"
+            ]
+          },
+          "facts": {
+            "tokens": {
+              "access_token": {
+                "length": 944
+              },
+              "id_token": {
+                "length": 944
+              },
+              "refresh_token": {
+                "length": 247
+              }
+            },
+            "refreshTokenReturned": "a"
+          }
+        },
+        "json-camel-invalid-token": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_REFRESH_TOKEN",
+              "status": "INVALID_ARGUMENT"
+            }
+          },
+          "request": {
+            "contentType": "json",
+            "bodyBytes": 66,
+            "fields": [
+              "grantType",
+              "refreshToken"
+            ]
+          },
+          "facts": {
+            "tokens": {}
+          }
+        },
+        "json-snake-invalid-token": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_REFRESH_TOKEN",
+              "status": "INVALID_ARGUMENT"
+            }
+          },
+          "request": {
+            "contentType": "json",
+            "bodyBytes": 68,
+            "fields": [
+              "grant_type",
+              "refresh_token"
+            ]
+          },
+          "facts": {
+            "tokens": {}
+          }
+        },
+        "json-camel-wrong-grant": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_GRANT_TYPE",
+              "status": "INVALID_ARGUMENT"
+            }
+          },
+          "request": {
+            "contentType": "json",
+            "bodyBytes": 289,
+            "fields": [
+              "grantType",
+              "refreshToken"
+            ]
+          },
+          "facts": {
+            "tokens": {}
+          }
+        },
+        "json-camel-no-grant": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "MISSING_GRANT_TYPE",
+              "status": "INVALID_ARGUMENT"
+            }
+          },
+          "request": {
+            "contentType": "json",
+            "bodyBytes": 266,
+            "fields": [
+              "refreshToken"
+            ]
+          },
+          "facts": {
+            "tokens": {}
+          }
+        },
+        "json-camel-no-token": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "MISSING_REFRESH_TOKEN",
+              "status": "INVALID_ARGUMENT"
+            }
+          },
+          "request": {
+            "contentType": "json",
+            "bodyBytes": 29,
+            "fields": [
+              "grantType"
+            ]
+          },
+          "facts": {
+            "tokens": {}
+          }
+        },
+        "tenant-form-snake": {
+          "status": 200,
+          "body": {
+            "access_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-t",
+                  "sub": "stb-<run>-t",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-t@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-t@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password",
+                    "tenant": "<tenant>"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "expires_in": "3600",
+            "token_type": "Bearer",
+            "refresh_token": "<refresh_token>",
+            "id_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-t",
+                  "sub": "stb-<run>-t",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-t@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-t@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password",
+                    "tenant": "<tenant>"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "user_id": "stb-<run>-t",
+            "project_id": "<project-number>"
+          },
+          "request": {
+            "contentType": "form",
+            "bodyBytes": 307,
+            "fields": [
+              "grant_type",
+              "refresh_token"
+            ]
+          },
+          "facts": {
+            "tokens": {
+              "access_token": {
+                "length": 986
+              },
+              "id_token": {
+                "length": 986
+              },
+              "refresh_token": {
+                "length": 268
+              }
+            },
+            "refreshTokenReturned": "t"
+          }
+        },
+        "tenant-json-snake": {
+          "status": 200,
+          "body": {
+            "access_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-t",
+                  "sub": "stb-<run>-t",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-t@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-t@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password",
+                    "tenant": "<tenant>"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "expires_in": "3600",
+            "token_type": "Bearer",
+            "refresh_token": "<refresh_token>",
+            "id_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-t",
+                  "sub": "stb-<run>-t",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-t@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-t@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password",
+                    "tenant": "<tenant>"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "user_id": "stb-<run>-t",
+            "project_id": "<project-number>"
+          },
+          "request": {
+            "contentType": "json",
+            "bodyBytes": 317,
+            "fields": [
+              "grant_type",
+              "refresh_token"
+            ]
+          },
+          "facts": {
+            "tokens": {
+              "access_token": {
+                "length": 986
+              },
+              "id_token": {
+                "length": 986
+              },
+              "refresh_token": {
+                "length": 268
+              }
+            },
+            "refreshTokenReturned": "t"
+          }
+        },
+        "tenant-json-camel": {
+          "status": 200,
+          "body": {
+            "access_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-t",
+                  "sub": "stb-<run>-t",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-t@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-t@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password",
+                    "tenant": "<tenant>"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "expires_in": "3600",
+            "token_type": "Bearer",
+            "refresh_token": "<refresh_token>",
+            "id_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-t",
+                  "sub": "stb-<run>-t",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-t@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-t@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password",
+                    "tenant": "<tenant>"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "user_id": "stb-<run>-t",
+            "project_id": "<project-number>"
+          },
+          "request": {
+            "contentType": "json",
+            "bodyBytes": 315,
+            "fields": [
+              "grantType",
+              "refreshToken"
+            ]
+          },
+          "facts": {
+            "tokens": {
+              "access_token": {
+                "length": 986
+              },
+              "id_token": {
+                "length": 986
+              },
+              "refresh_token": {
+                "length": 268
+              }
+            },
+            "refreshTokenReturned": "t"
+          }
+        },
+        "tenant-form-camel": {
+          "status": 200,
+          "body": {
+            "access_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-t",
+                  "sub": "stb-<run>-t",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-t@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-t@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password",
+                    "tenant": "<tenant>"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "expires_in": "3600",
+            "token_type": "Bearer",
+            "refresh_token": "<refresh_token>",
+            "id_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-t",
+                  "sub": "stb-<run>-t",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-t@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-t@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password",
+                    "tenant": "<tenant>"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "user_id": "stb-<run>-t",
+            "project_id": "<project-number>"
+          },
+          "request": {
+            "contentType": "form",
+            "bodyBytes": 305,
+            "fields": [
+              "grantType",
+              "refreshToken"
+            ]
+          },
+          "facts": {
+            "tokens": {
+              "access_token": {
+                "length": 986
+              },
+              "id_token": {
+                "length": 986
+              },
+              "refresh_token": {
+                "length": 268
+              }
+            },
+            "refreshTokenReturned": "t"
+          }
+        },
+        "tenant-json-both-tokens": {
+          "status": 200,
+          "body": {
+            "access_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-t",
+                  "sub": "stb-<run>-t",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-t@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-t@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password",
+                    "tenant": "<tenant>"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "expires_in": "3600",
+            "token_type": "Bearer",
+            "refresh_token": "<refresh_token>",
+            "id_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-t",
+                  "sub": "stb-<run>-t",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-t@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-t@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password",
+                    "tenant": "<tenant>"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "user_id": "stb-<run>-t",
+            "project_id": "<project-number>"
+          },
+          "request": {
+            "contentType": "json",
+            "bodyBytes": 582,
+            "fields": [
+              "grant_type",
+              "refresh_token",
+              "refreshToken"
+            ]
+          },
+          "facts": {
+            "tokens": {
+              "access_token": {
+                "length": 986
+              },
+              "id_token": {
+                "length": 986
+              },
+              "refresh_token": {
+                "length": 268
+              }
+            },
+            "refreshTokenReturned": "t"
+          }
+        },
+        "json-snake-after": {
+          "status": 200,
+          "body": {
+            "access_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-a",
+                  "sub": "stb-<run>-a",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-a@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-a@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "expires_in": "3600",
+            "token_type": "Bearer",
+            "refresh_token": "<refresh_token>",
+            "id_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "stb-<run>-a",
+                  "sub": "stb-<run>-a",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-stb-<run>-a@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-stb-<run>-a@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "user_id": "stb-<run>-a",
+            "project_id": "<project-number>"
+          },
+          "request": {
+            "contentType": "json",
+            "bodyBytes": 296,
+            "fields": [
+              "grant_type",
+              "refresh_token"
+            ]
+          },
+          "facts": {
+            "tokens": {
+              "access_token": {
+                "length": 944
+              },
+              "id_token": {
+                "length": 944
+              },
+              "refresh_token": {
+                "length": 247
+              }
+            },
+            "refreshTokenReturned": "a"
+          }
+        }
+      }
+    }
+  ]
+}

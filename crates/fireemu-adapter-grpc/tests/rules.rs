@@ -954,6 +954,7 @@ async fn query_proofs_are_sound_for_shapes_arrays_and_collection_groups() {
 service cloud.firestore {
   match /databases/{database}/documents {
     match /shape/{id} { allow read: if !('blocked' in resource.data); }
+    match /keyed/{id} { allow read: if resource.data.size() > 0; }
     match /tagged/{id} { allow read: if resource.data.tags.hasAny(['x']); }
     match /sized/{id} { allow read: if resource.data.tags.size() == 1; }
     match /reviews/{id} { allow read: if true; }
@@ -963,10 +964,18 @@ service cloud.firestore {
         )
         .unwrap();
     let denied = |code: tonic::Code| assert_eq!(code, tonic::Code::PermissionDenied);
-    // Map-shape conditions cannot be proven for an unfiltered query.
+    // A key the query does not constrain is not in `resource.data`, as production answers
+    // (FS-RULES-DIFFS 2026-11-08, `fs-rules-v1/diffs/queries#blocked-nofilter`)...
+    assert!(h
+        .client
+        .run_query(with_bearer(list("shape"), &alice_token))
+        .await
+        .is_ok());
+    // ...and it holds no other key: an unfiltered query's data is empty (FS-RULES-SHAPES
+    // 2026-11-08, `size-nofilter` refused).
     denied(
         h.client
-            .run_query(with_bearer(list("shape"), &alice_token))
+            .run_query(with_bearer(list("keyed"), &alice_token))
             .await
             .unwrap_err()
             .code(),

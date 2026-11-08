@@ -53,6 +53,9 @@ jobs:
         run: ruby scripts/ci-workflow-contract.rb
       - name: Kani workflow contract
         run: ruby scripts/kani-ci-contract.test.rb
+      # txn04-replay replaced a stored binary digest; this keeps it unskippable and failing the run on failure.
+      - name: Txn-04 replay job contract
+        run: ruby scripts/txn04-replay-contract.test.rb
       - name: heavy-verification workflow contract and helpers
         run: |
           ruby scripts/heavy-verification-contract.rb
@@ -339,6 +342,46 @@ jobs:
         run: |
           target/debug/fireemu exec --config tools/sdk-smoke-python/fireemu.strict.json --project demo-app --hub-port 0 -- \
             "$RUNNER_TEMP/sdk-smoke-python/bin/python" -m pytest -p no:cacheprovider tools/sdk-smoke-python
+
+  # The Txn-04 recorded comparison on this commit's binary. The committed record
+  # (spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-recorded-comparison-v1.json) binds
+  # both production recordings, their projection and the strict superseded cases; this job builds
+  # fireemu from the checkout exactly as the local regeneration did (debug, --locked, -p fireemu
+  # --bin fireemu), replays the 13 cases in both profiles on loopback with the control clock, and
+  # fails when any answer differs from production (strict: outside the superseded cases). It sends
+  # no production request and reads no secret. The result names this commit and binary sha256.
+  txn04-replay:
+    name: Txn-04 replay (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          key: txn04-replay-${{ matrix.os }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+      - name: build fireemu from this commit
+        run: cargo build --locked -p fireemu --bin fireemu
+      - name: replay both profiles against the recorded production answers
+        run: |
+          uv run --project tools/compat-inventory --locked --python 3.12.13 \
+            tools/compat-broad/fs-write-txn/txn04_current_replay.py \
+            --binary target/debug/fireemu --dep-info target/debug/fireemu.d --out "$RUNNER_TEMP/txn04-replay"
+      - name: keep the result
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: txn04-replay-${{ matrix.os }}
+          path: ${{ runner.temp }}/txn04-replay/result.json
+          if-no-files-found: error
 
   # tools/runner-python and tools/sdk-smoke-functions-python: the Python Functions runner with the real
   # firebase-functions SDK (hash-locked in the fixture) under a fireemu built from this commit. The

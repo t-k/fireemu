@@ -1,0 +1,7094 @@
+[
+ {
+  "expr": "query.isOrderByChild('m')",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.isOrderByChild('m')",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.isOrderByChild('m')",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.isOrderByChild('m')",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.isOrderByChild('m')",
+  "query": "orderBy=%22m%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.isOrderByChild('m')",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.isOrderByChild('m')",
+  "query": "orderBy=%22m%22&endBefore=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.isOrderByChild('m')",
+  "query": "orderBy=%22m%22&endAt=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.isOrderByChild('m')",
+  "query": "orderBy=%22m%22&equalTo=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.isOrderByChild('m')",
+  "query": "orderBy=%22%24key%22&endBefore=%22b%22&limitToLast=1",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.isOrderByChild('/m/')",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.isOrderByChild('/m/')",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.isOrderByChild('/m/')",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.isOrderByChild('/m/')",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.isOrderByChild('/m/')",
+  "query": "orderBy=%22m%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.isOrderByChild('/m/')",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.isOrderByChild('/m/')",
+  "query": "orderBy=%22m%22&endBefore=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.isOrderByChild('/m/')",
+  "query": "orderBy=%22m%22&endAt=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.isOrderByChild('/m/')",
+  "query": "orderBy=%22m%22&equalTo=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.isOrderByChild('/m/')",
+  "query": "orderBy=%22%24key%22&endBefore=%22b%22&limitToLast=1",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.isOrderByChild('a/b')",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.isOrderByChild('a/b')",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.isOrderByChild('a/b')",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.isOrderByChild('a/b')",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.isOrderByChild('a/b')",
+  "query": "orderBy=%22m%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.isOrderByChild('a/b')",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.isOrderByChild('a/b')",
+  "query": "orderBy=%22m%22&endBefore=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.isOrderByChild('a/b')",
+  "query": "orderBy=%22m%22&endAt=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.isOrderByChild('a/b')",
+  "query": "orderBy=%22m%22&equalTo=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.isOrderByChild('a/b')",
+  "query": "orderBy=%22%24key%22&endBefore=%22b%22&limitToLast=1",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.isOrderByChild('a//b')",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.isOrderByChild('a//b')",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.isOrderByChild('a//b')",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.isOrderByChild('a//b')",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.isOrderByChild('a//b')",
+  "query": "orderBy=%22m%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.isOrderByChild('a//b')",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.isOrderByChild('a//b')",
+  "query": "orderBy=%22m%22&endBefore=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.isOrderByChild('a//b')",
+  "query": "orderBy=%22m%22&endAt=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.isOrderByChild('a//b')",
+  "query": "orderBy=%22m%22&equalTo=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.isOrderByChild('a//b')",
+  "query": "orderBy=%22%24key%22&endBefore=%22b%22&limitToLast=1",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.isOrderByChild('.priority')",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.isOrderByChild('.priority')",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.isOrderByChild('.priority')",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.isOrderByChild('.priority')",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.isOrderByChild('.priority')",
+  "query": "orderBy=%22m%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.isOrderByChild('.priority')",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.isOrderByChild('.priority')",
+  "query": "orderBy=%22m%22&endBefore=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.isOrderByChild('.priority')",
+  "query": "orderBy=%22m%22&endAt=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.isOrderByChild('.priority')",
+  "query": "orderBy=%22m%22&equalTo=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.isOrderByChild('.priority')",
+  "query": "orderBy=%22%24key%22&endBefore=%22b%22&limitToLast=1",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.isOrderByChild('.value')",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.isOrderByChild('.value')",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.isOrderByChild('.value')",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.isOrderByChild('.value')",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.isOrderByChild('.value')",
+  "query": "orderBy=%22m%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.isOrderByChild('.value')",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.isOrderByChild('.value')",
+  "query": "orderBy=%22m%22&endBefore=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.isOrderByChild('.value')",
+  "query": "orderBy=%22m%22&endAt=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.isOrderByChild('.value')",
+  "query": "orderBy=%22m%22&equalTo=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.isOrderByChild('.value')",
+  "query": "orderBy=%22%24key%22&endBefore=%22b%22&limitToLast=1",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!query.isOrderByChild('m')",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!query.isOrderByChild('m')",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!query.isOrderByChild('m')",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!query.isOrderByChild('m')",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!query.isOrderByChild('m')",
+  "query": "orderBy=%22m%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!query.isOrderByChild('m')",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!query.isOrderByChild('m')",
+  "query": "orderBy=%22m%22&endBefore=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!query.isOrderByChild('m')",
+  "query": "orderBy=%22m%22&endAt=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!query.isOrderByChild('m')",
+  "query": "orderBy=%22m%22&equalTo=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!query.isOrderByChild('m')",
+  "query": "orderBy=%22%24key%22&endBefore=%22b%22&limitToLast=1",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!query.isOrderByChild('')",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!query.isOrderByChild('')",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!query.isOrderByChild('')",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!query.isOrderByChild('')",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!query.isOrderByChild('')",
+  "query": "orderBy=%22m%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!query.isOrderByChild('')",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!query.isOrderByChild('')",
+  "query": "orderBy=%22m%22&endBefore=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!query.isOrderByChild('')",
+  "query": "orderBy=%22m%22&endAt=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!query.isOrderByChild('')",
+  "query": "orderBy=%22m%22&equalTo=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!query.isOrderByChild('')",
+  "query": "orderBy=%22%24key%22&endBefore=%22b%22&limitToLast=1",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!query.isOrderByChild('$key')",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!query.isOrderByChild('$key')",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!query.isOrderByChild('$key')",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!query.isOrderByChild('$key')",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!query.isOrderByChild('$key')",
+  "query": "orderBy=%22m%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!query.isOrderByChild('$key')",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!query.isOrderByChild('$key')",
+  "query": "orderBy=%22m%22&endBefore=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!query.isOrderByChild('$key')",
+  "query": "orderBy=%22m%22&endAt=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!query.isOrderByChild('$key')",
+  "query": "orderBy=%22m%22&equalTo=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!query.isOrderByChild('$key')",
+  "query": "orderBy=%22%24key%22&endBefore=%22b%22&limitToLast=1",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!query.isOrderByChild(auth.uid)",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!query.isOrderByChild(auth.uid)",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!query.isOrderByChild(auth.uid)",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!query.isOrderByChild(auth.uid)",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!query.isOrderByChild(auth.uid)",
+  "query": "orderBy=%22m%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!query.isOrderByChild(auth.uid)",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!query.isOrderByChild(auth.uid)",
+  "query": "orderBy=%22m%22&endBefore=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!query.isOrderByChild(auth.uid)",
+  "query": "orderBy=%22m%22&endAt=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!query.isOrderByChild(auth.uid)",
+  "query": "orderBy=%22m%22&equalTo=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!query.isOrderByChild(auth.uid)",
+  "query": "orderBy=%22%24key%22&endBefore=%22b%22&limitToLast=1",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!query.isOrderByChild('\\uD83D')",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!query.isOrderByChild('\\uD83D')",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!query.isOrderByChild('\\uD83D')",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!query.isOrderByChild('\\uD83D')",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!query.isOrderByChild('\\uD83D')",
+  "query": "orderBy=%22m%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!query.isOrderByChild('\\uD83D')",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!query.isOrderByChild('\\uD83D')",
+  "query": "orderBy=%22m%22&endBefore=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!query.isOrderByChild('\\uD83D')",
+  "query": "orderBy=%22m%22&endAt=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!query.isOrderByChild('\\uD83D')",
+  "query": "orderBy=%22m%22&equalTo=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!query.isOrderByChild('\\uD83D')",
+  "query": "orderBy=%22%24key%22&endBefore=%22b%22&limitToLast=1",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.isOrderByChild()",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 400,
+  "error": "1:25: isOrderByChild() expects 1 argument.\n",
+  "read": null
+ },
+ {
+  "expr": "query.isOrderByChild(1)",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 400,
+  "error": "1:46: isOrderByChild() expects a string argument.\n",
+  "read": null
+ },
+ {
+  "expr": "query.isOrderByChild('a', 'b')",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 400,
+  "error": "1:25: isOrderByChild() expects 1 argument.\n",
+  "read": null
+ },
+ {
+  "expr": "query.isOrderByChild != null",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 400,
+  "error": "1:25: Invalid != expression: left operand is not a number, boolean, string, or null.\n",
+  "read": null
+ },
+ {
+  "expr": "query.isOrderByChild('m') == true",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.isOrderByChild('m') == true",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.isOrderByChild('m') == true",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.isOrderByChild('m') == true",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.isOrderByChild('m') == true",
+  "query": "orderBy=%22m%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.isOrderByChild('m') == true",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.isOrderByChild('m') == true",
+  "query": "orderBy=%22m%22&endBefore=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.isOrderByChild('m') == true",
+  "query": "orderBy=%22m%22&endAt=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.isOrderByChild('m') == true",
+  "query": "orderBy=%22m%22&equalTo=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.isOrderByChild('m') == true",
+  "query": "orderBy=%22%24key%22&endBefore=%22b%22&limitToLast=1",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.endBefore == 2",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.endBefore == 2",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.endBefore == 2",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.endBefore == 2",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.endBefore == 2",
+  "query": "orderBy=%22m%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.endBefore == 2",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.endBefore == 2",
+  "query": "orderBy=%22m%22&endBefore=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.endBefore == 2",
+  "query": "orderBy=%22m%22&endAt=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.endBefore == 2",
+  "query": "orderBy=%22m%22&equalTo=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.endBefore == 2",
+  "query": "orderBy=%22%24key%22&endBefore=%22b%22&limitToLast=1",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.endBefore == 'b'",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.endBefore == 'b'",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.endBefore == 'b'",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.endBefore == 'b'",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.endBefore == 'b'",
+  "query": "orderBy=%22m%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.endBefore == 'b'",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.endBefore == 'b'",
+  "query": "orderBy=%22m%22&endBefore=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.endBefore == 'b'",
+  "query": "orderBy=%22m%22&endAt=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.endBefore == 'b'",
+  "query": "orderBy=%22m%22&equalTo=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.endBefore == 'b'",
+  "query": "orderBy=%22%24key%22&endBefore=%22b%22&limitToLast=1",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.endBefore == null",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.endBefore == null",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.endBefore == null",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.endBefore == null",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.endBefore == null",
+  "query": "orderBy=%22m%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.endBefore == null",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.endBefore == null",
+  "query": "orderBy=%22m%22&endBefore=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.endBefore == null",
+  "query": "orderBy=%22m%22&endAt=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.endBefore == null",
+  "query": "orderBy=%22m%22&equalTo=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.endBefore == null",
+  "query": "orderBy=%22%24key%22&endBefore=%22b%22&limitToLast=1",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(query.endBefore == null)",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(query.endBefore == null)",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(query.endBefore == null)",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(query.endBefore == null)",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(query.endBefore == null)",
+  "query": "orderBy=%22m%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(query.endBefore == null)",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(query.endBefore == null)",
+  "query": "orderBy=%22m%22&endBefore=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(query.endBefore == null)",
+  "query": "orderBy=%22m%22&endAt=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(query.endBefore == null)",
+  "query": "orderBy=%22m%22&equalTo=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(query.endBefore == null)",
+  "query": "orderBy=%22%24key%22&endBefore=%22b%22&limitToLast=1",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.endBefore.length == 1",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.endBefore.length == 1",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.endBefore.length == 1",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.endBefore.length == 1",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.endBefore.length == 1",
+  "query": "orderBy=%22m%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.endBefore.length == 1",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.endBefore.length == 1",
+  "query": "orderBy=%22m%22&endBefore=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.endBefore.length == 1",
+  "query": "orderBy=%22m%22&endAt=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.endBefore.length == 1",
+  "query": "orderBy=%22m%22&equalTo=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.endBefore.length == 1",
+  "query": "orderBy=%22%24key%22&endBefore=%22b%22&limitToLast=1",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.endAt == 2",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.endAt == 2",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.endAt == 2",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.endAt == 2",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.endAt == 2",
+  "query": "orderBy=%22m%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.endAt == 2",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.endAt == 2",
+  "query": "orderBy=%22m%22&endBefore=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.endAt == 2",
+  "query": "orderBy=%22m%22&endAt=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.endAt == 2",
+  "query": "orderBy=%22m%22&equalTo=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.endAt == 2",
+  "query": "orderBy=%22%24key%22&endBefore=%22b%22&limitToLast=1",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.equalTo == 2",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.equalTo == 2",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.equalTo == 2",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.equalTo == 2",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.equalTo == 2",
+  "query": "orderBy=%22m%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.equalTo == 2",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.equalTo == 2",
+  "query": "orderBy=%22m%22&endBefore=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.equalTo == 2",
+  "query": "orderBy=%22m%22&endAt=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.equalTo == 2",
+  "query": "orderBy=%22m%22&equalTo=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.equalTo == 2",
+  "query": "orderBy=%22%24key%22&endBefore=%22b%22&limitToLast=1",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.startAfter == null",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 400,
+  "error": "1:25: No such method/property 'startAfter'.\n",
+  "read": null
+ },
+ {
+  "expr": "query.orderBy == OrderByKey",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.orderBy == OrderByKey",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.orderBy == OrderByKey",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == OrderByKey",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == OrderByKey",
+  "query": "orderBy=%22m%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == OrderByKey",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == OrderByKey",
+  "query": "orderBy=%22m%22&endBefore=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == OrderByKey",
+  "query": "orderBy=%22m%22&endAt=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == OrderByKey",
+  "query": "orderBy=%22m%22&equalTo=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == OrderByKey",
+  "query": "orderBy=%22%24key%22&endBefore=%22b%22&limitToLast=1",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.orderBy == OrderByValue",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == OrderByValue",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == OrderByValue",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.orderBy == OrderByValue",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == OrderByValue",
+  "query": "orderBy=%22m%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == OrderByValue",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == OrderByValue",
+  "query": "orderBy=%22m%22&endBefore=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == OrderByValue",
+  "query": "orderBy=%22m%22&endAt=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == OrderByValue",
+  "query": "orderBy=%22m%22&equalTo=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == OrderByValue",
+  "query": "orderBy=%22%24key%22&endBefore=%22b%22&limitToLast=1",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == OrderByPriority",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == OrderByPriority",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == OrderByPriority",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == OrderByPriority",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.orderBy == OrderByPriority",
+  "query": "orderBy=%22m%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == OrderByPriority",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == OrderByPriority",
+  "query": "orderBy=%22m%22&endBefore=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == OrderByPriority",
+  "query": "orderBy=%22m%22&endAt=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == OrderByPriority",
+  "query": "orderBy=%22m%22&equalTo=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == OrderByPriority",
+  "query": "orderBy=%22%24key%22&endBefore=%22b%22&limitToLast=1",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == '.priority'",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == '.priority'",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == '.priority'",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == '.priority'",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.orderBy == '.priority'",
+  "query": "orderBy=%22m%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == '.priority'",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == '.priority'",
+  "query": "orderBy=%22m%22&endBefore=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == '.priority'",
+  "query": "orderBy=%22m%22&endAt=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == '.priority'",
+  "query": "orderBy=%22m%22&equalTo=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderBy == '.priority'",
+  "query": "orderBy=%22%24key%22&endBefore=%22b%22&limitToLast=1",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "OrderByPriority == '.priority'",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "OrderByPriority == '.priority'",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "OrderByPriority == '.priority'",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "OrderByPriority == '.priority'",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "OrderByPriority == '.priority'",
+  "query": "orderBy=%22m%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "OrderByPriority == '.priority'",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "OrderByPriority == '.priority'",
+  "query": "orderBy=%22m%22&endBefore=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "OrderByPriority == '.priority'",
+  "query": "orderBy=%22m%22&endAt=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "OrderByPriority == '.priority'",
+  "query": "orderBy=%22m%22&equalTo=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "OrderByPriority == '.priority'",
+  "query": "orderBy=%22%24key%22&endBefore=%22b%22&limitToLast=1",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "OrderByKey == OrderByKey",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "OrderByKey == OrderByKey",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "OrderByKey == OrderByKey",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "OrderByKey == OrderByKey",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "OrderByKey == OrderByKey",
+  "query": "orderBy=%22m%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "OrderByKey == OrderByKey",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "OrderByKey == OrderByKey",
+  "query": "orderBy=%22m%22&endBefore=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "OrderByKey == OrderByKey",
+  "query": "orderBy=%22m%22&endAt=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "OrderByKey == OrderByKey",
+  "query": "orderBy=%22m%22&equalTo=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "OrderByKey == OrderByKey",
+  "query": "orderBy=%22%24key%22&endBefore=%22b%22&limitToLast=1",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "OrderByKey == OrderByValue",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "OrderByKey == OrderByValue",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "OrderByKey == OrderByValue",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "OrderByKey == OrderByValue",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "OrderByKey == OrderByValue",
+  "query": "orderBy=%22m%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "OrderByKey == OrderByValue",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "OrderByKey == OrderByValue",
+  "query": "orderBy=%22m%22&endBefore=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "OrderByKey == OrderByValue",
+  "query": "orderBy=%22m%22&endAt=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "OrderByKey == OrderByValue",
+  "query": "orderBy=%22m%22&equalTo=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "OrderByKey == OrderByValue",
+  "query": "orderBy=%22%24key%22&endBefore=%22b%22&limitToLast=1",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "OrderByKey != OrderByValue",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "OrderByKey != OrderByValue",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "OrderByKey != OrderByValue",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "OrderByKey != OrderByValue",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "OrderByKey != OrderByValue",
+  "query": "orderBy=%22m%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "OrderByKey != OrderByValue",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "OrderByKey != OrderByValue",
+  "query": "orderBy=%22m%22&endBefore=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "OrderByKey != OrderByValue",
+  "query": "orderBy=%22m%22&endAt=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "OrderByKey != OrderByValue",
+  "query": "orderBy=%22m%22&equalTo=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "OrderByKey != OrderByValue",
+  "query": "orderBy=%22%24key%22&endBefore=%22b%22&limitToLast=1",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "OrderByKey == 'a'",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "OrderByKey == 'a'",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "OrderByKey == 'a'",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "OrderByKey == 'a'",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "OrderByKey == 'a'",
+  "query": "orderBy=%22m%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "OrderByKey == 'a'",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "OrderByKey == 'a'",
+  "query": "orderBy=%22m%22&endBefore=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "OrderByKey == 'a'",
+  "query": "orderBy=%22m%22&endAt=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "OrderByKey == 'a'",
+  "query": "orderBy=%22m%22&equalTo=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "OrderByKey == 'a'",
+  "query": "orderBy=%22%24key%22&endBefore=%22b%22&limitToLast=1",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "OrderByKey != null",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "OrderByKey != null",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "OrderByKey != null",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "OrderByKey != null",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "OrderByKey != null",
+  "query": "orderBy=%22m%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "OrderByKey != null",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "OrderByKey != null",
+  "query": "orderBy=%22m%22&endBefore=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "OrderByKey != null",
+  "query": "orderBy=%22m%22&endAt=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "OrderByKey != null",
+  "query": "orderBy=%22m%22&equalTo=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "OrderByKey != null",
+  "query": "orderBy=%22%24key%22&endBefore=%22b%22&limitToLast=1",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "OrderByKey == null",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "OrderByKey == null",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "OrderByKey == null",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "OrderByKey == null",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "OrderByKey == null",
+  "query": "orderBy=%22m%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "OrderByKey == null",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "OrderByKey == null",
+  "query": "orderBy=%22m%22&endBefore=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "OrderByKey == null",
+  "query": "orderBy=%22m%22&endAt=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "OrderByKey == null",
+  "query": "orderBy=%22m%22&equalTo=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "OrderByKey == null",
+  "query": "orderBy=%22%24key%22&endBefore=%22b%22&limitToLast=1",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "OrderByKey.length == 0",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 400,
+  "error": "1:25: Invalid property access: target is not an object.\n",
+  "read": null
+ },
+ {
+  "expr": "OrderByValue != '.value'",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "OrderByValue != '.value'",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "OrderByValue != '.value'",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "OrderByValue != '.value'",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "OrderByValue != '.value'",
+  "query": "orderBy=%22m%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "OrderByValue != '.value'",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "OrderByValue != '.value'",
+  "query": "orderBy=%22m%22&endBefore=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "OrderByValue != '.value'",
+  "query": "orderBy=%22m%22&endAt=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "OrderByValue != '.value'",
+  "query": "orderBy=%22m%22&equalTo=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "OrderByValue != '.value'",
+  "query": "orderBy=%22%24key%22&endBefore=%22b%22&limitToLast=1",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http != null",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 400,
+  "error": "1:25: Invalid != expression: left operand is not a number, boolean, string, or null.\n",
+  "read": null
+ },
+ {
+  "expr": "http.foo == null",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 400,
+  "error": "1:25: No such method/property 'foo'.\n",
+  "read": null
+ },
+ {
+  "expr": "http.encodeURL != null",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 400,
+  "error": "1:25: Invalid != expression: left operand is not a number, boolean, string, or null.\n",
+  "read": null
+ },
+ {
+  "expr": "http.encodeURL()",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 400,
+  "error": "1:25: encodeURL() expects 1 argument (the string to escape).\n",
+  "read": null
+ },
+ {
+  "expr": "http.encodeURL(1)",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 400,
+  "error": "1:40: Argument 1 of encodeURL() must be a string.\n",
+  "read": null
+ },
+ {
+  "expr": "http.encodeURL('a', 'b')",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 400,
+  "error": "1:25: encodeURL() expects 1 argument (the string to escape).\n",
+  "read": null
+ },
+ {
+  "expr": "http.encodeURL(null) == null",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 400,
+  "error": "1:40: Argument 1 of encodeURL() must be a string.\n",
+  "read": null
+ },
+ {
+  "expr": "!(http.encodeURL(auth.missing) == null)",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(http.encodeURL(auth.missing) == null)",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(http.encodeURL(auth.missing) == null)",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(http.encodeURL(auth.missing) == null)",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(http.encodeURL(auth.missing) == null)",
+  "query": "orderBy=%22m%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(http.encodeURL(auth.missing) == null)",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(http.encodeURL(auth.missing) == null)",
+  "query": "orderBy=%22m%22&endBefore=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(http.encodeURL(auth.missing) == null)",
+  "query": "orderBy=%22m%22&endAt=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(http.encodeURL(auth.missing) == null)",
+  "query": "orderBy=%22m%22&equalTo=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(http.encodeURL(auth.missing) == null)",
+  "query": "orderBy=%22%24key%22&endBefore=%22b%22&limitToLast=1",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "http.encodeURL('a b') == 'a+b'",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "http.encodeURL('a b') == 'a+b'",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "http.encodeURL('a b') == 'a+b'",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "http.encodeURL('a b') == 'a+b'",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "http.encodeURL('a b') == 'a+b'",
+  "query": "orderBy=%22m%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "http.encodeURL('a b') == 'a+b'",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "http.encodeURL('a b') == 'a+b'",
+  "query": "orderBy=%22m%22&endBefore=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "http.encodeURL('a b') == 'a+b'",
+  "query": "orderBy=%22m%22&endAt=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "http.encodeURL('a b') == 'a+b'",
+  "query": "orderBy=%22m%22&equalTo=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "http.encodeURL('a b') == 'a+b'",
+  "query": "orderBy=%22%24key%22&endBefore=%22b%22&limitToLast=1",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "http.encodeURL('aZ09.-*_~') == 'aZ09.-*_%7E'",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('aZ09.-*_~') == 'aZ09.-*_%7E'",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('aZ09.-*_~') == 'aZ09.-*_%7E'",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('aZ09.-*_~') == 'aZ09.-*_%7E'",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('aZ09.-*_~') == 'aZ09.-*_%7E'",
+  "query": "orderBy=%22m%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('aZ09.-*_~') == 'aZ09.-*_%7E'",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('aZ09.-*_~') == 'aZ09.-*_%7E'",
+  "query": "orderBy=%22m%22&endBefore=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('aZ09.-*_~') == 'aZ09.-*_%7E'",
+  "query": "orderBy=%22m%22&endAt=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('aZ09.-*_~') == 'aZ09.-*_%7E'",
+  "query": "orderBy=%22m%22&equalTo=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('aZ09.-*_~') == 'aZ09.-*_%7E'",
+  "query": "orderBy=%22%24key%22&endBefore=%22b%22&limitToLast=1",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('!\\'()') == '%21%27%28%29'",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('!\\'()') == '%21%27%28%29'",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('!\\'()') == '%21%27%28%29'",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('!\\'()') == '%21%27%28%29'",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('!\\'()') == '%21%27%28%29'",
+  "query": "orderBy=%22m%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('!\\'()') == '%21%27%28%29'",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('!\\'()') == '%21%27%28%29'",
+  "query": "orderBy=%22m%22&endBefore=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('!\\'()') == '%21%27%28%29'",
+  "query": "orderBy=%22m%22&endAt=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('!\\'()') == '%21%27%28%29'",
+  "query": "orderBy=%22m%22&equalTo=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('!\\'()') == '%21%27%28%29'",
+  "query": "orderBy=%22%24key%22&endBefore=%22b%22&limitToLast=1",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('+/?#&=%') == '%2B%2F%3F%23%26%3D%25'",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('+/?#&=%') == '%2B%2F%3F%23%26%3D%25'",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('+/?#&=%') == '%2B%2F%3F%23%26%3D%25'",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('+/?#&=%') == '%2B%2F%3F%23%26%3D%25'",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('+/?#&=%') == '%2B%2F%3F%23%26%3D%25'",
+  "query": "orderBy=%22m%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('+/?#&=%') == '%2B%2F%3F%23%26%3D%25'",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('+/?#&=%') == '%2B%2F%3F%23%26%3D%25'",
+  "query": "orderBy=%22m%22&endBefore=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('+/?#&=%') == '%2B%2F%3F%23%26%3D%25'",
+  "query": "orderBy=%22m%22&endAt=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('+/?#&=%') == '%2B%2F%3F%23%26%3D%25'",
+  "query": "orderBy=%22m%22&equalTo=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('+/?#&=%') == '%2B%2F%3F%23%26%3D%25'",
+  "query": "orderBy=%22%24key%22&endBefore=%22b%22&limitToLast=1",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('a b') == 'a%20b'",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('a b') == 'a%20b'",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('a b') == 'a%20b'",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('a b') == 'a%20b'",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('a b') == 'a%20b'",
+  "query": "orderBy=%22m%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('a b') == 'a%20b'",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('a b') == 'a%20b'",
+  "query": "orderBy=%22m%22&endBefore=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('a b') == 'a%20b'",
+  "query": "orderBy=%22m%22&endAt=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('a b') == 'a%20b'",
+  "query": "orderBy=%22m%22&equalTo=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('a b') == 'a%20b'",
+  "query": "orderBy=%22%24key%22&endBefore=%22b%22&limitToLast=1",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('\\u00e9\\u00df') == '%C3%A9%C3%9F'",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('\\u00e9\\u00df') == '%C3%A9%C3%9F'",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('\\u00e9\\u00df') == '%C3%A9%C3%9F'",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('\\u00e9\\u00df') == '%C3%A9%C3%9F'",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('\\u00e9\\u00df') == '%C3%A9%C3%9F'",
+  "query": "orderBy=%22m%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('\\u00e9\\u00df') == '%C3%A9%C3%9F'",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('\\u00e9\\u00df') == '%C3%A9%C3%9F'",
+  "query": "orderBy=%22m%22&endBefore=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('\\u00e9\\u00df') == '%C3%A9%C3%9F'",
+  "query": "orderBy=%22m%22&endAt=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('\\u00e9\\u00df') == '%C3%A9%C3%9F'",
+  "query": "orderBy=%22m%22&equalTo=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('\\u00e9\\u00df') == '%C3%A9%C3%9F'",
+  "query": "orderBy=%22%24key%22&endBefore=%22b%22&limitToLast=1",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('\\uD83D\\uDE00') == '%F0%9F%98%80'",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('\\uD83D\\uDE00') == '%F0%9F%98%80'",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('\\uD83D\\uDE00') == '%F0%9F%98%80'",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('\\uD83D\\uDE00') == '%F0%9F%98%80'",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('\\uD83D\\uDE00') == '%F0%9F%98%80'",
+  "query": "orderBy=%22m%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('\\uD83D\\uDE00') == '%F0%9F%98%80'",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('\\uD83D\\uDE00') == '%F0%9F%98%80'",
+  "query": "orderBy=%22m%22&endBefore=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('\\uD83D\\uDE00') == '%F0%9F%98%80'",
+  "query": "orderBy=%22m%22&endAt=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('\\uD83D\\uDE00') == '%F0%9F%98%80'",
+  "query": "orderBy=%22m%22&equalTo=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('\\uD83D\\uDE00') == '%F0%9F%98%80'",
+  "query": "orderBy=%22%24key%22&endBefore=%22b%22&limitToLast=1",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('\\uD83D') == '%3F'",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('\\uD83D') == '%3F'",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('\\uD83D') == '%3F'",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('\\uD83D') == '%3F'",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('\\uD83D') == '%3F'",
+  "query": "orderBy=%22m%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('\\uD83D') == '%3F'",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('\\uD83D') == '%3F'",
+  "query": "orderBy=%22m%22&endBefore=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('\\uD83D') == '%3F'",
+  "query": "orderBy=%22m%22&endAt=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('\\uD83D') == '%3F'",
+  "query": "orderBy=%22m%22&equalTo=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('\\uD83D') == '%3F'",
+  "query": "orderBy=%22%24key%22&endBefore=%22b%22&limitToLast=1",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('\\u2028 \\t') == '%E2%80%A8%20%09'",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('\\u2028 \\t') == '%E2%80%A8%20%09'",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('\\u2028 \\t') == '%E2%80%A8%20%09'",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('\\u2028 \\t') == '%E2%80%A8%20%09'",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('\\u2028 \\t') == '%E2%80%A8%20%09'",
+  "query": "orderBy=%22m%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('\\u2028 \\t') == '%E2%80%A8%20%09'",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('\\u2028 \\t') == '%E2%80%A8%20%09'",
+  "query": "orderBy=%22m%22&endBefore=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('\\u2028 \\t') == '%E2%80%A8%20%09'",
+  "query": "orderBy=%22m%22&endAt=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('\\u2028 \\t') == '%E2%80%A8%20%09'",
+  "query": "orderBy=%22m%22&equalTo=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "http.encodeURL('\\u2028 \\t') == '%E2%80%A8%20%09'",
+  "query": "orderBy=%22%24key%22&endBefore=%22b%22&limitToLast=1",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth.uid.contains != null",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth.uid.contains != null",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth.uid.contains != null",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth.uid.contains != null",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth.uid.contains != null",
+  "query": "orderBy=%22m%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth.uid.contains != null",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth.uid.contains != null",
+  "query": "orderBy=%22m%22&endBefore=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth.uid.contains != null",
+  "query": "orderBy=%22m%22&endAt=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth.uid.contains != null",
+  "query": "orderBy=%22m%22&equalTo=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth.uid.contains != null",
+  "query": "orderBy=%22%24key%22&endBefore=%22b%22&limitToLast=1",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth.uid.contains == null",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.uid.contains == null",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.uid.contains == null",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.uid.contains == null",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.uid.contains == null",
+  "query": "orderBy=%22m%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.uid.contains == null",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.uid.contains == null",
+  "query": "orderBy=%22m%22&endBefore=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.uid.contains == null",
+  "query": "orderBy=%22m%22&endAt=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.uid.contains == null",
+  "query": "orderBy=%22m%22&equalTo=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.uid.contains == null",
+  "query": "orderBy=%22%24key%22&endBefore=%22b%22&limitToLast=1",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth.missing.contains == null)",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth.missing.contains == null)",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth.missing.contains == null)",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth.missing.contains == null)",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth.missing.contains == null)",
+  "query": "orderBy=%22m%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth.missing.contains == null)",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth.missing.contains == null)",
+  "query": "orderBy=%22m%22&endBefore=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth.missing.contains == null)",
+  "query": "orderBy=%22m%22&endAt=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth.missing.contains == null)",
+  "query": "orderBy=%22m%22&equalTo=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth.missing.contains == null)",
+  "query": "orderBy=%22%24key%22&endBefore=%22b%22&limitToLast=1",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.uid['matches'] != null",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth.uid['matches'] != null",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth.uid['matches'] != null",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth.uid['matches'] != null",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth.uid['matches'] != null",
+  "query": "orderBy=%22m%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth.uid['matches'] != null",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth.uid['matches'] != null",
+  "query": "orderBy=%22m%22&endBefore=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth.uid['matches'] != null",
+  "query": "orderBy=%22m%22&endAt=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth.uid['matches'] != null",
+  "query": "orderBy=%22m%22&equalTo=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth.uid['matches'] != null",
+  "query": "orderBy=%22%24key%22&endBefore=%22b%22&limitToLast=1",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(now > 0 ? data.child : 's') != null",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(now > 0 ? data.child : 's') != null",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(now > 0 ? data.child : 's') != null",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(now > 0 ? data.child : 's') != null",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(now > 0 ? data.child : 's') != null",
+  "query": "orderBy=%22m%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(now > 0 ? data.child : 's') != null",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(now > 0 ? data.child : 's') != null",
+  "query": "orderBy=%22m%22&endBefore=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(now > 0 ? data.child : 's') != null",
+  "query": "orderBy=%22m%22&endAt=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(now > 0 ? data.child : 's') != null",
+  "query": "orderBy=%22m%22&equalTo=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(now > 0 ? data.child : 's') != null",
+  "query": "orderBy=%22%24key%22&endBefore=%22b%22&limitToLast=1",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(now > 0 ? data.child : 's') == (now > 0 ? data.child : 's')",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(now > 0 ? data.child : 's') == (now > 0 ? data.child : 's')",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(now > 0 ? data.child : 's') == (now > 0 ? data.child : 's')",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(now > 0 ? data.child : 's') == (now > 0 ? data.child : 's')",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(now > 0 ? data.child : 's') == (now > 0 ? data.child : 's')",
+  "query": "orderBy=%22m%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(now > 0 ? data.child : 's') == (now > 0 ? data.child : 's')",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(now > 0 ? data.child : 's') == (now > 0 ? data.child : 's')",
+  "query": "orderBy=%22m%22&endBefore=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(now > 0 ? data.child : 's') == (now > 0 ? data.child : 's')",
+  "query": "orderBy=%22m%22&endAt=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(now > 0 ? data.child : 's') == (now > 0 ? data.child : 's')",
+  "query": "orderBy=%22m%22&equalTo=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(now > 0 ? data.child : 's') == (now > 0 ? data.child : 's')",
+  "query": "orderBy=%22%24key%22&endBefore=%22b%22&limitToLast=1",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(now > 0 ? 'a'.contains : 's') == 's'",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(now > 0 ? 'a'.contains : 's') == 's'",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(now > 0 ? 'a'.contains : 's') == 's'",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(now > 0 ? 'a'.contains : 's') == 's'",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(now > 0 ? 'a'.contains : 's') == 's'",
+  "query": "orderBy=%22m%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(now > 0 ? 'a'.contains : 's') == 's'",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(now > 0 ? 'a'.contains : 's') == 's'",
+  "query": "orderBy=%22m%22&endBefore=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(now > 0 ? 'a'.contains : 's') == 's'",
+  "query": "orderBy=%22m%22&endAt=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(now > 0 ? 'a'.contains : 's') == 's'",
+  "query": "orderBy=%22m%22&equalTo=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(now > 0 ? 'a'.contains : 's') == 's'",
+  "query": "orderBy=%22%24key%22&endBefore=%22b%22&limitToLast=1",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "data.child != null",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 400,
+  "error": "1:25: Invalid != expression: left operand is not a number, boolean, string, or null.\n",
+  "read": null
+ },
+ {
+  "expr": "(now > 0 ? data.child : data.parent)('o').exists()",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(now > 0 ? data.child : data.parent)('o').exists()",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(now > 0 ? data.child : data.parent)('o').exists()",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(now > 0 ? data.child : data.parent)('o').exists()",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(now > 0 ? data.child : data.parent)('o').exists()",
+  "query": "orderBy=%22m%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(now > 0 ? data.child : data.parent)('o').exists()",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(now > 0 ? data.child : data.parent)('o').exists()",
+  "query": "orderBy=%22m%22&endBefore=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(now > 0 ? data.child : data.parent)('o').exists()",
+  "query": "orderBy=%22m%22&endAt=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(now > 0 ? data.child : data.parent)('o').exists()",
+  "query": "orderBy=%22m%22&equalTo=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(now > 0 ? data.child : data.parent)('o').exists()",
+  "query": "orderBy=%22%24key%22&endBefore=%22b%22&limitToLast=1",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(now < 0 ? data.child : data.parent)('o').exists()",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 500
+ },
+ {
+  "expr": "(now < 0 ? data.child : data.parent)('o').exists()",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 500
+ },
+ {
+  "expr": "(now < 0 ? data.child : data.parent)('o').exists()",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 500
+ },
+ {
+  "expr": "(now < 0 ? data.child : data.parent)('o').exists()",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 500
+ },
+ {
+  "expr": "(now < 0 ? data.child : data.parent)('o').exists()",
+  "query": "orderBy=%22m%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 500
+ },
+ {
+  "expr": "(now < 0 ? data.child : data.parent)('o').exists()",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 500
+ },
+ {
+  "expr": "(now < 0 ? data.child : data.parent)('o').exists()",
+  "query": "orderBy=%22m%22&endBefore=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 500
+ },
+ {
+  "expr": "(now < 0 ? data.child : data.parent)('o').exists()",
+  "query": "orderBy=%22m%22&endAt=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 500
+ },
+ {
+  "expr": "(now < 0 ? data.child : data.parent)('o').exists()",
+  "query": "orderBy=%22m%22&equalTo=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 500
+ },
+ {
+  "expr": "(now < 0 ? data.child : data.parent)('o').exists()",
+  "query": "orderBy=%22%24key%22&endBefore=%22b%22&limitToLast=1",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 500
+ },
+ {
+  "expr": "!((now < 0 ? data.child : data.parent)('o').exists())",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 500
+ },
+ {
+  "expr": "!((now < 0 ? data.child : data.parent)('o').exists())",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 500
+ },
+ {
+  "expr": "!((now < 0 ? data.child : data.parent)('o').exists())",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 500
+ },
+ {
+  "expr": "!((now < 0 ? data.child : data.parent)('o').exists())",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 500
+ },
+ {
+  "expr": "!((now < 0 ? data.child : data.parent)('o').exists())",
+  "query": "orderBy=%22m%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 500
+ },
+ {
+  "expr": "!((now < 0 ? data.child : data.parent)('o').exists())",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 500
+ },
+ {
+  "expr": "!((now < 0 ? data.child : data.parent)('o').exists())",
+  "query": "orderBy=%22m%22&endBefore=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 500
+ },
+ {
+  "expr": "!((now < 0 ? data.child : data.parent)('o').exists())",
+  "query": "orderBy=%22m%22&endAt=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 500
+ },
+ {
+  "expr": "!((now < 0 ? data.child : data.parent)('o').exists())",
+  "query": "orderBy=%22m%22&equalTo=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 500
+ },
+ {
+  "expr": "!((now < 0 ? data.child : data.parent)('o').exists())",
+  "query": "orderBy=%22%24key%22&endBefore=%22b%22&limitToLast=1",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 500
+ },
+ {
+  "expr": "(now > 0 ? 'abc'.contains : 'abc'.beginsWith)('b')",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(now > 0 ? 'abc'.contains : 'abc'.beginsWith)('b')",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(now > 0 ? 'abc'.contains : 'abc'.beginsWith)('b')",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(now > 0 ? 'abc'.contains : 'abc'.beginsWith)('b')",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(now > 0 ? 'abc'.contains : 'abc'.beginsWith)('b')",
+  "query": "orderBy=%22m%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(now > 0 ? 'abc'.contains : 'abc'.beginsWith)('b')",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(now > 0 ? 'abc'.contains : 'abc'.beginsWith)('b')",
+  "query": "orderBy=%22m%22&endBefore=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(now > 0 ? 'abc'.contains : 'abc'.beginsWith)('b')",
+  "query": "orderBy=%22m%22&endAt=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(now > 0 ? 'abc'.contains : 'abc'.beginsWith)('b')",
+  "query": "orderBy=%22m%22&equalTo=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(now > 0 ? 'abc'.contains : 'abc'.beginsWith)('b')",
+  "query": "orderBy=%22%24key%22&endBefore=%22b%22&limitToLast=1",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(now < 0 ? 'abc'.contains : 'abc'.beginsWith)('b')",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(now < 0 ? 'abc'.contains : 'abc'.beginsWith)('b')",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(now < 0 ? 'abc'.contains : 'abc'.beginsWith)('b')",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(now < 0 ? 'abc'.contains : 'abc'.beginsWith)('b')",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(now < 0 ? 'abc'.contains : 'abc'.beginsWith)('b')",
+  "query": "orderBy=%22m%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(now < 0 ? 'abc'.contains : 'abc'.beginsWith)('b')",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(now < 0 ? 'abc'.contains : 'abc'.beginsWith)('b')",
+  "query": "orderBy=%22m%22&endBefore=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(now < 0 ? 'abc'.contains : 'abc'.beginsWith)('b')",
+  "query": "orderBy=%22m%22&endAt=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(now < 0 ? 'abc'.contains : 'abc'.beginsWith)('b')",
+  "query": "orderBy=%22m%22&equalTo=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(now < 0 ? 'abc'.contains : 'abc'.beginsWith)('b')",
+  "query": "orderBy=%22%24key%22&endBefore=%22b%22&limitToLast=1",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(now > 0 ? data.child : 's')('o').exists()",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(now > 0 ? data.child : 's')('o').exists()",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(now > 0 ? data.child : 's')('o').exists()",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(now > 0 ? data.child : 's')('o').exists()",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(now > 0 ? data.child : 's')('o').exists()",
+  "query": "orderBy=%22m%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(now > 0 ? data.child : 's')('o').exists()",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(now > 0 ? data.child : 's')('o').exists()",
+  "query": "orderBy=%22m%22&endBefore=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(now > 0 ? data.child : 's')('o').exists()",
+  "query": "orderBy=%22m%22&endAt=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(now > 0 ? data.child : 's')('o').exists()",
+  "query": "orderBy=%22m%22&equalTo=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(now > 0 ? data.child : 's')('o').exists()",
+  "query": "orderBy=%22%24key%22&endBefore=%22b%22&limitToLast=1",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(data.child)('o').exists()",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(data.child)('o').exists()",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(data.child)('o').exists()",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(data.child)('o').exists()",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(data.child)('o').exists()",
+  "query": "orderBy=%22m%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(data.child)('o').exists()",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(data.child)('o').exists()",
+  "query": "orderBy=%22m%22&endBefore=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(data.child)('o').exists()",
+  "query": "orderBy=%22m%22&endAt=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(data.child)('o').exists()",
+  "query": "orderBy=%22m%22&equalTo=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(data.child)('o').exists()",
+  "query": "orderBy=%22%24key%22&endBefore=%22b%22&limitToLast=1",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(now > 0 ? http.encodeURL : 's')('a b') == 'a%20b'",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(now > 0 ? http.encodeURL : 's')('a b') == 'a%20b'",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(now > 0 ? http.encodeURL : 's')('a b') == 'a%20b'",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(now > 0 ? http.encodeURL : 's')('a b') == 'a%20b'",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(now > 0 ? http.encodeURL : 's')('a b') == 'a%20b'",
+  "query": "orderBy=%22m%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(now > 0 ? http.encodeURL : 's')('a b') == 'a%20b'",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(now > 0 ? http.encodeURL : 's')('a b') == 'a%20b'",
+  "query": "orderBy=%22m%22&endBefore=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(now > 0 ? http.encodeURL : 's')('a b') == 'a%20b'",
+  "query": "orderBy=%22m%22&endAt=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(now > 0 ? http.encodeURL : 's')('a b') == 'a%20b'",
+  "query": "orderBy=%22m%22&equalTo=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(now > 0 ? http.encodeURL : 's')('a b') == 'a%20b'",
+  "query": "orderBy=%22%24key%22&endBefore=%22b%22&limitToLast=1",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(now > 0 ? query.isOrderByChild : data.child)('m')",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(now > 0 ? query.isOrderByChild : data.child)('m')",
+  "query": "orderBy=%22%24key%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(now > 0 ? query.isOrderByChild : data.child)('m')",
+  "query": "orderBy=%22%24value%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(now > 0 ? query.isOrderByChild : data.child)('m')",
+  "query": "orderBy=%22%24priority%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(now > 0 ? query.isOrderByChild : data.child)('m')",
+  "query": "orderBy=%22m%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(now > 0 ? query.isOrderByChild : data.child)('m')",
+  "query": "orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(now > 0 ? query.isOrderByChild : data.child)('m')",
+  "query": "orderBy=%22m%22&endBefore=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(now > 0 ? query.isOrderByChild : data.child)('m')",
+  "query": "orderBy=%22m%22&endAt=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(now > 0 ? query.isOrderByChild : data.child)('m')",
+  "query": "orderBy=%22m%22&equalTo=2",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(now > 0 ? query.isOrderByChild : data.child)('m')",
+  "query": "orderBy=%22%24key%22&endBefore=%22b%22&limitToLast=1",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(now > 0 ? data.child : data.parent)().exists()",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 400,
+  "error": "1:26: child() expects 1 argument.\n",
+  "read": null
+ },
+ {
+  "expr": "now(1) == null",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 400,
+  "error": "1:25: Type error: Function call on target that is not a function.\n",
+  "read": null
+ },
+ {
+  "expr": "auth('a') == null",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 400,
+  "error": "1:25: Type error: Function call on target that is not a function.\n",
+  "read": null
+ },
+ {
+  "expr": "('a')('b') == null",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 400,
+  "error": "1:26: Type error: Function call on target that is not a function.\n",
+  "read": null
+ },
+ {
+  "expr": "(data)('a').exists()",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 400,
+  "error": "1:26: Type error: Function call on target that is not a function.\n",
+  "read": null
+ },
+ {
+  "expr": "(auth.uid)('a') == null",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 400,
+  "error": "1:26: Type error: Function call on target that is not a function.\n",
+  "read": null
+ },
+ {
+  "expr": "(now > 0 ? 'abc' : 's')('b')",
+  "query": "",
+  "indexOn": [
+   "m",
+   "a/b",
+   ".value"
+  ],
+  "load": 400,
+  "error": "1:26: Type error: Function call on target that is not a function.\n",
+  "read": null
+ }
+]

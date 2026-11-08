@@ -16,6 +16,7 @@ import {
 import {
   BAD_PATH_PROGRAMS,
   countRequests,
+  DIFFS_PROGRAMS,
   HARNESS_CAP,
   PROGRAMS,
   programDigest,
@@ -25,15 +26,21 @@ export const TASK_ID = "FS-3-V1-RULES";
 /** The ledger task of the FS-8 corpus (Rules get()/exists() on a bad path). */
 export const TASK_ID_BAD_PATH = "FS-8-RULES-BAD-PATH";
 
-const isBadPath = (program) => program.id.startsWith("fs-rules-v1/bad-path/");
+/** The ledger task of the FS-RULES differences corpus (five claimed differences from the official emulator). */
+export const TASK_ID_DIFFS = "FS-RULES-DIFFS";
+
+const TASKS = [
+  ["fs-rules-v1/bad-path/", TASK_ID_BAD_PATH],
+  ["fs-rules-v1/diffs/", TASK_ID_DIFFS],
+];
+const taskOf = (program) => TASKS.find(([prefix]) => program.id.startsWith(prefix))?.[1] ?? TASK_ID;
 
 /** The ledger task id of a run: one corpus family at a time, so its lines name the right task. */
 export function taskIdFor(programs) {
   if (programs.length === 0) throw new Error("no program to name a task for");
-  const badPath = programs.filter(isBadPath).length;
-  if (badPath !== 0 && badPath !== programs.length)
-    throw new Error("a run mixes FS-3 and FS-8 programs");
-  return badPath ? TASK_ID_BAD_PATH : TASK_ID;
+  const tasks = new Set(programs.map(taskOf));
+  if (tasks.size > 1) throw new Error("a run mixes corpus families");
+  return [...tasks][0];
 }
 /** The synthetic project number fireemu is configured with. */
 export const LOCAL_PROJECT_NUMBER = "123456789012";
@@ -148,12 +155,13 @@ export function confirmedNoAuthRecording(env = process.env, now = Date.now()) {
   return new Date(at).toISOString();
 }
 
-/** The corpus family of FS3_CORPUS: `v1` (FS-3, the default) or `bad-path` (FS-8). */
+/** The corpus family of FS3_CORPUS: `v1` (FS-3, the default), `bad-path` (FS-8) or `diffs`. */
 export function corpusFor(env = process.env) {
   const family = env.FS3_CORPUS ?? "v1";
   if (family === "v1") return PROGRAMS;
   if (family === "bad-path") return BAD_PATH_PROGRAMS;
-  throw new Error(`FS3_CORPUS must be v1 or bad-path, not ${family}`);
+  if (family === "diffs") return DIFFS_PROGRAMS;
+  throw new Error(`FS3_CORPUS must be v1, bad-path or diffs, not ${family}`);
 }
 
 /** Programs selected by id prefix in FS3_PROGRAMS (all of the chosen corpus when unset). */

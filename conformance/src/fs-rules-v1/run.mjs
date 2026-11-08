@@ -10,8 +10,10 @@
 //                                                   Firestore emulator (firebase-tools 15.28.2)
 //   node src/fs-rules-v1/run.mjs export-comparison <out.json>
 //
-// FS3_CORPUS picks the corpus: `v1` (FS-3, the default) or `bad-path` (FS-8, Rules get()/exists()
-// on a path that is not a document of this database). One run never mixes the two.
+// FS3_CORPUS picks the corpus: `v1` (FS-3, the default), `bad-path` (FS-8, Rules get()/exists()
+// on a path that is not a document of this database) or `diffs` (five claimed differences from
+// the official emulator; `diffs-report` prints what production answered against the claims).
+// One run never mixes the families.
 //
 // Production needs FIREEMU_AUTH_SANDBOX_WEB_CONFIG (the sandbox web app config JSON, kept outside
 // the repository), owner ADC, FIREEMU_SANDBOX_LEDGER, FIREEMU_FS3_PRIVATE_DIR and
@@ -32,7 +34,14 @@ import { scanFixture } from "../auth-account/fixture-scan.mjs";
 import { CONFORMANCE_DIR } from "../config.mjs";
 import { resolveFireemuBinary } from "../evidence.mjs";
 import { createContext, SANDBOX_PROJECT } from "../fs-rules/harness.mjs";
-import { BAD_PATH_PROGRAMS, PRINCIPALS, PROGRAMS, validateCorpus } from "./corpus.mjs";
+import {
+  BAD_PATH_PROGRAMS,
+  DIFFS_PROGRAMS,
+  PRINCIPALS,
+  PROGRAMS,
+  validateCorpus,
+} from "./corpus.mjs";
+import { diffsReport } from "./diffs.mjs";
 import { createGrpcAdapter } from "./grpc.mjs";
 import {
   brief,
@@ -330,7 +339,7 @@ async function check() {
   const profile = process.env.FS3_PROFILE ?? "strict";
   const local = await runLocal(programs, { profile });
   const rows = compareRows({ fixture, programs, local });
-  const known = new Set([...PROGRAMS, ...BAD_PATH_PROGRAMS].map((p) => p.id));
+  const known = new Set([...PROGRAMS, ...BAD_PATH_PROGRAMS, ...DIFFS_PROGRAMS].map((p) => p.id));
   const orphans = Object.keys(fixture.programs ?? {}).filter((id) => !known.has(id));
   const summary = {};
   for (const { status } of rows) summary[status] = (summary[status] ?? 0) + 1;
@@ -345,6 +354,16 @@ async function check() {
   console.log(JSON.stringify({ profile, summary, orphans, failures: local.failures }, null, 2));
   if (!rows.every((r) => PASSING.has(r.status)) || orphans.length || local.failures.length)
     process.exitCode = 1;
+}
+
+/** What production answered for each FS-RULES differences row, against the official claim. */
+async function diffsReportCommand() {
+  const fixture = JSON.parse(await readFile(FIXTURE, "utf8"));
+  const rows = diffsReport(fixture);
+  for (const r of rows)
+    console.log(
+      `${r.verdict.padEnd(14)} ${r.row.padEnd(36)} ${r.answer}${r.documents === undefined ? "" : ` docs=${r.documents}`}${r.claim ? ` (official: ${r.claim})` : ""}${r.detail ? ` [${r.detail}]` : ""}`,
+    );
 }
 
 async function exportComparison(out) {
@@ -381,6 +400,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     if (result.error) console.error(result.error);
     process.exitCode = result.exitCode;
   } else if (mode === "check") await check();
+  else if (mode === "diffs-report") await diffsReportCommand();
   else if (mode === "export-comparison") await exportComparison(process.argv[3]);
   else if (mode === "session-local") await sessionLocal();
   else if (mode === "session-official") await sessionOfficial();
@@ -404,7 +424,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     );
   } else {
     console.error(
-      "usage: run.mjs preflight|record-production|check|local|official|export-comparison",
+      "usage: run.mjs preflight|record-production|check|local|official|export-comparison|diffs-report",
     );
     process.exitCode = 2;
   }

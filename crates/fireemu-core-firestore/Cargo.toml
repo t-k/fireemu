@@ -34,3 +34,7 @@ harness = false
 [[bench]]
 name = "document_size_charges"
 harness = false
+
+[[bench]]
+name = "vector_distance"
+harness = false

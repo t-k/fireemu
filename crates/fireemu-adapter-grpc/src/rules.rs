@@ -29,7 +29,10 @@
 //! production; inequality constraints become ranges, `in` a set of candidates, `!=` /
 //! `not-in` an exclusion set, and `request.query` carries `limit`, `offset` and `orderBy`
 //! (`"field ASC, other DESC"`, the Emulator's rendering). The decision never depends on
-//! stored data, so it leaks nothing about it.
+//! stored data, so it leaks nothing about it, except for a branch of the query that names a
+//! document with `__name__ ==`: as in production, the rule is checked against each named
+//! document as stored (a missing one refuses a rule that reads `resource`), and a branch that
+//! names exactly one document is decided by it alone (see `name_plan`).
 //!
 //! Writes serve `getAfter()` from the state every write of the commit will leave behind.
 
@@ -466,6 +469,13 @@ pub struct RulesEnforcer {
     /// Whether an end user may open a read-write transaction: production refuses it with the
     /// ordinary denial (the `strict` profile); the official emulator opens it.
     end_user_transactions: bool,
+    /// Whether a query authorization also gives the official emulator's answers to shapes
+    /// production has not been recorded answering (the `emulator` profile), or refuses them
+    /// (the `strict` profile): an `OR` mixing a branch that names one document with a branch
+    /// that names none is authorized branch by branch only with the official answers
+    /// (production asked for a composite index first, FS-RULES-SHAPES 2026-11-08); the
+    /// `strict` profile proves every branch from its constraints too.
+    official_query_answers: bool,
     /// Which ID-token checks apply (see [`TokenSemantics`]).
     token_semantics: TokenSemantics,
     /// The wall time an unpinned strict session follows; `None` keeps the clock where it is
@@ -511,6 +521,7 @@ impl RulesEnforcer {
             unsigned_id_tokens: None,
             refuse_without_ruleset: false,
             end_user_transactions: true,
+            official_query_answers: true,
             token_semantics: TokenSemantics::default(),
             wall_clock: None,
             listen_stream_lifetime: false,
@@ -639,6 +650,14 @@ impl RulesEnforcer {
     #[must_use]
     pub const fn with_end_user_transactions(mut self, allowed: bool) -> Self {
         self.end_user_transactions = allowed;
+        self
+    }
+
+    /// Sets whether a query authorization also gives the official emulator's answers to
+    /// shapes production has not been recorded answering (see the field).
+    #[must_use]
+    pub const fn with_official_query_answers(mut self, official: bool) -> Self {
+        self.official_query_answers = official;
         self
     }
 
@@ -1211,19 +1230,33 @@ impl RulesEnforcer {
             seen: RefCell::new(BTreeSet::new()),
         };
         let list_max = multi_total_max();
-        if let Some(candidates) = exact_name_candidates(parent, query) {
-            return authorize_exact_names(
-                ruleset,
-                &sink,
-                principal,
-                query,
-                &candidates,
-                &reader,
-                now,
-            );
+        let disjunctions = query.dnf();
+        let mut plans: Vec<NamePlan> = disjunctions
+            .iter()
+            .map(|disjunction| name_plan(parent, query, disjunction))
+            .collect();
+        if !self.official_query_answers && plans.iter().any(|plan| plan.names.is_empty()) {
+            // A branch naming no document beside a named one: production's Rules answer was
+            // not recorded, so every branch is proven from its constraints too.
+            for plan in &mut plans {
+                plan.decides = false;
+            }
+        }
+        let candidates: Vec<DocumentPath> = plans
+            .iter()
+            .flat_map(|plan| plan.names.iter().cloned())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        if !candidates.is_empty() {
+            authorize_exact_names(ruleset, &sink, principal, query, &candidates, &reader, now)?;
         }
         for placeholder in placeholder_paths(parent, query)? {
-            for disjunction in query.dnf() {
+            for (disjunction, plan) in disjunctions.iter().zip(&plans) {
+                // A branch that names one document is decided by that document alone.
+                if plan.decides {
+                    continue;
+                }
                 let ctx = RequestContext {
                     service: RulesService::Firestore,
                     method: Method::List,
@@ -1232,7 +1265,10 @@ impl RulesEnforcer {
                         Principal::User(a) => Some(a.clone()),
                         _ => None,
                     },
-                    resource: Some(abstract_resource(&disjunction)),
+                    resource: Some(abstract_resource(
+                        disjunction,
+                        query.effective_order_by().iter().map(|order| &order.field),
+                    )),
                     request_resource: None,
                     time_unix_nanos: now.as_nanos(),
                     abstract_path: true,
@@ -1686,7 +1722,10 @@ pub fn write_guard<'a>(
 /// map of the constrained fields (equality, `array-contains` as a partial list, `is null`),
 /// an undetermined id and name. Everything else is undetermined, so a rule that depends on
 /// it cannot be proven.
-fn abstract_resource(disjunction: &[FilterExpr]) -> RulesValue {
+fn abstract_resource<'a>(
+    disjunction: &'a [FilterExpr],
+    ordered: impl IntoIterator<Item = &'a FieldPath>,
+) -> RulesValue {
     let mut data: BTreeMap<String, RulesValue> = BTreeMap::new();
     // Inequality filters on one field combine into one range (Firestore requires every
     // range filter of a field to share the value's class); an equality wins over them.
@@ -1782,6 +1821,7 @@ fn abstract_resource(disjunction: &[FilterExpr]) -> RulesValue {
             set_nested_exclusion(&mut data, field, excluded);
         }
     }
+    require_result_fields(&mut data, disjunction, ordered);
     let mut m = BTreeMap::new();
     m.insert("data".to_owned(), RulesValue::PartialMap(data));
     m.insert("id".to_owned(), RulesValue::Unknown);
@@ -1960,6 +2000,49 @@ fn set_nested(fields: &mut BTreeMap<String, RulesValue>, path: &FieldPath, value
     }
 }
 
+/// Makes every field a result must hold a key of `data`.
+fn require_result_fields<'a>(
+    data: &mut BTreeMap<String, RulesValue>,
+    disjunction: &'a [FilterExpr],
+    ordered: impl IntoIterator<Item = &'a FieldPath>,
+) {
+    // A key the proof leaves out of `data` reads as absent from it (`k in resource.data` is
+    // false), so every field a result must hold is a key: any filtered field (`IS_NOT_NULL`,
+    // `IS_NAN`, `IS_NOT_NAN`, an empty `in` and the like carry no value constraint) and every
+    // ordered field, which cursors also bound. Its value stays undetermined.
+    let filtered = disjunction.iter().filter_map(|atom| match atom {
+        FilterExpr::Field { field, .. } | FilterExpr::Unary { field, .. } => Some(field),
+        FilterExpr::And(_) | FilterExpr::Or(_) => None,
+    });
+    for field in filtered.chain(ordered) {
+        if !field.is_document_name() {
+            ensure_present(data, field);
+        }
+    }
+}
+
+/// Makes `path` a key of `fields` (an undetermined value) unless it is one already. A level
+/// that is not a partial map (an exact map, `null`, a scalar) is left as it is: the query
+/// already fixes it.
+fn ensure_present(fields: &mut BTreeMap<String, RulesValue>, path: &FieldPath) {
+    let segments = path.segments();
+    let Some((last, parents)) = segments.split_last() else {
+        return;
+    };
+    let mut map = fields;
+    for segment in parents {
+        let entry = map
+            .entry(segment.clone())
+            .or_insert_with(|| RulesValue::PartialMap(BTreeMap::new()));
+        map = match entry {
+            RulesValue::PartialMap(m) => m,
+            RulesValue::PartialMapExcluding { fields, .. } => fields,
+            _ => return,
+        };
+    }
+    map.entry(last.clone()).or_insert(RulesValue::Unknown);
+}
+
 /// Merges a parent-level exclusion with any partial child constraints already present at that
 /// path. Query proofs need both facts: a child range remains available to the evaluator while
 /// the complete map is known not to equal each excluded value.
@@ -2090,42 +2173,53 @@ pub fn placeholder_paths(parent: &Parent, query: &Query) -> Result<Vec<DocumentP
     Ok(vec![path])
 }
 
-/// Finite same-database candidates of a pure `__name__ ==`/`in` query. Any additional
-/// predicate, cursor, offset or limit falls back to the content-independent constraint proof.
-fn exact_name_candidates(parent: &Parent, query: &Query) -> Option<Vec<DocumentPath>> {
-    if query.limit.is_some()
-        || query.offset != 0
-        || query.start_at.is_some()
-        || query.end_at.is_some()
-    {
-        return None;
-    }
+/// How one branch of a query's disjunctive normal form is authorized from the documents it
+/// names with `__name__ ==`.
+struct NamePlan {
+    /// The named documents inside the query's scope, checked against the rule as stored.
+    names: Vec<DocumentPath>,
+    /// The named document alone decides the branch: the branch names exactly one document.
+    /// Otherwise the branch also needs its constraint proof.
+    decides: bool,
+}
+
+/// The plan of one branch, as production answered (FS-RULES-DIFFS, FS-RULES-SHAPES and
+/// FS-RULES-SHAPES-TWO, 2026-11-08): one named document decides its branch whatever else the
+/// branch filters on (`owner == uid AND documentId() == <missing or foreign>` refused,
+/// `documentId() == <own> AND n == 1` allowed), also with a limit, a cursor or an offset
+/// (`name-offset` allowed, `foreign-offset` refused); two names in one branch are refused even
+/// when both documents pass (`two-names-own`), so they keep the constraint proof. A branch
+/// naming a document outside the query's scope (or none) is proven from its constraints alone.
+fn name_plan(parent: &Parent, query: &Query, disjunction: &[FilterExpr]) -> NamePlan {
     let prefix = format!(
         "projects/{}/databases/{}/documents/",
         parent.project.as_str(),
         parent.database.as_str()
     );
-    let mut candidates = BTreeSet::new();
-    for disjunction in query.dnf() {
-        let [FilterExpr::Field {
-            field,
-            op: FieldOp::Equal,
-            value: Value::Reference(reference),
-        }] = disjunction.as_slice()
-        else {
-            return None;
-        };
-        if !field.is_document_name() {
-            return None;
-        }
-        let relative = reference.strip_prefix(&prefix)?;
-        let path = DocumentPath::parse(&parent.project, &parent.database, relative).ok()?;
-        if !query_scope_contains(&query.scope, &path) {
-            return None;
-        }
-        candidates.insert(path);
+    let references: Vec<&String> = disjunction
+        .iter()
+        .filter_map(|atom| match atom {
+            FilterExpr::Field {
+                field,
+                op: FieldOp::Equal,
+                value: Value::Reference(reference),
+            } if field.is_document_name() => Some(reference),
+            _ => None,
+        })
+        .collect();
+    let names: Option<Vec<DocumentPath>> = references
+        .iter()
+        .map(|reference| {
+            let relative = reference.strip_prefix(&prefix)?;
+            let path = DocumentPath::parse(&parent.project, &parent.database, relative).ok()?;
+            query_scope_contains(&query.scope, &path).then_some(path)
+        })
+        .collect();
+    let names = names.unwrap_or_default();
+    NamePlan {
+        decides: names.len() == 1,
+        names,
     }
-    (!candidates.is_empty()).then(|| candidates.into_iter().collect())
 }
 
 fn query_scope_contains(
@@ -2262,24 +2356,156 @@ mod tests {
     use fireemu_core_rules::value::RulesValue;
     use std::collections::BTreeMap;
 
+    /// Whether the dotted `path` is a key chain of the query's `data` (each parent a map).
+    fn holds_key(data: &BTreeMap<String, RulesValue>, path: &FieldPath) -> bool {
+        let mut map = data;
+        let segments = path.segments();
+        for (i, segment) in segments.iter().enumerate() {
+            let Some(value) = map.get(segment) else {
+                return false;
+            };
+            if i + 1 == segments.len() {
+                return true;
+            }
+            map = match value {
+                RulesValue::PartialMap(m) => m,
+                RulesValue::PartialMapExcluding { fields, .. } => fields,
+                // A level the query fixes to an exact value (a map, null, a scalar) matches no
+                // document holding the path: the query is empty, so it holds vacuously.
+                _ => return true,
+            };
+        }
+        true
+    }
+
+    fn atom() -> impl proptest::strategy::Strategy<Value = FilterExpr> {
+        use fireemu_core_firestore::query::UnaryOp;
+        use proptest::prelude::*;
+        let field = prop::sample::select(vec!["x", "y", "x.y", "x.z", "m.n", "__name__"])
+            .prop_map(|f| FieldPath::parse(f).unwrap());
+        let value = prop_oneof![
+            Just(Value::Integer(1)),
+            Just(Value::Null),
+            Just(Value::Array(vec![])),
+            Just(Value::Array(vec![Value::Integer(1)])),
+            Just(Value::Map(BTreeMap::new())),
+        ];
+        let op = prop::sample::select(vec![
+            FieldOp::Equal,
+            FieldOp::NotEqual,
+            FieldOp::LessThan,
+            FieldOp::GreaterThanOrEqual,
+            FieldOp::In,
+            FieldOp::NotIn,
+            FieldOp::ArrayContains,
+            FieldOp::ArrayContainsAny,
+        ]);
+        let unary = prop::sample::select(vec![
+            UnaryOp::IsNull,
+            UnaryOp::IsNan,
+            UnaryOp::IsNotNull,
+            UnaryOp::IsNotNan,
+        ]);
+        prop_oneof![
+            (field.clone(), op, value).prop_map(|(field, op, value)| FilterExpr::Field {
+                field,
+                op,
+                value
+            }),
+            (field, unary).prop_map(|(field, op)| FilterExpr::Unary { field, op }),
+        ]
+    }
+
+    proptest::proptest! {
+        /// Every field a result must hold (filtered or ordered) is a key of the query's
+        /// `data`, whatever the operator: a missing key reads as absent from it.
+        #[test]
+        fn every_filtered_or_ordered_field_is_a_key_of_the_query_data(
+            atoms in proptest::collection::vec(atom(), 0..5),
+            ordered in proptest::collection::vec(
+                proptest::sample::select(vec!["x", "z", "x.y", "x.w", "__name__"]), 0..3),
+        ) {
+            let ordered: Vec<FieldPath> =
+                ordered.iter().map(|f| FieldPath::parse(f).unwrap()).collect();
+            let RulesValue::Map(resource) = abstract_resource(&atoms, &ordered) else {
+                panic!("resource should be a map");
+            };
+            let Some(RulesValue::PartialMap(data)) = resource.get("data") else {
+                panic!("resource data should be a partial map");
+            };
+            let fields = atoms.iter().filter_map(|atom| match atom {
+                FilterExpr::Field { field, .. } | FilterExpr::Unary { field, .. } => Some(field),
+                _ => None,
+            });
+            for field in fields.chain(ordered.iter()) {
+                if !field.is_document_name() {
+                    proptest::prop_assert!(holds_key(data, field), "{} missing from {:?}", field.canonical(), data);
+                }
+            }
+        }
+    }
+
+    /// A field below a map the query both excludes and constrains in part is kept in the
+    /// excluding map's known fields, next to the exclusion.
+    #[test]
+    fn a_required_field_below_an_excluded_map_is_kept_with_the_exclusion() {
+        use fireemu_core_firestore::query::UnaryOp;
+        let path = |p: &str| FieldPath::parse(p).unwrap();
+        let resource = abstract_resource(
+            &[
+                FilterExpr::Field {
+                    field: path("x"),
+                    op: FieldOp::NotEqual,
+                    value: Value::Map(BTreeMap::new()),
+                },
+                FilterExpr::Field {
+                    field: path("x.y"),
+                    op: FieldOp::Equal,
+                    value: Value::Integer(1),
+                },
+                FilterExpr::Unary {
+                    field: path("x.z"),
+                    op: UnaryOp::IsNotNull,
+                },
+            ],
+            &[path("x.w")],
+        );
+        let RulesValue::Map(resource) = resource else {
+            panic!("resource should be a map");
+        };
+        let Some(RulesValue::PartialMap(data)) = resource.get("data") else {
+            panic!("resource data should be a partial map");
+        };
+        let Some(RulesValue::PartialMapExcluding { fields, excluded }) = data.get("x") else {
+            panic!("x keeps its exclusion: {data:?}");
+        };
+        assert_eq!(excluded, &vec![RulesValue::Map(BTreeMap::new())]);
+        assert_eq!(fields.get("y"), Some(&RulesValue::Int(1)));
+        assert_eq!(fields.get("z"), Some(&RulesValue::Unknown));
+        assert_eq!(fields.get("w"), Some(&RulesValue::Unknown));
+    }
+
     #[test]
     fn abstract_resource_retains_parent_exclusion_when_nested_exclusion_is_added() {
         let parent = FieldPath::parse("meta").unwrap();
         let nested = FieldPath::parse("meta.score").unwrap();
         let mut excluded_map = BTreeMap::new();
         excluded_map.insert("score".to_owned(), Value::Integer(6));
-        let resource = abstract_resource(&[
-            FilterExpr::Field {
-                field: parent,
-                op: FieldOp::NotEqual,
-                value: Value::Map(excluded_map),
-            },
-            FilterExpr::Field {
-                field: nested,
-                op: FieldOp::NotEqual,
-                value: Value::Integer(5),
-            },
-        ]);
+        let resource = abstract_resource(
+            &[
+                FilterExpr::Field {
+                    field: parent,
+                    op: FieldOp::NotEqual,
+                    value: Value::Map(excluded_map),
+                },
+                FilterExpr::Field {
+                    field: nested,
+                    op: FieldOp::NotEqual,
+                    value: Value::Integer(5),
+                },
+            ],
+            [],
+        );
 
         let RulesValue::Map(resource) = resource else {
             panic!("resource should be a map");

@@ -401,7 +401,11 @@ enum Resume {
 }
 
 /// An immutable snapshot row is encoded only after its outbound channel slot is reserved.
-/// This retains O(N) shared handles and the payloads they own, not O(page) snapshot memory.
+///
+/// The selected handles are the refresh's pinned snapshot: they share each document with the
+/// store and keep a selected version alive if a later write replaces it before delivery. Change
+/// rows of one target are queued as a run, a pointer per row, and expanded one row at a time
+/// when sent; the frames are the rows in order, exactly as if each row had been queued alone.
 #[derive(Debug, Clone, PartialEq)]
 enum PendingListenResponse {
     Wire(pb::ListenResponse),
@@ -409,6 +413,11 @@ enum PendingListenResponse {
         document: Arc<Document>,
         target_id: i32,
         removed: bool,
+    },
+    /// Consecutive change rows of one target (`removed: false`), in send order.
+    Documents {
+        documents: Vec<Arc<Document>>,
+        target_id: i32,
     },
 }
 
@@ -419,29 +428,46 @@ impl From<pb::ListenResponse> for PendingListenResponse {
 }
 
 impl PendingListenResponse {
+    /// Bytes this queued entry holds outside the shared documents themselves.
+    #[cfg(test)]
+    fn queued_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + match self {
+                Self::Documents { documents, .. } => {
+                    documents.capacity() * std::mem::size_of::<Arc<Document>>()
+                }
+                Self::Wire(_) | Self::Document { .. } => 0,
+            }
+    }
+
     #[cfg(test)]
     fn as_wire(&self) -> Option<&pb::ListenResponse> {
         match self {
             Self::Wire(response) => Some(response),
-            Self::Document { .. } => None,
+            Self::Document { .. } | Self::Documents { .. } => None,
         }
     }
 
-    /// The lifecycle observer only needs response kinds and target identities. Keep its complete batch framing without copying or encoding a document payload.
-    fn observer_metadata(&self) -> pb::ListenResponse {
+    /// The lifecycle observer only needs response kinds and target identities. Keep its complete batch framing, one entry per frame, without copying or encoding a document payload.
+    fn observer_metadata(&self, metadata: &mut Vec<pb::ListenResponse>) {
+        let row = |target_id: i32, removed: bool| pb::ListenResponse {
+            response_type: Some(pb::listen_response::ResponseType::DocumentChange(
+                pb::DocumentChange {
+                    document: None,
+                    target_ids: if removed { vec![] } else { vec![target_id] },
+                    removed_target_ids: if removed { vec![target_id] } else { vec![] },
+                },
+            )),
+        };
         match self {
-            Self::Wire(response) => response.clone(),
+            Self::Wire(response) => metadata.push(response.clone()),
             Self::Document {
                 target_id, removed, ..
-            } => pb::ListenResponse {
-                response_type: Some(pb::listen_response::ResponseType::DocumentChange(
-                    pb::DocumentChange {
-                        document: None,
-                        target_ids: if *removed { vec![] } else { vec![*target_id] },
-                        removed_target_ids: if *removed { vec![*target_id] } else { vec![] },
-                    },
-                )),
-            },
+            } => metadata.push(row(*target_id, *removed)),
+            Self::Documents {
+                documents,
+                target_id,
+            } => metadata.extend(documents.iter().map(|_| row(*target_id, false))),
         }
     }
 
@@ -461,6 +487,7 @@ impl PendingListenResponse {
                     },
                 )),
             },
+            Self::Documents { .. } => unreachable!("a run is expanded before it is encoded"),
         }
     }
 }
@@ -483,6 +510,31 @@ struct TargetState {
     current: bool,
     /// Responses produced by the last refresh, drained by the caller.
     pending: Vec<PendingListenResponse>,
+}
+
+/// The queued responses one frame at a time, in send order: a run yields its rows, each moved
+/// out (and so released after it is sent) as it is reached.
+fn expand_pending(out: Vec<PendingListenResponse>) -> impl Iterator<Item = PendingListenResponse> {
+    out.into_iter().flat_map(|response| {
+        let (run, single) = match response {
+            PendingListenResponse::Documents {
+                documents,
+                target_id,
+            } => (Some((documents, target_id)), None),
+            other => (None, Some(other)),
+        };
+        run.into_iter()
+            .flat_map(|(documents, target_id)| {
+                documents
+                    .into_iter()
+                    .map(move |document| PendingListenResponse::Document {
+                        document,
+                        target_id,
+                        removed: false,
+                    })
+            })
+            .chain(single)
+    })
 }
 
 #[cfg(test)]
@@ -712,13 +764,13 @@ pub(crate) async fn listen_stream_observed(
             }},
         };
         if let Some(observer) = observer.as_ref() {
-            let metadata = out
-                .iter()
-                .map(PendingListenResponse::observer_metadata)
-                .collect::<Vec<_>>();
+            let mut metadata = Vec::new();
+            for response in &out {
+                response.observer_metadata(&mut metadata);
+            }
             observer.exchange(request.as_ref(), &metadata);
         }
-        for response in out {
+        for response in expand_pending(out) {
             let Ok(permit) = tx.reserve().await else {
                 return;
             };
@@ -1917,10 +1969,19 @@ fn encode_listen_document(document: &Document) -> pb::Document {
 fn out_change(doc: Arc<Document>, id: i32, out: &mut Vec<PendingListenResponse>) {
     #[cfg(test)]
     LISTEN_DOCUMENT_HANDLES.with(|handles| handles.borrow_mut().push(Arc::downgrade(&doc)));
-    out.push(PendingListenResponse::Document {
-        document: doc,
+    if let Some(PendingListenResponse::Documents {
+        documents,
+        target_id,
+    }) = out.last_mut()
+    {
+        if *target_id == id {
+            documents.push(doc);
+            return;
+        }
+    }
+    out.push(PendingListenResponse::Documents {
+        documents: vec![doc],
         target_id: id,
-        removed: false,
     });
 }
 
@@ -1982,6 +2043,9 @@ impl WireCommit {
         }
     }
 }
+
+#[cfg(test)]
+mod frame_identity_tests;
 
 #[cfg(test)]
 mod refresh_tests {
@@ -2229,9 +2293,7 @@ mod refresh_tests {
     }
 
     fn assert_reset_replay(out: &[PendingListenResponse], value: &str) {
-        let out = out
-            .iter()
-            .cloned()
+        let out = expand_pending(out.to_vec())
             .map(PendingListenResponse::encode)
             .collect::<Vec<_>>();
         assert!(out.iter().any(|response| matches!(
@@ -2301,6 +2363,126 @@ mod refresh_tests {
         }
     }
 
+    /// Measures delivery through the real producer channel, without retaining received rows.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "release Listen delivery and external RSS measurement"]
+    #[allow(clippy::too_many_lines)]
+    async fn measure_listen_initial_snapshot_delivery() {
+        let count = std::env::var("FIREEMU_LISTEN_MEASURE_DOCUMENTS")
+            .ok()
+            .map_or(100_000, |value| value.parse::<usize>().unwrap());
+        assert!(count > 0);
+        let setup_start = std::time::Instant::now();
+        let fixture = generation_fixture();
+        for start in (0..count).step_by(500) {
+            let writes = (start..(start + 500).min(count))
+                .map(|index| {
+                    let mut write = set(&format!("measured/d{index:06}"));
+                    let WriteOp::Set { fields, .. } = &mut write.op else {
+                        unreachable!()
+                    };
+                    fields.insert("payload".to_owned(), Value::String("x".repeat(1024)));
+                    write
+                })
+                .collect::<Vec<_>>();
+            fixture
+                .context
+                .local
+                .commit_writes(fixture.parent.as_ref().unwrap(), &writes, &|_, _, _| Ok(()))
+                .unwrap();
+        }
+        eprintln!(
+            "listen_delivery_setup_done {}",
+            serde_json::json!({
+                "pid": std::process::id(), "documents": count, "payload_bytes_per_document": 1024,
+                "setup_micros": setup_start.elapsed().as_micros(), "runtime_workers": 2,
+                "response_channel_capacity": 256,
+            })
+        );
+        let (requests, inbound) = mpsc::channel(1);
+        let (responses, mut outbound) = mpsc::channel(256);
+        let stream = tokio::spawn(listen_stream(
+            fixture.context,
+            tokio_stream::wrappers::ReceiverStream::new(inbound),
+            responses,
+        ));
+        let start = std::time::Instant::now();
+        requests
+            .send(Ok(query_request(1, "measured")))
+            .await
+            .unwrap();
+        let mut first_add_micros = None;
+        let mut first_document_micros = None;
+        let mut received = 0;
+        let mut current_boundary = None;
+        loop {
+            let response = tokio::time::timeout(Duration::from_secs(60), outbound.recv())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            let elapsed = start.elapsed().as_micros();
+            match response.response_type.unwrap() {
+                pb::listen_response::ResponseType::DocumentChange(change) => {
+                    assert!(first_add_micros.is_some());
+                    assert!(current_boundary.is_none());
+                    assert_eq!(change.target_ids, [1]);
+                    assert!(change.removed_target_ids.is_empty());
+                    let document = change.document.unwrap();
+                    assert!(document.name.contains("/documents/measured/d"));
+                    first_document_micros.get_or_insert(elapsed);
+                    received += 1;
+                }
+                pb::listen_response::ResponseType::TargetChange(change) => {
+                    use pb::target_change::TargetChangeType as Kind;
+                    match Kind::try_from(change.target_change_type).unwrap() {
+                        Kind::Add => {
+                            assert!(first_add_micros.replace(elapsed).is_none());
+                            assert_eq!(change.target_ids, [1]);
+                            assert_eq!(received, 0);
+                        }
+                        Kind::Current => {
+                            assert_eq!(received, count);
+                            assert_eq!(change.target_ids, [1]);
+                            assert!(current_boundary
+                                .replace((change.resume_token, change.read_time))
+                                .is_none());
+                        }
+                        Kind::NoChange => {
+                            assert!(change.target_ids.is_empty());
+                            assert_eq!(
+                                current_boundary,
+                                Some((change.resume_token, change.read_time))
+                            );
+                            break;
+                        }
+                        other => panic!("unexpected target change: {other:?}"),
+                    }
+                }
+                other => panic!("unexpected response: {other:?}"),
+            }
+        }
+        assert_eq!(received, count);
+        assert!(first_document_micros.is_some());
+        let complete_micros = start.elapsed().as_micros();
+        drop(outbound);
+        drop(requests);
+        tokio::time::timeout(Duration::from_secs(5), stream)
+            .await
+            .unwrap()
+            .unwrap();
+        eprintln!(
+            "listen_delivery_measure {}",
+            serde_json::json!({
+                "documents": received, "payload_bytes_per_document": 1024,
+                "runtime_workers": 2, "response_channel_capacity": 256,
+                "first_add_micros": first_add_micros, "first_document_micros": first_document_micros,
+                "complete_micros": complete_micros, "transport": "in-process mpsc receiver",
+                "retained_memory_bound": "O(N) immutable handles and retained payloads",
+            })
+        );
+    }
+
     #[test]
     #[ignore = "bounded initial snapshot encoding measurement"]
     fn measure_listen_initial_snapshot_encoding() {
@@ -2345,6 +2527,7 @@ mod refresh_tests {
         .unwrap();
         let selection_micros = start.elapsed().as_micros();
         assert_eq!(ENCODED_LISTEN_DOCUMENTS.with(std::cell::Cell::get), 0);
+        let plans = expand_pending(plans).collect::<Vec<_>>();
         let selected_handles = plans
             .iter()
             .filter(|plan| matches!(plan, PendingListenResponse::Document { .. }))
@@ -2676,6 +2859,50 @@ mod refresh_tests {
         .is_none());
     }
 
+    /// A full refresh queues each snapshot row as one shared handle, not as one response-sized
+    /// entry: the queue between selection and delivery grows by a pointer per row.
+    #[test]
+    fn full_refresh_queues_a_handle_per_snapshot_row() {
+        const ROWS: usize = 2_000;
+        let mut fixture = generation_fixture();
+        let writes = (0..ROWS)
+            .map(|index| set(&format!("queued/d{index:05}")))
+            .collect::<Vec<_>>();
+        for chunk in writes.chunks(500) {
+            fixture
+                .context
+                .local
+                .commit_writes(fixture.parent.as_ref().unwrap(), chunk, &|_, _, _| Ok(()))
+                .unwrap();
+        }
+        let mut out = Vec::new();
+        handle_listen_request(
+            &fixture.context,
+            &mut fixture.parent,
+            &mut fixture.targets,
+            &query_request(2, "queued"),
+            &mut fixture.cache,
+            &mut fixture.last_snapshot_version,
+            &mut out,
+        )
+        .unwrap();
+        let rows = expand_pending(out.clone())
+            .filter(|row| matches!(row, PendingListenResponse::Document { target_id: 2, .. }))
+            .count();
+        assert_eq!(rows, ROWS);
+        let queued = out
+            .iter()
+            .map(PendingListenResponse::queued_bytes)
+            .sum::<usize>();
+        let bound = ROWS * 2 * std::mem::size_of::<Arc<Document>>()
+            + 16 * std::mem::size_of::<PendingListenResponse>();
+        assert!(
+            queued <= bound,
+            "{queued} queued bytes for {ROWS} rows (bound {bound}, entry {} bytes)",
+            std::mem::size_of::<PendingListenResponse>()
+        );
+    }
+
     #[test]
     fn deferred_snapshot_rows_and_boundaries_survive_writes_deletes_and_restore() {
         let mut fixture = generation_fixture();
@@ -2717,8 +2944,7 @@ mod refresh_tests {
             .local
             .restore_scope(&fixture.scope, &restored_snapshot("replacement"))
             .unwrap();
-        let encoded = out
-            .into_iter()
+        let encoded = expand_pending(out)
             .map(PendingListenResponse::encode)
             .collect::<Vec<_>>();
         let document = encoded
@@ -2916,6 +3142,174 @@ mod refresh_tests {
         assert_eq!(local.listen_ring_count(), 0);
     }
 
+    /// A client that stops reading in the middle of a large run holds the producer at its next
+    /// reserved slot: rows are encoded one slot ahead, never the rest of the run. Dropping the
+    /// client then ends the producer and releases every queued handle the store does not own.
+    #[tokio::test]
+    async fn slow_client_mid_run_bounds_encoding_and_cancellation_releases_the_run() {
+        const ROWS: usize = 300;
+        let fixture = generation_fixture();
+        let parent = fixture.parent.as_ref().unwrap().clone();
+        let writes = (0..ROWS)
+            .map(|index| set(&format!("paged/d{index:04}")))
+            .collect::<Vec<_>>();
+        fixture
+            .context
+            .local
+            .commit_writes(&parent, &writes, &|_, _, _| Ok(()))
+            .unwrap();
+        let local = Arc::clone(&fixture.context.local);
+        let (requests, inbound) = mpsc::channel(1);
+        let (responses, mut outbound) = mpsc::channel(4);
+        ENCODED_LISTEN_DOCUMENTS.with(|count| count.set(0));
+        LISTEN_DOCUMENT_HANDLES.with(|handles| handles.borrow_mut().clear());
+        let stream = tokio::spawn(listen_stream(
+            fixture.context,
+            tokio_stream::wrappers::ReceiverStream::new(inbound),
+            responses,
+        ));
+        requests.send(Ok(query_request(1, "paged"))).await.unwrap();
+        let mut documents = 0;
+        while documents < 40 {
+            let response = outbound.recv().await.unwrap().unwrap();
+            if matches!(
+                response.response_type,
+                Some(pb::listen_response::ResponseType::DocumentChange(_))
+            ) {
+                documents += 1;
+            }
+        }
+        // Writes landing now replace selected rows; the run still holds the selected versions.
+        local
+            .commit_writes(&parent, &writes[100..120], &|_, _, _| Ok(()))
+            .unwrap();
+        for _ in 0..64 {
+            tokio::task::yield_now().await;
+        }
+        let encoded = ENCODED_LISTEN_DOCUMENTS.with(std::cell::Cell::get);
+        assert!(
+            encoded <= documents + 4 + 1,
+            "{encoded} rows encoded for {documents} read through a 4-slot channel"
+        );
+        LISTEN_DOCUMENT_HANDLES.with(|handles| {
+            let alive = handles
+                .borrow()
+                .iter()
+                .filter(|weak| weak.strong_count() > 0)
+                .count();
+            assert_eq!(
+                alive, ROWS,
+                "the undelivered rows stay pinned until sent or dropped"
+            );
+        });
+        drop(outbound);
+        drop(requests);
+        tokio::time::timeout(Duration::from_secs(5), stream)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(ENCODED_LISTEN_DOCUMENTS.with(std::cell::Cell::get) <= documents + 4 + 1);
+        let stored = local
+            .live_document_handles(&Scope::Project("demo-app".to_owned()))
+            .into_values()
+            .flatten()
+            .collect::<Vec<_>>();
+        LISTEN_DOCUMENT_HANDLES.with(|handles| {
+            assert_eq!(handles.borrow().len(), ROWS);
+            for weak in handles.borrow().iter() {
+                if let Some(document) = weak.upgrade() {
+                    assert!(
+                        stored.iter().any(|live| Arc::ptr_eq(live, &document)),
+                        "a replaced selected version outlived the cancelled stream"
+                    );
+                }
+            }
+        });
+    }
+
+    use proptest::strategy::Strategy as _;
+
+    #[derive(Debug, Clone)]
+    enum QueuedRow {
+        Wire(i32),
+        Change(i32),
+        Removal(i32),
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config { cases: 256, failure_persistence: None, ..Default::default() })]
+        /// Queuing rows through `out_change` (runs) and expanding them gives the rows in the
+        /// order they were queued, each as the single-row entry it stands for.
+        #[test]
+        fn queued_runs_expand_to_the_rows_in_queue_order(
+            rows in proptest::collection::vec(
+                proptest::prop_oneof![
+                    (0_i32..3).prop_map(QueuedRow::Wire),
+                    (0_i32..3).prop_map(QueuedRow::Change),
+                    (0_i32..3).prop_map(QueuedRow::Removal),
+                ],
+                0..64,
+            )
+        ) {
+            let state = state_with_value("v");
+            let document = state.get_shared(&path("restored/a")).unwrap();
+            let mut queued = Vec::new();
+            let mut expected = Vec::new();
+            for (index, row) in rows.iter().enumerate() {
+                let mut copy = (*document).clone();
+                copy.version = CommitVersion::from_value(u64::try_from(index).unwrap() + 1);
+                let handle = Arc::new(copy);
+                match row {
+                    QueuedRow::Wire(id) => {
+                        let wire = target_change(
+                            pb::target_change::TargetChangeType::NoChange,
+                            vec![*id],
+                            None,
+                            None,
+                        );
+                        queued.push(wire.clone());
+                        expected.push(wire);
+                    }
+                    QueuedRow::Change(id) => {
+                        out_change(Arc::clone(&handle), *id, &mut queued);
+                        expected.push(PendingListenResponse::Document {
+                            document: handle,
+                            target_id: *id,
+                            removed: false,
+                        });
+                    }
+                    QueuedRow::Removal(id) => {
+                        let removal = PendingListenResponse::Document {
+                            document: handle,
+                            target_id: *id,
+                            removed: true,
+                        };
+                        queued.push(removal.clone());
+                        expected.push(removal);
+                    }
+                }
+            }
+            let mut metadata = Vec::new();
+            for response in &queued {
+                response.observer_metadata(&mut metadata);
+            }
+            let actual = expand_pending(queued).collect::<Vec<_>>();
+            let expected_metadata = expected
+                .iter()
+                .flat_map(|response| {
+                    let mut one = Vec::new();
+                    response.observer_metadata(&mut one);
+                    one
+                })
+                .collect::<Vec<_>>();
+            proptest::prop_assert_eq!(&actual, &expected);
+            proptest::prop_assert_eq!(metadata, expected_metadata);
+            let encoded = actual.into_iter().map(PendingListenResponse::encode).collect::<Vec<_>>();
+            let reference = expected.into_iter().map(PendingListenResponse::encode).collect::<Vec<_>>();
+            proptest::prop_assert_eq!(encoded, reference);
+        }
+    }
+
     #[test]
     fn same_version_target_add_reauthorizes_existing_targets_after_rules_reload() {
         const ALLOW: &str = "rules_version = '2'; service cloud.firestore { match /databases/{database}/documents { match /{path=**} { allow read: if true; } } }";
@@ -3015,15 +3409,16 @@ mod refresh_tests {
             &mut out,
         )
         .unwrap();
-        let rows = out
-            .iter()
+        let rows = expand_pending(out.clone())
             .filter_map(|plan| match plan {
                 PendingListenResponse::Document { document, .. } => Some(document),
-                PendingListenResponse::Wire(_) => None,
+                _ => None,
             })
             .collect::<Vec<_>>();
         assert_eq!(rows.len(), 1);
-        assert!(stored.iter().any(|document| Arc::ptr_eq(document, rows[0])));
+        assert!(stored
+            .iter()
+            .any(|document| Arc::ptr_eq(document, &rows[0])));
     }
 
     #[test]
@@ -3049,15 +3444,16 @@ mod refresh_tests {
             &mut out,
         )
         .unwrap();
-        let rows = out
-            .iter()
+        let rows = expand_pending(out.clone())
             .filter_map(|plan| match plan {
                 PendingListenResponse::Document { document, .. } => Some(document),
-                PendingListenResponse::Wire(_) => None,
+                _ => None,
             })
             .collect::<Vec<_>>();
         assert_eq!(rows.len(), 1);
-        assert!(stored.iter().any(|document| Arc::ptr_eq(document, rows[0])));
+        assert!(stored
+            .iter()
+            .any(|document| Arc::ptr_eq(document, &rows[0])));
     }
 
     #[test]
@@ -3275,9 +3671,7 @@ mod refresh_tests {
                     encode_document(&db.get_shared(&path("restored/a")).unwrap())
                 })
                 .unwrap();
-            let restored_wire = restored
-                .iter()
-                .cloned()
+            let restored_wire = expand_pending(restored.clone())
                 .map(PendingListenResponse::encode)
                 .collect::<Vec<_>>();
             for target_id in [1, 3, 4] {
@@ -3447,8 +3841,7 @@ mod refresh_tests {
                 )
                 .encode(),
             ];
-            let actual = resumed
-                .into_iter()
+            let actual = expand_pending(resumed)
                 .map(PendingListenResponse::encode)
                 .collect::<Vec<_>>();
             assert_eq!(actual, expected);
@@ -3701,7 +4094,7 @@ mod refresh_tests {
         out: Vec<PendingListenResponse>,
         tokens: &mut Vec<Vec<u8>>,
     ) -> Vec<pb::ListenResponse> {
-        out.into_iter()
+        expand_pending(out)
             .map(|response| {
                 let mut response = response.encode();
                 if let Some(pb::listen_response::ResponseType::TargetChange(change)) =

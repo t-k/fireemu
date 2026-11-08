@@ -17,6 +17,7 @@ const paths = [
   "sdk-rules",
   "sdk-tokens",
   "sdk-rules-load",
+  "sdk-rules-syntax",
   "breadth",
   "functions",
   "rest-v033",
@@ -165,6 +166,7 @@ test("campaign selection pins the actual distinct producer scripts", () => {
     "sdk-rules": "rtdb-sdk-rules.mjs",
     "sdk-tokens": "rtdb-sdk-tokens.mjs",
     "sdk-rules-load": "rtdb-sdk-rules-load.mjs",
+    "sdk-rules-syntax": "rtdb-sdk-rules-syntax.mjs",
     breadth: "breadth-local-run.mjs",
     functions: "local-run.mjs",
   };
@@ -312,6 +314,7 @@ test("every RTDB campaign binds its recorded fixture and local producer sources"
     "sdk-rules",
     "sdk-tokens",
     "sdk-rules-load",
+    "sdk-rules-syntax",
     "breadth",
     "functions",
     "smoke",
@@ -761,7 +764,14 @@ test("the closure campaigns replay strict, judge the committed production reduct
   const { join } = await import("node:path");
   const fixtures = new URL("../../tools/sdk-smoke-database/fixtures/", import.meta.url);
   const read = (url) => JSON.parse(readFileSync(url, "utf8"));
-  for (const name of ["sdk-rest", "sdk-rules", "sdk-tokens", "sdk-rules-load", "breadth"]) {
+  for (const name of [
+    "sdk-rest",
+    "sdk-rules",
+    "sdk-tokens",
+    "sdk-rules-load",
+    "sdk-rules-syntax",
+    "breadth",
+  ]) {
     const argv = plan(name, "/installed/fireemu", "/output").argv;
     assert.equal(
       argv.includes("local"),
@@ -799,6 +809,7 @@ test("the closure campaigns replay strict, judge the committed production reduct
     ["sdk-rules", "rules-suite.mjs"],
     ["sdk-tokens", "tokens-suite.mjs"],
     ["sdk-rules-load", "rules-load-suite.mjs"],
+    ["sdk-rules-syntax", "rules-syntax-suite.mjs"],
   ]) {
     const keys = Object.keys(sourceResources(name));
     assert.ok(
@@ -815,7 +826,7 @@ test("the closure campaigns replay strict, judge the committed production reduct
       "conformance/src/rtdb-functions/recorded/production-rtdb-breadth.json",
     ),
   );
-  for (const name of ["rest", "rules", "tokens", "rules-load"]) {
+  for (const name of ["rest", "rules", "tokens", "rules-load", "rules-syntax"]) {
     const dir = mkdtempSync(join(tmpdir(), `rtdb-closure-${name}-`));
     try {
       const strict = read(new URL(`closure-sdk-${name}-strict.json`, fixtures));

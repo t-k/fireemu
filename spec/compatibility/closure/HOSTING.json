@@ -1,0 +1,258 @@
+{
+  "schemaVersion": 1,
+  "parent": "HOSTING",
+  "parentStatus": "IMPLEMENTING",
+  "inventoryStatus": "DRAFT",
+  "oracleTrack": "not-recorded",
+  "scopeDecisions": [
+    {
+      "id": "HOSTING-LOCAL-ONLY",
+      "decision": "Only local registered Functions targets can be rewritten. No Cloud Run lookup or live Functions fallback is allowed. Missing local targets remain unverified and are not an approved production equivalence.",
+      "status": "IMPLEMENTING"
+    }
+  ],
+  "conditions": [
+    {
+      "conditionId": "HOSTING/static-files",
+      "description": "Static files and directory indexes",
+      "status": "UNVERIFIED",
+      "recipeIds": [
+        "hosting/static-files"
+      ],
+      "fixture": "conformance/hosting-fixtures/cases.json",
+      "productionEvidence": [],
+      "fixtureCaseIds": [
+        "root",
+        "static",
+        "directory",
+        "index",
+        "head",
+        "static-post",
+        "range"
+      ],
+      "officialFixture": "conformance/hosting-fixtures/official.json"
+    },
+    {
+      "conditionId": "HOSTING/redirects",
+      "description": "First-match redirects, captures and query preservation",
+      "status": "UNVERIFIED",
+      "recipeIds": [
+        "hosting/redirects"
+      ],
+      "fixture": "conformance/hosting-fixtures/cases.json",
+      "productionEvidence": [],
+      "fixtureCaseIds": [
+        "redirect-first",
+        "redirect-capture",
+        "query",
+        "redirect-capture-prefix",
+        "redirect-capture-literal"
+      ],
+      "officialFixture": "conformance/hosting-fixtures/official.json"
+    },
+    {
+      "conditionId": "HOSTING/rewrites",
+      "description": "Static precedence and first-match rewrites",
+      "status": "UNVERIFIED",
+      "recipeIds": [
+        "hosting/rewrites"
+      ],
+      "fixture": "conformance/hosting-fixtures/cases.json",
+      "productionEvidence": [],
+      "fixtureCaseIds": [
+        "rewrite-first",
+        "static"
+      ],
+      "officialFixture": "conformance/hosting-fixtures/official.json"
+    },
+    {
+      "conditionId": "HOSTING/glob-matching",
+      "description": "Glob matching and ordered overlapping rules",
+      "status": "UNVERIFIED",
+      "recipeIds": [
+        "hosting/glob-matching"
+      ],
+      "fixture": "conformance/hosting-fixtures/glob-cases.json",
+      "productionEvidence": [],
+      "officialFixture": "conformance/hosting-fixtures/official-globs.json",
+      "fixtureSelection": "All 138 pattern/path pairs"
+    },
+    {
+      "conditionId": "HOSTING/headers-cache",
+      "description": "Custom headers and cache metadata",
+      "status": "UNVERIFIED",
+      "recipeIds": [
+        "hosting/headers-cache"
+      ],
+      "fixture": "conformance/hosting-fixtures/cases.json",
+      "productionEvidence": [],
+      "fixtureCaseIds": [
+        "static",
+        "conditional-static",
+        "conditional-rewrite",
+        "modified-static",
+        "modified-rewrite"
+      ],
+      "officialFixture": "conformance/hosting-fixtures/official.json"
+    },
+    {
+      "conditionId": "HOSTING/clean-urls",
+      "description": "cleanUrls path selection",
+      "status": "UNVERIFIED",
+      "recipeIds": [
+        "hosting/clean-urls"
+      ],
+      "fixture": "conformance/hosting-fixtures/cases.json",
+      "productionEvidence": [],
+      "fixtureCaseIds": [
+        "clean-_page",
+        "clean-_page_",
+        "clean-_page.html",
+        "clean-_dir",
+        "clean-_dir_",
+        "clean-_dir_index.html",
+        "clean-slash-_page",
+        "clean-slash-_page_",
+        "clean-slash-_page.html",
+        "clean-slash-_dir",
+        "clean-slash-_dir_",
+        "clean-slash-_dir_index.html",
+        "clean-noslash-_page",
+        "clean-noslash-_page_",
+        "clean-noslash-_page.html",
+        "clean-noslash-_dir",
+        "clean-noslash-_dir_",
+        "clean-noslash-_dir_index.html"
+      ],
+      "officialFixture": "conformance/hosting-fixtures/official.json"
+    },
+    {
+      "conditionId": "HOSTING/trailing-slash",
+      "description": "trailingSlash path canonicalization",
+      "status": "UNVERIFIED",
+      "recipeIds": [
+        "hosting/trailing-slash"
+      ],
+      "fixture": "conformance/hosting-fixtures/cases.json",
+      "productionEvidence": [],
+      "fixtureCaseIds": [
+        "slash-_page",
+        "slash-_page_",
+        "slash-_page.html",
+        "slash-_dir",
+        "slash-_dir_",
+        "slash-_dir_index.html",
+        "noslash-_page",
+        "noslash-_page_",
+        "noslash-_page.html",
+        "noslash-_dir",
+        "noslash-_dir_",
+        "noslash-_dir_index.html",
+        "clean-slash-_page",
+        "clean-slash-_page_",
+        "clean-slash-_page.html",
+        "clean-slash-_dir",
+        "clean-slash-_dir_",
+        "clean-slash-_dir_index.html",
+        "clean-noslash-_page",
+        "clean-noslash-_page_",
+        "clean-noslash-_page.html",
+        "clean-noslash-_dir",
+        "clean-noslash-_dir_",
+        "clean-noslash-_dir_index.html"
+      ],
+      "officialFixture": "conformance/hosting-fixtures/official.json"
+    },
+    {
+      "conditionId": "HOSTING/i18n",
+      "description": "Language, country, cookie and fallback selection",
+      "status": "UNVERIFIED",
+      "recipeIds": [
+        "hosting/i18n"
+      ],
+      "fixture": "conformance/hosting-fixtures/cases.json",
+      "productionEvidence": [],
+      "fixtureCaseIds": [
+        "i18n-language",
+        "i18n-country",
+        "i18n-country-fallback",
+        "i18n-language-cookie",
+        "i18n-fallback"
+      ],
+      "officialFixture": "conformance/hosting-fixtures/official.json"
+    },
+    {
+      "conditionId": "HOSTING/reserved-paths",
+      "description": "Reserved initialization paths",
+      "status": "UNVERIFIED",
+      "recipeIds": [
+        "hosting/reserved-paths"
+      ],
+      "fixture": "conformance/hosting-fixtures/cases.json",
+      "productionEvidence": [],
+      "fixtureCaseIds": [
+        "reserved-json",
+        "reserved-js",
+        "reserved-emulator-js",
+        "reserved-unknown"
+      ],
+      "officialFixture": "conformance/hosting-fixtures/official.json"
+    },
+    {
+      "conditionId": "HOSTING/not-found",
+      "description": "404 handling",
+      "status": "UNVERIFIED",
+      "recipeIds": [
+        "hosting/not-found"
+      ],
+      "fixture": "conformance/hosting-fixtures/cases.json",
+      "productionEvidence": [],
+      "fixtureCaseIds": [
+        "missing",
+        "404-direct",
+        "default-404"
+      ],
+      "officialFixture": "conformance/hosting-fixtures/official.json"
+    },
+    {
+      "conditionId": "HOSTING/function-rewrites",
+      "description": "Registered local Functions rewrites",
+      "status": "UNVERIFIED",
+      "recipeIds": [
+        "hosting/function-rewrites"
+      ],
+      "fixture": "conformance/hosting-fixtures/cases.json",
+      "productionEvidence": [],
+      "fixtureCaseIds": [
+        "function",
+        "function-post"
+      ],
+      "officialFixture": "conformance/hosting-fixtures/official.json"
+    },
+    {
+      "conditionId": "HOSTING/run-rewrites",
+      "description": "Registered local Run-style rewrites",
+      "status": "UNVERIFIED",
+      "recipeIds": [
+        "hosting/run-rewrites"
+      ],
+      "fixture": "conformance/hosting-fixtures/cases.json",
+      "productionEvidence": [],
+      "fixtureCaseIds": [
+        "run"
+      ],
+      "officialFixture": "conformance/hosting-fixtures/official.json"
+    }
+  ],
+  "integratedRegression": {
+    "status": "OFFLINE_PASS",
+    "suite": "conformance/src/hosting/run.mjs",
+    "matrix": "conformance/HOSTING-MATRIX.md",
+    "scope": "82 HTTP cases and 138 glob pairs; no production evidence"
+  },
+  "productionProposal": "spec/compatibility/hosting-production-packet.md",
+  "outOfScope": [
+    "Production deployment and live upstream routing are not executed by this offline task.",
+    "No condition is promoted from official-emulator behavior or documentation alone."
+  ]
+}

@@ -95,8 +95,9 @@ fn members_role_in_query_without_the_resource_guard_is_allowed() {
     ));
 }
 
+/// Production allows it (FS-RULES-DIFFS 2026-11-08, `fs-rules-v1/diffs/queries#members-guarded-in`):
+/// the query resource is a map, never null, whatever its fields hold.
 #[test]
-#[ignore = "claimed official ALLOW; fireemu denies because the query resource Map holds unknown values: rules-resource-not-null-guard-over-query-resource.md"]
 fn members_role_in_query_with_the_resource_not_null_guard_is_allowed() {
     assert!(list_allowed(
         r#"resource != null && resource.data.members[request.auth.uid].role in ["ADMIN", "MEMBER"]"#,
@@ -148,12 +149,15 @@ fn top_level_function_outside_the_service_is_accepted_and_evaluated() {
 // Item 5: `!("blocked" in resource.data)` with no filter
 // ----------------------------------------------------------------------------------------
 
-/// The existing tests that pin today's deny: `undetermined_values_never_prove_a_condition`
-/// (tests/eval.rs, the `!('blocked' in resource.data)` entry of its must-not-be-provable list)
-/// and `query_proofs_are_sound_for_shapes_arrays_and_collection_groups` (the adapter's
-/// tests/rules.rs, `denied` for the unfiltered `shape` query).
+/// Production allows it and refuses the plain `"owner" in resource.data` without a filter
+/// (FS-RULES-DIFFS 2026-11-08, `fs-rules-v1/diffs/queries#blocked-nofilter` and
+/// `#has-owner-nofilter`): a key the query does not constrain is not in `resource.data`.
 #[test]
-#[ignore = "claimed official ALLOW for an unfiltered query; fireemu denies and two tests pin that: rules-not-in-resource-data-unfiltered-list.md"]
 fn not_in_resource_data_is_allowed_for_an_unfiltered_list() {
     assert!(list_allowed(r#"!("blocked" in resource.data)"#, vec![]));
+    assert!(!list_allowed(r#""owner" in resource.data"#, vec![]));
+    assert!(list_allowed(
+        r#""owner" in resource.data"#,
+        vec![("owner", RulesValue::String("o1".to_owned()))]
+    ));
 }

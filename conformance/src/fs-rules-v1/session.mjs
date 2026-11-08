@@ -25,6 +25,7 @@ import {
   normalizeString,
   PRODUCTION,
   SANDBOX_PROJECT,
+  substitute,
 } from "../fs-rules/harness.mjs";
 import { markerOf, rulesetSource } from "./corpus.mjs";
 
@@ -170,6 +171,19 @@ export function summarizeListen(frames, end, ctx, principals) {
       : "open",
     ...(rows.length === 0 && !ended ? { silent: true } : {}),
   };
+}
+
+/** A map key can carry a principal's uid (a field map keyed by uid); `normalizeRest` leaves keys alone. */
+function maskKeys(value, ctx, principals) {
+  if (Array.isArray(value)) return value.map((item) => maskKeys(item, ctx, principals));
+  if (value && typeof value === "object")
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [
+        normalizeString(key, ctx, principals),
+        maskKeys(item, ctx, principals),
+      ]),
+    );
+  return value;
 }
 
 export function createSession(
@@ -383,10 +397,15 @@ export function createSession(
     throw fatal("wipe: documents remain after 40 rounds");
   }
 
+  /** Seed documents may name a principal's uid (`UID(anon)`), in a value or a map key. */
   async function seed(documents) {
+    const resolved = (text) => substitute(text, ctx, principals);
     await commit(
       (documents ?? []).map(({ doc, fields }) => ({
-        update: { name: `${documentsName(ctx)}/${doc}`, fields },
+        update: {
+          name: `${documentsName(ctx)}/${resolved(doc)}`,
+          fields: JSON.parse(resolved(JSON.stringify(fields))),
+        },
       })),
     );
   }
@@ -430,9 +449,10 @@ export function createSession(
       };
     }
     const text = await response.text();
+    const recorded = normalizeRest(response.status, text, ctx, principals);
     return {
       status: response.status,
-      recorded: normalizeRest(response.status, text, ctx, principals),
+      recorded: recorded.body === undefined ? recorded : maskKeys(recorded, ctx, principals),
     };
   }
 

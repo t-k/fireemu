@@ -1,6 +1,5 @@
-//! Source-owned lexical scope plans. Paths resolve against the live borrowed AST, so the plan
-//! contains neither self references nor request bindings. Public AST mutations that change item
-//! shape/offsets rebuild the plan; names, bodies and match captures are always read from the AST.
+//! Source-owned lexical scope plans without request bindings or self references.
+//! Declaration lookups check live structural paths and ancestry; a miss rebuilds the request's plan once. Names, order, bodies and match captures always come from the borrowed AST.
 
 use std::cell::OnceCell;
 use std::collections::BTreeMap;
@@ -10,6 +9,30 @@ use crate::ast::{FunctionDecl, Item};
 
 #[cfg(test)]
 std::thread_local! { pub(crate) static PLAN_BUILDS: core::cell::Cell<usize> = const { core::cell::Cell::new(0) }; }
+
+#[cfg(test)]
+std::thread_local! {
+    pub(crate) static BUILD_OBSERVER: core::cell::RefCell<Option<Arc<std::sync::atomic::AtomicUsize>>> = const { core::cell::RefCell::new(None) };
+}
+
+/// Keeps test observations independent while allowing a parser or evaluator child thread to
+/// report to the observation that explicitly admitted it.
+#[cfg(test)]
+pub(crate) struct BuildObservation(Option<Arc<std::sync::atomic::AtomicUsize>>);
+
+#[cfg(test)]
+impl BuildObservation {
+    pub(crate) fn enter(observer: Option<Arc<std::sync::atomic::AtomicUsize>>) -> Self {
+        Self(BUILD_OBSERVER.with(|active| active.replace(observer)))
+    }
+}
+
+#[cfg(test)]
+impl Drop for BuildObservation {
+    fn drop(&mut self) {
+        BUILD_OBSERVER.with(|active| active.replace(self.0.take()));
+    }
+}
 
 #[cfg(test)]
 std::thread_local! { pub(crate) static LEGACY_EVALUATION: core::cell::Cell<bool> = const { core::cell::Cell::new(false) }; }
@@ -50,6 +73,12 @@ impl ServiceScopes {
     pub(crate) fn compile(items: &[Item]) -> Arc<Self> {
         #[cfg(test)]
         PLAN_BUILDS.with(|work| work.set(work.get() + 1));
+        #[cfg(test)]
+        BUILD_OBSERVER.with(|observer| {
+            if let Some(observer) = observer.borrow().as_ref() {
+                observer.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+        });
         let mut plan = Self {
             blocks: Vec::new(),
             declarations: BTreeMap::new(),
@@ -87,6 +116,7 @@ impl ServiceScopes {
         id
     }
 
+    #[cfg(test)]
     fn agrees(&self, items: &[Item], block: usize) -> bool {
         let shape = &self.blocks[block].shape;
         items.len() == shape.len()
@@ -102,24 +132,72 @@ impl ServiceScopes {
                 })
     }
 
-    fn items<'a>(&self, root: &'a [Item], block: usize) -> &'a [Item] {
+    fn items<'a>(&self, root: &'a [Item], block: usize) -> Option<&'a [Item]> {
         let mut items = root;
-        for &position in &self.blocks[block].path {
-            let Item::Match(block) = &items[position] else {
-                unreachable!("validated scope path")
+        for &position in &self.blocks.get(block)?.path {
+            let Item::Match(block) = items.get(position)? else {
+                return None;
             };
             items = &block.items;
         }
-        items
+        Some(items)
+    }
+
+    /// Every parent must describe the actual live structural prefix of this declaration.
+    /// Names and declaration order are read from those live blocks during lookup.
+    fn ancestry_agrees(&self, root: &[Item], mut scope: usize) -> bool {
+        let Some(target) = self.blocks.get(scope) else {
+            return false;
+        };
+        let mut depth = target.path.len();
+        loop {
+            let Some(block) = self.blocks.get(scope) else {
+                return false;
+            };
+            if block.path != target.path[..depth] || self.items(root, scope).is_none() {
+                return false;
+            }
+            if depth == 0 {
+                return block.parent.is_none();
+            }
+            let Some(parent_id) = block.parent else {
+                return false;
+            };
+            let Some(parent) = self.blocks.get(parent_id) else {
+                return false;
+            };
+            if parent.path != target.path[..depth - 1]
+                || parent.shape.get(target.path[depth - 1]) != Some(&Shape::Match(scope))
+            {
+                return false;
+            }
+            scope = parent_id;
+            depth -= 1;
+        }
+    }
+
+    fn scope_for(&self, root: &[Item], function: &FunctionDecl) -> Option<usize> {
+        self.declarations
+            .get(&function.span.offset)?
+            .iter()
+            .find_map(|&(scope, position)| {
+                let Item::Function(found) = self.items(root, scope)?.get(position)? else {
+                    return None;
+                };
+                (std::ptr::eq(found, function)
+                    && self.blocks.get(scope)?.shape.get(position)
+                        == Some(&Shape::Function(function.span.offset))
+                    && self.ancestry_agrees(root, scope))
+                .then_some(scope)
+            })
     }
 }
 
 pub(crate) struct FunctionScopes<'a> {
     items: &'a [Item],
     compiled: &'a Arc<ServiceScopes>,
-    /// Resolved on the first declaration lookup, so a request that calls no function never
-    /// walks the service. `items` is borrowed for the whole evaluation, so a later check sees
-    /// the same AST shape as an eager one would have.
+    /// Rebuilt at most once when a live declaration cannot use the generation's paths.
+    /// The immutable borrow keeps previously validated environments valid after fallback.
     plan: OnceCell<Arc<ServiceScopes>>,
     #[cfg(test)]
     legacy: Option<BTreeMap<usize, Arc<crate::eval::LegacyFunctionEnvironment<'a>>>>,
@@ -146,6 +224,7 @@ impl<'a> FunctionScopes<'a> {
     }
 
     /// The compiled plan when it still describes `items`; otherwise a plan rebuilt from them.
+    #[cfg(test)]
     pub(crate) fn plan(&self) -> &Arc<ServiceScopes> {
         self.plan.get_or_init(|| {
             #[cfg(test)]
@@ -170,10 +249,14 @@ impl<'a> FunctionScopes<'a> {
                     legacy: Some(Arc::clone(environment)),
                 });
         }
-        let plan = self.plan();
-        let &(scope, _) = plan.declarations.get(&function.span.offset)?.iter().find(|&&(scope, position)| {
-            matches!(&plan.items(self.items, scope)[position], Item::Function(found) if std::ptr::eq(found, function))
-        })?;
+        let (plan, scope) = if let Some(plan) = self.plan.get() {
+            (plan, plan.scope_for(self.items, function)?)
+        } else if let Some(scope) = self.compiled.scope_for(self.items, function) {
+            (self.compiled, scope)
+        } else {
+            let plan = self.plan.get_or_init(|| ServiceScopes::compile(self.items));
+            (plan, plan.scope_for(self.items, function)?)
+        };
         Some(FunctionEnvironment {
             items: self.items,
             plan: Arc::clone(plan),
@@ -215,7 +298,7 @@ impl<'a> FunctionEnvironment<'a> {
         while let Some(id) = scope {
             if let Some(function) = self
                 .plan
-                .items(self.items, id)
+                .items(self.items, id)?
                 .iter()
                 .rev()
                 .find_map(|item| match item {
@@ -232,7 +315,177 @@ impl<'a> FunctionEnvironment<'a> {
 }
 
 #[cfg(test)]
+pub(crate) fn measurement_iterations(mut operation: impl FnMut()) -> u32 {
+    let mut iterations = 1_024;
+    loop {
+        let started = std::time::Instant::now();
+        for _ in 0..iterations {
+            operation();
+        }
+        if started.elapsed() >= std::time::Duration::from_millis(200) || iterations >= 1_048_576 {
+            return iterations;
+        }
+        iterations *= 2;
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn measurement_sample(
+    label: &str,
+    sample: u32,
+    iterations: u32,
+    mut operation: impl FnMut(),
+) {
+    let started = std::time::Instant::now();
+    for _ in 0..iterations {
+        operation();
+    }
+    let elapsed = started.elapsed();
+    println!(
+        "scope-measure {label} sample={sample} iterations={iterations} elapsed_ns={} mean={:?}",
+        elapsed.as_nanos(),
+        elapsed / iterations
+    );
+}
+
+#[cfg(test)]
+fn measure_operation(label: &str, mut operation: impl FnMut()) {
+    let iterations = measurement_iterations(&mut operation);
+    for sample in 0..5 {
+        measurement_sample(label, sample, iterations, &mut operation);
+    }
+}
+
+#[cfg(test)]
 mod scope_plan_tests {
+    #[test]
+    fn access_local_scope_lookup_handles_later_declarations_and_duplicate_offsets() {
+        let mut tree = crate::parse::parse_ruleset(
+            "service cloud.firestore { function original() { return true; } }",
+        )
+        .unwrap();
+        let crate::ast::Item::Function(original) = &tree.services[0].items[0] else {
+            unreachable!()
+        };
+        let mut added = original.clone();
+        added.name = "added".into();
+        tree.services[0]
+            .items
+            .push(crate::ast::Item::Function(added));
+        let crate::ast::Item::Function(original) = &tree.services[0].items[0] else {
+            unreachable!()
+        };
+        let crate::ast::Item::Function(added) = &tree.services[0].items[1] else {
+            unreachable!()
+        };
+        let foreign = added.clone();
+        super::PLAN_BUILDS.with(|count| count.set(0));
+        let scopes = super::FunctionScopes::new(&tree.services[0].items, &tree.function_scopes[0]);
+        let first = scopes.get(original).unwrap();
+        assert!(std::ptr::eq(first.function("added").unwrap(), added));
+        let second = scopes.get(added).unwrap();
+        assert!(std::ptr::eq(second.function("original").unwrap(), original));
+        assert!(scopes.get(original).is_some());
+        assert!(scopes.get(&foreign).is_none());
+        assert_eq!(
+            super::PLAN_BUILDS.with(core::cell::Cell::get),
+            1,
+            "one fallback for the evaluation, not one per lookup"
+        );
+    }
+
+    #[test]
+    fn access_local_scope_lookup_handles_truncated_paths_without_leaking_ancestors() {
+        let mut tree = crate::parse::parse_ruleset("service cloud.firestore { function ancestor() { return true; } match /old { function moved() { return ancestor(); } } }").unwrap();
+        let crate::ast::Item::Match(old) = &tree.services[0].items[1] else {
+            unreachable!()
+        };
+        let moved = old.items[0].clone();
+        tree.services[0].items = vec![moved];
+        let crate::ast::Item::Function(moved) = &tree.services[0].items[0] else {
+            unreachable!()
+        };
+        let foreign = moved.clone();
+        let scopes = super::FunctionScopes::new(&tree.services[0].items, &tree.function_scopes[0]);
+        let environment = scopes.get(moved).unwrap();
+        assert!(std::ptr::eq(environment.function("moved").unwrap(), moved));
+        assert!(environment.function("ancestor").is_none());
+        assert!(scopes.get(&foreign).is_none());
+    }
+
+    #[test]
+    #[ignore = "bounded release measurement; compilation and parsing are outside timed loops"]
+    fn measure_residual_scope_resolution() {
+        use crate::eval::{evaluate_request, Decision, Method, RequestContext, RulesService};
+        use std::fmt::Write as _;
+        use std::hint::black_box;
+
+        let request = RequestContext {
+            service: RulesService::Firestore,
+            method: Method::Get,
+            path: "/databases/(default)/documents/notes/one".to_owned(),
+            auth: None,
+            resource: None,
+            request_resource: None,
+            time_unix_nanos: 0,
+            abstract_path: false,
+            request_query: None,
+        };
+        for condition in ["true", "inner()"] {
+            for unrelated in [0, 100, 1_000] {
+                let mut source = format!(
+                    "rules_version = '2'; service cloud.firestore {{ function top() {{ return true; }} match /databases/{{db}}/documents {{ function inner() {{ return top(); }} match /notes/{{id}} {{ allow get: if {condition}; }}"
+                );
+                for index in 0..unrelated {
+                    let _ = write!(
+                        source,
+                        " match /unrelated{index}/{{id}} {{ function helper{index}() {{ return id == 'x'; }} allow get: if helper{index}(); }}"
+                    );
+                }
+                source.push_str(" } }");
+                let tree = crate::parse::parse_ruleset(&source).unwrap();
+                assert_eq!(evaluate_request(&tree, &request).decision, Decision::Allow);
+                let items = &tree.services[0].items;
+                let compiled = &tree.function_scopes[0];
+                let label = format!("condition={condition} blocks={unrelated}");
+                super::measure_operation(&format!("{label} full"), || {
+                    black_box(evaluate_request(black_box(&tree), black_box(&request)));
+                });
+                super::measure_operation(&format!("{label} first-plan"), || {
+                    let scopes = super::FunctionScopes::new(black_box(items), black_box(compiled));
+                    black_box(scopes.plan());
+                });
+                super::measure_operation(&format!("{label} agrees"), || {
+                    black_box(compiled.agrees(black_box(items), 0));
+                });
+                let cached = super::FunctionScopes::new(items, compiled);
+                cached.plan();
+                super::measure_operation(&format!("{label} cached-plan"), || {
+                    black_box(cached.plan());
+                });
+                if condition == "inner()" {
+                    let crate::ast::Item::Match(documents) = &items[1] else {
+                        unreachable!()
+                    };
+                    let crate::ast::Item::Function(inner) = &documents.items[0] else {
+                        unreachable!()
+                    };
+                    let scopes = super::FunctionScopes::new(items, compiled);
+                    let environment = scopes.get(inner).unwrap();
+                    assert_eq!(environment.function("top").unwrap().name, "top");
+                    super::measure_operation(&format!("{label} checked-get"), || {
+                        let scopes =
+                            super::FunctionScopes::new(black_box(items), black_box(compiled));
+                        black_box(scopes.get(black_box(inner)));
+                    });
+                    super::measure_operation(&format!("{label} live-outer-lookup"), || {
+                        black_box(environment.function(black_box("top")));
+                    });
+                }
+            }
+        }
+    }
+
     #[test]
     fn parsed_scopes_are_shared_but_mutated_items_are_replanned() {
         let mut ruleset = crate::parse::parse_ruleset("service cloud.firestore { function f() { return true; } match /{id} { function g() { return f(); } allow read: if g(); } }").unwrap();

@@ -230,6 +230,445 @@
         }
       }
     },
+    "fs-rules-v1/diffs/fn-inner": {
+      "corpusDigest": "b518347807c192f44e6780ad58db39f481db7b360476da570a735f968b4fbc5b",
+      "harnessDigest": "fca98c19d47a3d5f0a3c0614afd01be992c4171576c414d046f76cd71174e40b",
+      "recordedAt": "2026-11-08T02:47:31.410Z",
+      "gitSha": "4f693b43200cfeaa8c1cbe548782c19b728457e3",
+      "steps": {
+        "publishes": {
+          "compiled": true
+        },
+        "fn-inner-true": {
+          "status": 404,
+          "body": {
+            "error": {
+              "code": 404,
+              "message": "Document \"projects/demo-fs-rules/databases/(default)/documents/fsr9-fn-inner-true/x\" not found.",
+              "status": "NOT_FOUND"
+            }
+          }
+        },
+        "fn-inner-false": {
+          "status": 403,
+          "body": {
+            "error": {
+              "code": 403,
+              "message": "Missing or insufficient permissions.",
+              "status": "PERMISSION_DENIED"
+            }
+          }
+        }
+      }
+    },
+    "fs-rules-v1/diffs/fn-top": {
+      "corpusDigest": "cf609a70bdf97eb5151112ba918847506854ee612f096de08658fe53b74c721d",
+      "harnessDigest": "fca98c19d47a3d5f0a3c0614afd01be992c4171576c414d046f76cd71174e40b",
+      "recordedAt": "2026-11-08T02:47:31.410Z",
+      "gitSha": "4f693b43200cfeaa8c1cbe548782c19b728457e3",
+      "steps": {
+        "publishes": {
+          "compiled": true
+        },
+        "fn-top-true": {
+          "status": 404,
+          "body": {
+            "error": {
+              "code": 404,
+              "message": "Document \"projects/demo-fs-rules/databases/(default)/documents/fsr9-fn-top-true/x\" not found.",
+              "status": "NOT_FOUND"
+            }
+          }
+        },
+        "fn-top-false": {
+          "status": 403,
+          "body": {
+            "error": {
+              "code": 403,
+              "message": "Missing or insufficient permissions.",
+              "status": "PERMISSION_DENIED"
+            }
+          }
+        }
+      }
+    },
+    "fs-rules-v1/diffs/queries": {
+      "corpusDigest": "7f02201b1ae49028375f3b7dcc86412eaa3b02874bd168ee23b2daf8e0b809b3",
+      "harnessDigest": "fca98c19d47a3d5f0a3c0614afd01be992c4171576c414d046f76cd71174e40b",
+      "recordedAt": "2026-11-08T02:47:31.410Z",
+      "gitSha": "4f693b43200cfeaa8c1cbe548782c19b728457e3",
+      "steps": {
+        "publishes": {
+          "compiled": true
+        },
+        "owner-alone": {
+          "status": 200,
+          "body": [
+            {
+              "document": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/fsr9-owner/mine",
+                "fields": {
+                  "owner": {
+                    "stringValue": "<uid:anon>"
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "owner-and-name-missing": {
+          "status": 403,
+          "body": [
+            {
+              "error": {
+                "code": 403,
+                "message": "Missing or insufficient permissions.",
+                "status": "PERMISSION_DENIED"
+              }
+            }
+          ]
+        },
+        "owner-and-name-foreign": {
+          "status": 403,
+          "body": [
+            {
+              "error": {
+                "code": 403,
+                "message": "Missing or insufficient permissions.",
+                "status": "PERMISSION_DENIED"
+              }
+            }
+          ]
+        },
+        "owner-and-name-own": {
+          "status": 200,
+          "body": [
+            {
+              "document": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/fsr9-owner/mine",
+                "fields": {
+                  "owner": {
+                    "stringValue": "<uid:anon>"
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "name-missing-alone": {
+          "status": 403,
+          "body": [
+            {
+              "error": {
+                "code": 403,
+                "message": "Missing or insufficient permissions.",
+                "status": "PERMISSION_DENIED"
+              }
+            }
+          ]
+        },
+        "name-foreign-alone": {
+          "status": 403,
+          "body": [
+            {
+              "error": {
+                "code": 403,
+                "message": "Missing or insufficient permissions.",
+                "status": "PERMISSION_DENIED"
+              }
+            }
+          ]
+        },
+        "members-guarded-in": {
+          "status": 200,
+          "body": [
+            {
+              "document": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/fsr9-m-guarded/g1",
+                "fields": {
+                  "members": {
+                    "mapValue": {
+                      "fields": {
+                        "<uid:anon>": {
+                          "mapValue": {
+                            "fields": {
+                              "role": {
+                                "stringValue": "ADMIN"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "members-guarded-in-viewer": {
+          "status": 403,
+          "body": [
+            {
+              "error": {
+                "code": 403,
+                "message": "Missing or insufficient permissions.",
+                "status": "PERMISSION_DENIED"
+              }
+            }
+          ]
+        },
+        "members-unguarded-in": {
+          "status": 200,
+          "body": [
+            {
+              "document": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/fsr9-m-unguarded/u1",
+                "fields": {
+                  "members": {
+                    "mapValue": {
+                      "fields": {
+                        "<uid:anon>": {
+                          "mapValue": {
+                            "fields": {
+                              "role": {
+                                "stringValue": "ADMIN"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "members-bare-nofilter": {
+          "status": 200,
+          "body": [
+            {
+              "document": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/fsr9-m-bare/b1",
+                "fields": {
+                  "members": {
+                    "mapValue": {
+                      "fields": {
+                        "<uid:anon>": {
+                          "mapValue": {
+                            "fields": {
+                              "role": {
+                                "stringValue": "ADMIN"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "blocked-nofilter": {
+          "status": 200,
+          "body": [
+            {
+              "document": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/fsr9-blocked/p1",
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "has-owner-nofilter": {
+          "status": 403,
+          "body": [
+            {
+              "error": {
+                "code": 403,
+                "message": "Missing or insufficient permissions.",
+                "status": "PERMISSION_DENIED"
+              }
+            }
+          ]
+        },
+        "has-owner-filtered": {
+          "status": 200,
+          "body": [
+            {
+              "document": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/fsr9-has-owner/h1",
+                "fields": {
+                  "owner": {
+                    "stringValue": "o1"
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        }
+      }
+    },
+    "fs-rules-v1/diffs/string-escape": {
+      "corpusDigest": "22b2d23ce77ec167119516ed81e7e58eed62e352ae2d80ed94802d67fcf889a9",
+      "harnessDigest": "fca98c19d47a3d5f0a3c0614afd01be992c4171576c414d046f76cd71174e40b",
+      "recordedAt": "2026-11-08T02:47:31.410Z",
+      "gitSha": "4f693b43200cfeaa8c1cbe548782c19b728457e3",
+      "steps": {
+        "publishes": {
+          "compiled": true
+        },
+        "esc-high": {
+          "status": 403,
+          "body": {
+            "error": {
+              "code": 403,
+              "message": "Missing or insufficient permissions.",
+              "status": "PERMISSION_DENIED"
+            }
+          }
+        },
+        "esc-ctl": {
+          "status": 404,
+          "body": {
+            "error": {
+              "code": 404,
+              "message": "Document \"projects/demo-fs-rules/databases/(default)/documents/fsr9-s-esc-ctl/x\" not found.",
+              "status": "NOT_FOUND"
+            }
+          }
+        }
+      }
+    },
+    "fs-rules-v1/diffs/string-index": {
+      "corpusDigest": "2534fd9bebaf1bc0ff75c51c516013be965959d28ff5b80dad68917280932c10",
+      "harnessDigest": "fca98c19d47a3d5f0a3c0614afd01be992c4171576c414d046f76cd71174e40b",
+      "recordedAt": "2026-11-08T02:47:31.410Z",
+      "gitSha": "4f693b43200cfeaa8c1cbe548782c19b728457e3",
+      "steps": {
+        "publishes": {
+          "compiled": true
+        },
+        "ascii-ctl": {
+          "status": 404,
+          "body": {
+            "error": {
+              "code": 404,
+              "message": "Document \"projects/demo-fs-rules/databases/(default)/documents/fsr9-s-ascii-ctl/x\" not found.",
+              "status": "NOT_FOUND"
+            }
+          }
+        },
+        "idx0": {
+          "status": 404,
+          "body": {
+            "error": {
+              "code": 404,
+              "message": "Document \"projects/demo-fs-rules/databases/(default)/documents/fsr9-s-idx0/x\" not found.",
+              "status": "NOT_FOUND"
+            }
+          }
+        },
+        "idx1-fire": {
+          "status": 403,
+          "body": {
+            "error": {
+              "code": 403,
+              "message": "Missing or insufficient permissions.",
+              "status": "PERMISSION_DENIED"
+            }
+          }
+        },
+        "idx2-x": {
+          "status": 403,
+          "body": {
+            "error": {
+              "code": 403,
+              "message": "Missing or insufficient permissions.",
+              "status": "PERMISSION_DENIED"
+            }
+          }
+        },
+        "idx3-x": {
+          "status": 404,
+          "body": {
+            "error": {
+              "code": 404,
+              "message": "Document \"projects/demo-fs-rules/databases/(default)/documents/fsr9-s-idx3-x/x\" not found.",
+              "status": "NOT_FOUND"
+            }
+          }
+        },
+        "idx4-eq-x": {
+          "status": 403,
+          "body": {
+            "error": {
+              "code": 403,
+              "message": "Missing or insufficient permissions.",
+              "status": "PERMISSION_DENIED"
+            }
+          }
+        },
+        "idx4-not-eq": {
+          "status": 403,
+          "body": {
+            "error": {
+              "code": 403,
+              "message": "Missing or insufficient permissions.",
+              "status": "PERMISSION_DENIED"
+            }
+          }
+        },
+        "size-4": {
+          "status": 404,
+          "body": {
+            "error": {
+              "code": 404,
+              "message": "Document \"projects/demo-fs-rules/databases/(default)/documents/fsr9-s-size-4/x\" not found.",
+              "status": "NOT_FOUND"
+            }
+          }
+        },
+        "size-3": {
+          "status": 403,
+          "body": {
+            "error": {
+              "code": 403,
+              "message": "Missing or insufficient permissions.",
+              "status": "PERMISSION_DENIED"
+            }
+          }
+        }
+      }
+    },
     "fs-rules-v1/path-wildcard/v1": {
       "corpusDigest": "a6c0c067d251fd19d3e6edb7d1b2009c9dae8ae472d438c5b3f20d07a6bf41a8",
       "harnessDigest": "e8c83656a7c229b681918489684c3ba3b3f63d03220e6feecbe808f309f97578",

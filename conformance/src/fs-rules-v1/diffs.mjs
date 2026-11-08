@@ -82,6 +82,10 @@ export function classifyAnswer(rpc, recorded) {
   if (recorded === undefined) return { kind: "unknown", detail: "no recording" };
   if (recorded.unresolved !== undefined)
     return { kind: "not-evaluated", detail: recorded.unresolved };
+  // Only a bare answer is judged: an annotation such as `publication: "unsettled"` (the ruleset was
+  // no longer in force after the rows) or `transport` makes the row unknown.
+  if (!exactKeys(recorded, ["status", "body"]))
+    return { kind: "unknown", detail: "not a bare status and body" };
   const { status, body } = recorded;
   if (rpc === "get") {
     if (status === 404 && exactKeys(body, ["error"]) && isNotFound(body.error))

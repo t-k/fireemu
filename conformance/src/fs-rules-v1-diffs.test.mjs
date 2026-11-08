@@ -4,6 +4,7 @@
 // classifier is pinned to are copied from the checked-in production fixtures (cited per test).
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import { createContext, SANDBOX_PROJECT } from "./fs-rules/harness.mjs";
@@ -660,4 +661,102 @@ test("report rows carry the document count, the reason and the claim, and only w
   assert.equal(rows["string-index#publishes"].detail, "no publication answer");
   assert.equal(rows["string-escape#publishes"].answer, "refused");
   assert.equal(rows["string-escape#publishes"].verdict, "differs");
+});
+
+// ---- the review's M1 and S5 (2026-11-08) ------------------------------------------------------
+
+test("an answer carrying any top-level key besides status and body is unknown (publication unsettled, transport, others)", () => {
+  const documentRow = {
+    document: { name: "projects/demo-fs-rules/databases/(default)/documents/fsr9-x/a" },
+    readTime: "t",
+  };
+  const shapes = [
+    ["get", { status: 404, body: NOT_FOUND }],
+    ["get", { status: 403, body: DENIED_BODY }],
+    ["runQuery", { status: 200, body: [{ readTime: "t" }] }],
+    ["runQuery", { status: 200, body: [documentRow] }],
+    ["runQuery", { status: 403, body: [{ error: DENIED_BODY.error }] }],
+  ];
+  for (const [rpc, recorded] of shapes) {
+    assert.notEqual(classifyAnswer(rpc, recorded).kind, "unknown", `${rpc} ${recorded.status}`);
+    for (const extra of [{ publication: "unsettled" }, { transport: "reset" }, { note: 1 }]) {
+      const answer = classifyAnswer(rpc, { ...recorded, ...extra });
+      assert.equal(answer.kind, "unknown", `${rpc} ${recorded.status} ${Object.keys(extra)}`);
+    }
+    const { body, ...withoutBody } = recorded;
+    assert.equal(classifyAnswer(rpc, withoutBody).kind, "unknown");
+    assert.ok(body !== undefined);
+  }
+});
+
+test("a row both recordings answered under an unsettled publication is unknown in the report", () => {
+  const unsettledAllow = { ...allow, publication: "unsettled" };
+  const unsettledDeny = { ...deny, publication: "unsettled" };
+  const fixture = {
+    programs: {
+      "fs-rules-v1/diffs/fn-top": programRecord(
+        {
+          publishes: { compiled: true },
+          "fn-top-true": unsettledAllow,
+          "fn-top-false": unsettledDeny,
+        },
+        { "fn-top-true": unsettledAllow, "fn-top-false": unsettledDeny },
+      ),
+    },
+  };
+  const rows = Object.fromEntries(diffsReport(fixture).map((r) => [r.row, r]));
+  assert.equal(rows["fn-top#fn-top-true"].answer, "unknown");
+  assert.equal(rows["fn-top#fn-top-true"].verdict, "unknown");
+  assert.equal(rows["fn-top#fn-top-false"].answer, "unknown");
+  assert.equal(rows["fn-top#fn-top-false"].verdict, "unknown");
+});
+
+const readFixture = (file) =>
+  JSON.parse(readFileSync(new URL(`../${file}`, import.meta.url), "utf8"));
+
+test("every shape the judge cites classifies to its kind in the checked-in production fixture", () => {
+  for (const shape of RECORDED_SHAPES) {
+    const [file, cited] = shape.source.split(" ");
+    const [programId, stepId] = cited.split("#");
+    assert.equal(programId, shape.row, shape.source);
+    const recorded = readFixture(file).programs?.[programId]?.steps?.[stepId];
+    assert.ok(recorded !== undefined, `${shape.source} is not in the fixture`);
+    assert.deepEqual(Object.keys(recorded).toSorted(), ["body", "status"], shape.source);
+    assert.equal(classifyAnswer(shape.rpc, recorded).kind, shape.kind, shape.source);
+  }
+});
+
+test("the checked-in 2026-11-08 production recording of the differences corpus reads as recorded", () => {
+  const fixture = readFixture("fs-rules-v1-observation.json");
+  for (const { id } of DIFFS_PROGRAMS) {
+    const saved = fixture.programs[id];
+    assert.equal(saved.recordedAt, "2026-11-08T02:47:31.410Z", id);
+    assert.equal(saved.second, undefined, `${id}: the two recordings were identical`);
+  }
+  const rows = Object.fromEntries(diffsReport(fixture).map((r) => [r.row, r.answer]));
+  const denied = new Set([
+    "queries#owner-and-name-missing",
+    "queries#owner-and-name-foreign",
+    "queries#name-missing-alone",
+    "queries#name-foreign-alone",
+    "queries#members-guarded-in-viewer",
+    "queries#has-owner-nofilter",
+    "string-index#idx1-fire",
+    "string-index#idx2-x",
+    "string-index#idx4-eq-x",
+    "string-index#idx4-not-eq",
+    "string-index#size-3",
+    "string-escape#esc-high",
+    "fn-top#fn-top-false",
+    "fn-inner#fn-inner-false",
+  ]);
+  for (const [row, answer] of Object.entries(rows)) {
+    const expected = row.endsWith("#publishes")
+      ? "compiled"
+      : denied.has(row)
+        ? "denied"
+        : "allowed";
+    assert.equal(answer, expected, row);
+  }
+  assert.equal(Object.keys(rows).length, 33);
 });

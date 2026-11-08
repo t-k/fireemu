@@ -708,5 +708,7 @@ test("a failed recording that left a name open is needs-recovery, and meta.json 
     assert.equal(result.outcome, outcome, name);
     assert.equal(d.ledger.at(-1).outcome, outcome, name);
     assert.equal(JSON.parse(d.writes.get("meta.json")).outcome, outcome, name);
+    // Only a run that ended "recorded" leaves a fixture.
+    assert.ok(!d.writes.has("FIXTURE"), name);
   }
 });

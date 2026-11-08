@@ -13,7 +13,8 @@
 // FS3_CORPUS picks the corpus: `v1` (FS-3, the default), `bad-path` (FS-8, Rules get()/exists()
 // on a path that is not a document of this database) or `diffs` (five claimed differences from
 // the official emulator; `diffs-report` prints what production answered against the claims) or
-// `shapes` (shapes the fixes decided without a production row; `shapes-report`).
+// `shapes` (shapes the fixes decided without a production row; `shapes-report`) or `shapes2` (the
+// second family: stored keys, key sets, a function over resource, an offset; `shapes2-report`).
 // One run never mixes the families.
 //
 // Production needs FIREEMU_AUTH_SANDBOX_WEB_CONFIG (the sandbox web app config JSON, kept outside
@@ -41,10 +42,12 @@ import {
   PRINCIPALS,
   PROGRAMS,
   SHAPES_PROGRAMS,
+  SHAPES_TWO_PROGRAMS,
   validateCorpus,
 } from "./corpus.mjs";
 import { diffsReport } from "./diffs.mjs";
 import { shapesReport, shapesReportLine } from "./shapes.mjs";
+import { shapesTwoReport } from "./shapes-two.mjs";
 import { createGrpcAdapter } from "./grpc.mjs";
 import {
   brief,
@@ -343,7 +346,13 @@ async function check() {
   const local = await runLocal(programs, { profile });
   const rows = compareRows({ fixture, programs, local });
   const known = new Set(
-    [...PROGRAMS, ...BAD_PATH_PROGRAMS, ...DIFFS_PROGRAMS, ...SHAPES_PROGRAMS].map((p) => p.id),
+    [
+      ...PROGRAMS,
+      ...BAD_PATH_PROGRAMS,
+      ...DIFFS_PROGRAMS,
+      ...SHAPES_PROGRAMS,
+      ...SHAPES_TWO_PROGRAMS,
+    ].map((p) => p.id),
   );
   const orphans = Object.keys(fixture.programs ?? {}).filter((id) => !known.has(id));
   const summary = {};
@@ -375,6 +384,12 @@ async function diffsReportCommand() {
 async function shapesReportCommand() {
   const fixture = JSON.parse(await readFile(FIXTURE, "utf8"));
   for (const r of shapesReport(fixture)) console.log(shapesReportLine(r));
+}
+
+/** What production answered for each row of the second shapes family. */
+async function shapesTwoReportCommand() {
+  const fixture = JSON.parse(await readFile(FIXTURE, "utf8"));
+  for (const r of shapesTwoReport(fixture)) console.log(shapesReportLine(r));
 }
 
 async function exportComparison(out) {
@@ -413,6 +428,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   } else if (mode === "check") await check();
   else if (mode === "diffs-report") await diffsReportCommand();
   else if (mode === "shapes-report") await shapesReportCommand();
+  else if (mode === "shapes2-report") await shapesTwoReportCommand();
   else if (mode === "export-comparison") await exportComparison(process.argv[3]);
   else if (mode === "session-local") await sessionLocal();
   else if (mode === "session-official") await sessionOfficial();
@@ -436,7 +452,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     );
   } else {
     console.error(
-      "usage: run.mjs preflight|record-production|check|local|official|export-comparison|diffs-report|shapes-report",
+      "usage: run.mjs preflight|record-production|check|local|official|export-comparison|diffs-report|shapes-report|shapes2-report",
     );
     process.exitCode = 2;
   }

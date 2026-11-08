@@ -99,7 +99,10 @@ test("a closed terminal stops a recording like an interrupt does", () => {
 test("preflight names the corpus family before it asks for the web config", () => {
   const result = run(["preflight"], { FS3_CORPUS: "nonsense" });
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /FS3_CORPUS must be v1, bad-path, diffs or shapes, not nonsense/);
+  assert.match(
+    result.stderr,
+    /FS3_CORPUS must be v1, bad-path, diffs, shapes or shapes2, not nonsense/,
+  );
   assert.doesNotMatch(result.stderr, /FIREEMU_AUTH_SANDBOX_WEB_CONFIG/);
   const mixed = run(["preflight"], { FS3_CORPUS: "bad-path", FS3_PROGRAMS: "fs-rules-v1/path" });
   assert.match(mixed.stderr, /no program matches FS3_PROGRAMS/);
@@ -184,11 +187,26 @@ test("shapes-report prints one line per shapes row from the checked-in fixture, 
     lines.at(-1),
     /^.* fn-after#fn-after-false +missing \(official: denied, fixes: denied\)/,
   );
-  assert.match(run(["nope"]).stderr, /\|diffs-report\|shapes-report$/m);
+  assert.match(run(["nope"]).stderr, /\|diffs-report\|shapes-report\|shapes2-report$/m);
+});
+
+test("shapes2-report prints one line per row of the second shapes family, none recorded yet", () => {
+  const result = run(["shapes2-report"]);
+  assert.equal(result.status, 0, result.stderr);
+  const lines = result.stdout.trimEnd().split("\n");
+  assert.equal(lines.length, 26);
+  assert.match(
+    lines[0],
+    /^unknown {8}unknown {8}queries#publishes {18}missing \(official: compiled, fixes: compiled\) \[not recorded\]$/,
+  );
+  assert.ok(lines.every((line) => line.startsWith("unknown        unknown        ")));
+  assert.match(lines.at(-1), /^.* fn#fn-arg-allow +missing \(official: allowed, fixes: allowed\)/);
 });
 
 test("check runs the local side and refuses without a fireemu binary", () => {
-  const result = run(["check"], { FIREEMU_BIN: "/nonexistent/fireemu", FS3_CORPUS: "shapes" });
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /fireemu is not built/);
+  for (const corpus of ["shapes", "shapes2"]) {
+    const result = run(["check"], { FIREEMU_BIN: "/nonexistent/fireemu", FS3_CORPUS: corpus });
+    assert.notEqual(result.status, 0, corpus);
+    assert.match(result.stderr, /fireemu is not built/, corpus);
+  }
 });

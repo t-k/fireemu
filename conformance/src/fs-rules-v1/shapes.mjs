@@ -237,9 +237,12 @@ const refusalDetail = (diagnostics) =>
   diagnostics ? `${diagnostics.stage} ${diagnostics.status}: ${diagnostics.message}` : undefined;
 
 /** Every row of the corpus: the recorded answer, its meaning and the two comparisons. */
-export function shapesReport(fixture, { official = OFFICIAL, fixes = FIXES } = {}) {
+export function shapesReport(
+  fixture,
+  { official = OFFICIAL, fixes = FIXES, programs = SHAPES_PROGRAMS } = {},
+) {
   const rows = [];
-  for (const program of SHAPES_PROGRAMS) {
+  for (const program of programs) {
     const name = program.id.split("/").at(-1);
     const saved = fixture.programs?.[program.id];
     for (const step of program.steps) {

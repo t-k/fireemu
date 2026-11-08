@@ -40,7 +40,8 @@ function compose(rulesetId, label) {
     RULESETS[rulesetId] ??
     BAD_PATH_RULESETS[rulesetId] ??
     DIFFS_RULESETS[rulesetId] ??
-    SHAPES_RULESETS[rulesetId];
+    SHAPES_RULESETS[rulesetId] ??
+    SHAPES_TWO_RULESETS[rulesetId];
   if (!ruleset) throw new Error(`unknown ruleset ${rulesetId}`);
   return [
     ...(ruleset.version === 2 ? ["rules_version = '2';"] : []),
@@ -187,7 +188,8 @@ export function validateCorpus(programs, principals = PRINCIPALS) {
       !RULESET_IDS.includes(p.ruleset) &&
       !BAD_PATH_RULESET_IDS.includes(p.ruleset) &&
       !DIFFS_RULESET_IDS.includes(p.ruleset) &&
-      !SHAPES_RULESET_IDS.includes(p.ruleset)
+      !SHAPES_RULESET_IDS.includes(p.ruleset) &&
+      !SHAPES_TWO_RULESET_IDS.includes(p.ruleset)
     )
       throw new Error(`${p.id}: unknown ruleset ${p.ruleset}`);
     const stepIds = new Set();
@@ -754,4 +756,155 @@ export const SHAPES_PROGRAMS = [
     getRow("fsr9-fa-true", "fn-after-true"),
     getRow("fsr9-fa-false", "fn-after-false"),
   ]),
+];
+
+// ---- FS-RULES: shapes, second family ------------------------------------------------------------
+//
+// The review of the query fix (rules-query-fix-sol-r3, Must 1) found three rules whose query
+// authorization the fix answers without a production row when the offending key is STORED in the
+// matching documents: a default (`get('blocked', false) == false`), a key list
+// (`!keys().hasAny(['blocked'])`) and a nested membership (`!('blocked' in resource.data.meta)`).
+// The first shapes family recorded those rules only over documents without the key, plus the
+// top-level negated `in` over documents with it. This family stores the key, and beside every
+// stored-key row it records the same rule over documents without the key. It also records the
+// exact key set and the cardinality (`hasOnly`, `size() == 1`) with and without an extra key, a
+// function called with `resource`, and a named document with an offset. Every row is a list query
+// on a field the rule does not name (`a`, `meta.a`) or on the owner. A shared pair of controls
+// (`true`, `false`) shows that the rows can tell an allowed list from a refused one; each case has
+// its own refused control that pins the key the rule forbids.
+//
+// The mixed named/unnamed OR query of the first family (`or-named-unnamed`) is not repeated: it
+// was answered 400 for a missing index, and the index it asks for is the single-field index
+// `__name__` ascending, which cannot be declared as a composite index.
+
+const SHAPES_TWO_QUERY_RULES = [
+  ["fsr9-p-ctl-true", "true"],
+  ["fsr9-p-ctl-false", "false"],
+  ["fsr9-p-get", "resource.data.get('blocked', false) == false"],
+  ["fsr9-p-get-absent", "resource.data.get('blocked', false) == false"],
+  ["fsr9-p-keys", "!resource.data.keys().hasAny(['blocked'])"],
+  ["fsr9-p-keys-absent", "!resource.data.keys().hasAny(['blocked'])"],
+  ["fsr9-p-meta", "!('blocked' in resource.data.meta)"],
+  ["fsr9-p-meta-absent", "!('blocked' in resource.data.meta)"],
+  ["fsr9-p-only-plain", "resource.data.keys().hasOnly(['a'])"],
+  ["fsr9-p-only-extra", "resource.data.keys().hasOnly(['a'])"],
+  ["fsr9-p-only-b", "resource.data.keys().hasOnly(['b'])"],
+  ["fsr9-p-size-plain", "resource.data.size() == 1"],
+  ["fsr9-p-size-extra", "resource.data.size() == 1"],
+  ["fsr9-p-size-zero", "resource.data.size() == 0"],
+  ["fsr9-p-own", "resource.data.owner == request.auth.uid"],
+];
+
+const functionWithArgument = (indent, name, value) => [
+  `${indent}function ${name}(r) {`,
+  `${indent}  return ${value};`,
+  `${indent}}`,
+];
+
+export const SHAPES_TWO_RULESETS = {
+  "shapes-two-queries": {
+    version: 2,
+    body: SHAPES_TWO_QUERY_RULES.flatMap(([collection, condition]) =>
+      rule("list", collection, condition),
+    ),
+  },
+  // f(r) is true for any non-null argument and g(r) for a null one; both are called with resource.
+  "shapes-two-fn": {
+    version: 2,
+    body: [
+      ...functionWithArgument("    ", "f", "r != null"),
+      ...functionWithArgument("    ", "g", "r == null"),
+      ...rule("list", "fsr9-p-fn-resource", "f(resource)"),
+      ...rule("list", "fsr9-p-fn-null", "g(resource)"),
+      ...rule("list", "fsr9-p-fn-arg", "f(request.auth)"),
+    ],
+  },
+};
+export const SHAPES_TWO_RULESET_IDS = Object.keys(SHAPES_TWO_RULESETS);
+
+const pRow = (id, collection, where, extra) =>
+  queryRow(id, { collectionId: collection }, where, extra);
+const BLOCKED = { blocked: { booleanValue: true } };
+const EXTRA = { extra: { booleanValue: true } };
+const BLOCKED_IS = (value) => field("blocked", "EQUAL", { booleanValue: value });
+const META_BLOCKED_IS_TRUE = field("meta.blocked", "EQUAL", { booleanValue: true });
+const ownName = (doc) => field("__name__", "EQUAL", { referenceValue: `{docs}/fsr9-p-own/${doc}` });
+
+const shapesTwoProgram = (name, steps, seed = []) => ({
+  id: `fs-rules-v1/shapes-two/${name}`,
+  ruleset: `shapes-two-${name}`,
+  seed,
+  steps: [{ id: "publishes", publish: true }, ...steps],
+});
+
+export const SHAPES_TWO_PROGRAMS = [
+  shapesTwoProgram(
+    "queries",
+    [
+      // Controls shared by every case: a list rule that is true and one that is false.
+      pRow("ctl-allow", "fsr9-p-ctl-true", A_IS_1),
+      pRow("ctl-deny", "fsr9-p-ctl-false", A_IS_1),
+      // get('blocked', false) == false: the key stored, the key absent, and the key pinned.
+      pRow("get-stored", "fsr9-p-get", A_IS_1),
+      pRow("get-absent", "fsr9-p-get-absent", A_IS_1),
+      pRow("get-allow", "fsr9-p-get", BLOCKED_IS(false)),
+      pRow("get-deny", "fsr9-p-get", BLOCKED_IS(true)),
+      // !keys().hasAny(['blocked'])
+      pRow("keys-stored", "fsr9-p-keys", A_IS_1),
+      pRow("keys-absent", "fsr9-p-keys-absent", A_IS_1),
+      pRow("keys-deny", "fsr9-p-keys", BLOCKED_IS(true)),
+      // !('blocked' in resource.data.meta), queried on meta.a
+      pRow("meta-stored", "fsr9-p-meta", META_A_IS_1),
+      pRow("meta-absent", "fsr9-p-meta-absent", META_A_IS_1),
+      pRow("meta-deny", "fsr9-p-meta", META_BLOCKED_IS_TRUE),
+      // The exact key set and the cardinality, with and without an extra key; `b` and `0` can
+      // never hold beside the constrained `a`.
+      pRow("only-plain", "fsr9-p-only-plain", A_IS_1),
+      pRow("only-extra", "fsr9-p-only-extra", A_IS_1),
+      pRow("only-b-deny", "fsr9-p-only-b", A_IS_1),
+      pRow("size-plain", "fsr9-p-size-plain", A_IS_1),
+      pRow("size-extra", "fsr9-p-size-extra", A_IS_1),
+      pRow("size-zero-deny", "fsr9-p-size-zero", A_IS_1),
+      // documentId() == the own document, skipping one: the allowed control is the owner filter,
+      // the refused control a name the rule refuses.
+      pRow("name-offset", "fsr9-p-own", ownName("mine"), { offset: 1 }),
+      pRow("owner-offset", "fsr9-p-own", ME, { offset: 1 }),
+      pRow("foreign-offset", "fsr9-p-own", ownName("foreign"), { offset: 1 }),
+    ],
+    [
+      { doc: "fsr9-p-ctl-true/d1", fields: A1 },
+      { doc: "fsr9-p-ctl-false/d1", fields: A1 },
+      { doc: "fsr9-p-get/d1", fields: { ...A1, ...BLOCKED } },
+      { doc: "fsr9-p-get-absent/d1", fields: A1 },
+      { doc: "fsr9-p-keys/d1", fields: { ...A1, ...BLOCKED } },
+      { doc: "fsr9-p-keys-absent/d1", fields: A1 },
+      {
+        doc: "fsr9-p-meta/d1",
+        fields: { meta: { mapValue: { fields: { ...A1, ...BLOCKED } } } },
+      },
+      { doc: "fsr9-p-meta-absent/d1", fields: META_A1 },
+      { doc: "fsr9-p-only-plain/d1", fields: A1 },
+      { doc: "fsr9-p-only-extra/d1", fields: { ...A1, ...EXTRA } },
+      { doc: "fsr9-p-only-b/d1", fields: A1 },
+      { doc: "fsr9-p-size-plain/d1", fields: A1 },
+      { doc: "fsr9-p-size-extra/d1", fields: { ...A1, ...EXTRA } },
+      { doc: "fsr9-p-size-zero/d1", fields: A1 },
+      { doc: "fsr9-p-own/mine", fields: { owner: { stringValue: "UID(anon)" }, ...N1 } },
+      { doc: "fsr9-p-own/mine2", fields: { owner: { stringValue: "UID(anon)" }, ...N1 } },
+      { doc: "fsr9-p-own/foreign", fields: { owner: { stringValue: "other-owner" }, ...N1 } },
+    ],
+  ),
+  shapesTwoProgram(
+    "fn",
+    [
+      pRow("fn-resource", "fsr9-p-fn-resource", A_IS_1),
+      pRow("fn-null-deny", "fsr9-p-fn-null", A_IS_1),
+      pRow("fn-arg-allow", "fsr9-p-fn-arg", A_IS_1),
+    ],
+    [
+      { doc: "fsr9-p-fn-resource/d1", fields: A1 },
+      { doc: "fsr9-p-fn-null/d1", fields: A1 },
+      { doc: "fsr9-p-fn-arg/d1", fields: A1 },
+    ],
+  ),
 ];

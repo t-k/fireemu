@@ -1984,6 +1984,9 @@ impl WireCommit {
 }
 
 #[cfg(test)]
+mod frame_identity_tests;
+
+#[cfg(test)]
 mod refresh_tests {
     use super::*;
     use crate::local::{CommitChangeKind, CommitPathChange, FirestoreSnapshot};

@@ -3782,6 +3782,23 @@ fn handle_request(state: &StorageState, req: StorageRequest) -> StorageResponse 
     let outcome = match route {
         Route::SetRules => unreachable!("setRules returns before Storage data dispatch"),
         Route::FbRoot => Ok(StorageResponse::json(200, &json!({"emulator": "storage"}))),
+        // The same validator for every other Firebase v0 route that takes an object name, so no
+        // rule sees an empty segment through this API. Recorded for the reads (STORAGE-RULES-S9);
+        // for the writes it is inferred from the reads, not recorded.
+        Route::FbObject { name, .. }
+            if matches!(method.as_str(), "POST" | "PUT" | "PATCH" | "DELETE")
+                && has_empty_path_segment(&name) =>
+        {
+            Err(fb_empty_path_segment())
+        }
+        Route::FbBucket { .. }
+            if matches!(method.as_str(), "POST" | "PUT")
+                && params
+                    .get("name")
+                    .is_some_and(|name| has_empty_path_segment(name)) =>
+        {
+            Err(fb_empty_path_segment())
+        }
         Route::FbBucket { bucket } => match method.as_str() {
             "GET" => fb_list(state, &principal, &bucket, &params),
             "POST" | "PUT" => fb_object_post(

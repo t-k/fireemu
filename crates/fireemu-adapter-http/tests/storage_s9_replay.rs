@@ -807,3 +807,243 @@ mod properties {
         }
     }
 }
+
+// ---------------------------------------------------------------------------------------------
+// Writes through the Firebase v0 API. UNRECORDED (inferred, coordinator ruling 2026-11-09):
+// production answered the path refusal on every v0 route that was read, before the rules, so the
+// same validator is applied to every v0 route that takes an object name.
+// ---------------------------------------------------------------------------------------------
+
+fn multipart_body(meta: &Value, data: &[u8]) -> (String, Vec<u8>) {
+    let boundary = "fireemu-boundary";
+    let mut body = Vec::new();
+    body.extend_from_slice(
+        format!(
+            "--{boundary}\r\nContent-Type: application/json; charset=utf-8\r\n\r\n{meta}\r\n--{boundary}\r\nContent-Type: text/plain\r\n\r\n"
+        )
+        .as_bytes(),
+    );
+    body.extend_from_slice(data);
+    body.extend_from_slice(format!("\r\n--{boundary}--").as_bytes());
+    (format!("multipart/related; boundary={boundary}"), body)
+}
+
+/// Every v0 route that takes an object name: (label, request builder for `name`).
+fn v0_write_routes() -> Vec<(&'static str, fn(&str, &[(&str, &str)]) -> StorageRequest)> {
+    fn with(auth: &[(&str, &str)], extra: &[(&str, &str)]) -> Vec<(String, String)> {
+        auth.iter()
+            .chain(extra.iter())
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+            .collect()
+    }
+    fn build(
+        method: &str,
+        path: String,
+        auth: &[(&str, &str)],
+        extra: &[(&str, &str)],
+        body: &[u8],
+    ) -> StorageRequest {
+        let headers = with(auth, extra);
+        let refs: Vec<(&str, &str)> = headers
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        request(method, &path, &refs, body)
+    }
+    vec![
+        ("post-path-media", |n, a| {
+            build(
+                "POST",
+                format!("/v0/b/{BUCKET}/o/{}", enc(n)),
+                a,
+                &[("content-type", "text/plain")],
+                b"x",
+            )
+        }),
+        ("put-path-media", |n, a| {
+            build(
+                "PUT",
+                format!("/v0/b/{BUCKET}/o/{}", enc(n)),
+                a,
+                &[("content-type", "text/plain")],
+                b"x",
+            )
+        }),
+        ("post-query-media", |n, a| {
+            build(
+                "POST",
+                format!("/v0/b/{BUCKET}/o?name={}&uploadType=media", enc(n)),
+                a,
+                &[("content-type", "text/plain")],
+                b"x",
+            )
+        }),
+        ("put-query-media", |n, a| {
+            build(
+                "PUT",
+                format!("/v0/b/{BUCKET}/o?name={}&uploadType=media", enc(n)),
+                a,
+                &[("content-type", "text/plain")],
+                b"x",
+            )
+        }),
+        ("post-query-multipart", |n, a| {
+            let (ct, body) = multipart_body(&serde_json::json!({"name": n}), b"x");
+            build(
+                "POST",
+                format!("/v0/b/{BUCKET}/o?name={}&uploadType=multipart", enc(n)),
+                a,
+                &[
+                    ("content-type", &ct),
+                    ("x-goog-upload-protocol", "multipart"),
+                ],
+                &body,
+            )
+        }),
+        ("post-path-multipart", |n, a| {
+            let (ct, body) = multipart_body(&serde_json::json!({}), b"x");
+            build(
+                "POST",
+                format!("/v0/b/{BUCKET}/o/{}", enc(n)),
+                a,
+                &[
+                    ("content-type", &ct),
+                    ("x-goog-upload-protocol", "multipart"),
+                ],
+                &body,
+            )
+        }),
+        ("post-query-resumable-start", |n, a| {
+            build(
+                "POST",
+                format!("/v0/b/{BUCKET}/o?name={}", enc(n)),
+                a,
+                &[
+                    ("x-goog-upload-protocol", "resumable"),
+                    ("x-goog-upload-command", "start"),
+                    ("content-type", "application/json"),
+                ],
+                b"{}",
+            )
+        }),
+        ("post-path-resumable-start", |n, a| {
+            build(
+                "POST",
+                format!("/v0/b/{BUCKET}/o/{}", enc(n)),
+                a,
+                &[
+                    ("x-goog-upload-protocol", "resumable"),
+                    ("x-goog-upload-command", "start"),
+                    ("content-type", "application/json"),
+                ],
+                b"{}",
+            )
+        }),
+        ("post-path-create-token", |n, a| {
+            build(
+                "POST",
+                format!("/v0/b/{BUCKET}/o/{}?create_token=true", enc(n)),
+                a,
+                &[],
+                b"",
+            )
+        }),
+        ("post-path-delete-token", |n, a| {
+            build(
+                "POST",
+                format!("/v0/b/{BUCKET}/o/{}?delete_token=t", enc(n)),
+                a,
+                &[],
+                b"",
+            )
+        }),
+        ("patch", |n, a| {
+            build(
+                "PATCH",
+                format!("/v0/b/{BUCKET}/o/{}", enc(n)),
+                a,
+                &[("content-type", "application/json")],
+                br#"{"contentType":"text/x-new"}"#,
+            )
+        }),
+        ("put-method-override-patch", |n, a| {
+            build(
+                "PUT",
+                format!("/v0/b/{BUCKET}/o/{}", enc(n)),
+                a,
+                &[
+                    ("content-type", "application/json"),
+                    ("x-http-method-override", "PATCH"),
+                ],
+                br#"{"contentType":"text/x-new"}"#,
+            )
+        }),
+        ("delete", |n, a| {
+            build(
+                "DELETE",
+                format!("/v0/b/{BUCKET}/o/{}", enc(n)),
+                a,
+                &[],
+                b"",
+            )
+        }),
+    ]
+}
+
+const EMPTY_SEGMENT_NAMES: [&str; 3] = ["p/pub//x", "/p/pub/x", "p/pub/x/"];
+
+#[test]
+fn every_v0_route_that_takes_an_object_name_refuses_an_empty_segment_before_the_rules() {
+    for profile in [Profile::Strict, Profile::Emulator] {
+        for (route, build) in v0_write_routes() {
+            for name in EMPTY_SEGMENT_NAMES {
+                for credentials in [&OWNER[..], &[][..]] {
+                    let s = state(profile, ALLOW_ALL);
+                    // The object exists under the odd name (the JSON API creates it), so a delete
+                    // or a patch would find something to change.
+                    let existed = put_status(&s, name, "original").status == 200;
+                    let r = handle(&s, build(name, credentials));
+                    let label = format!(
+                        "{profile:?} {route} {name} owner={}",
+                        !credentials.is_empty()
+                    );
+                    assert_path_refusal(&r, &label);
+                    // The emulator profile stores `/x` as `x` (the official leading-slash strip).
+                    let stored = if profile == Profile::Emulator {
+                        name.strip_prefix('/').unwrap_or(name)
+                    } else {
+                        name
+                    };
+                    if existed {
+                        assert_eq!(
+                            gcs_media(&s, stored),
+                            (200, "original".into()),
+                            "{label}: untouched"
+                        );
+                    } else {
+                        assert_eq!(gcs_media(&s, stored).0, 404, "{label}: nothing created");
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Near misses of the same routes: a name with single slashes only is not this refusal. The
+/// answer is whatever the route answered before (an upload commits, a patch or a delete of an
+/// absent object is not a path refusal).
+#[test]
+fn the_v0_write_routes_still_serve_a_well_formed_name() {
+    for profile in [Profile::Strict, Profile::Emulator] {
+        for (route, build) in v0_write_routes() {
+            let s = state(profile, ALLOW_ALL);
+            put(&s, "p/pub/x", "original");
+            let r = handle(&s, build("p/pub/x", &OWNER));
+            let label = format!("{profile:?} {route}");
+            let refusal = r.status == 400
+                && serde_json::from_slice::<Value>(&r.body)
+                    .is_ok_and(|b| b["error"]["message"] == PATH_MESSAGE);
+            assert!(!refusal, "{label}: {}", String::from_utf8_lossy(&r.body));
+        }
+    }
+}

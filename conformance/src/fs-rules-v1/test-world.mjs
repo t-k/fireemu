@@ -212,19 +212,26 @@ export function createWorld(scenario = {}) {
         body: [{ result: { aggregateFields: { n: { integerValue: String(matches.length) } } } }],
       };
     }
-    const limited = query.limit ? matches.slice(0, query.limit?.value ?? query.limit) : matches;
+    // An offset skips what exists; production then leads with `{readTime, skippedResults}`
+    // (fs-rules/query/constraints#offset-1-le-1, fs-query-index/cursors/values#cursor-with-offset).
+    const rest = matches.slice(Number(query.offset ?? 0));
+    const skipped = matches.length - rest.length;
+    const limited = query.limit ? rest.slice(0, query.limit?.value ?? query.limit) : rest;
     // Production's shapes: `[{document, readTime}, ...]`, and `[{readTime}]` when nothing matches
     // (fs-rules-v1/path-wildcard/v2#group-none, fs-rules/budgets/access-calls#list-10).
     const readTime = "2026-01-01T00:00:00Z";
+    const entries = limited.map((p) => ({
+      document: { name: names(p), fields: world.documents.get(p) ?? {} },
+      readTime,
+    }));
     return {
       code: 0,
       status: 200,
-      body: limited.length
-        ? limited.map((p) => ({
-            document: { name: names(p), fields: world.documents.get(p) ?? {} },
-            readTime,
-          }))
-        : [{ readTime }],
+      body: skipped
+        ? [{ readTime, skippedResults: skipped }, ...entries]
+        : entries.length
+          ? entries
+          : [{ readTime }],
     };
   }
 

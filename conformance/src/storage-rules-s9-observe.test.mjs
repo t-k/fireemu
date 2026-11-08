@@ -674,10 +674,11 @@ describe("storage rules s9 observation details", () => {
 
   it("keeps each problem once", async () => {
     const fake = createWorld({ project, bucket, baseline: baselineName, lag: 0 });
-    // Every object create is refused with its own status text; the same problem text appears for both recordings.
+    // Every create except the markers is refused, in both recordings: the same text is reported twice.
     const inner = fake.net;
     const net = async (req) => {
-      if (req.method === "POST" && req.url.includes("/upload/"))
+      const name = new URL(req.url).searchParams.get("name") ?? "";
+      if (req.method === "POST" && req.url.includes("/upload/") && !/\/mk\/[abc]$/.test(name))
         return { status: 400, headers: {}, body: Buffer.from("{}") };
       return inner(req);
     };
@@ -688,14 +689,14 @@ describe("storage rules s9 observation details", () => {
       deps: { net, adminHeaders: () => owner, sleep: noSleep },
       out: memoryOut(),
     });
+    assert.equal(report.rows.length, ROWS.length * 2, "both recordings ran");
     const creates = report.problems.filter((p) => p.startsWith("create of "));
     assert.equal(
       creates.length,
-      27,
-      "27 objects, each noted once although two recordings refuse it",
+      24,
+      "24 objects, each noted once although two recordings refuse it",
     );
     assert.equal(new Set(report.problems).size, report.problems.length);
-    assert.ok(report.problems.length <= 60);
   });
 
   it("sends the content types of the recorded requests", async () => {

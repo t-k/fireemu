@@ -59,7 +59,7 @@ function required(name) {
   return value;
 }
 
-function newOutDir(path) {
+export function newOutDir(path) {
   mkdirSync(path, { recursive: false, mode: 0o700 });
   return {
     journal: (entry) =>
@@ -74,14 +74,12 @@ function newOutDir(path) {
   };
 }
 
-function gitState() {
+export function gitState(exec = execFileSync) {
   try {
     return {
-      gitSha: execFileSync("git", ["-C", HERE, "rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
+      gitSha: exec("git", ["-C", HERE, "rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
       // The whole checkout: the lock library and the tests are inputs too.
-      dirty:
-        execFileSync("git", ["-C", HERE, "status", "--porcelain"], { encoding: "utf8" }).trim() !==
-        "",
+      dirty: exec("git", ["-C", HERE, "status", "--porcelain"], { encoding: "utf8" }).trim() !== "",
     };
   } catch {
     return { gitSha: null, dirty: null };
@@ -97,19 +95,19 @@ export function requireCleanCheckout(pin) {
     );
 }
 
-function pins() {
+export function pins(exec = execFileSync) {
   const digest = (file) =>
     createHash("sha256")
       .update(readFileSync(join(HERE, file)))
       .digest("hex");
   return {
-    ...gitState(),
+    ...gitState(exec),
     modules: Object.fromEntries(MODULES.map((file) => [file, digest(file)])),
     node: process.version,
   };
 }
 
-function finish(out, report, extra) {
+export function finish(out, report, extra, log = console) {
   const full = {
     ...report,
     ...extra,
@@ -117,18 +115,18 @@ function finish(out, report, extra) {
     finishedAt: new Date().toISOString(),
   };
   // The receipt goes to stdout first: a full disk must not lose it.
-  console.log(JSON.stringify({ ...full, rows: undefined, loads: undefined }));
+  log.log(JSON.stringify({ ...full, rows: undefined, loads: undefined }));
   try {
     out.save("run-report.json", full);
   } catch (error) {
-    console.error(`run-report.json not saved: ${error.message}`);
+    log.error(`run-report.json not saved: ${error.message}`);
   }
   return full;
 }
 
-function adcToken() {
+export function adcToken(exec = execFileSync) {
   try {
-    return execFileSync("gcloud", ["auth", "application-default", "print-access-token"], {
+    return exec("gcloud", ["auth", "application-default", "print-access-token"], {
       encoding: "utf8",
       timeout: 30_000,
       stdio: ["ignore", "pipe", "pipe"],
@@ -138,41 +136,65 @@ function adcToken() {
   }
 }
 
-async function recordProduction() {
-  for (const name of Object.keys(process.env)) {
+/** The production run, with its collaborators passed in so a test can stand in for each. */
+export async function recordProductionRun({
+  baseline: requested,
+  outPath,
+  lockDir = "docs.local/runs/sandbox-locks",
+  legacyLock = "docs.local/runs/sandbox-ledger.jsonl.lock",
+  env = process.env,
+  exec = execFileSync,
+  locks = withProjectLocks,
+  makeDeps = createProductionDeps,
+  observer = observe,
+  guardEgress = installEgressGuard,
+  newId = newRunId,
+  pid = process.pid,
+  log = console,
+}) {
+  for (const name of Object.keys(env)) {
     if (FORBIDDEN_ENV.some((pattern) => pattern.test(name)))
       throw new Error(`refusing to start with ${name} set`);
   }
-  const baseline = validateBaseline(required("baseline"), PROJECT);
-  const runId = newRunId();
-  const pin = pins();
+  const baseline = validateBaseline(requested, PROJECT);
+  const runId = newId();
+  const pin = pins(exec);
   requireCleanCheckout(pin);
-  const out = newOutDir(required("out"));
+  const out = newOutDir(outPath);
   const startedAt = new Date().toISOString();
-  installEgressGuard(PRODUCTION_HOSTS);
-  const accessToken = adcToken();
+  guardEgress(PRODUCTION_HOSTS);
+  const accessToken = adcToken(exec);
   const target = { name: "production", bucket: BUCKET, project: PROJECT };
   out.save("run-header.json", { runId, startedAt, baseline, ...pin, target });
   let final;
-  await withProjectLocks(
+  await locks(
     {
       projects: [PROJECT],
       taskId: "STORAGE-RULES-S9",
       packetId: runId,
       sourceCommit: pin.gitSha,
-      pid: process.pid,
+      pid,
       acquiredAt: startedAt.replace(/\.\d{3}Z$/, "Z"),
-      lockDir: argValue("lock-dir") ?? "docs.local/runs/sandbox-locks",
-      legacyLockPath: argValue("legacy-lock") ?? "docs.local/runs/sandbox-ledger.jsonl.lock",
+      lockDir,
+      legacyLockPath: legacyLock,
     },
     async (lease) => {
-      const deps = createProductionDeps({ accessToken, lease });
-      const { report } = await observe({ target, runId, baseline, deps, out });
-      final = finish(out, report, { startedAt, ...pin });
+      const deps = makeDeps({ accessToken, lease });
+      const { report } = await observer({ target, runId, baseline, deps, out });
+      final = finish(out, report, { startedAt, ...pin }, log);
       if (report.closureReady) lease.confirmClosed();
     },
   );
   return final;
+}
+
+async function recordProduction() {
+  return recordProductionRun({
+    baseline: required("baseline"),
+    outPath: required("out"),
+    ...(argValue("lock-dir") ? { lockDir: argValue("lock-dir") } : {}),
+    ...(argValue("legacy-lock") ? { legacyLock: argValue("legacy-lock") } : {}),
+  });
 }
 
 async function recordLocal() {
@@ -203,13 +225,21 @@ async function recordLocal() {
   return finish(out, report, { startedAt, ...pin });
 }
 
-async function readbackCommand() {
-  const dir = required("run-dir");
+/** The A2 read-back of a finished run: the run's own header and entry list, fresh time-stamped files. */
+export async function readbackRun({
+  dir,
+  exec = execFileSync,
+  guardEgress = installEgressGuard,
+  net = fetchNet,
+  reader = readback,
+  now = () => new Date(),
+  log = console,
+}) {
   const header = JSON.parse(readFileSync(join(dir, "run-header.json"), "utf8"));
   const entry = JSON.parse(readFileSync(join(dir, "entry.json"), "utf8")).entryRulesets;
-  installEgressGuard(PRODUCTION_HOSTS);
-  const accessToken = adcToken();
-  const stamp = new Date().toISOString().replace(/[:.]/g, "");
+  guardEgress(PRODUCTION_HOSTS);
+  const accessToken = adcToken(exec);
+  const stamp = now().toISOString().replace(/[:.]/g, "");
   const out = {
     journal: (entryLine) =>
       appendFileSync(
@@ -229,9 +259,9 @@ async function readbackCommand() {
       authorization: `Bearer ${accessToken}`,
       "x-goog-user-project": PROJECT,
     }),
-    net: fetchNet,
+    net,
   };
-  const report = await readback({
+  const report = await reader({
     target: { name: "production", bucket: BUCKET, project: PROJECT },
     runId: header.runId,
     baseline: header.baseline,
@@ -239,8 +269,12 @@ async function readbackCommand() {
     deps,
     out,
   });
-  console.log(JSON.stringify(report));
+  log.log(JSON.stringify(report));
   return report;
+}
+
+async function readbackCommand() {
+  return readbackRun({ dir: required("run-dir") });
 }
 
 function tableCommand() {

@@ -36,6 +36,7 @@ import {
   SETTLE_STREAK,
   STILL_IN_FORCE_READS,
   objectName,
+  plannedNames,
   recordingPrefix,
   rowsOf,
   runRoot,
@@ -105,7 +106,7 @@ export async function observe({
 
   const created = new Map(); // name -> generation, from a 2xx create answer
   const unconfirmed = new Set(); // names of creates whose answer was unknown
-  const refusedCreates = new Map(); // name -> definitive refusal status
+  const refusedCreates = new Set(); // names whose create was refused or stored under another name
   const rowsAll = [];
   const loads = [];
   const publications = [];
@@ -170,24 +171,23 @@ export async function observe({
         // The server stored the bytes under another name (for example without a leading slash): the
         // cleanup deletes what it reports, and the rows of this object are not evaluated.
         created.set(parsed.name, parsed.generation);
-        refusedCreates.set(name, "renamed");
+        refusedCreates.add(name);
         problem(`create of ${id} was stored under another name`);
-        return false;
+        return;
       }
       if (object.metadata && JSON.stringify(parsed.metadata) !== JSON.stringify(object.metadata)) {
         created.set(name, parsed.generation);
         throw new StopRun(`create of ${id} did not keep the custom metadata`);
       }
       created.set(name, parsed.generation);
-      return true;
+      return;
     }
     if ([401, 403, 429].includes(res.status))
       throw new StopRun(`create of ${id} refused with ${res.status}`);
     // A 412 means another object already holds the name (for example a server that reads
     // `/x` and `x` as one object): the row is not evaluated and the run says so.
-    refusedCreates.set(name, res.status);
+    refusedCreates.add(name);
     problem(`create of ${id} refused with ${res.status}`);
-    return false;
   }
 
   const markerStatus = async (label, P, markerId) => {
@@ -263,16 +263,17 @@ export async function observe({
     throw new StopRun(`${label}: ruleset create answered ${res.status}`);
   }
 
-  async function readRelease(label) {
+  /** The release, or null when the answer is not a recorded shape. A `read` caller gets null for an unknown answer too. */
+  async function readRelease(label, read = false) {
     const res = await wire(
       label,
       {
         method: "GET",
         url: `${rulesApi}/v1/${releaseName}`,
       },
-      { admin: true },
+      { admin: true, read },
     );
-    return parseRelease(res, releaseName);
+    return res.unknown ? null : parseRelease(res, releaseName);
   }
 
   async function writeRelease(label, rulesetName) {
@@ -307,7 +308,6 @@ export async function observe({
       );
     }
     if (res.status === 200) {
-      released = true;
       releaseExists = true;
       return { ok: true };
     }
@@ -547,7 +547,7 @@ export async function observe({
         ? release?.state === "absent"
         : release?.state === "present" && release.rulesetName === baseline;
     // Read first: an unknown answer to an earlier write is settled by this read, never by a second write.
-    let current = await readRelease(`${label}/read`);
+    let current = await readRelease(`${label}/read`, true);
     if (!isBaseline(current)) {
       if (baseline === "absent") {
         if (unknownLabels.some((l) => l.includes("restore") && l.endsWith("/delete"))) {
@@ -568,7 +568,7 @@ export async function observe({
         const wrote = await writeRelease(`${label}/patch`, baseline);
         if (!wrote.ok) problem(`${label}: the baseline release was refused`);
       }
-      current = await readRelease(`${label}/readback`);
+      current = await readRelease(`${label}/readback`, true);
     }
     if (!isBaseline(current)) problem(`${label}: the release did not read back as the baseline`);
     else {
@@ -592,13 +592,19 @@ export async function observe({
   async function deleteOwnRulesets() {
     for (const name of ownRulesets) {
       if (deletedRulesets.has(name)) continue;
-      await deleteRuleset(`cleanup/ruleset/${name.split("/").pop()}`, name);
+      try {
+        await deleteRuleset(`cleanup/ruleset/${name.split("/").pop()}`, name);
+      } catch (error) {
+        // An unknown delete is recorded by the wire and never re-sent; the others still go.
+        if (!(error instanceof UnknownAnswer)) throw error;
+      }
     }
   }
 
   async function cleanupObjects() {
     const toDelete = new Map(); // name -> generation
     for (const [name, generation] of created) toDelete.set(name, generation);
+    const planned = new Set(plannedNames(runId, recordings));
     for (const prefix of [root, `/${root}`]) {
       const res = await wire(
         `cleanup/list${prefix.startsWith("/") ? "-slash" : ""}`,
@@ -606,14 +612,19 @@ export async function observe({
           method: "GET",
           url: gcsList(prefix),
         },
-        { admin: true },
+        { admin: true, read: true },
       );
       const items = parseObjectList(res);
       if (items === null) {
         problem("cleanup list is not a recorded single page");
         continue;
       }
-      for (const item of items) toDelete.set(item.name, item.generation);
+      for (const item of items) {
+        // Only names this run plans are its own; anything else under the root is left alone and reported.
+        if (planned.has(item.name) || created.has(item.name))
+          toDelete.set(item.name, item.generation);
+        else problem("an unexpected object is listed under the run root");
+      }
     }
     const deleteUnknown = new Set();
     for (const [name, generation] of toDelete) {
@@ -659,7 +670,7 @@ export async function observe({
 
   async function finalAudit() {
     if (!production) return;
-    const release = await readRelease("final/release");
+    const release = await readRelease("final/release", true);
     const ok =
       baseline === "absent"
         ? release?.state === "absent"
@@ -671,7 +682,7 @@ export async function observe({
         method: "GET",
         url: `${rulesApi}/v1/projects/${target.project}/rulesets?pageSize=100`,
       },
-      { admin: true },
+      { admin: true, read: true },
     );
     const finalList = parseRulesetList(list);
     if (finalList === null || entryRulesets === null || !sameRulesetList(finalList, entryRulesets))

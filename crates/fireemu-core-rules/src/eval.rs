@@ -6921,6 +6921,321 @@ service cloud.firestore {
     }
 
     #[test]
+    fn canonical_function_calls_skip_global_scope_agreement_walks() {
+        let observed: Vec<_> = [0, 100, 1_000]
+            .into_iter()
+            .map(|unrelated| {
+                let tree = early_allow_rules(unrelated, "top()");
+                scope_setup_work(&tree, 3)
+            })
+            .collect();
+        assert_eq!(observed, vec![(0, 0, 0); 3]);
+    }
+
+    fn mutation_scope_items<'a>(
+        items: &'a mut Vec<crate::ast::Item>,
+        path: &[usize],
+    ) -> &'a mut Vec<crate::ast::Item> {
+        let Some((&position, rest)) = path.split_first() else {
+            return items;
+        };
+        let crate::ast::Item::Match(block) = &mut items[position] else {
+            panic!("fixture scope path");
+        };
+        mutation_scope_items(&mut block.items, rest)
+    }
+
+    fn mutation_function<'a>(
+        tree: &'a mut crate::ast::Ruleset,
+        path: &[usize],
+        position: usize,
+    ) -> &'a mut crate::ast::FunctionDecl {
+        let crate::ast::Item::Function(function) =
+            &mut mutation_scope_items(&mut tree.services[0].items, path)[position]
+        else {
+            panic!("fixture declaration");
+        };
+        function
+    }
+
+    fn mutation_body(expression: &str) -> crate::ast::Expr {
+        let tree = parse_ruleset(&format!(
+            "service cloud.firestore {{ function expression() {{ return {expression}; }} }}"
+        ))
+        .unwrap();
+        let crate::ast::Item::Function(function) = &tree.services[0].items[0] else {
+            unreachable!()
+        };
+        function.body.clone()
+    }
+
+    fn mutation_helper(tree: &mut crate::ast::Ruleset, body: &str) -> crate::ast::Item {
+        let mut helper = mutation_function(tree, &[0, 0], 1).clone();
+        helper.body = mutation_body(body);
+        crate::ast::Item::Function(helper)
+    }
+
+    fn mutate_scope_structure(tree: &mut crate::ast::Ruleset, mutation: u8) {
+        let yes = mutation_helper(tree, "true");
+        let no = mutation_helper(tree, "false");
+        match mutation {
+            1..=3 => {
+                mutation_scope_items(&mut tree.services[0].items, &[0, 0]).remove(1);
+                let parent = mutation_scope_items(&mut tree.services[0].items, &[0]);
+                match mutation {
+                    1 => parent.push(yes),
+                    2 => {
+                        parent.remove(1);
+                    }
+                    _ => {
+                        parent.push(yes);
+                        let last = parent.len() - 1;
+                        parent.swap(1, last);
+                    }
+                }
+            }
+            4 => mutation_scope_items(&mut tree.services[0].items, &[0, 0]).push(no),
+            5 => {
+                mutation_scope_items(&mut tree.services[0].items, &[0, 0]).remove(1);
+            }
+            6 => {
+                let own = mutation_scope_items(&mut tree.services[0].items, &[0, 0]);
+                own.push(no);
+                let last = own.len() - 1;
+                own.swap(1, last);
+            }
+            7 => mutation_scope_items(&mut tree.services[0].items, &[0, 2]).push(yes),
+            8 => mutation_scope_items(&mut tree.services[0].items, &[0]).swap(0, 2),
+            9 => mutation_scope_items(&mut tree.services[0].items, &[0]).insert(0, no),
+            10 => {
+                let target = mutation_scope_items(&mut tree.services[0].items, &[0, 0]).remove(0);
+                mutation_scope_items(&mut tree.services[0].items, &[0]).push(target);
+            }
+            _ => {}
+        }
+    }
+
+    fn mutate_scope_values(tree: &mut crate::ast::Ruleset, mutation: u8) {
+        match mutation {
+            11 | 12 | 18 => {
+                let crate::ast::Item::Match(notes) =
+                    &mut mutation_scope_items(&mut tree.services[0].items, &[0])[0]
+                else {
+                    unreachable!()
+                };
+                match mutation {
+                    11 => notes.path[0] = PathSegment::Literal("renamed".into()),
+                    12 => {
+                        let PathSegment::Capture { name, .. } = &mut notes.path[1] else {
+                            unreachable!()
+                        };
+                        *name = "renamed".into();
+                    }
+                    _ => {
+                        let PathSegment::Capture { name, span } = notes.path[1].clone() else {
+                            unreachable!()
+                        };
+                        notes.path[1] = PathSegment::RecursiveWildcard { name, span };
+                    }
+                }
+                if mutation == 12 {
+                    mutation_function(tree, &[0, 0], 1).body = mutation_body("renamed == 'yes'");
+                }
+            }
+            14 => {
+                let crate::ast::Item::Function(mut added) = mutation_helper(tree, "true") else {
+                    unreachable!()
+                };
+                added.name = "added".into();
+                mutation_function(tree, &[0, 0], 0).body = mutation_body("helper() && added()");
+                mutation_scope_items(&mut tree.services[0].items, &[0, 0])
+                    .push(crate::ast::Item::Function(added));
+            }
+            15 => {
+                let offset = mutation_function(tree, &[0, 0], 0).span.offset;
+                mutation_function(tree, &[0, 0], 1).span.offset = offset;
+            }
+            16 | 17 => {
+                mutation_function(tree, &[0, 0], 1).params.push(
+                    if mutation == 16 {
+                        "parameter"
+                    } else {
+                        "renamed"
+                    }
+                    .into(),
+                );
+                mutation_function(tree, &[0, 0], 1).body = mutation_body("parameter == 'yes'");
+                mutation_function(tree, &[0, 0], 0).body = mutation_body("helper(id)");
+            }
+            _ => {}
+        }
+    }
+
+    fn scope_mutation_tree(service: RulesService) -> crate::ast::Ruleset {
+        parse_ruleset(&format!("rules_version = '2'; service {} {{ match /databases/{{db}}/documents {{ match /notes/{{id}} {{ function target() {{ return helper(); }} function helper() {{ return id == 'yes'; }} allow get: if target(); match /child/{{tail}} {{ function helper() {{ return false; }} allow get: if target(); }} }} function helper() {{ return false; }} match /siblings/{{id}} {{ function helper() {{ return true; }} allow get: if helper(); }} }} function helper() {{ return true; }} }}", service.name())).unwrap()
+    }
+
+    fn scope_reference_report(
+        tree: &crate::ast::Ruleset,
+        context: &RequestContext,
+    ) -> super::EvaluationReport {
+        crate::scope::LEGACY_EVALUATION.with(|enabled| enabled.set(true));
+        let legacy = super::evaluate_request_traced(tree, context, None);
+        crate::scope::LEGACY_EVALUATION.with(|enabled| enabled.set(false));
+        crate::scope::EAGER_SCOPE_SETUP.with(|enabled| enabled.set(true));
+        let eager = super::evaluate_request_traced(tree, context, None);
+        crate::scope::EAGER_SCOPE_SETUP.with(|enabled| enabled.set(false));
+        let actual = super::evaluate_request_traced(tree, context, None);
+        assert_eq!(format!("{actual:?}"), format!("{legacy:?}"), "{context:?}");
+        assert_eq!(format!("{actual:?}"), format!("{eager:?}"), "{context:?}");
+        actual.0
+    }
+
+    fn assert_mutated_scope_report(
+        tree: &crate::ast::Ruleset,
+        context: &RequestContext,
+        mutation: u8,
+        yes: bool,
+    ) {
+        let actual = scope_reference_report(tree, context);
+        if !context.abstract_path {
+            let allow = match mutation {
+                1 | 2 => true,
+                3 | 4 | 5 | 10 | 17 | 18 => false,
+                _ => yes,
+            };
+            assert_eq!(
+                matches!(actual.decision, Decision::Allow),
+                allow,
+                "mutation {mutation}, {actual:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn public_scope_mutations_preserve_lexical_ancestry_and_reports() {
+        // Pairwise rows: mutation, Storage service, abstract query, captured value is yes.
+        let cases: &[(u8, bool, bool, bool)] = &[
+            (0, false, false, true),
+            (1, false, false, true),
+            (2, false, false, true),
+            (3, false, false, true),
+            (4, false, false, true),
+            (5, false, false, true),
+            (6, false, false, true),
+            (7, false, false, true),
+            (8, false, false, true),
+            (9, false, false, true),
+            (10, false, false, true),
+            (11, false, false, true),
+            (12, false, false, true),
+            (13, false, false, true),
+            (14, false, false, true),
+            (15, false, false, true),
+            (16, false, false, true),
+            (17, false, false, true),
+            (18, false, false, true),
+            (0, true, true, false),
+            (14, true, false, true),
+            (15, false, true, false),
+            (5, true, true, false),
+            (12, true, false, false),
+            (8, true, true, true),
+            (9, true, true, false),
+            (8, false, true, false),
+            (18, true, true, false),
+            (1, true, true, false),
+            (16, true, true, false),
+            (12, true, true, false),
+            (11, true, true, false),
+            (10, true, true, false),
+            (17, true, true, false),
+            (15, true, false, false),
+            (14, true, true, false),
+            (7, true, true, false),
+            (3, true, true, false),
+            (4, true, true, false),
+            (6, true, true, false),
+            (2, true, true, false),
+            (13, true, true, false),
+        ];
+        for &(mutation, storage, query, selected_yes) in cases {
+            let service = if storage {
+                RulesService::Storage
+            } else {
+                RulesService::Firestore
+            };
+            let mut tree = scope_mutation_tree(service);
+            let target_offset = mutation_function(&mut tree, &[0, 0], 0).span.offset;
+            mutate_scope_structure(&mut tree, mutation);
+            mutate_scope_values(&mut tree, mutation);
+            if !matches!(mutation, 8..=10) {
+                assert_eq!(
+                    mutation_function(&mut tree, &[0, 0], 0).span.offset,
+                    target_offset,
+                    "target path and offset remain unchanged"
+                );
+            }
+            for yes in [selected_yes, !selected_yes] {
+                let context = RequestContext {
+                    service,
+                    method: Method::Get,
+                    path: format!(
+                        "/databases/(default)/documents/{}/{}{}",
+                        if mutation == 11 { "renamed" } else { "notes" },
+                        if yes { "yes" } else { "no" },
+                        if mutation == 13 { "/child/tail" } else { "" }
+                    ),
+                    auth: None,
+                    resource: None,
+                    request_resource: None,
+                    time_unix_nanos: 0,
+                    abstract_path: query,
+                    request_query: None,
+                };
+                assert_mutated_scope_report(&tree, &context, mutation, yes);
+            }
+        }
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config::with_cases(128))]
+        #[test]
+        fn generated_live_ancestor_names_and_order_match_reference(
+            levels in proptest::collection::vec(proptest::collection::vec((proptest::bool::ANY, proptest::bool::ANY), 0..6), 3),
+            storage in proptest::bool::ANY,
+            query in proptest::bool::ANY,
+        ) {
+            let service = if storage { RulesService::Storage } else { RulesService::Firestore };
+            let mut tree = scope_mutation_tree(service);
+            let template = mutation_function(&mut tree, &[0, 0], 1).clone();
+            let target_offset = mutation_function(&mut tree, &[0, 0], 0).span.offset;
+            for (path, declarations) in [vec![], vec![0], vec![0, 0]].iter().zip(&levels) {
+                let items = mutation_scope_items(&mut tree.services[0].items, path);
+                items.retain(|item| !matches!(item, crate::ast::Item::Function(function) if function.name == "helper"));
+                for &(helper, allowed) in declarations {
+                    let mut declaration = template.clone();
+                    declaration.name = if helper { "helper" } else { "other" }.into();
+                    declaration.body = crate::ast::Expr::new(crate::ast::ExprKind::Literal(crate::ast::Literal::Bool(allowed)), declaration.body.span, declaration.body.end);
+                    items.push(crate::ast::Item::Function(declaration));
+                }
+            }
+            proptest::prop_assert_eq!(mutation_function(&mut tree, &[0, 0], 0).span.offset, target_offset);
+            let request = RequestContext {
+                service, method: Method::Get,
+                path: "/databases/(default)/documents/notes/yes".into(),
+                auth: None, resource: None, request_resource: None, time_unix_nanos: 0,
+                abstract_path: query, request_query: None,
+            };
+            let report = scope_reference_report(&tree, &request);
+            if !query {
+                let allowed = levels.iter().rev().find_map(|declarations| declarations.iter().rev().find_map(|&(helper, allowed)| helper.then_some(allowed))).unwrap_or(false);
+                proptest::prop_assert_eq!(matches!(report.decision, Decision::Allow), allowed);
+            }
+        }
+    }
+
+    #[test]
     fn unrelated_blocks_add_no_per_request_scope_setup_to_an_early_allow() {
         for unrelated in [0, 100, 1_000] {
             let literal = early_allow_rules(unrelated, "true");
@@ -6929,12 +7244,11 @@ service cloud.firestore {
                 (0, 0, 0),
                 "literal allow, {unrelated} unrelated blocks"
             );
-            // A call checks the compiled plan against the AST once per request, never rebuilds
-            // it, and the allowing block declares nothing to capture.
+            // A call validates its live ancestry without a global agreement walk or rebuild; the allowing block declares nothing to capture.
             let call = early_allow_rules(unrelated, "top()");
             assert_eq!(
                 scope_setup_work(&call, 3),
-                (3, 0, 0),
+                (0, 0, 0),
                 "function allow, {unrelated} unrelated blocks"
             );
         }

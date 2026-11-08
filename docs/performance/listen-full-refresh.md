@@ -66,3 +66,13 @@ cargo nextest run --locked --offline -p fireemu-adapter-grpc --release --lib --p
 The resume filter selected the cross-backend issuance refusal test. Integration tests and recorded conformance replays were not run. There is no production implementation diff, failing-first runtime claim, or production mutation result. The original 3 GiB release build ended with a killed compiler; the unchanged build succeeded under 6 GiB with a measured container peak of 5,069,897,728 bytes and no OOM events. That build resource failure is separate from the measured Listen process.
 
 No before/after improvement is claimed because the production implementation is unchanged. Exact bounded-memory paging remains unimplemented for the retention and restore reasons above.
+
+## Extended TCP measurement protocol
+
+The ignored integration test `measure_listen_network_delivery` uses a tonic client and server connected over loopback TCP. Both run in one process on two Tokio workers, so measured RSS includes the client, server, HTTP/2 buffers and fixture. It cannot be interpreted as server-only memory. Each process builds a fresh fixture through 500-document Commit requests and binds an OS-assigned port. The connection and fixture setup times are separate from AddTarget delivery.
+
+`FIREEMU_LISTEN_MEASURE_DOCUMENTS` selects the fixture size (at least 257). `FIREEMU_LISTEN_MEASURE_RECEIVER` selects `normal` or `pause`; the latter waits two seconds after ADD and any scheduled writes before reading document responses. `FIREEMU_LISTEN_MEASURE_MUTATION` selects `none` or `write`; the write schedule updates the first 100 documents, deletes the final original document and creates one document. `FIREEMU_LISTEN_MEASURE_TERMINATION` selects `drain` or `cancel`. Drain verifies the complete ordered original snapshot, its boundaries, and the expected 102 subsequent changes when writes are enabled. Cancel drops the stream after the selected schedule. Both paths drop the client and await server shutdown; a task guard aborts the server on assertion failure.
+
+Pausing application reads does not immediately stop HTTP/2 buffering. Sampled RSS during the pause is an observation, not proof of page-bounded memory. Cancellation and orderly server shutdown also do not prove that every snapshot allocation was immediately returned to the operating system; the existing library tests provide the more precise shared-handle ownership checks.
+
+The integration harness compiled in release mode, and its 257-document smoke passed. All eight combinations of receiver, mutation and termination passed with 257 documents. Large network measurements are pending; the earlier in-process measurements must not be read as network results.

@@ -4,6 +4,7 @@
 // offset. The facts the fake production uses are the test's choice, not claims about production.
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import { createContext, SANDBOX_PROJECT } from "./fs-rules/harness.mjs";
@@ -491,6 +492,26 @@ test("an offset query answer is allowed when its first entry is exactly the reco
   // The plain recorded forms are unchanged.
   assert.deepEqual(classify(query200({ readTime: "t" })), { kind: "allowed", documents: 0 });
   assert.deepEqual(classify(query200(DOC())), { kind: "allowed", documents: 1 });
+});
+
+test("the recorded production offset answers of this repository classify as allowed", () => {
+  const read = (file) => JSON.parse(readFileSync(new URL(`../${file}`, import.meta.url), "utf8"));
+  const rules = read("fs-rules-production.json");
+  const index = read("fs-query-index-production.json");
+  const rows = [
+    [rules.programs["fs-rules/query/constraints"].steps["offset-1-le-1"], 0],
+    [index.programs["fs-query-index/cursors/values"].steps["cursor-with-offset"], 2],
+    [
+      index.programs["fs-query-index/collection-group/queries"].steps["limit-and-offset"],
+      undefined,
+    ],
+  ];
+  for (const [recorded, documents] of rows) {
+    assert.ok(recorded.body[0].skippedResults >= 1);
+    const answer = classify({ status: recorded.status, body: recorded.body });
+    assert.equal(answer.kind, "allowed");
+    assert.equal(answer.documents, documents ?? recorded.body.length - 1);
+  }
 });
 
 test("near misses of the offset form are unknown, never an allow", () => {

@@ -423,7 +423,8 @@ test("buildRequest: defaults, headers per credential, and the refusal of an unkn
       admin.init.headers.authorization,
       local ? "Bearer owner" : "Bearer ya29.test-owner",
     );
-    assert.equal(admin.init.headers["x-goog-user-project"], local ? undefined : SANDBOX_PROJECT);
+    assert.equal("x-goog-user-project" in admin.init.headers, !local);
+    if (!local) assert.equal(admin.init.headers["x-goog-user-project"], SANDBOX_PROJECT);
     assert.equal(new URL(admin.url).searchParams.has("key"), false);
     // No method means POST; no body means no content type and no body.
     assert.equal(admin.init.method, "POST");

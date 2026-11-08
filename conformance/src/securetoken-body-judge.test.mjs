@@ -363,6 +363,9 @@ test("an unknown answer says why, in the words of the first check it fails", () 
     [with200((b) => (b.user_id = "xstb-<run>-a")), "200 for an account this run did not create"],
     [with200((b) => (b.user_id = "stb-<run>-ab")), "200 for an account this run did not create"],
     [with200((b) => (b.id_token = "x")), "200 with a token of another shape"],
+    [with200((b) => (b.id_token = { "<jwt>": null })), "200 with a token of another shape"],
+    [with200((b) => (b.id_token = { "<jwt>": "x" })), "200 with a token of another shape"],
+    [with200((b) => (b.id_token = { other: 1 })), "200 with a token of another shape"],
     [with200((b) => (b.access_token = "x")), "200 with a token of another shape"],
     [
       with200((b) => (b.id_token["<jwt>"].header.alg = "HS256")),
@@ -534,4 +537,59 @@ test("a report with no local recording has nothing to compare, and keeps the pro
     assert.equal(r.question, ROWS.find((x) => x.id === r.row).question);
   }
   assert.equal(report.find((r) => r.row === "json-camel").cite, CITATIONS.accepted.project);
+});
+
+test("the one-hour and six-hour windows of the ledger helpers include their last millisecond only", () => {
+  const line = (o) => `${JSON.stringify(o)}\n`;
+  const at = (ms) => new Date(ms).toISOString();
+  const t0 = Date.parse("2026-11-08T08:00:00Z");
+  const end = line({ ts: at(t0), taskId: "SECURETOKEN-BODY", outcome: "needs-recovery" });
+  assert.ok(recentAbort(end, t0 + 3_600_000 - 1));
+  assert.equal(recentAbort(end, t0 + 3_600_000), undefined);
+  assert.equal(recentAbort(end, t0 + 3_600_001), undefined);
+  assert.ok(recentAbort(end, t0));
+  const started = line({ ts: at(t0), event: "started", taskId: "OTHER", project: "p" });
+  assert.deepEqual(openRuns(started, "p", t0 + 6 * 3_600_000 - 1), ["OTHER"]);
+  assert.deepEqual(openRuns(started, "p", t0 + 6 * 3_600_000), []);
+  assert.deepEqual(openRuns(started, "p", t0 + 7 * 3_600_000), []);
+  // Own runs, runs without a task, and other projects never count; the last line of a task decides.
+  const noise =
+    line({ ts: at(t0), event: "started", taskId: "SECURETOKEN-BODY", project: "p" }) +
+    line({ ts: at(t0), event: "started", project: "p" }) +
+    line({ ts: at(t0), event: "started", taskId: "ELSEWHERE", project: "q" });
+  assert.deepEqual(openRuns(noise, "p", t0 + 1000), []);
+  const two = started + line({ ts: at(t0), event: "started", taskId: "THIRD", project: "p" });
+  assert.deepEqual(openRuns(two, "p", t0 + 1000).toSorted(), ["OTHER", "THIRD"]);
+  assert.deepEqual(
+    openRuns(
+      two + line({ ts: at(t0 + 10), taskId: "THIRD", project: "p", outcome: "recorded" }),
+      "p",
+      t0 + 1000,
+    ),
+    ["OTHER"],
+  );
+});
+
+test("each preflight problem is stated in its own words", () => {
+  const clean = {
+    failedReads: [],
+    projectAccounts: 0,
+    tenants: 0,
+    passwordEnabled: true,
+    openRuns: [],
+  };
+  assert.deepEqual(
+    preflightProblems({ ...clean, failedReads: ["config (HTTP 403)", "accounts (HTTP 0)"] }),
+    ["preflight read failed: config (HTTP 403)", "preflight read failed: accounts (HTTP 0)"],
+  );
+  assert.deepEqual(preflightProblems({ ...clean, projectAccounts: 2 }), [
+    "2 project-level account(s) exist",
+  ]);
+  assert.deepEqual(preflightProblems({ ...clean, tenants: 3 }), ["3 tenant(s) exist"]);
+  assert.deepEqual(preflightProblems({ ...clean, passwordEnabled: false }), [
+    "email/password sign-in is not enabled",
+  ]);
+  assert.deepEqual(preflightProblems({ ...clean, openRuns: ["A", "B"] }), [
+    "runs still open: A, B",
+  ]);
 });

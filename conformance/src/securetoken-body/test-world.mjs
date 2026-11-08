@@ -48,6 +48,7 @@ export function createWorld(options = {}) {
     tenants: new Map(),
     accounts: new Map(),
     tokens: new Map(),
+    jwts: new Set(),
     log: [],
     apiKey,
   };
@@ -76,7 +77,9 @@ export function createWorld(options = {}) {
         ...(account.tenantId ? { tenant: account.tenantId } : {}),
       },
     };
-    return `${b64({ alg: "RS256", kid: "k1", typ: "JWT" })}.${b64(claims)}.${randomBytes(12).toString("base64url")}`;
+    const token = `${b64({ alg: "RS256", kid: "k1", typ: "JWT" })}.${b64(claims)}.${randomBytes(12).toString("base64url")}`;
+    world.jwts.add(token);
+    return token;
   };
 
   /** The refresh endpoint under the policy. */
@@ -126,15 +129,14 @@ export function createWorld(options = {}) {
     if (token === undefined || token === "") return error(400, "MISSING_REFRESH_TOKEN");
     const account = world.tokens.get(token);
     if (!account || account.deleted) return error(400, "INVALID_REFRESH_TOKEN");
-    const idToken = jwt(account);
     return {
       status: 200,
       json: {
-        access_token: idToken,
+        access_token: jwt(account),
         expires_in: "3600",
         token_type: "Bearer",
         refresh_token: token,
-        id_token: idToken,
+        id_token: jwt(account),
         user_id: account.localId,
         project_id: number,
       },
@@ -304,6 +306,7 @@ export function createWorld(options = {}) {
     });
     for (const fault of faults) {
       const injected = fault(req, world);
+      if (injected === "throw-plain") throw "connection lost";
       if (injected === "throw")
         throw Object.assign(new Error("fetch failed"), { cause: { code: "ECONNRESET" } });
       if (injected) return reply(injected);

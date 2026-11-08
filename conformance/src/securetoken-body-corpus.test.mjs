@@ -8,6 +8,7 @@ import {
   ACCOUNTS,
   INVALID_REFRESH_TOKEN,
   ROWS,
+  accountOf,
   accountsNeeded,
   corpusDigest,
   encodeBody,
@@ -232,4 +233,27 @@ test("every row says what it asks, and the accounts are the project's and the te
   assert.equal(new Set(ROWS.map((r) => r.question)).size, ROWS.length);
   assert.deepEqual(ACCOUNTS, { a: { tenant: false }, b: { tenant: false }, t: { tenant: true } });
   assert.ok(Object.isFrozen(ACCOUNTS) && Object.isFrozen(ROWS));
+});
+
+test("accountOf names an account only for a token placeholder", () => {
+  assert.equal(accountOf({ rt: "a" }), "a");
+  assert.equal(accountOf({ rt: "t", extra: 1 }), "t");
+  for (const value of [
+    null,
+    undefined,
+    "a",
+    7,
+    {},
+    { rt: 7 },
+    { rt: null },
+    { rt: ["a"] },
+    [],
+    { account: "a" },
+  ])
+    assert.equal(accountOf(value), undefined, JSON.stringify(value));
+});
+
+test("digests are hex sha-256", () => {
+  assert.match(corpusDigest(), /^[0-9a-f]{64}$/);
+  for (const spec of ROWS) assert.match(rowDigest(spec), /^[0-9a-f]{64}$/);
 });

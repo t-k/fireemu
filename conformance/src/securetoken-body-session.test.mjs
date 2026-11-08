@@ -2,6 +2,8 @@
 // what it records, and what its cleanup does when a delete, a create or a switch answers badly.
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { mock, test } from "node:test";
 
 import { ROWS } from "./securetoken-body/corpus.mjs";
@@ -12,6 +14,7 @@ import {
   readRow,
 } from "./securetoken-body/judge.mjs";
 import { createContext, SANDBOX_PROJECT } from "./auth-account/harness.mjs";
+import { CONFORMANCE_DIR } from "./config.mjs";
 import { tenancyIs } from "./securetoken-body/session.mjs";
 import { fakeSession, NUMBER } from "./securetoken-body/test-support.mjs";
 
@@ -515,8 +518,9 @@ test("the defaults: a minute per request, 30 polls of 2 s before giving up", asy
     const recording = await session.runRecording();
     assert.match(recording.failure, /did not read back/);
     // One read for the state, then 30 polls of the switch on; the restore is attempted and polls too.
-    assert.equal(journal.filter((e) => e.id === "read-config").length >= 31, true);
-    assert.equal(waits.filter((ms) => ms === 2000).length >= 30, true);
+    // One read for the state, 30 polls that never show it, then the restore reads back at once.
+    assert.equal(journal.filter((e) => e.id === "read-config").length, 32);
+    assert.equal(waits.filter((ms) => ms === 2000).length, 30);
     assert.ok(timeouts.mock.calls.length > 0);
     assert.ok(timeouts.mock.calls.every((c) => c.arguments[0] === 60_000));
   } finally {
@@ -713,4 +717,383 @@ test("a credential that cannot be renewed stops the recording as fatal", async (
   }).runRecording();
   assert.equal(recording.fatal, true);
   assert.match(recording.failure, /owner credential refresh failed: gcloud is gone/);
+});
+
+// ---- replay: the management answers production was recorded giving -----------------------
+
+const recorded = (file, program, step) =>
+  JSON.parse(readFileSync(join(CONFORMANCE_DIR, file), "utf8")).programs[program].steps[step];
+const atb = (program, step) => recorded("auth-tenant-blocking-production.json", program, step);
+
+test("replay: the recorded tenant, lookup, delete and read-back answers drive the session to a clean close", async () => {
+  const createOpen = atb("atb/tenant/manage", "create-open").body;
+  const deleted = atb("atb/tenant/manage", "get-deleted");
+  const deleteTenant = atb("atb/tenant/manage", "delete-minimal");
+  const missing = atb("atb/tenant/selection", "admin-lookup-a1-in-b");
+  const present = atb("atb/tenant/selection", "admin-lookup-a1-email-in-b").body;
+  const deleteAccount = recorded(
+    "auth-account-production.json",
+    "auth-account/admin/delete",
+    "delete",
+  );
+  const { session, world } = fakeSession({
+    world: {
+      tenancy: true,
+      lateFaults: [
+        (req, res) => {
+          if (req.method === "POST" && req.path.endsWith("tenants") && res.status === 200) {
+            // The recorded create answer, carrying this run's own name and display name.
+            return {
+              status: 200,
+              json: { ...createOpen, name: res.json.name, displayName: res.json.displayName },
+            };
+          }
+          if (req.method === "DELETE")
+            return { status: deleteTenant.status, json: deleteTenant.body };
+          if (req.method === "GET" && /tenants\/[^/]+$/.test(req.path) && res.status === 404)
+            return { status: deleted.status, json: deleted.body };
+          if (req.path.endsWith("accounts:lookup")) {
+            if (Object.keys(res.json).includes("users")) {
+              const user = { ...present.users[0], localId: res.json.users[0].localId };
+              return { status: 200, json: { ...present, users: [user] } };
+            }
+            return { status: missing.status, json: missing.body };
+          }
+          if (req.path.endsWith("accounts:delete") && res.status === 200)
+            return { status: deleteAccount.status, json: deleteAccount.body };
+          return undefined;
+        },
+      ],
+    },
+  });
+  const recording = await session.runRecording();
+  assert.equal(recording.failure, undefined);
+  assert.equal(recording.closureReady, true);
+  assert.equal(world.accounts.size + world.tenants.size, 0);
+  assert.equal(recording.ownership.owned.length, 0);
+  assert.equal(recording.ownership.deletedUnverified.length, 0);
+});
+
+test("replay: a recorded 200 lookup that still lists the account reads as present, not as deleted", async () => {
+  const present = atb("atb/tenant/selection", "admin-lookup-a1-email-in-b").body;
+  const { session } = fakeSession({
+    world: {
+      lateFaults: [
+        (req) => {
+          if (
+            !req.path.endsWith("accounts:lookup") ||
+            !req.path.includes("%P/accounts") ||
+            req.path.includes("tenants")
+          )
+            return undefined;
+          if (!JSON.parse(req.body).localId[0].endsWith("-a")) return undefined;
+          // The recorded answer for an account that exists, for every lookup of account a.
+          return {
+            status: 200,
+            json: {
+              ...present,
+              users: [{ ...present.users[0], localId: JSON.parse(req.body).localId[0] }],
+            },
+          };
+        },
+      ],
+    },
+  });
+  const recording = await session.runRecording();
+  assert.equal(recording.closureReady, false);
+  assert.ok(
+    recording.ownership.reasons.some((r) => r.startsWith("deleted-but-present:account:stb-")),
+  );
+});
+
+test("a refresh answer's three tokens are kept as secrets and as lengths, each its own", async () => {
+  const { session, world } = fakeSession();
+  const { secrets, rows } = await session.runRecording();
+  const facts = rows["json-camel"].facts.tokens;
+  assert.deepEqual(Object.keys(facts).toSorted(), ["access_token", "id_token", "refresh_token"]);
+  for (const f of Object.values(facts)) assert.ok(f.length > 20);
+  // The world signs every token separately; every one it issued, sign-in or refresh, is held.
+  assert.ok(world.jwts.size > 20);
+  for (const jwt of world.jwts) assert.ok(secrets.includes(jwt));
+  for (const token of world.tokens.keys()) assert.ok(secrets.includes(token));
+});
+
+// ---- failures of the transport and of the owner API, in their own words -----------------------
+
+test("a transport failure is journaled with its code, its name, or a plain 'error'", async () => {
+  let n = 0;
+  const kinds = ["throw", "throw-plain"];
+  const { session, journal } = fakeSession({
+    world: { faults: [(req) => (req.path === "v1/token" && n < 2 ? kinds[n++] : undefined)] },
+  });
+  const recording = await session.runRecording();
+  const failed = journal.filter((e) => e.status === 0);
+  assert.deepEqual(
+    failed.map((e) => [e.id, e.transport]),
+    [
+      ["refresh", "ECONNRESET"],
+      ["refresh", "error"],
+    ],
+  );
+  assert.equal(recording.rows["form-snake"].transport, "ECONNRESET");
+  assert.equal(recording.rows["json-snake"].transport, "error");
+  for (const entry of failed) assert.equal("bodyBytes" in entry, false);
+});
+
+test("an owner call that fails says which call and how, with the placeholder not the project", async () => {
+  const http = fakeSession({
+    world: {
+      tenancy: true,
+      faults: [
+        (req) =>
+          req.method === "GET" && req.path.startsWith("admin/v2")
+            ? { status: 500, json: {} }
+            : undefined,
+      ],
+    },
+  });
+  const a = await http.session.runRecording();
+  assert.equal(a.failure, "harness GET admin/v2/projects/{project}/config: HTTP 500");
+  const reset = fakeSession({
+    world: {
+      tenancy: true,
+      faults: [
+        (req) => (req.method === "GET" && req.path.startsWith("admin/v2") ? "throw" : undefined),
+      ],
+    },
+  });
+  const b = await reset.session.runRecording();
+  assert.equal(b.failure, "harness GET admin/v2/projects/{project}/config: ECONNRESET");
+  assert.equal(a.fatal && b.fatal, true);
+});
+
+test("a lost tenant create names its transport error in the ownership record", async () => {
+  let lost = false;
+  const { session } = fakeSession({
+    world: {
+      lateFaults: [
+        (req, res) => {
+          if (lost || req.method !== "POST" || !req.path.endsWith("tenants") || res.status !== 200)
+            return undefined;
+          lost = true;
+          return "throw";
+        },
+      ],
+    },
+  });
+  const recording = await session.runRecording();
+  assert.equal(recording.ownership.unknownAnswers[0].reason, "transport-error");
+  assert.equal(recording.unknowns[0].answer, "transport-error");
+  assert.equal(recording.unknowns[0].call, "create tenant:stb-1794000000");
+});
+
+test("a poll waits for its sleep before it reads again", async () => {
+  const events = [];
+  let lag = 2;
+  const { session } = fakeSession({
+    world: {
+      tenancy: false,
+      lateFaults: [
+        (req, res) => {
+          if (req.method === "GET" && req.path.startsWith("admin/v2")) {
+            events.push("read");
+            if (res.json?.multiTenant?.allowTenants === true && lag > 0) {
+              lag -= 1;
+              return { status: 200, json: { multiTenant: {} } };
+            }
+          }
+          return undefined;
+        },
+      ],
+    },
+    session: {
+      settleMs: 5000,
+      pollMs: 2000,
+      sleep: async (ms) => {
+        events.push(`sleep:${ms}`);
+        await new Promise((resolve) => setImmediate(resolve));
+        events.push(`woke:${ms}`);
+      },
+    },
+  });
+  await session.runRecording();
+  // read (state), read (lag), sleep, read (lag), sleep, read (on), settle, ... each sleep ends before the next read.
+  const head = events.slice(0, 11);
+  assert.deepEqual(head, [
+    "read",
+    "read",
+    "sleep:2000",
+    "woke:2000",
+    "read",
+    "sleep:2000",
+    "woke:2000",
+    "read",
+    "sleep:5000",
+    "woke:5000",
+    "read",
+  ]);
+});
+
+test("a switch that never reads back is bounded by the poll limit, not by the clock", async () => {
+  let sleeps = 0;
+  const { session } = fakeSession({
+    world: {
+      tenancy: false,
+      faults: [(req) => (req.method === "PATCH" ? { status: 200, json: {} } : undefined)],
+    },
+    session: {
+      pollLimit: 3,
+      sleep: async () => {
+        sleeps += 1;
+        if (sleeps > 20) throw new Error("the poll loop does not end");
+      },
+    },
+  });
+  const recording = await session.runRecording();
+  assert.match(recording.failure, /multi-tenancy did not read back as true/);
+  assert.equal(sleeps, 3);
+});
+
+test("a one-character secret is still a secret", async () => {
+  const { session } = fakeSession({
+    world: {
+      lateFaults: [
+        (req, res) =>
+          req.path === "v1/accounts:signInWithPassword" && res.status === 200
+            ? { status: 200, json: { ...res.json, refreshToken: "x" } }
+            : undefined,
+      ],
+    },
+  });
+  const { secrets } = await session.runRecording();
+  assert.ok(secrets.includes("x"));
+});
+
+// ---- the tenant list and the tenant create, edge by edge -------------------------------------
+
+test("the tenant list is read page by page, up to twenty pages", async () => {
+  const page = (n) => `page-${n}`;
+  const lister = (pages) => {
+    const asked = [];
+    const fault = (req) => {
+      if (req.method !== "GET" || !req.path.endsWith("tenants")) return undefined;
+      asked.push(req.query.pageToken);
+      const n = req.query.pageToken ? Number(req.query.pageToken.slice(5)) : 1;
+      if (n < pages) return { status: 200, json: { nextPageToken: page(n + 1) } };
+      return { status: 200, json: {} };
+    };
+    return { asked, fault };
+  };
+  // Twenty pages, the last one without a token: read to the end and carry on.
+  const twenty = lister(20);
+  const ok = fakeSession({ world: { tenancy: true, faults: [twenty.fault] } });
+  const good = await ok.session.runRecording();
+  assert.equal(good.failure, undefined);
+  assert.equal(twenty.asked.slice(0, 20).filter(Boolean).length, 19);
+  assert.equal(twenty.asked[0], undefined);
+  assert.equal(twenty.asked[1], "page-2");
+  assert.equal(twenty.asked[19], "page-20");
+  // A twenty-first page is one too many.
+  const many = lister(21);
+  const bad = fakeSession({ world: { tenancy: true, faults: [many.fault] } });
+  const failed = await bad.session.runRecording();
+  assert.equal(failed.failure, "the tenant list has more than 20 pages");
+  // The listing stops at twenty pages; no tenant was asked for, so there is no audit after it.
+  assert.equal(many.asked.length, 20);
+});
+
+test("a tenant on a later page of the list stops the recording", async () => {
+  const { session, journal } = fakeSession({
+    world: {
+      tenancy: true,
+      faults: [
+        (req) => {
+          if (req.method !== "GET" || !req.path.endsWith("tenants")) return undefined;
+          return req.query.pageToken === "p2"
+            ? {
+                status: 200,
+                json: { tenants: [{ name: "projects/1/tenants/old", displayName: "old-one" }] },
+              }
+            : { status: 200, json: { nextPageToken: "p2" } };
+        },
+      ],
+    },
+  });
+  const recording = await session.runRecording();
+  assert.match(recording.failure, /1 tenant\(s\) exist; nothing is created/);
+  assert.equal(journal.filter((e) => e.id === "create-tenant").length, 0);
+});
+
+test("a tenant create answered with a status that may be a lost answer is looked for, any other 4xx is a refusal", async () => {
+  const answered = async (status) => {
+    const { session, journal } = fakeSession({
+      world: {
+        tenancy: true,
+        faults: [
+          (req) =>
+            req.method === "POST" && req.path.endsWith("tenants")
+              ? { status, json: {} }
+              : undefined,
+        ],
+      },
+    });
+    const recording = await session.runRecording();
+    return {
+      failure: recording.failure,
+      listed: journal.filter((e) => e.id === "list-tenants").length,
+      unknowns: recording.unknowns.length,
+    };
+  };
+  for (const status of [400, 403, 409, 429]) {
+    const r = await answered(status);
+    assert.equal(r.failure, `the tenant create was refused (HTTP ${status})`, String(status));
+    assert.equal(r.unknowns, 0, String(status));
+    assert.equal(r.listed, 2, String(status)); // before the create, and the audit after
+  }
+  for (const status of [408, 499, 500, 502, 503]) {
+    const r = await answered(status);
+    assert.match(
+      r.failure,
+      /the answer to the tenant create is unknown and no read shows it/,
+      String(status),
+    );
+    assert.equal(r.unknowns, 1, String(status));
+    assert.equal(r.listed, 3, String(status)); // before, the search for the lost create, the audit
+  }
+});
+
+test("a 200 that names no tenant is recorded as an unreadable answer", async () => {
+  const { session } = fakeSession({
+    world: {
+      lateFaults: [
+        (req) =>
+          req.method === "POST" && req.path.endsWith("tenants")
+            ? { status: 200, json: { name: "garbled" } }
+            : undefined,
+      ],
+    },
+  });
+  const recording = await session.runRecording();
+  assert.equal(recording.ownership.unknownAnswers[0].reason, "unreadable-body");
+  assert.equal(recording.ownership.unknownAnswers[0].status, undefined);
+});
+
+test("a run that never asked for a tenant does not audit for one", async () => {
+  // The first configuration read fails: nothing was done, and a tenant list with tenancy off is refused.
+  const { session, journal } = fakeSession({
+    world: {
+      tenancy: false,
+      faults: [
+        (req) =>
+          req.method === "GET" && req.path.startsWith("admin/v2")
+            ? { status: 500, json: {} }
+            : undefined,
+      ],
+    },
+  });
+  const recording = await session.runRecording();
+  assert.equal(recording.failure, "harness GET admin/v2/projects/{project}/config: HTTP 500");
+  assert.equal(journal.filter((e) => e.id === "list-tenants").length, 0);
+  assert.deepEqual(recording.cleanupErrors, []);
+  assert.equal(recording.closureReady, true);
 });

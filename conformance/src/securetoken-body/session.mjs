@@ -176,6 +176,7 @@ export function createSession(ctx, options = {}) {
   // ---- the run's resources -----------------------------------------------------------------
 
   const state = { tenantId: undefined, tokens: {}, created: [] };
+  let tenantAttempted = false;
   const accountName = (key) => `account:${localIdOf(ctx.run, key)}`;
   const tenantName = () => `tenant:${tenantNameOf(ctx.run)}`;
 
@@ -184,6 +185,7 @@ export function createSession(ctx, options = {}) {
 
   async function createTenant() {
     const name = tenantName();
+    tenantAttempted = true;
     const ticket = beginCreate(ownership, { name, transport: "rest" });
     const res = await send(R.createTenant(ctx.run), { harness: true });
     const id = res.status === 200 ? tenantIdOfName(res.json?.name) : undefined;
@@ -199,7 +201,8 @@ export function createSession(ctx, options = {}) {
       return;
     }
     // A refusal made no tenant: nothing to look for, and nothing to delete.
-    if (res.status >= 400 && res.status < 500 && res.status !== 408)
+    // (408 and 499 are lost answers, as the ownership ledger reads them: the create may have run.)
+    if (res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 499)
       throw fatal(`the tenant create was refused (HTTP ${res.status})`);
     // Unknown (or malformed) answer: look for the tenant by its display name, then read it.
     const settled = await settleTenant(name);
@@ -368,12 +371,15 @@ export function createSession(ctx, options = {}) {
         ),
       );
     }
-    // Nothing of the run may remain, whether or not this run switched tenancy on.
-    await attempt("tenant audit", async () => {
-      // Only the run's own tenant is its business; a foreign one is the preflight's to refuse.
-      const left = (await listTenants()).filter((t) => t.displayName === tenantNameOf(ctx.run));
-      if (left.length) throw new Error(`${left.length} tenant(s) remain`);
-    });
+    // Nothing of the run may remain, whether or not this run switched tenancy on. A run that never
+    // asked for a tenant has nothing to find (and, with tenancy off, a list would only be refused).
+    if (tenantAttempted) {
+      await attempt("tenant audit", async () => {
+        // Only the run's own tenant is its business; a foreign one is the preflight's to refuse.
+        const left = (await listTenants()).filter((t) => t.displayName === tenantNameOf(ctx.run));
+        if (left.length) throw new Error(`${left.length} tenant(s) remain`);
+      });
+    }
     if (tenancy.switchedOn) {
       const clear = closureReport(ownership).closureReady;
       if (clear) {

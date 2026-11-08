@@ -434,10 +434,9 @@ const WHOLE_FILE_DIGEST_LANES = new Set(["auth-fs-cross-stage2", "securetoken-bo
 
 /** The harness digests a lane's fixture records (every row's, or the one of the whole file). */
 export function recordedDigests(name, fixture) {
-  const found =
-    WHOLE_FILE_DIGEST_LANES.has(name)
-      ? [fixture.harnessDigest]
-      : Object.values(fixture.programs ?? {}).map((program) => program.harnessDigest);
+  const found = WHOLE_FILE_DIGEST_LANES.has(name)
+    ? [fixture.harnessDigest]
+    : Object.values(fixture.programs ?? {}).map((program) => program.harnessDigest);
   if (found.length === 0 || found.some((digest) => !/^[0-9a-f]{64}$/.test(digest ?? "")))
     throw new Error(`${name}: the fixture has a row without a harnessDigest`);
   return [...new Set(found)];

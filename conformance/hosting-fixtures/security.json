@@ -1,0 +1,38 @@
+{
+  "outsideSentinel": "HOSTING_PRIVATE_OUTSIDE_SENTINEL",
+  "cases": [
+    {
+      "id": "parent",
+      "path": "/../outside.txt"
+    },
+    {
+      "id": "encoded-parent",
+      "path": "/%2e%2e/outside.txt"
+    },
+    {
+      "id": "encoded-slash",
+      "path": "/..%2foutside.txt"
+    },
+    {
+      "id": "double-encoded-parent",
+      "path": "/%252e%252e/outside.txt"
+    },
+    {
+      "id": "backslash",
+      "path": "/..%5coutside.txt"
+    },
+    {
+      "id": "nul",
+      "path": "/data.json%00"
+    },
+    {
+      "id": "bad-percent",
+      "path": "/%GG"
+    },
+    {
+      "id": "symlink",
+      "path": "/outside-link.txt"
+    }
+  ],
+  "assertion": "No response body contains the outside sentinel; preserve literal wire targets. Symlink case creates an owned temporary outside file and link."
+}

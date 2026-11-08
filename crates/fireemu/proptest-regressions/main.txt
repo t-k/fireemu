@@ -1,0 +1,2 @@
+# Preserve the configured Hosting host when a CLI override changes only its port.
+cc 2044c1e45f797a9416757712cbfd89d841281dec5f88afa49128b40d5673a374 # shrinks to port = 0

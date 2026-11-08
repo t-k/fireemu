@@ -775,6 +775,7 @@
         "httpPort": { "type": "integer", "minimum": 0, "maximum": 65535 },
         "storagePort": { "type": "integer", "minimum": 0, "maximum": 65535 },
         "functionsPort": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "hostingPort": { "type": "integer", "minimum": 0, "maximum": 65535 },
         "eventarcPort": { "type": "integer", "minimum": 0, "maximum": 65535 },
         "tasksPort": { "type": "integer", "minimum": 0, "maximum": 65535 },
         "pubsubPort": { "type": "integer", "minimum": 0, "maximum": 65535 },

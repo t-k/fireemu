@@ -1,0 +1,930 @@
+{
+  "pin": "firebase-tools@15.28.2",
+  "stack": "actual superstatic strict + Hosting init/functions/run middleware and init template, synthetic project config",
+  "inputs": {
+    "runnerSha256": "60f51e78ed905dadf5fa8f8e2098d9717abdf845ac3d5e5618e72e3a430490a8",
+    "corpusSha256": "8a6e27ebd6894a8053385a5121b98d4a7a96f6b7193f9d222952837c940ff4ff",
+    "lockSha256": "f197c15da81d633ed4d96665886ef8a10153cf105213e27fd0e4c6526bb1d821"
+  },
+  "noEgress": {
+    "destination": "192.0.2.1:443",
+    "result": "ENETUNREACH"
+  },
+  "rows": [
+    {
+      "id": "root",
+      "status": 200,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "etag": "424c507e18bf0b98725a06b6221ae2f3",
+        "x-fixture": "first",
+        "vary": "Accept-Encoding",
+        "last-modified": "Sat, 01 Jan 2000 00:00:00 GMT"
+      },
+      "body": "<h1>home</h1>\n"
+    },
+    {
+      "id": "static",
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "public, max-age=123",
+        "etag": "7589382fa60188be2d320bd7cf78d1f0",
+        "x-fixture": "second",
+        "vary": "Accept-Encoding",
+        "last-modified": "Sat, 01 Jan 2000 00:00:00 GMT"
+      },
+      "body": "{\"fixture\":true}\n"
+    },
+    {
+      "id": "directory",
+      "status": 301,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "location": "/dir/",
+        "x-fixture": "first"
+      },
+      "body": "Redirecting to /dir/"
+    },
+    {
+      "id": "index",
+      "status": 200,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "etag": "3d962ef5b21abad9323c6dae8a18089e",
+        "x-fixture": "first",
+        "vary": "Accept-Encoding",
+        "last-modified": "Sat, 01 Jan 2000 00:00:00 GMT"
+      },
+      "body": "<h1>directory</h1>\n"
+    },
+    {
+      "id": "missing",
+      "status": 404,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "etag": "f868d459f6a079988193a6213b9e401c",
+        "x-fixture": "first",
+        "vary": "Accept-Encoding",
+        "last-modified": "Sat, 01 Jan 2000 00:00:00 GMT"
+      },
+      "body": "<h1>not found</h1>\n"
+    },
+    {
+      "id": "404-direct",
+      "status": 404,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "etag": "f868d459f6a079988193a6213b9e401c",
+        "x-fixture": "first",
+        "vary": "Accept-Encoding",
+        "last-modified": "Sat, 01 Jan 2000 00:00:00 GMT"
+      },
+      "body": "<h1>not found</h1>\n"
+    },
+    {
+      "id": "rewrite-first",
+      "status": 200,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "etag": "eb260e9ae827821beceeed4104f0ad89",
+        "x-fixture": "first",
+        "vary": "Accept-Encoding",
+        "last-modified": "Sat, 01 Jan 2000 00:00:00 GMT"
+      },
+      "body": "first\n"
+    },
+    {
+      "id": "redirect-first",
+      "status": 302,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "location": "/page.html?q=1"
+      },
+      "body": "Redirecting to /page.html?q=1"
+    },
+    {
+      "id": "redirect-capture",
+      "status": 301,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "location": "/new/name"
+      },
+      "body": "Redirecting to /new/name"
+    },
+    {
+      "id": "query",
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "public, max-age=123",
+        "etag": "7589382fa60188be2d320bd7cf78d1f0",
+        "x-fixture": "second",
+        "vary": "Accept-Encoding",
+        "last-modified": "Sat, 01 Jan 2000 00:00:00 GMT"
+      },
+      "body": "{\"fixture\":true}\n"
+    },
+    {
+      "id": "reserved-json",
+      "status": 200,
+      "headers": {
+        "content-type": "application/json",
+        "x-fixture": "first"
+      },
+      "body": "{\"apiKey\":\"fireemu-local-only\",\"projectId\":\"demo-hosting\"}"
+    },
+    {
+      "id": "reserved-js",
+      "status": 200,
+      "headers": {
+        "content-type": "application/javascript",
+        "x-fixture": "first"
+      },
+      "body": "if (typeof firebase === 'undefined') throw new Error('hosting/init-error: Firebase SDK not detected. You must include it before /__/firebase/init.js');\nvar firebaseConfig = {\"apiKey\":\"fireemu-local-only\",\"projectId\":\"demo-hosting\"};\nif (firebaseConfig) {\n  firebase.initializeApp(firebaseConfig);\n\n  var firebaseEmulators = undefined;\n  if (firebaseEmulators) {\n    console.log(\"Automatically connecting Firebase SDKs to running emulators:\");\n    Object.keys(firebaseEmulators).forEach(function (key) {\n      console.log('\\t' + key + ': http://' + firebaseEmulators[key].hostAndPort);\n    });\n\n    if (firebaseEmulators.database && typeof firebase.database === 'function') {\n      firebase.database().useEmulator(firebaseEmulators.database.host, firebaseEmulators.database.port);\n    }\n\n    if (firebaseEmulators.firestore && typeof firebase.firestore === 'function') {\n      firebase.firestore().useEmulator(firebaseEmulators.firestore.host, firebaseEmulators.firestore.port);\n    }\n\n    if (firebaseEmulators.functions && typeof firebase.functions === 'function') {\n      firebase.functions().useEmulator(firebaseEmulators.functions.host, firebaseEmulators.functions.port);\n    }\n\n    if (firebaseEmulators.auth && typeof firebase.auth === 'function') {\n      // TODO: Consider using location.protocol + '//' instead (may help HTTPS).\n      firebase.auth().useEmulator('http://' + firebaseEmulators.auth.hostAndPort);\n    }\n\n    if (firebaseEmulators.storage && typeof firebase.storage === 'function') {\n      firebase.storage().useEmulator(firebaseEmulators.storage.host, firebaseEmulators.storage.port);\n    }\n  } else {\n    console.log(\"To automatically connect the Firebase SDKs to running emulators, replace '/__/firebase/init.js' with '/__/firebase/init.js?useEmulator=true' in your index.html\");\n  }\n}\n"
+    },
+    {
+      "id": "reserved-emulator-js",
+      "status": 200,
+      "headers": {
+        "content-type": "application/javascript",
+        "x-fixture": "first"
+      },
+      "body": "if (typeof firebase === 'undefined') throw new Error('hosting/init-error: Firebase SDK not detected. You must include it before /__/firebase/init.js');\nvar firebaseConfig = {\"apiKey\":\"fireemu-local-only\",\"projectId\":\"demo-hosting\"};\nif (firebaseConfig) {\n  firebase.initializeApp(firebaseConfig);\n\n  var firebaseEmulators = {};\n  if (firebaseEmulators) {\n    console.log(\"Automatically connecting Firebase SDKs to running emulators:\");\n    Object.keys(firebaseEmulators).forEach(function (key) {\n      console.log('\\t' + key + ': http://' + firebaseEmulators[key].hostAndPort);\n    });\n\n    if (firebaseEmulators.database && typeof firebase.database === 'function') {\n      firebase.database().useEmulator(firebaseEmulators.database.host, firebaseEmulators.database.port);\n    }\n\n    if (firebaseEmulators.firestore && typeof firebase.firestore === 'function') {\n      firebase.firestore().useEmulator(firebaseEmulators.firestore.host, firebaseEmulators.firestore.port);\n    }\n\n    if (firebaseEmulators.functions && typeof firebase.functions === 'function') {\n      firebase.functions().useEmulator(firebaseEmulators.functions.host, firebaseEmulators.functions.port);\n    }\n\n    if (firebaseEmulators.auth && typeof firebase.auth === 'function') {\n      // TODO: Consider using location.protocol + '//' instead (may help HTTPS).\n      firebase.auth().useEmulator('http://' + firebaseEmulators.auth.hostAndPort);\n    }\n\n    if (firebaseEmulators.storage && typeof firebase.storage === 'function') {\n      firebase.storage().useEmulator(firebaseEmulators.storage.host, firebaseEmulators.storage.port);\n    }\n  } else {\n    console.log(\"To automatically connect the Firebase SDKs to running emulators, replace '/__/firebase/init.js' with '/__/firebase/init.js?useEmulator=true' in your index.html\");\n  }\n}\n"
+    },
+    {
+      "id": "reserved-unknown",
+      "status": 404,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "etag": "f868d459f6a079988193a6213b9e401c",
+        "x-fixture": "first",
+        "vary": "Accept-Encoding",
+        "last-modified": "Sat, 01 Jan 2000 00:00:00 GMT"
+      },
+      "body": "<h1>not found</h1>\n"
+    },
+    {
+      "id": "encoded-static",
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "etag": "7589382fa60188be2d320bd7cf78d1f0",
+        "x-fixture": "first",
+        "vary": "Accept-Encoding",
+        "last-modified": "Sat, 01 Jan 2000 00:00:00 GMT"
+      },
+      "body": "{\"fixture\":true}\n"
+    },
+    {
+      "id": "head",
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "public, max-age=123",
+        "etag": "7589382fa60188be2d320bd7cf78d1f0",
+        "x-fixture": "second",
+        "vary": "Accept-Encoding",
+        "last-modified": "Sat, 01 Jan 2000 00:00:00 GMT"
+      },
+      "body": ""
+    },
+    {
+      "id": "static-post",
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "public, max-age=123",
+        "etag": "7589382fa60188be2d320bd7cf78d1f0",
+        "x-fixture": "second",
+        "vary": "Accept-Encoding",
+        "last-modified": "Sat, 01 Jan 2000 00:00:00 GMT"
+      },
+      "body": "{\"fixture\":true}\n"
+    },
+    {
+      "id": "function",
+      "status": 200,
+      "headers": {
+        "content-type": "application/json",
+        "cache-control": "private",
+        "x-fixture": "first",
+        "vary": "Accept-Encoding, Authorization, Cookie"
+      },
+      "body": "{\"method\":\"GET\",\"path\":\"/demo-hosting/us-central1/echo/api/echo?q=one\",\"body\":\"\"}"
+    },
+    {
+      "id": "run",
+      "status": 200,
+      "headers": {
+        "content-type": "application/json",
+        "cache-control": "private",
+        "x-fixture": "first",
+        "vary": "Accept-Encoding, Authorization, Cookie"
+      },
+      "body": "{\"method\":\"GET\",\"path\":\"/demo-hosting/us-central1/echo/run/echo?q=two\",\"body\":\"\"}"
+    },
+    {
+      "id": "function-post",
+      "status": 200,
+      "headers": {
+        "content-type": "application/json",
+        "cache-control": "private",
+        "x-fixture": "first",
+        "vary": "Accept-Encoding, Authorization, Cookie"
+      },
+      "body": "{\"method\":\"POST\",\"path\":\"/demo-hosting/us-central1/echo/api/echo\",\"body\":\"request body\"}"
+    },
+    {
+      "id": "range",
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "public, max-age=123",
+        "etag": "7589382fa60188be2d320bd7cf78d1f0",
+        "x-fixture": "second",
+        "vary": "Accept-Encoding",
+        "last-modified": "Sat, 01 Jan 2000 00:00:00 GMT"
+      },
+      "body": "{\"fixture\":true}\n"
+    },
+    {
+      "id": "conditional-static",
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "public, max-age=123",
+        "etag": "7589382fa60188be2d320bd7cf78d1f0",
+        "x-fixture": "second",
+        "vary": "Accept-Encoding",
+        "last-modified": "Sat, 01 Jan 2000 00:00:00 GMT"
+      },
+      "body": "{\"fixture\":true}\n"
+    },
+    {
+      "id": "conditional-rewrite",
+      "status": 304,
+      "headers": {
+        "x-fixture": "first"
+      },
+      "body": ""
+    },
+    {
+      "id": "modified-static",
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "public, max-age=123",
+        "etag": "7589382fa60188be2d320bd7cf78d1f0",
+        "x-fixture": "second",
+        "vary": "Accept-Encoding",
+        "last-modified": "Sat, 01 Jan 2000 00:00:00 GMT"
+      },
+      "body": "{\"fixture\":true}\n"
+    },
+    {
+      "id": "modified-rewrite",
+      "status": 304,
+      "headers": {
+        "x-fixture": "first"
+      },
+      "body": ""
+    },
+    {
+      "id": "redirect-capture-prefix",
+      "status": 301,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "location": "/new/two/one"
+      },
+      "body": "Redirecting to /new/two/one"
+    },
+    {
+      "id": "redirect-capture-literal",
+      "status": 301,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "location": "/new/two/:id2"
+      },
+      "body": "Redirecting to /new/two/:id2"
+    },
+    {
+      "id": "clean-_page",
+      "status": 200,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "etag": "e9de1610d53daf55305cb7dafc4cef1c",
+        "x-fixture": "first",
+        "vary": "Accept-Encoding",
+        "last-modified": "Sat, 01 Jan 2000 00:00:00 GMT"
+      },
+      "body": "<h1>page</h1>\n"
+    },
+    {
+      "id": "clean-_page_",
+      "status": 404,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "etag": "f868d459f6a079988193a6213b9e401c",
+        "x-fixture": "first",
+        "vary": "Accept-Encoding",
+        "last-modified": "Sat, 01 Jan 2000 00:00:00 GMT"
+      },
+      "body": "<h1>not found</h1>\n"
+    },
+    {
+      "id": "clean-_page.html",
+      "status": 301,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "location": "/page?q=1",
+        "x-fixture": "first"
+      },
+      "body": "Redirecting to /page?q=1"
+    },
+    {
+      "id": "clean-_dir",
+      "status": 200,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "etag": "3d962ef5b21abad9323c6dae8a18089e",
+        "x-fixture": "first",
+        "vary": "Accept-Encoding",
+        "last-modified": "Sat, 01 Jan 2000 00:00:00 GMT"
+      },
+      "body": "<h1>directory</h1>\n"
+    },
+    {
+      "id": "clean-_dir_",
+      "status": 200,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "etag": "3d962ef5b21abad9323c6dae8a18089e",
+        "x-fixture": "first",
+        "vary": "Accept-Encoding",
+        "last-modified": "Sat, 01 Jan 2000 00:00:00 GMT"
+      },
+      "body": "<h1>directory</h1>\n"
+    },
+    {
+      "id": "clean-_dir_index.html",
+      "status": 301,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "location": "/dir?q=1",
+        "x-fixture": "first"
+      },
+      "body": "Redirecting to /dir?q=1"
+    },
+    {
+      "id": "slash-_page",
+      "status": 404,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "etag": "f868d459f6a079988193a6213b9e401c",
+        "x-fixture": "first",
+        "vary": "Accept-Encoding",
+        "last-modified": "Sat, 01 Jan 2000 00:00:00 GMT"
+      },
+      "body": "<h1>not found</h1>\n"
+    },
+    {
+      "id": "slash-_page_",
+      "status": 404,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "etag": "f868d459f6a079988193a6213b9e401c",
+        "x-fixture": "first",
+        "vary": "Accept-Encoding",
+        "last-modified": "Sat, 01 Jan 2000 00:00:00 GMT"
+      },
+      "body": "<h1>not found</h1>\n"
+    },
+    {
+      "id": "slash-_page.html",
+      "status": 200,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "etag": "e9de1610d53daf55305cb7dafc4cef1c",
+        "x-fixture": "first",
+        "vary": "Accept-Encoding",
+        "last-modified": "Sat, 01 Jan 2000 00:00:00 GMT"
+      },
+      "body": "<h1>page</h1>\n"
+    },
+    {
+      "id": "slash-_dir",
+      "status": 301,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "location": "/dir/?q=1",
+        "x-fixture": "first"
+      },
+      "body": "Redirecting to /dir/?q=1"
+    },
+    {
+      "id": "slash-_dir_",
+      "status": 200,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "etag": "3d962ef5b21abad9323c6dae8a18089e",
+        "x-fixture": "first",
+        "vary": "Accept-Encoding",
+        "last-modified": "Sat, 01 Jan 2000 00:00:00 GMT"
+      },
+      "body": "<h1>directory</h1>\n"
+    },
+    {
+      "id": "slash-_dir_index.html",
+      "status": 200,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "etag": "3d962ef5b21abad9323c6dae8a18089e",
+        "x-fixture": "first",
+        "vary": "Accept-Encoding",
+        "last-modified": "Sat, 01 Jan 2000 00:00:00 GMT"
+      },
+      "body": "<h1>directory</h1>\n"
+    },
+    {
+      "id": "noslash-_page",
+      "status": 404,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "etag": "f868d459f6a079988193a6213b9e401c",
+        "x-fixture": "first",
+        "vary": "Accept-Encoding",
+        "last-modified": "Sat, 01 Jan 2000 00:00:00 GMT"
+      },
+      "body": "<h1>not found</h1>\n"
+    },
+    {
+      "id": "noslash-_page_",
+      "status": 404,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "etag": "f868d459f6a079988193a6213b9e401c",
+        "x-fixture": "first",
+        "vary": "Accept-Encoding",
+        "last-modified": "Sat, 01 Jan 2000 00:00:00 GMT"
+      },
+      "body": "<h1>not found</h1>\n"
+    },
+    {
+      "id": "noslash-_page.html",
+      "status": 200,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "etag": "e9de1610d53daf55305cb7dafc4cef1c",
+        "x-fixture": "first",
+        "vary": "Accept-Encoding",
+        "last-modified": "Sat, 01 Jan 2000 00:00:00 GMT"
+      },
+      "body": "<h1>page</h1>\n"
+    },
+    {
+      "id": "noslash-_dir",
+      "status": 200,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "etag": "3d962ef5b21abad9323c6dae8a18089e",
+        "x-fixture": "first",
+        "vary": "Accept-Encoding",
+        "last-modified": "Sat, 01 Jan 2000 00:00:00 GMT"
+      },
+      "body": "<h1>directory</h1>\n"
+    },
+    {
+      "id": "noslash-_dir_",
+      "status": 301,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "location": "/dir?q=1",
+        "x-fixture": "first"
+      },
+      "body": "Redirecting to /dir?q=1"
+    },
+    {
+      "id": "noslash-_dir_index.html",
+      "status": 200,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "etag": "3d962ef5b21abad9323c6dae8a18089e",
+        "x-fixture": "first",
+        "vary": "Accept-Encoding",
+        "last-modified": "Sat, 01 Jan 2000 00:00:00 GMT"
+      },
+      "body": "<h1>directory</h1>\n"
+    },
+    {
+      "id": "clean-slash-_page",
+      "status": 301,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "location": "/page/?q=1",
+        "x-fixture": "first"
+      },
+      "body": "Redirecting to /page/?q=1"
+    },
+    {
+      "id": "clean-slash-_page_",
+      "status": 200,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "etag": "e9de1610d53daf55305cb7dafc4cef1c",
+        "x-fixture": "first",
+        "vary": "Accept-Encoding",
+        "last-modified": "Sat, 01 Jan 2000 00:00:00 GMT"
+      },
+      "body": "<h1>page</h1>\n"
+    },
+    {
+      "id": "clean-slash-_page.html",
+      "status": 301,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "location": "/page/?q=1",
+        "x-fixture": "first"
+      },
+      "body": "Redirecting to /page/?q=1"
+    },
+    {
+      "id": "clean-slash-_dir",
+      "status": 301,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "location": "/dir/?q=1",
+        "x-fixture": "first"
+      },
+      "body": "Redirecting to /dir/?q=1"
+    },
+    {
+      "id": "clean-slash-_dir_",
+      "status": 200,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "etag": "3d962ef5b21abad9323c6dae8a18089e",
+        "x-fixture": "first",
+        "vary": "Accept-Encoding",
+        "last-modified": "Sat, 01 Jan 2000 00:00:00 GMT"
+      },
+      "body": "<h1>directory</h1>\n"
+    },
+    {
+      "id": "clean-slash-_dir_index.html",
+      "status": 301,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "location": "/dir/?q=1",
+        "x-fixture": "first"
+      },
+      "body": "Redirecting to /dir/?q=1"
+    },
+    {
+      "id": "clean-noslash-_page",
+      "status": 200,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "etag": "e9de1610d53daf55305cb7dafc4cef1c",
+        "x-fixture": "first",
+        "vary": "Accept-Encoding",
+        "last-modified": "Sat, 01 Jan 2000 00:00:00 GMT"
+      },
+      "body": "<h1>page</h1>\n"
+    },
+    {
+      "id": "clean-noslash-_page_",
+      "status": 301,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "location": "/page?q=1",
+        "x-fixture": "first"
+      },
+      "body": "Redirecting to /page?q=1"
+    },
+    {
+      "id": "clean-noslash-_page.html",
+      "status": 301,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "location": "/page?q=1",
+        "x-fixture": "first"
+      },
+      "body": "Redirecting to /page?q=1"
+    },
+    {
+      "id": "clean-noslash-_dir",
+      "status": 200,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "etag": "3d962ef5b21abad9323c6dae8a18089e",
+        "x-fixture": "first",
+        "vary": "Accept-Encoding",
+        "last-modified": "Sat, 01 Jan 2000 00:00:00 GMT"
+      },
+      "body": "<h1>directory</h1>\n"
+    },
+    {
+      "id": "clean-noslash-_dir_",
+      "status": 301,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "location": "/dir?q=1",
+        "x-fixture": "first"
+      },
+      "body": "Redirecting to /dir?q=1"
+    },
+    {
+      "id": "clean-noslash-_dir_index.html",
+      "status": 301,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "location": "/dir?q=1",
+        "x-fixture": "first"
+      },
+      "body": "Redirecting to /dir?q=1"
+    },
+    {
+      "id": "i18n-language",
+      "status": 200,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "etag": "94baaad4d1347ec6e15ae35c88ee8bc8",
+        "x-fixture": "first",
+        "vary": "Accept-Encoding",
+        "last-modified": "Sat, 01 Jan 2000 00:00:00 GMT"
+      },
+      "body": "bonjour\n"
+    },
+    {
+      "id": "i18n-country",
+      "status": 200,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "etag": "cc3ba456807696d8770b90e64f2530d8",
+        "x-fixture": "first",
+        "vary": "Accept-Encoding",
+        "last-modified": "Sat, 01 Jan 2000 00:00:00 GMT"
+      },
+      "body": "bonjour canada\n"
+    },
+    {
+      "id": "i18n-country-fallback",
+      "status": 200,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "etag": "1d0a0647167195fabfcebd8b614cbda5",
+        "x-fixture": "first",
+        "vary": "Accept-Encoding",
+        "last-modified": "Sat, 01 Jan 2000 00:00:00 GMT"
+      },
+      "body": "canada\n"
+    },
+    {
+      "id": "i18n-language-cookie",
+      "status": 200,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "etag": "94baaad4d1347ec6e15ae35c88ee8bc8",
+        "x-fixture": "first",
+        "vary": "Accept-Encoding",
+        "last-modified": "Sat, 01 Jan 2000 00:00:00 GMT"
+      },
+      "body": "bonjour\n"
+    },
+    {
+      "id": "i18n-fallback",
+      "status": 200,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "etag": "e9de1610d53daf55305cb7dafc4cef1c",
+        "x-fixture": "first",
+        "vary": "Accept-Encoding",
+        "last-modified": "Sat, 01 Jan 2000 00:00:00 GMT"
+      },
+      "body": "<h1>page</h1>\n"
+    },
+    {
+      "id": "pict-0",
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "public, max-age=123",
+        "etag": "7589382fa60188be2d320bd7cf78d1f0",
+        "x-fixture": "second",
+        "vary": "Accept-Encoding",
+        "last-modified": "Sat, 01 Jan 2000 00:00:00 GMT"
+      },
+      "body": "{\"fixture\":true}\n"
+    },
+    {
+      "id": "pict-1",
+      "status": 200,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "etag": "eb260e9ae827821beceeed4104f0ad89",
+        "x-fixture": "first",
+        "vary": "Accept-Encoding",
+        "last-modified": "Sat, 01 Jan 2000 00:00:00 GMT"
+      },
+      "body": "first\n"
+    },
+    {
+      "id": "pict-2",
+      "status": 302,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "location": "/page.html"
+      },
+      "body": "Redirecting to /page.html"
+    },
+    {
+      "id": "pict-3",
+      "status": 404,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "etag": "f868d459f6a079988193a6213b9e401c",
+        "x-fixture": "first",
+        "vary": "Accept-Encoding",
+        "last-modified": "Sat, 01 Jan 2000 00:00:00 GMT"
+      },
+      "body": "<h1>not found</h1>\n"
+    },
+    {
+      "id": "pict-4",
+      "status": 301,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "location": "/page/",
+        "x-fixture": "first"
+      },
+      "body": "Redirecting to /page/"
+    },
+    {
+      "id": "pict-5",
+      "status": 301,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "location": "/dir",
+        "x-fixture": "first"
+      },
+      "body": ""
+    },
+    {
+      "id": "pict-6",
+      "status": 200,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "etag": "94baaad4d1347ec6e15ae35c88ee8bc8",
+        "x-fixture": "first",
+        "vary": "Accept-Encoding",
+        "last-modified": "Sat, 01 Jan 2000 00:00:00 GMT"
+      },
+      "body": ""
+    },
+    {
+      "id": "pict-7",
+      "status": 301,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "location": "/page",
+        "x-fixture": "first"
+      },
+      "body": ""
+    },
+    {
+      "id": "pict-8",
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "public, max-age=123",
+        "etag": "7589382fa60188be2d320bd7cf78d1f0",
+        "x-fixture": "second",
+        "vary": "Accept-Encoding",
+        "last-modified": "Sat, 01 Jan 2000 00:00:00 GMT"
+      },
+      "body": ""
+    },
+    {
+      "id": "pict-9",
+      "status": 200,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "etag": "3d962ef5b21abad9323c6dae8a18089e",
+        "x-fixture": "first",
+        "vary": "Accept-Encoding",
+        "last-modified": "Sat, 01 Jan 2000 00:00:00 GMT"
+      },
+      "body": "<h1>directory</h1>\n"
+    },
+    {
+      "id": "pict-10",
+      "status": 404,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "etag": "f868d459f6a079988193a6213b9e401c",
+        "x-fixture": "first",
+        "vary": "Accept-Encoding",
+        "last-modified": "Sat, 01 Jan 2000 00:00:00 GMT"
+      },
+      "body": ""
+    },
+    {
+      "id": "pict-11",
+      "status": 302,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "location": "/page.html"
+      },
+      "body": ""
+    },
+    {
+      "id": "pict-12",
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "public, max-age=123",
+        "etag": "7589382fa60188be2d320bd7cf78d1f0",
+        "x-fixture": "second",
+        "vary": "Accept-Encoding",
+        "last-modified": "Sat, 01 Jan 2000 00:00:00 GMT"
+      },
+      "body": "{\"fixture\":true}\n"
+    },
+    {
+      "id": "pict-13",
+      "status": 200,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "etag": "eb260e9ae827821beceeed4104f0ad89",
+        "x-fixture": "first",
+        "vary": "Accept-Encoding",
+        "last-modified": "Sat, 01 Jan 2000 00:00:00 GMT"
+      },
+      "body": "first\n"
+    },
+    {
+      "id": "pict-14",
+      "status": 404,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "etag": "f868d459f6a079988193a6213b9e401c",
+        "x-fixture": "first",
+        "vary": "Accept-Encoding",
+        "last-modified": "Sat, 01 Jan 2000 00:00:00 GMT"
+      },
+      "body": ""
+    },
+    {
+      "id": "pict-15",
+      "status": 200,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "etag": "eb260e9ae827821beceeed4104f0ad89",
+        "x-fixture": "first",
+        "vary": "Accept-Encoding",
+        "last-modified": "Sat, 01 Jan 2000 00:00:00 GMT"
+      },
+      "body": ""
+    },
+    {
+      "id": "pict-16",
+      "status": 302,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "location": "/page.html"
+      },
+      "body": ""
+    },
+    {
+      "id": "pict-17",
+      "status": 200,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "etag": "3d962ef5b21abad9323c6dae8a18089e",
+        "x-fixture": "first",
+        "vary": "Accept-Encoding",
+        "last-modified": "Sat, 01 Jan 2000 00:00:00 GMT"
+      },
+      "body": "<h1>directory</h1>\n"
+    },
+    {
+      "id": "pict-18",
+      "status": 301,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "location": "/page",
+        "x-fixture": "first"
+      },
+      "body": ""
+    },
+    {
+      "id": "default-404",
+      "status": 404,
+      "headers": {
+        "content-type": "text/html; charset=utf-8"
+      },
+      "body": "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Error</title>\n</head>\n<body>\n<pre>Cannot GET /not-found</pre>\n</body>\n</html>\n"
+    }
+  ]
+}

@@ -184,3 +184,12 @@ test('the home page counts the areas whose parent is verified against production
 		productionAreaRows(closures).filter((row) => row.status === 'Verified against production').length,
 	);
 });
+
+test('Hosting implementation conditions remain unverified in production', () => {
+	const record = closure('HOSTING', ['UNVERIFIED'], { parentStatus: 'IMPLEMENTING' });
+	const [row] = productionAreaRows([record]);
+	assert.equal(row.product, 'Firebase Hosting');
+	assert.equal(row.status, 'In progress');
+	assert.equal(row.verified, 0);
+	assert.equal(verifiedAreaCount([record]), 0);
+});

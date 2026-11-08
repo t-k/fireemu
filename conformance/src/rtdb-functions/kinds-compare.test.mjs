@@ -164,3 +164,55 @@ test("sequence numbers, receive times and the write stamp are not compared", () 
   assert.equal(compareRecordings({ production: a, local: b }).totals.difference, 0);
   assert.ok(transitions(steps).length === 21);
 });
+
+test("an authId of a non-user write is compared, not masked", () => {
+  const make = (authId) => ({
+    handler: "k9CreatedV2",
+    generation: 2,
+    seq: 1,
+    event: {
+      id: ID,
+      time: TIME,
+      eventKeys: [],
+      params: { group: "ga", id: "a1" },
+      authType: "unknown",
+      authId,
+      data: { exists: true, key: "a1", value: { value: 1, run: MASKED_NONCE } },
+    },
+  });
+  assert.equal(
+    compareRecordings({ production: [make(null)], local: [make("someone")] }).totals.difference,
+    1,
+  );
+  assert.equal(
+    compareRecordings({ production: [make("a")], local: [make("b")] }).totals.difference,
+    1,
+  );
+  assert.equal(
+    compareRecordings({ production: [make("a")], local: [make("a")] }).totals.difference,
+    0,
+  );
+});
+
+test("the events of one row compare in a stable order whatever the arrival order", () => {
+  const all = base();
+  const first = all.find((f) => f.handler === "k9CreatedV2");
+  const second = structuredClone(first);
+  second.event.id = idOf(77);
+  second.event.extras = { traceparent: TRACE, marker: "second" };
+  const others = all.filter((f) => f !== first);
+  const production = [first, second, ...others];
+  assert.equal(
+    compareRecordings({ production, local: [second, first, ...others] }).totals.difference,
+    0,
+  );
+  // a row holding two events is not the row holding one
+  assert.equal(compareRecordings({ production, local: [first, ...others] }).totals.difference, 1);
+  // the order does not hide a changed member either
+  const changed = structuredClone(second);
+  changed.event.extras.marker = "changed";
+  assert.equal(
+    compareRecordings({ production, local: [changed, first, ...others] }).totals.difference,
+    1,
+  );
+});

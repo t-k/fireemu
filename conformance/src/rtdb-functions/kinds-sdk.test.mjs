@@ -161,3 +161,65 @@ test("the runner's request caps are the scenario's, the breadth ones by default"
   assert.equal(await take(undefined), 40);
   assert.equal(await take({ http: 80, ws: 4 }), 80);
 });
+
+async function runnerWith(options, observe) {
+  const { browserRunner } = await import("./breadth-sdk.mjs");
+  const path = await import("node:path");
+  const handlers = {};
+  const page = {
+    route: async () => {},
+    on: (name, cb) => (handlers[name] = cb),
+    goto: async () => {},
+    waitForFunction: async () => {},
+    evaluate: async () => ({ outcome: "ok" }),
+    close: async () => {},
+  };
+  const deps = {
+    path,
+    LAUNCH: {},
+    createSdk,
+    createRequire: () => () => ({
+      chromium: {
+        launch: async () => ({
+          newContext: async () => ({ newPage: async () => page }),
+          close: async () => {},
+        }),
+      },
+    }),
+    createServer: () => ({
+      listen: (_p, _h, cb) => cb(),
+      address: () => ({ port: 1 }),
+      close: (cb) => cb(),
+    }),
+  };
+  const runner = new Function(
+    ...Object.keys(deps),
+    `return (${browserRunner.toString().replaceAll("import.meta.url", JSON.stringify(import.meta.url))});`,
+  )(...Object.values(deps))({ modules: ".", allowHost: () => true, ...options });
+  return runner({}, {}, (api) => observe(api, handlers));
+}
+
+test("the runner's WebSocket cap is the scenario's", async () => {
+  const sockets = async (caps) => {
+    const result = await runnerWith({ caps }, async (_api, handlers) => {
+      for (let i = 0; i < 7; i++)
+        handlers.websocket({ url: () => "wss://s-gke.firebaseio.com/.ws" });
+    });
+    return result.counts.ws;
+  };
+  assert.equal(await sockets({ http: 80, ws: 6 }), 7);
+});
+
+test("the runner hands the scenario's ids to the SDK client", async () => {
+  const outcomes = [];
+  await runnerWith({ ids: ["k18"] }, async ({ write }) => {
+    outcomes.push((await write("k18")).outcome);
+    await assert.rejects(write("w10"), /write unavailable/);
+  });
+  assert.deepEqual(outcomes, ["ok"]);
+  // without ids the breadth ids are the allowed ones
+  await runnerWith({}, async ({ write }) => {
+    assert.equal((await write("w10")).outcome, "ok");
+    await assert.rejects(write("k18"), /write unavailable/);
+  });
+});

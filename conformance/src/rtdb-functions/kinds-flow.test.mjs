@@ -113,3 +113,49 @@ test("the SDK steps go to the SDK and the others to the REST client", async () =
   );
   assert.equal(seen.filter(([who]) => who === "rtdb").length, 17);
 });
+
+test("a write that is not answered ok stops the run and is named", async () => {
+  const world = makeWorld({ frames: "all" });
+  const write = world.deps.rtdb.write;
+  world.deps.rtdb.write = async (step) =>
+    step.id === "k5" ? { outcome: "refused", status: 400 } : write(step);
+  const result = await runBreadth(world.deps);
+  assert.deepEqual(writes(world), ["k1", "k2", "k3", "k4"]);
+  assert.ok(result.reasons.includes("write k5 refused"));
+  assert.ok(result.reasons.includes("write k5 was not answered ok"));
+  assert.equal(result.outcome, "stopped-needs-review");
+  // the run still cleans up what it started
+  assert.ok(world.events.includes("cleanup rtdb"));
+  assert.ok(world.events.includes("cleanup k9GroupWrittenV2"));
+});
+
+test("a signal before the first deploy deploys nothing and still cleans up", async () => {
+  const world = makeWorld();
+  world.deps.abort.stopped = true;
+  const result = await runBreadth(world.deps);
+  assert.ok(result.reasons.includes("signal before deploy"));
+  assert.equal(world.events.filter((e) => e.startsWith("deploy ")).length, 0);
+  assert.equal(writes(world).length, 0);
+  assert.ok(world.events.includes("cleanup rtdb"));
+  assert.ok(world.events.includes("cleanup user"));
+});
+
+test("an RTDB cleanup that is not closed leaves the run residual", async () => {
+  const world = makeWorld();
+  world.deps.rtdb.cleanup = async () => ({
+    closed: false,
+    errors: ["unexpected: x"],
+    unresolved: [],
+  });
+  const result = await runBreadth(world.deps);
+  assert.equal(result.residual, true);
+  assert.ok(result.reasons.includes("RTDB cleanup unresolved"));
+});
+
+test("a handler that was not deployed does not hold the tail", async () => {
+  const world = makeWorld({ failure: "k9AnyWrittenV2", kind: "refused", frames: "all" });
+  const result = await runBreadth(world.deps);
+  assert.deepEqual(result.reasons, []);
+  assert.ok(world.deps.clock.now() < 300000 + 21 * 6000 + 210000);
+  assert.ok(world.deps.clock.now() >= 300000 + 21 * 6000 + 30000);
+});

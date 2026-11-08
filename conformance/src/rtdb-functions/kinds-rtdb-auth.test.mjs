@@ -83,21 +83,62 @@ test("user REST writes carry the token in the URL only", async () => {
   assert.ok(sent.every(([, url]) => url.includes("auth=user-token")));
 });
 
-test("the default RTDB client is still the breadth one", async () => {
-  const { createRtdb: create } = await import("./breadth-rtdb.mjs");
-  const urls = [];
+test("the default RTDB client is still the breadth one: its prefix and its Rules", async () => {
+  const { createRtdb: create, rulesFor: breadthRules } = await import("./breadth-rtdb.mjs");
+  const calls = [];
+  let installed;
   const client = create({
     nonce: "nonce",
     userToken: () => "t",
     log: () => {},
-    packet: { projectNumber: "123456789012", baselineRulesSha256: "0".repeat(64) },
-    fetchImpl: async (url) => {
-      urls.push(url);
-      return { status: 200, text: async () => "null" };
+    sleep: async () => {},
+    packet: {
+      projectNumber: "123456789012",
+      baselineRulesSha256: createHash("sha256").update(BASELINE).digest("hex"),
+    },
+    fetchImpl: async (url, init) => {
+      calls.push([init.method, url]);
+      let value;
+      if (url.includes("serviceusage"))
+        value = { name: client.run.u.serviceName, state: "ENABLED" };
+      else if (url.includes("firebasedatabase")) {
+        const instance = {
+          name: client.run.u.instanceName,
+          type: "USER_DATABASE",
+          state: "ACTIVE",
+        };
+        value = url.endsWith("/instances") ? { instances: [instance] } : instance;
+      } else if (url.includes(".settings/rules")) {
+        if (init.method === "PUT") {
+          installed = init.body;
+          value = { status: "ok" };
+        } else return { status: 200, text: async () => installed ?? BASELINE };
+      } else value = null;
+      return { status: 200, text: async () => JSON.stringify(value) };
     },
   });
-  await assert.rejects(client.setup());
-  assert.ok(urls.length > 0);
+  await client.setup();
+  assert.deepEqual(JSON.parse(installed), breadthRules("g9-rtdb", "nonce"));
+  assert.ok(calls.some(([method, url]) => method === "GET" && url.endsWith("/g9-rtdb.json")));
+  assert.ok(!calls.some(([, url]) => url.includes("k9-rtdb")));
+  await client.cleanup();
+  assert.ok(calls.some(([method, url]) => method === "DELETE" && url.endsWith("/g9-rtdb.json")));
+});
+
+test("the clean-up of the kinds client deletes the prefix and reads it back null", async () => {
+  const { client, calls } = rtdbWorld();
+  await client.setup();
+  const before = calls.length;
+  await client.cleanup();
+  const sent = calls.slice(before).map(([method, ,]) => method);
+  const urls = calls.slice(before).map(([, url]) => new URL(url).pathname);
+  assert.deepEqual(sent, ["DELETE", "GET", "PUT", "GET"]);
+  assert.deepEqual(urls, [
+    "/k9-rtdb.json",
+    "/k9-rtdb.json",
+    "/.settings/rules.json",
+    "/.settings/rules.json",
+  ]);
 });
 
 function authWorld({ update = { status: 200, body: {} } } = {}) {
@@ -179,4 +220,27 @@ test("without claims the sign-in is the breadth one: no update request", async (
   await auth.create();
   await auth.signIn();
   assert.equal(calls.length, 2);
+});
+
+test("an answer body of the claims update is masked in the journal", async () => {
+  const rows = [];
+  const auth = createAuth({
+    projectId: "demo",
+    apiKey: "key-sentinel",
+    email: "user@example.test",
+    password: "password-sentinel",
+    claims: KINDS_CLAIMS,
+    log: (row) => rows.push(row),
+    fetchImpl: async (url) => {
+      if (url.endsWith("/accounts"))
+        return { status: 200, text: async () => JSON.stringify({ localId: "uid" }) };
+      return { status: 400, text: async () => "body-sentinel password-sentinel" };
+    },
+  });
+  await auth.create();
+  assert.equal((await auth.signIn()).outcome, "refused");
+  const claimsRow = rows.find((row) => row.step === "user-claims");
+  assert.equal(claimsRow.status, 400);
+  assert.equal(claimsRow.body, "***");
+  assert.ok(!JSON.stringify(rows).includes("body-sentinel"));
 });

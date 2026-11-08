@@ -245,3 +245,139 @@ test("a kinds run through the real executeRun writes the private output and clea
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("source admission without a scenario checks the breadth pins and fixture directory", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "breadth-stage-"));
+  try {
+    const stageDir = join(dir, "a", "b");
+    const breadthFiles = [
+      "firebase-breadth.json",
+      "fixtures-breadth/index.js",
+      "fixtures-breadth/frames.js",
+      "fixtures-breadth/package.json",
+      "fixtures-breadth/package-lock.json",
+    ];
+    await mkdir(join(stageDir, "fixtures-breadth"), { recursive: true });
+    for (const file of breadthFiles)
+      await writeFile(join(stageDir, file), await readFile(join(here, file)));
+    for (const [name, version] of [
+      ["firebase-functions", "7.3.2"],
+      ["firebase-admin", "14.3.0"],
+    ]) {
+      await mkdir(join(stageDir, "fixtures-breadth/node_modules", name), { recursive: true });
+      await writeFile(
+        join(stageDir, "fixtures-breadth/node_modules", name, "package.json"),
+        JSON.stringify({ name, version }),
+      );
+    }
+    await mkdir(join(dir, "node_modules/firebase-tools"), { recursive: true });
+    await writeFile(
+      join(dir, "node_modules/firebase-tools/package.json"),
+      JSON.stringify({ version: "15.28.2" }),
+    );
+    await requiredBreadthSources({ stageDir });
+    // the kinds pins are not the breadth ones: the breadth stage fails them
+    await assert.rejects(
+      requiredBreadthSources({ stageDir, pins: KINDS_PINS, fixtureDir: "fixtures-kinds" }),
+      /ENOENT|reviewed source changed/,
+    );
+    await writeFile(join(stageDir, "fixtures-breadth/index.js"), "changed");
+    await assert.rejects(
+      requiredBreadthSources({ stageDir }),
+      /reviewed source changed: fixtures-breadth\/index\.js/,
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("admission without a fixture directory looks at the breadth one", async () => {
+  const gitSha = "d".repeat(40);
+  const packet = Buffer.from(
+    `\`\`\`json cv14-pins\n${JSON.stringify({ baselineRulesSha256: "a".repeat(64) })}\n\`\`\`\n`,
+  );
+  const approval = `Decision: APPROVE\ngitSha: ${gitSha}\npacketSha256: ${sha(packet)}\n`;
+  const seen = [];
+  const deps = {
+    git: async (args) => {
+      seen.push(args);
+      if (args[0] === "rev-parse") return gitSha;
+      return args.includes("--ignored")
+        ? "!! conformance/src/rtdb-functions/fixtures-breadth/node_modules/\n"
+        : "";
+    },
+    readFile: async (path) => (path.endsWith("review") ? approval : packet),
+    requiredSources: async () => {},
+    readPrivateProjectIdentity: async () => "123456789012",
+    adcVerdict: async () => ({ ok: true }),
+  };
+  const env = { FIREEMU_CV14_REVIEW: "/private/review", FIREEMU_CV14_PACKET: "/private/packet" };
+  await admitRun({ env, privateRoot: "/private", root: "/repo", deps });
+  assert.ok(seen.some((args) => args.includes("conformance/src/rtdb-functions/fixtures-breadth")));
+  assert.ok(!seen.some((args) => args.includes("conformance/src/rtdb-functions/fixtures-kinds")));
+});
+
+test("the entry takes the browser WebSocket cap from the scenario's limits", async () => {
+  const listeners = new Map();
+  let browser;
+  const deps = {
+    process: {
+      argv: ["node", "unused", "--key-file", "/fake/key"],
+      env: {},
+      on: (signal, cb) => listeners.set(signal, cb),
+      off: (signal) => listeners.delete(signal),
+    },
+    isAbsolute,
+    fileURLToPath,
+    join,
+    STAGE_DIR: "/fake/stage",
+    PRIVATE_ROOT: "/fake/private",
+    PROJECT: "demo",
+    ownerAdc: async () => ({ file: {}, path: "/fake/adc" }),
+    createBreadthBudget,
+    createTokenProvider: () => async () => "fake-access",
+    adcPreflight: async () => ({ ok: true }),
+    fetch: async () => ({}),
+    tokenProviderWithSecrets: () => ({ getToken: async () => "fake-access", secrets: [] }),
+    admitRun: async ({ deps: inner }) => {
+      await inner.requiredSources();
+      await inner.adcVerdict();
+      return { packetPins: {}, projectNumber: "123456789012" };
+    },
+    requiredBreadthSources: async () => {},
+    readFile: async () => "fake-key",
+    parseKeyFile: (x) => x,
+    readPrivateProjectIdentity: async () => "123456789012",
+    PROJECT_IDENTITY_FILE: "/fake/identity",
+    PROJECT_IDENTITY_SHA: "sha",
+    mkdir: async () => {},
+    randomBytes: () => Buffer.from("nonce"),
+    createControl: () => ({}),
+    BREADTH_HOSTS: [],
+    breadthCli: (run) => run,
+    createAuth: () => ({ signIn: async () => ({}) }),
+    executeRun: async ({ environment }) => {
+      environment.createSdk({ uid: "u" });
+      return { outcome: "recorded", residual: false };
+    },
+    openSdk: (runner) => runner,
+    browserRunner: (options) => (browser = options),
+    INSTANCE: "fireemu-q-rtdb2",
+    exitCodeOf: () => 0,
+    console: { log() {} },
+    readdir: async () => [],
+    rm: async () => {},
+  };
+  const source = recordBreadth
+    .toString()
+    .replaceAll("import.meta.url", JSON.stringify(import.meta.url));
+  const entry = new Function(...Object.keys(deps), "scenario", `return (${source})(scenario);`);
+  const limits = { ...KINDS_SCENARIO.limits, browserWs: 7, browserHttp: 90 };
+  await entry(...Object.values(deps), { ...KINDS_SCENARIO, limits });
+  assert.deepEqual(browser.caps, { http: 90, ws: 7 });
+  // and the breadth entry passes no caps at all, so the runner keeps its own defaults
+  await entry(...Object.values(deps), undefined);
+  assert.equal(browser.caps, undefined);
+  assert.equal(browser.pageFile, undefined);
+  assert.equal(browser.ids, undefined);
+});

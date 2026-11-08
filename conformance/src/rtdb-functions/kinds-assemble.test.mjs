@@ -20,6 +20,7 @@ async function assemble(control, extra = {}) {
     clock: { now: () => 0, sleep: async () => {} },
     nonce: "nonce",
     scenario: KINDS_SCENARIO,
+    log: () => {},
     ...extra,
   });
   return {
@@ -101,5 +102,73 @@ test("without a scenario the assembly is the breadth one", async () => {
   } finally {
     assembled.uploads.close();
     await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("the assembled RTDB client reads, installs and clears the scenario's prefix and Rules", async () => {
+  const calls = [];
+  let installed;
+  const baseline = "{ }\n";
+  const sha = (await import("node:crypto")).createHash("sha256").update(baseline).digest("hex");
+  const adminFetch = async (url, init) => {
+    calls.push([init.method, url]);
+    let value = null;
+    if (url.includes("serviceusage"))
+      value = {
+        name: "projects/123456789012/services/firebasedatabase.googleapis.com",
+        state: "ENABLED",
+      };
+    else if (url.includes("firebasedatabase")) {
+      const instance = {
+        name: "projects/123456789012/locations/us-central1/instances/fireemu-q-rtdb2",
+        type: "USER_DATABASE",
+        state: "ACTIVE",
+      };
+      value = url.endsWith("/instances") ? { instances: [instance] } : instance;
+    } else if (url.includes(".settings/rules")) {
+      if (init.method === "PUT") installed = init.body;
+      else return { status: 200, text: async () => installed ?? baseline };
+      value = { status: "ok" };
+    }
+    return { status: 200, text: async () => JSON.stringify(value) };
+  };
+  const { assembled, cleanup } = await assemble(async () => ({ value: {} }), {
+    adminFetch,
+    anonymousFetch: adminFetch,
+    packet: { projectNumber: "123456789012", baselineRulesSha256: sha },
+  });
+  try {
+    await assembled.rtdb.setup();
+    assert.deepEqual(JSON.parse(installed), KINDS_SCENARIO.rulesFor("k9-rtdb", "nonce"));
+    assert.ok(calls.some(([, url]) => url.endsWith("/k9-rtdb.json")));
+    assert.ok(!calls.some(([, url]) => url.includes("g9-rtdb")));
+    assembled.deps.budget.startCleanup();
+    await assembled.rtdb.cleanup();
+    assert.ok(calls.some(([method, url]) => method === "DELETE" && url.endsWith("/k9-rtdb.json")));
+  } finally {
+    await cleanup();
+  }
+});
+
+test("the upload ledger is bounded by the scenario's upload limit", async () => {
+  const { assembled, cleanup } = await assemble(async () => ({ value: {} }));
+  try {
+    const { budget } = assembled.deps;
+    // 100 upload requests used: 20 of the kinds limit (120) left, below the breadth limit (45) it would be none
+    for (let i = 0; i < 100; i++) budget.take("upload");
+    await assert.doesNotReject(async () => {
+      try {
+        await assembled.uploads.beginDeploy("a", { generation: 2 });
+      } catch (error) {
+        if (/budget is short/.test(error.message)) throw error;
+      }
+    });
+    for (let i = 0; i < 18; i++) budget.take("upload");
+    await assert.rejects(
+      assembled.uploads.beginDeploy("b", { generation: 2 }),
+      /upload request budget is short/,
+    );
+  } finally {
+    await cleanup();
   }
 });

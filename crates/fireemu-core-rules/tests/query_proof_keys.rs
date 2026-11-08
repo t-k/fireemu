@@ -119,19 +119,18 @@ proptest! {
         prop_assert!(!allows("null == resource", &query));
     }
 
-    /// A container built from a value the query does not determine exactly is not provably
+    /// A container built from a read of a field the query does not constrain is not provably
     /// non-null: building it from the stored document may fail on a missing field (reviews
-    /// 2026-11-08: `[resource.data.secret] != null`), and a container holding any undetermined
-    /// value is undetermined as a whole (r4). Built from exact values it cannot fail.
+    /// 2026-11-08: `[resource.data.secret] != null`). Built from constrained values, exact or
+    /// not, or from values that exist (`resource.id`, `resource`), it cannot fail
+    /// (coordinator ruling A, 2026-11-09).
     #[test]
     fn a_container_of_an_undetermined_read_is_not_provably_non_null(
         data in constrained_data(),
         key in prop::sample::select(KEYS.to_vec()),
     ) {
         let constrained = data.contains_key(key);
-        let exact = data.get(key).is_some_and(|value| {
-            matches!(value, RulesValue::Null | RulesValue::Int(_) | RulesValue::String(_))
-        });
+
         let query = ctx(data, true);
         for condition in [
             format!("[resource.data.{key}] != null"),
@@ -139,11 +138,11 @@ proptest! {
             format!("[[resource.data.{key}]] != null"),
             format!("null != [1, resource.data.{key}]"),
         ] {
-            let expected = constrained && exact;
+            let expected = constrained;
             prop_assert_eq!(allows(&condition, &query), expected, "{}", condition);
         }
         for condition in ["[resource.id] != null", "{'r': resource.id} != null", "{'r': resource} != null"] {
-            prop_assert!(!allows(condition, &query), "{} must not be provable", condition);
+            prop_assert!(allows(condition, &query), "{} must hold", condition);
         }
     }
 

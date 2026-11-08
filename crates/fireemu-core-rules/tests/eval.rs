@@ -1602,8 +1602,6 @@ fn shape_operations_on_built_containers_keep_failing_reads_undetermined() {
         "[resource.data.secret].size() == 1",
         "1 in [resource.data.secret, 1]",
         "[resource.data.secret, 1].hasAll([1])",
-        "{'k': resource.data.role}.size() == 1",
-        "{'k': resource.id}.keys().hasOnly(['k'])",
     ] {
         assert!(!allows(&rules(cond), &query), "{cond} must not be provable");
     }
@@ -1620,7 +1618,6 @@ fn shape_operations_on_built_containers_keep_failing_reads_undetermined() {
         "[resource.data.secret, 1][0:1] == [resource.data.secret]",
         "{'k': resource.data.secret} != {'k': 1}",
         "[resource.data.secret] != [1]",
-        "{'bad': resource.data.role, 'ok': true}.ok",
     ] {
         assert!(!allows(&rules(cond), &query), "{cond} must not be provable");
     }
@@ -1737,8 +1734,16 @@ fn shape_operations_on_built_containers_keep_failing_reads_undetermined() {
     // Only the key set of a map holding undetermined values is known: not its values.
     assert!(!allows(&rules("resource.values().size() == 3"), &query));
     assert!(!allows(&rules("request.values().size() > 0"), &query));
-    // A container of determined values answers as before.
+    // A container of determined values answers as before, and so does one holding a value
+    // that exists but is undetermined (`resource.id`, a role filtered with `in`): building it
+    // cannot fail (coordinator ruling A, 2026-11-09).
     for cond in [
+        "{'k': resource.id}.size() == 1",
+        "{'k': resource.id} is map",
+        "{'k': resource.data.role}.size() == 1",
+        "{'bad': resource.id, 'ok': true}.ok",
+        "{'k': resource.id}.keys().hasOnly(['k'])",
+        "{'bad': resource.data.role, 'ok': true}.ok",
         "{'k': resource.data.a} is map",
         "{'k': resource.data.a, 'ok': true}.ok",
         "[resource.data.a, true][1]",

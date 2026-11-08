@@ -1752,6 +1752,22 @@ impl<'a> Evaluator<'a> {
         })
     }
 
+    /// Evaluates a container member or a function argument, which concrete evaluation
+    /// evaluates eagerly: in a query proof, a value undetermined because it read a field the
+    /// query does not constrain (an absent read not absorbed, see `absent_reads`) may be a
+    /// missing-field error for a stored document, so it is undetermined here too.
+    fn eval_operand_that_cannot_fail(&mut self, expr: &Expr) -> Result<RulesValue, EvalError> {
+        let absent_before = self.absent_reads;
+        let value = self.eval(expr)?;
+        if self.query_proof
+            && matches!(value, RulesValue::Unknown)
+            && self.absent_reads > absent_before
+        {
+            return Err(EvalError::Unknown);
+        }
+        Ok(value)
+    }
+
     /// A member or index read of a partial map: the value of a constrained key, or `Unknown`
     /// for a key the query does not constrain, which is counted (see `absent_reads`).
     fn partial_read(&mut self, value: Option<&RulesValue>) -> RulesValue {
@@ -4450,30 +4466,25 @@ impl<'a> Evaluator<'a> {
                     self.eval(otherwise)
                 }
             }
-            // In a query proof, a list or map the rule builds from a value the query leaves
-            // undetermined is undetermined as a whole: building it from a stored document can
-            // fail (an unconstrained field may be missing), so no operation on it (a type
-            // test, a member, a shape read, a comparison) can be proven (reviews 2026-11-08 r3
-            // and r4).
+            // In a query proof, a list or map the rule builds from a member that may fail to
+            // evaluate for a stored document (a read of a field the query does not constrain)
+            // is undetermined as a whole, so no operation on it (a type test, a member, a shape
+            // read, a comparison) can be proven (reviews 2026-11-08 r3 and r4). A member that
+            // exists but is undetermined (`resource.id`, a Storage path capture) cannot fail
+            // (coordinator ruling A, 2026-11-09). See `eval_operand_that_cannot_fail`.
             ExprKind::List(items) => {
                 let values = items
                     .iter()
-                    .map(|i| self.eval(i))
+                    .map(|i| self.eval_operand_that_cannot_fail(i))
                     .collect::<Result<Vec<_>, _>>()?;
-                if self.query_proof && values.iter().any(undetermined) {
-                    return Err(EvalError::Unknown);
-                }
                 Ok(RulesValue::List(values))
             }
             ExprKind::Map(entries) => {
                 let mut m = BTreeMap::new();
                 for (k, v) in entries {
-                    let value = self.eval(v)?;
                     // Checked per entry: a later duplicate key would overwrite it (review
                     // 2026-11-08 r5).
-                    if self.query_proof && undetermined(&value) {
-                        return Err(EvalError::Unknown);
-                    }
+                    let value = self.eval_operand_that_cannot_fail(v)?;
                     m.insert(k.clone(), value);
                 }
                 Ok(RulesValue::Map(m))
@@ -4991,18 +5002,10 @@ impl<'a> Evaluator<'a> {
                     // 2026-11-08 r5). An undetermined value that exists (`resource.id`, a field
                     // the query orders by) and `resource` itself pass (review r6;
                     // `f(resource)`, FS-RULES-SHAPES-TWO).
-                    let mut values = Vec::with_capacity(args.len());
-                    for argument in args {
-                        let absent_before = self.absent_reads;
-                        let value = self.eval(argument)?;
-                        if self.query_proof
-                            && matches!(value, RulesValue::Unknown)
-                            && self.absent_reads > absent_before
-                        {
-                            return Err(EvalError::Unknown);
-                        }
-                        values.push(value);
-                    }
+                    let values = args
+                        .iter()
+                        .map(|argument| self.eval_operand_that_cannot_fail(argument))
+                        .collect::<Result<Vec<_>, _>>()?;
                     let query_provenance = args
                         .iter()
                         .map(|argument| {

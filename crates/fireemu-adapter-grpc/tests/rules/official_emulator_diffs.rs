@@ -946,6 +946,7 @@ service cloud.firestore {
     match /fn-helper/{id} { allow list: if helper(resource.data.secret).ok; }
     match /request-keys/{id} { allow list: if request.keys().hasAll(['auth', 'path']); }
     match /resource-keys/{id} { allow list: if resource.keys().hasAll(['data', 'id']); }
+    match /id-map/{id} { allow list: if {'k': resource.id}.size() == 1; }
   }
 }";
     for (profile, mut h) in start_profiles().await {
@@ -965,6 +966,7 @@ service cloud.firestore {
                     a1("fn-helper/d"),
                     a1("request-keys/d"),
                     a1("resource-keys/d"),
+                    a1("id-map/d"),
                 ]),
                 "owner",
             ))
@@ -992,6 +994,7 @@ service cloud.firestore {
             ("fn-helper", false),
             ("request-keys", true),
             ("resource-keys", true),
+            ("id-map", true),
         ];
         for (collection, allowed) in rows {
             let answer = run(&mut h, a_is_1(collection), &token).await;

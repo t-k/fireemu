@@ -27,7 +27,12 @@ module KaniCiContract
     return errors unless workflow.is_a?(Hash)
 
     normalized_keys = workflow.keys.map { |key| key == true ? "on" : key }
-    assert(errors, exact_keys?(normalized_keys, %w[jobs name on permissions]), "workflow keys must be exactly name, on, permissions and jobs")
+    assert(errors, exact_keys?(normalized_keys, %w[concurrency jobs name on permissions]), "workflow keys must be exactly name, on, permissions, concurrency and jobs")
+    assert(
+      errors,
+      workflow["concurrency"] == { "group" => "${{ github.workflow }}-${{ github.ref }}", "cancel-in-progress" => true },
+      "a superseded kani run must be cancelled",
+    )
     assert(errors, workflow["name"] == "kani", "workflow name must be kani")
 
     events = workflow["on"] || workflow[true]

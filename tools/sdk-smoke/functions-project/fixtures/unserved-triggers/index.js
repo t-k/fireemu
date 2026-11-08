@@ -5,7 +5,6 @@
 // default, refuses.
 const { onRequest } = require("firebase-functions/v2/https");
 const { onValueWritten } = require("firebase-functions/v2/database");
-const { onConfigUpdated } = require("firebase-functions/v2/remoteConfig");
 const v1 = require("firebase-functions/v1");
 
 // Served, and expected to survive a `report` run.
@@ -17,5 +16,5 @@ exports.fxOnValueWritten = onValueWritten("/rooms/{roomId}", () => {});
 // The v1 spelling of the same product.
 exports.fxV1DatabaseWrite = v1.database.ref("/rooms/{roomId}").onWrite(() => {});
 
-// Remote Config: deferred, no such service in the daemon.
-exports.fxOnConfigUpdated = onConfigUpdated(() => {});
+// Analytics remains outside the served trigger surface.
+exports.fxAnalytics = v1.analytics.event("fixture_event").onLog(() => {});

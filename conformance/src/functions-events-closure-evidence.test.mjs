@@ -776,11 +776,12 @@ function commandFiles({
   repoCorpus = corpusText,
   corpus = corpusText,
   git = gitFake,
+  closureValue = publicWriterClosure(),
 } = {}) {
   const files = new Map([
     ["comparison.json", JSON.stringify(comparison)],
     ["run/production-run.json", JSON.stringify(run)],
-    ["closure.json", closureText],
+    ["closure.json", JSON.stringify(closureValue)],
     ["corpus.json", corpus],
     ["build.json", JSON.stringify(build)],
     ["receipt.json", JSON.stringify(receipt)],
@@ -796,6 +797,24 @@ function commandFiles({
     repoCorpus: () => repoCorpus,
   };
   return { io, written, logs };
+}
+
+function publicWriterClosure() {
+  const value = structuredClone(closure());
+  const replacePrivateMarkers = (current) => {
+    if (typeof current === "string")
+      return current
+        .replaceAll("docs.local", "public-review")
+        .replaceAll(".codex", "public-review")
+        .replaceAll("docs/superpowers", "public-review");
+    if (Array.isArray(current)) return current.map(replacePrivateMarkers);
+    if (current && typeof current === "object")
+      return Object.fromEntries(
+        Object.entries(current).map(([key, child]) => [key, replacePrivateMarkers(child)]),
+      );
+    return current;
+  };
+  return replacePrivateMarkers(value);
 }
 const options = (over = {}) => ({
   comparison: "comparison.json",
@@ -861,6 +880,41 @@ test("--write writes the comparison evidence with the gate rows, the closure and
   assertClosureConsistent(closureFile, evidenceFile);
   assert.equal(closureFile.conditions.filter((c) => c.status === "VERIFIED").length, 21);
   assert.equal(evidence.rows.length, evidenceFile.rows.length);
+});
+
+test("--write validates build record and closure payloads before touching any public output", () => {
+  for (const [build, comparisonPath] of [
+    [buildOf({ cargoVersion: "cargo docs.local/private-build" }), "safe-comparison.json"],
+    [buildOf(), "docs.local/private-comparison.json"],
+  ]) {
+    const { io, written } = commandFiles({ build });
+    for (const path of ["build-copy.json", "evidence.json", "closure.json"])
+      written.set(path, `preserve ${path}`);
+    asRefusal(
+      () => closureEvidenceCommand(writing({ "comparison-path": comparisonPath }), io),
+      /public evidence/i,
+    );
+    assert.deepEqual(
+      [...written.entries()].toSorted(([left], [right]) => left.localeCompare(right)),
+      [
+        ["build-copy.json", "preserve build-copy.json"],
+        ["closure.json", "preserve closure.json"],
+        ["evidence.json", "preserve evidence.json"],
+      ],
+    );
+  }
+  const { io, written } = commandFiles({ closureValue: closure() });
+  for (const path of ["build-copy.json", "evidence.json", "closure.json"])
+    written.set(path, `preserve ${path}`);
+  asRefusal(() => closureEvidenceCommand(writing(), io), /public evidence/i);
+  assert.deepEqual(
+    [...written.entries()].toSorted(([left], [right]) => left.localeCompare(right)),
+    [
+      ["build-copy.json", "preserve build-copy.json"],
+      ["closure.json", "preserve closure.json"],
+      ["evidence.json", "preserve evidence.json"],
+    ],
+  );
 });
 
 test("--write refuses a preliminary comparison, a missing option, an incomplete run, the wrong build, the wrong receipt and a bad ledger", () => {
@@ -1027,10 +1081,11 @@ test("the command line reports, writes with --write, and says what is wrong with
     commit: head,
     tree: String(gitOut("rev-parse", "HEAD:conformance/src/functions-events/compare")).trim(),
   };
+  const publicClosureText = `${JSON.stringify(publicWriterClosure(), null, 2)}\n`;
   const files = {
     comparison: put("comparison.json", comparisonOf({ localBinary, comparator })),
     run: put("run/production-run.json", runOf()),
-    closure: put("closure.json", closureText),
+    closure: put("closure.json", publicClosureText),
     corpus: put("corpus.json", corpusText),
     build: put("build.json", buildOf({ sourceCommit: head })),
     receipt: put("receipt.json", receiptOf({ sourceCommit: head })),
@@ -1056,7 +1111,7 @@ test("the command line reports, writes with --write, and says what is wrong with
   assert.equal(JSON.parse(readFileSync(join(dir, "report.json"), "utf8")).conditions.verified, 20);
   assert.equal(
     readFileSync(files.closure, "utf8"),
-    closureText,
+    publicClosureText,
     "the report does not touch the closure",
   );
   const written = run([

@@ -21,6 +21,7 @@
 // This file is the orchestration (processes, files, the real effects); the decisions are in
 // judge.mjs, the production sequence in record.mjs, the requests in session.mjs.
 
+import { publicEvidence } from "../evidence.mjs";
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { appendFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
@@ -357,7 +358,7 @@ async function exportComparison(out) {
     summary: comparison.summary,
     rows: comparison.rows.map(({ row, status }) => ({ row, status })),
   };
-  await writeFile(out, `${JSON.stringify(evidence, null, 2)}\n`);
+  await writeFile(out, `${JSON.stringify(publicEvidence(evidence), null, 2)}\n`);
   console.log(
     JSON.stringify(
       { out, summary: evidence.summary, fixtureSha256: evidence.fixtureSha256 },

@@ -571,3 +571,87 @@ fn strict_tenant_password_change_answers_a_legacy_token() {
     assert_eq!(status, 200, "{secure}");
     assert!(secure["refreshToken"].is_string(), "{secure}");
 }
+
+/// The Android SDK refreshes a tenant session with camelCase JSON and only `?key=`. Store
+/// selection, the deleted-tenant check, the tenant-mismatch check and the exchange all read the
+/// same field, so every answer equals the `snake_case` one.
+#[test]
+fn strict_camel_case_refresh_selects_and_checks_the_tenant_like_snake_case() {
+    let s = state(true);
+    let (tenant_a, signed) = tenant_with_user(&s, "atb-camel-a");
+    let (tenant_b, _) = tenant_with_user(&s, "atb-camel-b");
+    let (tenant_c, signed_c) = tenant_with_user(&s, "atb-camel-c");
+    let snake = |token: &Value| json!({"grant_type": "refresh_token", "refresh_token": token});
+    let camel = |token: &Value| json!({"grantType": "refresh_token", "refreshToken": token});
+
+    // A tenant token with only ?key= refreshes inside its tenant.
+    let (status, refreshed) = client(&s, TOKEN, &camel(&signed["refreshToken"]));
+    assert_eq!(status, 200, "{refreshed}");
+    let (status, found) = client(
+        &s,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": refreshed["id_token"]}),
+    );
+    assert_eq!(status, 200, "{found}");
+    assert_eq!(found["users"][0]["tenantId"], json!(tenant_a));
+
+    // A query tenant that is not the token's tenant: the snake_case answer, whatever it is.
+    let with_query = |body: &Value| {
+        let response = handle_with(
+            &s,
+            "POST",
+            &format!("{TOKEN}?key={KEY}&tenantId={tenant_b}"),
+            &RequestHeaders::default(),
+            body,
+        );
+        (response.status, response.body)
+    };
+    let expected = with_query(&snake(&signed["refreshToken"]));
+    assert_eq!(expected.0, 400, "{}", expected.1);
+    assert!(
+        expected.1["error"]["message"]
+            .as_str()
+            .is_some_and(|m| m.starts_with("TENANT_ID_MISMATCH")),
+        "{}",
+        expected.1
+    );
+    assert_eq!(with_query(&camel(&signed["refreshToken"])), expected);
+
+    // A deleted tenant: the snake_case refusal, with or without the grant type.
+    let (status, _) = admin(&s, "DELETE", &format!("{TENANTS}/{tenant_c}"), &json!({}));
+    assert_eq!(status, 200);
+    let deleted = client(&s, TOKEN, &snake(&signed_c["refreshToken"]));
+    assert_eq!(deleted.1["error"]["message"], json!("TENANT_DELETED"));
+    assert_eq!(
+        client(&s, TOKEN, &camel(&signed_c["refreshToken"])),
+        deleted
+    );
+    assert_eq!(
+        client(
+            &s,
+            TOKEN,
+            &json!({"refreshToken": signed_c["refreshToken"]})
+        ),
+        deleted
+    );
+}
+
+/// The emulator profile selects the store from the refresh token in the same spelling too.
+#[test]
+fn the_emulator_profile_selects_a_tenant_store_for_a_camel_case_refresh() {
+    let s = state(false);
+    let (tenant_a, signed) = tenant_with_user(&s, "atb-camel-emu");
+    let (status, refreshed) = client(
+        &s,
+        TOKEN,
+        &json!({"grantType": "refresh_token", "refreshToken": signed["refreshToken"]}),
+    );
+    assert_eq!(status, 200, "{refreshed}");
+    let (status, found) = client(
+        &s,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": refreshed["id_token"]}),
+    );
+    assert_eq!(status, 200, "{found}");
+    assert_eq!(found["users"][0]["tenantId"], json!(tenant_a));
+}

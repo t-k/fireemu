@@ -18,7 +18,7 @@
 // productionExact for strict local runs: the recordings are of a new production project, where
 // multi-tenancy is off until the session switches it on, and the strict profile's development
 // default turns it on from the start. The source as of that change (2026-10-12) has the file SHA-256
-// 21625ee47fd60abe212da18c14d664eed5b25eb3ccb77cefd5465d43c3aea01c
+// 1eed605676b33ae8704f4693e5b5e792103ceaf664b9addfd2058dd8a3bba270
 //
 // Production needs FIREEMU_AUTH_SANDBOX_WEB_CONFIG (the sandbox web app config JSON, kept outside
 // the repository), FIREEMU_AUTH_FOREIGN_PROJECT_FILE and FIREEMU_AUTH_FOREIGN_KEY_FILE (the id,
@@ -26,6 +26,7 @@
 // FIREEMU_AUTH_FS_CROSS_PRIVATE_DIR.
 // AFC_PROGRAMS selects programs by id prefix.
 
+import { publicEvidence } from "../evidence.mjs";
 import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
@@ -693,7 +694,7 @@ async function exportComparison(out) {
     localSetup: comparison.localSetup,
     rows: comparison.rows.map(({ row, status }) => ({ row, status })),
   };
-  await writeFile(out, `${JSON.stringify(evidence, null, 2)}\n`);
+  await writeFile(out, `${JSON.stringify(publicEvidence(evidence), null, 2)}\n`);
   console.log(JSON.stringify({ out, summary: evidence.summary, fixtureSha256 }, null, 2));
 }
 

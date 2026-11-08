@@ -65,7 +65,7 @@ Local Realtime Database instances are in `us-central1`, so a 2nd-gen database tr
 
 Storage archive events fire only for a bucket whose versioning was turned on (`PATCH /storage/v1/b/{bucket}` with `{"versioning":{"enabled":true}}`), and their shape is unrecorded.
 
-Triggers for products Fireemu does not deliver events for, such as Remote Config (deferred) and Data Connect (deferred), cannot run. By default discovery refuses a codebase that exports one; set `functions.unservedTriggers` to `"report"` to report each one and load the rest. The Functions page of the [Emulator UI](../../guides/ui/) and `GET /v1/sessions/default/functions` on the control API list every ignored export with the reason.
+Triggers for products Fireemu does not deliver events for, such as Data Connect (deferred), cannot run. Remote Config handlers run only through the local injection action, and its production event shape is unobserved. By default discovery refuses a codebase that exports one; set `functions.unservedTriggers` to `"report"` to report each one and load the rest. The Functions page of the [Emulator UI](../../guides/ui/) and `GET /v1/sessions/default/functions` on the control API list every ignored export with the reason.
 
 ## Parameters and secrets
 

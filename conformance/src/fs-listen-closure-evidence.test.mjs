@@ -1,6 +1,15 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
 import { closureEvidence } from "./fs-listen/closure-evidence.mjs";
@@ -94,6 +103,43 @@ test("evidence binds each condition case to the recording bytes, binary and curr
   assert.equal(evidence.conditions.length, 15);
   assert.equal(evidence.rows.filter((r) => r.row === "native/resume-token/current").length, 4);
   assert.ok(!JSON.stringify(evidence).includes(options["production-root"]));
+});
+
+test("private comparison artifacts are allowed only under target/codex-out", async (t) => {
+  const { options } = fixture(t);
+  const evidence = await closureEvidence(options);
+  assert.equal(evidence.kind, "fs-listen-sdk-comparison-v1");
+  assert.ok(existsSync(options.out));
+  assert.ok(existsSync(options.summary));
+});
+
+test("public and symlink-aliased FS-LISTEN destinations refuse private paths before touching outputs", async (t) => {
+  const { options } = fixture(t);
+  const dir = mkdtempSync(join(tmpdir(), "listen-public-output-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  options.out = join(dir, "comparison.json");
+  options.summary = join(dir, "summary.md");
+  writeFileSync(options.out, "preserve comparison sentinel");
+  writeFileSync(options.summary, "preserve summary sentinel");
+
+  await assert.rejects(
+    closureEvidence(options),
+    /public evidence contains a disallowed filesystem path/,
+  );
+  assert.equal(readFileSync(options.out, "utf8"), "preserve comparison sentinel");
+  assert.equal(readFileSync(options.summary, "utf8"), "preserve summary sentinel");
+
+  const alias = `${options["production-root"]}-alias`;
+  symlinkSync(dir, alias, "dir");
+  t.after(() => rmSync(alias, { force: true }));
+  options.out = join(alias, "comparison.json");
+  options.summary = join(alias, "summary.md");
+  await assert.rejects(
+    closureEvidence(options),
+    /public evidence contains a disallowed filesystem path/,
+  );
+  assert.equal(readFileSync(join(dir, "comparison.json"), "utf8"), "preserve comparison sentinel");
+  assert.equal(readFileSync(join(dir, "summary.md"), "utf8"), "preserve summary sentinel");
 });
 
 test(

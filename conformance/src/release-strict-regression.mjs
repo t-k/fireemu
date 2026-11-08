@@ -25,10 +25,11 @@ import { gunzipSync } from "node:zlib";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
-import { copyFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
+import { publicEvidence, publicEvidenceBytes } from "./evidence.mjs";
 
 import {
   historicalProductionSummary,
@@ -1138,11 +1139,43 @@ function parseUniqueJson(text) {
   return value;
 }
 
+const isPlainObject = (value) =>
+  value !== null && typeof value === "object" && !Array.isArray(value);
+
+/**
+ * The historical judge requires absolute paths at these root binding fields, so only they leave
+ * the public evidence check. Everything else in the binding is still checked.
+ */
+function withoutHistoricalBindingPaths(comparison) {
+  if (!isPlainObject(comparison) || !isPlainObject(comparison.profileBinding)) return comparison;
+  const { cwd, argv, binary, config, indexes, ...binding } = comparison.profileBinding;
+  const withoutPaths = (value, ...names) =>
+    isPlainObject(value)
+      ? Object.fromEntries(Object.entries(value).filter(([name]) => !names.includes(name)))
+      : value;
+  return {
+    ...comparison,
+    profileBinding: {
+      ...binding,
+      cwd: typeof cwd === "string" ? undefined : cwd,
+      argv: Array.isArray(argv) ? argv.filter((item) => typeof item !== "string") : argv,
+      binary: withoutPaths(binary, "path"),
+      config: withoutPaths(config, "path", "sourcePath"),
+      indexes: withoutPaths(indexes, "path", "sourcePath"),
+    },
+  };
+}
+
 export async function collectHistoricalReplay(runDir, outDir) {
   const summaryPath = join(runDir, "historical-production-comparison.json");
   const rawPath = join(runDir, "fireemu-historical-production.json");
   const comparisonBytes = existsSync(summaryPath) ? await readFile(summaryPath) : undefined;
   const rawBytes = existsSync(rawPath) ? await readFile(rawPath) : undefined;
+  if (comparisonBytes) {
+    const comparison = parseUniqueJson(comparisonBytes.toString("utf8"));
+    publicEvidence(withoutHistoricalBindingPaths(comparison));
+  }
+  if (rawBytes) publicEvidence(parseUniqueJson(rawBytes.toString("utf8")));
   if (comparisonBytes)
     await writeFile(join(outDir, "R11-historical-production-comparison.json"), comparisonBytes);
   if (rawBytes) await writeFile(join(outDir, "R11-fireemu-historical-production.json"), rawBytes);
@@ -1604,6 +1637,23 @@ export function exportCopies(comparisons, runs) {
     }));
 }
 
+/** Validate each retained export snapshot before writing any public comparison copy. */
+export async function copyValidatedExportSnapshots(
+  outDir,
+  copies,
+  { readSource = readFile, writeDestination = writeFile } = {},
+) {
+  const snapshots = [];
+  for (const { from, to } of copies) {
+    const source = join(outDir, from);
+    if (!existsSync(source)) continue;
+    const bytes = await readSource(source);
+    publicEvidenceBytes(bytes);
+    snapshots.push([join(outDir, to), bytes]);
+  }
+  for (const [destination, bytes] of snapshots) await writeDestination(destination, bytes);
+}
+
 /** Persist the final outcome before the namespace process exits. */
 export async function writeReleaseSummary(out, summary) {
   await writeFile(join(out, "summary.json"), `${JSON.stringify(summary, null, 2)}\n`);
@@ -1702,9 +1752,7 @@ async function main() {
         summary.comparisons.push({ ...comparison, differences });
       }
     if (!fatalTimeout)
-      for (const { from, to } of exportCopies(plan.comparisons, RUNS)) {
-        if (existsSync(join(out, from))) await copyFile(join(out, from), join(out, to));
-      }
+      await copyValidatedExportSnapshots(out, exportCopies(plan.comparisons, RUNS));
   }
   if (!fatalTimeout) {
     const expectedRaw = context.readJson(

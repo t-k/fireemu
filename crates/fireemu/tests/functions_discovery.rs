@@ -1070,9 +1070,9 @@ fn a_trigger_of_a_product_the_daemon_does_not_serve_fails_discovery_by_name() {
     let out = exec(&fixture("unserved-triggers"), None);
     let err = stderr(&out);
     assert_eq!(out.status.code(), Some(1), "{err}");
-    assert!(err.contains("fxOnConfigUpdated (remoteConfig)"), "{err}");
+    assert!(err.contains("fxAnalytics (analytics)"), "{err}");
     assert!(
-        err.contains("Remote Config has no emulator in the active supported surface"),
+        err.contains("Google Analytics triggers have no local emulator"),
         "{err}"
     );
     // The served exports are not the reason the run failed, and are not named as unserved:
@@ -1101,8 +1101,8 @@ fn the_report_policy_names_every_ignored_export_and_serves_the_rest() {
     let err = stderr(&out);
     assert_eq!(out.status.code(), Some(0), "{err}");
     assert!(
-        err.contains("functions[us-central1-fxOnConfigUpdated]: function ignored"),
-        "fxOnConfigUpdated has no ignored line:\n{err}"
+        err.contains("functions[us-central1-fxAnalytics]: function ignored"),
+        "fxAnalytics has no ignored line:\n{err}"
     );
     for name in ["fxHealth", "fxOnValueWritten", "fxV1DatabaseWrite"] {
         assert!(

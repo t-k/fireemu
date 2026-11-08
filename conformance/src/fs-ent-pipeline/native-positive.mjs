@@ -310,7 +310,7 @@ export async function exportEvidence({ binary, manifest, out }) {
     manifestSha256: digest(entry.bytes),
     localReplays,
   };
-  await writeFile(out, JSON.stringify(result, null, 2) + "\n", { flag: "wx" });
+  await writeFile(out, JSON.stringify(publicEvidence(result), null, 2) + "\n", { flag: "wx" });
   return result;
 }
 if (isMainModule(import.meta)) {
@@ -340,6 +340,7 @@ if (isMainModule(import.meta)) {
   }
 }
 
+import { publicEvidence } from "../evidence.mjs";
 /** Exact inputs for a Root-owned invocation receipt; not a capture of a wire target. */
 export function producerInputs(transport, profile) {
   assert.ok(["strict", "emulator"].includes(profile));

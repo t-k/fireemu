@@ -5,9 +5,16 @@
 // Without supplied local files, reuse record.mjs with the strict profile (including the 35-minute expiry case).
 import { spawnSync, execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from "node:fs";
 import { isDeepStrictEqual } from "node:util";
-import { basename, dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   canonicalRow,
@@ -18,8 +25,36 @@ import {
   recordingProblems,
 } from "./compare.mjs";
 
+import { publicEvidence } from "../evidence.mjs";
 const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 const HERE = dirname(fileURLToPath(import.meta.url));
+const PRIVATE_OUTPUT_ROOT = resolve(ROOT, "target/codex-out");
+const isWithin = (root, path) => {
+  const pathFromRoot = relative(root, path);
+  return (
+    pathFromRoot === "" ||
+    (pathFromRoot !== ".." &&
+      !pathFromRoot.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) &&
+      !isAbsolute(pathFromRoot))
+  );
+};
+const isPrivateOutput = (path) => {
+  if (!isWithin(PRIVATE_OUTPUT_ROOT, path) || path === PRIVATE_OUTPUT_ROOT) return false;
+  try {
+    if (lstatSync(path).isSymbolicLink()) return false;
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  let existing = dirname(path);
+  while (!existsSync(existing)) existing = dirname(existing);
+  const repository = realpathSync(ROOT);
+  const privateRoot = realpathSync(PRIVATE_OUTPUT_ROOT);
+  const physicalExisting = realpathSync(existing);
+  return (
+    privateRoot === resolve(repository, "target/codex-out") &&
+    isWithin(privateRoot, physicalExisting)
+  );
+};
 const RUNS = [
   [
     "native",
@@ -101,6 +136,7 @@ export async function closureEvidence(options) {
     ),
     dirty: git("status", "--porcelain", "--", "conformance") !== "",
   };
+  const privateOutput = isPrivateOutput(out) && isPrivateOutput(summaryPath);
   const localFiles = {};
   for (const kind of ["native", "l1b", "sdk", "browser"]) {
     const path = resolve(options[`local-${kind}`] ?? join(work, `${kind}-strict.json`));
@@ -615,6 +651,10 @@ export async function closureEvidence(options) {
       condition.blockers.push(
         "Local binary provenance is not a clean build of the current source head.",
       );
+  if (!privateOutput) {
+    publicEvidence(evidence);
+    if (relative(ROOT, out) === evidence.evidencePath) publicEvidence(closure);
+  }
   mkdirSync(dirname(out), { recursive: true });
   writeFileSync(out, `${JSON.stringify(evidence, null, 2)}\n`);
   if (relative(ROOT, out) === evidence.evidencePath) {

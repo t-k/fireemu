@@ -509,7 +509,7 @@ if (process.env.PYCHECK_PROFILE !== "tasks") {
       [],
     );
     const queueDeletes = journal.filter(
-      (row) => /^delete-queue-/.test(row.id) && row.state === "response-persisted",
+      (row) => row.id?.startsWith("delete-queue-") && row.state === "response-persisted",
     );
     assert.deepEqual(
       queueDeletes.map((row) => row.status),
@@ -742,6 +742,81 @@ if (process.env.PYCHECK_PROFILE !== "tasks") {
     assert.equal(JSON.parse(readback[0]).profile, "tasks");
     assert.equal(JSON.parse(readback[0]).maxRequests, 130);
   });
+
+  // The whole product of the world's four axes for the profile (the PICT model of the ledger generates a pairwise subset of
+  // these 32 rows; every row is run): which of the two queue names Cloud Tasks refuses, what the CLI's debug log shows for the
+  // collection writes, whether the Eventarc channel stands at the baseline, and who deletes the queues.
+  const MATRIX = [];
+  for (const refused of [[], [SDK], [RAW], [SDK, RAW]])
+    for (const writes of ["none", "real"])
+      for (const channel of ["absent", "present"])
+        for (const queuesBy of ["cli-leaves", "cli-deletes"])
+          MATRIX.push({ refused, writes, channel, queuesBy });
+
+  for (const row of MATRIX) {
+    test(`matrix: refused=[${row.refused}] writes=${row.writes} channel=${row.channel} queues=${row.queuesBy}`, async () => {
+      const { world, result } = await go({
+        queueTombstones: new Set(row.refused),
+        cliWrites: row.writes === "real" ? REAL_WRITES : undefined,
+        seedChannels: row.channel === "present" ? ["firebase"] : [],
+        appEngine: false,
+        leaveOnDelete: row.queuesBy === "cli-leaves" ? [`queue:${SDK}`, `queue:${RAW}`] : [],
+      });
+      const refusedLabels = row.refused.map((fn) => `queue-${fn}`).toSorted();
+      // What the run owns is always gone, whatever happened to the deploy: every name read back absent, nothing left in the
+      // world, nothing outside the profile touched.
+      assert.equal(result.cleanup.verified, true);
+      assert.ok(Object.values(result.cleanup.readBack).every((v) => v === true));
+      assert.equal(
+        world.functions.size + world.queues.size + world.packages.size + world.topics.size,
+        0,
+      );
+      assert.deepEqual(
+        world.channels.has("firebase"),
+        row.channel === "present",
+        "the baseline channel is as it was",
+      );
+      assert.deepEqual(
+        world.calls.filter((c) =>
+          /^(POST|PUT|DELETE|PATCH) (pubsub|firestore|eventarcpublishing|eventarc|cloudscheduler)/.test(
+            c,
+          ),
+        ),
+        [],
+      );
+      assert.deepEqual(result.unconfirmedCreates.map((c) => c.label).toSorted(), refusedLabels);
+      const open = row.refused.length > 0 || row.writes === "real";
+      assert.equal(result.closureReady, !open);
+      assert.equal(result.readBackRequired, open);
+      assert.equal(result.outcome, open ? "pycheck-needs-review" : "pycheck-recorded");
+      // Each task goes to a queue only when the queue exists; the judged case follows the raw twin's delivery.
+      for (const fn of [SDK, RAW])
+        assert.equal(result.operations[`task-${fn}`].status, row.refused.includes(fn) ? 404 : 200);
+      assert.equal(
+        result.judged.cases["tasks-request"].status,
+        row.refused.includes(RAW) ? "not-delivered" : "as-expected",
+      );
+      assert.equal(result.frames[SDK] ?? 0, row.refused.includes(SDK) ? 0 : 1);
+      assert.equal(result.frames[RAW] ?? 0, row.refused.includes(RAW) ? 0 : 1);
+      assert.ok(result.attempted <= NORMAL_CEILING + CLEANUP_CEILING);
+      // The read-back (A2) of every row finds the world as the run left it; it closes exactly when nothing was left open.
+      const back = await readbackRun({
+        runId: RUN,
+        projectNumber: NUMBER,
+        bucket: result.bucket,
+        uploadObjects: [],
+        baseline: result.inventory.before,
+        enabled: [],
+        channel: result.cleanup.channel,
+        carried: [],
+        accessToken: "test-token-abcdefgh",
+        save: async () => {},
+        send: world.send,
+      });
+      assert.equal(back.allAbsent, true);
+      assert.equal(back.inventory.baseline, true);
+    });
+  }
 
   test("the read-back (A2) of a clean run closes, and reads the profile's names only", async () => {
     const { world, result } = await go(CLI_LEAVES_QUEUES);

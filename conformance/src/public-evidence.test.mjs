@@ -271,6 +271,11 @@ test("the historical daemonLog may name only the binding's own paths", async (t)
     "\n  note: file:///srv/secret.json\n",
     "\n  note: http://127.0.0.1:1/../srv/secret.json\n",
     "\n  note: http://example.com/srv\n",
+    // Punctuation inside a name does not split it.
+    "\n  note: /v1/rules,private.json\n",
+    "\n  note: /[secret.json]\n",
+    "\n  note: /health/live;/srv/x\n",
+    "\n  note: (/srv/x)\n",
     "\n  note: C:\\Users\\someone\\secret.json\n",
     // Only the exact exempt path is masked: a dot in it matches no other character.
     "\n  binary: /tmp/fireemu-verifyXx/fireemu try ✓/bin/fireemu\n",

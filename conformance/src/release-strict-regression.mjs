@@ -1191,8 +1191,9 @@ function withoutHistoricalBindingPaths(comparison) {
     // The generic guard recognises only some path forms inside prose, so the banner fails closed:
     // after masking, every word holding a slash, a backslash or a leading tilde must be one of the
     // banner's routes or a loopback URL.
-    for (const word of maskedLog.split(/[\s()[\];,]+/)) {
-      const trimmed = word.replace(/[.,:]+$/, "");
+    for (const word of maskedLog.split(/\s+/)) {
+      // Only punctuation at the edges of a word is prose; inside a word it may be part of a name.
+      const trimmed = word.replace(/^[([]+/, "").replace(/[)\];,.:]+$/, "");
       if (!/[\\/]|^~/.test(trimmed)) continue;
       if (DAEMON_LOG_ROUTES.has(trimmed) || LOOPBACK_URL.test(trimmed)) continue;
       throw new Error("public evidence contains a disallowed filesystem path in daemonLog");

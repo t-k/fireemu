@@ -101,13 +101,39 @@ class RunnerContractTest(unittest.TestCase):
             self.assertEqual(events[5], ("android-adb-server", "10000-19999"))
 
     def test_disappearing_owned_process_is_already_clean(self):
-        with patch.object(run.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "owned command\n")), patch.object(run.os, "kill", side_effect=ProcessLookupError):
-            run.stop(12345, "owned command")
+        with patch.object(run.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "S Sun Nov  8 10:00:00 2026\n")), patch.object(run.os, "kill", side_effect=ProcessLookupError):
+            run.stop(12345, "Sun Nov  8 10:00:00 2026")
 
-    def test_changed_pid_command_is_not_signaled(self):
-        with patch.object(run.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "another command\n")), patch.object(run.os, "kill") as kill:
-            run.stop(12345, "owned command")
+    def test_reused_pid_with_another_start_time_is_not_signaled(self):
+        with patch.object(run.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "S Sun Nov  8 11:00:00 2026\n")), patch.object(run.os, "kill") as kill:
+            run.stop(12345, "Sun Nov  8 10:00:00 2026")
             kill.assert_not_called()
+
+    def test_real_process_with_a_different_recorded_start_is_left_alone(self):
+        process = subprocess.Popen(["python3", "-c", "import time; time.sleep(60)"])
+        try:
+            real = None
+            for _ in range(100):
+                real = run.process_start(process.pid)
+                if real:
+                    break
+                time.sleep(0.02)
+            run.stop(process.pid, "Mon Jan  1 00:00:00 2001")
+            time.sleep(0.3)
+            self.assertIsNone(process.poll())
+            self.assertEqual(run.process_start(process.pid), real)
+        finally:
+            process.kill()
+            process.wait()
+
+    def test_zombie_does_not_count_as_a_live_identity(self):
+        with patch.object(run.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "Z+ Sun Nov  8 10:00:00 2026\n")):
+            self.assertIsNone(run.process_start(1))
+
+    def test_ps_failure_is_not_read_as_gone(self):
+        with patch.object(run.subprocess, "run", return_value=subprocess.CompletedProcess([], 2, "")):
+            with self.assertRaises(RuntimeError):
+                run.process_start(1)
 
     def test_owned_adb_server_excludes_external_key_override(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -225,6 +251,29 @@ class RunnerContractTest(unittest.TestCase):
                 except ProcessLookupError:
                     pass
 
+    def wait_for(self, path):
+        for _ in range(500):
+            if path.exists() and path.read_text():
+                return int(path.read_text())
+            time.sleep(0.02)
+        self.fail("marker not written")
+
+    def alive(self, pid):
+        try:
+            os.kill(pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+
+    def kill_all(self, pids):
+        for pid in pids:
+            if pid is not None:
+                for kill in (os.killpg, os.kill):
+                    try:
+                        kill(pid, signal.SIGKILL)
+                    except (ProcessLookupError, PermissionError):
+                        pass
+
     def test_observed_separate_group_stops_before_release(self):
         # The parent stays alive until the scan, then exits; its child has its own session
         # (as fireemu's client does) and outlives it, so only the recorded pgid can reach it.
@@ -234,147 +283,41 @@ class RunnerContractTest(unittest.TestCase):
             child_code = "import os,subprocess,sys,time; os.setsid(); open(sys.argv[1], 'w').write(str(os.getpid())); [time.sleep(0.02) for _ in range(500) if not os.path.exists(sys.argv[1] + '.go')]; subprocess.Popen([sys.executable, '-c', 'import os,sys,time; open(sys.argv[1], \\'w\\').write(str(os.getpid())); time.sleep(60)', sys.argv[1] + '.grand']); time.sleep(60)"
             parent_code = "import os,subprocess,sys,time; subprocess.Popen([sys.executable, '-c', sys.argv[3], sys.argv[1]]); [time.sleep(0.02) for _ in range(500) if not os.path.exists(sys.argv[2])]"
             parent = subprocess.Popen(["python3", "-c", parent_code, str(marker), str(go), child_code], start_new_session=True)
-            child = None
+            child = grandchild = None
             try:
-                for _ in range(250):
-                    if marker.exists() and marker.read_text():
-                        break
-                    time.sleep(0.02)
-                child = int(marker.read_text())
+                child = self.wait_for(marker)
                 self.assertEqual(os.getpgid(child), child)
-                groups = {parent.pid}
+                groups = {}
                 owned = run.descendants(parent.pid, groups)
-                self.assertEqual(groups, {parent.pid, child})
+                self.assertEqual(set(groups), {child})
                 # A process the child forks after the scan is in the child's group but not in `owned`.
                 Path(str(marker) + ".go").touch()
-                grand_marker = Path(str(marker) + ".grand")
-                for _ in range(250):
-                    if grand_marker.exists() and grand_marker.read_text():
-                        break
-                    time.sleep(0.02)
-                grandchild = int(grand_marker.read_text())
+                grandchild = self.wait_for(Path(str(marker) + ".grand"))
                 self.assertNotIn(grandchild, owned)
                 self.assertEqual(os.getpgid(grandchild), child)
                 go.touch()
                 parent.wait(timeout=5)
-                self.assertEqual(os.getpgid(child), child)
                 alive_at_release = []
-                def release(_command):
-                    try:
-                        os.killpg(child, 0)
-                        alive_at_release.append(True)
-                    except ProcessLookupError:
-                        alive_at_release.append(False)
-                with patch.object(run, "TOOL", work), patch.object(run, "checked", side_effect=release), contextlib.redirect_stdout(io.StringIO()):
+                with patch.object(run, "TOOL", work), patch.object(run, "checked", side_effect=lambda _command: alive_at_release.append([self.alive(child), self.alive(grandchild)])), contextlib.redirect_stdout(io.StringIO()):
                     run.cleanup(owned, [(parent, io.StringIO())], [{"token": "fixture"}], ["registry"], work, Mock(), lambda: None, groups=groups)
-                self.assertEqual(alive_at_release, [False])
-                with self.assertRaises(ProcessLookupError):
-                    os.kill(grandchild, 0)
-            finally:
-                for pid in [parent.pid, child]:
-                    if pid is not None:
-                        try:
-                            os.killpg(pid, signal.SIGKILL)
-                        except (ProcessLookupError, PermissionError):
-                            pass
-
-    def test_descendant_of_an_exited_root_is_still_scanned(self):
-        # A (launched) creates B in its own session and exits; B stays alive and later
-        # creates C in yet another session. C must be found by a later scan and stopped
-        # before the leases are released.
-        with tempfile.TemporaryDirectory() as temp:
-            work = Path(temp)
-            b_marker, a_go, b_go = work / "b", work / "a-go", work / "b-go"
-            c_code = "import os,sys,time; os.setsid(); open(sys.argv[1], 'w').write(str(os.getpid())); time.sleep(60)"
-            b_code = "import os,subprocess,sys,time; os.setsid(); open(sys.argv[1], 'w').write(str(os.getpid())); [time.sleep(0.02) for _ in range(1000) if not os.path.exists(sys.argv[2])]; subprocess.Popen([sys.executable, '-c', sys.argv[3], sys.argv[1] + '.c']); time.sleep(60)"
-            a_code = "import os,subprocess,sys,time; subprocess.Popen([sys.executable, '-c', sys.argv[4], sys.argv[1], sys.argv[3], sys.argv[5]]); [time.sleep(0.02) for _ in range(1000) if not os.path.exists(sys.argv[2])]"
-            launched = subprocess.Popen(["python3", "-c", a_code, str(b_marker), str(a_go), str(b_go), b_code, c_code], start_new_session=True)
-            b = c = None
-            try:
-                def wait_for(path):
-                    for _ in range(500):
-                        if path.exists() and path.read_text():
-                            return int(path.read_text())
-                        time.sleep(0.02)
-                    self.fail("marker not written")
-                b = wait_for(b_marker)
-                owned, groups, starts = {}, set(), {}
-                children = [(launched, io.StringIO())]
-                run.observe_owned(children, owned, groups, starts)
-                self.assertIn(b, owned)
-                a_go.touch()
-                launched.wait(timeout=5)
-                self.assertIsNotNone(launched.poll())
-                b_go.touch()
-                c = wait_for(Path(str(b_marker) + ".c"))
-                self.assertEqual(os.getpgid(c), c)
-                self.assertNotIn(c, groups)
-                alive_at_release = []
-                def release(_command):
-                    alive_at_release.append([self.alive(b), self.alive(c)])
-                with patch.object(run, "TOOL", work), patch.object(run, "checked", side_effect=release), contextlib.redirect_stdout(io.StringIO()):
-                    run.cleanup(owned, children, [{"token": "fixture"}], ["registry"], work, Mock(), lambda: run.observe_owned(children, owned, groups, starts), groups=groups)
                 self.assertEqual(alive_at_release, [[False, False]])
             finally:
-                for pid in [launched.pid, b, c]:
-                    if pid is not None:
-                        try:
-                            os.killpg(pid, signal.SIGKILL)
-                        except (ProcessLookupError, PermissionError):
-                            pass
-                        try:
-                            os.kill(pid, signal.SIGKILL)
-                        except (ProcessLookupError, PermissionError):
-                            pass
-
-    def alive(self, pid):
-        try:
-            os.kill(pid, 0)
-            return True
-        except ProcessLookupError:
-            return False
-
-    def test_reused_pid_is_not_traversed(self):
-        gone = Mock(poll=Mock(return_value=0), pid=111)
-        owned, groups, starts = {222: "old command"}, set(), {222: "Sun Nov  8 10:00:00 2026"}
-        with patch.object(run, "process_start", return_value="Sun Nov  8 11:00:00 2026"), patch.object(run, "descendants") as scan:
-            run.observe_owned([(gone, io.StringIO())], owned, groups, starts)
-        scan.assert_not_called()
-        self.assertEqual(groups, set())
-
-    def test_matching_start_time_keeps_an_owned_pid_in_the_scan(self):
-        gone = Mock(poll=Mock(return_value=0), pid=111)
-        owned, groups, starts = {222: "old command", 333: "child"}, set(), {222: "Sun Nov  8 10:00:00 2026", 333: "Sun Nov  8 10:00:00 2026"}
-        with patch.object(run, "process_start", return_value="Sun Nov  8 10:00:00 2026"), patch.object(run, "descendants", return_value={333: "child"}) as scan:
-            run.observe_owned([(gone, io.StringIO())], owned, groups, starts)
-        # 333 was found under 222 in the same pass, so it is not scanned a second time.
-        scan.assert_called_once_with(222, groups, starts)
-        self.assertEqual(owned[333], "child")
+                self.kill_all([parent.pid, child, grandchild])
 
     def test_descendant_scan_records_every_group_it_sees(self):
         with tempfile.TemporaryDirectory() as temp:
             marker = Path(temp) / "child"
             code = "import os,subprocess,sys,time; subprocess.Popen([sys.executable, '-c', 'import os,sys,time; os.setsid(); open(sys.argv[1], \\'w\\').write(str(os.getpid())); time.sleep(60)', sys.argv[1]]); time.sleep(60)"
             parent = subprocess.Popen(["python3", "-c", code, str(marker)], start_new_session=True)
+            child = None
             try:
-                for _ in range(250):
-                    if marker.exists() and marker.read_text():
-                        break
-                    time.sleep(0.02)
-                child = int(marker.read_text())
-                groups = set()
+                child = self.wait_for(marker)
+                groups = {}
                 owned = run.descendants(parent.pid, groups)
-                self.assertIn(child, owned)
-                self.assertEqual(groups, {child})
-                without = run.descendants(parent.pid)
-                self.assertIn(child, without)
+                self.assertEqual(owned, {child: run.process_start(child)})
+                self.assertEqual(groups, {child: {child: run.process_start(child)}})
             finally:
-                for pid in [parent.pid, int(marker.read_text() or 0) if marker.exists() else None]:
-                    if pid:
-                        try:
-                            os.killpg(pid, signal.SIGKILL)
-                        except (ProcessLookupError, PermissionError):
-                            pass
+                self.kill_all([parent.pid, child])
                 parent.wait()
 
     def test_sigterm_ignoring_group_is_killed_and_verified(self):
@@ -405,8 +348,7 @@ class RunnerContractTest(unittest.TestCase):
         process = subprocess.Popen(["python3", "-c", "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); print('ready', flush=True); time.sleep(60)"], stdout=subprocess.PIPE, text=True)
         try:
             self.assertEqual(process.stdout.readline().strip(), "ready")
-            command = subprocess.run(["ps", "-p", str(process.pid), "-o", "comm=,args="], capture_output=True, text=True).stdout.strip()
-            run.stop(process.pid, command)
+            run.stop(process.pid, run.process_start(process.pid))
             process.wait(timeout=5)
             self.assertLess(process.returncode, 0)
         finally:
@@ -416,10 +358,10 @@ class RunnerContractTest(unittest.TestCase):
             process.stdout.close()
 
     def test_stop_reports_a_pid_that_survives_sigkill(self):
-        ps = subprocess.CompletedProcess([], 0, "owned command\n")
+        ps = subprocess.CompletedProcess([], 0, "S Sun Nov  8 10:00:00 2026\n")
         with patch.object(run.subprocess, "run", return_value=ps), patch.object(run.os, "kill") as kill, patch.object(run.time, "sleep"):
             with self.assertRaisesRegex(RuntimeError, "survived"):
-                run.stop(12345, "owned command")
+                run.stop(12345, "Sun Nov  8 10:00:00 2026")
         self.assertEqual([call.args[1] for call in kill.call_args_list], [signal.SIGTERM, signal.SIGKILL])
 
     def test_unverifiable_group_keeps_leases(self):
@@ -437,17 +379,233 @@ class RunnerContractTest(unittest.TestCase):
             checked.assert_not_called()
 
     def test_unstoppable_owned_pid_keeps_leases(self):
-        ps = subprocess.CompletedProcess([], 0, "owned command\n")
+        ps = subprocess.CompletedProcess([], 0, "S Sun Nov  8 10:00:00 2026\n")
         with tempfile.TemporaryDirectory() as temp, patch.object(run, "TOOL", Path(temp)), patch.object(run.subprocess, "run", return_value=ps), patch.object(run.os, "kill"), patch.object(run.time, "sleep"), patch.object(run, "checked") as checked, contextlib.redirect_stdout(io.StringIO()):
             with self.assertRaisesRegex(RuntimeError, "stop"):
-                run.cleanup({12345: "owned command"}, [], [{"token": "fixture"}], ["registry"], Path(temp), Mock(), lambda: None)
+                run.cleanup({12345: "Sun Nov  8 10:00:00 2026"}, [], [{"token": "fixture"}], ["registry"], Path(temp), Mock(), lambda: None)
             checked.assert_not_called()
 
     def test_runner_never_signals_its_own_process_group(self):
         process = Mock(pid=os.getpgrp())
         with tempfile.TemporaryDirectory() as temp, patch.object(run, "TOOL", Path(temp)), patch.object(run.os, "killpg") as killpg, patch.object(run, "checked"), contextlib.redirect_stdout(io.StringIO()):
-            run.cleanup({}, [(process, io.StringIO())], [], ["registry"], Path(temp), Mock(), lambda: None, groups={os.getpgrp(), 0, 1})
+            run.cleanup({}, [(process, io.StringIO())], [], ["registry"], Path(temp), Mock(), lambda: None, groups={os.getpgrp(): {}, 0: {}, 1: {}})
             killpg.assert_not_called()
+
+    def test_descendant_of_an_exited_root_is_still_scanned(self):
+        # A (launched) creates B in its own session and exits; B stays alive and later
+        # creates C in yet another session. C must be found by a later scan and stopped
+        # before the leases are released.
+        with tempfile.TemporaryDirectory() as temp:
+            work = Path(temp)
+            b_marker, a_go, b_go = work / "b", work / "a-go", work / "b-go"
+            c_code = "import os,sys,time; os.setsid(); open(sys.argv[1], 'w').write(str(os.getpid())); time.sleep(60)"
+            b_code = "import os,subprocess,sys,time; os.setsid(); open(sys.argv[1], 'w').write(str(os.getpid())); [time.sleep(0.02) for _ in range(1000) if not os.path.exists(sys.argv[2])]; subprocess.Popen([sys.executable, '-c', sys.argv[3], sys.argv[1] + '.c']); time.sleep(60)"
+            a_code = "import os,subprocess,sys,time; subprocess.Popen([sys.executable, '-c', sys.argv[4], sys.argv[1], sys.argv[3], sys.argv[5]]); [time.sleep(0.02) for _ in range(1000) if not os.path.exists(sys.argv[2])]"
+            launched = subprocess.Popen(["python3", "-c", a_code, str(b_marker), str(a_go), str(b_go), b_code, c_code], start_new_session=True)
+            b = c = None
+            try:
+                b = self.wait_for(b_marker)
+                owned, groups = {}, {}
+                children = [(launched, io.StringIO())]
+                run.observe_owned(children, owned, groups)
+                self.assertIn(b, owned)
+                a_go.touch()
+                launched.wait(timeout=5)
+                self.assertIsNotNone(launched.poll())
+                b_go.touch()
+                c = self.wait_for(Path(str(b_marker) + ".c"))
+                self.assertEqual(os.getpgid(c), c)
+                self.assertNotIn(c, groups)
+                alive_at_release = []
+                with patch.object(run, "TOOL", work), patch.object(run, "checked", side_effect=lambda _command: alive_at_release.append([self.alive(b), self.alive(c)])), contextlib.redirect_stdout(io.StringIO()):
+                    run.cleanup(owned, children, [{"token": "fixture"}], ["registry"], work, Mock(), lambda: run.observe_owned(children, owned, groups), groups=groups)
+                self.assertEqual(alive_at_release, [[False, False]])
+            finally:
+                self.kill_all([launched.pid, b, c])
+
+    def test_setsid_and_exec_after_observation_is_still_stopped(self):
+        # A forks B in A's group and B is observed there. A exits. B then setsid()s and
+        # exec()s into a different program (new group, new command). Cleanup must still
+        # find B by (pid, start time) and stop it before the leases are released.
+        with tempfile.TemporaryDirectory() as temp:
+            work = Path(temp)
+            b_marker, a_go, b_go = work / "b", work / "a-go", work / "b-go"
+            b_code = "import os,sys,time; open(sys.argv[1], 'w').write(str(os.getpid())); [time.sleep(0.02) for _ in range(1000) if not os.path.exists(sys.argv[2])]; os.setsid(); os.execvp('python3', ['python3', '-c', 'import time; time.sleep(60)', 'server']);"
+            a_code = "import os,subprocess,sys,time; subprocess.Popen([sys.executable, '-c', sys.argv[4], sys.argv[1], sys.argv[3]]); [time.sleep(0.02) for _ in range(1000) if not os.path.exists(sys.argv[2])]"
+            launched = subprocess.Popen(["python3", "-c", a_code, str(b_marker), str(a_go), str(b_go), b_code], start_new_session=True)
+            b = None
+            try:
+                b = self.wait_for(b_marker)
+                self.assertEqual(os.getpgid(b), launched.pid)
+                owned, groups = {}, {}
+                children = [(launched, io.StringIO())]
+                run.observe_owned(children, owned, groups)
+                self.assertEqual(set(groups), {launched.pid})
+                a_go.touch()
+                launched.wait(timeout=5)
+                b_go.touch()
+                for _ in range(500):
+                    if os.getpgid(b) == b and "server" in subprocess.run(["ps", "-p", str(b), "-o", "args="], capture_output=True, text=True).stdout:
+                        break
+                    time.sleep(0.02)
+                self.assertEqual(os.getpgid(b), b)
+                alive_at_release = []
+                with patch.object(run, "TOOL", work), patch.object(run, "checked", side_effect=lambda _command: alive_at_release.append(self.alive(b))), contextlib.redirect_stdout(io.StringIO()):
+                    run.cleanup(owned, children, [{"token": "fixture"}], ["registry"], work, Mock(), lambda: run.observe_owned(children, owned, groups), groups=groups)
+                self.assertEqual(alive_at_release, [False])
+            finally:
+                self.kill_all([launched.pid, b])
+
+    def test_daemon_forked_while_the_group_is_terminating_is_still_stopped(self):
+        # The second scan runs after the SIGTERM grace period, like a dying server that forked a daemon.
+        # The daemon is detached (reparented to init) so that nothing here has to reap it.
+        spawner = "import subprocess,sys; print(subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], start_new_session=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).pid)"
+        process = Mock(pid=int(subprocess.run(["python3", "-c", spawner], capture_output=True, text=True).stdout), kill=lambda: None, wait=lambda: None)
+        try:
+            started = None
+            for _ in range(100):
+                started = run.process_start(process.pid)
+                if started:
+                    break
+                time.sleep(0.02)
+            calls = []
+            owned, groups = {}, {}
+            def observe():
+                calls.append(1)
+                if len(calls) == 2:
+                    groups[process.pid] = {process.pid: started}
+            released = []
+            with tempfile.TemporaryDirectory() as temp, patch.object(run, "TOOL", Path(temp)), patch.object(run, "checked", side_effect=lambda _command: released.append(self.alive(process.pid))), contextlib.redirect_stdout(io.StringIO()):
+                run.cleanup(owned, [], [{"token": "fixture"}], ["registry"], Path(temp), Mock(), observe, groups=groups)
+            self.assertEqual(len(calls), 2)
+            self.assertEqual(released, [False])
+        finally:
+            self.kill_all([process.pid])
+
+    def test_group_whose_leader_pid_was_reused_is_not_signaled(self):
+        # The recorded member's start time no longer matches: the group id now belongs to
+        # an unrelated process, which cleanup must leave alone without failing.
+        stranger = subprocess.Popen(["python3", "-c", "import time; time.sleep(60)"], start_new_session=True)
+        try:
+            real = None
+            for _ in range(100):
+                real = run.process_start(stranger.pid)
+                if real:
+                    break
+                time.sleep(0.02)
+            released = []
+            with tempfile.TemporaryDirectory() as temp, patch.object(run, "TOOL", Path(temp)), patch.object(run, "checked", side_effect=lambda _command: released.append(1)), contextlib.redirect_stdout(io.StringIO()):
+                run.cleanup({stranger.pid: "Mon Jan  1 00:00:00 2001"}, [], [{"token": "fixture"}], ["registry"], Path(temp), Mock(), lambda: None, groups={stranger.pid: {stranger.pid: "Mon Jan  1 00:00:00 2001"}})
+            time.sleep(0.3)
+            self.assertIsNone(stranger.poll())
+            self.assertEqual(released, [1])
+        finally:
+            stranger.kill()
+            stranger.wait()
+
+    def test_live_group_whose_recorded_members_are_all_gone_is_unproven_and_keeps_leases(self):
+        stranger = subprocess.Popen(["python3", "-c", "import time; time.sleep(60)"], start_new_session=True)
+        try:
+            with tempfile.TemporaryDirectory() as temp, patch.object(run, "TOOL", Path(temp)), patch.object(run, "checked") as checked, contextlib.redirect_stdout(io.StringIO()):
+                with self.assertRaisesRegex(RuntimeError, "stop-group"):
+                    run.cleanup({}, [], [{"token": "fixture"}], ["registry"], Path(temp), Mock(), lambda: None, groups={stranger.pid: {2 ** 22 + 12345: "Mon Jan  1 00:00:00 2001"}})
+                checked.assert_not_called()
+            self.assertIsNone(stranger.poll())
+        finally:
+            stranger.kill()
+            stranger.wait()
+
+    def test_ownership_check_failure_still_signals_launched_groups_and_keeps_leases(self):
+        process = subprocess.Popen(["python3", "-c", "import time; time.sleep(60)"], start_new_session=True)
+        try:
+            with tempfile.TemporaryDirectory() as temp, patch.object(run, "TOOL", Path(temp)), patch.object(run, "process_start", side_effect=RuntimeError("ps failed")), patch.object(run, "checked") as checked, contextlib.redirect_stdout(io.StringIO()):
+                with self.assertRaisesRegex(RuntimeError, "refresh"):
+                    run.cleanup({}, [(process, io.StringIO())], [{"token": "fixture"}], ["registry"], Path(temp), Mock(), lambda: None, groups={process.pid + 1: {process.pid + 1: "x"}})
+                checked.assert_not_called()
+            self.assertIsNotNone(process.poll())
+        finally:
+            self.kill_all([process.pid])
+            process.wait()
+
+    def test_stop_never_signals_the_runner(self):
+        started = run.process_start(os.getpid())
+        with patch.object(run.os, "kill") as kill:
+            run.stop(os.getpid(), started)
+        kill.assert_not_called()
+
+    def test_member_that_moved_to_another_group_does_not_prove_the_old_group(self):
+        # S leads a live group. B is recorded as a member of S's group but sits in its own session.
+        leader = subprocess.Popen(["python3", "-c", "import time; time.sleep(60)"], start_new_session=True)
+        mover = subprocess.Popen(["python3", "-c", "import time; time.sleep(60)"], start_new_session=True)
+        try:
+            for _ in range(100):
+                started = run.process_start(mover.pid)
+                if started and run.process_start(leader.pid):
+                    break
+                time.sleep(0.02)
+            released = []
+            with tempfile.TemporaryDirectory() as temp, patch.object(run, "TOOL", Path(temp)), patch.object(run, "checked", side_effect=lambda _command: released.append(1)), contextlib.redirect_stdout(io.StringIO()):
+                run.cleanup({}, [], [{"token": "fixture"}], ["registry"], Path(temp), Mock(), lambda: None, groups={leader.pid: {mover.pid: started}})
+            time.sleep(0.3)
+            self.assertIsNone(leader.poll())
+            self.assertEqual(released, [1])
+        finally:
+            self.kill_all([leader.pid, mover.pid])
+            leader.wait()
+            mover.wait()
+
+    def test_dead_recorded_group_is_not_a_failure(self):
+        released = []
+        with tempfile.TemporaryDirectory() as temp, patch.object(run, "TOOL", Path(temp)), patch.object(run, "checked", side_effect=lambda _command: released.append(1)), contextlib.redirect_stdout(io.StringIO()):
+            run.cleanup({}, [], [{"token": "fixture"}], ["registry"], Path(temp), Mock(), lambda: None, groups={2 ** 22 + 99: {2 ** 22 + 98: "Mon Jan  1 00:00:00 2001"}})
+        self.assertEqual(released, [1])
+
+    def test_root_that_does_not_exit_after_cleanup_keeps_leases(self):
+        process = Mock(pid=2 ** 22 + 54321, wait=Mock(side_effect=subprocess.TimeoutExpired("fixture", 5)))
+        with tempfile.TemporaryDirectory() as temp, patch.object(run, "TOOL", Path(temp)), patch.object(run.os, "killpg", side_effect=ProcessLookupError), patch.object(run, "checked") as checked, contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(RuntimeError, "TimeoutExpired"):
+                run.cleanup({}, [(process, io.StringIO())], [{"token": "fixture"}], ["registry"], Path(temp), Mock(), lambda: None)
+            checked.assert_not_called()
+
+    def test_reused_pid_is_dropped_and_not_traversed(self):
+        gone = Mock(poll=Mock(return_value=0), pid=111)
+        owned, groups = {222: "Sun Nov  8 10:00:00 2026"}, {}
+        with patch.object(run, "process_start", return_value="Sun Nov  8 11:00:00 2026"), patch.object(run, "descendants") as scan:
+            run.observe_owned([(gone, io.StringIO())], owned, groups)
+        scan.assert_not_called()
+        self.assertEqual((owned, groups), ({}, {}))
+
+    def test_matching_start_time_keeps_an_owned_pid_in_the_scan(self):
+        gone = Mock(poll=Mock(return_value=0), pid=111)
+        started = "Sun Nov  8 10:00:00 2026"
+        owned, groups = {222: started, 333: started}, {}
+        with patch.object(run, "process_start", return_value=started), patch.object(run.os, "getpgid", return_value=222), patch.object(run, "descendants", return_value={333: started}) as scan:
+            run.observe_owned([(gone, io.StringIO())], owned, groups)
+        # 333 was found under 222 in the same pass, so it is not scanned a second time.
+        scan.assert_called_once_with(222, groups)
+        self.assertEqual(groups, {222: {222: started}})
+
+    def test_scan_refreshes_the_group_of_a_seed_that_moved(self):
+        gone = Mock(poll=Mock(return_value=0), pid=111)
+        started = "Sun Nov  8 10:00:00 2026"
+        owned, groups = {222: started}, {100: {222: started}}
+        with patch.object(run, "process_start", return_value=started), patch.object(run.os, "getpgid", return_value=222), patch.object(run, "descendants", return_value={}):
+            run.observe_owned([(gone, io.StringIO())], owned, groups)
+        self.assertEqual(groups[222], {222: started})
+
+    def test_descendant_scan_truncation_is_an_error(self):
+        def fake(command, **_kwargs):
+            if command[0] == "pgrep":
+                return subprocess.CompletedProcess(command, 0, "\n".join(str(1000 + i) for i in range(150)))
+            return subprocess.CompletedProcess(command, 0, "S Sun Nov  8 10:00:00 2026\n")
+        with patch.object(run.subprocess, "run", side_effect=fake), patch.object(run.os, "getpgid", return_value=5):
+            with self.assertRaisesRegex(RuntimeError, "truncated"):
+                run.descendants(1)
+
+    def test_pgrep_failure_is_an_error_not_an_empty_scan(self):
+        with patch.object(run.subprocess, "run", return_value=subprocess.CompletedProcess([], 3, "")):
+            with self.assertRaisesRegex(RuntimeError, "pgrep"):
+                run.descendants(1)
 
     def backend_result(self, report):
         with tempfile.TemporaryDirectory() as temp:

@@ -31,71 +31,86 @@ def checked(args, **kwargs):
     return subprocess.run(args, check=True, text=True, capture_output=True, timeout=60, **kwargs).stdout
 
 
-def stop(pid, command):
-    current = subprocess.run(["ps", "-p", str(pid), "-o", "comm=,args="], capture_output=True, text=True).stdout.strip()
-    if current and current == command:
-        try:
-            os.kill(pid, signal.SIGTERM)
-        except ProcessLookupError:
-            return
-        for _ in range(30):
-            if subprocess.run(["ps", "-p", str(pid), "-o", "comm="], capture_output=True, text=True).returncode:
-                return
-            time.sleep(0.1)
-        current = subprocess.run(["ps", "-p", str(pid), "-o", "comm=,args="], capture_output=True, text=True).stdout.strip()
-        if current == command:
-            try:
-                os.kill(pid, signal.SIGKILL)
-            except ProcessLookupError:
-                return
-            for _ in range(30):
-                current = subprocess.run(["ps", "-p", str(pid), "-o", "comm=,args="], capture_output=True, text=True).stdout.strip()
-                if current != command:
-                    return
-                time.sleep(0.1)
-            raise RuntimeError("process survived cleanup")
-
-
 def process_start(pid):
-    return subprocess.run(["ps", "-p", str(pid), "-o", "lstart="], capture_output=True, text=True).stdout.strip() or None
+    """Return the start time that, with the pid, identifies a live process (None if gone or a zombie)."""
+    result = subprocess.run(["ps", "-p", str(pid), "-o", "stat=,lstart="], capture_output=True, text=True)
+    if result.returncode not in (0, 1):
+        raise RuntimeError("ps failed")
+    stat, _, started = result.stdout.strip().partition(" ")
+    if not stat or stat.startswith("Z"):
+        return None
+    return started.strip() or None
 
 
-def descendants(pid, groups=None, starts=None):
+def stop(pid, started):
+    """Stop the process identified by (pid, start time). A different start time means the pid was reused: not ours."""
+    if pid == os.getpid():
+        return
+    if process_start(pid) != started:
+        return
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    for _ in range(30):
+        if process_start(pid) != started:
+            return
+        time.sleep(0.1)
+    if process_start(pid) != started:
+        return
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return
+    for _ in range(30):
+        if process_start(pid) != started:
+            return
+        time.sleep(0.1)
+    raise RuntimeError("process survived cleanup")
+
+
+def descendants(pid, groups=None):
+    """Return {pid: start time} for every live descendant of pid; record each one's current pgid in groups."""
     result = {}
     todo = [pid]
-    while todo and len(result) < 100:
+    while todo:
+        if len(result) >= 100:
+            raise RuntimeError("descendant scan truncated")
         parent = todo.pop()
-        children = subprocess.run(["pgrep", "-P", str(parent)], capture_output=True, text=True).stdout.split()
-        for child in map(int, children):
-            command = subprocess.run(["ps", "-p", str(child), "-o", "comm=,args="], capture_output=True, text=True).stdout.strip()
-            if command and child not in result:
-                if groups is not None:
-                    try:
-                        groups.add(os.getpgid(child))
-                    except ProcessLookupError:
-                        continue
-                result[child] = command
-                if starts is not None:
-                    # A child of a validated parent is ours now, even if the pid was reused.
-                    starts[child] = process_start(child)
-                todo.append(child)
+        listing = subprocess.run(["pgrep", "-P", str(parent)], capture_output=True, text=True)
+        if listing.returncode not in (0, 1):
+            raise RuntimeError("pgrep failed")
+        for child in map(int, listing.stdout.split()):
+            if child in result:
+                continue
+            started = process_start(child)
+            if started is None:
+                continue
+            try:
+                group = os.getpgid(child)
+            except ProcessLookupError:
+                continue
+            if groups is not None:
+                groups.setdefault(group, {})[child] = started
+            result[child] = started
+            todo.append(child)
     return result
 
 
-def observe_owned(children, owned, groups, starts):
+def observe_owned(children, owned, groups):
     """Scan every live identity-validated owned process, not only the launch roots.
 
-    A launched root may exit while an observed descendant lives on and creates
-    more processes; that descendant keeps being traversed, and every pgid seen
-    is recorded. A pid whose start time changed was reused and is not traversed.
+    Identity of an owned process is (pid, start time); the command is never used.
+    Each scan refreshes the current pgid of every validated seed, because a
+    process may setsid() and exec() after it was first seen. A pid whose start
+    time changed was reused: it is dropped from `owned` and never traversed.
     """
     seeds = []
     for process, _ in children:
         if process.poll() is None:
-            command = subprocess.run(["ps", "-p", str(process.pid), "-o", "comm=,args="], capture_output=True, text=True).stdout.strip()
-            if command:
-                owned[process.pid] = command
-                starts.setdefault(process.pid, process_start(process.pid))
+            started = process_start(process.pid)
+            if started:
+                owned[process.pid] = started  # an unreaped child's pid cannot be reused
                 seeds.append(process.pid)
     seeds += [pid for pid in list(owned) if pid not in seeds]
     covered = set()
@@ -103,12 +118,27 @@ def observe_owned(children, owned, groups, starts):
         if pid in covered:
             continue
         started = process_start(pid)
-        if started is None or starts.get(pid) != started:
+        if started is None:
             continue
-        found = descendants(pid, groups, starts)
+        if owned.get(pid) != started:
+            owned.pop(pid, None)
+            continue
+        try:
+            group = os.getpgid(pid)
+        except ProcessLookupError:
+            continue
+        groups.setdefault(group, {})[pid] = started
+        found = descendants(pid, groups)
         owned.update(found)
         covered.add(pid)
         covered.update(found)
+
+
+def member_of(group, pid, started):
+    try:
+        return process_start(pid) == started and os.getpgid(pid) == group
+    except ProcessLookupError:
+        return False
 
 
 def group_alive(group):
@@ -166,8 +196,29 @@ def cleanup(owned, children, leases, registry, work, temporary, observe, primary
     attempt("observe", observe)
     # An unobserved descendant tree cannot be proven stopped.
     owned_stopped = len(failures) == observe_failures
-    pgids = {process.pid for process, _ in children} | set(groups or ())
-    pgids = sorted(group for group in pgids if group > 1 and group != os.getpgrp())
+    groups = groups if groups is not None else {}
+    # A launched root's group is ours by construction; any other group is ours
+    # only while a recorded (pid, start time) member is still in it.
+    proven = {process.pid for process, _ in children}
+    unproven = set()
+
+    def eligible(group):
+        return group > 1 and group != os.getpgrp()
+
+    def targets():
+        return [group for group in sorted(proven) if eligible(group)]
+
+    def refresh():
+        unproven.clear()
+        for group, members in list(groups.items()):
+            if group in proven or not eligible(group):
+                continue
+            if any(member_of(group, pid, started) for pid, started in list(members.items())):
+                proven.add(group)
+            elif all(process_start(pid) is None for pid in members) and group_alive(group):
+                # Every recorded member is gone but the group lives: it may hold
+                # stragglers of ours, yet the id may also have been reused.
+                unproven.add(group)
 
     def settle(pending, deadline_ticks):
         for _ in range(deadline_ticks):
@@ -181,29 +232,53 @@ def cleanup(owned, children, leases, registry, work, temporary, observe, primary
 
     def signal_groups(pending, number):
         for group in pending:
+            if not eligible(group):
+                continue
             try:
                 os.killpg(group, number)
             except ProcessLookupError:
                 pass
 
+    def safe_refresh():
+        # A failed ownership check must not stop us from signalling the launched groups.
+        nonlocal owned_stopped
+        try:
+            refresh()
+        except BaseException as error:
+            owned_stopped = False
+            failures.append(("refresh", type(error).__name__))
+
     try:
-        signal_groups(pgids, signal.SIGTERM)
-        remaining = settle(pgids, 30)
+        safe_refresh()
+        signal_groups(targets(), signal.SIGTERM)
+        settle(targets(), 30)
+        # A dying process may have forked a daemon during the grace period.
+        rescan = len(failures)
+        attempt("observe", observe)
+        if len(failures) != rescan:
+            owned_stopped = False
+        safe_refresh()
+        remaining = [group for group in targets() if group_alive(group)]
         if remaining:
             signal_groups(remaining, signal.SIGKILL)
             remaining = settle(remaining, 30)
         if remaining:
             raise RuntimeError("process group survived cleanup")
+        if unproven:
+            raise RuntimeError("process group ownership unproven")
     except BaseException as error:
         owned_stopped = False
         failures.append(("stop-group", type(error).__name__))
-    for pid, command in reversed(list(owned.items())):
+    for pid, started in reversed(list(owned.items())):
         before = len(failures)
-        attempt("stop", lambda: stop(pid, command))
+        attempt("stop", lambda: stop(pid, started))
         if len(failures) != before:
             owned_stopped = False
     for process, stream in children:
+        before = len(failures)
         attempt("wait", lambda: process.wait(timeout=5))
+        if len(failures) != before and failures[-1][1] == "TimeoutExpired":
+            owned_stopped = False
         attempt("stream-close", stream.close)
     diagnostics = TOOL / "build/diagnostics" / str(time.time_ns())
     attempt("diagnostics-directory", lambda: diagnostics.mkdir(parents=True))
@@ -256,8 +331,7 @@ def run(args):
     leases = []
     allocated = set()
     owned = {}
-    groups = set()
-    starts = {}
+    groups = {}
     children = []
     temporary = tempfile.TemporaryDirectory(prefix="android-run-", dir=TOOL / "build")
     work = Path(temporary.name)
@@ -324,11 +398,11 @@ def run(args):
             stream.close()
             raise
         children.append((process, stream))
-        groups.add(process.pid)
+        groups.setdefault(process.pid, {})
         return process
 
     def observe():
-        observe_owned(children, owned, groups, starts)
+        observe_owned(children, owned, groups)
         if owned:
             rss = subprocess.run(["ps", "-p", ",".join(map(str, owned)), "-o", "rss="], capture_output=True, text=True).stdout.split()
             if sum(map(int, rss)) > 8 * 1024 * 1024:

@@ -12,6 +12,30 @@ use crate::ast::{FunctionDecl, Item};
 std::thread_local! { pub(crate) static PLAN_BUILDS: core::cell::Cell<usize> = const { core::cell::Cell::new(0) }; }
 
 #[cfg(test)]
+std::thread_local! {
+    pub(crate) static BUILD_OBSERVER: core::cell::RefCell<Option<Arc<std::sync::atomic::AtomicUsize>>> = const { core::cell::RefCell::new(None) };
+}
+
+/// Keeps test observations independent while allowing a parser or evaluator child thread to
+/// report to the observation that explicitly admitted it.
+#[cfg(test)]
+pub(crate) struct BuildObservation(Option<Arc<std::sync::atomic::AtomicUsize>>);
+
+#[cfg(test)]
+impl BuildObservation {
+    pub(crate) fn enter(observer: Option<Arc<std::sync::atomic::AtomicUsize>>) -> Self {
+        Self(BUILD_OBSERVER.with(|active| active.replace(observer)))
+    }
+}
+
+#[cfg(test)]
+impl Drop for BuildObservation {
+    fn drop(&mut self) {
+        BUILD_OBSERVER.with(|active| active.replace(self.0.take()));
+    }
+}
+
+#[cfg(test)]
 std::thread_local! { pub(crate) static LEGACY_EVALUATION: core::cell::Cell<bool> = const { core::cell::Cell::new(false) }; }
 
 #[cfg(test)]
@@ -50,6 +74,12 @@ impl ServiceScopes {
     pub(crate) fn compile(items: &[Item]) -> Arc<Self> {
         #[cfg(test)]
         PLAN_BUILDS.with(|work| work.set(work.get() + 1));
+        #[cfg(test)]
+        BUILD_OBSERVER.with(|observer| {
+            if let Some(observer) = observer.borrow().as_ref() {
+                observer.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+        });
         let mut plan = Self {
             blocks: Vec::new(),
             declarations: BTreeMap::new(),
@@ -232,7 +262,98 @@ impl<'a> FunctionEnvironment<'a> {
 }
 
 #[cfg(test)]
+pub(crate) fn measurement_iterations(mut operation: impl FnMut()) -> u32 {
+    let mut iterations = 1_024;
+    loop {
+        let started = std::time::Instant::now();
+        for _ in 0..iterations {
+            operation();
+        }
+        if started.elapsed() >= std::time::Duration::from_millis(200) || iterations >= 1_048_576 {
+            return iterations;
+        }
+        iterations *= 2;
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn measurement_sample(
+    label: &str,
+    sample: u32,
+    iterations: u32,
+    mut operation: impl FnMut(),
+) {
+    let started = std::time::Instant::now();
+    for _ in 0..iterations {
+        operation();
+    }
+    let elapsed = started.elapsed();
+    println!(
+        "scope-measure {label} sample={sample} iterations={iterations} elapsed_ns={} mean={:?}",
+        elapsed.as_nanos(),
+        elapsed / iterations
+    );
+}
+
+#[cfg(test)]
+fn measure_operation(label: &str, mut operation: impl FnMut()) {
+    let iterations = measurement_iterations(&mut operation);
+    for sample in 0..5 {
+        measurement_sample(label, sample, iterations, &mut operation);
+    }
+}
+
+#[cfg(test)]
 mod scope_plan_tests {
+    #[test]
+    #[ignore = "bounded release measurement; compilation and parsing are outside timed loops"]
+    fn measure_residual_scope_resolution() {
+        use crate::eval::{evaluate_request, Decision, Method, RequestContext, RulesService};
+        use std::fmt::Write as _;
+        use std::hint::black_box;
+
+        let request = RequestContext {
+            service: RulesService::Firestore,
+            method: Method::Get,
+            path: "/databases/(default)/documents/notes/one".to_owned(),
+            auth: None,
+            resource: None,
+            request_resource: None,
+            time_unix_nanos: 0,
+            abstract_path: false,
+            request_query: None,
+        };
+        for condition in ["true", "inner()"] {
+            for unrelated in [0, 100, 1_000] {
+                let mut source = format!("rules_version = '2'; service cloud.firestore {{ function top() {{ return true; }} match /databases/{{db}}/documents {{ function inner() {{ return top(); }} match /notes/{{id}} {{ allow get: if {condition}; }}");
+                for index in 0..unrelated {
+                    let _ = write!(source, " match /unrelated{index}/{{id}} {{ function helper{index}() {{ return id == 'x'; }} allow get: if helper{index}(); }}");
+                }
+                source.push_str(" } }");
+                let tree = crate::parse::parse_ruleset(&source).unwrap();
+                assert_eq!(evaluate_request(&tree, &request).decision, Decision::Allow);
+                let items = &tree.services[0].items;
+                let compiled = &tree.function_scopes[0];
+                let label = format!("condition={condition} blocks={unrelated}");
+                super::measure_operation(&format!("{label} full"), || {
+                    black_box(evaluate_request(black_box(&tree), black_box(&request)));
+                });
+                super::measure_operation(&format!("{label} first-plan"), || {
+                    let scopes = super::FunctionScopes::new(black_box(items), black_box(compiled));
+                    black_box(scopes.plan());
+                });
+                super::measure_operation(&format!("{label} agrees"), || {
+                    black_box(compiled.agrees(black_box(items), 0));
+                });
+                let cached = super::FunctionScopes::new(items, compiled);
+                cached.plan();
+                super::measure_operation(&format!("{label} cached-plan"), || {
+                    black_box(cached.plan());
+                });
+            }
+        }
+    }
+
     #[test]
     fn parsed_scopes_are_shared_but_mutated_items_are_replanned() {
         let mut ruleset = crate::parse::parse_ruleset("service cloud.firestore { function f() { return true; } match /{id} { function g() { return f(); } allow read: if g(); } }").unwrap();

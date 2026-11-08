@@ -7070,6 +7070,64 @@ service cloud.firestore {
     }
 
     #[test]
+    #[ignore = "bounded release paired measurement of unused declaration and capture setup"]
+    fn measure_unused_declaration_capture_setup() {
+        use std::hint::black_box;
+
+        for depth in [1, 4] {
+            for value_length in [1, 256] {
+                let mut base = String::from("rules_version = '2'; service cloud.firestore {");
+                for level in 0..depth {
+                    let _ = write!(base, " match /{{w{level}}} {{");
+                }
+                base.push_str(" allow get: if true;");
+                let closing = "}".repeat(depth + 1);
+                let absent = parse_ruleset(&format!("{base}{closing}")).unwrap();
+                let present = parse_ruleset(&format!(
+                    "{base} function unused() {{ return w0; }}{closing}"
+                ))
+                .unwrap();
+                let context = RequestContext {
+                    service: RulesService::Firestore,
+                    method: Method::Get,
+                    path: format!("/{}", vec!["x".repeat(value_length); depth].join("/")),
+                    auth: None,
+                    resource: None,
+                    request_resource: None,
+                    time_unix_nanos: 0,
+                    abstract_path: false,
+                    request_query: None,
+                };
+                super::CAPTURE_TABLES.with(|count| count.set(0));
+                let expected = super::evaluate_request_traced(&absent, &context, None);
+                assert_eq!(expected.0.decision, Decision::Allow);
+                assert_eq!(super::CAPTURE_TABLES.with(core::cell::Cell::get), 0);
+                let actual = super::evaluate_request_traced(&present, &context, None);
+                assert_eq!(super::CAPTURE_TABLES.with(core::cell::Cell::get), 1);
+                assert_eq!(format!("{actual:?}"), format!("{expected:?}"));
+                let iterations = crate::scope::measurement_iterations(|| {
+                    black_box(evaluate_request(black_box(&present), black_box(&context)));
+                });
+                for sample in 0..5 {
+                    let order = if sample % 2 == 0 {
+                        [(&absent, "absent"), (&present, "present")]
+                    } else {
+                        [(&present, "present"), (&absent, "absent")]
+                    };
+                    for (tree, declaration) in order {
+                        let label = format!(
+                            "capture depth={depth} bytes={value_length} declaration={declaration}"
+                        );
+                        crate::scope::measurement_sample(&label, sample, iterations, || {
+                            black_box(evaluate_request(black_box(tree), black_box(&context)));
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn accelerated_collections_retain_mixed_nonreflexive_and_nested_fallback() {
         let mut items: Vec<_> = (0..70).map(RulesValue::Int).collect();
         items.extend([

@@ -447,6 +447,208 @@ mod tests {
     const V2: &str = "service cloud.firestore { match /databases/{database}/documents { match /{document=**} { allow read: if true; } } }";
 
     #[test]
+    fn scope_build_observation_crosses_parser_thread_and_counts_services() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let builds = Arc::new(AtomicUsize::new(0));
+        let _observation = crate::scope::BuildObservation::enter(Some(Arc::clone(&builds)));
+        let _control = crate::scope::ServiceScopes::compile(&[]);
+        assert_eq!(
+            builds.load(Ordering::Relaxed),
+            1,
+            "same-thread observation control"
+        );
+        builds.store(0, Ordering::Relaxed);
+        let first = LoadedRules::from_source(V1).unwrap();
+        assert_eq!(
+            builds.load(Ordering::Relaxed),
+            1,
+            "one plan for one parsed service"
+        );
+        let two_services =
+            format!("{V1} service firebase.storage {{ match /{{id}} {{ allow read: if true; }} }}");
+        let _second = LoadedRules::from_source(&two_services).unwrap();
+        assert_eq!(
+            builds.load(Ordering::Relaxed),
+            3,
+            "one additional plan per parsed service"
+        );
+        let slot = RulesetSlot::new(first);
+        let retained = slot.snapshot().unwrap();
+        slot.replace_loaded((*retained.loaded()).clone()).unwrap();
+        slot.clear().unwrap();
+        assert_eq!(
+            builds.load(Ordering::Relaxed),
+            3,
+            "publication and clear reuse compiled input"
+        );
+    }
+
+    #[test]
+    fn scope_build_observers_are_scoped_and_isolated() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let outer = Arc::new(AtomicUsize::new(0));
+        let inner = Arc::new(AtomicUsize::new(0));
+        let _observation = crate::scope::BuildObservation::enter(Some(Arc::clone(&outer)));
+        crate::scope::ServiceScopes::compile(&[]);
+        let unwind = catch_unwind(AssertUnwindSafe(|| {
+            let _nested = crate::scope::BuildObservation::enter(Some(Arc::clone(&inner)));
+            crate::scope::ServiceScopes::compile(&[]);
+            panic!("exercise observation restoration");
+        }));
+        assert!(unwind.is_err());
+        crate::scope::ServiceScopes::compile(&[]);
+        assert_eq!(outer.load(Ordering::Relaxed), 2);
+        assert_eq!(inner.load(Ordering::Relaxed), 1);
+        std::thread::scope(|threads| {
+            for count in [2, 3] {
+                threads.spawn(move || {
+                    let independent = Arc::new(AtomicUsize::new(0));
+                    let _guard =
+                        crate::scope::BuildObservation::enter(Some(Arc::clone(&independent)));
+                    for _ in 0..count {
+                        LoadedRules::from_source(V1).unwrap();
+                    }
+                    assert_eq!(independent.load(Ordering::Relaxed), count);
+                });
+            }
+        });
+        assert_eq!(outer.load(Ordering::Relaxed), 2);
+    }
+
+    fn assert_generation_report(
+        tree: &crate::ast::Ruleset,
+        request: &crate::eval::RequestContext,
+        allowed: bool,
+    ) {
+        use crate::eval::{evaluate_request_traced, Decision};
+        let report = evaluate_request_traced(tree, request, None);
+        assert_eq!(
+            report.0.decision,
+            if allowed {
+                Decision::Allow
+            } else {
+                Decision::Deny(crate::eval::DenyReason::NoMatchingAllow)
+            }
+        );
+        crate::scope::EAGER_SCOPE_SETUP.with(|enabled| enabled.set(true));
+        let eager = evaluate_request_traced(tree, request, None);
+        crate::scope::EAGER_SCOPE_SETUP.with(|enabled| enabled.set(false));
+        crate::scope::LEGACY_EVALUATION.with(|enabled| enabled.set(true));
+        let legacy = evaluate_request_traced(tree, request, None);
+        crate::scope::LEGACY_EVALUATION.with(|enabled| enabled.set(false));
+        assert_eq!(format!("{report:?}"), format!("{eager:?}"));
+        assert_eq!(format!("{report:?}"), format!("{legacy:?}"));
+        for _ in 0..3 {
+            assert_eq!(
+                format!("{:?}", evaluate_request_traced(tree, request, None)),
+                format!("{report:?}")
+            );
+        }
+    }
+
+    #[test]
+    fn function_captures_and_scope_plans_stay_with_retained_generations() {
+        use crate::eval::{Method, RequestContext, RulesService};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        // Pairwise rows cover service, publication, captured value and execution mode.
+        // The first six rows are mandatory reload/restore/concurrent regressions.
+        let cases = [
+            (RulesService::Firestore, "replace", "yes", false),
+            (RulesService::Firestore, "replace", "no", true),
+            (RulesService::Storage, "replace", "yes", true),
+            (RulesService::Firestore, "restore", "yes", true),
+            (RulesService::Storage, "restore", "no", false),
+            (RulesService::Firestore, "clear", "no", true),
+            (RulesService::Storage, "clear", "yes", false),
+        ];
+        for (service, operation, value, parallel) in cases {
+            let service_name = match service {
+                RulesService::Firestore => "cloud.firestore",
+                RulesService::Storage => "firebase.storage",
+            };
+            let source = format!("rules_version = '2'; service {service_name} {{ match /databases/{{db}}/documents/{{id}} {{ function selected() {{ return id == 'yes'; }} function permitted() {{ return selected(); }} match /{{child}} {{ function selected() {{ return false; }} allow get: if permitted(); }} }} }}");
+            let builds = Arc::new(AtomicUsize::new(0));
+            let _guard = crate::scope::BuildObservation::enter(Some(Arc::clone(&builds)));
+            let slot = RulesetSlot::new(LoadedRules::from_source(&source).unwrap());
+            let retained = slot.snapshot().unwrap();
+            assert_eq!(builds.load(Ordering::Relaxed), 1);
+            slot.replace_source(&source.replace("'yes'", "'no'"))
+                .unwrap();
+            let replaced = slot.snapshot().unwrap();
+            assert_eq!(builds.load(Ordering::Relaxed), 2);
+            let retained_tree = retained.ruleset.as_ref().unwrap();
+            let replaced_tree = replaced.ruleset.as_ref().unwrap();
+            assert!(!Arc::ptr_eq(
+                &retained_tree.function_scopes[0],
+                &replaced_tree.function_scopes[0]
+            ));
+            match operation {
+                "restore" => {
+                    slot.replace_loaded((*retained.loaded()).clone()).unwrap();
+                }
+                "clear" => {
+                    slot.clear().unwrap();
+                }
+                _ => {}
+            }
+            let current = slot.snapshot().unwrap();
+            assert_eq!(retained.generation(), 0);
+            assert_eq!(replaced.generation(), 1);
+            assert_eq!(
+                current.generation(),
+                if operation == "replace" { 1 } else { 2 }
+            );
+            if operation == "clear" {
+                assert!(current.ruleset.is_none());
+            } else {
+                let expected_tree = if operation == "restore" {
+                    retained_tree
+                } else {
+                    replaced_tree
+                };
+                assert!(Arc::ptr_eq(
+                    current.ruleset.as_ref().unwrap(),
+                    expected_tree
+                ));
+            }
+            let check = |id: &str| {
+                let _child_guard = crate::scope::BuildObservation::enter(Some(Arc::clone(&builds)));
+                let request = RequestContext {
+                    service,
+                    method: Method::Get,
+                    path: format!("/databases/(default)/documents/{id}/item"),
+                    auth: None,
+                    resource: None,
+                    request_resource: None,
+                    time_unix_nanos: 0,
+                    abstract_path: false,
+                    request_query: None,
+                };
+                for (tree, allowed) in [(retained_tree, id == "yes"), (replaced_tree, id == "no")] {
+                    assert_generation_report(tree, &request, allowed);
+                }
+            };
+            if parallel {
+                std::thread::scope(|threads| {
+                    threads.spawn(|| check("yes"));
+                    threads.spawn(|| check("no"));
+                });
+            } else {
+                check(value);
+                check(if value == "yes" { "no" } else { "yes" });
+            }
+            assert_eq!(
+                builds.load(Ordering::Relaxed),
+                2,
+                "evaluations and publication reuse plans"
+            );
+        }
+    }
+
+    #[test]
     fn cloned_rules_keep_diagnostics_and_publications_independent() {
         let loaded = LoadedRules::from_source(V1).unwrap();
         let mut coverage = crate::coverage::Coverage::default();

@@ -232,6 +232,8 @@ std::thread_local! { pub(crate) static PARSE_CALLS: core::cell::Cell<usize> = co
 pub fn parse_ruleset(src: &str) -> Result<Ruleset, ParseError> {
     #[cfg(test)]
     PARSE_CALLS.with(|calls| calls.set(calls.get() + 1));
+    #[cfg(test)]
+    let build_observer = crate::scope::BUILD_OBSERVER.with(|active| active.borrow().clone());
     // Production compiles expressions 99 levels deep, which the recursive-descent parser
     // follows through about ten frames a level: more than a request thread's stack holds in a
     // debug build. Loading a ruleset is rare, so the parse gets a thread of its own.
@@ -239,7 +241,11 @@ pub fn parse_ruleset(src: &str) -> Result<Ruleset, ParseError> {
         std::thread::Builder::new()
             .name("rules-parse".to_owned())
             .stack_size(PARSE_STACK_BYTES)
-            .spawn_scoped(scope, || parse_ruleset_on_this_thread(src))
+            .spawn_scoped(scope, || {
+                #[cfg(test)]
+                let _observation = crate::scope::BuildObservation::enter(build_observer);
+                parse_ruleset_on_this_thread(src)
+            })
             .map_or_else(
                 |_| parse_ruleset_on_this_thread(src),
                 |handle| {

@@ -9698,7 +9698,12 @@ fn select_store(
             return Ok(store);
         }
     }
-    if let Some(token) = request_refresh_token(body) {
+    let refresh_token = if exchanges_refresh_token {
+        request_refresh_token(body)
+    } else {
+        str_field(body, "refresh_token")
+    };
+    if let Some(token) = refresh_token {
         use fireemu_core_auth::store::RefreshTokenStoreMatch;
 
         match registry.store_for_refresh_token(token) {

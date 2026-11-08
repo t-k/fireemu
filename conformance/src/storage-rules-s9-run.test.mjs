@@ -12,10 +12,12 @@ import { observe, readback } from "./storage-rules-s9/observe.mjs";
 import { BUCKET, ESTIMATED_USD, PROJECT } from "./storage-rules-s9/plan.mjs";
 import {
   adcToken,
+  argValue,
   finish,
   gitState,
   newOutDir,
   pins,
+  productionOptions,
   readbackRun,
   recordProductionRun,
 } from "./storage-rules-s9/run.mjs";
@@ -573,6 +575,40 @@ describe("storage rules s9 read-back of a finished run", () => {
     assert.equal(objectLost.report.unknownReads, 1);
   });
 
+  it("reads at most seventy things unless told otherwise", async () => {
+    const { fake, entry } = await finished();
+    // Three recordings of names would take 85 reads.
+    await assert.rejects(
+      read(fake, entry, baselineName, { options: { recordings: 3 } }),
+      /request budget exhausted/,
+    );
+    const before = fake.world.calls.length;
+    await assert.rejects(
+      readback({
+        target,
+        runId,
+        baseline: baselineName,
+        entry,
+        deps: { net: fake.net, adminHeaders: () => owner },
+        out: sinks().out,
+        recordings: 3,
+      }),
+    );
+    assert.equal(fake.world.calls.length - before, 70);
+  });
+
+  it("reads an unreadable ruleset list as a list that differs", async () => {
+    const { fake, entry } = await finished();
+    const unreadable = await read(fake, entry, baselineName, {
+      net: async (req) =>
+        req.url.includes("/rulesets?")
+          ? { status: 503, headers: {}, body: Buffer.from("{}") }
+          : fake.net(req),
+    });
+    assert.deepEqual(unreadable.report.problems, ["the ruleset list is not the list at entry"]);
+    assert.equal(unreadable.report.unknownReads, 1);
+  });
+
   it("stops at its cap of reads", async () => {
     const { fake, entry } = await finished();
     await assert.rejects(
@@ -588,5 +624,95 @@ describe("storage rules s9 read-back of a finished run", () => {
         .requests,
       31,
     );
+  });
+});
+
+describe("storage rules s9 command line options", () => {
+  it("reads a named option, and nothing when it is missing or last", () => {
+    assert.equal(argValue("out", ["node", "run.mjs", "x", "--out", "dir"]), "dir");
+    assert.equal(argValue("out", ["--other", "dir"]), undefined);
+    assert.equal(argValue("out", ["--out"]), undefined);
+  });
+
+  it("builds the production options, naming the lock paths only when they are given", () => {
+    assert.deepEqual(productionOptions(["--baseline", "absent", "--out", "d"]), {
+      baseline: "absent",
+      outPath: "d",
+    });
+    assert.deepEqual(
+      productionOptions([
+        "--out",
+        "d",
+        "--baseline",
+        "absent",
+        "--lock-dir",
+        "/l",
+        "--legacy-lock",
+        "/g",
+      ]),
+      { baseline: "absent", outPath: "d", lockDir: "/l", legacyLock: "/g" },
+    );
+    assert.deepEqual(
+      productionOptions(["--out", "d", "--baseline", "absent", "--lock-dir", "/l"]),
+      { baseline: "absent", outPath: "d", lockDir: "/l" },
+    );
+    assert.deepEqual(
+      productionOptions(["--out", "d", "--baseline", "absent", "--legacy-lock", "/g"]),
+      { baseline: "absent", outPath: "d", legacyLock: "/g" },
+    );
+    assert.throws(() => productionOptions(["--out", "d"]), /--baseline is required/);
+    assert.throws(() => productionOptions(["--baseline", "absent"]), /--out is required/);
+  });
+
+  it("runs git on this checkout with -C", () => {
+    const calls = [];
+    gitState(cleanExec(calls));
+    for (const call of calls) {
+      assert.equal(call[1][0], "-C");
+      assert.match(call[1][1], /conformance\/src\/storage-rules-s9$/);
+    }
+  });
+});
+
+describe("storage rules s9 run receipts and read-back files", () => {
+  it("carries the start time and the pins in the final report, and in the printed receipt", async () => {
+    const logger = sink();
+    const out = newOutDir(fresh());
+    const full = finish(
+      out,
+      { runId: "r" },
+      { startedAt: "2026-11-08T00:00:00.000Z", gitSha: "g" },
+      { log: logger.log, error: logger.error },
+    );
+    assert.equal(full.startedAt, "2026-11-08T00:00:00.000Z");
+    assert.equal(full.gitSha, "g");
+    assert.equal(JSON.parse(logger.lines[0]).gitSha, "g");
+  });
+
+  it("writes the read-back journal and report as private, formatted files", async () => {
+    const dir = fresh();
+    const seeded = newOutDir(dir);
+    seeded.save("run-header.json", { runId: "sr-0123abcd", baseline: "absent" });
+    seeded.save("entry.json", { baseline: "absent", entryRulesets: [] });
+    await readbackRun({
+      dir,
+      exec: cleanExec(),
+      guardEgress() {},
+      now: () => new Date("2026-11-08T15:30:45.123Z"),
+      reader: async ({ out }) => {
+        out.journal({ phase: "x", n: 1 });
+        out.save("readback.json", { a: 1 });
+        return {};
+      },
+      log: { log() {}, error() {} },
+    });
+    const journal = join(dir, "readback-journal-2026-11-08T153045123Z.jsonl");
+    const report = join(dir, "readback-2026-11-08T153045123Z.json");
+    const line = JSON.parse(readFileSync(journal, "utf8").trim());
+    assert.deepEqual([line.phase, line.n], ["x", 1]);
+    assert.match(line.ts, /^\d{4}-\d\d-\d\dT/);
+    assert.equal(readFileSync(report, "utf8"), '{\n  "a": 1\n}\n');
+    assert.equal(statSync(journal).mode & 0o777, 0o600);
+    assert.equal(statSync(report).mode & 0o777, 0o600);
   });
 });

@@ -66,24 +66,70 @@ async function go({
   seed?.(fake.world);
   const out = sinks();
   const sleeps = [];
+  // The recorder sends one request at a time and waits for each pause: a request that starts while
+  // another is in flight, or while a pause is running, is a missing await.
+  let inflight = 0;
+  let maxInflight = 0;
+  let sleeping = 0;
+  let overlaps = 0;
+  const later = () => new Promise((resolve) => setImmediate(resolve));
   const net = async (req) => {
-    if (intercept) {
-      const answered = await intercept(req, fake.net);
-      if (answered !== undefined) return answered;
+    if (sleeping > 0) overlaps += 1;
+    inflight += 1;
+    maxInflight = Math.max(maxInflight, inflight);
+    try {
+      await later();
+      if (intercept) {
+        const answered = await intercept(req, fake.net);
+        if (answered !== undefined) return answered;
+      }
+      return await fake.net(req);
+    } finally {
+      inflight -= 1;
     }
-    return fake.net(req);
+  };
+  const sleep = async (ms) => {
+    sleeping += 1;
+    sleeps.push(ms);
+    await later();
+    sleeping -= 1;
   };
   const { report } = await observe({
     target,
     runId,
     baseline,
-    deps: { net, adminHeaders: () => owner, sleep: async (ms) => sleeps.push(ms) },
+    deps: { net, adminHeaders: () => owner, sleep },
     out,
     recordings,
     rowFilter,
     caps,
   });
+  assert.equal(maxInflight <= 1, true, "two requests were in flight at once");
+  assert.equal(overlaps, 0, "a request was sent while a pause was running");
   return { ...fake, report, out, sleeps };
+}
+
+/** The number of the request (1-based, in sending order) that carries `label` in a clean run with these options. */
+async function requestNumber(label, options = {}) {
+  const { out } = await go(options);
+  const entry = out.entries.find((e) => e.phase === "before" && e.label === label);
+  assert.ok(entry, `no request labelled ${label}`);
+  return entry.n;
+}
+
+/** An intercept that answers the nth request of the run with `answer` (or throws a transport failure when it is "transport"). */
+function atRequest(n, answer) {
+  let seen = 0;
+  return async (req, inner) => {
+    seen += 1;
+    if (seen !== n) return undefined;
+    if (answer === "transport") throw new Error("reset");
+    if (answer === "after") {
+      await inner(req);
+      throw new Error("lost");
+    }
+    return answer;
+  };
 }
 
 const rootPrefix = `storage-rules-s9/${runId}/`;
@@ -1108,3 +1154,442 @@ describe("storage rules s9 cleanup details", () => {
     assert.deepEqual(one.report.agreement, []);
   });
 });
+
+const enc = encodeURIComponent;
+const toBaselinePatch = (req) =>
+  req.method === "PATCH" &&
+  req.url.includes("/releases/") &&
+  JSON.parse(Buffer.from(req.body)).release.rulesetName === baselineName;
+/** A fresh intercept that refuses the first patch back to the baseline with 400. */
+const refuseFirstBaselinePatch = () => {
+  let refused = 0;
+  return (req) => (toBaselinePatch(req) && (refused += 1) === 1 ? reply(400, {}) : undefined);
+};
+/** Total cap that lets everything before the request labelled `label` through and refuses that one. */
+async function capBefore(label, options = {}) {
+  const n = await requestNumber(label, options);
+  return { main: 100_000, total: n - 1 };
+}
+
+describe("storage rules s9 local programs", () => {
+  const local = { name: "local", bucket: LOCAL_BUCKET, origin: "http://127.0.0.1:9199" };
+  const localDeps = (fake, intercept) => ({
+    net: async (req) => (intercept && (await intercept(req))) || fake.net(req),
+    adminHeaders: () => ({ authorization: "Bearer owner" }),
+    sleep: async () => {},
+  });
+
+  it("records a program the emulator refuses to load and goes on with the others", async () => {
+    const fake = createWorld({
+      project: "demo-storage-s9",
+      bucket: LOCAL_BUCKET,
+      baseline: null,
+      lag: 0,
+    });
+    const out = sinks();
+    const { report } = await observe({
+      target: local,
+      runId,
+      baseline: "local",
+      deps: localDeps(fake, (req) =>
+        req.url.endsWith("/internal/setRules") && Buffer.from(req.body).includes("mk/b")
+          ? reply(400, {})
+          : undefined,
+      ),
+      out,
+      recordings: 1,
+    });
+    assert.equal(report.stopped, null);
+    assert.deepEqual(
+      report.loads.find((l) => l.stage === "released-program"),
+      {
+        recording: 1,
+        id: "units",
+        stage: "released-program",
+        compiled: false,
+        status: 400,
+      },
+    );
+    const units = report.rows.filter((r) => r.program === "units");
+    assert.ok(
+      units.length > 0 &&
+        units.every(
+          (r) =>
+            r.class === "not-evaluated" &&
+            r.why === "setRules answered 400" &&
+            r.answer.status === null,
+        ),
+    );
+    assert.deepEqual(
+      report.publications.filter((p) => p.program).map((p) => p.program),
+      ["s9", "lists"],
+    );
+    // A local run has no still-in-force reads and no Rules API.
+    assert.ok(!out.entries.some((e) => /\/still\d/.test(e.label ?? "")));
+    assert.ok(report.publications.filter((p) => p.program).every((p) => p.inForce === true));
+  });
+});
+
+describe("storage rules s9 which marker a program supersedes", () => {
+  const labels = (out) => out.entries.filter((e) => e.phase === "before").map((e) => e.label);
+
+  it("reads the marker of the last program that was published, not of one that was skipped or refused", async () => {
+    const skipped = await go({ recordings: 1, rowFilter: only("pub-plain-meta", "l0-true") });
+    const skippedLabels = labels(skipped.out);
+    assert.ok(
+      skippedLabels.includes("rec1/lists/poll1/old"),
+      "the lists program supersedes s9 although units was skipped",
+    );
+    assert.ok(!skippedLabels.includes("rec1/s9/poll1/old"));
+    const refused = await go({
+      recordings: 1,
+      intercept: (req) =>
+        req.method === "POST" && rulesetsUrl(req) && Buffer.from(req.body).includes("mk/b")
+          ? reply(400, {})
+          : undefined,
+    });
+    const refusedLabels = labels(refused.out);
+    assert.ok(
+      refusedLabels.includes("rec1/lists/poll1/old"),
+      "a refused program leaves the earlier marker to be superseded",
+    );
+    assert.ok(!refusedLabels.includes("rec1/units/poll1/old"));
+    const first = await go({
+      recordings: 1,
+      intercept: (req) =>
+        req.method === "POST" && rulesetsUrl(req) && Buffer.from(req.body).includes("mk/a")
+          ? reply(400, {})
+          : undefined,
+    });
+    const firstLabels = labels(first.out);
+    assert.ok(
+      !firstLabels.some((l) => /^rec1\/units\/poll\d+\/old$/.test(l)),
+      "nothing was published before units",
+    );
+    assert.ok(firstLabels.includes("rec1/lists/poll1/old"));
+  });
+
+  it("does not touch the release when no program has rows", async () => {
+    const { world, report } = await go({ recordings: 1, rowFilter: only("no-such-row") });
+    assert.equal(report.stopped, null);
+    assert.equal(report.rows.length, 0);
+    assert.equal(
+      world.calls.filter(
+        (c) => c.method === "PATCH" || (c.method === "POST" && c.url.endsWith("/releases")),
+      ).length,
+      0,
+    );
+    assert.equal(
+      world.calls.filter((c) => isGet(c) && releaseUrl(c) && c.url.endsWith(bucket)).length,
+      2,
+      "the preflight read and the final audit only",
+    );
+  });
+});
+
+describe("storage rules s9 restore reads", () => {
+  it("writes the baseline back when the release cannot be read at the restore", async () => {
+    const n = await requestNumber("rec1/restore/read", { recordings: 1 });
+    const { report, world } = await go({ recordings: 1, intercept: atRequest(n, reply(503, {})) });
+    assert.deepEqual(world.release, { rulesetName: baselineName });
+    assert.equal(report.unknownReads, 1);
+    assert.deepEqual(report.problems, []);
+    assert.equal(world.calls.filter(toBaselinePatch).length, 1);
+  });
+
+  it("restores once more when the read-back of the restore cannot be read", async () => {
+    const n = await requestNumber("rec1/restore/readback", { recordings: 1 });
+    const { report, world } = await go({ recordings: 1, intercept: atRequest(n, reply(503, {})) });
+    assert.deepEqual(report.problems, [
+      "rec1/restore: the release did not read back as the baseline",
+    ]);
+    assert.deepEqual(world.release, { rulesetName: baselineName });
+    assert.equal(report.unknownReads, 1);
+    assert.equal(
+      world.calls.filter(toBaselinePatch).length,
+      1,
+      "the cleanup read it, found the baseline and wrote nothing",
+    );
+  });
+
+  it("settles the restore on the sixtieth poll and not on the sixty-first", async () => {
+    const last = await go({
+      recordings: 1,
+      lag: SETTLE_MAX_POLLS - 2,
+      rowFilter: only("pub-plain-meta"),
+    });
+    assert.equal(
+      last.report.publications.find((p) => p.restoreSettlePolls).restoreSettlePolls,
+      SETTLE_MAX_POLLS,
+    );
+    assert.deepEqual(last.report.problems, []);
+  });
+
+  it("says that an unknown release delete was not sent again, in the cleanup's words", async () => {
+    const del = (req) =>
+      req.method === "DELETE" && releaseUrl(req)
+        ? (() => {
+            throw new Error("reset");
+          })()
+        : undefined;
+    const { report } = await go({ baseline: "absent", recordings: 1, intercept: del });
+    assert.ok(
+      report.problems.includes(
+        "cleanup/restore: the release delete was unknown and is not re-sent",
+      ),
+      JSON.stringify(report.problems),
+    );
+    assert.ok(
+      report.problems.includes("rec1/restore: unknown answer: rec1/restore/delete (transport)"),
+    );
+    assert.ok(
+      report.problems.includes("cleanup/restore: the release did not read back as the baseline"),
+    );
+    assert.deepEqual(report.unknowns, ["rec1/restore/delete"]);
+  });
+
+  it("names the cleanup restore and the step in a failure of the cleanup restore", async () => {
+    const { report } = await go({
+      lag: 100000,
+      recordings: 1,
+      intercept: (req) => (toBaselinePatch(req) ? reply(403, {}) : undefined),
+    });
+    assert.ok(
+      report.problems.includes(
+        "cleanup/restore: cleanup/restore/patch: release write answered 403",
+      ),
+      JSON.stringify(report.problems),
+    );
+    assert.match(
+      report.stopped,
+      /^rec1\/s9: rec1\/s9: did not settle in 60 polls|did not settle in 60 polls/,
+    );
+  });
+
+  it("restores and settles on the recording's prefix in the cleanup, after the first restore failed", async () => {
+    const options = { recordings: 1, intercept: refuseFirstBaselinePatch() };
+    const { report, world } = await go(options);
+    assert.deepEqual(world.release, { rulesetName: baselineName });
+    assert.ok(
+      report.publications.some((p) => p.label === "cleanup/restore" && p.restoreSettlePolls === 3),
+    );
+    assert.deepEqual(
+      report.problems,
+      [
+        "rec1/restore: the baseline release was refused",
+        "rec1/restore: the release did not read back as the baseline",
+        "rec1/restore: the last marker still answers 200 or unknown",
+      ],
+      "no ruleset delete was refused as in use: the rulesets are deleted after the restore",
+    );
+  });
+});
+
+describe("storage rules s9 cleanup order and labels", () => {
+  it("names each cleanup delete and read by the end of the encoded object name", async () => {
+    const { out } = await go({ recordings: 1 });
+    const labels = new Set(out.entries.filter((e) => e.phase === "before").map((e) => e.label));
+    for (const id of Object.keys(OBJECTS)) {
+      const tail = enc(objectName(id, P1)).slice(-24);
+      assert.ok(labels.has(`cleanup/delete/${tail}`), `delete ${id}`);
+      assert.ok(labels.has(`cleanup/absent/${tail}`), `absent ${id}`);
+    }
+    for (const id of [1, 2, 3])
+      assert.ok(
+        labels.has(`cleanup/ruleset/0000000${id}-0000-4000-8000-000000000000`),
+        `ruleset ${id}`,
+      );
+  });
+
+  it("goes on after an unknown ruleset delete and after an unreadable absent read", async () => {
+    const n = await requestNumber("cleanup/ruleset/00000001-0000-4000-8000-000000000000", {
+      recordings: 1,
+    });
+    const unknown = await go({ recordings: 1, intercept: atRequest(n, "transport") });
+    assert.deepEqual(unknown.report.unknowns, [
+      "cleanup/ruleset/00000001-0000-4000-8000-000000000000",
+    ]);
+    assert.equal(unknown.report.closureReady, false);
+    assert.deepEqual(
+      [...unknown.world.rulesets.keys()].filter((k) => /\/0000000\d-/.test(k)),
+      [`projects/${project}/rulesets/00000001-0000-4000-8000-000000000000`],
+    );
+    const m = await requestNumber(`cleanup/absent/${enc(objectName("pubPlain", P1)).slice(-24)}`, {
+      recordings: 1,
+    });
+    const lost = await go({ recordings: 1, intercept: atRequest(m, reply(503, {})) });
+    assert.deepEqual(lost.report.problems, ["an object still reads 503 after cleanup"]);
+    assert.equal(lost.report.unknownReads, 1);
+    assert.equal(
+      lost.world.calls.filter(
+        (c) =>
+          isGet(c) &&
+          c.url.includes("/storage/v1/") &&
+          c.url.includes("/o/") &&
+          !c.url.includes("prefix"),
+      ).length,
+      Object.keys(OBJECTS).length - 1,
+      "every other name is read (the unreadable one never reached the world)",
+    );
+  });
+
+  it("names the cleanup step that ran out of requests, and calls the run incomplete", async () => {
+    for (const [label, step] of [
+      ["cleanup/ruleset/00000001-0000-4000-8000-000000000000", "cleanup/rulesets"],
+      ["cleanup/list", "cleanup/objects"],
+      ["cleanup/delete/" + enc(objectName("mkA", P1)).slice(-24), "cleanup/objects"],
+      ["final/release", "cleanup/audit"],
+    ]) {
+      const caps = await capBefore(label, { recordings: 1 });
+      const { report } = await go({ recordings: 1, caps });
+      assert.ok(
+        report.problems.includes(`${step}: request budget exhausted`),
+        `${step}: ${JSON.stringify(report.problems)}`,
+      );
+      assert.equal(report.stopped, `${step}: request budget exhausted`);
+      assert.equal(report.rows.length, ROWS.length, "every row was read");
+      assert.equal(report.complete, false, "a run that stopped is not complete, whatever it read");
+      assert.equal(report.closureReady, false);
+    }
+    const n = await requestNumber("cleanup/restore/read", {
+      recordings: 1,
+      intercept: refuseFirstBaselinePatch(),
+    });
+    const { report } = await go({
+      recordings: 1,
+      intercept: refuseFirstBaselinePatch(),
+      caps: { main: 100_000, total: n - 1 },
+    });
+    assert.ok(
+      report.problems.includes("cleanup/restore: request budget exhausted"),
+      JSON.stringify(report.problems),
+    );
+  });
+
+  it("keeps an object that it created although the create answered with a body it could not read", async () => {
+    const stale = nthRootList(2, reply(200, { kind: "storage#objects" }));
+    const unreadable = await go({
+      recordings: 1,
+      intercept: async (req, inner) => {
+        if (
+          req.method === "POST" &&
+          req.url.includes("/upload/") &&
+          new URL(req.url).searchParams.get("name") === objectName("mkB", P1)
+        ) {
+          await inner(req);
+          return reply(200, "{}");
+        }
+        return stale(req);
+      },
+    });
+    assert.match(unreadable.report.stopped, /create of mkB answered 200 with an unrecorded body/);
+    assert.ok(
+      unreadable.report.problems.includes("an object still reads 200 after cleanup"),
+      "the unconfirmed name is read back and found",
+    );
+    assert.deepEqual([...unreadable.world.objects.keys()], [objectName("mkB", P1)]);
+    const dropped = await go({
+      recordings: 1,
+      intercept: async (req, inner) => {
+        const name = new URL(req.url).searchParams.get("name");
+        if (req.method === "POST" && name === objectName("s4a", P1)) {
+          const res = await inner(req);
+          const body = JSON.parse(res.body.toString("utf8"));
+          delete body.metadata;
+          return { ...res, body: Buffer.from(JSON.stringify(body)) };
+        }
+        return stale(req);
+      },
+    });
+    assert.match(dropped.report.stopped, /did not keep the custom metadata/);
+    assert.equal(
+      dropped.world.objects.size,
+      0,
+      "the generation of the object it stopped on was known, so the stale list does not matter",
+    );
+  });
+});
+
+describe("storage rules s9 rows and masks", () => {
+  it("records a row whose answer is unknown and goes on", async () => {
+    const n = await requestNumber("row/1/pub-plain-meta", { recordings: 1 });
+    const { report } = await go({ recordings: 1, intercept: atRequest(n, reply(503, "down")) });
+    assert.equal(report.stopped, null);
+    const row = report.rows.find((r) => r.id === "pub-plain-meta");
+    assert.equal(row.class, "unknown");
+    assert.equal(row.answer.status, 503);
+    assert.equal(report.unknownReads, 1);
+    assert.equal(report.rows.length, ROWS.length);
+    const lostRow = await go({ recordings: 1, intercept: atRequest(n, "transport") });
+    assert.equal(lostRow.report.rows.find((r) => r.id === "pub-plain-meta").class, "unknown");
+    assert.equal(lostRow.report.stopped, null);
+  });
+
+  it("puts the delimiter in the list URL, and masks the run, the bucket and the project in answers", async () => {
+    const n = await requestNumber("row/1/pub-plain-meta", {
+      recordings: 1,
+      rowFilter: only("pub-plain-meta", "list-pub-delim"),
+    });
+    const text = `${bucket} ${project} ${runId} ${P1}/x`;
+    const { report, world } = await go({
+      recordings: 1,
+      rowFilter: only("pub-plain-meta", "list-pub-delim"),
+      intercept: atRequest(n, reply(400, { error: { code: 400, message: text } })),
+    });
+    assert.equal(
+      report.rows.find((r) => r.id === "pub-plain-meta").answer.error.message,
+      "<bucket> <project> <run> <P>/x",
+    );
+    const list = world.calls.find((c) => c.url.includes("/v0/") && c.url.includes("delimiter"));
+    assert.ok(list.url.endsWith("&delimiter=%2F"), list.url);
+  });
+
+  it("computes the agreement of two recordings from one row each, and counts the entry rulesets", async () => {
+    const { report } = await go({ rowFilter: only("pub-plain-meta") });
+    assert.equal(report.agreement.length, 1);
+    assert.equal(report.entryRulesets, 2);
+    assert.equal(report.complete, true);
+    assert.equal(report.runId, runId);
+    assert.equal(report.target, "production");
+    assert.equal(report.baseline, baselineName);
+    assert.equal(report.requests, report.out?.requests ?? report.requests);
+  });
+
+  it("gives a row of an object it could not create the reason", async () => {
+    const collide = (req) =>
+      req.method === "POST" &&
+      req.url.includes("/upload/") &&
+      new URL(req.url).searchParams.get("name") === objectName("pubTrailing", P1)
+        ? reply(412, {})
+        : undefined;
+    const { report } = await go({ recordings: 1, intercept: collide });
+    const row = report.rows.find((r) => r.id === "pub-trailing-meta");
+    assert.equal(row.why, "the object could not be created");
+    assert.equal(row.class, "not-evaluated");
+  });
+
+  it("does not read a bucket whose answer is not a 200", async () => {
+    const fault = (req) =>
+      isGet(req) && req.url.endsWith(`/b/${bucket}`) ? reply(404, { name: bucket }) : undefined;
+    const { report, world } = await go({ recordings: 1, intercept: fault });
+    assert.match(report.stopped, /the bucket is not the expected one/);
+    assert.equal(world.calls.filter((c) => c.method !== "GET").length, 0);
+  });
+
+  it("reads the final release as a read: an unreadable answer is a finding, and the ruleset list is still checked", async () => {
+    const n = await requestNumber("final/release", { recordings: 1 });
+    const { report, out } = await go({ recordings: 1, intercept: atRequest(n, reply(503, {})) });
+    assert.deepEqual(report.problems, ["the bucket release is not the baseline at the end"]);
+    assert.ok(out.entries.some((e) => e.label === "final/rulesets"));
+    const m = await requestNumber("final/rulesets", { recordings: 1 });
+    const second = await go({ recordings: 1, intercept: atRequest(m, reply(503, {})) });
+    assert.deepEqual(second.report.problems, ["the ruleset list is not what it was at entry"]);
+  });
+});
+
+/** Answers the nth GCS list of the root prefix. */
+function nthRootList(n, answer) {
+  let seen = 0;
+  return (req) =>
+    isGcsList(req) && prefixOf(req) === rootPrefix && (seen += 1) === n ? answer : undefined;
+}

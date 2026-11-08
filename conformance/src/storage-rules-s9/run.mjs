@@ -48,15 +48,25 @@ const PRODUCTION_HOSTS = [
   "firebaserules.googleapis.com",
 ];
 
-function argValue(name) {
-  const index = process.argv.indexOf(`--${name}`);
-  return index === -1 ? undefined : process.argv[index + 1];
+export function argValue(name, argv = process.argv) {
+  const index = argv.indexOf(`--${name}`);
+  return index === -1 ? undefined : argv[index + 1];
 }
 
-function required(name) {
-  const value = argValue(name);
+function required(name, argv = process.argv) {
+  const value = argValue(name, argv);
   if (!value) throw new Error(`--${name} is required`);
   return value;
+}
+
+/** The options of a production run from the command line; the lock paths only when they are named. */
+export function productionOptions(argv) {
+  return {
+    baseline: required("baseline", argv),
+    outPath: required("out", argv),
+    ...(argValue("lock-dir", argv) ? { lockDir: argValue("lock-dir", argv) } : {}),
+    ...(argValue("legacy-lock", argv) ? { legacyLock: argValue("legacy-lock", argv) } : {}),
+  };
 }
 
 export function newOutDir(path) {
@@ -189,12 +199,7 @@ export async function recordProductionRun({
 }
 
 async function recordProduction() {
-  return recordProductionRun({
-    baseline: required("baseline"),
-    outPath: required("out"),
-    ...(argValue("lock-dir") ? { lockDir: argValue("lock-dir") } : {}),
-    ...(argValue("legacy-lock") ? { legacyLock: argValue("legacy-lock") } : {}),
-  });
+  return recordProductionRun(productionOptions(process.argv));
 }
 
 async function recordLocal() {

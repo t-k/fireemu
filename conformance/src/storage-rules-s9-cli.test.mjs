@@ -162,6 +162,56 @@ describe("storage rules s9 command line", () => {
     }
   });
 
+  it("takes the emulator host from the environment when no origin is named, and prefers the origin", async () => {
+    const fake = createWorld({
+      project: "demo-storage-s9",
+      bucket: LOCAL_BUCKET,
+      baseline: null,
+      lag: 0,
+    });
+    const { server, origin } = await serve(fake);
+    try {
+      const host = origin.replace("http://", "");
+      const viaEnv = join(scratch, "via-env");
+      const child = spawn(
+        process.execPath,
+        [run, "record-local", "--out", viaEnv, "--rows", "c1-true", "--recordings", "1"],
+        { env: { PATH: process.env.PATH, FIREBASE_STORAGE_EMULATOR_HOST: host } },
+      );
+      let stdout = "";
+      child.stdout.on("data", (chunk) => (stdout += chunk));
+      assert.equal(await new Promise((resolve) => child.on("exit", resolve)), 0);
+      const report = JSON.parse(stdout);
+      assert.equal(report.baseline, "local");
+      assert.equal(report.target, "local");
+      assert.equal(report.rows, undefined);
+      const preferred = join(scratch, "preferred");
+      const second = spawn(
+        process.execPath,
+        [
+          run,
+          "record-local",
+          "--origin",
+          origin,
+          "--out",
+          preferred,
+          "--rows",
+          "c1-true",
+          "--recordings",
+          "1",
+        ],
+        { env: { PATH: process.env.PATH, FIREBASE_STORAGE_EMULATOR_HOST: "127.0.0.1:1" } },
+      );
+      assert.equal(await new Promise((resolve) => second.on("exit", resolve)), 0);
+    } finally {
+      server.close();
+    }
+  });
+
+  it("needs the run directory for a read-back", () => {
+    assert.match(cli(["readback"]).stderr, /--run-dir is required/);
+  });
+
   it("limits a local record to the named rows and recordings", async () => {
     const fake = createWorld({
       project: "demo-storage-s9",

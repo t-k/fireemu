@@ -99,7 +99,7 @@ test("a closed terminal stops a recording like an interrupt does", () => {
 test("preflight names the corpus family before it asks for the web config", () => {
   const result = run(["preflight"], { FS3_CORPUS: "nonsense" });
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /FS3_CORPUS must be v1, bad-path or diffs, not nonsense/);
+  assert.match(result.stderr, /FS3_CORPUS must be v1, bad-path, diffs or shapes, not nonsense/);
   assert.doesNotMatch(result.stderr, /FIREEMU_AUTH_SANDBOX_WEB_CONFIG/);
   const mixed = run(["preflight"], { FS3_CORPUS: "bad-path", FS3_PROGRAMS: "fs-rules-v1/path" });
   assert.match(mixed.stderr, /no program matches FS3_PROGRAMS/);

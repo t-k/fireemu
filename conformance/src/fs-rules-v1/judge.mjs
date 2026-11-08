@@ -20,6 +20,7 @@ import {
   HARNESS_CAP,
   PROGRAMS,
   programDigest,
+  SHAPES_PROGRAMS,
 } from "./corpus.mjs";
 
 export const TASK_ID = "FS-3-V1-RULES";
@@ -29,9 +30,13 @@ export const TASK_ID_BAD_PATH = "FS-8-RULES-BAD-PATH";
 /** The ledger task of the FS-RULES differences corpus (five claimed differences from the official emulator). */
 export const TASK_ID_DIFFS = "FS-RULES-DIFFS";
 
+/** The ledger task of the FS-RULES shapes corpus (shapes the fixes decided without a production row). */
+export const TASK_ID_SHAPES = "FS-RULES-SHAPES";
+
 const TASKS = [
   ["fs-rules-v1/bad-path/", TASK_ID_BAD_PATH],
   ["fs-rules-v1/diffs/", TASK_ID_DIFFS],
+  ["fs-rules-v1/shapes/", TASK_ID_SHAPES],
 ];
 const taskOf = (program) => TASKS.find(([prefix]) => program.id.startsWith(prefix))?.[1] ?? TASK_ID;
 
@@ -155,13 +160,14 @@ export function confirmedNoAuthRecording(env = process.env, now = Date.now()) {
   return new Date(at).toISOString();
 }
 
-/** The corpus family of FS3_CORPUS: `v1` (FS-3, the default), `bad-path` (FS-8) or `diffs`. */
+/** The corpus family of FS3_CORPUS: `v1` (FS-3, the default), `bad-path` (FS-8), `diffs` or `shapes`. */
 export function corpusFor(env = process.env) {
   const family = env.FS3_CORPUS ?? "v1";
   if (family === "v1") return PROGRAMS;
   if (family === "bad-path") return BAD_PATH_PROGRAMS;
   if (family === "diffs") return DIFFS_PROGRAMS;
-  throw new Error(`FS3_CORPUS must be v1, bad-path or diffs, not ${family}`);
+  if (family === "shapes") return SHAPES_PROGRAMS;
+  throw new Error(`FS3_CORPUS must be v1, bad-path, diffs or shapes, not ${family}`);
 }
 
 /** Programs selected by id prefix in FS3_PROGRAMS (all of the chosen corpus when unset). */

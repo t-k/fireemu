@@ -121,7 +121,10 @@ export function createWorld(scenario = {}) {
    */
   function diffsAllowed(collection, op) {
     const source = active();
-    if (!source?.includes(`match /${collection}/{id} {`)) return false;
+    const ruled =
+      source?.includes(`match /${collection}/{id} {`) ||
+      source?.includes(`match /{path=**}/${collection}/{id} {`);
+    if (!ruled) return false;
     return world.scenario.diffs?.({ collection, op }) ?? true;
   }
 
@@ -210,14 +213,18 @@ export function createWorld(scenario = {}) {
       };
     }
     const limited = query.limit ? matches.slice(0, query.limit?.value ?? query.limit) : matches;
+    // Production's shapes: `[{document, readTime}, ...]`, and `[{readTime}]` when nothing matches
+    // (fs-rules-v1/path-wildcard/v2#group-none, fs-rules/budgets/access-calls#list-10).
+    const readTime = "2026-01-01T00:00:00Z";
     return {
       code: 0,
       status: 200,
       body: limited.length
         ? limited.map((p) => ({
             document: { name: names(p), fields: world.documents.get(p) ?? {} },
+            readTime,
           }))
-        : [{}],
+        : [{ readTime }],
     };
   }
 
@@ -392,10 +399,24 @@ export function createWorld(scenario = {}) {
       if (rpc && method !== "POST") return json(405, { error: { status: "METHOD_NOT_ALLOWED" } });
       const op = rpc ?? { GET: "get", PATCH: "patch" }[method];
       const answer = firestore({ op, path: match[1], body, owner });
-      if (answer.status !== 200)
-        return json(answer.status, {
-          error: { code: answer.status, status: answer.code === 7 ? "PERMISSION_DENIED" : "ERROR" },
-        });
+      if (answer.status !== 200) {
+        // The refusal and the missing document take production's recorded shapes
+        // (fs-rules-v1/bad-path/core#ctl-real-not-exists, #ctl-missing-not-exists,
+        // fs-rules-v1/path-wildcard/v2#kindless-parent-none); anything else stays generic.
+        let error = { code: answer.status, status: "ERROR" };
+        if (answer.code === 7)
+          error = {
+            code: 403,
+            message: "Missing or insufficient permissions.",
+            status: "PERMISSION_DENIED",
+          };
+        if (answer.code === 5 && op === "get")
+          error = { code: 404, message: `Document "${match[1]}" not found.`, status: "NOT_FOUND" };
+        return json(
+          answer.status,
+          op === "runQuery" && answer.code === 7 ? [{ error }] : { error },
+        );
+      }
       return json(200, answer.body ?? {});
     }
     return json(404, {});

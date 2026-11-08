@@ -36,7 +36,11 @@ export const RULESETS = {
 export const RULESET_IDS = Object.keys(RULESETS);
 
 function compose(rulesetId, label) {
-  const ruleset = RULESETS[rulesetId] ?? BAD_PATH_RULESETS[rulesetId] ?? DIFFS_RULESETS[rulesetId];
+  const ruleset =
+    RULESETS[rulesetId] ??
+    BAD_PATH_RULESETS[rulesetId] ??
+    DIFFS_RULESETS[rulesetId] ??
+    SHAPES_RULESETS[rulesetId];
   if (!ruleset) throw new Error(`unknown ruleset ${rulesetId}`);
   return [
     ...(ruleset.version === 2 ? ["rules_version = '2';"] : []),
@@ -52,6 +56,8 @@ function compose(rulesetId, label) {
     ...ruleset.body,
     "  }",
     "}",
+    // Declarations after `service` (FS-RULES shapes).
+    ...(ruleset.postamble ?? []),
     "",
   ].join("\n");
 }
@@ -180,7 +186,8 @@ export function validateCorpus(programs, principals = PRINCIPALS) {
     if (
       !RULESET_IDS.includes(p.ruleset) &&
       !BAD_PATH_RULESET_IDS.includes(p.ruleset) &&
-      !DIFFS_RULESET_IDS.includes(p.ruleset)
+      !DIFFS_RULESET_IDS.includes(p.ruleset) &&
+      !SHAPES_RULESET_IDS.includes(p.ruleset)
     )
       throw new Error(`${p.id}: unknown ruleset ${p.ruleset}`);
     const stepIds = new Set();
@@ -478,5 +485,241 @@ export const DIFFS_PROGRAMS = [
   diffsProgram("fn-inner", [
     getRow("fsr9-fn-inner-true", "fn-inner-true"),
     getRow("fsr9-fn-inner-false", "fn-inner-false"),
+  ]),
+];
+
+// ---- FS-RULES: shapes decided without a production row ------------------------------------------
+//
+// The fixes that followed the differences recording (string indexing by UTF-16 unit, top-level
+// functions, query authorization with named documents and unconstrained `in`) decided some shapes
+// that no row recorded. This family records exactly those, each case beside an allowed and a
+// refused control in the same ruleset: string ranges and string functions over a supplementary
+// character and over a lone high-surrogate escape; a top-level function shadowed inside the
+// service and a function declared after it; query authorization with names, OR branches, limits
+// and cursors; membership, keys(), size() and get() on the query resource; a collection-group
+// query with a negated `in`. Rows are REST reads as in the differences family. The string and the
+// function rulesets each stand alone, because production accepts or refuses a ruleset as a whole.
+
+/**
+ * A lone high surrogate written as an escape in the rule source, and the replacement character. A
+ * character after the escape is never a hex digit, so the escape cannot be read as longer.
+ */
+const HI = "\\ud83d";
+const FFFD = "\\ufffd";
+const PAIR = "\u{1F525}";
+const UPPER = `A${PAIR}X`;
+const LOWER = `a${PAIR}x`;
+
+/** String ranges, lower() and upper(): id, expression (a `get` of `fsr9-t-<id>/x`). */
+const SHAPES_STRING_CASES = [
+  ["rng-ctl-true", '"abc"[0:2] == "ab"'],
+  ["rng-ctl-false", '"abc"[0:2] == "abc"'],
+  ["rng-02", `"${FIRE}"[0:2] == "é${PAIR}"`],
+  ["rng-03", `"${FIRE}"[0:3] == "é${PAIR}"`],
+  ["rng-13", `"${FIRE}"[1:3] == "${PAIR}"`],
+  ["rng-34", `"${FIRE}"[3:4] == "x"`],
+  ["rng-12-size", `"${FIRE}"[1:2].size() == 1`],
+  ["rng-hi", `"a${HI}z"[1:2] == "${HI}"`],
+  ["low-ctl-true", '"ABC".lower() == "abc"'],
+  ["low-ctl-false", '"ABC".lower() == "ABC"'],
+  ["low-fire", `"${UPPER}".lower() == "${LOWER}"`],
+  ["low-fire-size", `"${UPPER}".lower().size() == 4`],
+  ["low-hi", `"A${HI}".lower() == "a${HI}"`],
+  ["low-hi-size", `"A${HI}".lower().size() == 2`],
+  ["up-ctl-true", '"abc".upper() == "ABC"'],
+  ["up-ctl-false", '"abc".upper() == "abc"'],
+  ["up-fire", `"${LOWER}".upper() == "${UPPER}"`],
+  ["up-hi", `"a${HI}".upper() == "A${HI}"`],
+  ["hi-size", `"${HI}".size() == 1`],
+  ["hi-self", `"${HI}" == "${HI}"`],
+  ["hi-fffd", `"${HI}" == "${FFFD}"`],
+];
+
+/** split(), replace() and matches(), whose arguments are regular expressions. */
+const SHAPES_REGEX_CASES = [
+  ["split-ctl-true", '"a,b".split(",").size() == 2'],
+  ["split-ctl-false", '"a,b".split(",").size() == 3'],
+  ["split-fire", `"a${PAIR}b".split("${PAIR}").size() == 2`],
+  ["split-fire-by-hi", `"a${PAIR}b".split("${HI}").size() == 2`],
+  ["split-fire-by-hi-1", `"a${PAIR}b".split("${HI}").size() == 1`],
+  ["split-hi", `"a${HI}z".split("${HI}").size() == 2`],
+  ["rep-ctl-true", '"abc".replace("b", "x") == "axc"'],
+  ["rep-ctl-false", '"abc".replace("b", "x") == "abc"'],
+  ["rep-fire", `"a${PAIR}b".replace("${PAIR}", "x") == "axb"`],
+  ["rep-dot-fire", `"${PAIR}".replace(".", "x") == "x"`],
+  ["rep-dot-fire-xx", `"${PAIR}".replace(".", "x") == "xx"`],
+  ["rep-hi", `"a${HI}z".replace("${HI}", "x") == "axz"`],
+  ["m-ctl-true", '"abc".matches("a.c")'],
+  ["m-ctl-false", '"abc".matches("a.")'],
+  ["m-dot-fire", `"${PAIR}".matches(".")`],
+  ["m-dotdot-fire", `"${PAIR}".matches("..")`],
+  ["m-hi-dot", `"${HI}".matches(".")`],
+  ["m-hi-lit", `"a${HI}".matches("a${HI}")`],
+];
+
+/** Query rules: collection, condition (`{path=**}/` before the collection for a group rule). */
+const SHAPES_QUERY_RULES = [
+  ["fsr9-q-owner", "resource.data.owner == request.auth.uid"],
+  ["fsr9-q-nested-neg", '!("blocked" in resource.data.meta)'],
+  ["fsr9-q-nested-pos", '"a" in resource.data.meta'],
+  ["fsr9-q-keys-neg", '!resource.data.keys().hasAny(["blocked"])'],
+  ["fsr9-q-keys-pos", 'resource.data.keys().hasAll(["a"])'],
+  ["fsr9-q-size", "resource.data.size() > 0"],
+  ["fsr9-q-get-neg", 'resource.data.get("blocked", false) == false'],
+  ["fsr9-q-get-pos", 'resource.data.get("a", 0) == 1'],
+  ["{path=**}/fsr9-q-cg", '!("blocked" in resource.data)'],
+  ["{path=**}/fsr9-q-cg-has", '"blocked" in resource.data'],
+];
+
+export const SHAPES_RULESETS = {
+  "shapes-queries": {
+    version: 2,
+    body: SHAPES_QUERY_RULES.flatMap(([collection, condition]) =>
+      rule("list", collection, condition),
+    ),
+  },
+  "shapes-strings": {
+    version: 2,
+    body: SHAPES_STRING_CASES.flatMap(([id, expr]) => rule("get", `fsr9-t-${id}`, expr)),
+  },
+  "shapes-regex": {
+    version: 2,
+    body: SHAPES_REGEX_CASES.flatMap(([id, expr]) => rule("get", `fsr9-t-${id}`, expr)),
+  },
+  // pick() is declared at top level and again, with the other answer, inside the match.
+  "shapes-fn-shadow": {
+    version: 2,
+    preamble: functionDeclarations("", [
+      ["pick", "false"],
+      ["topOnly", "true"],
+    ]),
+    body: [
+      ...functionDeclarations("    ", [
+        ["pick", "true"],
+        ["innerOnly", "false"],
+      ]),
+      ...rule("get", "fsr9-fs-pick", "pick()"),
+      ...rule("get", "fsr9-fs-top-only", "topOnly()"),
+      ...rule("get", "fsr9-fs-inner-only", "innerOnly()"),
+    ],
+  },
+  // The functions are declared after the closing brace of service.
+  "shapes-fn-after": {
+    version: 2,
+    body: functionRules("fa", ["afterTrue", "afterFalse"]),
+    postamble: functionDeclarations("", [
+      ["afterTrue", "true"],
+      ["afterFalse", "false"],
+    ]),
+  },
+};
+export const SHAPES_RULESET_IDS = Object.keys(SHAPES_RULESETS);
+
+const either = (...filters) => ({ compositeFilter: { op: "OR", filters } });
+const ME = field("owner", "EQUAL", { stringValue: "UID(anon)" });
+const named = (doc) => field("__name__", "EQUAL", { referenceValue: `{docs}/fsr9-q-owner/${doc}` });
+const A_IS_1 = field("a", "EQUAL", { integerValue: "1" });
+const META_A_IS_1 = field("meta.a", "EQUAL", { integerValue: "1" });
+
+const queryRow = (id, from, where, extra = {}) => ({
+  id,
+  as: "anon",
+  rpc: "runQuery",
+  body: { structuredQuery: { from: [from], ...(where ? { where } : {}), ...extra } },
+});
+const ownerRow = (id, where, extra) => queryRow(id, { collectionId: "fsr9-q-owner" }, where, extra);
+/** A query of `collection` without a filter and with `filter`. */
+const pairRows = (id, collection, filter) => [
+  queryRow(`${id}-nofilter`, { collectionId: collection }),
+  queryRow(`${id}-filtered`, { collectionId: collection }, filter),
+];
+
+const shapesProgram = (name, steps, seed = []) => ({
+  id: `fs-rules-v1/shapes/${name}`,
+  ruleset: `shapes-${name}`,
+  seed,
+  steps: [{ id: "publishes", publish: true }, ...steps],
+});
+
+const N1 = { n: { integerValue: "1" } };
+const A1 = { a: { integerValue: "1" } };
+const META_A1 = { meta: { mapValue: { fields: A1 } } };
+
+export const SHAPES_PROGRAMS = [
+  shapesProgram(
+    "queries",
+    [
+      // Controls: the owner filter the rule proves, and a name the rule refuses.
+      ownerRow("owner-alone", ME),
+      ownerRow("name-foreign-alone", named("foreign")),
+      // Named documents without the owner filter.
+      ownerRow("name-own-alone", named("mine")),
+      ownerRow("two-names-own", both(named("mine"), named("mine2"))),
+      ownerRow("two-names-mixed", both(named("mine"), named("foreign"))),
+      ownerRow("or-named-unnamed", either(named("mine"), ME)),
+      ownerRow("or-foreign-unnamed", either(named("foreign"), ME)),
+      ownerRow("own-plus-unproven", both(named("mine"), field("n", "EQUAL", N1.n))),
+      // A name in an inequality (an equality on the name beside an inequality on another field
+      // is INVALID_ARGUMENT in both emulators: "Equality on key is not allowed if there are other
+      // inequality fields and key does not appear in inequalities").
+      ownerRow(
+        "name-own-range",
+        both(
+          field("__name__", "GREATER_THAN_OR_EQUAL", {
+            referenceValue: "{docs}/fsr9-q-owner/mine",
+          }),
+          field("__name__", "LESS_THAN_OR_EQUAL", { referenceValue: "{docs}/fsr9-q-owner/mine" }),
+        ),
+      ),
+      ownerRow("name-own-limit", named("mine"), { limit: 1 }),
+      ownerRow("name-own-cursor", named("mine"), {
+        orderBy: [{ field: { fieldPath: "__name__" }, direction: "ASCENDING" }],
+        startAt: { values: [{ referenceValue: "{docs}/fsr9-q-owner/mine" }], before: true },
+      }),
+      // Membership, keys(), size() and get() on the query resource, without and with a filter.
+      ...pairRows("nested-neg", "fsr9-q-nested-neg", META_A_IS_1),
+      ...pairRows("nested-pos", "fsr9-q-nested-pos", META_A_IS_1),
+      ...pairRows("keys-neg", "fsr9-q-keys-neg", A_IS_1),
+      ...pairRows("keys-pos", "fsr9-q-keys-pos", A_IS_1),
+      ...pairRows("size", "fsr9-q-size", A_IS_1),
+      ...pairRows("get-neg", "fsr9-q-get-neg", A_IS_1),
+      ...pairRows("get-pos", "fsr9-q-get-pos", A_IS_1),
+      // A collection-group query under a negated `in`, its refused control and a plain query.
+      queryRow("cg-blocked-group", { collectionId: "fsr9-q-cg", allDescendants: true }),
+      queryRow("cg-has-group", { collectionId: "fsr9-q-cg-has", allDescendants: true }),
+      queryRow("cg-blocked-single", { collectionId: "fsr9-q-cg" }),
+    ],
+    [
+      { doc: "fsr9-q-owner/mine", fields: { owner: { stringValue: "UID(anon)" }, ...N1 } },
+      { doc: "fsr9-q-owner/mine2", fields: { owner: { stringValue: "UID(anon)" }, ...N1 } },
+      { doc: "fsr9-q-owner/foreign", fields: { owner: { stringValue: "other-owner" }, ...N1 } },
+      { doc: "fsr9-q-nested-neg/d1", fields: META_A1 },
+      { doc: "fsr9-q-nested-pos/d1", fields: META_A1 },
+      { doc: "fsr9-q-keys-neg/d1", fields: A1 },
+      { doc: "fsr9-q-keys-pos/d1", fields: A1 },
+      { doc: "fsr9-q-size/d1", fields: A1 },
+      { doc: "fsr9-q-get-neg/d1", fields: A1 },
+      { doc: "fsr9-q-get-pos/d1", fields: A1 },
+      { doc: "fsr9-q-cg/c1", fields: N1 },
+      { doc: "fsr9-q-x/y/fsr9-q-cg/c2", fields: N1 },
+      { doc: "fsr9-q-cg-has/c1", fields: N1 },
+    ],
+  ),
+  shapesProgram(
+    "strings",
+    SHAPES_STRING_CASES.map(([id]) => getRow(`fsr9-t-${id}`, id)),
+  ),
+  shapesProgram(
+    "regex",
+    SHAPES_REGEX_CASES.map(([id]) => getRow(`fsr9-t-${id}`, id)),
+  ),
+  shapesProgram("fn-shadow", [
+    getRow("fsr9-fs-pick", "fn-shadow-pick"),
+    getRow("fsr9-fs-top-only", "fn-shadow-top-only"),
+    getRow("fsr9-fs-inner-only", "fn-shadow-inner-only"),
+  ]),
+  shapesProgram("fn-after", [
+    getRow("fsr9-fa-true", "fn-after-true"),
+    getRow("fsr9-fa-false", "fn-after-false"),
   ]),
 ];

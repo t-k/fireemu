@@ -77,4 +77,34 @@ Pausing application reads does not immediately stop HTTP/2 buffering. Sampled RS
 
 Delivery timings start immediately before sending AddTarget on an established Listen stream. They exclude the initial Listen handshake. Write and slow-reader schedules include sequential Commit/GetDocument work, the explicit two-second pause where selected, and client decoding and validation before completion. They are application-observed scenario elapsed times, not isolated server latency. Cancellation reports zero received initial documents and null document/boundary timings; it is not a successful delivery of 100,000 documents. Large runs require an external whole-run timeout and memory limit because individual fixture Commit requests do not have local deadlines.
 
-The integration harness compiled in release mode, and its 257-document smoke passed. All eight combinations of receiver, mutation and termination passed with 257 documents. Large network measurements are pending; the earlier in-process measurements must not be read as network results.
+### TCP results
+
+Six fresh-process runs used 100,000 documents each, a 1,024-byte string payload, two Tokio workers and unchanged release fat LTO. The Linux aarch64 VM had 8 GiB RAM and four CPUs; each measured container had a 6 GiB memory limit, no swap, two CPUs and a 180-second whole-run deadline. Fixture setup took 9.374–9.730 seconds. VM and filesystem caches were not reset between runs.
+
+| Schedule | ADD (ms) | First document (ms) | Initial boundary (ms) | Process peak RSS (KiB) |
+| --- | ---: | ---: | ---: | ---: |
+| Normal 1 | 195.310 | 195.339 | 517.301 | 402,892 |
+| Normal 2 | 144.474 | 144.491 | 399.351 | 401,376 |
+| Normal 3 | 134.838 | 134.860 | 356.092 | 400,236 |
+| Two-second pause | 159.607 | 2,170.985 | 2,371.641 | 401,772 |
+| Write, then two-second pause | 131.758 | 2,137.007 | 2,357.112 | 402,700 |
+| Two-second pause, then cancel | 135.629 | Not received | Not received | 401,812 |
+
+All five draining runs verified every original document's name, order, revision and payload, followed by matching CURRENT and NO_CHANGE boundaries. The write run also verified the subsequent 100 updates, one deletion and one creation. Its scheduled Commit took 1.477 ms and GetDocument plus validation took 0.793 ms. The cancel run deliberately received zero document frames after ADD and did not validate a complete snapshot. Client drop and tonic shutdown took 0.117–0.267 ms across the six runs; this is not a measurement of detached producer termination.
+
+Each process and container exited successfully. The largest container memory peak was 423,870,464 bytes, including the external sampler; all six containers recorded zero memory-limit and OOM events. RSS is the process lifetime high-water value from `getrusage`, including fixture construction. Ten-millisecond `/proc` samples separately tagged setup, delivery, pause, writes and shutdown, with phase-attribution uncertainty at marker receipt. These observations do not establish a memory bound or isolate server allocations.
+
+Host load and the shared job registry were recorded at each run's start and end. On the host's 18 logical CPUs, the one-minute load average ranged from 2.750 to 4.551. Other native mutation and nextest jobs overlapped the series. Normal first-document observations ranged from 134.860 to 195.339 ms; three samples under changing load do not establish a stable latency distribution or a strict comparison with the earlier in-process run. No speedup or memory-reduction claim is made.
+
+To reproduce a schedule after building the single integration binary, run it inside the stated memory limit with an external deadline:
+
+```sh
+cargo test --locked --offline -p fireemu-adapter-grpc --release --test listen_delivery_measurement --no-run
+FIREEMU_LISTEN_MEASURE_DOCUMENTS=100000 \
+FIREEMU_LISTEN_MEASURE_RECEIVER=pause \
+FIREEMU_LISTEN_MEASURE_MUTATION=write \
+FIREEMU_LISTEN_MEASURE_TERMINATION=drain \
+timeout --signal=TERM --kill-after=5s 180s target/release/deps/listen_delivery_measurement-<build-hash> measure_listen_network_delivery --exact --ignored --nocapture
+```
+
+The integration harness's 257-document smoke and all eight receiver/mutation/termination combinations passed. All-target/all-feature clippy and formatting passed. One viable fixture-revision mutant was rejected by the document-content assertion; the unchanged and restored controls passed. This validates the measurement guard, not a production mutation campaign. A separate finite harness-schedule model checked 62 states for framing and harness-owned handle/server termination; it did not model the detached Listen producer. Recorded conformance replays were not run, and production behavior was not changed.

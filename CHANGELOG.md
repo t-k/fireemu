@@ -8,6 +8,10 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Changed
+
+- Python Cloud Functions (FUNCTIONS-PYTHON) is verified against production for the six recorded event families: Firestore, Pub/Sub, Cloud Storage, Eventarc custom events, Cloud Scheduler and Cloud Tasks, each from two independent production recordings in the strict profile. Auth blocking functions (still open) and deployment (not compared) are outside the claim; the emulator profile's declared differences are listed as known differences.
+
 ### Fixed
 
 - Cloud Storage answers every Firebase v0 route that takes an object name (upload in all forms, `PATCH`, `DELETE`, token management) with the same `400` for a path with an empty segment, so no rule sees one through that API; production was recorded for the reads, and the writes follow from that and are not recorded.
@@ -15,6 +19,7 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 - Storage Rules: a listing with the delimiter `/` is allowed in the emulator profile when every entry one level below the prefix is allowed (`match /p/{f} { allow list: if true; }` with `prefix=p/&delimiter=/`), as production and the strict profile already did; before, it answered 403. In the strict profile, `allow list: if [file] != null` and `request.path == /b/$(bucket)/o/<prefix>` under `match /p/{file=**}` are allowed for a listing without a delimiter, as production did on 2026-11-08; before, they answered 403. A single-segment capture, a bare capture and the path of another prefix are still refused, and `request.path` of a delimited listing stays refused until it is recorded.
 - Hosting `ignore` patterns ignore case the way firebase-tools does on macOS and Windows (a JavaScript regular expression with the `i` flag, as glob 10.5.0 compiles them), not by Rust lower- and uppercase: `[^S]*.json` now hides `ßsecret.json` and `[S]*.json` does not; `ſ`, the Kelvin sign and the dotless and dotted I no longer meet `s`, `k` or `i`; `ς`, `σ` and `Σ` meet each other; classes and ranges compare the character set, not only the input's two case variants. Linux, which is case-sensitive, is unchanged. Checked against 135 new generated rows of the real `listFiles` (3,220 in all).
 - Hosting `headers`, `rewrites` and glob `redirects` sources treat a run of slashes as one, and a pattern also matches a path with one trailing slash, as the pinned superstatic (minimatch) does: `//data.json` now gets the `/data.json` header rule and `/data.json/` matches `/data.json`. A percent-encoded alias such as `/%64ata.json` still does not get the rule, because header and rewrite sources match the raw request path in the pinned emulator (recorded row `encoded-static`); what production does for either alias was not recorded.
+- Authentication: the Secure Token refresh no longer reads a nested `{"$serde_json::private::RawValue": ...}` object as the JSON text it wraps. A value such as `{"grant_type":{"$serde_json::private::RawValue":"\"refresh_token\""}}` was honoured as the string `refresh_token`, in both profiles, so a refresh token or grant type hidden behind that marker refreshed a session; it is now the object it is, as production reads it, and the request answers `400 MISSING_GRANT_TYPE` or `400 MISSING_REFRESH_TOKEN`. Which bodies are refused as invalid JSON is unchanged.
 
 ## [0.45.0] - 2026-11-09
 

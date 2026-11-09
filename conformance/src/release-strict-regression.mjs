@@ -602,6 +602,12 @@ export const EXCLUDED_KINDS = [
     issue: "fs-text-search-comparison-needs-a-release-binary-run.md",
   },
   {
+    kind: "functions-python-pass-comparison-v1",
+    reason:
+      "the rows compare the committed masked fixtures of the production passes against each other and are recomputed by the FUNCTIONS-PYTHON closure test on every commit; the real Python SDK replay of those fixtures runs in the functions-python CI job against the Python runner source, so the release job has no installed-binary comparison to rerun and no pinned Python SDK environment",
+    issue: "functions-python-comparison-needs-a-release-binary-run.md",
+  },
+  {
     kind: "fs-listen-sdk-comparison-v1",
     reason:
       "the final release artifact was compared with private native, SDK and browser production recordings that are unavailable to the release job; the native expired-token case also waits 35 minutes and the browser cache and lifecycle cases require Chromium; publish the recordings and provide a long browser-enabled release job before reproducing this comparison",
@@ -747,7 +753,8 @@ export function planComparisons(
     // PUBSUB registers its per-case comparison (a disclosed exclusion) before the parent review.
     const pendingPubsub = parent === "PUBSUB" && entry.closure.parentStatus === "IMPLEMENTING";
     const reopenedParent =
-      ["RTDB", "FS-PIPELINE"].includes(parent) && entry.closure.parentStatus === "IMPLEMENTING";
+      ["RTDB", "FS-PIPELINE", "FUNCTIONS-PYTHON"].includes(parent) &&
+      entry.closure.parentStatus === "IMPLEMENTING";
     if (
       entry.closure.parentStatus !== "COMPAT_VERIFIED" &&
       !pendingEventarc &&

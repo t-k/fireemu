@@ -1,0 +1,731 @@
+{
+  "schemaVersion": 1,
+  "projection": "Recorded constants and field presence only. Resource identities, payloads except the masked task body, token contents, timestamp values and infrastructure header values are not compared. Replay inputs are synthetic representatives, not original requests.",
+  "versions": {
+    "firebase-functions": "0.6.0",
+    "firebase-tools": "15.28.2",
+    "runtime": "python312"
+  },
+  "observations": [
+    {
+      "condition": "firestore-events",
+      "origin": "masked-production-projection",
+      "observedPasses": 1,
+      "coverage": "RECORDED",
+      "frames": [
+        {
+          "kind": "sdk-event"
+        },
+        {
+          "kind": "raw-event",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headerNames": [
+              "accept",
+              "accept-encoding",
+              "authorization",
+              "ce-database",
+              "ce-dataschema",
+              "ce-document",
+              "ce-id",
+              "ce-location",
+              "ce-namespace",
+              "ce-project",
+              "ce-source",
+              "ce-specversion",
+              "ce-subject",
+              "ce-time",
+              "ce-type",
+              "content-length",
+              "content-type",
+              "forwarded",
+              "from",
+              "function-execution-id",
+              "host",
+              "traceparent",
+              "user-agent",
+              "x-cloud-trace-context",
+              "x-forwarded-for",
+              "x-forwarded-proto"
+            ],
+            "headers": {
+              "content-type": "application/protobuf",
+              "user-agent": "APIs-Google; (+https://developers.google.com/webmasters/APIs-Google.html)",
+              "accept-encoding": "gzip, deflate, br",
+              "x-forwarded-proto": "https"
+            }
+          },
+          "attributes": {
+            "type": "google.cloud.firestore.document.v1.created",
+            "specversion": "1.0",
+            "datacontenttype": "application/protobuf",
+            "dataschema": "https://github.com/googleapis/google-cloudevents/blob/main/proto/google/events/cloud/firestore/v1/data.proto"
+          },
+          "fractionalTime": true
+        },
+        {
+          "kind": "sdk-event"
+        }
+      ],
+      "sdkCases": [
+        {
+          "origin": "observed-sdk-projection",
+          "inputIdentity": "synthetic",
+          "expected": {
+            "snapshot": {
+              "n": 1,
+              "run": "fixture-run"
+            }
+          },
+          "trigger": "firestore",
+          "variant": "created",
+          "event": {
+            "specversion": "1.0",
+            "id": "fixture-event",
+            "source": "//firestore.googleapis.com/projects/fixture-project/databases/(default)",
+            "type": "google.cloud.firestore.document.v1.created",
+            "time": "2026-01-01T00:00:02.555555+00:00",
+            "datacontenttype": "application/json",
+            "subject": "documents/items/fixture-document",
+            "project": "fixture-project",
+            "location": "us-central1",
+            "database": "(default)",
+            "namespace": "(default)",
+            "document": "items/fixture-document",
+            "data": {
+              "value": {
+                "name": "projects/fixture-project/databases/(default)/documents/items/fixture-document",
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  },
+                  "run": {
+                    "stringValue": "fixture-run"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "origin": "observed-sdk-projection",
+          "inputIdentity": "synthetic",
+          "expected": {
+            "before": {
+              "n": 1,
+              "run": "fixture-run"
+            },
+            "after": {
+              "n": 2,
+              "run": "fixture-run"
+            }
+          },
+          "trigger": "firestore",
+          "variant": "updated",
+          "event": {
+            "specversion": "1.0",
+            "id": "fixture-event",
+            "source": "//firestore.googleapis.com/projects/fixture-project/databases/(default)",
+            "type": "google.cloud.firestore.document.v1.updated",
+            "time": "2026-01-01T00:00:02.555555+00:00",
+            "datacontenttype": "application/json",
+            "subject": "documents/items/fixture-document",
+            "project": "fixture-project",
+            "location": "us-central1",
+            "database": "(default)",
+            "namespace": "(default)",
+            "document": "items/fixture-document",
+            "data": {
+              "value": {
+                "name": "projects/fixture-project/databases/(default)/documents/items/fixture-document",
+                "fields": {
+                  "n": {
+                    "integerValue": "2"
+                  },
+                  "run": {
+                    "stringValue": "fixture-run"
+                  }
+                }
+              },
+              "oldValue": {
+                "name": "projects/fixture-project/databases/(default)/documents/items/fixture-document",
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  },
+                  "run": {
+                    "stringValue": "fixture-run"
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "condition": "pubsub-events",
+      "origin": "masked-production-projection",
+      "observedPasses": 1,
+      "coverage": "RECORDED",
+      "frames": [
+        {
+          "kind": "raw-event",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headerNames": [
+              "accept",
+              "accept-encoding",
+              "authorization",
+              "ce-id",
+              "ce-source",
+              "ce-specversion",
+              "ce-time",
+              "ce-type",
+              "content-length",
+              "content-type",
+              "forwarded",
+              "from",
+              "function-execution-id",
+              "host",
+              "traceparent",
+              "user-agent",
+              "x-cloud-trace-context",
+              "x-forwarded-for",
+              "x-forwarded-proto"
+            ],
+            "headers": {
+              "content-type": "application/json",
+              "user-agent": "APIs-Google; (+https://developers.google.com/webmasters/APIs-Google.html)",
+              "accept-encoding": "gzip, deflate, br",
+              "x-forwarded-proto": "https"
+            }
+          },
+          "attributes": {
+            "type": "google.cloud.pubsub.topic.v1.messagePublished",
+            "specversion": "1.0",
+            "datacontenttype": "application/json"
+          },
+          "fractionalTime": true
+        },
+        {
+          "kind": "sdk-event"
+        },
+        {
+          "kind": "sdk-event"
+        },
+        {
+          "kind": "raw-event",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headerNames": [
+              "accept",
+              "accept-encoding",
+              "authorization",
+              "ce-id",
+              "ce-source",
+              "ce-specversion",
+              "ce-time",
+              "ce-type",
+              "content-length",
+              "content-type",
+              "forwarded",
+              "from",
+              "function-execution-id",
+              "host",
+              "traceparent",
+              "user-agent",
+              "x-cloud-trace-context",
+              "x-forwarded-for",
+              "x-forwarded-proto"
+            ],
+            "headers": {
+              "content-type": "application/json",
+              "user-agent": "APIs-Google; (+https://developers.google.com/webmasters/APIs-Google.html)",
+              "accept-encoding": "gzip, deflate, br",
+              "x-forwarded-proto": "https"
+            }
+          },
+          "attributes": {
+            "type": "google.cloud.pubsub.topic.v1.messagePublished",
+            "specversion": "1.0",
+            "datacontenttype": "application/json"
+          },
+          "fractionalTime": true
+        }
+      ],
+      "sdkCases": [
+        {
+          "origin": "observed-sdk-projection",
+          "inputIdentity": "synthetic",
+          "expected": {
+            "attributes": {
+              "label": "fixture-label",
+              "run": "fixture-run"
+            },
+            "ordering_key": null,
+            "message_id": "11111111111111111",
+            "publish_time": "2026-01-01T00:00:02.555555+00:00",
+            "subscription": "projects/fixture-project/subscriptions/eventarc-us-central1-fixture-111111-sub-111"
+          },
+          "trigger": "pubsub",
+          "event": {
+            "specversion": "1.0",
+            "id": "fixture-event",
+            "source": "//example.invalid/fixture",
+            "type": "google.cloud.pubsub.topic.v1.messagePublished",
+            "time": "2026-01-01T00:00:02.555555+00:00",
+            "datacontenttype": "application/json",
+            "data": {
+              "message": {
+                "data": "Zml4dHVyZS1tZXNzYWdl",
+                "messageId": "11111111111111111",
+                "publishTime": "2026-01-01T00:00:02.555555+00:00",
+                "attributes": {
+                  "label": "fixture-label",
+                  "run": "fixture-run"
+                }
+              },
+              "subscription": "projects/fixture-project/subscriptions/eventarc-us-central1-fixture-111111-sub-111"
+            }
+          }
+        },
+        {
+          "origin": "observed-sdk-projection",
+          "inputIdentity": "synthetic",
+          "expected": {
+            "attributes": {
+              "label": "fixture-label",
+              "run": "fixture-run"
+            },
+            "ordering_key": "fixture-order",
+            "message_id": "11111111111111111",
+            "publish_time": "2026-01-01T00:00:02.555555+00:00",
+            "subscription": "projects/fixture-project/subscriptions/eventarc-us-central1-fixture-111111-sub-111"
+          },
+          "trigger": "pubsub",
+          "event": {
+            "specversion": "1.0",
+            "id": "fixture-event",
+            "source": "//example.invalid/fixture",
+            "type": "google.cloud.pubsub.topic.v1.messagePublished",
+            "time": "2026-01-01T00:00:02.555555+00:00",
+            "datacontenttype": "application/json",
+            "data": {
+              "message": {
+                "data": "Zml4dHVyZS1tZXNzYWdl",
+                "messageId": "11111111111111111",
+                "publishTime": "2026-01-01T00:00:02.555555+00:00",
+                "attributes": {
+                  "label": "fixture-label",
+                  "run": "fixture-run"
+                },
+                "orderingKey": "fixture-order"
+              },
+              "subscription": "projects/fixture-project/subscriptions/eventarc-us-central1-fixture-111111-sub-111"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "condition": "storage-events",
+      "origin": "masked-production-projection",
+      "observedPasses": 1,
+      "coverage": "RECORDED",
+      "frames": [
+        {
+          "kind": "sdk-event"
+        },
+        {
+          "kind": "raw-event",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headerNames": [
+              "accept",
+              "accept-encoding",
+              "authorization",
+              "ce-bucket",
+              "ce-id",
+              "ce-source",
+              "ce-specversion",
+              "ce-subject",
+              "ce-time",
+              "ce-type",
+              "content-length",
+              "content-type",
+              "forwarded",
+              "from",
+              "function-execution-id",
+              "host",
+              "traceparent",
+              "user-agent",
+              "x-cloud-trace-context",
+              "x-forwarded-for",
+              "x-forwarded-proto"
+            ],
+            "headers": {
+              "content-type": "application/json",
+              "user-agent": "APIs-Google; (+https://developers.google.com/webmasters/APIs-Google.html)",
+              "accept-encoding": "gzip, deflate, br",
+              "x-forwarded-proto": "https"
+            }
+          },
+          "attributes": {
+            "type": "google.cloud.storage.object.v1.finalized",
+            "specversion": "1.0",
+            "datacontenttype": "application/json"
+          },
+          "fractionalTime": true
+        }
+      ],
+      "sdkCases": [
+        {
+          "origin": "observed-sdk-projection",
+          "inputIdentity": "synthetic",
+          "expected": {
+            "bucket": "fixture-bucket.firebasestorage.app",
+            "name": "fixture-object",
+            "generation": "1111111111111111",
+            "size": "32",
+            "content_type": "application/json"
+          },
+          "trigger": "storage",
+          "event": {
+            "specversion": "1.0",
+            "id": "fixture-event",
+            "source": "//example.invalid/fixture",
+            "type": "google.cloud.storage.object.v1.finalized",
+            "time": "2026-01-01T00:00:02.555555+00:00",
+            "datacontenttype": "application/json",
+            "data": {
+              "bucket": "fixture-bucket.firebasestorage.app",
+              "name": "fixture-object",
+              "generation": "1111111111111111",
+              "size": "32",
+              "contentType": "application/json",
+              "id": "fixture-object/1111111111111111",
+              "metageneration": "1",
+              "storageClass": "STANDARD"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "condition": "eventarc-custom-events",
+      "origin": "masked-production-projection",
+      "observedPasses": 1,
+      "coverage": "RECORDED",
+      "frames": [
+        {
+          "kind": "sdk-event"
+        },
+        {
+          "kind": "raw-event",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headerNames": [
+              "accept",
+              "accept-encoding",
+              "authorization",
+              "ce-id",
+              "ce-source",
+              "ce-specversion",
+              "ce-time",
+              "ce-type",
+              "content-length",
+              "content-type",
+              "forwarded",
+              "from",
+              "function-execution-id",
+              "host",
+              "traceparent",
+              "user-agent",
+              "x-cloud-trace-context",
+              "x-forwarded-for",
+              "x-forwarded-proto"
+            ],
+            "headers": {
+              "content-type": "application/json",
+              "user-agent": "APIs-Google; (+https://developers.google.com/webmasters/APIs-Google.html)",
+              "accept-encoding": "gzip, deflate, br",
+              "x-forwarded-proto": "https"
+            }
+          },
+          "attributes": {
+            "type": "pycheck.thing.v1.happened",
+            "specversion": "1.0",
+            "datacontenttype": "application/json"
+          },
+          "fractionalTime": true
+        },
+        {
+          "kind": "raw-event",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headerNames": [
+              "accept",
+              "accept-encoding",
+              "authorization",
+              "ce-id",
+              "ce-source",
+              "ce-specversion",
+              "ce-time",
+              "ce-type",
+              "content-length",
+              "content-type",
+              "forwarded",
+              "from",
+              "function-execution-id",
+              "host",
+              "traceparent",
+              "user-agent",
+              "x-cloud-trace-context",
+              "x-forwarded-for",
+              "x-forwarded-proto"
+            ],
+            "headers": {
+              "content-type": "application/json",
+              "user-agent": "APIs-Google; (+https://developers.google.com/webmasters/APIs-Google.html)",
+              "accept-encoding": "gzip, deflate, br",
+              "x-forwarded-proto": "https"
+            }
+          },
+          "attributes": {
+            "type": "pycheck.thing.v1.happened",
+            "specversion": "1.0",
+            "datacontenttype": "application/json"
+          },
+          "fractionalTime": false
+        }
+      ],
+      "sdkCases": [
+        {
+          "origin": "observed-sdk-projection",
+          "inputIdentity": "synthetic",
+          "expected": {
+            "data": {
+              "label": "fixture-label",
+              "run": "fixture-run"
+            },
+            "time": "2026-01-01T00:00:02.555555+00:00"
+          },
+          "trigger": "eventarc",
+          "event": {
+            "specversion": "1.0",
+            "id": "fixture-event",
+            "source": "//example.invalid/fixture",
+            "type": "pycheck.thing.v1.happened",
+            "time": "2026-01-01T00:00:02.555555+00:00",
+            "datacontenttype": "application/json",
+            "data": {
+              "label": "fixture-label",
+              "run": "fixture-run"
+            }
+          }
+        }
+      ],
+      "wholeSecondSdkFrames": 0,
+      "wholeSecondInput": {
+        "specversion": "1.0",
+        "id": "fixture-event",
+        "source": "//example.invalid/fixture",
+        "type": "pycheck.thing.v1.happened",
+        "time": "2026-01-01T00:00:02Z",
+        "datacontenttype": "application/json",
+        "data": {
+          "label": "fixture-label",
+          "run": "fixture-run"
+        }
+      }
+    },
+    {
+      "condition": "scheduler-events",
+      "origin": "masked-production-projection",
+      "observedPasses": 1,
+      "coverage": "RECORDED",
+      "frames": [
+        {
+          "kind": "sdk-event"
+        },
+        {
+          "kind": "raw-request",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headerNames": [
+              "accept-encoding",
+              "authorization",
+              "content-length",
+              "forwarded",
+              "function-execution-id",
+              "host",
+              "traceparent",
+              "user-agent",
+              "x-cloud-trace-context",
+              "x-cloudscheduler",
+              "x-cloudscheduler-jobname",
+              "x-cloudscheduler-scheduletime",
+              "x-forwarded-for",
+              "x-forwarded-proto"
+            ],
+            "headers": {
+              "user-agent": "Google-Cloud-Scheduler",
+              "accept-encoding": "gzip, deflate, br",
+              "x-forwarded-proto": "https",
+              "x-cloudscheduler": "true"
+            }
+          }
+        }
+      ],
+      "sdkCases": [
+        {
+          "origin": "observed-sdk-projection",
+          "inputIdentity": "synthetic",
+          "expected": {
+            "job_name": "fixture-job",
+            "schedule_time": "2026-01-01T00:00:02-08:00"
+          },
+          "trigger": "schedule",
+          "event": {
+            "data": {
+              "jobName": "projects/fixture-project/locations/us-central1/jobs/fixture-job",
+              "scheduleTime": "2026-01-01T08:00:02Z"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "condition": "tasks-events",
+      "origin": "masked-production-projection",
+      "observedPasses": 1,
+      "coverage": "RECORDED",
+      "frames": [
+        {
+          "kind": "sdk-event",
+          "hasApp": false,
+          "hasAuth": false
+        },
+        {
+          "kind": "raw-request",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headerNames": [
+              "accept-encoding",
+              "authorization",
+              "content-length",
+              "content-type",
+              "forwarded",
+              "function-execution-id",
+              "host",
+              "traceparent",
+              "user-agent",
+              "x-cloud-trace-context",
+              "x-cloudtasks-queuename",
+              "x-cloudtasks-tasketa",
+              "x-cloudtasks-taskexecutioncount",
+              "x-cloudtasks-taskname",
+              "x-cloudtasks-taskretrycount",
+              "x-forwarded-for",
+              "x-forwarded-proto"
+            ],
+            "headers": {
+              "content-type": "application/json",
+              "user-agent": "Google-Cloud-Tasks",
+              "accept-encoding": "gzip, deflate, br",
+              "x-forwarded-proto": "https"
+            }
+          },
+          "bodyText": "{\"data\":{\"run\":\"fixture-run\",\"label\":\"fixture-label\"}}",
+          "originalBodyBytes": 61,
+          "originalValueBytes": {
+            "run": 22,
+            "label": 9
+          },
+          "layoutVerifiedAgainstRecordedLength": true
+        }
+      ],
+      "sdkCases": [
+        {
+          "origin": "observed-sdk-projection",
+          "inputIdentity": "synthetic",
+          "expected": {
+            "data": {
+              "label": "fixture-label",
+              "run": "fixture-run"
+            },
+            "has_app": false,
+            "has_auth": false
+          },
+          "trigger": "tasks",
+          "body": "{\"data\":{\"label\":\"fixture-label\",\"run\":\"fixture-run\"}}"
+        }
+      ]
+    },
+    {
+      "condition": "auth-blocking",
+      "origin": "masked-production-projection",
+      "observedPasses": 1,
+      "frames": [
+        {
+          "kind": "blocking-raw",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headerNames": [
+              "accept-encoding",
+              "content-length",
+              "content-type",
+              "forwarded",
+              "function-execution-id",
+              "host",
+              "traceparent",
+              "user-agent",
+              "x-cloud-trace-context",
+              "x-forwarded-for",
+              "x-forwarded-proto"
+            ],
+            "headers": {
+              "accept-encoding": "gzip, deflate, br",
+              "content-type": "application/json; charset=utf-8",
+              "user-agent": "Google-Firebase",
+              "x-forwarded-proto": "https"
+            }
+          }
+        }
+      ],
+      "clientStatus": 503,
+      "sdkEventObserved": false,
+      "sdkCases": []
+    },
+    {
+      "condition": "deployment",
+      "origin": "masked-production-projection",
+      "observedPasses": 1,
+      "frames": [],
+      "localComparison": false,
+      "observedFunctionCount": 13,
+      "sdkCases": []
+    }
+  ],
+  "recording": {
+    "alias": "pass-1",
+    "accounting": {
+      "recorderRequests": 160,
+      "cliWriteRows": 28,
+      "cliWriteAttempts": 44,
+      "accountedRequests": 204
+    },
+    "eventFrames": 16,
+    "functionFrameCategories": 13
+  }
+}

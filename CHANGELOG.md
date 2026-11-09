@@ -8,6 +8,10 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Changed
+
+- Firestore Listen keeps the documents a target has delivered as one compact key per document instead of a full path, and a full refresh updates that set in place instead of building a second copy of it. With 100,000 documents of 1 KiB, each further target on the same collection costs about 14 MiB instead of 31 MiB, the peak memory of repeated full refreshes of four such targets falls from about 493 MiB to about 415 MiB, and the refreshes take about a third of the time. The frames, their order, resume tokens and target changes are unchanged.
+
 ### Fixed
 
 - Hosting `ignore` patterns ignore case the way firebase-tools does on macOS and Windows (a JavaScript regular expression with the `i` flag, as glob 10.5.0 compiles them), not by Rust lower- and uppercase: `[^S]*.json` now hides `ßsecret.json` and `[S]*.json` does not; `ſ`, the Kelvin sign and the dotless and dotted I no longer meet `s`, `k` or `i`; `ς`, `σ` and `Σ` meet each other; classes and ranges compare the character set, not only the input's two case variants. Linux, which is case-sensitive, is unchanged. Checked against 135 new generated rows of the real `listFiles` (3,220 in all).

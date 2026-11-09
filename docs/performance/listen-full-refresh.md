@@ -133,3 +133,30 @@ Peak RSS fell by 32.2 to 35.2 MB in every pair (about 9 percent of the process p
 cargo test --locked -p fireemu-adapter-grpc --release --lib --no-run
 FIREEMU_LISTEN_MEASURE_DOCUMENTS=100000 /usr/bin/time -l target/release/deps/fireemu_adapter_grpc-<build-hash> streams::refresh_tests::measure_listen_initial_snapshot_delivery --exact --ignored --nocapture
 ```
+
+## Known-document map
+
+Every Listen target keeps the `(document, version)` set it last delivered, to diff the next refresh against. That map lives as long as the target, so a large result costs its size once per target, and a full refresh used to rebuild it: every path of the result was cloned into a second map (five allocations per path) while the first was alive, even when nothing had changed.
+
+Two changes, neither visible on the wire (the 320 recorded transcripts of `listen_frames_match_the_recorded_transcripts` are unchanged):
+
+- A full refresh folds the result into the existing map in place. A key is created only for a document that enters the target; departures are found from a borrowed set only when the map and the result differ in size, and are reported in path order as before.
+- The map stores one allocation per document, the collection and document ids joined by NUL, instead of a `DocumentPath`. Ids reject control characters, so the joined form orders exactly as the paths do (property `known_keys_order_as_paths_do`), and a key gives its path back for the removal frame.
+
+### Known-map measurement
+
+The ignored `streams::refresh_tests::measure_listen_repeat_full_refresh` test adds `FIREEMU_LISTEN_MEASURE_TARGETS` identical query targets over `FIREEMU_LISTEN_MEASURE_DOCUMENTS` documents (1,024-byte payloads), drops the initial rows, then forces three full refreshes of every target after unrelated commits while a thread samples the process RSS with `ps` every 5 ms. Three release runs each on macOS aarch64 (18 logical CPUs, Rust 1.94.0, unchanged fat LTO, load about 10), 100,000 documents; "before" is origin/main e8aad1d37 with the same test. RSS values are KiB. The sampler can miss the instantaneous peak.
+
+| Targets | Measure | Before | After |
+| ---: | --- | ---: | ---: |
+| 1 | RSS after the target was added | 343,824-343,984 | 326,368-326,640 |
+| 1 | peak RSS during the refreshes | 375,328-375,488 | 341,152-341,360 |
+| 1 | three full refreshes (ms) | 636-794 | 253-344 |
+| 4 | RSS after the targets were added | 438,960-440,384 | 366,880-370,128 |
+| 4 | peak RSS during the refreshes | 502,880-507,408 | 424,128-426,688 |
+| 4 | three full refreshes (ms) | 3,331-5,606 | 894-1,483 |
+
+The RSS after setup, before any target, was 302,304-302,960 KiB in every run, so the first target cost about 40 MiB before and about 24 MiB after (it also pays for the query's one-time structures), and each further target about 31 MiB before and about 14 MiB after. The initial-snapshot measurement of the previous section, three runs each: process peak RSS 353.3-353.6 MB before and 335.4-335.6 MB after; time to the first document 114-156 ms before and 87-145 ms after (overlapping under load); no change is claimed for the final boundary.
+
+What is still proportional to the result: the target's map (about 140 bytes per document, one per target), the handles of a snapshot being delivered, and the payloads of documents replaced before they are delivered. A bound independent of the result size still needs the history-pinning decision above.
+

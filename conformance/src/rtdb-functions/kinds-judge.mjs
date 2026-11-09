@@ -24,7 +24,10 @@ export function judgeRun({ report, frames, writes, ignored, userUid, deployed })
     if (seen.duplicateFrames > 0) reasons.push(`repeated delivery: ${label}`);
   };
   for (const step of report.steps) {
-    if (!writeOk(step.write)) reasons.push(`write ${step.id} was not answered ok`);
+    // a definite refusal of an observation-only write is what the step observes, not a fault
+    const refusedObservation = step.observeOnly && step.write?.outcome === "refused";
+    if (!writeOk(step.write) && !refusedObservation)
+      reasons.push(`write ${step.id} was not answered ok`);
     for (const leaf of step.leaves ?? [])
       for (const [name, seen] of Object.entries(leaf.handlers)) {
         if (deployed && !deployed.includes(name)) continue;

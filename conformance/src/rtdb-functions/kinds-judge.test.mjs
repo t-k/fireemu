@@ -301,3 +301,43 @@ test("a frame's auth is read from the generation's own holder", () => {
   v2.event.authId = null;
   assert.deepEqual(judge(frames, { userUid: "owner" }), []);
 });
+
+test("a definite refusal of an observation-only write is the observation, not a reason; of a judged write it is", () => {
+  const refused = (id) => ({ ...okWrites, [id]: { outcome: "refused", status: 400 } });
+  const without = (id) =>
+    frameSet().filter((f) => {
+      const params = f.generation === 1 ? f.event.context.params : f.event.params;
+      return (
+        !(id === "k13" && params.group === "gl" && params.id === "l3") &&
+        !(
+          id === "k13" &&
+          f.handler === "k9GroupWrittenV2" &&
+          params.group === "gl" &&
+          f.event.data.after.value?.items?.l3
+        )
+      );
+    });
+  const frames = without("k13");
+  const run = (writes, f) =>
+    judgeRun({
+      report: observe({ writes, frames: f, steps }),
+      frames: f,
+      writes,
+      ignored: {},
+      deployed: all,
+    });
+  assert.deepEqual(run(refused("k13"), frames), []);
+  // the same refusal of a judged write is named
+  const noA1 = frameSet().filter(
+    (f) => !(f.event.params?.id === "a1" || f.event.context?.params?.id === "a1"),
+  );
+  assert.ok(run(refused("k1"), noA1).includes("write k1 was not answered ok"));
+  // a refused observation-only write that was delivered after all is unexpected
+  assert.ok(run(refused("k13"), frameSet()).some((r) => r.startsWith("unexpected delivery: k13")));
+  // an unknown answer is not a refusal
+  assert.ok(
+    run({ ...okWrites, k13: { outcome: "other" } }, frames).includes(
+      "write k13 was not answered ok",
+    ),
+  );
+});

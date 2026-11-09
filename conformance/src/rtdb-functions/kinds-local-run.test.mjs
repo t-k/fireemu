@@ -26,10 +26,10 @@ test("the local run refuses an unknown profile before it starts anything", async
   );
 });
 
-test("the local run sends all 21 steps unless packet v2 is asked for", () => {
+test("the local run sends all 21 steps unless packet v2 (k15-k25) is asked for", () => {
   assert.equal(scenarioFor("all"), KINDS_SCENARIO);
   assert.equal(scenarioFor(undefined), KINDS_SCENARIO);
   assert.equal(scenarioFor("v2"), KINDS_V2_SCENARIO);
-  assert.equal(scenarioFor("v2").buildSteps("n").length, 7);
+  assert.equal(scenarioFor("v2").buildSteps("n").length, 11);
   assert.equal(scenarioFor("all").buildSteps("n").length, 21);
 });

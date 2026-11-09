@@ -4,7 +4,7 @@
 import { fileURLToPath } from "node:url";
 import { CODEBASE, FIXTURE_HANDLERS, PREFIX } from "./kinds-frames.mjs";
 import { judgeRun } from "./kinds-judge.mjs";
-import { buildSteps, observe } from "./kinds-sequence.mjs";
+import { buildLadderSteps, buildSteps, observe } from "./kinds-sequence.mjs";
 import { TARGETS } from "./kinds-targets.mjs";
 
 /**
@@ -132,5 +132,8 @@ export const KINDS_V2_SCENARIO = Object.freeze({
   ...KINDS_SCENARIO,
   id: "kinds2",
   runDirPrefix: "kinds2",
-  buildSteps: (nonce) => buildSteps(nonce).filter((step) => KINDS_V2_STEP_IDS.includes(step.id)),
+  buildSteps: (nonce) => [
+    ...buildSteps(nonce).filter((step) => KINDS_V2_STEP_IDS.includes(step.id)),
+    ...buildLadderSteps(nonce),
+  ],
 });

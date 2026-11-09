@@ -103,7 +103,8 @@ export function makeWorld(options = {}) {
       setup: async () => events.push("setup rtdb"),
       write: async (step) => {
         events.push(`write ${step.id}`);
-        return { outcome: "ok", status: 200 };
+        const refused = (options.refuse ?? (() => false))(step);
+        return refused ? { outcome: "refused", status: 400 } : { outcome: "ok", status: 200 };
       },
       cleanup: async () => {
         events.push("cleanup rtdb");

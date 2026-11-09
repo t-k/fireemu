@@ -135,6 +135,27 @@ export function buildSteps(nonce) {
 }
 export const STEPS = buildSteps();
 
+/**
+ * The payload ladder of packet v2: admin creates of one leaf each in a group of its own (so no event adds to
+ * another's data), observation-only, sized by the compact JSON of the largest event of the write, the group
+ * handler's `{"items":{id:leaf}}`. The first repeats the 600 KiB value of the first recording's k12, which
+ * production answered 200 and did not deliver within 30 s; the next three straddle the documented 1 MB per
+ * event (about 0.95 MB, about 1.05 MB, above 1,048,576 bytes as well, and about 1.5 MB). A refusal of a
+ * rung is an answer the run records and goes on from.
+ */
+export const LADDER_BLOBS = Object.freeze([614400, 949900, 1049900, 1499900]);
+export function buildLadderSteps(nonce) {
+  const mark = (value) => (nonce === undefined ? value : { ...value, run: nonce });
+  return LADDER_BLOBS.map((size, index) => ({
+    id: `k${22 + index}`,
+    method: "PUT",
+    path: [PREFIX, `gq${index + 1}`, "items", `q${index + 1}`].join("/"),
+    body: mark({ value: 10 + index, blob: "x".repeat(size) }),
+    context: "admin",
+    observeOnly: true,
+  }));
+}
+
 const cache = new WeakMap();
 /** The transitions of each step: item leaves (with kind) and groups. Values are in the reduced form. */
 export function transitions(steps) {

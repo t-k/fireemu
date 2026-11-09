@@ -156,7 +156,10 @@ export async function runBreadth(deps) {
       const answer =
         step.context === "user-sdk" ? await deps.sdk.write(step.id) : await deps.rtdb.write(step);
       writes[step.id] = answer;
-      if (answer.outcome !== "ok") throw Error(`write ${step.id} ${answer.outcome}`);
+      // A definite refusal of an observation-only write is the answer being observed: recorded, and the run
+      // goes on. Anything else (and any refusal of a judged write) stops it.
+      if (answer.outcome !== "ok" && !(step.observeOnly === true && answer.outcome === "refused"))
+        throw Error(`write ${step.id} ${answer.outcome}`);
       const deadline = clock.now() + windows.writeMs;
       while (clock.now() < deadline) {
         await clock.sleep(Math.min(deadline, nextRead) - clock.now());

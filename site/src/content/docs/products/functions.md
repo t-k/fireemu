@@ -68,6 +68,13 @@ Publishing a message to a first-generation schedule's `firebase-schedule-<functi
 
 Under the `strict` profile the daemon also verifies a callable's `Authorization` bearer before it forwards the call, for Node and Python codebases alike. A request that carries more than one `Authorization` header is refused with 401 before anything is forwarded.
 
+## When the event queue is full
+
+The runtime holds at most 4096 undelivered events (and 64 MiB of payloads). What happens to an event that does not fit depends on its source, and for these sources none loses it silently:
+
+- Firestore, Storage, the Pub/Sub emulator and the control Pub/Sub publish (`POST /v1/sessions/{session}/pubsub/topics/{topic}:publish`) reserve the whole fan-out first, every message to every subscribed function with the copies a `duplicate` fault asks for. When it does not fit, the write or publish is refused (a control publish answers `429 RESOURCE_EXHAUSTED` and issues no message id) and nothing is delivered.
+- An Auth user created or deleted is committed whether or not the queue has room, as production never refuses a sign-up because functions are behind. An event the queue cannot take yet is held and delivered when capacity returns, oldest first and whole. `GET /v1/sessions/{session}/functions` shows the held count as `authEventsPending`, and `await-idle` waits for it. At most 4096 events are held: one beyond that is dropped, counted as `admission.auth_event_dropped` in the resource report and logged. A session reset discards held events with the rest of the queue.
+
 ## Exports that never run
 
 An export Fireemu cannot serve (a function whose options fail to resolve, or an event type it does not recognise) is skipped, and each one is a `warning:` on standard error at start, followed by a summary line. A function that production would deploy and run never runs here, so a test that asserts "no side effect" passes for the wrong reason; read the warnings. `functions.unservedTriggers` still refuses the products Fireemu does not serve.

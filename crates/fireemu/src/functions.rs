@@ -3243,6 +3243,37 @@ fn launch_codebases(
         .collect()
 }
 
+/// The Functions session every event id is derived from: the seed when the configuration named
+/// one (a replay gets the same ids every run), else the boot nonce (a restart does not repeat a
+/// previous run's ids, so a handler that deduplicates by event id keeps seeing new events).
+const fn session_value(seed: u64, pinned: bool, nonce: u64) -> u128 {
+    if pinned {
+        seed as u128
+    } else {
+        nonce as u128
+    }
+}
+
+/// A random value drawn once per daemon boot from the operating system's entropy; the wall
+/// clock only if the entropy source fails (the daemon refuses to start without one, so this is a
+/// fallback for a library embedding).
+fn boot_nonce() -> u64 {
+    static NONCE: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *NONCE.get_or_init(fresh_nonce)
+}
+
+/// One draw of the nonce: the operating system's entropy, else the wall clock.
+fn fresh_nonce() -> u64 {
+    let mut bytes = [0_u8; 8];
+    if fireemu_adapter_support::entropy::fill(&mut bytes).is_ok() {
+        u64::from_le_bytes(bytes)
+    } else {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX))
+    }
+}
+
 /// The runtime configuration of the Functions backend for this run: the project, the location, the
 /// limits and, by profile, how events are named and shaped.
 fn functions_config(
@@ -3257,7 +3288,7 @@ fn functions_config(
             CompatibilityProfile::Strict => cfg.firestore_location.clone(),
             CompatibilityProfile::Emulator => "nam5".to_owned(),
         },
-        session: SessionId::new(u128::from(cfg.seed)),
+        session: SessionId::new(session_value(cfg.seed, cfg.seed_pinned, boot_nonce())),
         max_running: cfg.functions_max_running,
         debug_mode: cfg.functions_inspect_dynamic || cfg.functions_inspect_port.is_some(),
         retry_attempts: cfg.events_max_attempts,
@@ -6893,11 +6924,27 @@ impl FunctionsHook for Hook {
         self.0.status()
     }
 
-    fn publish(&self, topic: &str, messages: &[serde_json::Value]) -> Result<Vec<String>, String> {
+    fn publish(
+        &self,
+        topic: &str,
+        messages: &[serde_json::Value],
+    ) -> Result<Vec<String>, fireemu_adapter_http::control::PublishMessagesError> {
+        use fireemu_adapter_functions::runtime::SourceEventAdmissionError;
+        use fireemu_adapter_http::control::PublishMessagesError;
         if topic.is_empty() || topic.len() > 255 {
-            return Err("topic must be 1..=255 characters".to_owned());
+            return Err(PublishMessagesError::Invalid(
+                "topic must be 1..=255 characters".to_owned(),
+            ));
         }
-        Ok(self.0.publish(topic, messages))
+        self.0
+            .publish(topic, messages)
+            .map_err(|error| match error {
+                SourceEventAdmissionError::Capacity => PublishMessagesError::Capacity,
+                SourceEventAdmissionError::Unavailable => PublishMessagesError::Unavailable,
+                SourceEventAdmissionError::InvalidEvent => {
+                    PublishMessagesError::Invalid("the message cannot become an event".to_owned())
+                }
+            })
     }
 
     fn project(&self) -> String {
@@ -9813,7 +9860,7 @@ exports.add = onCall({{}}, observe("add"));
                 ids.extend(stored.iter().map(|stored| stored.message_id.clone()));
             }
             for _ in 0..=(round % 2) {
-                ids.extend(runtime.publish("jobs", &[json!({"data": "YQ=="})]));
+                ids.extend(runtime.publish("jobs", &[json!({"data": "YQ=="})]).unwrap());
             }
         }
         assert!(ids.len() > 100, "{}", ids.len());
@@ -9831,6 +9878,60 @@ exports.add = onCall({{}}, observe("add"));
             ids.len(),
             "two messages share an id: {ids:?}"
         );
+    }
+
+    /// The control hook maps the runtime's publish outcomes onto the control API's: a bad topic
+    /// is invalid, a full queue is a capacity refusal that issues no ids, and a publish that
+    /// fits answers its message ids.
+    #[tokio::test(flavor = "current_thread")]
+    async fn the_control_hook_maps_publish_outcomes_to_the_control_errors() {
+        use fireemu_adapter_http::control::{FunctionsHook, PublishMessagesError};
+        let runtime = runtime_with_blocking_auth_targets(&[]).await;
+        let hook = super::Hook(runtime.clone());
+        let message = json!({"data": "YQ=="});
+        assert!(matches!(
+            hook.publish("", std::slice::from_ref(&message)),
+            Err(PublishMessagesError::Invalid(_))
+        ));
+        assert!(matches!(
+            hook.publish(&"t".repeat(256), std::slice::from_ref(&message)),
+            Err(PublishMessagesError::Invalid(_))
+        ));
+        let longest = "t".repeat(255);
+        assert_eq!(
+            hook.publish(&longest, std::slice::from_ref(&message))
+                .unwrap()
+                .len(),
+            1,
+            "255 characters is the longest topic"
+        );
+        assert_eq!(
+            hook.publish("nobody", std::slice::from_ref(&message))
+                .unwrap()
+                .len(),
+            1
+        );
+        // Each publish to `jobs` queues one delivery; reserving every other record fills the queue.
+        let queued = || runtime.source_event_accounting().unwrap().published_records;
+        let before = queued();
+        assert_eq!(
+            hook.publish("jobs", std::slice::from_ref(&message))
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(queued(), before + 1, "one subscriber of `jobs`");
+        let free = fireemu_adapter_functions::runtime::MAX_ACTIVE_EVENT_RECORDS - queued();
+        let others: Vec<serde_json::Value> = (0..free)
+            .map(|n| json!({"data": "YQ==", "messageId": format!("m{n}")}))
+            .collect();
+        let reservation = runtime.reserve_pubsub_events("jobs", &others).unwrap();
+        assert_eq!(
+            hook.publish("jobs", std::slice::from_ref(&message)),
+            Err(PublishMessagesError::Capacity)
+        );
+        drop(reservation);
+        assert_eq!(hook.publish("jobs", &[message]).unwrap().len(), 1);
     }
 
     /// Identity Platform's email and SMS events are served by the strict profile's bridge only
@@ -14739,6 +14840,61 @@ exit 0
             inspected.functions_inspect_port = Some(9229);
             assert!(super::functions_config(&inspected, None, "s").debug_mode);
         }
+    }
+
+    proptest::proptest! {
+        /// E4: a pinned seed ignores the nonce, an unpinned start ignores the seed.
+        #[test]
+        fn the_session_is_a_function_of_the_seed_or_the_nonce_never_both(
+            seed in proptest::prelude::any::<u64>(),
+            nonce in proptest::prelude::any::<u64>(),
+            other in proptest::prelude::any::<u64>(),
+        ) {
+            proptest::prop_assert_eq!(super::session_value(seed, true, nonce), u128::from(seed));
+            proptest::prop_assert_eq!(super::session_value(seed, true, other), u128::from(seed));
+            proptest::prop_assert_eq!(super::session_value(seed, false, nonce), u128::from(nonce));
+            proptest::prop_assert_eq!(super::session_value(other, false, nonce), u128::from(nonce));
+        }
+    }
+
+    /// E1/E2: the Functions session, which every event id is derived from, is the seed only when
+    /// the configuration names one. A plain start gets a per-boot session, so a restart does not
+    /// repeat the previous run's ids; an explicit seed still gives the documented golden ids.
+    #[test]
+    fn a_plain_start_does_not_derive_event_ids_from_the_default_seed() {
+        use crate::config::RuntimeConfig;
+        use fireemu_core_types::ids::SessionId;
+        let pinned =
+            RuntimeConfig::from_json(&json!({"schemaVersion": 1, "daemon": {"seed": 42}})).unwrap();
+        assert!(pinned.seed_pinned);
+        assert_eq!(
+            super::functions_config(&pinned, None, "s").session,
+            SessionId::new(42)
+        );
+        let plain = RuntimeConfig::from_json(&json!({"schemaVersion": 1})).unwrap();
+        assert!(!plain.seed_pinned);
+        assert_ne!(
+            super::functions_config(&plain, None, "s").session,
+            SessionId::new(42),
+            "a plain start must not be the seed-42 session"
+        );
+        // One boot, one session: every codebase and every call sees the same nonce, and it is a
+        // draw, not a constant. Two draws differ (the odds of a repeat are 2^-64).
+        let again = RuntimeConfig::from_json(&json!({"schemaVersion": 1})).unwrap();
+        let session = super::functions_config(&plain, None, "s").session;
+        assert_eq!(session, super::functions_config(&again, None, "s").session);
+        assert!(
+            session.value() > 1,
+            "the nonce is drawn, not a small constant"
+        );
+        assert_eq!(session.value(), u128::from(super::boot_nonce()));
+        assert_ne!(super::fresh_nonce(), super::fresh_nonce());
+        let other =
+            RuntimeConfig::from_json(&json!({"schemaVersion": 1, "daemon": {"seed": 7}})).unwrap();
+        assert_eq!(
+            super::functions_config(&other, None, "s").session,
+            SessionId::new(7)
+        );
     }
 
     #[test]

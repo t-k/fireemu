@@ -491,7 +491,11 @@ impl fireemu_adapter_http::control::FunctionsHook for FakeFunctions {
     fn status(&self) -> Value {
         json!({})
     }
-    fn publish(&self, topic: &str, messages: &[Value]) -> Result<Vec<String>, String> {
+    fn publish(
+        &self,
+        topic: &str,
+        messages: &[Value],
+    ) -> Result<Vec<String>, fireemu_adapter_http::control::PublishMessagesError> {
         self.0
             .lock()
             .unwrap()
@@ -2729,8 +2733,12 @@ impl fireemu_adapter_http::control::FunctionsHook for ClockCounting {
     fn status(&self) -> Value {
         json!({})
     }
-    fn publish(&self, _topic: &str, _messages: &[Value]) -> Result<Vec<String>, String> {
-        Err("not used".to_owned())
+    fn publish(
+        &self,
+        _topic: &str,
+        _messages: &[Value],
+    ) -> Result<Vec<String>, fireemu_adapter_http::control::PublishMessagesError> {
+        Err(fireemu_adapter_http::control::PublishMessagesError::Invalid("not used".to_owned()))
     }
     fn project(&self) -> String {
         "demo-app".to_owned()
@@ -3124,7 +3132,11 @@ impl fireemu_adapter_http::control::FunctionsHook for ScopedFunctions {
     fn status(&self) -> Value {
         json!({"tasksInFlight": 1})
     }
-    fn publish(&self, _: &str, _: &[Value]) -> Result<Vec<String>, String> {
+    fn publish(
+        &self,
+        _: &str,
+        _: &[Value],
+    ) -> Result<Vec<String>, fireemu_adapter_http::control::PublishMessagesError> {
         Ok(vec![])
     }
     fn project(&self) -> String {
@@ -3741,4 +3753,68 @@ async fn remote_config_wire_authentication_precedes_json_parsing() {
     tokio::net::TcpListener::bind(addr)
         .await
         .expect("the test listener was released");
+}
+
+/// A hook whose publish answers a fixed refusal.
+struct RefusingPublish(fireemu_adapter_http::control::PublishMessagesError);
+
+impl fireemu_adapter_http::control::FunctionsHook for RefusingPublish {
+    fn on_clock_changed(&self) {}
+    fn run_schedule(&self, _: &str) -> Result<(), fireemu_adapter_http::control::RunScheduleError> {
+        Ok(())
+    }
+    fn is_idle(&self) -> bool {
+        true
+    }
+    fn idle_notify(&self) -> Arc<tokio::sync::Notify> {
+        Arc::new(tokio::sync::Notify::new())
+    }
+    fn status(&self) -> Value {
+        json!({})
+    }
+    fn publish(
+        &self,
+        _: &str,
+        _: &[Value],
+    ) -> Result<Vec<String>, fireemu_adapter_http::control::PublishMessagesError> {
+        Err(self.0.clone())
+    }
+    fn project(&self) -> String {
+        "demo-app".into()
+    }
+}
+
+/// A control publish the runtime refuses at capacity is not a success: 429 and no message ids,
+/// as the Remote Config publish and a manual schedule run answer (EVDROP-2).
+#[test]
+fn a_publish_the_queue_cannot_hold_answers_429_without_message_ids() {
+    use fireemu_adapter_http::control::PublishMessagesError;
+    let body = json!({"messages": [{"data": "YQ=="}]});
+    for (error, status, code) in [
+        (PublishMessagesError::Capacity, 429, "RESOURCE_EXHAUSTED"),
+        (PublishMessagesError::Unavailable, 503, "UNAVAILABLE"),
+        (
+            PublishMessagesError::Invalid("bad".to_owned()),
+            400,
+            "INVALID_ARGUMENT",
+        ),
+    ] {
+        let mut s = state(Arc::new(AtomicUsize::new(0)));
+        s.functions = Some(Arc::new(RefusingPublish(error.clone())));
+        for path in [
+            "/v1/projects/demo-app/topics/jobs:publish",
+            "/v1/sessions/default/pubsub/topics/jobs:publish",
+        ] {
+            let response = handle(&s, "POST", path, &body);
+            assert_eq!(response.status, status, "{error:?} {path}");
+            assert!(
+                response.body["error"]["message"]
+                    .as_str()
+                    .is_some_and(|m| m.starts_with(code)),
+                "{error:?}: {}",
+                response.body
+            );
+            assert!(response.body.get("messageIds").is_none(), "{error:?}");
+        }
+    }
 }

@@ -7,7 +7,7 @@
 //! backoff in virtual time) or `DeadLettered`. `await-idle` waits until no event is
 //! pending / leased / running / retry-waiting and no schedule is due.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -59,6 +59,9 @@ pub const RETRY_BASE_BACKOFF_SECONDS: i64 = 10;
 pub const RETRY_MAX_BACKOFF_SECONDS: i64 = 600;
 /// Maximum non-terminal event records retained by one Functions runtime.
 pub const MAX_ACTIVE_EVENT_RECORDS: usize = 4096;
+/// Auth user events held while the event queue is full (see [`FunctionsRuntime::on_user_event`]).
+/// An event beyond the bound is dropped, counted and logged.
+pub const MAX_PENDING_AUTH_EVENTS: usize = MAX_ACTIVE_EVENT_RECORDS;
 /// The admission-refusal category of RTDB writes applied without their trigger events.
 pub const DATABASE_FANOUT_DROPPED: &str = "database_fanout_dropped";
 /// Logical events whose causal phases the runtime keeps for `await-idle` diagnostics
@@ -750,11 +753,33 @@ struct Inner {
     overlap_rejected: u64,
     /// Source-event admissions refused since the last reset, by category.
     admission_refusals: BTreeMap<&'static str, u64>,
+    /// Auth user events the event queue had no room for, oldest first (bounded by
+    /// [`MAX_PENDING_AUTH_EVENTS`]). They are admitted whole as capacity returns.
+    pending_auth: VecDeque<PendingAuthEvent>,
     /// Events held back by a `delay` fault until the virtual clock reaches the instant,
     /// with the outcome the same rule set decided for them.
     delayed: BTreeMap<EventId, Held>,
     /// Bounded causal phases of registered events (`await-idle` diagnostics).
     causality: CausalityLog,
+}
+
+/// A user lifecycle event waiting for room in the event queue: the delivery plan decided when
+/// the user changed (the matching functions and each one's copy count, so a `duplicate` fault
+/// is consulted once) and the event time of the change, not of the admission.
+struct PendingAuthEvent {
+    kind: AuthEvent,
+    user: fireemu_core_auth::store::UserRecord,
+    time: LogicalInstant,
+    targets: Vec<(String, usize)>,
+}
+
+/// How an attempt to admit one user event ended.
+enum AuthAdmission {
+    Admitted,
+    /// The queue has no room for the whole event yet.
+    Full,
+    /// The event can never be queued (its payload exceeds the frame limit).
+    Unrepresentable,
 }
 
 struct QueuedPayload {
@@ -955,6 +980,8 @@ impl Drop for EventBatchReservation {
         if retry_schedule {
             runtime.on_clock_changed();
         }
+        // The released records may be what a held Auth event waits for.
+        runtime.admit_pending_auth();
         runtime.idle.notify_waiters();
     }
 }
@@ -1581,6 +1608,7 @@ impl FunctionsRuntime {
                 catch_up_steps: 0,
                 overlap_rejected: 0,
                 admission_refusals: BTreeMap::new(),
+                pending_auth: VecDeque::new(),
                 delayed: BTreeMap::new(),
                 causality: CausalityLog::new(MAX_CAUSALITY_ENTRIES),
             }),
@@ -2190,6 +2218,9 @@ impl FunctionsRuntime {
     pub fn set_background_triggers(&self, enabled: bool) {
         self.background_triggers
             .store(enabled, std::sync::atomic::Ordering::SeqCst);
+        // Held Auth events are dropped by contract when the triggers go off, never kept for a
+        // later replay.
+        self.admit_pending_auth();
     }
 
     /// Whether background (event) triggers deliver.
@@ -2826,14 +2857,20 @@ impl FunctionsRuntime {
 
     /// Counts a refused source-event admission for the resource report.
     fn note_admission_refusal(&self, error: SourceEventAdmissionError) {
+        if let Ok(mut inner) = self.inner.lock() {
+            Self::refuse(&mut inner, error);
+        }
+    }
+
+    /// Counts `error` as an admission refusal and hands it back.
+    fn refuse(inner: &mut Inner, error: SourceEventAdmissionError) -> SourceEventAdmissionError {
         let category = match error {
             SourceEventAdmissionError::Capacity => "capacity",
             SourceEventAdmissionError::Unavailable => "unavailable",
             SourceEventAdmissionError::InvalidEvent => "invalid_event",
         };
-        if let Ok(mut inner) = self.inner.lock() {
-            *inner.admission_refusals.entry(category).or_default() += 1;
-        }
+        *inner.admission_refusals.entry(category).or_default() += 1;
+        error
     }
 
     #[allow(clippy::too_many_lines)]
@@ -3319,43 +3356,84 @@ impl FunctionsRuntime {
 
     /// Publishes messages on `topic`: one event per message and subscribed function.
     /// Returns the message IDs (assigned even when nothing is subscribed, as Pub/Sub does).
-    pub fn publish(&self, topic: &str, messages: &[Value]) -> Vec<String> {
+    ///
+    /// The complete fan-out (every message to every subscribed function, with the copies a
+    /// `duplicate` fault asks for) is reserved before anything is enqueued, as the broker and
+    /// Remote Config paths do: a capacity refusal issues no id and enqueues nothing, so a
+    /// published message is never acknowledged without its promised delivery.
+    ///
+    /// # Errors
+    ///
+    /// [`SourceEventAdmissionError::Capacity`] when the fan-out does not fit, and
+    /// [`SourceEventAdmissionError::Unavailable`] when the runtime is shutting down.
+    pub fn publish(
+        self: &Arc<Self>,
+        topic: &str,
+        messages: &[Value],
+    ) -> Result<Vec<String>, SourceEventAdmissionError> {
+        const EVENT_TYPE: &str = "google.cloud.pubsub.topic.v1.messagePublished";
         let time = self.now();
-        let Ok(mut inner) = self.inner.lock() else {
-            return Vec::new();
-        };
-        let mut ids = Vec::with_capacity(messages.len());
-        let mut enqueued = false;
-        let deliver = self.background_triggers_enabled();
-        for message in messages {
-            inner.next_event += 1;
-            // The broker draws its ids from the other half of the id space, so this message's id
-            // cannot equal one the broker gives.
-            let message_id =
-                fireemu_core_types::pubsub_message_id::runtime_message_id(inner.next_event);
-            ids.push(message_id.clone());
-            if !deliver {
-                continue; // the message is accepted and dropped, as Pub/Sub does without a subscriber
-            }
-            for f in self.pubsub_matches(topic, true) {
-                let payload = self.pubsub_payload(f, &message_id, topic, message, time);
-                self.enqueue_delivery(
-                    &mut inner,
-                    EventSource::PubSub,
-                    &f.name,
-                    "google.cloud.pubsub.topic.v1.messagePublished",
-                    &format!("topics/{topic}"),
-                    time,
-                    &payload,
-                );
-                enqueued = true;
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| SourceEventAdmissionError::Unavailable)?;
+        // The broker draws its ids from the other half of the id space, so this message's id
+        // cannot equal one the broker gives. The ids are counted from the runtime counter
+        // without taking them, so a refusal consumes none.
+        let first = inner.next_event;
+        let ids: Vec<String> = (1..=messages.len() as u64)
+            .map(|n| fireemu_core_types::pubsub_message_id::runtime_message_id(first + n))
+            .collect();
+        let message_count = u64::try_from(messages.len()).unwrap_or(u64::MAX);
+        if !self.background_triggers_enabled() {
+            // The message is accepted and dropped, as Pub/Sub does without a subscriber.
+            inner.next_event = first.saturating_add(message_count);
+            return Ok(ids);
+        }
+        let subject = format!("topics/{topic}");
+        let mut drafts = Vec::new();
+        for (message, message_id) in messages.iter().zip(&ids) {
+            for function in self.pubsub_matches(topic, true) {
+                let payload =
+                    Arc::new(self.pubsub_payload(function, message_id, topic, message, time));
+                let Some(retained_bytes) =
+                    Self::retained_event_bytes(&function.name, EVENT_TYPE, &subject, &payload)
+                else {
+                    return Err(Self::refuse(
+                        &mut inner,
+                        SourceEventAdmissionError::Capacity,
+                    ));
+                };
+                for _ in 0..self.delivery_copies(&function.name, EVENT_TYPE) {
+                    drafts.push(DeliveryDraft {
+                        function: function.name.clone(),
+                        event_type: EVENT_TYPE.to_owned(),
+                        subject: subject.clone(),
+                        time,
+                        payload: Arc::clone(&payload),
+                        raw_data: None,
+                        retained_bytes,
+                        parent: None,
+                    });
+                }
             }
         }
-        drop(inner);
-        if enqueued {
-            self.wake.notify_one();
+        if drafts.is_empty() {
+            inner.next_event = first.saturating_add(message_count);
+            return Ok(ids);
         }
-        ids
+        match self.reserve_drafts(EventSource::PubSub, drafts, &mut inner) {
+            Ok(reservation) => {
+                // Event ids were drawn after `first`; message ids reuse that range in another
+                // id space, so the counter moves past both.
+                inner.next_event = inner.next_event.max(first.saturating_add(message_count));
+                drop(inner);
+                reservation.publish();
+                self.wake.notify_one();
+                Ok(ids)
+            }
+            Err(error) => Err(Self::refuse(&mut inner, error)),
+        }
     }
 
     /// Accepts one Cloud Tasks enqueue and starts delivering it.
@@ -3988,7 +4066,117 @@ impl FunctionsRuntime {
         Ok(delivery_count)
     }
 
+    /// Admits the Auth events held for room, oldest first, while the queue has it. An event is
+    /// admitted whole or not at all, and a younger event never overtakes an older one.
+    fn admit_pending_auth(&self) {
+        let Ok(mut inner) = self.inner.lock() else {
+            return;
+        };
+        let mut admitted = false;
+        while let Some(front) = inner.pending_auth.front() {
+            if !self.background_triggers_enabled() {
+                // Dropped by contract (never held for a later replay), as at the source.
+                inner.pending_auth.clear();
+                break;
+            }
+            let (kind, time) = (front.kind, front.time);
+            let user = front.user.clone();
+            let targets = front.targets.clone();
+            match self.try_admit_auth(&mut inner, kind, &user, time, &targets) {
+                AuthAdmission::Admitted => {
+                    admitted = true;
+                    inner.pending_auth.pop_front();
+                }
+                AuthAdmission::Full => break,
+                AuthAdmission::Unrepresentable => {
+                    inner.pending_auth.pop_front();
+                    Self::count_dropped_auth_event(
+                        &mut inner,
+                        "its payload exceeds the frame limit",
+                    );
+                }
+            }
+        }
+        drop(inner);
+        if admitted {
+            self.wake.notify_one();
+        }
+    }
+
+    /// Counts and logs an Auth event that could not be delivered: a drop is never silent.
+    fn count_dropped_auth_event(inner: &mut Inner, reason: &str) {
+        *inner
+            .admission_refusals
+            .entry("auth_event_dropped")
+            .or_default() += 1;
+        eprintln!("[functions] an Auth user event was dropped: {reason}");
+    }
+
+    /// Enqueues one user event for every target, all or none: every copy of every matching
+    /// function fits, or nothing is enqueued. The payload id is the ordinal the delivery's
+    /// first copy gets, so it names the event it becomes.
+    fn try_admit_auth(
+        &self,
+        inner: &mut Inner,
+        kind: AuthEvent,
+        user: &fireemu_core_auth::store::UserRecord,
+        time: LogicalInstant,
+        targets: &[(String, usize)],
+    ) -> AuthAdmission {
+        let subject = format!("users/{}", user.local_id.as_str());
+        let session = self.config.session;
+        let mut ordinal = inner.next_event;
+        let mut plan = Vec::with_capacity(targets.len());
+        let (mut records, mut bytes) = (0_usize, 0_usize);
+        for (function, copies) in targets {
+            if self.manifest.get(function).is_none() {
+                continue; // reloaded away while the event was held
+            }
+            let id = format!("{}-{}", session.value(), ordinal + 1);
+            let payload = auth_event(&id, &self.config.project, kind, user, time);
+            let Some(one) =
+                Self::retained_event_bytes(function, kind.event_type(), &subject, &payload)
+            else {
+                return AuthAdmission::Unrepresentable;
+            };
+            records = records.saturating_add(*copies);
+            bytes = bytes.saturating_add(one.saturating_mul(*copies));
+            ordinal += *copies as u64;
+            plan.push((function, *copies, payload));
+        }
+        if plan.is_empty() {
+            return AuthAdmission::Admitted;
+        }
+        if !Self::can_admit_events(inner, EventSource::Auth, records, bytes) {
+            return AuthAdmission::Full;
+        }
+        for (function, copies, payload) in plan {
+            for _ in 0..copies {
+                let admitted = Self::enqueue(
+                    inner,
+                    session,
+                    EventSource::Auth,
+                    function,
+                    kind.event_type(),
+                    &subject,
+                    time,
+                    &payload,
+                    None,
+                );
+                debug_assert!(admitted, "a planned Auth delivery fits");
+            }
+        }
+        AuthAdmission::Admitted
+    }
+
     /// Turns a user lifecycle event into events for every matching Auth trigger.
+    ///
+    /// The user change has already been committed and production never refuses a sign-up
+    /// because a trigger backlog exists, so an event the queue has no room for is not lost: it
+    /// is held (counted as `admission.auth_event_deferred`, shown as `authEventsPending` in the
+    /// status) and admitted, oldest first and whole, when capacity returns. Only a backlog
+    /// beyond [`MAX_PENDING_AUTH_EVENTS`] drops an event, and that drop is counted
+    /// (`admission.auth_event_dropped`) and logged.
     pub fn on_user_event(&self, event: &UserEvent) {
         if !self.background_triggers_enabled() {
             return; // dropped, never held for a later replay
@@ -4001,25 +4189,55 @@ impl FunctionsRuntime {
         let Ok(mut inner) = self.inner.lock() else {
             return;
         };
-        let mut enqueued = false;
-        for f in self.manifest.auth_matches(kind) {
-            let id = format!("{}-{}", self.config.session.value(), inner.next_event + 1);
-            let payload = auth_event(&id, &self.config.project, kind, &event.user, time);
-            self.enqueue_delivery(
+        let targets: Vec<(String, usize)> = self
+            .manifest
+            .auth_matches(kind)
+            .into_iter()
+            .map(|f| {
+                (
+                    f.name.clone(),
+                    self.delivery_copies(&f.name, kind.event_type()),
+                )
+            })
+            .collect();
+        if targets.is_empty() {
+            return;
+        }
+        // An older held event goes first, so a newer one never overtakes it.
+        if inner.pending_auth.is_empty() {
+            match self.try_admit_auth(&mut inner, kind, &event.user, time, &targets) {
+                AuthAdmission::Admitted => {
+                    drop(inner);
+                    self.wake.notify_one();
+                    return;
+                }
+                AuthAdmission::Unrepresentable => {
+                    Self::count_dropped_auth_event(
+                        &mut inner,
+                        "its payload exceeds the frame limit",
+                    );
+                    return;
+                }
+                AuthAdmission::Full => {}
+            }
+        }
+        if inner.pending_auth.len() >= MAX_PENDING_AUTH_EVENTS {
+            Self::count_dropped_auth_event(
                 &mut inner,
-                EventSource::Auth,
-                &f.name,
-                kind.event_type(),
-                &format!("users/{}", event.user.local_id.as_str()),
-                time,
-                &payload,
+                "the event queue is full and the held backlog is at its bound",
             );
-            enqueued = true;
+            return;
         }
-        drop(inner);
-        if enqueued {
-            self.wake.notify_one();
-        }
+        *inner
+            .admission_refusals
+            .entry("auth_event_deferred")
+            .or_default() += 1;
+        inner.pending_auth.push_back(PendingAuthEvent {
+            kind,
+            user: event.user.clone(),
+            time,
+            targets,
+        });
     }
 
     /// Enqueues the schedule runs that became due up to the current virtual time according
@@ -4528,6 +4746,7 @@ impl FunctionsRuntime {
                 inner.outbox.discard_stale(epoch);
                 inner.causality.reset();
                 inner.admission_refusals.clear();
+                inner.pending_auth.clear();
                 inner.payloads.clear();
                 inner.active_event_bytes = 0;
                 inner.reserved_event_records = 0;
@@ -4974,6 +5193,7 @@ impl FunctionsRuntime {
                 !i.outbox.has_active()
                     && i.running.is_empty()
                     && i.reserved_event_bytes == 0
+                    && i.pending_auth.is_empty()
                     && !i.catch_up_pending
                     && if runnable_only {
                         let (now, epoch) = self.task_projection_time();
@@ -5040,6 +5260,7 @@ impl FunctionsRuntime {
             "succeeded": inner.succeeded_total,
             "deadLettered": inner.dead_lettered_total,
             "catchUpPending": inner.catch_up_pending,
+            "authEventsPending": inner.pending_auth.len(),
             "tasksInFlight": inner.task_scheduler.outstanding(),
             "overlapRejected": inner.overlap_rejected,
             "timeZoneDatabase": crate::zone::database_version(),
@@ -6054,6 +6275,7 @@ impl FunctionsRuntime {
             {
                 break;
             }
+            self.admit_pending_auth();
             let recheck = self
                 .inner
                 .lock()
@@ -6759,6 +6981,8 @@ impl FunctionsRuntime {
                 text,
             );
         }
+        // The completed delivery freed its record: a held Auth event may fit now.
+        self.admit_pending_auth();
         let more_due = self
             .inner
             .lock()
@@ -6917,12 +7141,13 @@ mod task_completion_tests {
     use crate::manifest_json::parse_manifest;
     use crate::runner::{Runner, SpawnSpec};
     use fireemu_adapter_grpc::local::{Actor, CommitEvent};
+    use fireemu_core_auth::store::{UserEvent, UserEventKind};
     use fireemu_core_firestore::path::DocumentPath;
     use fireemu_core_firestore::store::{CommitVersion, Document, DocumentChange};
     use fireemu_core_functions::manifest::{TaskRateLimits, TaskRetryConfig, Trigger};
     use fireemu_core_session::clock::VirtualClock;
     use fireemu_core_session::fault::{FaultAction, FaultMatch, FaultPlan, FaultRule, FaultState};
-    use fireemu_core_types::ids::{DatabaseId, ProjectId, SessionId};
+    use fireemu_core_types::ids::{DatabaseId, EventId, ProjectId, SessionId};
     use fireemu_core_types::time::LogicalInstant;
     use serde_json::json;
     use std::sync::{Arc, Mutex};
@@ -7048,6 +7273,531 @@ mod task_completion_tests {
             runtime.publish_remote_config(&body),
             Err(SourceEventAdmissionError::Unavailable)
         );
+        runtime.shutdown().await;
+        base.shutdown().await;
+    }
+
+    /// A runtime whose manifest holds exactly `functions` (name, trigger), sharing the base
+    /// runtime's runner and clock.
+    fn runtime_with(
+        base: &Arc<FunctionsRuntime>,
+        functions: &[(&str, Trigger)],
+    ) -> Arc<FunctionsRuntime> {
+        let mut manifest = base.manifest.clone();
+        let template = manifest.get("echo").unwrap().clone();
+        manifest.functions = functions
+            .iter()
+            .map(|(name, trigger)| {
+                let mut spec = template.clone();
+                spec.name = (*name).to_owned();
+                spec.entry_point = (*name).to_owned();
+                spec.trigger = trigger.clone();
+                spec
+            })
+            .collect();
+        FunctionsRuntime::with_codebases(
+            vec![super::CodebaseSpec {
+                name: "default".into(),
+                manifest,
+                runner: base.runner(),
+                spawn: None,
+                cleanup_dir: None,
+            }],
+            base.config.clone(),
+            base.clock.clone(),
+            super::FunctionsHttpProfile::Strict,
+        )
+        .unwrap()
+    }
+
+    fn pubsub_on(topic: &str) -> Trigger {
+        Trigger::PubSub {
+            topic: topic.to_owned(),
+        }
+    }
+
+    fn capacity_refusals(runtime: &FunctionsRuntime) -> u64 {
+        runtime
+            .inner
+            .lock()
+            .unwrap()
+            .admission_refusals
+            .get("capacity")
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// C1/C2: a control publish whose complete fan-out does not fit is refused whole: no
+    /// message id, nothing enqueued, the refusal counted; one slot more admits it.
+    #[tokio::test]
+    async fn control_publish_is_all_or_none_at_capacity() {
+        let base = runtime().await;
+        let runtime = runtime_with(&base, &[("a", pubsub_on("jobs")), ("b", pubsub_on("jobs"))]);
+        let message = json!({"data": "YQ=="});
+        // One message reaches two functions: it needs two free records.
+        runtime.inner.lock().unwrap().reserved_event_records = super::MAX_ACTIVE_EVENT_RECORDS - 1;
+        let next_before = runtime.inner.lock().unwrap().next_event;
+        assert_eq!(
+            runtime.publish("jobs", std::slice::from_ref(&message)),
+            Err(SourceEventAdmissionError::Capacity)
+        );
+        {
+            let inner = runtime.inner.lock().unwrap();
+            assert!(
+                inner.payloads.is_empty(),
+                "nothing is enqueued on a refusal"
+            );
+            assert_eq!(inner.next_event, next_before, "no id is consumed");
+        }
+        assert_eq!(capacity_refusals(&runtime), 1);
+        runtime.inner.lock().unwrap().reserved_event_records = super::MAX_ACTIVE_EVENT_RECORDS - 2;
+        let ids = runtime
+            .publish("jobs", std::slice::from_ref(&message))
+            .unwrap();
+        assert_eq!(ids.len(), 1);
+        assert_eq!(runtime.inner.lock().unwrap().payloads.len(), 2);
+        // Two messages need four records: with three free the whole call is refused and the
+        // first message is not delivered alone.
+        {
+            let mut inner = runtime.inner.lock().unwrap();
+            inner.payloads.clear();
+            inner.active_event_bytes = 0;
+            inner.reserved_event_records = super::MAX_ACTIVE_EVENT_RECORDS - 3;
+        }
+        assert_eq!(
+            runtime.publish("jobs", &[message.clone(), message.clone()]),
+            Err(SourceEventAdmissionError::Capacity)
+        );
+        assert!(runtime.inner.lock().unwrap().payloads.is_empty());
+        runtime.inner.lock().unwrap().reserved_event_records = super::MAX_ACTIVE_EVENT_RECORDS - 4;
+        assert_eq!(
+            runtime
+                .publish("jobs", &[message.clone(), message])
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(runtime.inner.lock().unwrap().payloads.len(), 4);
+        runtime.inner.lock().unwrap().reserved_event_records = 0;
+        runtime.shutdown().await;
+        base.shutdown().await;
+    }
+
+    /// C5: with no subscriber, or with background triggers off, a full queue has nothing to
+    /// refuse and the ids are still issued.
+    #[tokio::test]
+    async fn control_publish_without_deliveries_never_refuses() {
+        let base = runtime().await;
+        let runtime = runtime_with(&base, &[("a", pubsub_on("jobs"))]);
+        runtime.inner.lock().unwrap().reserved_event_records = super::MAX_ACTIVE_EVENT_RECORDS;
+        let message = json!({"data": "YQ=="});
+        assert_eq!(
+            runtime
+                .publish("nobody", std::slice::from_ref(&message))
+                .unwrap()
+                .len(),
+            1
+        );
+        runtime.set_background_triggers(false);
+        assert_eq!(runtime.publish("jobs", &[message]).unwrap().len(), 1);
+        assert_eq!(capacity_refusals(&runtime), 0);
+        runtime.inner.lock().unwrap().reserved_event_records = 0;
+        runtime.shutdown().await;
+        base.shutdown().await;
+    }
+
+    /// C3: a duplicate fault multiplies the fan-out, and the copies are part of the
+    /// all-or-none reservation. After a refusal the same publish succeeds once capacity returns.
+    #[tokio::test]
+    async fn control_publish_reserves_duplicate_copies_with_the_fan_out() {
+        use fireemu_core_session::fault::{FaultAction, FaultMatch, FaultPlan, FaultRule};
+        let base = runtime().await;
+        let runtime = runtime_with(&base, &[("a", pubsub_on("jobs"))]);
+        let faults = Arc::new(Mutex::new(
+            fireemu_core_session::fault::FaultState::default(),
+        ));
+        faults.lock().unwrap().install(FaultPlan {
+            seed: 1,
+            rules: vec![FaultRule {
+                matches: FaultMatch {
+                    operation: "functions.deliver".to_owned(),
+                    nth: None,
+                    function: Some("a".to_owned()),
+                    event_type: None,
+                },
+                action: FaultAction::Duplicate { count: 2 },
+            }],
+        });
+        runtime.set_faults(faults);
+        let message = json!({"data": "YQ=="});
+        runtime.inner.lock().unwrap().reserved_event_records = super::MAX_ACTIVE_EVENT_RECORDS - 2;
+        assert_eq!(
+            runtime.publish("jobs", std::slice::from_ref(&message)),
+            Err(SourceEventAdmissionError::Capacity),
+            "one message with two extra copies needs three records"
+        );
+        assert!(runtime.inner.lock().unwrap().payloads.is_empty());
+        runtime.inner.lock().unwrap().reserved_event_records = super::MAX_ACTIVE_EVENT_RECORDS - 3;
+        runtime.publish("jobs", &[message]).unwrap();
+        assert_eq!(runtime.inner.lock().unwrap().payloads.len(), 3);
+        runtime.inner.lock().unwrap().reserved_event_records = 0;
+        runtime.shutdown().await;
+        base.shutdown().await;
+    }
+
+    /// A broker reservation that does not fit is counted as a capacity refusal, and the resource
+    /// report lists the count.
+    #[tokio::test]
+    async fn a_refused_broker_reservation_is_counted_in_the_resource_report() {
+        use fireemu_core_types::resources::RootBudget;
+        let base = runtime().await;
+        let runtime = runtime_with(&base, &[("a", pubsub_on("jobs"))]);
+        let message = json!({"data": "YQ==", "messageId": "m1"});
+        runtime.inner.lock().unwrap().reserved_event_records = super::MAX_ACTIVE_EVENT_RECORDS;
+        assert!(matches!(
+            runtime.reserve_pubsub_events("jobs", std::slice::from_ref(&message)),
+            Err(SourceEventAdmissionError::Capacity)
+        ));
+        assert_eq!(capacity_refusals(&runtime), 1);
+        let report = runtime.resources(RootBudget::DEFAULT).unwrap();
+        assert!(
+            report
+                .refusals
+                .iter()
+                .any(|r| r.reason == "admission.capacity" && r.count == 1),
+            "{:?}",
+            report.refusals
+        );
+        runtime.inner.lock().unwrap().reserved_event_records = 0;
+        runtime.shutdown().await;
+        base.shutdown().await;
+    }
+
+    fn auth_on(event: fireemu_core_functions::manifest::AuthEvent) -> Trigger {
+        Trigger::Auth { event }
+    }
+
+    /// One user lifecycle event for a freshly created user.
+    fn user_event(kind: UserEventKind, email: &str) -> UserEvent {
+        use fireemu_core_auth::mfa::TotpPolicy;
+        use fireemu_core_auth::store::{AuthStore, NewUser};
+        use fireemu_core_types::determinism::SplitMix64;
+        let mut store = AuthStore::new("demo-app", SplitMix64::new(1), TotpPolicy::default());
+        store
+            .create_user(
+                NewUser::email(email),
+                LogicalInstant::from_unix_seconds(1_788_004_860),
+            )
+            .unwrap();
+        let mut event = store.take_user_events().remove(0);
+        event.kind = kind;
+        event
+    }
+
+    fn auth_pending(runtime: &FunctionsRuntime) -> u64 {
+        runtime.status()["authEventsPending"].as_u64().unwrap()
+    }
+
+    fn payload_subjects(runtime: &FunctionsRuntime) -> Vec<String> {
+        let inner = runtime.inner.lock().unwrap();
+        let mut ids: Vec<EventId> = inner.payloads.keys().copied().collect();
+        ids.sort();
+        ids.iter()
+            .map(|id| {
+                inner.payloads[id].payload["data"]["email"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned()
+            })
+            .collect()
+    }
+
+    /// A1-A3: an Auth event the queue cannot take is held, not dropped. It is admitted when
+    /// capacity returns, oldest first, and an event that fits is admitted at once.
+    #[tokio::test]
+    async fn an_auth_event_at_capacity_is_held_and_admitted_oldest_first() {
+        use fireemu_core_functions::manifest::AuthEvent;
+        let base = runtime().await;
+        let runtime = runtime_with(&base, &[("created", auth_on(AuthEvent::Created))]);
+        let (first, second) = (
+            user_event(UserEventKind::Created, "one@example.com"),
+            user_event(UserEventKind::Created, "two@example.com"),
+        );
+        // A free slot: admitted at once, nothing held.
+        runtime.inner.lock().unwrap().reserved_event_records = super::MAX_ACTIVE_EVENT_RECORDS - 1;
+        runtime.on_user_event(&first);
+        assert_eq!(runtime.inner.lock().unwrap().payloads.len(), 1);
+        assert_eq!(auth_pending(&runtime), 0);
+        // No slot: both are held, visible, and the runtime is not idle.
+        runtime.on_user_event(&second);
+        runtime.on_user_event(&first);
+        assert_eq!(runtime.inner.lock().unwrap().payloads.len(), 1);
+        assert_eq!(auth_pending(&runtime), 2);
+        assert_eq!(
+            runtime
+                .inner
+                .lock()
+                .unwrap()
+                .admission_refusals
+                .get("auth_event_deferred"),
+            Some(&2),
+            "each held event is counted once"
+        );
+        assert!(!runtime.is_idle(), "a held event is outstanding work");
+        // One slot frees: only the oldest held event is admitted.
+        runtime.inner.lock().unwrap().reserved_event_records = super::MAX_ACTIVE_EVENT_RECORDS - 2;
+        runtime.admit_pending_auth();
+        assert_eq!(auth_pending(&runtime), 1);
+        assert_eq!(
+            payload_subjects(&runtime),
+            vec!["one@example.com".to_owned(), "two@example.com".to_owned()]
+        );
+        runtime.inner.lock().unwrap().reserved_event_records = 0;
+        runtime.admit_pending_auth();
+        assert_eq!(auth_pending(&runtime), 0);
+        assert_eq!(runtime.inner.lock().unwrap().payloads.len(), 3);
+        runtime.shutdown().await;
+        base.shutdown().await;
+    }
+
+    /// A4/A5/A9: a held event is admitted whole (every matching function and every duplicate
+    /// copy) or not at all, and its payload carries the id of the event it becomes.
+    #[tokio::test]
+    async fn a_held_auth_event_is_admitted_whole_and_with_the_id_it_gets() {
+        use fireemu_core_functions::manifest::AuthEvent;
+        use fireemu_core_session::fault::{
+            FaultAction, FaultMatch, FaultPlan, FaultRule, FaultState,
+        };
+        let base = runtime().await;
+        let runtime = runtime_with(
+            &base,
+            &[
+                ("a", auth_on(AuthEvent::Created)),
+                ("b", auth_on(AuthEvent::Created)),
+            ],
+        );
+        let faults = Arc::new(Mutex::new(FaultState::default()));
+        faults.lock().unwrap().install(FaultPlan {
+            seed: 1,
+            rules: vec![FaultRule {
+                matches: FaultMatch {
+                    operation: "functions.deliver".to_owned(),
+                    nth: None,
+                    function: Some("a".to_owned()),
+                    event_type: None,
+                },
+                action: FaultAction::Duplicate { count: 1 },
+            }],
+        });
+        runtime.set_faults(faults);
+        // Function a delivers twice, b once: three records.
+        runtime.inner.lock().unwrap().reserved_event_records = super::MAX_ACTIVE_EVENT_RECORDS - 2;
+        runtime.on_user_event(&user_event(UserEventKind::Created, "u@example.com"));
+        assert!(
+            runtime.inner.lock().unwrap().payloads.is_empty(),
+            "two free records do not hold the three copies, and none is admitted alone"
+        );
+        assert_eq!(auth_pending(&runtime), 1);
+        runtime.inner.lock().unwrap().reserved_event_records = super::MAX_ACTIVE_EVENT_RECORDS - 3;
+        runtime.admit_pending_auth();
+        assert_eq!(auth_pending(&runtime), 0);
+        {
+            let inner = runtime.inner.lock().unwrap();
+            assert_eq!(inner.payloads.len(), 3);
+            let session = runtime.config.session.value();
+            for (id, queued) in &inner.payloads {
+                let expected_ordinal = match queued.function.as_str() {
+                    "a" => [1_u128, 2],
+                    _ => [3, 3],
+                };
+                // The copies of one delivery share the payload (and so its id), which is the
+                // ordinal of the delivery's first copy.
+                let expected =
+                    crate::events::event_id_uuid(&format!("{session}-{}", expected_ordinal[0]));
+                assert_eq!(
+                    queued.payload["id"],
+                    expected,
+                    "{} copy {}",
+                    queued.function,
+                    id.value()
+                );
+            }
+        }
+        runtime.inner.lock().unwrap().reserved_event_records = 0;
+        runtime.shutdown().await;
+        base.shutdown().await;
+    }
+
+    /// A6: the hold is bounded. The event beyond the bound is dropped, and the drop is counted
+    /// (it shows in the resource report), never silent.
+    #[tokio::test]
+    async fn the_auth_hold_is_bounded_and_a_drop_beyond_it_is_counted() {
+        use fireemu_core_functions::manifest::AuthEvent;
+        let base = runtime().await;
+        let runtime = runtime_with(&base, &[("created", auth_on(AuthEvent::Created))]);
+        runtime.inner.lock().unwrap().reserved_event_records = super::MAX_ACTIVE_EVENT_RECORDS;
+        let event = user_event(UserEventKind::Created, "u@example.com");
+        for _ in 0..super::MAX_PENDING_AUTH_EVENTS {
+            runtime.on_user_event(&event);
+        }
+        assert_eq!(
+            auth_pending(&runtime),
+            super::MAX_PENDING_AUTH_EVENTS as u64
+        );
+        let dropped = |runtime: &FunctionsRuntime| {
+            runtime
+                .inner
+                .lock()
+                .unwrap()
+                .admission_refusals
+                .get("auth_event_dropped")
+                .copied()
+                .unwrap_or(0)
+        };
+        assert_eq!(dropped(&runtime), 0);
+        runtime.on_user_event(&event);
+        assert_eq!(dropped(&runtime), 1);
+        assert_eq!(
+            auth_pending(&runtime),
+            super::MAX_PENDING_AUTH_EVENTS as u64
+        );
+        runtime.inner.lock().unwrap().reserved_event_records = 0;
+        runtime.shutdown().await;
+        base.shutdown().await;
+    }
+
+    /// A7: a reset discards held events with the rest of the session; disabled background
+    /// triggers hold nothing.
+    #[tokio::test]
+    async fn a_reset_discards_held_auth_events_and_disabled_triggers_hold_none() {
+        use fireemu_core_functions::manifest::AuthEvent;
+        let base = runtime().await;
+        let runtime = runtime_with(&base, &[("created", auth_on(AuthEvent::Created))]);
+        runtime.inner.lock().unwrap().reserved_event_records = super::MAX_ACTIVE_EVENT_RECORDS;
+        let event = user_event(UserEventKind::Created, "u@example.com");
+        runtime.on_user_event(&event);
+        assert_eq!(auth_pending(&runtime), 1);
+        runtime.reset();
+        assert_eq!(auth_pending(&runtime), 0);
+        runtime.inner.lock().unwrap().reserved_event_records = super::MAX_ACTIVE_EVENT_RECORDS;
+        runtime.on_user_event(&event);
+        assert_eq!(auth_pending(&runtime), 1);
+        runtime.set_background_triggers(false);
+        assert_eq!(
+            auth_pending(&runtime),
+            0,
+            "switching the triggers off drops what was held"
+        );
+        runtime.on_user_event(&event);
+        assert_eq!(auth_pending(&runtime), 0, "dropped by contract, never held");
+        runtime.inner.lock().unwrap().reserved_event_records = 0;
+        runtime.shutdown().await;
+        base.shutdown().await;
+    }
+
+    /// A8 (model-based): over any interleaving of user events and capacity changes, the held
+    /// Auth events and the admitted ones equal a reference queue: first in, first out, a head
+    /// that does not fit blocks the younger events, and an event is admitted whole.
+    #[tokio::test]
+    async fn held_auth_events_follow_a_fifo_reference_model() {
+        use fireemu_core_functions::manifest::AuthEvent;
+        use proptest::prelude::*;
+        use proptest::test_runner::{Config, TestRunner};
+
+        #[derive(Debug, Clone)]
+        enum Op {
+            Created,
+            Deleted,
+            SetFree(usize),
+        }
+        let base = runtime().await;
+        // Created reaches two functions (two records), Deleted one.
+        let runtime = runtime_with(
+            &base,
+            &[
+                ("a", auth_on(AuthEvent::Created)),
+                ("b", auth_on(AuthEvent::Created)),
+                ("c", auth_on(AuthEvent::Deleted)),
+            ],
+        );
+        let ops = proptest::collection::vec(
+            prop_oneof![
+                Just(Op::Created),
+                Just(Op::Deleted),
+                (0_usize..5).prop_map(Op::SetFree),
+            ],
+            1..40,
+        );
+        let mut runner = TestRunner::new(Config::with_cases(96));
+        runner
+            .run(&ops, |ops| {
+                {
+                    let mut inner = runtime.inner.lock().unwrap();
+                    inner.payloads.clear();
+                    inner.active_event_bytes = 0;
+                    inner.pending_auth.clear();
+                    inner.reserved_event_records = super::MAX_ACTIVE_EVENT_RECORDS;
+                }
+                // Model: free records, the held queue (need, label), admitted labels in order.
+                let mut free = 0_usize;
+                let mut held: std::collections::VecDeque<(usize, String)> =
+                    std::collections::VecDeque::default();
+                let mut admitted: Vec<String> = Vec::new();
+                for (n, op) in ops.iter().enumerate() {
+                    let label = format!("u{n}@example.com");
+                    match op {
+                        Op::Created | Op::Deleted => {
+                            let need = if matches!(op, Op::Created) { 2 } else { 1 };
+                            let kind = if matches!(op, Op::Created) {
+                                UserEventKind::Created
+                            } else {
+                                UserEventKind::Deleted
+                            };
+                            runtime.on_user_event(&user_event(kind, &label));
+                            if held.is_empty() && free >= need {
+                                free -= need;
+                                admitted.push(label);
+                            } else {
+                                held.push_back((need, label));
+                            }
+                        }
+                        Op::SetFree(f) => {
+                            let active = runtime.inner.lock().unwrap().payloads.len();
+                            runtime.inner.lock().unwrap().reserved_event_records =
+                                super::MAX_ACTIVE_EVENT_RECORDS - active - f;
+                            free = *f;
+                            runtime.admit_pending_auth();
+                            while let Some((need, _)) = held.front() {
+                                if free < *need {
+                                    break;
+                                }
+                                free -= *need;
+                                admitted.push(held.pop_front().unwrap().1);
+                            }
+                        }
+                    }
+                    let inner = runtime.inner.lock().unwrap();
+                    prop_assert_eq!(inner.pending_auth.len(), held.len());
+                    // The admitted events, in id order, are the model's admitted labels; each
+                    // delivery (a record per function) carries its user.
+                    let mut ids: Vec<EventId> = inner.payloads.keys().copied().collect();
+                    ids.sort();
+                    let mut seen: Vec<String> = Vec::new();
+                    for id in ids {
+                        let email = inner.payloads[&id].payload["data"]["email"]
+                            .as_str()
+                            .unwrap()
+                            .to_owned();
+                        if seen.last() != Some(&email) {
+                            seen.push(email);
+                        }
+                    }
+                    prop_assert_eq!(seen, admitted.clone());
+                }
+                Ok(())
+            })
+            .unwrap();
+        runtime.inner.lock().unwrap().reserved_event_records = 0;
         runtime.shutdown().await;
         base.shutdown().await;
     }
@@ -7601,7 +8351,9 @@ mod task_completion_tests {
                 }],
             });
             runtime.set_faults(faults);
-            let ids = runtime.publish("firebase-schedule-other-us-central1", &[message]);
+            let ids = runtime
+                .publish("firebase-schedule-other-us-central1", &[message])
+                .unwrap();
             let delivered = runtime
                 .inner
                 .lock()
@@ -7843,7 +8595,7 @@ mod task_completion_tests {
         }
         runtime.runner().kill_now();
         tokio::spawn(runtime.clone().dispatch_loop());
-        runtime.publish("jobs", &[json!({"data": "YQ=="})]);
+        runtime.publish("jobs", &[json!({"data": "YQ=="})]).unwrap();
         runtime
             .await_idle(Duration::from_secs(3))
             .await
@@ -8803,9 +9555,11 @@ for (const [name, topic, timeout] of [['hang', 'jobs', 1], ['longHang', 'long-jo
             let mut oldest_deadline = None;
             for revision in 0..2 {
                 if revision == 0 {
-                    runtime.publish("long-jobs", &[json!({"data": "YQ=="})]);
+                    runtime
+                        .publish("long-jobs", &[json!({"data": "YQ=="})])
+                        .unwrap();
                 }
-                runtime.publish("jobs", &[json!({"data": "YQ=="})]);
+                runtime.publish("jobs", &[json!({"data": "YQ=="})]).unwrap();
                 tokio::time::timeout(Duration::from_secs(5), async {
                     loop {
                         if root.join("hang").exists()
@@ -8925,7 +9679,7 @@ for (const [name, topic, timeout] of [['hang', 'jobs', 1], ['longHang', 'long-jo
                 );
             }
             if !debug_mode {
-                runtime.publish("jobs", &[json!({"data": "YQ=="})]);
+                runtime.publish("jobs", &[json!({"data": "YQ=="})]).unwrap();
                 tokio::time::timeout(Duration::from_secs(3), async {
                     loop {
                         if runtime.inner.lock().unwrap().running.len() == 1 {
@@ -9386,7 +10140,9 @@ mod schedule_capacity_tests {
         let (runtime, clock) = runtime(CatchUpPolicy::All).await;
         // One slot left, taken by a Pub/Sub event: the queue is full.
         set_room(&runtime, 1);
-        runtime.publish("jobs", &[serde_json::json!({"data": "YQ=="})]);
+        runtime
+            .publish("jobs", &[serde_json::json!({"data": "YQ=="})])
+            .unwrap();
         advance(&clock, 300);
         runtime.on_clock_changed();
         assert_eq!(

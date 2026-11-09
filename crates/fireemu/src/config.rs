@@ -1110,6 +1110,10 @@ pub struct RuntimeConfig {
     pub clock_mode: Option<ClockMode>,
     /// Deterministic seed.
     pub seed: u64,
+    /// Whether `daemon.seed` named the seed. Without it the Functions event ids are not a
+    /// function of the seed (a fresh daemon would repeat the previous run's ids, so a handler that
+    /// deduplicates by event id could drop a new event); with it they are, for a replay.
+    pub seed_pinned: bool,
     /// Project ID used for Auth token issuance.
     pub auth_project: String,
     /// Explicit project ID to number mappings for Auth response metadata.
@@ -1683,6 +1687,7 @@ impl Default for RuntimeConfig {
             clock_start_pinned: false,
             clock_mode: None,
             seed: 42,
+            seed_pinned: false,
             auth_project: "demo-app".to_owned(),
             auth_project_numbers: BTreeMap::new(),
             auth_totp: None,
@@ -4477,6 +4482,7 @@ impl RuntimeConfig {
         }
         if let Some(seed) = d.get("seed").and_then(Value::as_u64) {
             cfg.seed = seed;
+            cfg.seed_pinned = true;
         }
         if let Some(p) = d.get("authProject").and_then(Value::as_str) {
             p.clone_into(&mut cfg.auth_project);

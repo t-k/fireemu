@@ -658,6 +658,117 @@ fn a_tenant_mail_with_a_blocking_function_checks_the_parent_projects_domains() {
     }
 }
 
+/// Sets the project's authorized domains while `beforeSendEmail` runs: the effect of an Admin
+/// config update that lands during the function (the namespace gate is released then).
+struct DomainsHook {
+    project: Arc<Mutex<AuthStore>>,
+    during: Vec<String>,
+}
+
+impl AuthBlockingHook for DomainsHook {
+    fn handles(&self, event: BlockingAuthEvent) -> bool {
+        event == BlockingAuthEvent::BeforeSendEmail
+    }
+
+    fn invoke(
+        &self,
+        _event: BlockingAuthEvent,
+        _user: &fireemu_core_auth::store::UserRecord,
+    ) -> Result<Value, BlockingFunctionFailure> {
+        unreachable!("a mail event has no user")
+    }
+
+    fn invoke_before_send_email(
+        &self,
+        _project: &str,
+        _context: &AuthBlockingContext,
+    ) -> Result<Option<Value>, BlockingFunctionFailure> {
+        self.project
+            .lock()
+            .unwrap()
+            .set_authorized_domains_seed(self.during.clone())
+            .unwrap();
+        Ok(None)
+    }
+}
+
+/// Strict: a tenant link is decided by the project's list at commit, as the project scope is,
+/// when the list changes while `beforeSendEmail` runs. A domain removed meanwhile refuses both
+/// scopes; one that stays authorized (unchanged, or with another added) sends both.
+#[test]
+fn a_domain_removed_during_the_mail_function_refuses_a_tenant_link_as_the_project_scope() {
+    // (list during the function, host asked, accepted)
+    let cases: [(&[&str], &str, bool); 4] = [
+        (&["other.test"], "project.test", false),
+        (&["project.test"], "project.test", true),
+        (&["project.test", "other.test"], "project.test", true),
+        // Not authorized at admission: refused before the function runs, whatever it sets.
+        (&["other.test"], "added.test", false),
+    ];
+    for (during, host, accepted) in cases {
+        for scope in ["project", "tenant-client", "tenant-admin"] {
+            let (mut s, mails) = state(true, true);
+            s.blocking = Some(Arc::new(DomainsHook {
+                project: s.store.clone(),
+                during: during.iter().map(|d| (*d).to_owned()).collect(),
+            }));
+            let tenant = create_tenant(&s);
+            create_account(
+                &s,
+                &format!("{V1}/projects/demo-app/accounts"),
+                "race@example.com",
+            );
+            create_account(
+                &s,
+                &format!("{V1}/projects/demo-app/tenants/{tenant}/accounts"),
+                "race@example.com",
+            );
+            let (status, body) = admin(
+                &s,
+                "PATCH",
+                "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config?updateMask=authorizedDomains",
+                &json!({"authorizedDomains": ["project.test"]}),
+            );
+            assert_eq!(status, 200, "{body}");
+            let request = json!({"requestType": "PASSWORD_RESET", "email": "race@example.com", "continueUrl": format!("https://{host}/done")});
+            let before = codes(&s, &tenant);
+            let (status, answer) = match scope {
+                "project" => client(&s, &format!("{V1}/accounts:sendOobCode"), &request),
+                "tenant-client" => {
+                    let mut request = request;
+                    request["tenantId"] = json!(tenant);
+                    client(&s, &format!("{V1}/accounts:sendOobCode"), &request)
+                }
+                _ => {
+                    let mut request = request;
+                    request["returnOobLink"] = json!(true);
+                    admin(
+                        &s,
+                        "POST",
+                        &format!("{V1}/projects/demo-app/tenants/{tenant}/accounts:sendOobCode"),
+                        &request,
+                    )
+                }
+            };
+            let context = format!("{scope} during={during:?} host={host}");
+            if accepted {
+                assert_eq!(status, 200, "{context}: {answer}");
+            } else {
+                assert_eq!(
+                    (status, answer["error"]["message"].as_str()),
+                    (
+                        400,
+                        Some("UNAUTHORIZED_DOMAIN : Domain not allowlisted by project")
+                    ),
+                    "{context}: {answer}"
+                );
+                assert_eq!(codes(&s, &tenant), before, "{context}: no code");
+            }
+            drop(mails);
+        }
+    }
+}
+
 /// Refuses every mail once switched on.
 struct SwitchHook {
     refuse: AtomicBool,

@@ -2811,7 +2811,8 @@ fn dispatch_with_blocking_hook(
     if revision_changed() {
         return error(409, "BLOCKING_FUNCTION_CONFIGURATION_CHANGED");
     }
-    let mut commit = |metadata: Option<&fireemu_core_auth::store::TenantMetadata>| {
+    let mut commit = |metadata: Option<&fireemu_core_auth::store::TenantMetadata>,
+                      committed_domains: Option<&[String]>| {
         if revision_changed() {
             return error(409, "BLOCKING_FUNCTION_CONFIGURATION_CHANGED");
         }
@@ -2911,7 +2912,7 @@ fn dispatch_with_blocking_hook(
                 body,
                 headers,
                 at,
-                &blocking_dispatch_options(state, parent_authorized_domains),
+                &blocking_dispatch_options(state, committed_domains),
             )
         };
         if committed_response.status != 200 {
@@ -3152,6 +3153,11 @@ fn dispatch_with_blocking_hook(
         },
         None => None,
     };
+    // A tenant-scoped link is decided by the project's list as it stands now, as a project
+    // scoped one is by the live store: the function ran unlocked, so an Admin update may have
+    // landed. It is read with the parent check below, after the gate is retaken and before the
+    // registry's tenant locks and the tenant store are taken (parent before tenant).
+    let mut committed_domains = None;
     if !state.stateless_refresh_tokens && tenant.is_some() {
         let Some(parent) = state
             .registry
@@ -3166,13 +3172,16 @@ fn dispatch_with_blocking_hook(
         if !parent.allows_tenants() {
             return unknown_tenant_refusal(handler, error(404, "TENANT_NOT_FOUND"));
         }
+        committed_domains = parent_authorized_domains.map(|_| parent.authorized_domains());
     }
     match (tenant.as_deref(), state.registry.as_ref()) {
         (Some(tenant), Some(registry)) => {
-            registry.with_existing_tenant_metadata(&project, tenant, commit)
+            registry.with_existing_tenant_metadata(&project, tenant, |metadata| {
+                commit(metadata, committed_domains.as_deref())
+            })
         }
         (Some(_), None) => error(400, "TENANT_NOT_FOUND"),
-        (None, _) => commit(None),
+        (None, _) => commit(None, None),
     }
 }
 

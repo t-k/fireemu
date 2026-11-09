@@ -3494,6 +3494,12 @@ impl FunctionsDatabaseSink {
         self.runtime
             .database_capture_patterns(project, instance, &self.location)
     }
+
+    fn triggers(&self, instance: &str) -> Vec<DatabaseTrigger> {
+        let project = crate::database_rules::project_of_instance(instance, &self.daemon_project);
+        self.runtime
+            .database_capture_triggers(project, instance, &self.location)
+    }
 }
 
 impl fireemu_adapter_database::changes::ChangeSink for FunctionsDatabaseSink {
@@ -3521,7 +3527,7 @@ impl fireemu_adapter_database::changes::ChangeSink for FunctionsDatabaseSink {
         use fireemu_adapter_functions::protocol::MAX_FRAME_BYTES;
         use fireemu_adapter_functions::runtime::MAX_ACTIVE_EVENT_RECORDS;
         match capture_database_references_limited(
-            &self.patterns(namespace),
+            &self.triggers(namespace),
             before,
             after,
             scope,
@@ -3638,7 +3644,16 @@ struct DatabaseReferenceCapture {
     /// The strict profile's event limit: a reference provably over it refuses the write.
     refuse_over: Option<usize>,
     frame_drops: usize,
+    /// The event kind the trigger being walked accepts. A reference whose change is of another kind
+    /// yields no event for it, so its size is no reason to refuse or drop anything.
+    accepts: fireemu_core_functions::manifest::DocumentEvent,
 }
+
+/// A deployed Database trigger as the capture sees it: its reference pattern and the event kind it accepts.
+type DatabaseTrigger = (
+    fireemu_core_functions::manifest::DatabasePattern,
+    fireemu_core_functions::manifest::DocumentEvent,
+);
 
 impl DatabaseReferenceCapture {
     fn insert(
@@ -3663,6 +3678,18 @@ impl DatabaseReferenceCapture {
             bound = bound.saturating_add(database_json_lower_bound(after, limit));
         }
         if bound > limit {
+            // `before` absent is a creation, `after` absent a deletion, anything else an update (the
+            // runtime's own rule when it builds the event).
+            let actual = if before.is_none() {
+                fireemu_core_functions::manifest::DocumentEvent::Created
+            } else if after.is_none() {
+                fireemu_core_functions::manifest::DocumentEvent::Deleted
+            } else {
+                fireemu_core_functions::manifest::DocumentEvent::Updated
+            };
+            if !self.accepts.accepts(actual) {
+                return Ok(());
+            }
             if self.refuse_over.is_some_and(|over| bound > over) {
                 return Err(
                     fireemu_core_types::admission::EventAdmissionError::PayloadTooLarge(
@@ -3746,8 +3773,17 @@ fn capture_database_references<'a>(
     (Vec<fireemu_adapter_database::changes::Path>, usize),
     fireemu_core_types::admission::EventAdmissionError,
 > {
+    let triggers: Vec<DatabaseTrigger> = patterns
+        .iter()
+        .map(|pattern| {
+            (
+                pattern.clone(),
+                fireemu_core_functions::manifest::DocumentEvent::Written,
+            )
+        })
+        .collect();
     capture_database_references_limited(
-        patterns,
+        &triggers,
         before,
         after,
         scope,
@@ -3759,8 +3795,10 @@ fn capture_database_references<'a>(
 
 /// `capture_database_references` that, given `refuse_over`, refuses the write instead of leaving out a
 /// reference whose snapshot is provably larger than that many bytes (the strict profile's event limit).
+/// Each trigger carries the event kind it accepts: an oversized reference whose change is of a kind no
+/// trigger on it accepts produces no event, and is neither refused nor counted as dropped.
 fn capture_database_references_limited<'a>(
-    patterns: &[fireemu_core_functions::manifest::DatabasePattern],
+    triggers: &[DatabaseTrigger],
     before: impl Into<fireemu_adapter_database::changes::ScopeView<'a>>,
     after: &fireemu_adapter_database::changes::Tree,
     scope: &fireemu_adapter_database::changes::Path,
@@ -3778,8 +3816,10 @@ fn capture_database_references_limited<'a>(
         frame_limit,
         refuse_over,
         frame_drops: 0,
+        accepts: fireemu_core_functions::manifest::DocumentEvent::Written,
     };
-    for pattern in patterns {
+    for (pattern, accepts) in triggers {
+        capture.accepts = *accepts;
         let parts: Vec<_> = pattern
             .as_str()
             .trim_matches('/')
@@ -7422,6 +7462,98 @@ while True:
         );
     }
 
+    /// Merge review note (2026-11-10): an oversized reference is refused or counted as dropped only for a
+    /// trigger that accepts the change's kind (creation: before absent, deletion: after absent, otherwise
+    /// an update); `written` accepts all three. A reference no trigger accepts is left out silently.
+    #[test]
+    fn database_bridge_capture_judges_an_oversized_reference_only_for_triggers_that_accept_its_kind(
+    ) {
+        use fireemu_core_functions::manifest::{DatabasePattern, DocumentEvent};
+        use fireemu_core_types::admission::EventAdmissionError;
+        let root = fireemu_adapter_database::changes::Path::root();
+        let big = json!("x".repeat(4096));
+        // (before, after, the kind of the change)
+        let changes = [
+            (
+                json!({}),
+                json!({"users":{"a": big}}),
+                DocumentEvent::Created,
+            ),
+            (
+                json!({"users":{"a": big}}),
+                json!({}),
+                DocumentEvent::Deleted,
+            ),
+            (
+                json!({"users":{"a": big}}),
+                json!({"users":{"a":"y"}}),
+                DocumentEvent::Updated,
+            ),
+        ];
+        let pattern = DatabasePattern::parse("/users/{uid}").unwrap();
+        for (before, after, actual) in &changes {
+            let (before, after) = (database_bridge_tree(before), database_bridge_tree(after));
+            for declared in [
+                DocumentEvent::Created,
+                DocumentEvent::Updated,
+                DocumentEvent::Deleted,
+                DocumentEvent::Written,
+            ] {
+                let accepted = declared.accepts(*actual);
+                let triggers = [(pattern.clone(), declared)];
+                let capture = |refuse_over: Option<usize>| {
+                    super::capture_database_references_limited(
+                        &triggers,
+                        &before,
+                        &after,
+                        &root,
+                        8,
+                        1024,
+                        refuse_over,
+                    )
+                };
+                // dropped for the frame, or refused for the event limit, only when accepted
+                assert_eq!(
+                    capture(None).unwrap(),
+                    (Vec::new(), usize::from(accepted)),
+                    "{declared:?} on a {actual:?}"
+                );
+                assert_eq!(
+                    matches!(
+                        capture(Some(2048)),
+                        Err(EventAdmissionError::PayloadTooLarge(_))
+                    ),
+                    accepted,
+                    "{declared:?} on a {actual:?}"
+                );
+                if !accepted {
+                    assert_eq!(capture(Some(2048)).unwrap(), (Vec::new(), 0));
+                }
+            }
+            // one trigger that accepts is enough, wherever it stands among the others
+            for order in [
+                [DocumentEvent::Created, DocumentEvent::Deleted],
+                [DocumentEvent::Deleted, DocumentEvent::Created],
+            ] {
+                let triggers = order.map(|declared| (pattern.clone(), declared));
+                let refused = super::capture_database_references_limited(
+                    &triggers,
+                    &before,
+                    &after,
+                    &root,
+                    8,
+                    1024,
+                    Some(2048),
+                )
+                .is_err();
+                assert_eq!(
+                    refused,
+                    matches!(actual, DocumentEvent::Created | DocumentEvent::Deleted)
+                );
+            }
+        }
+    }
+
     /// RTDB-TRIGGERS-KINDS-20261108-01 (k13): where the strict profile refuses a write whose event is too
     /// large, the capture refuses it from the same lower bound that otherwise leaves the reference out for
     /// not fitting a frame, before anything is exported.
@@ -7433,10 +7565,12 @@ while True:
         let before = database_bridge_tree(&json!({"users":{"a":"before","b":1}}));
         let after = database_bridge_tree(&json!({"users":{"a":"x".repeat(4 * 1024 * 1024),"b":2}}));
         let patterns = [DatabasePattern::parse("/users/{uid}").unwrap()];
+        let written = fireemu_core_functions::manifest::DocumentEvent::Written;
+        let triggers = [(patterns[0].clone(), written)];
         let at_bound = 8 + 4 * 1024 * 1024 + 2;
         let capture = |refuse_over: Option<usize>| {
             super::capture_database_references_limited(
-                &patterns,
+                &triggers,
                 &before,
                 &after,
                 &root,
@@ -7454,7 +7588,7 @@ while True:
         // a reference over the frame but not over the event limit is still only left out and counted
         assert_eq!(
             super::capture_database_references_limited(
-                &patterns,
+                &triggers,
                 &before,
                 &after,
                 &root,
@@ -8079,6 +8213,319 @@ root	unchanged	small	firstGen";
             assert_eq!(response.status, 200);
             runtime.shutdown().await;
         }
+    }
+
+    /// Merge review note (2026-11-10): the capture used to refuse an oversized reference by path alone, before
+    /// asking whether any deployed trigger accepts the change's kind. A write that produces no event is
+    /// never refused for an event size (production for this case is unrecorded); one a deployed trigger
+    /// would receive still is, at the same limit, through REST PUT, PATCH and POST.
+    #[tokio::test]
+    async fn database_bridge_strict_refuses_only_writes_whose_event_a_deployed_trigger_receives() {
+        use fireemu_adapter_database::rest::{Database, Handled, HttpRequest, RestOptions};
+        use fireemu_adapter_functions::events::DatabaseEventShape;
+        let limit = 1_048_576usize;
+        let at_limit = "x".repeat(limit);
+        for (event, overwrite_refused, create_refused, delete_refused) in [
+            ("created", false, true, false),
+            ("updated", true, false, false),
+            ("deleted", false, false, true),
+            ("written", true, true, true),
+        ] {
+            let manifest = json!({"functions":[{"name":"leaf","generation":2,"region":"us-central1","trigger":{
+                "type":"database","eventType":format!("google.firebase.database.ref.v1.{event}"),
+                "instance":"*","ref":"/users/{uid}"
+            }}]});
+            let runtime =
+                database_bridge_runtime_shaped(&manifest, DatabaseEventShape::Production).await;
+            let mut database = Database::new(RestOptions::default(), 1);
+            let call = |database: &mut Database,
+                        method: &str,
+                        target: &str,
+                        body: &serde_json::Value,
+                        at: i64| {
+                let Handled::Response { response, .. } = database.handle(
+                    &HttpRequest {
+                        method: method.to_owned(),
+                        target: format!("{target}?ns=demo-app-default-rtdb"),
+                        headers: Vec::new(),
+                        body: serde_json::to_vec(body).unwrap(),
+                    },
+                    at,
+                ) else {
+                    panic!("a REST write must not create a stream")
+                };
+                response.status
+            };
+            // the oversized values are there before the trigger is attached
+            assert_eq!(
+                call(&mut database, "PUT", "/users/a.json", &json!(at_limit), 1),
+                200
+            );
+            assert_eq!(
+                call(&mut database, "PUT", "/users/d.json", &json!(at_limit), 2),
+                200
+            );
+            database.set_change_sink(super::database_sink(
+                &runtime,
+                "demo-app",
+                "us-central1",
+                "firebaseio.com",
+            ));
+            let verdict = |refused: bool| if refused { 400 } else { 200 };
+            assert_eq!(
+                call(&mut database, "PUT", "/users/a.json", &json!("y"), 3),
+                verdict(overwrite_refused),
+                "{event}: overwrite of an at-limit value"
+            );
+            assert_eq!(
+                call(&mut database, "PUT", "/users/c.json", &json!(at_limit), 4),
+                verdict(create_refused),
+                "{event}: creating an at-limit value"
+            );
+            assert_eq!(
+                call(&mut database, "PUT", "/users/d.json", &json!(null), 5),
+                verdict(delete_refused),
+                "{event}: deleting an at-limit value"
+            );
+            runtime.shutdown().await;
+        }
+    }
+
+    /// The strict event limit is exact, and the same on every write route (merge review note, 2026-11-10):
+    /// a creation whose event (the `null` before plus the value as the delta) is exactly the limit is
+    /// applied, one byte more is refused and nothing is written, through REST PUT, PATCH and POST, and the
+    /// realtime put, update and `onDisconnect` writes. The measure is the serialized JSON, so an escaped
+    /// quote counts twice and a two-byte UTF-8 character twice, where the capture's lower bound counts raw bytes.
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn database_bridge_strict_event_limit_is_exact_on_every_write_route() {
+        use fireemu_adapter_database::realtime::{Opened, Session};
+        use fireemu_adapter_database::rest::{Database, Handled, HttpRequest, RestOptions};
+        use fireemu_adapter_functions::events::DatabaseEventShape;
+        #[derive(Clone, Copy, Debug)]
+        enum Route {
+            Put,
+            Patch,
+            Post,
+            WsPut,
+            WsUpdate,
+            OnDisconnect,
+        }
+        const LIMIT: usize = 1_048_576;
+        // the delta's JSON length is the value's length plus two quotes, and the before is `null`
+        let ascii = |bytes: usize| "x".repeat(bytes - 6);
+        let manifest = json!({"functions":[{"name":"leaf","generation":2,"region":"us-central1","trigger":{
+            "type":"database","eventType":"google.firebase.database.ref.v1.written","instance":"*",
+            "ref":"/users/{uid}"
+        }}]});
+        let runtime =
+            database_bridge_runtime_shaped(&manifest, DatabaseEventShape::Production).await;
+        let mut database = Database::new(RestOptions::default(), 1);
+        database.set_change_sink(super::database_sink(
+            &runtime,
+            "demo-app",
+            "us-central1",
+            "firebaseio.com",
+        ));
+        let mut session = match database
+            .open_realtime("/.ws?v=5&ns=demo-app-default-rtdb", None, 100)
+            .unwrap()
+        {
+            Opened::Session(session, _) => session,
+            other @ Opened::Shutdown(_) => panic!("unexpected realtime open: {other:?}"),
+        };
+        let rest =
+            |database: &mut Database, method: &str, target: &str, body: &serde_json::Value| {
+                let Handled::Response { response, .. } = database.handle(
+                    &HttpRequest {
+                        method: method.to_owned(),
+                        target: format!("{target}?ns=demo-app-default-rtdb"),
+                        headers: Vec::new(),
+                        body: serde_json::to_vec(body).unwrap(),
+                    },
+                    1_000,
+                ) else {
+                    panic!("a REST write must not create a stream")
+                };
+                response
+            };
+        let frame = |session: &mut Session,
+                     database: &mut Database,
+                     action: &str,
+                     body: serde_json::Value| {
+            let text = json!({"t":"d","d":{"r":1,"a":action,"b":body}}).to_string();
+            let received = session.receive(database, &text, 1_000);
+            serde_json::from_str::<serde_json::Value>(&received.replies[0]).unwrap()["d"]["b"]["s"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+        let mut next = 0u32;
+        // Writes `value` as a new child of /users by `route`; whether it was applied.
+        let mut write = |database: &mut Database,
+                         session: &mut Session,
+                         route: Route,
+                         value: &str|
+         -> bool {
+            next += 1;
+            let key = format!("k{next}");
+            let wrote = |database: &Database| {
+                database
+                    .tree("demo-app-default-rtdb")
+                    .unwrap()
+                    .root()
+                    .and_then(|root| root.child("users"))
+                    .and_then(|users| users.child(&key))
+                    .is_some()
+            };
+            match route {
+                Route::Put => {
+                    let response = rest(
+                        database,
+                        "PUT",
+                        &format!("/users/{key}.json"),
+                        &json!(value),
+                    );
+                    assert!(
+                        response.status == 200 || response.status == 400,
+                        "{}",
+                        response.status
+                    );
+                    if response.status == 400 {
+                        assert_eq!(
+                            String::from_utf8(response.body).unwrap(),
+                            "{\n  \"error\" : \"This request would cause a function payload exceeding the maximum size allowed.\"\n}\n"
+                        );
+                    }
+                }
+                Route::Patch => {
+                    let status =
+                        rest(database, "PATCH", "/users.json", &json!({ &key: value })).status;
+                    assert!(status == 200 || status == 400, "{status}");
+                }
+                Route::Post => {
+                    // a push key is generated, so the write is found by the size of /users instead of by key
+                    let before = database
+                        .tree("demo-app-default-rtdb")
+                        .unwrap()
+                        .root()
+                        .and_then(|root| root.child("users"))
+                        .map_or(0, fireemu_adapter_database::changes::Node::retained_bytes);
+                    let status = rest(database, "POST", "/users.json", &json!(value)).status;
+                    assert!(status == 200 || status == 400, "{status}");
+                    let after = database
+                        .tree("demo-app-default-rtdb")
+                        .unwrap()
+                        .root()
+                        .and_then(|root| root.child("users"))
+                        .map_or(0, fireemu_adapter_database::changes::Node::retained_bytes);
+                    assert_eq!(
+                        after > before,
+                        status == 200,
+                        "a refused push writes nothing"
+                    );
+                    return status == 200;
+                }
+                Route::WsPut => {
+                    let status = frame(
+                        session,
+                        database,
+                        "p",
+                        json!({"p": format!("/users/{key}"), "d": value}),
+                    );
+                    assert!(status == "ok" || status == "invalid_parameters", "{status}");
+                }
+                Route::WsUpdate => {
+                    let status = frame(
+                        session,
+                        database,
+                        "m",
+                        json!({"p": "/users", "d": {&key: value}}),
+                    );
+                    assert!(status == "ok" || status == "invalid_parameters", "{status}");
+                }
+                Route::OnDisconnect => {
+                    let status = frame(
+                        session,
+                        database,
+                        "o",
+                        json!({"p": format!("/users/{key}"), "d": value}),
+                    );
+                    assert_eq!(status, "ok", "registering is not a write");
+                    // The connection ends and the registered write is made at the root; a payload refusal drops it.
+                    database.close_realtime(session.client(), 1_000);
+                    let fresh = match database
+                        .open_realtime("/.ws?v=5&ns=demo-app-default-rtdb", None, 100)
+                        .unwrap()
+                    {
+                        Opened::Session(fresh, _) => fresh,
+                        other @ Opened::Shutdown(_) => {
+                            panic!("unexpected realtime open: {other:?}")
+                        }
+                    };
+                    *session = fresh;
+                }
+            }
+            wrote(database)
+        };
+        let routes = [
+            Route::Put,
+            Route::Patch,
+            Route::Post,
+            Route::WsPut,
+            Route::WsUpdate,
+            Route::OnDisconnect,
+        ];
+        let exact_quotes = "\"".repeat((LIMIT - 6) / 2);
+        let exact_utf8 = "\u{e9}".repeat((LIMIT - 6) / 2);
+        for route in routes {
+            assert!(
+                write(&mut database, &mut session, route, &ascii(LIMIT)),
+                "{route:?}: exactly the limit"
+            );
+            assert!(
+                !write(&mut database, &mut session, route, &ascii(LIMIT + 1)),
+                "{route:?}: one byte over"
+            );
+        }
+        for route in [Route::Put, Route::Patch, Route::WsPut] {
+            assert!(
+                write(&mut database, &mut session, route, &exact_quotes),
+                "{route:?}: escaped quotes, exactly the limit"
+            );
+            assert!(
+                !write(
+                    &mut database,
+                    &mut session,
+                    route,
+                    &format!("{exact_quotes}\"")
+                ),
+                "{route:?}: one more quote is two bytes over, though the capture counts one"
+            );
+            assert!(
+                write(&mut database, &mut session, route, &exact_utf8),
+                "{route:?}: two-byte characters, exactly the limit"
+            );
+            assert!(
+                !write(
+                    &mut database,
+                    &mut session,
+                    route,
+                    &format!("{exact_utf8}x")
+                ),
+                "{route:?}: one ASCII byte over"
+            );
+            assert!(
+                !write(
+                    &mut database,
+                    &mut session,
+                    route,
+                    &format!("{exact_utf8}\u{e9}")
+                ),
+                "{route:?}: one character over"
+            );
+        }
+        runtime.shutdown().await;
     }
 
     /// The strict profile refuses, rather than drops, an event larger than a frame, and does it from the

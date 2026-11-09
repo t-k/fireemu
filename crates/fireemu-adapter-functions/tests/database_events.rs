@@ -196,6 +196,20 @@ async fn database_capture_scopes_project_instance_and_generation_region() {
     assert!(runtime
         .database_capture_patterns("demo-db", "app-first", "europe-west1")
         .is_empty());
+    // the same scoping, with the event kind the trigger declared
+    let triggers = runtime.database_capture_triggers("demo-db", "app-first", "us-central1");
+    assert_eq!(triggers.len(), 1);
+    assert_eq!(
+        triggers[0].1,
+        fireemu_core_functions::manifest::DocumentEvent::Written
+    );
+    assert_eq!(
+        triggers[0].0,
+        runtime.database_capture_patterns("demo-db", "app-first", "us-central1")[0]
+    );
+    assert!(runtime
+        .database_capture_triggers("another-project", "app-first", "us-central1")
+        .is_empty());
     let mut other = commit();
     other.project = "another-project".to_owned();
     runtime.reserve_database_events(&other).unwrap().publish();

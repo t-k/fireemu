@@ -704,11 +704,12 @@ async fn strict_refuses_an_event_over_the_recorded_limit_and_the_emulator_profil
     );
     assert_eq!(dropped_fanouts(&emulator), 0);
     // the recorded shapes: 100 KiB and 600 KiB objects fit, the 2 MiB one does not; and the ladder of
-    // packet v2 around the documented 1 MB: 0.95 MB fits, 1.05 MB and 1.5 MB do not
+    // packet v2 around the documented 1 MB: 0.95 MB fits; 1,024,000 bytes (between 1,000,000 and 1,048,576), 1.05 MB and 1.5 MB do not
     for (blob, refused) in [
         (100 * 1024, false),
         (600 * 1024, false),
         (949_900, false),
+        (1_023_900, true),
         (1_049_900, true),
         (1_499_900, true),
         (2 * 1024 * 1024, true),

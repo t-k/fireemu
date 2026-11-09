@@ -140,10 +140,10 @@ export const STEPS = buildSteps();
  * another's data), observation-only, sized by the compact JSON of the largest event of the write, the group
  * handler's `{"items":{id:leaf}}`. The first repeats the 600 KiB value of the first recording's k12, which
  * production answered 200 and did not deliver within 30 s; the next three straddle the documented 1 MB per
- * event (about 0.95 MB, about 1.05 MB, above 1,048,576 bytes as well, and about 1.5 MB). A refusal of a
+ * event (about 0.95 MB; about 1,024,000 bytes, between the readings 1,000,000 and 1,048,576 of "1 MB"; about 1.05 MB, above both readings; and about 1.5 MB). A refusal of a
  * rung is an answer the run records and goes on from.
  */
-export const LADDER_BLOBS = Object.freeze([614400, 949900, 1049900, 1499900]);
+export const LADDER_BLOBS = Object.freeze([614400, 949900, 1023900, 1049900, 1499900]);
 export function buildLadderSteps(nonce) {
   const mark = (value) => (nonce === undefined ? value : { ...value, run: nonce });
   return LADDER_BLOBS.map((size, index) => ({

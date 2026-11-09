@@ -14,7 +14,7 @@ test("packet v2 has the user writes k15 to k21 in the first packet's order, then
   const steps = KINDS_V2_SCENARIO.buildSteps(MASKED_NONCE);
   assert.deepEqual(
     steps.map((s) => s.id),
-    ["k15", "k16", "k17", "k18", "k19", "k20", "k21", "k22", "k23", "k24", "k25"],
+    ["k15", "k16", "k17", "k18", "k19", "k20", "k21", "k22", "k23", "k24", "k25", "k26"],
   );
   const main = steps.slice(0, 7);
   assert.deepEqual(
@@ -38,10 +38,10 @@ test("the ladder steps around the documented 1 MB, each in its own group so no e
   const rungs = KINDS_V2_SCENARIO.buildSteps(MASKED_NONCE).slice(7);
   assert.deepEqual(
     rungs.map((s) => s.id),
-    ["k22", "k23", "k24", "k25"],
+    ["k22", "k23", "k24", "k25", "k26"],
   );
   const groups = rungs.map((s) => s.path.split("/")[1]);
-  assert.equal(new Set(groups).size, 4);
+  assert.equal(new Set(groups).size, 5);
   assert.ok(groups.every((g) => !["ga", "gb", "gp", "gl", "gc", "gs"].includes(g)));
   assert.ok(rungs.every((s) => s.method === "PUT" && s.path.split("/")[2] === "items"));
   // the event of a create is the delta {"items":{id:leaf}} (the node before is null): the size of the
@@ -51,18 +51,22 @@ test("the ladder steps around the documented 1 MB, each in its own group so no e
     void group;
     return JSON.stringify({ items: { [id]: s.body } }).length;
   });
-  const [repeat, below, above, far] = sizes;
+  const [repeat, below, between, above, far] = sizes;
   // the k12 value of the first recording again: the same 600 KiB blob
   assert.equal(rungs[0].body.blob.length, BLOB_SIZES.medium);
   assert.ok(repeat > 614_400 && repeat < 614_400 + 100, `the k12 shape again: ${repeat}`);
   assert.ok(below > 949_000 && below < 951_000, `about 0.95 MB: ${below}`);
-  // above both readings of "1 MB" (1,000,000 and 1,048,576 bytes), for the leaf's own event as well
+  // between the two readings of "1 MB": above 1,000,000 and below 1,048,576 bytes, for the leaf's own
+  // event as well as the group handler's
   const leaf = (s) => JSON.stringify(s.body).length;
-  assert.ok(leaf(rungs[2]) > 1_048_576 && above < 1_100_000, `about 1.05 MB: ${above}`);
+  assert.ok(between > 1_023_900 && between < 1_024_100, `about 1,024,000 bytes: ${between}`);
+  assert.ok(leaf(rungs[2]) > 1_000_000 && leaf(rungs[2]) < 1_048_576 && between < 1_048_576);
+  // above both readings, for the leaf's own event as well
+  assert.ok(leaf(rungs[3]) > 1_048_576 && above < 1_100_000, `about 1.05 MB: ${above}`);
   assert.ok(far > 1_450_000 && far < 1_550_000, `about 1.5 MB: ${far}`);
   // distinct blob lengths: the frames of one rung cannot be taken for another's
-  assert.equal(new Set(rungs.map((s) => s.body.blob.length)).size, 4);
-  assert.equal(new Set(rungs.map((s) => s.body.value)).size, 4);
+  assert.equal(new Set(rungs.map((s) => s.body.blob.length)).size, 5);
+  assert.equal(new Set(rungs.map((s) => s.body.value)).size, 5);
 });
 
 test("packet v2 shares the first packet's fixture, handlers, pins, limits and judge", () => {
@@ -90,7 +94,7 @@ test("packet v2 shares the first packet's fixture, handlers, pins, limits and ju
   assert.notEqual(KINDS_V2_SCENARIO.runDirPrefix, KINDS_SCENARIO.runDirPrefix);
 });
 
-test("packet v2 expects 31 judged deliveries from 8 item transitions and 7 group transitions, and up to 16 more on the ladder", () => {
+test("packet v2 expects 31 judged deliveries from 8 item transitions and 7 group transitions, and up to 20 more on the ladder", () => {
   const allSteps = KINDS_V2_SCENARIO.buildSteps(MASKED_NONCE);
   const steps = allSteps.slice(0, 7);
   const report = observe({ steps });
@@ -102,7 +106,7 @@ test("packet v2 expects 31 judged deliveries from 8 item transitions and 7 group
         .flatMap((entry) => Object.values(entry.handlers).map((seen) => seen.expected))
         .reduce((a, b) => a + b, 0),
     ),
-    [4, 4, 4, 4],
+    [4, 4, 4, 4, 4],
   );
   const expected = { created: 0, updated: 0, deleted: 0, any: 0, group: 0 };
   const bump = (name, n) => {
@@ -144,14 +148,14 @@ test("packet v2 expects 31 judged deliveries from 8 item transitions and 7 group
   assert.equal(FIXTURE_HANDLERS.length, 8);
 });
 
-test("the shared flow sends k15 to k25 and every expected delivery makes it recorded", async () => {
+test("the shared flow sends k15 to k26 and every expected delivery makes it recorded", async () => {
   const world = makeWorld({ frames: "all", scenario: KINDS_V2_SCENARIO });
   const result = await runBreadth(world.deps);
   assert.deepEqual(result.reasons, []);
   assert.equal(result.outcome, "recorded");
-  assert.deepEqual(writes(world), [...KINDS_V2_STEP_IDS, "k22", "k23", "k24", "k25"]);
+  assert.deepEqual(writes(world), [...KINDS_V2_STEP_IDS, "k22", "k23", "k24", "k25", "k26"]);
   assert.ok(world.deps.clock.now() < 300000 + 11 * 6000 + 210000);
-  assert.equal(result.report.totals.frames, 47);
+  assert.equal(result.report.totals.frames, 51);
   assert.equal(result.report.totals.unattributed, 0);
 });
 
@@ -159,19 +163,19 @@ test("a refused rung is recorded and the run goes on to the next rung; the refus
   const world = makeWorld({
     frames: "all",
     scenario: KINDS_V2_SCENARIO,
-    refuse: (step) => ["k24", "k25"].includes(step.id),
+    refuse: (step) => ["k24", "k25", "k26"].includes(step.id),
     drop: (f) => {
       const params = f.generation === 1 ? f.event.context.params : f.event.params;
-      return ["gq3", "gq4"].includes(params.group);
+      return ["gq3", "gq4", "gq5"].includes(params.group);
     },
   });
   const result = await runBreadth(world.deps);
   assert.deepEqual(result.reasons, []);
   assert.equal(result.outcome, "recorded");
-  assert.deepEqual(writes(world), [...KINDS_V2_STEP_IDS, "k22", "k23", "k24", "k25"]);
+  assert.deepEqual(writes(world), [...KINDS_V2_STEP_IDS, "k22", "k23", "k24", "k25", "k26"]);
   assert.equal(result.report.steps.find((s) => s.id === "k24").write.outcome, "refused");
   assert.equal(result.report.totals.frames, 39);
-  assert.ok(world.events.indexOf("cleanup user") > world.events.indexOf("write k25"));
+  assert.ok(world.events.indexOf("cleanup user") > world.events.indexOf("write k26"));
 });
 
 test("a rung that is refused and still delivered is a reason; a refused judged write still stops the run", async () => {

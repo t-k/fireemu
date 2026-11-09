@@ -8,7 +8,7 @@ import { Tabs, TabItem } from '@astrojs/starlight/components';
 ## Requirements
 
 - Node.js 20 or newer.
-- To run Cloud Functions, `firebase-functions` v6 or v7 in the codebase. A Python codebase needs Python 3.10 to 3.14 and its own `venv` with `firebase-functions` instead (macOS and Linux; see [Cloud Functions](../../products/functions/#python-codebases)).
+- To run Cloud Functions, `firebase-functions` v6 or v7 in the codebase. A Python codebase needs Python 3.10 to 3.14 and its own `venv` with `firebase-functions` instead (macOS and Linux; see [Cloud Functions](../../products/functions-python/)).
 
 | OS | Architecture |
 |---|---|
@@ -99,7 +99,7 @@ npx fireemu emulators:exec -- npm test
 
 ## Choose services
 
-By default Fireemu starts Firestore, Authentication, Storage and App Check; Functions when a codebase is configured, and with it Eventarc and Cloud Tasks; and Pub/Sub when it is configured. Use `--only` to choose:
+By default Fireemu starts Firestore, Authentication, Storage and App Check; Functions when a codebase is configured, and with it Eventarc and Cloud Tasks; Pub/Sub when it is configured; and Hosting when `firebase.json` has a `hosting.public` directory. Use `--only` to choose:
 
 ```sh
 npx fireemu up --only auth,firestore,storage
@@ -118,6 +118,7 @@ Fireemu uses the same default ports as the Local Emulator Suite. A port set in `
 | Emulator UI | 4000 | `--ui-port` |
 | Emulator Hub | 4400 | `--hub-port` |
 | Logging | 4500 | `--logging-port` |
+| Firebase Hosting | 5000 | `--hosting-port` |
 | Cloud Functions | 5001 | `--functions-port` |
 | Cloud Firestore | 8080 | `--firestore-port` |
 | Cloud Pub/Sub | 8085 | `--pubsub-port` |

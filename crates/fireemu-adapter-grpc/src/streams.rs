@@ -492,13 +492,139 @@ impl PendingListenResponse {
     }
 }
 
+/// The documents a target has delivered and the version of each: what a later refresh diffs the
+/// result against. It is kept for the life of the target, so it is stored compactly: all of its
+/// documents belong to one database, so a key is the path's collection and document ids joined
+/// by NUL (which no id contains) in one allocation, not a [`DocumentPath`] with five. Keys order
+/// as the paths do, because the joined form compares the way the id sequence does (an id that is
+/// a prefix of another sorts first, and a path that is a prefix of another sorts first), so a
+/// departure is reported in path order as before.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct KnownDocuments {
+    versions: BTreeMap<Box<str>, CommitVersion>,
+}
+
+impl KnownDocuments {
+    fn key(path: &DocumentPath) -> String {
+        let bytes = path
+            .pairs()
+            .iter()
+            .map(|(collection, document)| collection.as_str().len() + document.as_str().len() + 2)
+            .sum::<usize>();
+        let mut key = String::with_capacity(bytes);
+        for (index, (collection, document)) in path.pairs().iter().enumerate() {
+            if index > 0 {
+                key.push('\0');
+            }
+            key.push_str(collection.as_str());
+            key.push('\0');
+            key.push_str(document.as_str());
+        }
+        key
+    }
+
+    fn get(&self, path: &DocumentPath) -> Option<CommitVersion> {
+        self.versions.get(Self::key(path).as_str()).copied()
+    }
+
+    fn insert(&mut self, path: &DocumentPath, version: CommitVersion) {
+        #[cfg(test)]
+        KNOWN_KEYS_INSERTED.with(|count| count.set(count.get() + 1));
+        self.versions
+            .insert(Self::key(path).into_boxed_str(), version);
+    }
+
+    fn remove(&mut self, path: &DocumentPath) -> bool {
+        self.versions.remove(Self::key(path).as_str()).is_some()
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.versions.len()
+    }
+
+    fn clear(&mut self) {
+        self.versions.clear();
+    }
+
+    /// The path a key stands for, in the database of `scope`.
+    fn path_of(scope: &Parent, key: &str) -> DocumentPath {
+        DocumentPath::parse(&scope.project, &scope.database, &key.replace('\0', "/"))
+            .expect("a known key was built from a valid document path")
+    }
+
+    /// Folds a target's complete result into the map in place and queues a change row for every
+    /// document the map did not already hold at that version. Returns the number of changed rows
+    /// and the paths that left the target, in path order, taken out of the map.
+    ///
+    /// The map is updated rather than rebuilt: a rebuilt map copies every path of the result
+    /// while the old map is still alive, on every full refresh of a large target. A key is made
+    /// only when a path enters the map, and the departed ones are found without copying
+    /// `current`: it holds each path once (a query's rows are distinct and a document target's
+    /// names are deduplicated), so once every current path is in the map, an equal count means
+    /// no path left, and otherwise the map's other keys are the departed ones.
+    fn fold(
+        &mut self,
+        scope: &Parent,
+        current: &[Arc<Document>],
+        id: i32,
+        out: &mut Vec<PendingListenResponse>,
+    ) -> (usize, Vec<DocumentPath>) {
+        let mut changed = 0_usize;
+        for doc in current {
+            let key = Self::key(&doc.path);
+            match self.versions.get_mut(key.as_str()) {
+                Some(version) if *version == doc.version => {}
+                Some(version) => {
+                    *version = doc.version;
+                    changed += 1;
+                    out_change(Arc::clone(doc), id, out);
+                }
+                None => {
+                    #[cfg(test)]
+                    KNOWN_KEYS_INSERTED.with(|count| count.set(count.get() + 1));
+                    self.versions.insert(key.into_boxed_str(), doc.version);
+                    changed += 1;
+                    out_change(Arc::clone(doc), id, out);
+                }
+            }
+        }
+        if self.versions.len() == current.len() {
+            return (changed, Vec::new());
+        }
+        let present: BTreeSet<String> = current.iter().map(|doc| Self::key(&doc.path)).collect();
+        let gone: Vec<Box<str>> = self
+            .versions
+            .keys()
+            .filter(|key| !present.contains::<str>(key))
+            .cloned()
+            .collect();
+        for key in &gone {
+            self.versions.remove(key);
+        }
+        let departed = gone.iter().map(|key| Self::path_of(scope, key)).collect();
+        (changed, departed)
+    }
+}
+
+impl<'a> FromIterator<(&'a DocumentPath, CommitVersion)> for KnownDocuments {
+    fn from_iter<I: IntoIterator<Item = (&'a DocumentPath, CommitVersion)>>(rows: I) -> Self {
+        Self {
+            versions: rows
+                .into_iter()
+                .map(|(path, version)| (Self::key(path).into_boxed_str(), version))
+                .collect(),
+        }
+    }
+}
+
 // The flags are independent facts of one target (once, server-assigned id, current).
 #[allow(clippy::struct_excessive_bools)]
 struct TargetState {
     kind: TargetKind,
     target_hash: u64,
     parent: Parent,
-    known: BTreeMap<DocumentPath, CommitVersion>,
+    known: KnownDocuments,
     /// Pending resume, resolved on the first refresh (it needs the snapshot).
     resume: Option<Resume>,
     once: bool,
@@ -540,6 +666,8 @@ fn expand_pending(out: Vec<PendingListenResponse>) -> impl Iterator<Item = Pendi
 #[cfg(test)]
 thread_local! {
     static FULL_TARGET_REFRESHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Keys inserted into a target's known map.
+    static KNOWN_KEYS_INSERTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static ENCODED_LISTEN_DOCUMENTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static LISTEN_DOCUMENT_HANDLES: std::cell::RefCell<Vec<std::sync::Weak<Document>>> = const { std::cell::RefCell::new(Vec::new()) };
 }
@@ -1020,7 +1148,7 @@ fn handle_listen_request_with_events(
                     kind,
                     target_hash,
                     parent: parent.clone(),
-                    known: BTreeMap::new(),
+                    known: KnownDocuments::default(),
                     resume,
                     once: target.once,
                     assigned,
@@ -1516,20 +1644,9 @@ fn refresh_target_full(
                 .0
         }
     };
-    let mut next_known: BTreeMap<DocumentPath, CommitVersion> = BTreeMap::new();
-    let mut changed = 0_usize;
-    for doc in &current {
-        next_known.insert(doc.path.clone(), doc.version);
-        if state.known.get(&doc.path) != Some(&doc.version) {
-            changed += 1;
-            out_change(Arc::clone(doc), id, &mut state.pending);
-        }
-    }
-    let departed: Vec<&DocumentPath> = state
+    let (changed, departed) = state
         .known
-        .keys()
-        .filter(|path| !next_known.contains_key(*path))
-        .collect();
+        .fold(&state.parent, &current, id, &mut state.pending);
     // Exactly one commit since the token, and what it did is one departure: production replayed
     // it, a boundary after the removal message and no filter (`native/resume-kinds/leave` and
     // `delete`, both L1b runs).
@@ -1540,7 +1657,7 @@ fn refresh_target_full(
             .is_some_and(|from| from.value().checked_add(1) == Some(snapshot_version.value()));
     match answer {
         ResumeAnswer::CountOnly if one_commit_departure => {
-            out_removal(db, departed[0], id, read_time, &mut state.pending);
+            out_removal(db, &departed[0], id, read_time, &mut state.pending);
             state.pending.push(target_change(
                 pb::target_change::TargetChangeType::NoChange,
                 vec![],
@@ -1573,7 +1690,6 @@ fn refresh_target_full(
             }
         }
     }
-    state.known = next_known;
     Ok(())
 }
 
@@ -1671,13 +1787,13 @@ fn refresh_target_delta(
                 examined += 1;
                 match db.get_shared(path) {
                     Some(document) => {
-                        if state.known.get(path) != Some(&document.version) {
+                        if state.known.get(path) != Some(document.version) {
                             out_change(Arc::clone(&document), id, &mut state.pending);
-                            state.known.insert(path.clone(), document.version);
+                            state.known.insert(path, document.version);
                         }
                     }
                     None => {
-                        if state.known.remove(path).is_some() {
+                        if state.known.remove(path) {
                             out_removal(db, path, id, read_time, &mut state.pending);
                         }
                     }
@@ -1701,13 +1817,13 @@ fn refresh_target_delta(
                 .map(|document| document.path.clone())
                 .collect::<BTreeSet<_>>();
             for document in matched {
-                if state.known.get(&document.path) != Some(&document.version) {
-                    state.known.insert(document.path.clone(), document.version);
+                if state.known.get(&document.path) != Some(document.version) {
+                    state.known.insert(&document.path, document.version);
                     out_change(Arc::new(document), id, &mut state.pending);
                 }
             }
             for path in changed_paths {
-                if !matched_paths.contains(path) && state.known.remove(path).is_some() {
+                if !matched_paths.contains(path) && state.known.remove(path) {
                     out_removal(db, path, id, read_time, &mut state.pending);
                 }
             }
@@ -1942,7 +2058,7 @@ fn known_at(
     db: &fireemu_core_firestore::store::FirestoreState,
     kind: &TargetKind,
     version: CommitVersion,
-) -> Result<BTreeMap<DocumentPath, CommitVersion>, Status> {
+) -> Result<KnownDocuments, Status> {
     let docs: Vec<Arc<Document>> = match kind {
         TargetKind::Documents(paths) => paths
             .iter()
@@ -1954,10 +2070,7 @@ fn known_at(
                 .0
         }
     };
-    Ok(docs
-        .into_iter()
-        .map(|d| (d.path.clone(), d.version))
-        .collect())
+    Ok(docs.iter().map(|d| (&d.path, d.version)).collect())
 }
 
 fn encode_listen_document(document: &Document) -> pb::Document {
@@ -2248,7 +2361,10 @@ mod refresh_tests {
                 target_hash: target_hash(&TargetKind::Query(Box::new(query.clone()))),
                 kind: TargetKind::Query(Box::new(query)),
                 parent: parent.clone(),
-                known: BTreeMap::from([(path("restored/a"), CommitVersion::from_value(1))]),
+                known: KnownDocuments::from_iter([(
+                    &path("restored/a"),
+                    CommitVersion::from_value(1),
+                )]),
                 resume: None,
                 once: false,
                 assigned: false,
@@ -2479,6 +2595,113 @@ mod refresh_tests {
                 "first_add_micros": first_add_micros, "first_document_micros": first_document_micros,
                 "complete_micros": complete_micros, "transport": "in-process mpsc receiver",
                 "retained_memory_bound": "O(N) immutable handles and retained payloads",
+            })
+        );
+    }
+
+    /// Resident set size of this process in KiB, from `ps` (macOS and Linux).
+    fn resident_kib() -> u64 {
+        let output = std::process::Command::new("ps")
+            .args(["-o", "rss=", "-p", &std::process::id().to_string()])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .parse()
+            .unwrap()
+    }
+
+    /// Measures the memory a full refresh of an existing, unchanged target adds on top of the
+    /// target's known map: the target is added, its rows are dropped, and unrelated commits force
+    /// repeated full refreshes while a sampler records the largest resident set.
+    #[test]
+    #[ignore = "release repeat-refresh RSS measurement"]
+    fn measure_listen_repeat_full_refresh() {
+        let count = std::env::var("FIREEMU_LISTEN_MEASURE_DOCUMENTS")
+            .ok()
+            .map_or(100_000, |value| value.parse::<usize>().unwrap());
+        let targets = std::env::var("FIREEMU_LISTEN_MEASURE_TARGETS")
+            .ok()
+            .map_or(1, |value| value.parse::<i32>().unwrap());
+        let mut fixture = generation_fixture();
+        for start in (0..count).step_by(500) {
+            let writes = (start..(start + 500).min(count))
+                .map(|index| {
+                    let mut write = set(&format!("measured/d{index:06}"));
+                    let WriteOp::Set { fields, .. } = &mut write.op else {
+                        unreachable!()
+                    };
+                    fields.insert("payload".to_owned(), Value::String("x".repeat(1024)));
+                    write
+                })
+                .collect::<Vec<_>>();
+            fixture
+                .context
+                .local
+                .commit_writes(fixture.parent.as_ref().unwrap(), &writes, &|_, _, _| Ok(()))
+                .unwrap();
+        }
+        let after_setup = resident_kib();
+        for id in 2..2 + targets {
+            let mut out = Vec::new();
+            handle_listen_request(
+                &fixture.context,
+                &mut fixture.parent,
+                &mut fixture.targets,
+                &query_request(id, "measured"),
+                &mut fixture.cache,
+                &mut fixture.last_snapshot_version,
+                &mut out,
+            )
+            .unwrap();
+            drop(out);
+        }
+        let after_add = resident_kib();
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let peak = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let sampler = {
+            let (stop, peak) = (Arc::clone(&stop), Arc::clone(&peak));
+            std::thread::spawn(move || {
+                while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    peak.fetch_max(resident_kib(), std::sync::atomic::Ordering::Relaxed);
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+            })
+        };
+        let start = std::time::Instant::now();
+        for round in 0..3 {
+            fixture
+                .context
+                .local
+                .commit_writes(
+                    fixture.parent.as_ref().unwrap(),
+                    &[set(&format!("unrelated/r{round}"))],
+                    &|_, _, _| Ok(()),
+                )
+                .unwrap();
+            let mut out = Vec::new();
+            refresh_all(
+                &fixture.context,
+                fixture.parent.as_ref(),
+                &mut fixture.targets,
+                RefreshInput::Full,
+                &mut fixture.cache,
+                &mut fixture.last_snapshot_version,
+                &mut out,
+            )
+            .unwrap();
+            drop(out);
+        }
+        let refresh_micros = start.elapsed().as_micros();
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        sampler.join().unwrap();
+        eprintln!(
+            "listen_repeat_refresh_measure {}",
+            serde_json::json!({
+                "documents": count, "targets": targets,
+                "rss_kib_after_setup": after_setup, "rss_kib_after_add": after_add,
+                "rss_kib_peak_during_refreshes": peak.load(std::sync::atomic::Ordering::Relaxed),
+                "three_full_refreshes_micros": refresh_micros,
             })
         );
     }
@@ -2903,6 +3126,67 @@ mod refresh_tests {
         );
     }
 
+    /// A full refresh of a target whose result did not change keeps the known map it has: it
+    /// clones no path (a rebuilt map cloned every row of a large result on each refresh, with
+    /// the old map alive beside the new one).
+    #[test]
+    fn repeat_full_refresh_of_an_unchanged_target_clones_no_path() {
+        const ROWS: usize = 300;
+        let mut fixture = generation_fixture();
+        let writes = (0..ROWS)
+            .map(|index| set(&format!("queued/d{index:05}")))
+            .collect::<Vec<_>>();
+        fixture
+            .context
+            .local
+            .commit_writes(fixture.parent.as_ref().unwrap(), &writes, &|_, _, _| Ok(()))
+            .unwrap();
+        let mut out = Vec::new();
+        handle_listen_request(
+            &fixture.context,
+            &mut fixture.parent,
+            &mut fixture.targets,
+            &query_request(2, "queued"),
+            &mut fixture.cache,
+            &mut fixture.last_snapshot_version,
+            &mut out,
+        )
+        .unwrap();
+        assert_eq!(fixture.targets[&2].known.len(), ROWS);
+        // A commit outside the target, then a forced full refresh of every target.
+        fixture
+            .context
+            .local
+            .commit_writes(
+                fixture.parent.as_ref().unwrap(),
+                &[set("unrelated/a")],
+                &|_, _, _| Ok(()),
+            )
+            .unwrap();
+        out.clear();
+        KNOWN_KEYS_INSERTED.with(|count| count.set(0));
+        refresh_all(
+            &fixture.context,
+            fixture.parent.as_ref(),
+            &mut fixture.targets,
+            RefreshInput::Full,
+            &mut fixture.cache,
+            &mut fixture.last_snapshot_version,
+            &mut out,
+        )
+        .unwrap();
+        assert_eq!(fixture.targets[&2].known.len(), ROWS);
+        assert!(
+            !out.iter().any(|response| matches!(
+                response,
+                PendingListenResponse::Documents { target_id: 2, .. }
+                    | PendingListenResponse::Document { target_id: 2, .. }
+            )),
+            "an unchanged target sends no document"
+        );
+        assert_eq!(KNOWN_KEYS_INSERTED.with(std::cell::Cell::get), 0);
+    }
+
     #[test]
     fn deferred_snapshot_rows_and_boundaries_survive_writes_deletes_and_restore() {
         let mut fixture = generation_fixture();
@@ -3237,6 +3521,93 @@ mod refresh_tests {
     }
 
     proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config { cases: 1024, failure_persistence: None, ..Default::default() })]
+        /// The joined key of a path orders as the path does, and a key gives its path back, so
+        /// the compact known map reports departures in the same order and with the same paths.
+        #[test]
+        fn known_keys_order_as_paths_do(
+            left in proptest::collection::vec(("[ab \\-.~!é中🔥]{1,3}", "[ab \\-.~!é中🔥]{1,3}"), 1..4),
+            right in proptest::collection::vec(("[ab \\-.~!é中🔥]{1,3}", "[ab \\-.~!é中🔥]{1,3}"), 1..4),
+        ) {
+            let scope = database_parent("projects/demo-app/databases/(default)").unwrap();
+            let relative = |pairs: &[(String, String)]| {
+                pairs.iter().map(|(c, d)| format!("{c}/{d}")).collect::<Vec<_>>().join("/")
+            };
+            let parse = |pairs: &[(String, String)]| {
+                DocumentPath::parse(&scope.project, &scope.database, &relative(pairs))
+            };
+            let (Ok(left), Ok(right)) = (parse(&left), parse(&right)) else {
+                return Ok(());
+            };
+            proptest::prop_assert_eq!(
+                KnownDocuments::key(&left).cmp(&KnownDocuments::key(&right)),
+                left.cmp(&right)
+            );
+            proptest::prop_assert_eq!(
+                KnownDocuments::path_of(&scope, &KnownDocuments::key(&left)),
+                left
+            );
+        }
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config { cases: 512, failure_persistence: None, ..Default::default() })]
+        /// Folding a result into the known map in place gives what rebuilding the map gave: the
+        /// same map, the same change rows in result order, and the same departed paths in key
+        /// order.
+        #[test]
+        fn folding_a_snapshot_into_known_matches_a_rebuilt_map(
+            known in proptest::collection::btree_map(0_usize..12, 1_u64..4, 0..12),
+            current in proptest::collection::btree_map(0_usize..12, 1_u64..4, 0..12)
+                .prop_map(|rows| rows.into_iter().collect::<Vec<_>>())
+                .prop_shuffle(),
+            id in 1_i32..4,
+        ) {
+            let template = state_with_value("v").get_shared(&path("restored/a")).unwrap();
+            let handle = |(index, version): &(usize, u64)| {
+                let mut copy = (*template).clone();
+                copy.path = path(&format!("folded/d{index:02}"));
+                copy.version = CommitVersion::from_value(*version);
+                Arc::new(copy)
+            };
+            let documents = current.iter().map(handle).collect::<Vec<_>>();
+            let known_paths = known
+                .iter()
+                .map(|(index, version)| {
+                    (path(&format!("folded/d{index:02}")), CommitVersion::from_value(*version))
+                })
+                .collect::<BTreeMap<_, _>>();
+            let known_before = known_paths.iter().map(|(path, version)| (path, *version)).collect::<KnownDocuments>();
+
+            // Reference: rebuild the map from the result.
+            let mut rebuilt = BTreeMap::new();
+            let mut expected_rows = Vec::new();
+            let mut expected_changed = 0;
+            for doc in &documents {
+                rebuilt.insert(doc.path.clone(), doc.version);
+                if known_paths.get(&doc.path) != Some(&doc.version) {
+                    expected_changed += 1;
+                    out_change(Arc::clone(doc), id, &mut expected_rows);
+                }
+            }
+            let expected_departed = known_paths
+                .keys()
+                .filter(|key| !rebuilt.contains_key(*key))
+                .cloned()
+                .collect::<Vec<_>>();
+
+            let mut folded = known_before.clone();
+            let mut rows = Vec::new();
+            let scope = database_parent("projects/demo-app/databases/(default)").unwrap();
+            let (changed, departed) = folded.fold(&scope, &documents, id, &mut rows);
+            proptest::prop_assert_eq!(&folded, &rebuilt.iter().map(|(path, version)| (path, *version)).collect::<KnownDocuments>());
+            proptest::prop_assert_eq!(changed, expected_changed);
+            proptest::prop_assert_eq!(rows, expected_rows);
+            proptest::prop_assert_eq!(departed, expected_departed);
+        }
+    }
+
+    proptest::proptest! {
         #![proptest_config(proptest::test_runner::Config { cases: 256, failure_persistence: None, ..Default::default() })]
         /// Queuing rows through `out_change` (runs) and expanding them gives the rows in the
         /// order they were queued, each as the single-row entry it stands for.
@@ -3513,7 +3884,11 @@ mod refresh_tests {
                                 .0
                                 .into_iter()
                                 .map(|document| (document.path.clone(), document.version))
-                                .collect::<BTreeMap<_, _>>();
+                                .collect::<Vec<_>>();
+                            let known = known
+                                .iter()
+                                .map(|(path, version)| (path, *version))
+                                .collect::<KnownDocuments>();
                             assert!(fixture.targets[id].current, "target {id} is not current");
                             assert_eq!(fixture.targets[id].known, known, "target {id}");
                         }
@@ -3976,7 +4351,7 @@ mod refresh_tests {
             target_hash: 1,
             kind: TargetKind::Documents(vec![path("target/a")]),
             parent,
-            known: BTreeMap::from([(document.path.clone(), document.version)]),
+            known: KnownDocuments::from_iter([(&document.path, document.version)]),
             resume: None,
             once: false,
             assigned: false,
@@ -4062,7 +4437,7 @@ mod refresh_tests {
                 target_hash: target_hash(&TargetKind::Query(Box::new(query.clone()))),
                 kind: TargetKind::Query(Box::new(query.clone())),
                 parent: parent.clone(),
-                known: BTreeMap::new(),
+                known: KnownDocuments::default(),
                 resume: None,
                 once: false,
                 assigned: false,

@@ -1,6 +1,7 @@
 //! Ordered Hosting source matching. Glob segments never consume a path separator.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
+use std::sync::OnceLock;
 
 #[derive(Clone, Debug)]
 enum Token {
@@ -77,6 +78,48 @@ fn tokens(chars: &[char], at: &mut usize, nested: bool) -> Vec<Token> {
     out
 }
 
+/// The canonical form a JavaScript regular expression with the `i` flag and without the `u` flag
+/// compares (ECMAScript Canonicalize, as in glob 10.5.0's Ignore): the one-unit `toUpperCase` of a
+/// BMP character, unless that maps a non-ASCII character to ASCII or needs several units. So U+00DF
+/// stays itself and never meets `S`, U+212A never meets `k`, and U+03C2 meets U+03C3 through U+03A3.
+/// Astral characters are two surrogate units there and never fold.
+fn canonical(ch: char) -> char {
+    if ch.len_utf16() > 1 {
+        return ch;
+    }
+    let mut upper = ch.to_uppercase();
+    match (upper.next(), upper.next()) {
+        (Some(single), None) if ch.is_ascii() || !single.is_ascii() => single,
+        _ => ch,
+    }
+}
+
+/// Every BMP character that is not its own canonical form, grouped by that form.
+fn canonical_classes() -> &'static HashMap<char, Vec<char>> {
+    static CLASSES: OnceLock<HashMap<char, Vec<char>>> = OnceLock::new();
+    CLASSES.get_or_init(|| {
+        let mut classes: HashMap<char, Vec<char>> = HashMap::new();
+        for ch in (0..=0xFFFFu32).filter_map(char::from_u32) {
+            let form = canonical(ch);
+            if form != ch {
+                classes.entry(form).or_default().push(ch);
+            }
+        }
+        classes
+    })
+}
+
+/// Whether `ch` is in the character set of ranges when case is ignored: some member of the set has
+/// the same canonical form (a range is every character in it, not only its ends).
+fn class_contains_ignoring_case(ranges: &[(char, char)], ch: char) -> bool {
+    let form = canonical(ch);
+    let inside = |c: char| ranges.iter().any(|(a, b)| *a <= c && c <= *b);
+    inside(form)
+        || canonical_classes()
+            .get(&form)
+            .is_some_and(|members| members.iter().any(|member| inside(*member)))
+}
+
 fn ends(sequence: &[Token], input: &[char], start: usize, nocase: bool) -> BTreeSet<usize> {
     let mut positions = BTreeSet::from([start]);
     for token in sequence {
@@ -85,7 +128,7 @@ fn ends(sequence: &[Token], input: &[char], start: usize, nocase: bool) -> BTree
             match token {
                 Token::Literal(ch)
                     if input.get(pos).is_some_and(|value| {
-                        value == ch || (nocase && value.to_lowercase().eq(ch.to_lowercase()))
+                        value == ch || (nocase && canonical(*value) == canonical(*ch))
                     }) =>
                 {
                     next.insert(pos + 1);
@@ -97,8 +140,7 @@ fn ends(sequence: &[Token], input: &[char], start: usize, nocase: bool) -> BTree
                 Token::Class(ranges, negative) => {
                     if input.get(pos).is_some_and(|ch| {
                         let contains = |c: char| ranges.iter().any(|(a, b)| *a <= c && c <= *b);
-                        (contains(*ch)
-                            || (nocase && ch.to_lowercase().chain(ch.to_uppercase()).any(contains)))
+                        (contains(*ch) || (nocase && class_contains_ignoring_case(ranges, *ch)))
                             != *negative
                     }) {
                         next.insert(pos + 1);
@@ -164,9 +206,23 @@ fn segment(pattern: &str, value: &str, dot: bool, nocase: bool) -> bool {
     ends(&tokens(&chars, &mut 0, false), &value, 0, nocase).contains(&value.len())
 }
 
+/// Splits like minimatch (`/\/+/`): a run of slashes is one separator, while a leading or trailing
+/// slash still leaves its empty first or last part.
+fn slash_split(text: &str) -> Vec<&str> {
+    let parts: Vec<_> = text.split('/').collect();
+    let last = parts.len() - 1;
+    parts
+        .into_iter()
+        .enumerate()
+        .filter(|(index, part)| !part.is_empty() || *index == 0 || *index == last)
+        .map(|(_, part)| part)
+        .collect()
+}
+
 fn path_match(pattern: &[&str], path: &[&str], dot: bool, nocase: bool) -> bool {
     let Some(first) = pattern.first() else {
-        return path.is_empty();
+        // minimatch lets a pattern also match a path with one trailing slash.
+        return path.is_empty() || path == [""];
     };
     if *first == "**" {
         for take in 0..=path.len() {
@@ -364,16 +420,16 @@ pub(super) fn glob(pattern: &str, path: &str) -> bool {
 }
 
 pub(super) fn glob_with_dot(pattern: &str, path: &str, dot: bool) -> bool {
-    if pattern.starts_with('#') {
+    // superstatic's configMatcher tests `config.glob || config.source`, so an empty pattern is no
+    // pattern at all and matches nothing (not even `/`, which the trailing-slash rule would allow).
+    if pattern.is_empty() || pattern.starts_with('#') {
         return false;
     }
     let negative = pattern.chars().take_while(|ch| *ch == '!').count();
     let pattern = &pattern[negative..];
-    let matched = alternatives(pattern, false).iter().any(|pattern| {
-        let pattern: Vec<_> = pattern.split('/').collect();
-        let path: Vec<_> = path.split('/').collect();
-        path_match(&pattern, &path, dot, false)
-    });
+    let matched = alternatives(pattern, false)
+        .iter()
+        .any(|pattern| path_match(&slash_split(pattern), &slash_split(path), dot, false));
     matched != (negative % 2 == 1)
 }
 
@@ -408,25 +464,21 @@ pub(super) fn deploy_ignore(pattern: &str, path: &str, public_root: &str) -> boo
             } else {
                 path
             };
-            let pattern: Vec<_> = pattern.split('/').collect();
+            let pattern = slash_split(pattern);
             let slash_path = format!("{path}/");
             let nocase = cfg!(any(target_os = "macos", windows));
-            path_match(&pattern, &path.split('/').collect::<Vec<_>>(), true, nocase)
-                || path_match(
-                    &pattern,
-                    &slash_path.split('/').collect::<Vec<_>>(),
-                    true,
-                    nocase,
-                )
+            path_match(&pattern, &slash_split(path), true, nocase)
+                || path_match(&pattern, &slash_split(&slash_path), true, nocase)
         })
     })
 }
 
 pub(super) fn matches(rule: &serde_json::Value, path: &str) -> bool {
-    if let Some(pattern) = rule
-        .get("glob")
-        .or_else(|| rule.get("source"))
-        .and_then(serde_json::Value::as_str)
+    // The first non-empty of `glob` and `source`, as in `config.glob || config.source`.
+    if let Some(pattern) = ["glob", "source"]
+        .iter()
+        .filter_map(|key| rule.get(*key).and_then(serde_json::Value::as_str))
+        .find(|pattern| !pattern.is_empty())
     {
         glob(pattern, path)
     } else {
@@ -442,7 +494,8 @@ mod tests {
     use super::*;
     #[test]
     fn deploy_ignore_agrees_with_minimatch_fixture() {
-        // Generated on macOS with generate-deploy-ignore-fixture.mjs and firebase-tools listFiles.
+        // Generated with generate-deploy-ignore-fixture.mjs and firebase-tools listFiles (glob 10.5.0).
+        // `expected` is the result where matching ignores case; `caseSensitive` overrides it on Linux.
         let rows: Vec<serde_json::Value> =
             serde_json::from_str(include_str!("deploy-ignore-fixture.json")).unwrap();
         let mut failures = Vec::new();
@@ -452,10 +505,12 @@ mod tests {
                 .unwrap()
                 .replace("{PUBLIC_ROOT}", "/public/root");
             let path = row["path"].as_str().unwrap();
-            let expected = if row["nocase"] == true {
-                cfg!(any(target_os = "macos", windows))
-            } else {
+            let expected = if cfg!(any(target_os = "macos", windows)) {
                 row["expected"].as_bool().unwrap()
+            } else {
+                row["caseSensitive"]
+                    .as_bool()
+                    .unwrap_or_else(|| row["expected"].as_bool().unwrap())
             };
             if deploy_ignore(&pattern, path, "/public/root") != expected {
                 failures.push(row);
@@ -483,6 +538,184 @@ mod tests {
                 ),
                 row["matches"].as_bool().unwrap(),
                 "{row}"
+            );
+        }
+    }
+    // Measured offline with the pinned superstatic 10.0.0 configMatcher (its minimatch 6.2.3 splits
+    // pattern and path on runs of slashes). Route, rewrite and header matching see the raw path.
+    #[test]
+    fn repeated_slashes_collapse_like_the_pinned_minimatch() {
+        let rows: &[(&str, &str, bool)] = &[
+            ("", "/", false),
+            ("", "//", false),
+            ("", "", false),
+            ("", "/a", false),
+            ("/", "/", true),
+            ("/", "//", true),
+            ("//", "/", true),
+            ("/a/b", "/a/b/", true),
+            ("/data.json", "/data.json/", true),
+            ("/a", "/a/", true),
+            ("/a/*", "/a/b/", true),
+            ("/a/b/", "/a/b/", true),
+            ("/data.json", "//data.json", true),
+            ("/data.json", "///data.json", true),
+            ("//data.json", "/data.json", true),
+            ("/a/b.json", "/a//b.json", true),
+            ("/a//b.json", "/a/b.json", true),
+            ("/a/*", "/a//b", true),
+            ("/a/*", "//a/b", true),
+            ("/a/**", "/a//b/c", true),
+            ("/**", "//", true),
+            ("/", "//", true),
+            ("//", "/", true),
+            ("/a/b/", "/a//b//", true),
+            ("/a/b", "/a//b//", true),
+            ("/a/b/", "/a/b", false),
+            ("/a/*", "/a//", false),
+            ("/a/b.json", "/a/b.json//", true),
+            ("/a/?", "/a//", false),
+            ("/a/?", "/a//x", true),
+            ("/**/x", "//x", true),
+            ("/{a,b}/x", "//b//x", true),
+            ("/a/*/c", "/a///c", false),
+            ("/a/*/c", "/a//b//c", true),
+            ("/a/*/c", "/a//b/c", true),
+            ("/a/*/c", "/a/b//c", true),
+            ("/a/!(x)", "/a//y", true),
+            ("/a/!(x)", "/a//", false),
+        ];
+        for (pattern, path, expected) in rows {
+            assert_eq!(glob(pattern, path), *expected, "{pattern} against {path}");
+        }
+    }
+    #[test]
+    fn canonical_form_follows_the_one_unit_uppercase_rule() {
+        // Each pair was measured against glob 10.5.0's Ignore under nocase (fixture rows u000-u134).
+        for (a, b, same) in [
+            ('s', 'S', true),
+            ('\u{e9}', '\u{c9}', true),
+            ('\u{3c2}', '\u{3c3}', true),
+            ('\u{1c5}', '\u{1c6}', true),
+            ('\u{1c5}', '\u{1c4}', true),
+            ('\u{df}', 'S', false),
+            ('\u{df}', '\u{1e9e}', false),
+            ('\u{17f}', 's', false),
+            ('\u{212a}', 'k', false),
+            ('\u{130}', 'i', false),
+            ('\u{131}', 'I', false),
+            ('\u{10428}', '\u{10400}', false),
+        ] {
+            assert_eq!(canonical(a) == canonical(b), same, "{a:?} {b:?}");
+        }
+        for ch in (0..=0xFFFFu32).filter_map(char::from_u32) {
+            let form = canonical(ch);
+            assert_eq!(canonical(form), form, "{ch:?} is not folded once");
+            if ch.is_ascii() {
+                assert!(form.is_ascii(), "{ch:?} folds out of ASCII");
+            }
+        }
+    }
+    // Every character of a case class matches every other through a one-character class and range,
+    // in both directions (the class holds either the folded form or one of its variants).
+    #[test]
+    fn every_pair_in_a_case_class_matches_through_a_class_in_both_directions() {
+        let mut classes = 0;
+        for (form, members) in canonical_classes() {
+            let class: Vec<char> = std::iter::once(*form)
+                .chain(members.iter().copied())
+                .collect();
+            for first in &class {
+                for second in &class {
+                    for pattern in [format!("[{first}]"), format!("[{first}-{first}]")] {
+                        assert!(
+                            segment(&pattern, &second.to_string(), true, true),
+                            "{pattern} {second:?}"
+                        );
+                        assert!(
+                            !segment(
+                                &pattern.replacen('[', "[^", 1),
+                                &second.to_string(),
+                                true,
+                                true
+                            ),
+                            "{pattern} {second:?}"
+                        );
+                    }
+                }
+            }
+            classes += 1;
+        }
+        assert!(classes > 1000, "only {classes} case classes");
+    }
+    proptest::proptest! {
+        // Reference model: a class matches when some member of its range has the input's canonical form.
+        #[test]
+        fn class_matching_ignoring_case_equals_the_brute_force_definition(
+            region in 0usize..6, low in 0u32..0x180, span in 0u32..0x180, probe in 0u32..0x180, negative: bool, nocase: bool,
+        ) {
+            let base = [0x20u32, 0x100, 0x370, 0x1E00, 0x2100, 0xFF00][region];
+            let pick = |offset: u32| char::from_u32(base + offset).unwrap();
+            let (first, last, ch) = (pick(low), pick(low + span), pick(probe));
+            proptest::prop_assume!(![']', '[', '\\', '-', '^', '!'].iter().any(|bad| [first, last].contains(bad)));
+            let class = format!("[{}{first}-{last}]", if negative { "^" } else { "" });
+            let member = (u32::from(first)..=u32::from(last)).filter_map(char::from_u32).any(|z| {
+                z == ch || (nocase && canonical(z) == canonical(ch))
+            });
+            proptest::prop_assert_eq!(
+                segment(&class, &ch.to_string(), true, nocase),
+                member != negative,
+                "{} against {:?} nocase={}", class, ch, nocase
+            );
+        }
+        #[test]
+        fn literals_ignoring_case_compare_canonical_forms(a in 0x20u32..0x2200, b in 0x20u32..0x2200, nocase: bool) {
+            let (a, b) = (char::from_u32(a).unwrap(), char::from_u32(b).unwrap());
+            proptest::prop_assume!(!"[]\\*?+@!(){}|.^-/".contains(a));
+            proptest::prop_assert_eq!(
+                segment(&a.to_string(), &b.to_string(), true, nocase),
+                a == b || (nocase && canonical(a) == canonical(b))
+            );
+        }
+        #[test]
+        fn repeated_slashes_never_change_a_glob_result(
+            names in proptest::collection::vec("[a-c]{1,2}", 1..4), extra in proptest::collection::vec(0usize..3, 4), tail: bool,
+        ) {
+            let plain = format!("/{}", names.join("/"));
+            let padded = names.iter().zip(&extra).fold(String::from("/"), |out, (name, more)| {
+                format!("{out}{}{name}/", "/".repeat(*more))
+            });
+            let padded = if tail { padded } else { padded.trim_end_matches('/').to_owned() };
+            for pattern in [plain.as_str(), "/**", "/a*", "/*/**"] {
+                proptest::prop_assert_eq!(glob(pattern, &padded), glob(pattern, &format!("{plain}{}", if tail { "/" } else { "" })));
+            }
+        }
+    }
+    #[test]
+    fn an_empty_source_falls_through_to_the_regex_like_superstatic() {
+        let rule = |value: serde_json::Value| matches(&value, "/a");
+        assert!(!rule(serde_json::json!({"source": ""})));
+        assert!(!rule(serde_json::json!({"glob": "", "source": ""})));
+        assert!(rule(serde_json::json!({"source": "", "regex": "^/a$"})));
+        assert!(rule(serde_json::json!({"glob": "", "source": "/a"})));
+        assert!(!matches(&serde_json::json!({"source": ""}), "/"));
+    }
+    // glob 10.5.0 matches by UTF-16 unit: `?` takes half of an astral character. Measured with the
+    // real listFiles (docs.local probe, 2026-11-09). fireemu counts characters; tracked by the open
+    // issue hosting-ignore-astral-utf16-units.
+    #[test]
+    #[ignore = "known gap: hosting-ignore-astral-utf16-units"]
+    fn astral_characters_count_as_two_utf16_units_in_deploy_ignore() {
+        for (pattern, ignored) in [
+            ("?.json", false),
+            ("??.json", true),
+            ("[\u{1f600}].json", false),
+            ("*.json", true),
+        ] {
+            assert_eq!(
+                deploy_ignore(pattern, "\u{1f600}.json", "/public/root"),
+                ignored,
+                "{pattern}"
             );
         }
     }

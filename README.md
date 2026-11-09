@@ -68,9 +68,10 @@ See [Time and scheduled functions](https://t-k.github.io/fireemu/guides/time/) a
 | Cloud Functions for Firebase | HTTP, callable, event, task-queue, blocking and scheduled functions on a virtual clock; Python codebases serve HTTP, callable, Firestore, Pub/Sub, Storage, Eventarc, database, scheduled, task-queue and blocking triggers in real time | [Cloud Functions](https://t-k.github.io/fireemu/products/functions/) |
 | Cloud Pub/Sub and Eventarc | Topics, subscriptions, push and pull delivery, dead-letter topics and StreamingPull; Eventarc custom events for Functions | [Pub/Sub and Eventarc](https://t-k.github.io/fireemu/products/pubsub-eventarc/) |
 | Firebase Realtime Database | REST, realtime protocol, Security Rules, export and import; supported for the recorded scope, verified against production for the recorded cases (an open gap against the official emulator) | [Realtime Database](https://t-k.github.io/fireemu/products/realtime-database/) |
+| Firebase Hosting | One `firebase.json` site served locally: static files, redirects, rewrites (including to functions of the same run), headers, clean URLs and localization; served without a production parity claim (an open gap) | [Firebase Hosting](https://t-k.github.io/fireemu/products/hosting/) |
 | Firebase App Check | Local testing with debug tokens; no real attestation providers or replay protection | [App Check](https://t-k.github.io/fireemu/products/app-check/) |
 
-Firebase Hosting, App Hosting and Data Connect are deferred (not currently supported), and Firebase Extensions support is not planned. Fireemu also provides a UI for managing data and viewing logs.
+App Hosting and Data Connect are deferred (not currently supported), and Firebase Extensions support is not planned. Fireemu also provides a UI for managing data and viewing logs.
 
 This table is a summary, not an exhaustive list. See [Limitations](https://t-k.github.io/fireemu/compatibility/limitations/), the [capability manifest](crates/fireemu/src/capabilities.json) (also printed by `npx fireemu capabilities`) and the [Functions support inventory](docs/functions-export-inventory.md) for individual APIs and conditions.
 

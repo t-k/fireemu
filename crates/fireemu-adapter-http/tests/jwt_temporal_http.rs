@@ -528,42 +528,112 @@ fn a_future_dated_id_token_is_accepted_in_the_emulator_profile_and_refused_in_st
     }
 }
 
-/// Only the future time claims are accepted in the emulator profile: a malformed `iat`, a
-/// missing `auth_time` and an `exp` past Identity Toolkit's 300 s allowance (ledger 22) are
-/// still refused there. Strict refuses the near shapes: `iat` one second ahead, and only
-/// `auth_time` ahead.
+/// `second` plus half a second, as a JSON number.
+fn fractional(second: i64) -> Value {
+    serde_json::from_str(&format!("{second}.5")).unwrap()
+}
+
+/// Ledger 787: the emulator profile accepts the hand-made ID token shapes firebase-tools 15.28.2
+/// accepts (`parseIdToken` reads `iat` only, against the user's `validSince`): a missing,
+/// string or fractional `iat`, a missing `auth_time`, a missing or non-numeric `exp`. Strict
+/// refuses each with `INVALID_ID_TOKEN`. An `exp` past Identity Toolkit's 300 s allowance
+/// (ledger 22) is refused in both, and so are an `iat` and `auth_time` that are both unusable
+/// for a user holding a `validSince` (a password user), with `TOKEN_EXPIRED` as firebase-tools
+/// answers it.
 #[test]
-fn near_shapes_of_a_future_dated_token_stay_refused_where_they_should() {
+fn hand_made_token_shapes_follow_firebase_tools_in_the_emulator_profile_and_strict_refuses_them() {
     for profile in [Profile::Emulator, Profile::Strict] {
         let (state, signer, original, _) = setup_with(profile, true);
-        let lookup =
-            |token: &str| handle(&state, "POST", LOOKUP, &json!({"idToken": token})).status;
-        for (key, value) in [
-            ("iat", Some(json!((NOW + 600).to_string()))),
-            ("auth_time", None),
-            ("exp", Some(json!(NOW - 301))),
+        let message = |token: &str| {
+            let response = handle(&state, "POST", LOOKUP, &json!({"idToken": token}));
+            (
+                response.status,
+                response.body["error"]["message"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_owned(),
+            )
+        };
+        let accepted = (200, String::new());
+        let invalid = (400, "INVALID_ID_TOKEN".to_owned());
+        for (label, edits) in [
+            ("iat missing", vec![("iat", None)]),
+            (
+                "iat numeric string",
+                vec![("iat", Some(json!(NOW.to_string())))],
+            ),
+            ("iat float", vec![("iat", Some(fractional(NOW)))]),
+            ("iat text", vec![("iat", Some(json!("yesterday")))]),
+            ("auth_time missing", vec![("auth_time", None)]),
+            (
+                "auth_time numeric string",
+                vec![("auth_time", Some(json!(NOW.to_string())))],
+            ),
+            ("exp missing", vec![("exp", None)]),
+            (
+                "exp numeric string",
+                vec![("exp", Some(json!((NOW + 3600).to_string())))],
+            ),
+            ("exp text", vec![("exp", Some(json!("never")))]),
         ] {
-            let bad = revised_token(&original, signer.as_ref(), key, value.clone());
-            assert_eq!(lookup(&bad), 400, "{profile:?} {key}={value:?}");
+            let mut token = original.clone();
+            for (key, value) in edits {
+                token = revised_token(&token, signer.as_ref(), key, value);
+            }
+            let expected = if profile == Profile::Emulator {
+                &accepted
+            } else {
+                &invalid
+            };
+            assert_eq!(&message(&token), expected, "{profile:?} {label}");
         }
-        let one_ahead = revised_token(&original, signer.as_ref(), "iat", Some(json!(NOW + 1)));
-        let auth_ahead = revised_token(
-            &original,
+        // Both comparison claims unusable: firebase-tools answers TOKEN_EXPIRED for a user with
+        // a validSince (this one has a password); strict never gets that far.
+        let mut both = revised_token(&original, signer.as_ref(), "iat", None);
+        both = revised_token(&both, signer.as_ref(), "auth_time", None);
+        let expected = if profile == Profile::Emulator {
+            (400, "TOKEN_EXPIRED".to_owned())
+        } else {
+            invalid.clone()
+        };
+        assert_eq!(
+            message(&both),
+            expected,
+            "{profile:?} neither iat nor auth_time"
+        );
+        // exp is still honoured when it is there (ledger 22), in every form.
+        for stale in [
+            json!(NOW - 301),
+            json!((NOW - 301).to_string()),
+            fractional(NOW - 301),
+        ] {
+            let token = revised_token(&original, signer.as_ref(), "exp", Some(stale.clone()));
+            assert_eq!(message(&token), invalid, "{profile:?} exp={stale}");
+        }
+    }
+}
+
+/// An account the official emulator gives no `validSince` (anonymous) has no revocation bound
+/// to compare, so its token with neither `iat` nor `auth_time` is accepted in the emulator
+/// profile, as firebase-tools accepts it; strict refuses the shape.
+#[test]
+fn an_anonymous_account_token_without_iat_or_auth_time_is_accepted_only_in_the_emulator_profile() {
+    for profile in [Profile::Emulator, Profile::Strict] {
+        let (state, signer, _, _) = setup_with(profile, true);
+        let anonymous = handle(&state, "POST", SIGN_UP, &json!({"returnSecureToken": true}));
+        assert_eq!(anonymous.status, 200, "{}", anonymous.body);
+        let original = anonymous.body["idToken"].as_str().unwrap().to_owned();
+        let bare = revised_token(
+            &revised_token(&original, signer.as_ref(), "iat", None),
             signer.as_ref(),
             "auth_time",
-            Some(json!(NOW + 600)),
+            None,
         );
-        let expected = if profile == Profile::Strict { 400 } else { 200 };
-        assert_eq!(
-            lookup(&one_ahead),
-            expected,
-            "{profile:?} iat one second ahead"
-        );
-        assert_eq!(
-            lookup(&auth_ahead),
-            expected,
-            "{profile:?} only auth_time ahead"
-        );
+        let response = handle(&state, "POST", LOOKUP, &json!({"idToken": bare}));
+        match profile {
+            Profile::Emulator => assert_eq!(response.status, 200, "{}", response.body),
+            Profile::Strict => assert_eq!(response.status, 400, "{}", response.body),
+        }
     }
 }
 

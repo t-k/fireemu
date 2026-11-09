@@ -155,19 +155,72 @@ impl From<TokenAcceptance> for RulesTokenPolicy {
     }
 }
 
-/// Whether an ID token whose `iat` or `auth_time` is later than the verifier's now is refused
-/// (owner decision ledger 781).
+/// How strictly an ID token's time claims (`iat`, `auth_time`, `exp`) are read: whether a
+/// future `iat` or `auth_time` is refused (owner decision ledger 781) and whether a claim must
+/// be a present integer (ledger 787).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FutureClaims {
     /// The `strict` profile. Inferred, not recorded: production refused a custom token with a
     /// future `iat` (`INVALID_CUSTOM_TOKEN`), and an ID token with one cannot be produced
-    /// there; the Firebase ID-token contract requires both claims to be in the past.
+    /// there; the Firebase ID-token contract requires all three claims to be present integers
+    /// and `iat` and `auth_time` to be in the past.
     #[default]
     Refuse,
-    /// The `emulator` profile: firebase-tools 15.28.2 reads no time claim of an ID token
-    /// (`parseIdToken`, `lib/emulator/auth/operations.js:1715-1731`). The claims must still be
-    /// present integers, and `exp` with its allowance still applies (ledger 22).
+    /// The `emulator` profile: firebase-tools 15.28.2 decodes an ID token without verifying it
+    /// and reads only `iat`, against the user's `validSince` when the user has one
+    /// (`parseIdToken`, `lib/emulator/auth/operations.js:1715-1731`). So a future time claim is
+    /// accepted, and a claim may be missing, a numeric string or a fraction: it is read as
+    /// JavaScript's `Number(value)` would, floored to a whole second, and one that is no number
+    /// counts as missing. An `exp` that is present still ends the token's life, with its
+    /// allowance (ledger 22); a missing one does not. Revocation compares `auth_time`, else
+    /// `iat`; with neither, the token is refused only for a user the official emulator would
+    /// have given a `validSince` (see `official_valid_since_is_set`).
     Accept,
+}
+
+/// A time claim as firebase-tools' JavaScript reads it (`Number(value)`), floored to a whole
+/// second. A claim that is missing, `null`, a boolean, a container, or a string that is no
+/// decimal number (including a non-finite one) is `None`: the comparison it takes part in is
+/// false in JavaScript, as for a missing claim. (JavaScript also reads `Infinity` and hex
+/// forms as numbers; no hand-made token is expected to carry them, so they count as missing
+/// here.)
+fn lenient_seconds(value: Option<&JsonValue>) -> Option<i64> {
+    fn floor(number: f64) -> Option<i64> {
+        // The cast saturates, which is all a second this far from now needs.
+        #[allow(clippy::cast_possible_truncation)]
+        number.is_finite().then(|| number.floor() as i64)
+    }
+    match value? {
+        JsonValue::Int(seconds) => Some(*seconds),
+        JsonValue::Float(number) => floor(*number),
+        JsonValue::String(text) => {
+            let text = text.trim();
+            if text.is_empty() {
+                return Some(0);
+            }
+            if let Ok(seconds) = text.parse::<i64>() {
+                return Some(seconds);
+            }
+            // Rust would also read `inf` and `nan`, which `Number` reads differently.
+            text.chars()
+                .all(|c| c.is_ascii_digit() || matches!(c, '+' | '-' | '.' | 'e' | 'E'))
+                .then(|| text.parse::<f64>().ok().and_then(floor))
+                .flatten()
+        }
+        _ => None,
+    }
+}
+
+/// Whether the official emulator would hold a `validSince` for this account: it sets one when
+/// a password is set or changed, on an Admin import and on a revocation, and an anonymous or
+/// custom-token account has none (`operations.js:169`, `:341`, `:634`, `:862`). This store
+/// holds a `tokens_valid_after` for every account, so the cases are rebuilt from what it
+/// remembers.
+fn official_valid_since_is_set(store: &AuthStore, user: &crate::store::UserRecord) -> bool {
+    store.has_password(&user.local_id)
+        || user.removed_password_updated_at.is_some()
+        || user.tokens_revoked
+        || user.admin_created
 }
 
 /// Token signing mode (`auth.idTokenSigning`).
@@ -1039,7 +1092,20 @@ fn verify_id_token_account(
     if user.disabled {
         return Err(JwtError::UserDisabled);
     }
-    if LogicalInstant::from_unix_seconds(auth_time) < user.tokens_valid_after {
+    let revoked = match (future, auth_time) {
+        (FutureClaims::Refuse, Some(auth_time)) => {
+            LogicalInstant::from_unix_seconds(auth_time) < user.tokens_valid_after
+        }
+        // `check_auth_time` answers a strict token's missing `auth_time` with `Malformed`.
+        (FutureClaims::Refuse, None) => return Err(JwtError::Malformed),
+        (FutureClaims::Accept, auth_time) => {
+            match auth_time.or_else(|| lenient_seconds(decoded.payload.get("iat"))) {
+                Some(basis) => LogicalInstant::from_unix_seconds(basis) < user.tokens_valid_after,
+                None => official_valid_since_is_set(store, user),
+            }
+        }
+    };
+    if revoked {
         return Err(JwtError::Revoked);
     }
     let second_factor = decoded
@@ -1223,41 +1289,50 @@ fn validate_token_claims(
             return Err(JwtError::WrongSessionEpoch { expected, actual });
         }
     }
-    let exp = decoded.exp().ok_or(JwtError::Malformed)?;
+    let exp = match future {
+        FutureClaims::Refuse => Some(decoded.exp().ok_or(JwtError::Malformed)?),
+        FutureClaims::Accept => lenient_seconds(decoded.payload.get("exp")),
+    };
     let now_secs = i64::try_from(now.as_nanos().div_euclid(1_000_000_000)).unwrap_or(i64::MAX);
-    if now_secs >= exp.saturating_add(leeway_seconds) {
+    if exp.is_some_and(|exp| now_secs >= exp.saturating_add(leeway_seconds)) {
         return Err(JwtError::Expired);
     }
-    // Firebase's ID-token contract requires both iat and auth_time not to be in
-    // the future (strict; the emulator profile accepts them, ledger 781). Claims use
-    // whole seconds on this store's logical clock: a token issued in the current
-    // second must remain immediately usable. Either way `iat` must be an integer.
-    let issued_at = decoded
-        .payload
-        .get("iat")
-        .and_then(JsonValue::as_i64)
-        .ok_or(JwtError::Malformed)?;
-    if future == FutureClaims::Refuse && issued_at > now_secs {
-        return Err(JwtError::Malformed);
+    // Firebase's ID-token contract requires `iat` and `auth_time` to be present integers not
+    // in the future (strict; the emulator profile accepts any shape and any time, ledgers 781
+    // and 787). Claims use whole seconds on this store's logical clock: a token issued in the
+    // current second must remain immediately usable.
+    if future == FutureClaims::Refuse {
+        let issued_at = decoded
+            .payload
+            .get("iat")
+            .and_then(JsonValue::as_i64)
+            .ok_or(JwtError::Malformed)?;
+        if issued_at > now_secs {
+            return Err(JwtError::Malformed);
+        }
     }
     decoded.sub().ok_or(JwtError::Malformed)?;
     Ok(decoded)
 }
 
-/// `auth_time` must be present and, unless `future` accepts it, not in the future.
+/// `auth_time`, which a strict token must carry as an integer not in the future (`Some`
+/// then); under `future` accepting it, whatever second it reads as, or `None`.
 fn check_auth_time(
     decoded: &DecodedToken,
     now: LogicalInstant,
     future: FutureClaims,
-) -> Result<i64, JwtError> {
+) -> Result<Option<i64>, JwtError> {
+    if future == FutureClaims::Accept {
+        return Ok(lenient_seconds(decoded.payload.get("auth_time")));
+    }
     let now_secs = i64::try_from(now.as_nanos().div_euclid(1_000_000_000)).unwrap_or(i64::MAX);
     let auth_time = decoded
         .payload
         .get("auth_time")
         .and_then(JsonValue::as_i64)
         .ok_or(JwtError::Malformed)?;
-    if future == FutureClaims::Refuse && auth_time > now_secs {
+    if auth_time > now_secs {
         return Err(JwtError::Malformed);
     }
-    Ok(auth_time)
+    Ok(Some(auth_time))
 }

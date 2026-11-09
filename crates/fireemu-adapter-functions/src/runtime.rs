@@ -64,6 +64,16 @@ pub const MAX_ACTIVE_EVENT_RECORDS: usize = 4096;
 pub const MAX_PENDING_AUTH_EVENTS: usize = MAX_ACTIVE_EVENT_RECORDS;
 /// The admission-refusal category of RTDB writes applied without their trigger events.
 pub const DATABASE_FANOUT_DROPPED: &str = "database_fanout_dropped";
+/// The largest Realtime Database trigger event, in bytes of its `data` plus its `delta` as compact JSON,
+/// that the strict profile accepts; a write with a larger event is refused with 400. Recorded in production
+/// (RTDB-TRIGGERS-KINDS-20261108-01 and -20261109-02): events of about 720 KB, 0.95 MB and 1,023,9xx bytes
+/// (the group handler's, the leaf's own about 20 bytes less) were accepted and delivered, events of
+/// 1,049,9xx and 1,499,9xx bytes and of 2 MiB were refused with the recorded 400. The limit
+/// lies between about 1,023,950 and 1,049,850 bytes as counted here, and Firebase documents "1 MB" per
+/// event; 1,048,576 bytes (1 MiB) is the figure in that range. Unverified: the exact threshold inside the
+/// range, and that production counts `data` plus `delta` (the record is also consistent with counting the
+/// delta, or the whole event, which differ by less than the range). The emulator profile has no limit.
+pub const DATABASE_EVENT_LIMIT_BYTES: usize = 1_048_576;
 /// Logical events whose causal phases the runtime keeps for `await-idle` diagnostics
 /// (spec 10.5). Older entries are evicted and counted; eviction is never a completion.
 pub const MAX_CAUSALITY_ENTRIES: usize = 512;
@@ -1023,6 +1033,9 @@ pub enum SourceEventAdmissionError {
     Unavailable,
     /// A generated logical event was invalid.
     InvalidEvent,
+    /// One event of the write is larger than a function can receive from the source (the strict profile of
+    /// a Realtime Database write); the write is refused, not dropped.
+    PayloadTooLarge,
 }
 
 /// A bounded Eventarc publication refusal.
@@ -2680,6 +2693,14 @@ impl FunctionsRuntime {
         first
     }
 
+    /// The largest trigger event the profile accepts from a Realtime Database write, if it has a limit:
+    /// the strict profile ([`DATABASE_EVENT_LIMIT_BYTES`]); the emulator profile has none.
+    #[must_use]
+    pub fn database_event_limit(&self) -> Option<usize> {
+        (self.config.database_event_shape == crate::events::DatabaseEventShape::Production)
+            .then_some(DATABASE_EVENT_LIMIT_BYTES)
+    }
+
     /// Reserves an RTDB source operation's complete trigger fanout before data publication.
     /// What can never be delivered is settled first, on real serialized sizes, whatever the
     /// queue holds: an event larger than an invocation frame is dropped alone, and a fanout of
@@ -2730,6 +2751,15 @@ impl FunctionsRuntime {
                             crate::events::DatabaseEventShape::Official =>
                                 crate::events::event_id_uuid(&seed),
                         });
+                        // Recorded: the strict profile refuses a write whose event is too large
+                        // for a function, and applies nothing (the emulator profile never does).
+                        if self.config.database_event_shape
+                            == crate::events::DatabaseEventShape::Production
+                            && crate::events::database_event_data_bytes(&payload)
+                                > DATABASE_EVENT_LIMIT_BYTES
+                        {
+                            return Err(SourceEventAdmissionError::PayloadTooLarge);
+                        }
                         // The event is serialized once, only to count its bytes; that length
                         // sizes both its invocation frame and its retained bytes.
                         let mut payload_bytes = FrameByteCount::default();
@@ -2879,6 +2909,7 @@ impl FunctionsRuntime {
             SourceEventAdmissionError::Capacity => "capacity",
             SourceEventAdmissionError::Unavailable => "unavailable",
             SourceEventAdmissionError::InvalidEvent => "invalid_event",
+            SourceEventAdmissionError::PayloadTooLarge => "payload_too_large",
         };
         *inner.admission_refusals.entry(category).or_default() += 1;
         error

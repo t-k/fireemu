@@ -29,6 +29,22 @@ async fn respond(
     remote_peer: bool,
     req: Request<Incoming>,
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
+    if let Err(refusal) = fireemu_core_session::host_guard::admits_request(
+        req.version() == hyper::Version::HTTP_2,
+        req.headers()
+            .get_all(hyper::header::HOST)
+            .iter()
+            .map(hyper::header::HeaderValue::as_bytes),
+    ) {
+        return Ok(Response::builder()
+            .status(StatusCode::FORBIDDEN)
+            .header(
+                "content-type",
+                fireemu_core_session::host_guard::REFUSAL_CONTENT_TYPE,
+            )
+            .body(Full::new(Bytes::from(refusal.body())))
+            .unwrap_or_else(|_| Response::new(Full::new(Bytes::new()))));
+    }
     let method = req.method().as_str().to_owned();
     // The control API answers loopback peers only. The listener is on loopback unless
     // `network.allowNonLoopbackHosts` exposed the Auth emulator, and then a peer on another

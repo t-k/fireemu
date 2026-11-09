@@ -2560,3 +2560,77 @@ async fn the_storage_preflight_allows_the_app_check_request_header() {
     );
     server.abort();
 }
+
+/// DNS rebinding (issue storage-json-api-open-to-dns-rebinding-without-enforcement): a page on
+/// `evil.example` rebound to 127.0.0.1 sends a same-origin request with no `Origin`, no Fetch
+/// Metadata and no credential, which the JSON API serves as the owner. Its `Host` names the
+/// attacker's domain, and the listener refuses it on every route under every App Check mode,
+/// while loopback, IP literal and container host names keep working.
+#[tokio::test]
+async fn the_storage_listener_refuses_a_rebound_host_under_every_app_check_mode() {
+    for mode in [
+        BaselineMode::Off,
+        BaselineMode::Unenforced,
+        BaselineMode::Enforced,
+    ] {
+        let h = harness(mode);
+        h.seed_object("private/secret.txt");
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("a local address");
+        let server = tokio::spawn(fireemu_adapter_http::storage_server::serve_storage(
+            listener,
+            Arc::new(h.storage),
+        ));
+        let get = |path: &str, host: &str| {
+            format!("GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n")
+        };
+        let list = format!("/storage/v1/b/{BUCKET}/o");
+        let media = format!("/storage/v1/b/{BUCKET}/o/private%2Fsecret.txt?alt=media");
+        let metadata = format!("/storage/v1/b/{BUCKET}/o/private%2Fsecret.txt");
+        let firebase = format!("/v0/b/{BUCKET}/o/private%2Fsecret.txt?alt=media");
+        for path in [&list, &media, &metadata, &firebase] {
+            for host in [
+                "evil.example:9199",
+                "EVIL.example.",
+                "127.0.0.1.evil.example",
+            ] {
+                let answer = raw(addr, &get(path, host)).await;
+                assert!(
+                    answer.starts_with("HTTP/1.1 403"),
+                    "{mode:?} {path} {host}: {answer}"
+                );
+                assert!(answer.contains("network.allowedHosts"), "{answer}");
+                assert!(answer.contains("PERMISSION_DENIED"), "{answer}");
+                assert!(!answer.contains("hello"), "{answer}");
+            }
+            let twice = raw(
+                addr,
+                &format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nHost: evil.example\r\nConnection: close\r\n\r\n"),
+            )
+            .await;
+            assert!(
+                twice.starts_with("HTTP/1.1 403"),
+                "{mode:?} {path}: {twice}"
+            );
+        }
+        if mode != BaselineMode::Enforced {
+            for host in [
+                "127.0.0.1",
+                "localhost:9199",
+                "[::1]:9199",
+                "10.0.2.2:9199",
+                "host.containers.internal:9199",
+            ] {
+                let answer = raw(addr, &get(&media, host)).await;
+                assert!(
+                    answer.starts_with("HTTP/1.1 200"),
+                    "{mode:?} {host}: {answer}"
+                );
+                assert!(answer.ends_with("hello"), "{answer}");
+            }
+        }
+        server.abort();
+    }
+}

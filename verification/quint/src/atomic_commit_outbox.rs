@@ -899,6 +899,9 @@ impl AtomicChangeSink for RuntimeChangeSink {
                 SourceEventAdmissionError::InvalidEvent => {
                     EventAdmissionError::InvalidEvent("invalid Functions event".to_owned())
                 }
+                SourceEventAdmissionError::PayloadTooLarge => EventAdmissionError::PayloadTooLarge(
+                    "Functions event payload too large".to_owned(),
+                ),
             })
     }
 }

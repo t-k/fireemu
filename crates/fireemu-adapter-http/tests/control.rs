@@ -3818,3 +3818,58 @@ fn a_publish_the_queue_cannot_hold_answers_429_without_message_ids() {
         }
     }
 }
+
+/// DNS rebinding: the Auth port serves Identity Toolkit and the control API, both without a
+/// credential on loopback, so a request whose `Host` names a public domain is refused before
+/// any route runs; loopback, IP literal and container host names are served.
+#[tokio::test]
+async fn the_auth_and_control_listener_refuses_a_rebound_host() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(fireemu_adapter_http::server::serve_with_control(
+        listener,
+        Arc::new(remote_config_wire_auth()),
+        Arc::new(state(Arc::new(AtomicUsize::new(0)))),
+    ));
+    let get = |path: &'static str, host: &'static str| async move {
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let request = format!("GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut response = Vec::new();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            stream.read_to_end(&mut response),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        String::from_utf8(response).unwrap()
+    };
+    for path in ["/health/live", "/emulator/v1/projects/demo-app/config"] {
+        for host in ["evil.example:9099", "fireemu:9099"] {
+            let answer = get(path, host).await;
+            assert!(
+                answer.starts_with("HTTP/1.1 403"),
+                "{path} {host}: {answer}"
+            );
+            assert!(answer.contains("network.allowedHosts"), "{answer}");
+        }
+        for host in [
+            "127.0.0.1:9099",
+            "localhost",
+            "10.0.2.2:9099",
+            "host.docker.internal:9099",
+        ] {
+            let answer = get(path, host).await;
+            assert!(
+                answer.starts_with("HTTP/1.1 200"),
+                "{path} {host}: {answer}"
+            );
+        }
+    }
+    server.abort();
+    let _ = server.await;
+}

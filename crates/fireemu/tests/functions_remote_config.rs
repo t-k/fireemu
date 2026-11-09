@@ -51,7 +51,8 @@ impl FunctionsHook for Hook {
         self.0
             .publish_remote_config(body)
             .map_err(|error| match error {
-                SourceEventAdmissionError::InvalidEvent => PublishEventError::Invalid,
+                SourceEventAdmissionError::InvalidEvent
+                | SourceEventAdmissionError::PayloadTooLarge => PublishEventError::Invalid,
                 SourceEventAdmissionError::Capacity => PublishEventError::Capacity,
                 SourceEventAdmissionError::Unavailable => PublishEventError::Unavailable,
             })

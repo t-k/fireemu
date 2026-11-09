@@ -1,0 +1,2305 @@
+{
+  "versions": {
+    "firebase-tools": "15.28.2",
+    "superstatic": "10.0.0",
+    "mime-types": "2.1.35",
+    "mime-db (mime-types)": "1.52.0",
+    "compression": "1.8.2",
+    "compressible": "2.0.18",
+    "mime-db (compressible)": "1.54.0"
+  },
+  "samples": [
+    {
+      "file": "index.html",
+      "extname": ".html",
+      "contentType": "text/html; charset=utf-8",
+      "compressible": true
+    },
+    {
+      "file": "a.HTML",
+      "extname": ".HTML",
+      "contentType": "text/html; charset=utf-8",
+      "compressible": true
+    },
+    {
+      "file": "a.Js",
+      "extname": ".Js",
+      "contentType": "application/javascript; charset=utf-8",
+      "compressible": true
+    },
+    {
+      "file": "a.JSON",
+      "extname": ".JSON",
+      "contentType": "application/json; charset=utf-8",
+      "compressible": true
+    },
+    {
+      "file": "a.WOFF2",
+      "extname": ".WOFF2",
+      "contentType": "font/woff2",
+      "compressible": false
+    },
+    {
+      "file": "a.tar.gz",
+      "extname": ".gz",
+      "contentType": "application/gzip",
+      "compressible": false
+    },
+    {
+      "file": "a.min.js",
+      "extname": ".js",
+      "contentType": "application/javascript; charset=utf-8",
+      "compressible": true
+    },
+    {
+      "file": "a.",
+      "extname": ".",
+      "contentType": null,
+      "compressible": false
+    },
+    {
+      "file": "a..",
+      "extname": ".",
+      "contentType": null,
+      "compressible": false
+    },
+    {
+      "file": "a",
+      "extname": "",
+      "contentType": null,
+      "compressible": false
+    },
+    {
+      "file": ".hidden",
+      "extname": "",
+      "contentType": null,
+      "compressible": false
+    },
+    {
+      "file": ".hidden.css",
+      "extname": ".css",
+      "contentType": "text/css; charset=utf-8",
+      "compressible": true
+    },
+    {
+      "file": "..",
+      "extname": "",
+      "contentType": null,
+      "compressible": false
+    },
+    {
+      "file": ".",
+      "extname": "",
+      "contentType": null,
+      "compressible": false
+    },
+    {
+      "file": "dir.v1/file",
+      "extname": "",
+      "contentType": null,
+      "compressible": false
+    },
+    {
+      "file": "dir.v1/file.txt",
+      "extname": ".txt",
+      "contentType": "text/plain; charset=utf-8",
+      "compressible": true
+    },
+    {
+      "file": "dir.d/.x",
+      "extname": "",
+      "contentType": null,
+      "compressible": false
+    },
+    {
+      "file": "a/b.c/d",
+      "extname": "",
+      "contentType": null,
+      "compressible": false
+    },
+    {
+      "file": "a.unknownext",
+      "extname": ".unknownext",
+      "contentType": null,
+      "compressible": false
+    },
+    {
+      "file": "a.K",
+      "extname": ".K",
+      "contentType": null,
+      "compressible": false
+    },
+    {
+      "file": "a.Kml",
+      "extname": ".Kml",
+      "contentType": "application/vnd.google-earth.kml+xml",
+      "compressible": true
+    },
+    {
+      "file": "a.İ",
+      "extname": ".İ",
+      "contentType": null,
+      "compressible": false
+    },
+    {
+      "file": "a. html",
+      "extname": ". html",
+      "contentType": null,
+      "compressible": false
+    },
+    {
+      "file": "a.html ",
+      "extname": ".html ",
+      "contentType": null,
+      "compressible": false
+    },
+    {
+      "file": "x.sßs",
+      "extname": ".sßs",
+      "contentType": null,
+      "compressible": false
+    },
+    {
+      "file": "a.js/",
+      "extname": ".js",
+      "contentType": "application/javascript; charset=utf-8",
+      "compressible": true
+    },
+    {
+      "file": "...",
+      "extname": ".",
+      "contentType": null,
+      "compressible": false
+    },
+    {
+      "file": "....",
+      "extname": ".",
+      "contentType": null,
+      "compressible": false
+    },
+    {
+      "file": "a...",
+      "extname": ".",
+      "contentType": null,
+      "compressible": false
+    },
+    {
+      "file": "...x",
+      "extname": ".x",
+      "contentType": null,
+      "compressible": false
+    },
+    {
+      "file": "..x",
+      "extname": ".x",
+      "contentType": null,
+      "compressible": false
+    },
+    {
+      "file": ".x.",
+      "extname": ".",
+      "contentType": null,
+      "compressible": false
+    },
+    {
+      "file": "x/..",
+      "extname": "",
+      "contentType": null,
+      "compressible": false
+    },
+    {
+      "file": "x/.",
+      "extname": "",
+      "contentType": null,
+      "compressible": false
+    },
+    {
+      "file": "x.y/",
+      "extname": ".y",
+      "contentType": null,
+      "compressible": false
+    },
+    {
+      "file": "a.b.c.js",
+      "extname": ".js",
+      "contentType": "application/javascript; charset=utf-8",
+      "compressible": true
+    },
+    {
+      "file": ".js",
+      "extname": "",
+      "contentType": null,
+      "compressible": false
+    },
+    {
+      "file": "/.js",
+      "extname": "",
+      "contentType": null,
+      "compressible": false
+    },
+    {
+      "file": "a/.js",
+      "extname": "",
+      "contentType": null,
+      "compressible": false
+    },
+    {
+      "file": "404.html",
+      "extname": ".html",
+      "contentType": "text/html; charset=utf-8",
+      "compressible": true
+    },
+    {
+      "file": "a.map",
+      "extname": ".map",
+      "contentType": "application/json; charset=utf-8",
+      "compressible": true
+    },
+    {
+      "file": "a.ts",
+      "extname": ".ts",
+      "contentType": "video/mp2t",
+      "compressible": false
+    },
+    {
+      "file": "a.ico",
+      "extname": ".ico",
+      "contentType": "image/vnd.microsoft.icon",
+      "compressible": true
+    },
+    {
+      "file": "a.webmanifest",
+      "extname": ".webmanifest",
+      "contentType": "application/manifest+json; charset=utf-8",
+      "compressible": true
+    },
+    {
+      "file": "f.123",
+      "extname": ".123",
+      "contentType": "application/vnd.lotus-1-2-3",
+      "compressible": false
+    },
+    {
+      "file": "f.3mf",
+      "extname": ".3mf",
+      "contentType": "model/3mf",
+      "compressible": false
+    },
+    {
+      "file": "f.ac",
+      "extname": ".ac",
+      "contentType": "application/pkix-attr-cert",
+      "compressible": false
+    },
+    {
+      "file": "f.afm",
+      "extname": ".afm",
+      "contentType": "application/x-font-type1",
+      "compressible": false
+    },
+    {
+      "file": "f.aiff",
+      "extname": ".aiff",
+      "contentType": "audio/x-aiff",
+      "compressible": false
+    },
+    {
+      "file": "f.appcache",
+      "extname": ".appcache",
+      "contentType": "text/cache-manifest; charset=utf-8",
+      "compressible": true
+    },
+    {
+      "file": "f.asm",
+      "extname": ".asm",
+      "contentType": "text/x-asm; charset=utf-8",
+      "compressible": true
+    },
+    {
+      "file": "f.atomsvc",
+      "extname": ".atomsvc",
+      "contentType": "application/atomsvc+xml",
+      "compressible": true
+    },
+    {
+      "file": "f.aw",
+      "extname": ".aw",
+      "contentType": "application/applixware",
+      "compressible": false
+    },
+    {
+      "file": "f.bcpio",
+      "extname": ".bcpio",
+      "contentType": "application/x-bcpio",
+      "compressible": false
+    },
+    {
+      "file": "f.blb",
+      "extname": ".blb",
+      "contentType": "application/x-blorb",
+      "compressible": false
+    },
+    {
+      "file": "f.boz",
+      "extname": ".boz",
+      "contentType": "application/x-bzip2",
+      "compressible": false
+    },
+    {
+      "file": "f.c",
+      "extname": ".c",
+      "contentType": "text/x-c; charset=utf-8",
+      "compressible": true
+    },
+    {
+      "file": "f.c4u",
+      "extname": ".c4u",
+      "contentType": "application/vnd.clonk.c4group",
+      "compressible": false
+    },
+    {
+      "file": "f.cba",
+      "extname": ".cba",
+      "contentType": "application/x-cbr",
+      "compressible": false
+    },
+    {
+      "file": "f.ccxml",
+      "extname": ".ccxml",
+      "contentType": "application/ccxml+xml",
+      "compressible": true
+    },
+    {
+      "file": "f.cdmid",
+      "extname": ".cdmid",
+      "contentType": "application/cdmi-domain",
+      "compressible": false
+    },
+    {
+      "file": "f.cfs",
+      "extname": ".cfs",
+      "contentType": "application/x-cfs-compressed",
+      "compressible": false
+    },
+    {
+      "file": "f.cil",
+      "extname": ".cil",
+      "contentType": "application/vnd.ms-artgalry",
+      "compressible": false
+    },
+    {
+      "file": "f.clkw",
+      "extname": ".clkw",
+      "contentType": "application/vnd.crick.clicker.wordbank",
+      "compressible": false
+    },
+    {
+      "file": "f.cmx",
+      "extname": ".cmx",
+      "contentType": "image/x-cmx",
+      "compressible": false
+    },
+    {
+      "file": "f.cpp",
+      "extname": ".cpp",
+      "contentType": "text/x-c; charset=utf-8",
+      "compressible": true
+    },
+    {
+      "file": "f.csh",
+      "extname": ".csh",
+      "contentType": "application/x-csh",
+      "compressible": false
+    },
+    {
+      "file": "f.cu",
+      "extname": ".cu",
+      "contentType": "application/cu-seeme",
+      "compressible": false
+    },
+    {
+      "file": "f.dart",
+      "extname": ".dart",
+      "contentType": "application/vnd.dart",
+      "compressible": true
+    },
+    {
+      "file": "f.dd2",
+      "extname": ".dd2",
+      "contentType": "application/vnd.oma.dd2+xml",
+      "compressible": true
+    },
+    {
+      "file": "f.der",
+      "extname": ".der",
+      "contentType": "application/x-x509-ca-cert",
+      "compressible": false
+    },
+    {
+      "file": "f.dist",
+      "extname": ".dist",
+      "contentType": "application/octet-stream",
+      "compressible": true
+    },
+    {
+      "file": "f.dms",
+      "extname": ".dms",
+      "contentType": "application/octet-stream",
+      "compressible": true
+    },
+    {
+      "file": "f.dotx",
+      "extname": ".dotx",
+      "contentType": "application/vnd.openxmlformats-officedocument.wordprocessingml.template",
+      "compressible": false
+    },
+    {
+      "file": "f.dtb",
+      "extname": ".dtb",
+      "contentType": "application/x-dtbook+xml",
+      "compressible": true
+    },
+    {
+      "file": "f.dwd",
+      "extname": ".dwd",
+      "contentType": "application/atsc-dwd+xml",
+      "compressible": true
+    },
+    {
+      "file": "f.ecelp4800",
+      "extname": ".ecelp4800",
+      "contentType": "audio/vnd.nuera.ecelp4800",
+      "compressible": false
+    },
+    {
+      "file": "f.ei6",
+      "extname": ".ei6",
+      "contentType": "application/vnd.pg.osasli",
+      "compressible": false
+    },
+    {
+      "file": "f.eol",
+      "extname": ".eol",
+      "contentType": "audio/vnd.digital-winds",
+      "compressible": false
+    },
+    {
+      "file": "f.esf",
+      "extname": ".esf",
+      "contentType": "application/vnd.epson.esf",
+      "compressible": false
+    },
+    {
+      "file": "f.exp",
+      "extname": ".exp",
+      "contentType": "application/express",
+      "compressible": false
+    },
+    {
+      "file": "f.f4v",
+      "extname": ".f4v",
+      "contentType": "video/x-f4v",
+      "compressible": false
+    },
+    {
+      "file": "f.fdt",
+      "extname": ".fdt",
+      "contentType": "application/fdt+xml",
+      "compressible": true
+    },
+    {
+      "file": "f.fh7",
+      "extname": ".fh7",
+      "contentType": "image/x-freehand",
+      "compressible": false
+    },
+    {
+      "file": "f.flv",
+      "extname": ".flv",
+      "contentType": "video/x-flv",
+      "compressible": false
+    },
+    {
+      "file": "f.for",
+      "extname": ".for",
+      "contentType": "text/x-fortran; charset=utf-8",
+      "compressible": true
+    },
+    {
+      "file": "f.fvt",
+      "extname": ".fvt",
+      "contentType": "video/vnd.fvt",
+      "compressible": false
+    },
+    {
+      "file": "f.gac",
+      "extname": ".gac",
+      "contentType": "application/vnd.groove-account",
+      "compressible": false
+    },
+    {
+      "file": "f.geo",
+      "extname": ".geo",
+      "contentType": "application/vnd.dynageo",
+      "compressible": false
+    },
+    {
+      "file": "f.gim",
+      "extname": ".gim",
+      "contentType": "application/vnd.groove-identity-message",
+      "compressible": false
+    },
+    {
+      "file": "f.gpx",
+      "extname": ".gpx",
+      "contentType": "application/gpx+xml",
+      "compressible": true
+    },
+    {
+      "file": "f.grxml",
+      "extname": ".grxml",
+      "contentType": "application/srgs+xml",
+      "compressible": true
+    },
+    {
+      "file": "f.gv",
+      "extname": ".gv",
+      "contentType": "text/vnd.graphviz; charset=utf-8",
+      "compressible": true
+    },
+    {
+      "file": "f.h264",
+      "extname": ".h264",
+      "contentType": "video/h264",
+      "compressible": false
+    },
+    {
+      "file": "f.heics",
+      "extname": ".heics",
+      "contentType": "image/heic-sequence",
+      "compressible": false
+    },
+    {
+      "file": "f.hlp",
+      "extname": ".hlp",
+      "contentType": "application/winhlp",
+      "compressible": false
+    },
+    {
+      "file": "f.htke",
+      "extname": ".htke",
+      "contentType": "application/vnd.kenameaapp",
+      "compressible": false
+    },
+    {
+      "file": "f.icc",
+      "extname": ".icc",
+      "contentType": "application/vnd.iccprofile",
+      "compressible": false
+    },
+    {
+      "file": "f.ifm",
+      "extname": ".ifm",
+      "contentType": "application/vnd.shana.informed.formdata",
+      "compressible": false
+    },
+    {
+      "file": "f.img",
+      "extname": ".img",
+      "contentType": "application/octet-stream",
+      "compressible": true
+    },
+    {
+      "file": "f.install",
+      "extname": ".install",
+      "contentType": "application/x-install-instructions",
+      "compressible": false
+    },
+    {
+      "file": "f.itp",
+      "extname": ".itp",
+      "contentType": "application/vnd.shana.informed.formtemplate",
+      "compressible": false
+    },
+    {
+      "file": "f.jar",
+      "extname": ".jar",
+      "contentType": "application/java-archive",
+      "compressible": false
+    },
+    {
+      "file": "f.jng",
+      "extname": ".jng",
+      "contentType": "image/x-jng",
+      "compressible": false
+    },
+    {
+      "file": "f.jpg",
+      "extname": ".jpg",
+      "contentType": "image/jpeg",
+      "compressible": false
+    },
+    {
+      "file": "f.js",
+      "extname": ".js",
+      "contentType": "application/javascript; charset=utf-8",
+      "compressible": true
+    },
+    {
+      "file": "f.jxra",
+      "extname": ".jxra",
+      "contentType": "image/jxra",
+      "compressible": false
+    },
+    {
+      "file": "f.karbon",
+      "extname": ".karbon",
+      "contentType": "application/vnd.kde.karbon",
+      "compressible": false
+    },
+    {
+      "file": "f.kne",
+      "extname": ".kne",
+      "contentType": "application/vnd.kinar",
+      "compressible": false
+    },
+    {
+      "file": "f.ktr",
+      "extname": ".ktr",
+      "contentType": "application/vnd.kahootz",
+      "compressible": false
+    },
+    {
+      "file": "f.latex",
+      "extname": ".latex",
+      "contentType": "application/x-latex",
+      "compressible": false
+    },
+    {
+      "file": "f.link66",
+      "extname": ".link66",
+      "contentType": "application/vnd.route66.link66+xml",
+      "compressible": true
+    },
+    {
+      "file": "f.lostxml",
+      "extname": ".lostxml",
+      "contentType": "application/lost+xml",
+      "compressible": true
+    },
+    {
+      "file": "f.lwp",
+      "extname": ".lwp",
+      "contentType": "application/vnd.lotus-wordpro",
+      "compressible": false
+    },
+    {
+      "file": "f.m2v",
+      "extname": ".m2v",
+      "contentType": "video/mpeg",
+      "compressible": false
+    },
+    {
+      "file": "f.m4u",
+      "extname": ".m4u",
+      "contentType": "video/vnd.mpegurl",
+      "compressible": false
+    },
+    {
+      "file": "f.man",
+      "extname": ".man",
+      "contentType": "text/troff; charset=utf-8",
+      "compressible": true
+    },
+    {
+      "file": "f.mbk",
+      "extname": ".mbk",
+      "contentType": "application/vnd.mobius.mbk",
+      "compressible": false
+    },
+    {
+      "file": "f.mdi",
+      "extname": ".mdi",
+      "contentType": "image/vnd.ms-modi",
+      "compressible": false
+    },
+    {
+      "file": "f.mfm",
+      "extname": ".mfm",
+      "contentType": "application/vnd.mfmp",
+      "compressible": false
+    },
+    {
+      "file": "f.mif",
+      "extname": ".mif",
+      "contentType": "application/vnd.mif",
+      "compressible": false
+    },
+    {
+      "file": "f.mkd",
+      "extname": ".mkd",
+      "contentType": "text/x-markdown; charset=utf-8",
+      "compressible": true
+    },
+    {
+      "file": "f.mmr",
+      "extname": ".mmr",
+      "contentType": "image/vnd.fujixerox.edmics-mmr",
+      "compressible": false
+    },
+    {
+      "file": "f.mp2",
+      "extname": ".mp2",
+      "contentType": "audio/mpeg",
+      "compressible": false
+    },
+    {
+      "file": "f.mp4v",
+      "extname": ".mp4v",
+      "contentType": "video/mp4",
+      "compressible": false
+    },
+    {
+      "file": "f.mpg4",
+      "extname": ".mpg4",
+      "contentType": "video/mp4",
+      "compressible": false
+    },
+    {
+      "file": "f.mpy",
+      "extname": ".mpy",
+      "contentType": "application/vnd.ibm.minipay",
+      "compressible": false
+    },
+    {
+      "file": "f.mseq",
+      "extname": ".mseq",
+      "contentType": "application/vnd.mseq",
+      "compressible": false
+    },
+    {
+      "file": "f.msp",
+      "extname": ".msp",
+      "contentType": "application/octet-stream",
+      "compressible": true
+    },
+    {
+      "file": "f.mvb",
+      "extname": ".mvb",
+      "contentType": "application/x-msmediaview",
+      "compressible": false
+    },
+    {
+      "file": "f.mxs",
+      "extname": ".mxs",
+      "contentType": "application/vnd.triscape.mxs",
+      "compressible": false
+    },
+    {
+      "file": "f.ncx",
+      "extname": ".ncx",
+      "contentType": "application/x-dtbncx+xml",
+      "compressible": true
+    },
+    {
+      "file": "f.nns",
+      "extname": ".nns",
+      "contentType": "application/vnd.noblenet-sealer",
+      "compressible": false
+    },
+    {
+      "file": "f.ntf",
+      "extname": ".ntf",
+      "contentType": "application/vnd.nitf",
+      "compressible": false
+    },
+    {
+      "file": "f.obgx",
+      "extname": ".obgx",
+      "contentType": "application/vnd.openblox.game+xml",
+      "compressible": true
+    },
+    {
+      "file": "f.odg",
+      "extname": ".odg",
+      "contentType": "application/vnd.oasis.opendocument.graphics",
+      "compressible": false
+    },
+    {
+      "file": "f.ogex",
+      "extname": ".ogex",
+      "contentType": "model/vnd.opengex",
+      "compressible": false
+    },
+    {
+      "file": "f.onetoc",
+      "extname": ".onetoc",
+      "contentType": "application/onenote",
+      "compressible": false
+    },
+    {
+      "file": "f.osf",
+      "extname": ".osf",
+      "contentType": "application/vnd.yamaha.openscoreformat",
+      "compressible": false
+    },
+    {
+      "file": "f.oti",
+      "extname": ".oti",
+      "contentType": "application/vnd.oasis.opendocument.image-template",
+      "compressible": false
+    },
+    {
+      "file": "f.oxps",
+      "extname": ".oxps",
+      "contentType": "application/oxps",
+      "compressible": false
+    },
+    {
+      "file": "f.p7m",
+      "extname": ".p7m",
+      "contentType": "application/pkcs7-mime",
+      "compressible": false
+    },
+    {
+      "file": "f.paw",
+      "extname": ".paw",
+      "contentType": "application/vnd.pawaafile",
+      "compressible": false
+    },
+    {
+      "file": "f.pct",
+      "extname": ".pct",
+      "contentType": "image/x-pict",
+      "compressible": false
+    },
+    {
+      "file": "f.pfa",
+      "extname": ".pfa",
+      "contentType": "application/x-font-type1",
+      "compressible": false
+    },
+    {
+      "file": "f.pgp",
+      "extname": ".pgp",
+      "contentType": "application/pgp-encrypted",
+      "compressible": false
+    },
+    {
+      "file": "f.pl",
+      "extname": ".pl",
+      "contentType": "application/x-perl",
+      "compressible": false
+    },
+    {
+      "file": "f.png",
+      "extname": ".png",
+      "contentType": "image/png",
+      "compressible": false
+    },
+    {
+      "file": "f.ppd",
+      "extname": ".ppd",
+      "contentType": "application/vnd.cups-ppd",
+      "compressible": false
+    },
+    {
+      "file": "f.pptx",
+      "extname": ".pptx",
+      "contentType": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      "compressible": false
+    },
+    {
+      "file": "f.psb",
+      "extname": ".psb",
+      "contentType": "application/vnd.3gpp.pic-bw-small",
+      "compressible": false
+    },
+    {
+      "file": "f.pvb",
+      "extname": ".pvb",
+      "contentType": "application/vnd.3gpp.pic-bw-var",
+      "compressible": false
+    },
+    {
+      "file": "f.qps",
+      "extname": ".qps",
+      "contentType": "application/vnd.publishare-delta-tree",
+      "compressible": false
+    },
+    {
+      "file": "f.qxt",
+      "extname": ".qxt",
+      "contentType": "application/vnd.quark.quarkxpress",
+      "compressible": false
+    },
+    {
+      "file": "f.rcprofile",
+      "extname": ".rcprofile",
+      "contentType": "application/vnd.ipunplugged.rcprofile",
+      "compressible": false
+    },
+    {
+      "file": "f.rif",
+      "extname": ".rif",
+      "contentType": "application/reginfo+xml",
+      "compressible": true
+    },
+    {
+      "file": "f.rmi",
+      "extname": ".rmi",
+      "contentType": "audio/midi",
+      "compressible": false
+    },
+    {
+      "file": "f.roff",
+      "extname": ".roff",
+      "contentType": "text/troff; charset=utf-8",
+      "compressible": true
+    },
+    {
+      "file": "f.rsat",
+      "extname": ".rsat",
+      "contentType": "application/atsc-rsat+xml",
+      "compressible": true
+    },
+    {
+      "file": "f.rusd",
+      "extname": ".rusd",
+      "contentType": "application/route-usd+xml",
+      "compressible": true
+    },
+    {
+      "file": "f.scd",
+      "extname": ".scd",
+      "contentType": "application/x-msschedule",
+      "compressible": false
+    },
+    {
+      "file": "f.sdc",
+      "extname": ".sdc",
+      "contentType": "application/vnd.stardivision.calc",
+      "compressible": false
+    },
+    {
+      "file": "f.see",
+      "extname": ".see",
+      "contentType": "application/vnd.seemail",
+      "compressible": false
+    },
+    {
+      "file": "f.ser",
+      "extname": ".ser",
+      "contentType": "application/java-serialized-object",
+      "compressible": false
+    },
+    {
+      "file": "f.sgl",
+      "extname": ".sgl",
+      "contentType": "application/vnd.stardivision.writer-global",
+      "compressible": false
+    },
+    {
+      "file": "f.shtml",
+      "extname": ".shtml",
+      "contentType": "text/html; charset=utf-8",
+      "compressible": true
+    },
+    {
+      "file": "f.sisx",
+      "extname": ".sisx",
+      "contentType": "application/vnd.symbian.install",
+      "compressible": false
+    },
+    {
+      "file": "f.skt",
+      "extname": ".skt",
+      "contentType": "application/vnd.koan",
+      "compressible": false
+    },
+    {
+      "file": "f.sm",
+      "extname": ".sm",
+      "contentType": "application/vnd.stepmania.stepchart",
+      "compressible": false
+    },
+    {
+      "file": "f.snf",
+      "extname": ".snf",
+      "contentType": "application/x-font-snf",
+      "compressible": false
+    },
+    {
+      "file": "f.spp",
+      "extname": ".spp",
+      "contentType": "application/scvp-vp-response",
+      "compressible": false
+    },
+    {
+      "file": "f.srx",
+      "extname": ".srx",
+      "contentType": "application/sparql-results+xml",
+      "compressible": true
+    },
+    {
+      "file": "f.std",
+      "extname": ".std",
+      "contentType": "application/vnd.sun.xml.draw.template",
+      "compressible": false
+    },
+    {
+      "file": "f.stpz",
+      "extname": ".stpz",
+      "contentType": "model/step+zip",
+      "compressible": false
+    },
+    {
+      "file": "f.susp",
+      "extname": ".susp",
+      "contentType": "application/vnd.sus-calendar",
+      "compressible": false
+    },
+    {
+      "file": "f.swa",
+      "extname": ".swa",
+      "contentType": "application/x-director",
+      "compressible": false
+    },
+    {
+      "file": "f.sxi",
+      "extname": ".sxi",
+      "contentType": "application/vnd.sun.xml.impress",
+      "compressible": false
+    },
+    {
+      "file": "f.tao",
+      "extname": ".tao",
+      "contentType": "application/vnd.tao.intent-module-archive",
+      "compressible": false
+    },
+    {
+      "file": "f.tei",
+      "extname": ".tei",
+      "contentType": "application/tei+xml",
+      "compressible": true
+    },
+    {
+      "file": "f.tfm",
+      "extname": ".tfm",
+      "contentType": "application/x-tex-tfm",
+      "compressible": false
+    },
+    {
+      "file": "f.tmo",
+      "extname": ".tmo",
+      "contentType": "application/vnd.tmobile-livetv",
+      "compressible": false
+    },
+    {
+      "file": "f.trig",
+      "extname": ".trig",
+      "contentType": "application/trig",
+      "compressible": false
+    },
+    {
+      "file": "f.ttl",
+      "extname": ".ttl",
+      "contentType": "text/turtle; charset=utf-8",
+      "compressible": true
+    },
+    {
+      "file": "f.u32",
+      "extname": ".u32",
+      "contentType": "application/x-authorware-bin",
+      "compressible": false
+    },
+    {
+      "file": "f.ufd",
+      "extname": ".ufd",
+      "contentType": "application/vnd.ufdl",
+      "compressible": false
+    },
+    {
+      "file": "f.uris",
+      "extname": ".uris",
+      "contentType": "text/uri-list; charset=utf-8",
+      "compressible": true
+    },
+    {
+      "file": "f.uvd",
+      "extname": ".uvd",
+      "contentType": "application/vnd.dece.data",
+      "compressible": false
+    },
+    {
+      "file": "f.uvs",
+      "extname": ".uvs",
+      "contentType": "video/vnd.dece.sd",
+      "compressible": false
+    },
+    {
+      "file": "f.uvvg",
+      "extname": ".uvvg",
+      "contentType": "image/vnd.dece.graphic",
+      "compressible": false
+    },
+    {
+      "file": "f.uvvu",
+      "extname": ".uvvu",
+      "contentType": "video/vnd.uvvu.mp4",
+      "compressible": false
+    },
+    {
+      "file": "f.vbox-extpack",
+      "extname": ".vbox-extpack",
+      "contentType": "application/x-virtualbox-vbox-extpack",
+      "compressible": false
+    },
+    {
+      "file": "f.vdi",
+      "extname": ".vdi",
+      "contentType": "application/x-virtualbox-vdi",
+      "compressible": true
+    },
+    {
+      "file": "f.vor",
+      "extname": ".vor",
+      "contentType": "application/vnd.stardivision.writer",
+      "compressible": false
+    },
+    {
+      "file": "f.vsw",
+      "extname": ".vsw",
+      "contentType": "application/vnd.visio",
+      "compressible": false
+    },
+    {
+      "file": "f.wadl",
+      "extname": ".wadl",
+      "contentType": "application/vnd.sun.wadl+xml",
+      "compressible": true
+    },
+    {
+      "file": "f.wbxml",
+      "extname": ".wbxml",
+      "contentType": "application/vnd.wap.wbxml; charset=utf-8",
+      "compressible": false
+    },
+    {
+      "file": "f.webmanifest",
+      "extname": ".webmanifest",
+      "contentType": "application/manifest+json; charset=utf-8",
+      "compressible": true
+    },
+    {
+      "file": "f.wma",
+      "extname": ".wma",
+      "contentType": "audio/x-ms-wma",
+      "compressible": false
+    },
+    {
+      "file": "f.wmv",
+      "extname": ".wmv",
+      "contentType": "video/x-ms-wmv",
+      "compressible": false
+    },
+    {
+      "file": "f.wps",
+      "extname": ".wps",
+      "contentType": "application/vnd.ms-works",
+      "compressible": false
+    },
+    {
+      "file": "f.wtb",
+      "extname": ".wtb",
+      "contentType": "application/vnd.webturbo",
+      "compressible": false
+    },
+    {
+      "file": "f.x3dvz",
+      "extname": ".x3dvz",
+      "contentType": "model/x3d+vrml",
+      "compressible": false
+    },
+    {
+      "file": "f.xav",
+      "extname": ".xav",
+      "contentType": "application/xcap-att+xml",
+      "compressible": true
+    },
+    {
+      "file": "f.xdm",
+      "extname": ".xdm",
+      "contentType": "application/vnd.syncml.dm+xml; charset=utf-8",
+      "compressible": true
+    },
+    {
+      "file": "f.xfdf",
+      "extname": ".xfdf",
+      "contentType": "application/vnd.adobe.xfdf",
+      "compressible": false
+    },
+    {
+      "file": "f.xlam",
+      "extname": ".xlam",
+      "contentType": "application/vnd.ms-excel.addin.macroenabled.12",
+      "compressible": false
+    },
+    {
+      "file": "f.xlsx",
+      "extname": ".xlsx",
+      "contentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "compressible": false
+    },
+    {
+      "file": "f.xns",
+      "extname": ".xns",
+      "contentType": "application/xcap-ns+xml",
+      "compressible": true
+    },
+    {
+      "file": "f.xps",
+      "extname": ".xps",
+      "contentType": "application/vnd.ms-xpsdocument",
+      "compressible": false
+    },
+    {
+      "file": "f.xspf",
+      "extname": ".xspf",
+      "contentType": "application/xspf+xml",
+      "compressible": true
+    },
+    {
+      "file": "f.yaml",
+      "extname": ".yaml",
+      "contentType": "text/yaml; charset=utf-8",
+      "compressible": true
+    },
+    {
+      "file": "f.z3",
+      "extname": ".z3",
+      "contentType": "application/x-zmachine",
+      "compressible": false
+    },
+    {
+      "file": "f.zip",
+      "extname": ".zip",
+      "contentType": "application/zip",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.123",
+      "extname": ".123",
+      "contentType": "application/vnd.lotus-1-2-3",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.3MF",
+      "extname": ".3MF",
+      "contentType": "model/3mf",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.AC",
+      "extname": ".AC",
+      "contentType": "application/pkix-attr-cert",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.AFM",
+      "extname": ".AFM",
+      "contentType": "application/x-font-type1",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.AIFF",
+      "extname": ".AIFF",
+      "contentType": "audio/x-aiff",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.APPCACHE",
+      "extname": ".APPCACHE",
+      "contentType": "text/cache-manifest; charset=utf-8",
+      "compressible": true
+    },
+    {
+      "file": "dir/F.ASM",
+      "extname": ".ASM",
+      "contentType": "text/x-asm; charset=utf-8",
+      "compressible": true
+    },
+    {
+      "file": "dir/F.ATOMSVC",
+      "extname": ".ATOMSVC",
+      "contentType": "application/atomsvc+xml",
+      "compressible": true
+    },
+    {
+      "file": "dir/F.AW",
+      "extname": ".AW",
+      "contentType": "application/applixware",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.BCPIO",
+      "extname": ".BCPIO",
+      "contentType": "application/x-bcpio",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.BLB",
+      "extname": ".BLB",
+      "contentType": "application/x-blorb",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.BOZ",
+      "extname": ".BOZ",
+      "contentType": "application/x-bzip2",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.C",
+      "extname": ".C",
+      "contentType": "text/x-c; charset=utf-8",
+      "compressible": true
+    },
+    {
+      "file": "dir/F.C4U",
+      "extname": ".C4U",
+      "contentType": "application/vnd.clonk.c4group",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.CBA",
+      "extname": ".CBA",
+      "contentType": "application/x-cbr",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.CCXML",
+      "extname": ".CCXML",
+      "contentType": "application/ccxml+xml",
+      "compressible": true
+    },
+    {
+      "file": "dir/F.CDMID",
+      "extname": ".CDMID",
+      "contentType": "application/cdmi-domain",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.CFS",
+      "extname": ".CFS",
+      "contentType": "application/x-cfs-compressed",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.CIL",
+      "extname": ".CIL",
+      "contentType": "application/vnd.ms-artgalry",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.CLKW",
+      "extname": ".CLKW",
+      "contentType": "application/vnd.crick.clicker.wordbank",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.CMX",
+      "extname": ".CMX",
+      "contentType": "image/x-cmx",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.CPP",
+      "extname": ".CPP",
+      "contentType": "text/x-c; charset=utf-8",
+      "compressible": true
+    },
+    {
+      "file": "dir/F.CSH",
+      "extname": ".CSH",
+      "contentType": "application/x-csh",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.CU",
+      "extname": ".CU",
+      "contentType": "application/cu-seeme",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.DART",
+      "extname": ".DART",
+      "contentType": "application/vnd.dart",
+      "compressible": true
+    },
+    {
+      "file": "dir/F.DD2",
+      "extname": ".DD2",
+      "contentType": "application/vnd.oma.dd2+xml",
+      "compressible": true
+    },
+    {
+      "file": "dir/F.DER",
+      "extname": ".DER",
+      "contentType": "application/x-x509-ca-cert",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.DIST",
+      "extname": ".DIST",
+      "contentType": "application/octet-stream",
+      "compressible": true
+    },
+    {
+      "file": "dir/F.DMS",
+      "extname": ".DMS",
+      "contentType": "application/octet-stream",
+      "compressible": true
+    },
+    {
+      "file": "dir/F.DOTX",
+      "extname": ".DOTX",
+      "contentType": "application/vnd.openxmlformats-officedocument.wordprocessingml.template",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.DTB",
+      "extname": ".DTB",
+      "contentType": "application/x-dtbook+xml",
+      "compressible": true
+    },
+    {
+      "file": "dir/F.DWD",
+      "extname": ".DWD",
+      "contentType": "application/atsc-dwd+xml",
+      "compressible": true
+    },
+    {
+      "file": "dir/F.ECELP4800",
+      "extname": ".ECELP4800",
+      "contentType": "audio/vnd.nuera.ecelp4800",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.EI6",
+      "extname": ".EI6",
+      "contentType": "application/vnd.pg.osasli",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.EOL",
+      "extname": ".EOL",
+      "contentType": "audio/vnd.digital-winds",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.ESF",
+      "extname": ".ESF",
+      "contentType": "application/vnd.epson.esf",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.EXP",
+      "extname": ".EXP",
+      "contentType": "application/express",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.F4V",
+      "extname": ".F4V",
+      "contentType": "video/x-f4v",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.FDT",
+      "extname": ".FDT",
+      "contentType": "application/fdt+xml",
+      "compressible": true
+    },
+    {
+      "file": "dir/F.FH7",
+      "extname": ".FH7",
+      "contentType": "image/x-freehand",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.FLV",
+      "extname": ".FLV",
+      "contentType": "video/x-flv",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.FOR",
+      "extname": ".FOR",
+      "contentType": "text/x-fortran; charset=utf-8",
+      "compressible": true
+    },
+    {
+      "file": "dir/F.FVT",
+      "extname": ".FVT",
+      "contentType": "video/vnd.fvt",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.GAC",
+      "extname": ".GAC",
+      "contentType": "application/vnd.groove-account",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.GEO",
+      "extname": ".GEO",
+      "contentType": "application/vnd.dynageo",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.GIM",
+      "extname": ".GIM",
+      "contentType": "application/vnd.groove-identity-message",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.GPX",
+      "extname": ".GPX",
+      "contentType": "application/gpx+xml",
+      "compressible": true
+    },
+    {
+      "file": "dir/F.GRXML",
+      "extname": ".GRXML",
+      "contentType": "application/srgs+xml",
+      "compressible": true
+    },
+    {
+      "file": "dir/F.GV",
+      "extname": ".GV",
+      "contentType": "text/vnd.graphviz; charset=utf-8",
+      "compressible": true
+    },
+    {
+      "file": "dir/F.H264",
+      "extname": ".H264",
+      "contentType": "video/h264",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.HEICS",
+      "extname": ".HEICS",
+      "contentType": "image/heic-sequence",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.HLP",
+      "extname": ".HLP",
+      "contentType": "application/winhlp",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.HTKE",
+      "extname": ".HTKE",
+      "contentType": "application/vnd.kenameaapp",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.ICC",
+      "extname": ".ICC",
+      "contentType": "application/vnd.iccprofile",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.IFM",
+      "extname": ".IFM",
+      "contentType": "application/vnd.shana.informed.formdata",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.IMG",
+      "extname": ".IMG",
+      "contentType": "application/octet-stream",
+      "compressible": true
+    },
+    {
+      "file": "dir/F.INSTALL",
+      "extname": ".INSTALL",
+      "contentType": "application/x-install-instructions",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.ITP",
+      "extname": ".ITP",
+      "contentType": "application/vnd.shana.informed.formtemplate",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.JAR",
+      "extname": ".JAR",
+      "contentType": "application/java-archive",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.JNG",
+      "extname": ".JNG",
+      "contentType": "image/x-jng",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.JPG",
+      "extname": ".JPG",
+      "contentType": "image/jpeg",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.JS",
+      "extname": ".JS",
+      "contentType": "application/javascript; charset=utf-8",
+      "compressible": true
+    },
+    {
+      "file": "dir/F.JXRA",
+      "extname": ".JXRA",
+      "contentType": "image/jxra",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.KARBON",
+      "extname": ".KARBON",
+      "contentType": "application/vnd.kde.karbon",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.KNE",
+      "extname": ".KNE",
+      "contentType": "application/vnd.kinar",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.KTR",
+      "extname": ".KTR",
+      "contentType": "application/vnd.kahootz",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.LATEX",
+      "extname": ".LATEX",
+      "contentType": "application/x-latex",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.LINK66",
+      "extname": ".LINK66",
+      "contentType": "application/vnd.route66.link66+xml",
+      "compressible": true
+    },
+    {
+      "file": "dir/F.LOSTXML",
+      "extname": ".LOSTXML",
+      "contentType": "application/lost+xml",
+      "compressible": true
+    },
+    {
+      "file": "dir/F.LWP",
+      "extname": ".LWP",
+      "contentType": "application/vnd.lotus-wordpro",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.M2V",
+      "extname": ".M2V",
+      "contentType": "video/mpeg",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.M4U",
+      "extname": ".M4U",
+      "contentType": "video/vnd.mpegurl",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.MAN",
+      "extname": ".MAN",
+      "contentType": "text/troff; charset=utf-8",
+      "compressible": true
+    },
+    {
+      "file": "dir/F.MBK",
+      "extname": ".MBK",
+      "contentType": "application/vnd.mobius.mbk",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.MDI",
+      "extname": ".MDI",
+      "contentType": "image/vnd.ms-modi",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.MFM",
+      "extname": ".MFM",
+      "contentType": "application/vnd.mfmp",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.MIF",
+      "extname": ".MIF",
+      "contentType": "application/vnd.mif",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.MKD",
+      "extname": ".MKD",
+      "contentType": "text/x-markdown; charset=utf-8",
+      "compressible": true
+    },
+    {
+      "file": "dir/F.MMR",
+      "extname": ".MMR",
+      "contentType": "image/vnd.fujixerox.edmics-mmr",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.MP2",
+      "extname": ".MP2",
+      "contentType": "audio/mpeg",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.MP4V",
+      "extname": ".MP4V",
+      "contentType": "video/mp4",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.MPG4",
+      "extname": ".MPG4",
+      "contentType": "video/mp4",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.MPY",
+      "extname": ".MPY",
+      "contentType": "application/vnd.ibm.minipay",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.MSEQ",
+      "extname": ".MSEQ",
+      "contentType": "application/vnd.mseq",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.MSP",
+      "extname": ".MSP",
+      "contentType": "application/octet-stream",
+      "compressible": true
+    },
+    {
+      "file": "dir/F.MVB",
+      "extname": ".MVB",
+      "contentType": "application/x-msmediaview",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.MXS",
+      "extname": ".MXS",
+      "contentType": "application/vnd.triscape.mxs",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.NCX",
+      "extname": ".NCX",
+      "contentType": "application/x-dtbncx+xml",
+      "compressible": true
+    },
+    {
+      "file": "dir/F.NNS",
+      "extname": ".NNS",
+      "contentType": "application/vnd.noblenet-sealer",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.NTF",
+      "extname": ".NTF",
+      "contentType": "application/vnd.nitf",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.OBGX",
+      "extname": ".OBGX",
+      "contentType": "application/vnd.openblox.game+xml",
+      "compressible": true
+    },
+    {
+      "file": "dir/F.ODG",
+      "extname": ".ODG",
+      "contentType": "application/vnd.oasis.opendocument.graphics",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.OGEX",
+      "extname": ".OGEX",
+      "contentType": "model/vnd.opengex",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.ONETOC",
+      "extname": ".ONETOC",
+      "contentType": "application/onenote",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.OSF",
+      "extname": ".OSF",
+      "contentType": "application/vnd.yamaha.openscoreformat",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.OTI",
+      "extname": ".OTI",
+      "contentType": "application/vnd.oasis.opendocument.image-template",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.OXPS",
+      "extname": ".OXPS",
+      "contentType": "application/oxps",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.P7M",
+      "extname": ".P7M",
+      "contentType": "application/pkcs7-mime",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.PAW",
+      "extname": ".PAW",
+      "contentType": "application/vnd.pawaafile",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.PCT",
+      "extname": ".PCT",
+      "contentType": "image/x-pict",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.PFA",
+      "extname": ".PFA",
+      "contentType": "application/x-font-type1",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.PGP",
+      "extname": ".PGP",
+      "contentType": "application/pgp-encrypted",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.PL",
+      "extname": ".PL",
+      "contentType": "application/x-perl",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.PNG",
+      "extname": ".PNG",
+      "contentType": "image/png",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.PPD",
+      "extname": ".PPD",
+      "contentType": "application/vnd.cups-ppd",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.PPTX",
+      "extname": ".PPTX",
+      "contentType": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.PSB",
+      "extname": ".PSB",
+      "contentType": "application/vnd.3gpp.pic-bw-small",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.PVB",
+      "extname": ".PVB",
+      "contentType": "application/vnd.3gpp.pic-bw-var",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.QPS",
+      "extname": ".QPS",
+      "contentType": "application/vnd.publishare-delta-tree",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.QXT",
+      "extname": ".QXT",
+      "contentType": "application/vnd.quark.quarkxpress",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.RCPROFILE",
+      "extname": ".RCPROFILE",
+      "contentType": "application/vnd.ipunplugged.rcprofile",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.RIF",
+      "extname": ".RIF",
+      "contentType": "application/reginfo+xml",
+      "compressible": true
+    },
+    {
+      "file": "dir/F.RMI",
+      "extname": ".RMI",
+      "contentType": "audio/midi",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.ROFF",
+      "extname": ".ROFF",
+      "contentType": "text/troff; charset=utf-8",
+      "compressible": true
+    },
+    {
+      "file": "dir/F.RSAT",
+      "extname": ".RSAT",
+      "contentType": "application/atsc-rsat+xml",
+      "compressible": true
+    },
+    {
+      "file": "dir/F.RUSD",
+      "extname": ".RUSD",
+      "contentType": "application/route-usd+xml",
+      "compressible": true
+    },
+    {
+      "file": "dir/F.SCD",
+      "extname": ".SCD",
+      "contentType": "application/x-msschedule",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.SDC",
+      "extname": ".SDC",
+      "contentType": "application/vnd.stardivision.calc",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.SEE",
+      "extname": ".SEE",
+      "contentType": "application/vnd.seemail",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.SER",
+      "extname": ".SER",
+      "contentType": "application/java-serialized-object",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.SGL",
+      "extname": ".SGL",
+      "contentType": "application/vnd.stardivision.writer-global",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.SHTML",
+      "extname": ".SHTML",
+      "contentType": "text/html; charset=utf-8",
+      "compressible": true
+    },
+    {
+      "file": "dir/F.SISX",
+      "extname": ".SISX",
+      "contentType": "application/vnd.symbian.install",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.SKT",
+      "extname": ".SKT",
+      "contentType": "application/vnd.koan",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.SM",
+      "extname": ".SM",
+      "contentType": "application/vnd.stepmania.stepchart",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.SNF",
+      "extname": ".SNF",
+      "contentType": "application/x-font-snf",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.SPP",
+      "extname": ".SPP",
+      "contentType": "application/scvp-vp-response",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.SRX",
+      "extname": ".SRX",
+      "contentType": "application/sparql-results+xml",
+      "compressible": true
+    },
+    {
+      "file": "dir/F.STD",
+      "extname": ".STD",
+      "contentType": "application/vnd.sun.xml.draw.template",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.STPZ",
+      "extname": ".STPZ",
+      "contentType": "model/step+zip",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.SUSP",
+      "extname": ".SUSP",
+      "contentType": "application/vnd.sus-calendar",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.SWA",
+      "extname": ".SWA",
+      "contentType": "application/x-director",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.SXI",
+      "extname": ".SXI",
+      "contentType": "application/vnd.sun.xml.impress",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.TAO",
+      "extname": ".TAO",
+      "contentType": "application/vnd.tao.intent-module-archive",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.TEI",
+      "extname": ".TEI",
+      "contentType": "application/tei+xml",
+      "compressible": true
+    },
+    {
+      "file": "dir/F.TFM",
+      "extname": ".TFM",
+      "contentType": "application/x-tex-tfm",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.TMO",
+      "extname": ".TMO",
+      "contentType": "application/vnd.tmobile-livetv",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.TRIG",
+      "extname": ".TRIG",
+      "contentType": "application/trig",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.TTL",
+      "extname": ".TTL",
+      "contentType": "text/turtle; charset=utf-8",
+      "compressible": true
+    },
+    {
+      "file": "dir/F.U32",
+      "extname": ".U32",
+      "contentType": "application/x-authorware-bin",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.UFD",
+      "extname": ".UFD",
+      "contentType": "application/vnd.ufdl",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.URIS",
+      "extname": ".URIS",
+      "contentType": "text/uri-list; charset=utf-8",
+      "compressible": true
+    },
+    {
+      "file": "dir/F.UVD",
+      "extname": ".UVD",
+      "contentType": "application/vnd.dece.data",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.UVS",
+      "extname": ".UVS",
+      "contentType": "video/vnd.dece.sd",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.UVVG",
+      "extname": ".UVVG",
+      "contentType": "image/vnd.dece.graphic",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.UVVU",
+      "extname": ".UVVU",
+      "contentType": "video/vnd.uvvu.mp4",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.VBOX-EXTPACK",
+      "extname": ".VBOX-EXTPACK",
+      "contentType": "application/x-virtualbox-vbox-extpack",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.VDI",
+      "extname": ".VDI",
+      "contentType": "application/x-virtualbox-vdi",
+      "compressible": true
+    },
+    {
+      "file": "dir/F.VOR",
+      "extname": ".VOR",
+      "contentType": "application/vnd.stardivision.writer",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.VSW",
+      "extname": ".VSW",
+      "contentType": "application/vnd.visio",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.WADL",
+      "extname": ".WADL",
+      "contentType": "application/vnd.sun.wadl+xml",
+      "compressible": true
+    },
+    {
+      "file": "dir/F.WBXML",
+      "extname": ".WBXML",
+      "contentType": "application/vnd.wap.wbxml; charset=utf-8",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.WEBMANIFEST",
+      "extname": ".WEBMANIFEST",
+      "contentType": "application/manifest+json; charset=utf-8",
+      "compressible": true
+    },
+    {
+      "file": "dir/F.WMA",
+      "extname": ".WMA",
+      "contentType": "audio/x-ms-wma",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.WMV",
+      "extname": ".WMV",
+      "contentType": "video/x-ms-wmv",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.WPS",
+      "extname": ".WPS",
+      "contentType": "application/vnd.ms-works",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.WTB",
+      "extname": ".WTB",
+      "contentType": "application/vnd.webturbo",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.X3DVZ",
+      "extname": ".X3DVZ",
+      "contentType": "model/x3d+vrml",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.XAV",
+      "extname": ".XAV",
+      "contentType": "application/xcap-att+xml",
+      "compressible": true
+    },
+    {
+      "file": "dir/F.XDM",
+      "extname": ".XDM",
+      "contentType": "application/vnd.syncml.dm+xml; charset=utf-8",
+      "compressible": true
+    },
+    {
+      "file": "dir/F.XFDF",
+      "extname": ".XFDF",
+      "contentType": "application/vnd.adobe.xfdf",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.XLAM",
+      "extname": ".XLAM",
+      "contentType": "application/vnd.ms-excel.addin.macroenabled.12",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.XLSX",
+      "extname": ".XLSX",
+      "contentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.XNS",
+      "extname": ".XNS",
+      "contentType": "application/xcap-ns+xml",
+      "compressible": true
+    },
+    {
+      "file": "dir/F.XPS",
+      "extname": ".XPS",
+      "contentType": "application/vnd.ms-xpsdocument",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.XSPF",
+      "extname": ".XSPF",
+      "contentType": "application/xspf+xml",
+      "compressible": true
+    },
+    {
+      "file": "dir/F.YAML",
+      "extname": ".YAML",
+      "contentType": "text/yaml; charset=utf-8",
+      "compressible": true
+    },
+    {
+      "file": "dir/F.Z3",
+      "extname": ".Z3",
+      "contentType": "application/x-zmachine",
+      "compressible": false
+    },
+    {
+      "file": "dir/F.ZIP",
+      "extname": ".ZIP",
+      "contentType": "application/zip",
+      "compressible": false
+    }
+  ]
+}

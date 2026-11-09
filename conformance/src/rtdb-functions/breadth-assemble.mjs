@@ -22,7 +22,7 @@ import { createRtdb } from "./breadth-rtdb.mjs";
 import { resolveTarget } from "../../functions-http/harness.mjs";
 import { resolveGen1Target } from "./gen1.mjs";
 import { buildSteps } from "./breadth-sequence.mjs";
-import { CODEBASE, TARGETS } from "./breadth-targets.mjs";
+import { CODEBASE as BREADTH_CODEBASE, TARGETS as BREADTH_TARGETS } from "./breadth-targets.mjs";
 import {
   BREADTH_LIMITS,
   bindOps,
@@ -50,8 +50,13 @@ export function assembleBreadth({
   stop = {},
   programId = "breadth",
   nonce = randomBytes(8).toString("hex"),
+  scenario = {},
 }) {
   if (!auth || !sdk) throw new Error("breadth auth and SDK are required");
+  // the breadth recording unless the scenario names its own targets, steps, rules, limits and hooks
+  const TARGETS = scenario.targets ?? BREADTH_TARGETS;
+  const CODEBASE = scenario.codebase ?? BREADTH_CODEBASE;
+  const limits = scenario.limits ?? BREADTH_LIMITS;
   const specs = new Map(
     TARGETS.map((target) => {
       const { functionName, region, codebase, generation, project, runtime, entryPoint } = target;
@@ -90,7 +95,7 @@ export function assembleBreadth({
     projectNumber,
     region: LOCATION,
     send: storageSend(control),
-    requestsLeft: () => BREADTH_LIMITS.upload - budget.snapshot().upload,
+    requestsLeft: () => limits.upload - budget.snapshot().upload,
   });
   const forms = createFormsCollector(projectNumber);
   const ops = bindOps({
@@ -114,6 +119,8 @@ export function assembleBreadth({
     }
   }
   const rtdb = createRtdb({
+    prefix: scenario.prefix,
+    rulesFor: scenario.rulesFor,
     fetchImpl: anonymousFetch,
     adminFetch,
     packet,
@@ -137,8 +144,11 @@ export function assembleBreadth({
     runDir,
     budget,
     targets: TARGETS,
-    steps: buildSteps(nonce),
+    steps: (scenario.buildSteps ?? buildSteps)(nonce),
     nonce,
+    observe: scenario.observe,
+    judge: scenario.judge,
+    complete: scenario.complete,
     ops,
     // only a 2nd gen record names an Eventarc trigger and topic
     ownedNames: (record, spec) =>
@@ -168,12 +178,16 @@ export function assembleBreadth({
     rtdb,
     auth,
     sdk,
-    logs: createLogReader({ control, now: () => new Date(clock.now()).toISOString() }),
+    logs: createLogReader({
+      control,
+      now: () => new Date(clock.now()).toISOString(),
+      handlers: scenario.handlers,
+    }),
     uploads,
     log,
     abort,
     clock,
-    windows: BREADTH_WINDOWS,
+    windows: scenario.windows ?? BREADTH_WINDOWS,
     programId,
   };
   return {

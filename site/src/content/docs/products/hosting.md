@@ -41,13 +41,13 @@ These keys of the `hosting` object are honored:
 | `headers` | Rules with `source`, `glob` or `regex` and a `headers` list of `key` and `value`. They are added to responses for files and rewrites. |
 | `cleanUrls` | `/about.html` redirects (301) to `/about`, and `/about` serves `about.html`. |
 | `trailingSlash` | `true` adds a trailing slash to directory URLs, `false` removes it (301), and unset leaves a directory URL without a slash redirecting to the one with it unless `cleanUrls` is on. |
-| `i18n` | `{ "root": "locales" }` serves `locales/<language>_<country>/…`, `locales/ALL_<country>/…`, `locales/<language>_ALL/…` and `locales/<language>/…` before the plain path, chosen from `Accept-Language` and the `X-Country-Code` header, or from the `firebase-language-override` and `firebase-country-override` cookies. |
+| `i18n` | `{ "root": "/locales" }` (any spelling of the slashes: `locales`, `/locales/`) serves `locales/<language>_<country>/…`, `locales/ALL_<country>/…`, `locales/<language>_ALL/…` and `locales/<language>/…` before the plain path, chosen from `Accept-Language` and the `X-Country-Code` header, or from the `firebase-language-override` and `firebase-country-override` cookies. |
 
 Behaviour of a request, in order:
 
 1. Requests for `/__/firebase/init.json` and `/__/firebase/init.js` are answered first: `init.json` holds the project ID and a non-secret local API key (`fireemu-local-only`), and `init.js?useEmulator=true` also points the Firebase SDKs at the emulators of this run (Authentication, Firestore, Functions, Storage and the Realtime Database, when they run). They take precedence over a catch-all redirect, as Firebase Hosting's published priority says; the official emulator applies redirects first.
 2. A matching entry of `redirects` answers with its status and a `Location`.
-3. A file is served when one matches, including `index.html` for a directory; `HEAD` is answered with the headers only. Responses carry `ETag`, `Last-Modified` and `Content-Length`, and the body is streamed from the open file.
+3. A file is served when one matches, including `index.html` for a directory; `HEAD` is answered with the headers only. Responses carry `ETag`, `Last-Modified` and `Content-Length`, and the body is streamed from the open file. The `Content-Type` comes from the extension (compared without regard to case) in the table of `mime-types` 2.1.35 over `mime-db` 1.52.0, which is what the `firebase-tools` emulator uses, including its charsets (`application/javascript; charset=utf-8`, `text/css; charset=utf-8`, `image/svg+xml` without one). A compressible type also gets `Vary: Accept-Encoding`, as the emulator's compression does.
 4. A matching entry of `rewrites` answers: a `destination` file is served with 200 (a rewrite to `/404.html` answers 404), and a `function` or `run` rule is forwarded to the local Functions runtime.
 5. Otherwise `404.html` from the public directory is served with status 404 or, without one, a built-in "Cannot GET" page.
 
@@ -87,13 +87,14 @@ Hosting behaves the same under `strict` and `emulator`, and `productionExact` ch
 - App Hosting. `--only apphosting` is refused as deferred; see [Limitations](../../compatibility/limitations/).
 - Keys other than those in the table above are not acted on, for example `appAssociation`: Fireemu serves no `/.well-known/` association files for it, and a file you place in `public` is served like any other.
 - The hosted SDK scripts under `/__/firebase/<version>/`, deployed Cloud Run services and deployed functions (no live fallback).
-- Content types come from a short built-in table (HTML, JSON, JavaScript, CSS, plain text, SVG, PNG, JPEG and WebAssembly); any other extension, such as `.woff2`, `.gif` or `.ico`, is served as `application/octet-stream`. The `Content-Type` of a custom header rule replaces it.
-- An `i18n.root` with a leading slash (`/locales`, the form in Firebase's documentation) is not found yet: write it without one (`locales`) until this is fixed.
+- A file with no extension, or an extension that `mime-types` does not know, is served as `application/octet-stream`. The `firebase-tools` emulator sends the literal text `false` as its `Content-Type` there, and production's behaviour was not recorded. The `Content-Type` of a custom header rule replaces the one Fireemu chooses.
 
 ## Unreleased
 
-These fixes are on `main` and not in v0.46.0 (see the [changelog](https://github.com/t-k/fireemu/blob/main/CHANGELOG.md)):
+These changes are on `main` and not in v0.46.0 (see the [changelog](https://github.com/t-k/fireemu/blob/main/CHANGELOG.md)):
 
+- An `i18n.root` written with a leading or trailing slash (`/locales`, the form Firebase's documentation shows) finds the same files as `locales`, and an empty root is no root, as in `superstatic`. Before, only a root without a leading slash worked.
+- Content types come from the `mime-types`/`mime-db` table of the `firebase-tools` emulator (generated from it), with its `Vary: Accept-Encoding` rule. Before, a short built-in table served every other extension, such as `.woff2`, `.gif` or `.ico`, as `application/octet-stream` and `.js` as `text/javascript`.
 - `ignore` patterns ignore case the way `firebase-tools` does on macOS and Windows (a JavaScript regular expression with the `i` flag, as the `glob` package compiles them); on Linux they stay case-sensitive.
 - `headers`, `rewrites` and glob `redirects` sources treat a run of slashes as one, and a pattern also matches a path with one trailing slash, as the pinned `superstatic` does. A percent-encoded alias such as `/%64ata.json` still does not get a header rule, as in the pinned emulator.
 - A rule whose `source` is empty matches nothing and falls through to its `regex`, as `superstatic` does.

@@ -29,6 +29,8 @@ export function rulesFor(prefix, nonce) {
 }
 
 export function createRtdb({
+  prefix = PREFIX,
+  rulesFor: makeRules = rulesFor,
   fetchImpl = fetch,
   adminFetch = fetchImpl,
   headers = {},
@@ -65,9 +67,9 @@ export function createRtdb({
     caps: CAPS,
     propagationMs: 120000,
     fireGraceMs: 0,
-    rulesFor: (prefix) => rulesFor(prefix, nonce),
+    rulesFor: (name) => makeRules(name, nonce),
   });
-  const options = { mode: "production", packet, prefix: PREFIX };
+  const options = { mode: "production", packet, prefix };
   const run = {
     admin,
     call: admin.call,
@@ -110,10 +112,10 @@ export function createRtdb({
       );
       if (runDir)
         await writeFile(join(runDir, "baseline.rules.json"), run.baseline, { mode: 0o600 });
-      await fns.read(run, "prefix-before", "GET", run.u.data(PREFIX), (value) => value === null);
+      await fns.read(run, "prefix-before", "GET", run.u.data(prefix), (value) => value === null);
       baselineVerified = true;
       run.state.data = "ours";
-      await fns.putRules(run, "rules-install", rulesFor(PREFIX, nonce));
+      await fns.putRules(run, "rules-install", makeRules(prefix, nonce));
       run.propagation = false;
     },
     async write(step) {
@@ -146,11 +148,11 @@ export function createRtdb({
             "prefix-delete",
             "data",
             "DELETE",
-            run.u.data(PREFIX),
+            run.u.data(prefix),
             undefined,
             (value) => value === null,
           );
-          await fns.read(run, "prefix-null", "GET", run.u.data(PREFIX), (value) => value === null);
+          await fns.read(run, "prefix-null", "GET", run.u.data(prefix), (value) => value === null);
           run.state.data = "baseline";
         }
       } catch (error) {

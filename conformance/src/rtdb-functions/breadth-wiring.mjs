@@ -19,8 +19,11 @@ export { bearerFetch, bindOps, createFormsCollector, preflightStage2 } from "./w
 export const BREADTH_HOSTS = Object.freeze([LOGGING_HOST, ...INVENTORY_HOSTS]);
 export const NORMAL_CEILING = 130;
 export const CLEANUP_CEILING = 212;
-export const createBreadthBudget = () => {
-  const { userClient, browserHttp, browserWs, ...caps } = BREADTH_LIMITS;
+export const createBreadthBudget = ({
+  limits = BREADTH_LIMITS,
+  ceilings = { normal: NORMAL_CEILING, cleanup: CLEANUP_CEILING },
+} = {}) => {
+  const { userClient, browserHttp, browserWs, ...caps } = limits;
   const budget = createBudget(caps, {
     logs: caps.logs,
     inventory: caps.inventory,
@@ -36,7 +39,7 @@ export const createBreadthBudget = () => {
   let cleanupExhausted = false;
   return {
     take(kind) {
-      const limit = cleanup ? CLEANUP_CEILING : NORMAL_CEILING;
+      const limit = cleanup ? ceilings.cleanup : ceilings.normal;
       if (total >= limit) {
         exhausted = true;
         if (cleanup) cleanupExhausted = true;
@@ -59,28 +62,31 @@ export const createBreadthBudget = () => {
   };
 };
 
-export function breadthCli(run) {
+export function breadthCli(
+  run,
+  { targets = TARGETS, codebase = CODEBASE, config = "firebase-breadth.json" } = {},
+) {
   return async (args, ...rest) => {
     const only = args.indexOf("--only");
     if (
       args[0] !== "deploy" ||
       only < 0 ||
-      !TARGETS.some(
-        (target) => args[only + 1] === `functions:${CODEBASE}:${target.functionName}`,
+      !targets.some(
+        (target) => args[only + 1] === `functions:${codebase}:${target.functionName}`,
       ) ||
       args.filter((arg) => arg === "--only").length !== 1 ||
       args.includes("--config")
     ) {
       throw new Error("invalid breadth deploy");
     }
-    return run([...args, "--config", "firebase-breadth.json", "--force"], ...rest);
+    return run([...args, "--config", config, "--force"], ...rest);
   };
 }
 
 const LOG_PAGES = 3;
 
 /** Reads the frames of a window, page by page (at most three), each insert id once across reads. */
-export function createLogReader({ control, now }) {
+export function createLogReader({ control, now, handlers }) {
   const seen = new Set();
   return {
     async read({ start, end }) {
@@ -88,9 +94,9 @@ export function createLogReader({ control, now }) {
       let pageToken;
       try {
         for (let page = 0; page < LOG_PAGES; page += 1) {
-          const request = listRequest({ start, end, pageToken });
+          const request = listRequest({ start, end, pageToken }, handlers);
           const reply = await control(request.method, request.url, request.body, "logs");
-          const parsed = parseEntries(reply.value, { readAt: now(), seen });
+          const parsed = parseEntries(reply.value, { readAt: now(), seen, handlers });
           total.frames.push(...parsed.frames);
           total.entries += parsed.entries;
           for (const [key, count] of Object.entries(parsed.ignored)) {

@@ -64,7 +64,7 @@ pub const DAEMON_OPTIONS: &[OptionSpec] = &[
     opt(
         &["--only"],
         Value::Required("<list>"),
-        "Comma-separated services to start: auth, firestore, storage, functions (or functions:<codebase>), eventarc, tasks, pubsub, database, appcheck. Default: Firestore, Auth, Storage and App Check; Functions when a codebase is configured (firebase.json or --functions), and with it Eventarc and Cloud Tasks; Pub/Sub when configured (emulators.pubsub, daemon.pubsubPort or --pubsub-port); the Realtime Database when configured (emulators.database, daemon.databasePort or --database-port).",
+        "Comma-separated services to start: auth, firestore, storage, functions (or functions:<codebase>), eventarc, tasks, pubsub, database, appcheck, hosting. Default: Firestore, Auth, Storage and App Check; Functions when a codebase is configured (firebase.json or --functions), and with it Eventarc and Cloud Tasks; Pub/Sub when configured (emulators.pubsub, daemon.pubsubPort or --pubsub-port); the Realtime Database when configured (emulators.database, daemon.databasePort or --database-port); Hosting when firebase.json has hosting.public.",
     ),
     opt(
         &["--firestore-port"],
@@ -89,7 +89,7 @@ pub const DAEMON_OPTIONS: &[OptionSpec] = &[
     opt(
         &["--hosting-port"],
         Value::Required("<n>"),
-        "Hosting port, used when a codebase is loaded. Default: 5000 (0 picks a free port).",
+        "Hosting port, used when firebase.json has hosting.public. Default: 5000 (0 picks a free port).",
     ),
     opt(
         &["--eventarc-port"],

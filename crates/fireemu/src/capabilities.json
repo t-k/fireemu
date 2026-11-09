@@ -840,7 +840,7 @@
     ],
     "unimplemented": [
       "emulators.singleProjectMode is recorded and published but enforces nothing on its own: fireemu isolates every project into its own session, which is stricter",
-      "hosting and the other deferred products are not parsed beyond reporting them; the database section's predeploy / postdeploy hooks are accepted and ignored"
+      "the other deferred products (App Hosting, Data Connect) are not parsed beyond reporting them; the database section's predeploy / postdeploy hooks are accepted and ignored"
     ],
     "notes": [
       "command-line ports override firebase.json; firebase.json overrides the canonical configuration"
@@ -853,7 +853,7 @@
       "--only decides the lifecycle: an unselected Firestore, Storage or Functions binds no listener at all and its port stays free for whatever else wants it",
       "the child environment carries exactly the canonical variables of the selected services, in the firebase-tools@15.28.2 env.ts formats: FIRESTORE_EMULATOR_HOST and FIREBASE_FIRESTORE_EMULATOR_ADDRESS as host:port, FIREBASE_AUTH_EMULATOR_HOST as host:port, FIREBASE_STORAGE_EMULATOR_HOST as host:port next to STORAGE_EMULATOR_HOST as http://host:port, FIREBASE_EMULATOR_HUB as host:port, and a synthesised FIREBASE_CONFIG",
       "inherited emulator endpoints for unselected services are preserved; endpoints for selected services are overridden, so removing a routing variable cannot silently restore production routing",
-      "an official service fireemu does not serve (hosting, apphosting, dataconnect, extensions) is refused by --only with its scope status before anything binds; eventarc and tasks are accepted support-service selections and are no-ops without a Functions codebase, matching firebase-tools 15.28.2",
+      "an official service fireemu does not serve (apphosting, dataconnect, extensions) is refused by --only with its scope status before anything binds; eventarc and tasks are accepted support-service selections and are no-ops without a Functions codebase, matching firebase-tools 15.28.2",
       "--only functions:<codebase> selects one codebase, as the official CLI spells it",
       "the functions runner sees the same selection: an unselected product leaves its variable unset there too"
     ],

@@ -11,6 +11,7 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 ### Changed
 
 - Firestore Listen keeps the documents a target has delivered as one compact key per document instead of a full path, and a full refresh updates that set in place instead of building a second copy of it. With 100,000 documents of 1 KiB, each further target on the same collection costs about 14 MiB instead of 31 MiB, the peak memory of repeated full refreshes of four such targets falls from about 493 MiB to about 415 MiB, and the refreshes take about a third of the time. The frames, their order, resume tokens and target changes are unchanged.
+- Documentation: Firebase Hosting, served since 0.45.0 for one `firebase.json` site and without a production parity claim, now has its own page on the site and a row in the README product table; the README, the home page and the limitations page no longer list it as deferred. The Cloud Functions page describes the Node.js runner first, and the Python material moved to its own page.
 
 ### Fixed
 

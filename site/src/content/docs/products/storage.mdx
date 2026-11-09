@@ -10,64 +10,9 @@ Fireemu serves Cloud Storage for Firebase at `127.0.0.1:9199`, with both API dia
 - the Firebase Storage protocol the client SDKs use, including resumable uploads and download tokens;
 - the Cloud Storage JSON API the Admin SDK and the Google Cloud client libraries use, including copy and rewrite.
 
-Both dialects share one store, so an object uploaded through one is visible through the other.
+Both dialects share one store, so an object uploaded through one is visible through the other. See [Connect your app](../../getting-started/connect/) for the environment variables and `connectStorageEmulator`. The Storage emulator keeps its objects in memory.
 
-## Production behavior
-
-Under `strict`, generation and metageneration preconditions and declared checksums are honored as production honors them. The official emulator verifies no checksum.
-
-Storage Security Rules are read from the `storage.rules` file named in `firebase.json`, or `storage.rules` in `fireemu.toml`. A Storage rule can read Firestore documents with `firestore.get()` and `firestore.exists()`. Under `strict`, a project without rules refuses every end-user request with production's 400 "bucket has not been set up" answer. See [Security Rules](../../guides/security-rules/).
-
-Under `strict` the Storage emulator also refuses what production refuses and the official emulator accepts (a bucket that does not exist is the exception, see below):
-
-- **A public URL for a private object.** `GET /{bucket}/{object}`, which is what `file.publicUrl()` builds, answers 403 `AccessDenied` unless the request carries a non-empty `Bearer` `Authorization` header, comes from a Google client library (these send `x-goog-api-client`, and the Go library, so the Firebase Admin Go SDK, reads through this URL with no credential while `STORAGE_EMULATOR_HOST` is set; the Python, Java and Node libraries read through the JSON API and are never refused), is a signed URL that has not expired, or the object is public. An object is public when application code made it so (`file.makePublic()`, `predefinedAcl=publicRead` on an upload, patch, copy (`destinationPredefinedAcl`) or rewrite, an `allUsers` `READER` entry in the `acl` of an uploaded or patched resource, or `POST .../acl`), for that generation of the object only: an overwrite is private again. `file.makePrivate()` (`predefinedAcl=private`), a patched `acl` without that entry and `DELETE .../acl/allUsers` end it. An `acl` in the metadata that starts a resumable upload is not read. A bucket whose IAM grants `allUsers` the object viewer role, which production sets in the console, is listed in `storage.publicBuckets`. The 403 names both ways. Firebase download-token URLs are not affected.
-- **An expired signed URL.** A V4 or V2 signed URL past its lifetime answers 400 `ExpiredToken`, and a V4 lifetime over seven days or an unreadable `X-Goog-Date` answers 400. The signature itself is not verified, because that needs the signing service account's key; any signature is accepted.
-- **Signed XML uploads.** `PUT /{bucket}/{object}` accepts a V4 signed URL for local uploads. Set `FIREBASE_STORAGE_EMULATOR_HOST` to the host and port without a scheme, or `STORAGE_EMULATOR_HOST` to the HTTP URL, before initializing the Admin SDK. The SDK still needs signing credentials; a locally generated test service account key can be used for development. Strict mode rejects an unsigned upload. This upload path stores `Content-Type`; other object metadata and conditional write headers are not supported. Only `Content-Type` and `x-goog-content-length-range` are forwarded for this use; arbitrary signed extension headers are not supported. The range is inclusive.
-  - **Measured against production** (a real Firebase project, 2026-11-03, `getSignedUrl` V4 `write` for `image/png` with `x-goog-content-length-range: 0,10485760`, two recordings of 16 cases). A signed header missing from the request is `400 MalformedSecurityHeader` naming it (`content-type` and the range header were measured). A body above or below the range is `400 EntityTooLarge` or `400 EntityTooSmall`. An expired URL is `400 ExpiredToken` naming the end of the signed lifetime. These refusals, and the success headers (`ETag`, `x-goog-generation`, `x-goog-metageneration`, `x-goog-hash`, `x-goog-stored-content-length`, `x-goog-stored-content-encoding`), have production's body and values in both profiles. Under `strict`, a URL that names every signing parameter but the signature is `400 MissingSecurityHeader`, and the range header sent without being among the signed headers is `400 MalformedSecurityHeader`; the `emulator` profile keeps accepting both, as it did before (what firebase-tools 15.28.2 does with them was not measured).
-  - **Not verified, a documented difference.** Production answers `403 SignatureDoesNotMatch` when the signature is altered, when the `Content-Type` or the range value differs from the signed one, and when the object name differs from the signed one. fireemu has no key to check a signature with and accepts all four in both profiles, so changes to the method or signed header values cannot be authenticated; do not use this behavior as an authorization check. CORS is permissive in both profiles: a successful `OPTIONS` preflight answers `204` with CORS headers, and a `PUT` that carries an `Origin` gets them. Production depends on the bucket's CORS configuration and answered `200` with no CORS headers for a bucket that has none; bucket CORS configuration is not modelled. This remains a documented difference.
-  - Under `strict`, every occurrence of `X-Goog-SignedHeaders` is enforced, including repeated, differently cased and percent-encoded names. Conflicting repeated `X-Goog-Date`, `X-Goog-Expires` or `Expires` values return `400 InvalidArgument`; remove the conflicting parameters. That refusal has not been observed in production. The `emulator` profile keeps its existing query interpretation.
-- **A form upload without a signed policy.** `POST /{bucket}` with a multipart form needs a `policy` and a signature field. The policy's expiry and conditions (`bucket`, `eq`, `starts-with`, `content-length-range`) are enforced; the signature is not verified.
-- **A Firebase ID token as an OAuth bearer** on the JSON API: 401 `Invalid Credentials`. Any other credential, or none, is served as the owner, because a local run cannot judge an access token.
-- **An ACL entry Cloud Storage does not know** (400). Only `allUsers` with role `READER` has an effect.
-- **A bucket name Cloud Storage never accepts** (for example `ab`, `goog-x` or `1.2.3.4`): 400 `Invalid bucket name` on the JSON API, 400 `InvalidBucketName` on the XML routes and 404 on the Firebase routes, unless a bucket of that name exists (imported or declared).
-
-The `emulator` profile retains its existing behavior except for the signed-upload responses described above; those responses follow production, and official-emulator parity for them is not claimed.
-
-In both profiles, a Firebase Storage request (`/v0/b/{bucket}/o/...`) whose object name or list prefix has an empty path segment, such as an interior `//`, a leading `/` or a trailing `/` on an object name, answers `400` with `The path may not end with '/' or contain two consecutive '/'s` before any Security Rule is evaluated. Production answered reads, metadata reads and lists this way on 2026-11-08, also under an allow-all rule; uploads, `PATCH`, `DELETE` and token management follow from that and were not recorded. The `strict` profile keeps `/x`, `x` and `x/` as three objects, as Cloud Storage does; the `emulator` profile still drops one leading `/` of an uploaded name, as the official emulator does. A Firebase list leaves out a prefix that an object like `a//x` would produce, and a name it leaves out never takes a place in a page or becomes a `nextPageToken`.
-
-### Listing a prefix with single-segment attachment rules
-
-In the `strict` profile, list authorization proves access to the possible entries under the requested prefix. With `delimiter=/`, each entry is one immediate child; without a delimiter, entries can have arbitrary depth. Authorization does not depend on whether the prefix is empty or on which objects happen to exist.
-
-For `prefix=teams/T/requests/R/&delimiter=/`, a rule matching `/teams/{team}/requests/{id}/{attachment}` with `allow list: if member(team)` can authorize the listing. The team and request ID are fixed by the prefix, while the attachment name is unknown. A condition requiring a particular attachment name does not authorize a directory listing merely because all current objects match that name.
-
-A targeted production comparison on 2026-10-16 used authenticated UID-to-team membership, separate upload/get controls and two recordings. Current `strict` behavior matches the following observed outcomes. The ancestor prefix is `teams/T/requests/`; the request prefix is `teams/T/requests/R/`.
-
-| Rules granting `list` to the member | Prefix | Delimiter | Production and current `strict` | Before this fix |
-| --- | --- | --- | --- | --- |
-| Single attachment capture | Request | `/` | 200 | 403 |
-| Single attachment capture | Request | Omitted | 403 | 403 |
-| Same rules plus explicit parent match | Request | `/` | 200 | 200 |
-| Same rules plus explicit parent match | Request | Omitted | 403 | 200 |
-| Same rules plus explicit parent match | Ancestor | `/` | 200 | 403 |
-| Same rules plus recursive `list` match | Request | `/` or omitted | 200 | 200 |
-| Same rules plus recursive `list` match | Ancestor | `/` | 200 | 403 |
-
-Empty request prefixes have the same authorization decisions as populated ones. Non-member, anonymous and other-team request listings remain denied. The `emulator` profile retains its existing concrete-prefix authorization, except that a listing with `delimiter=/` is allowed when every entry one level below the prefix is allowed (`match /p/{f} { allow list: if true; }` with `prefix=p/&delimiter=/`), as production and `strict` allow it; the emulator profile used to answer 403. Non-slash delimiters use a conservative arbitrary-depth proof; the production comparison covered `/` and an omitted delimiter, not every custom delimiter or resource-dependent condition. The [Firebase granular operations documentation](https://firebase.google.com/docs/storage/security/core-syntax#granular_operations) provides further background.
-
-In the `strict` profile, a listing without a delimiter is also allowed for `allow list: if [file] != null` and for `request.path == /b/$(bucket)/o/<prefix>` under `match /p/{file=**}`, as production answered on 2026-11-08. A single-segment capture, a bare capture and the path of another prefix are still refused, and `request.path` of a delimited listing stays refused until production is recorded for it.
-
-An explicit parent rule is no longer needed as a workaround for the single-capture SDK request above. Adding one can change production permissions:
-
-```text
-match /teams/{team}/requests/{id} {
-  allow list: if member(team);
-}
-```
-
-In the measured rules, this also permits listing the ancestor's child prefixes. It does not authorize delimiter-free recursive enumeration of the request's attachments. Keep attachment `get`, `create`, `update` and `delete` conditions unchanged. Do not replace them with a broad recursive `allow read`: `read` includes both `get` and `list`. Listing permission exposes names under the prefix even when a particular object's content cannot be read; it does not grant content access or filter the list to objects with `get` permission.
-
-### Buckets that do not exist
+## Buckets that do not exist
 
 Production answers 404 `The specified bucket does not exist.` for an object operation on a bucket nobody created. The Storage emulator serves it instead, and creates the bucket on the first write, so a test needs no setup. Under `strict` it prints one `note:` line on standard error the first time an object is written to a bucket that is not a default bucket of the project (`<project>.appspot.com` or `<project>.firebasestorage.app`), a `firebase.json` storage target, imported data, a bucket a deployed Storage trigger names, or listed in the configuration. A typo in a bucket name is visible that way. To silence the note for a bucket that exists in production, list it:
 
@@ -106,6 +51,63 @@ publicBuckets = ["public-assets.example.com"]
 Each name must be one Cloud Storage accepts. `storage.publicBuckets` lists buckets whose objects the public URL serves without a credential, and also counts as declaring them. `storage.buckets` and `storage.publicBuckets` are ignored by the `emulator` profile.
 
 A production project has one default bucket: `<project>.firebasestorage.app` if Storage was set up after 2024-10-30, `<project>.appspot.com` before. A local run cannot know which, so both exist by default. To catch an app configuration copied from the other kind of project, set `storage.defaultBucket` to `"firebasestorage.app"` or `"appspot.com"` (default `"both"`): the other name then counts as an undeclared bucket, so its first write prints the note and `GET /storage/v1/b/{bucket}` answers 404.
+
+## Security Rules
+
+Storage Security Rules are read from the `storage.rules` file named in `firebase.json`, or `storage.rules` in `fireemu.toml`. A Storage rule can read Firestore documents with `firestore.get()` and `firestore.exists()`. Under `strict`, a project without rules refuses every end-user request with production's 400 "bucket has not been set up" answer. See [Security Rules](../../guides/security-rules/).
+
+## Production behavior
+
+Under `strict`, generation and metageneration preconditions and declared checksums are honored as production honors them. The official emulator verifies no checksum.
+
+Under `strict` the Storage emulator also refuses what production refuses and the official emulator accepts (a bucket that does not exist is the exception, see below):
+
+- **A public URL for a private object.** `GET /{bucket}/{object}`, which is what `file.publicUrl()` builds, answers 403 `AccessDenied` unless the request carries a non-empty `Bearer` `Authorization` header, comes from a Google client library (these send `x-goog-api-client`, and the Go library, so the Firebase Admin Go SDK, reads through this URL with no credential while `STORAGE_EMULATOR_HOST` is set; the Python, Java and Node libraries read through the JSON API and are never refused), is a signed URL that has not expired, or the object is public. An object is public when application code made it so (`file.makePublic()`, `predefinedAcl=publicRead` on an upload, patch, copy (`destinationPredefinedAcl`) or rewrite, an `allUsers` `READER` entry in the `acl` of an uploaded or patched resource, or `POST .../acl`), for that generation of the object only: an overwrite is private again. `file.makePrivate()` (`predefinedAcl=private`), a patched `acl` without that entry and `DELETE .../acl/allUsers` end it. An `acl` in the metadata that starts a resumable upload is not read. A bucket whose IAM grants `allUsers` the object viewer role, which production sets in the console, is listed in `storage.publicBuckets`. The 403 names both ways. Firebase download-token URLs are not affected.
+- **An expired signed URL.** A V4 or V2 signed URL past its lifetime answers 400 `ExpiredToken`, and a V4 lifetime over seven days or an unreadable `X-Goog-Date` answers 400. The signature itself is not verified, because that needs the signing service account's key; any signature is accepted.
+- **Signed XML uploads.** `PUT /{bucket}/{object}` accepts a V4 signed URL for local uploads. Set `FIREBASE_STORAGE_EMULATOR_HOST` to the host and port without a scheme, or `STORAGE_EMULATOR_HOST` to the HTTP URL, before initializing the Admin SDK. The SDK still needs signing credentials; a locally generated test service account key can be used for development. Strict mode rejects an unsigned upload. This upload path stores `Content-Type`; other object metadata and conditional write headers are not supported. Only `Content-Type` and `x-goog-content-length-range` are forwarded for this use; arbitrary signed extension headers are not supported. The range is inclusive.
+  - **Measured against production** (a real Firebase project, 2026-11-03, `getSignedUrl` V4 `write` for `image/png` with `x-goog-content-length-range: 0,10485760`, two recordings of 16 cases). A signed header missing from the request is `400 MalformedSecurityHeader` naming it (`content-type` and the range header were measured). A body above or below the range is `400 EntityTooLarge` or `400 EntityTooSmall`. An expired URL is `400 ExpiredToken` naming the end of the signed lifetime. These refusals, and the success headers (`ETag`, `x-goog-generation`, `x-goog-metageneration`, `x-goog-hash`, `x-goog-stored-content-length`, `x-goog-stored-content-encoding`), have production's body and values in both profiles. Under `strict`, a URL that names every signing parameter but the signature is `400 MissingSecurityHeader`, and the range header sent without being among the signed headers is `400 MalformedSecurityHeader`; the `emulator` profile keeps accepting both, as it did before (what firebase-tools 15.28.2 does with them was not measured).
+  - **Not verified, a documented difference.** Production answers `403 SignatureDoesNotMatch` when the signature is altered, when the `Content-Type` or the range value differs from the signed one, and when the object name differs from the signed one. fireemu has no key to check a signature with and accepts all four in both profiles, so changes to the method or signed header values cannot be authenticated; do not use this behavior as an authorization check. CORS is permissive in both profiles: a successful `OPTIONS` preflight answers `204` with CORS headers, and a `PUT` that carries an `Origin` gets them. Production depends on the bucket's CORS configuration and answered `200` with no CORS headers for a bucket that has none; bucket CORS configuration is not modelled. This remains a documented difference.
+  - Under `strict`, every occurrence of `X-Goog-SignedHeaders` is enforced, including repeated, differently cased and percent-encoded names. Conflicting repeated `X-Goog-Date`, `X-Goog-Expires` or `Expires` values return `400 InvalidArgument`; remove the conflicting parameters. That refusal has not been observed in production. The `emulator` profile keeps its existing query interpretation.
+- **A form upload without a signed policy.** `POST /{bucket}` with a multipart form needs a `policy` and a signature field. The policy's expiry and conditions (`bucket`, `eq`, `starts-with`, `content-length-range`) are enforced; the signature is not verified.
+- **A Firebase ID token as an OAuth bearer** on the JSON API: 401 `Invalid Credentials`. Any other credential, or none, is served as the owner, because a local run cannot judge an access token.
+- **An ACL entry Cloud Storage does not know** (400). Only `allUsers` with role `READER` has an effect.
+- **A bucket name Cloud Storage never accepts** (for example `ab`, `goog-x` or `1.2.3.4`): 400 `Invalid bucket name` on the JSON API, 400 `InvalidBucketName` on the XML routes and 404 on the Firebase routes, unless a bucket of that name exists (imported or declared).
+
+The `emulator` profile retains its existing behavior except for the signed-upload responses described above; those responses follow production, and official-emulator parity for them is not claimed.
+
+In both profiles, a Firebase Storage request (`/v0/b/{bucket}/o/...`) whose object name or list prefix has an empty path segment, such as an interior `//`, a leading `/` or a trailing `/` on an object name, answers `400` with `The path may not end with '/' or contain two consecutive '/'s` before any Security Rule is evaluated. Production answered reads, metadata reads and lists this way on 2026-11-08, also under an allow-all rule; uploads, `PATCH`, `DELETE` and token management follow from that and were not recorded. The `strict` profile keeps `/x`, `x` and `x/` as three objects, as Cloud Storage does; the `emulator` profile still drops one leading `/` of an uploaded name, as the official emulator does. A Firebase list leaves out a prefix that an object like `a//x` would produce, and a name it leaves out never takes a place in a page or becomes a `nextPageToken`.
+
+### Listing a prefix with single-segment attachment rules
+
+In the `strict` profile, list authorization proves access to the possible entries under the requested prefix. With `delimiter=/`, each entry is one immediate child; without a delimiter, entries can have arbitrary depth. Authorization does not depend on whether the prefix is empty or on which objects happen to exist.
+
+For `prefix=teams/T/requests/R/&delimiter=/`, a rule matching `/teams/{team}/requests/{id}/{attachment}` with `allow list: if member(team)` can authorize the listing. The team and request ID are fixed by the prefix, while the attachment name is unknown. A condition requiring a particular attachment name does not authorize a directory listing merely because all current objects match that name.
+
+A targeted production comparison on 2026-10-16 used authenticated UID-to-team membership, separate upload/get controls and two recordings. `strict` matches the following observed outcomes. The ancestor prefix is `teams/T/requests/`; the request prefix is `teams/T/requests/R/`.
+
+| Rules granting `list` to the member | Prefix | Delimiter | Production and `strict` |
+| --- | --- | --- | --- |
+| Single attachment capture | Request | `/` | 200 |
+| Single attachment capture | Request | Omitted | 403 |
+| Same rules plus explicit parent match | Request | `/` | 200 |
+| Same rules plus explicit parent match | Request | Omitted | 403 |
+| Same rules plus explicit parent match | Ancestor | `/` | 200 |
+| Same rules plus recursive `list` match | Request | `/` or omitted | 200 |
+| Same rules plus recursive `list` match | Ancestor | `/` | 200 |
+
+Empty request prefixes have the same authorization decisions as populated ones. Non-member, anonymous and other-team request listings remain denied. The `emulator` profile retains its existing concrete-prefix authorization, except that a listing with `delimiter=/` is allowed when every entry one level below the prefix is allowed (`match /p/{f} { allow list: if true; }` with `prefix=p/&delimiter=/`), as production and `strict` allow it. Non-slash delimiters use a conservative arbitrary-depth proof; the production comparison covered `/` and an omitted delimiter, not every custom delimiter or resource-dependent condition. The [Firebase granular operations documentation](https://firebase.google.com/docs/storage/security/core-syntax#granular_operations) provides further background.
+
+In the `strict` profile, a listing without a delimiter is also allowed for `allow list: if [file] != null` and for `request.path == /b/$(bucket)/o/<prefix>` under `match /p/{file=**}`, as production answered on 2026-11-08. A single-segment capture, a bare capture and the path of another prefix are still refused, and `request.path` of a delimited listing stays refused until production is recorded for it.
+
+An explicit parent rule is not needed for the single-capture SDK request above. Adding one can change production permissions:
+
+```text
+match /teams/{team}/requests/{id} {
+  allow list: if member(team);
+}
+```
+
+In the measured rules, this also permits listing the ancestor's child prefixes. It does not authorize delimiter-free recursive enumeration of the request's attachments. Keep attachment `get`, `create`, `update` and `delete` conditions unchanged. Do not replace them with a broad recursive `allow read`: `read` includes both `get` and `list`. Listing permission exposes names under the prefix even when a particular object's content cannot be read; it does not grant content access or filter the list to objects with `get` permission.
 
 ## Limit the stored bytes
 

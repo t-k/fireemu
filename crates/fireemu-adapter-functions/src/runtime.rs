@@ -62,14 +62,15 @@ pub const MAX_ACTIVE_EVENT_RECORDS: usize = 4096;
 /// The admission-refusal category of RTDB writes applied without their trigger events.
 pub const DATABASE_FANOUT_DROPPED: &str = "database_fanout_dropped";
 /// The largest Realtime Database trigger event, in bytes of its `data` plus its `delta` as compact JSON,
-/// that the strict profile accepts; a write with a larger event is refused with 400. Production refused a
-/// write whose events held a 2 MiB value and accepted one whose largest event held about 720 KB
-/// (RTDB-TRIGGERS-KINDS-20261108-01, writes k13 and k12), and its documentation names "1 MB" per event
-/// without saying whether that is 1,000,000 or 1,048,576 bytes or how the size is counted. The record fixes
-/// the limit only between those two events; this is the documented figure read as 1,000,000 bytes, which
-/// the record does not contradict (coordinator ruling 2026-11-09). The exact threshold and the counting
-/// stay unverified until the payload ladder of packet v2 is recorded. The emulator profile has no limit.
-pub const DATABASE_EVENT_LIMIT_BYTES: usize = 1_000_000;
+/// that the strict profile accepts; a write with a larger event is refused with 400. Recorded in production
+/// (RTDB-TRIGGERS-KINDS-20261108-01 and -20261109-02): events of about 720 KB, 0.95 MB and 1,023,9xx bytes
+/// (the group handler's, the leaf's own about 20 bytes less) were accepted and delivered, events of
+/// 1,049,9xx and 1,499,9xx bytes and of 2 MiB were refused with the recorded 400. The limit
+/// lies between about 1,023,950 and 1,049,850 bytes as counted here, and Firebase documents "1 MB" per
+/// event; 1,048,576 bytes (1 MiB) is the figure in that range. Unverified: the exact threshold inside the
+/// range, and that production counts `data` plus `delta` (the record is also consistent with counting the
+/// delta, or the whole event, which differ by less than the range). The emulator profile has no limit.
+pub const DATABASE_EVENT_LIMIT_BYTES: usize = 1_048_576;
 /// Logical events whose causal phases the runtime keeps for `await-idle` diagnostics
 /// (spec 10.5). Older entries are evicted and counted; eviction is never a completion.
 pub const MAX_CAUSALITY_ENTRIES: usize = 512;

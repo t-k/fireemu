@@ -704,12 +704,12 @@ async fn strict_refuses_an_event_over_the_recorded_limit_and_the_emulator_profil
     );
     assert_eq!(dropped_fanouts(&emulator), 0);
     // the recorded shapes: 100 KiB and 600 KiB objects fit, the 2 MiB one does not; and the ladder of
-    // packet v2 around the documented 1 MB: 0.95 MB fits; 1,024,000 bytes (between 1,000,000 and 1,048,576), 1.05 MB and 1.5 MB do not
+    // packet v2 around the documented 1 MB: 0.95 MB and 1,024,000 bytes fit (production accepted both, k23 and k24 of RTDB-TRIGGERS-KINDS-20261109-02); 1.05 MB and 1.5 MB do not (k25 and k26)
     for (blob, refused) in [
         (100 * 1024, false),
         (600 * 1024, false),
         (949_900, false),
-        (1_023_900, true),
+        (1_023_900, false),
         (1_049_900, true),
         (1_499_900, true),
         (2 * 1024 * 1024, true),
@@ -765,10 +765,10 @@ async fn strict_refuses_the_whole_write_when_one_of_its_events_is_over_the_limit
 async fn the_strict_profile_has_the_recorded_event_limit_and_counts_its_refusals() {
     use fireemu_adapter_functions::events::DatabaseReferenceChange;
     use fireemu_adapter_functions::runtime::DATABASE_EVENT_LIMIT_BYTES;
-    assert_eq!(DATABASE_EVENT_LIMIT_BYTES, 1_000_000);
+    assert_eq!(DATABASE_EVENT_LIMIT_BYTES, 1_048_576);
     let (strict, _) = runtime(false).await;
     let (emulator, _) = official_runtime().await;
-    assert_eq!(strict.database_event_limit(), Some(1_000_000));
+    assert_eq!(strict.database_event_limit(), Some(1_048_576));
     assert_eq!(emulator.database_event_limit(), None);
     let mut change = commit();
     change.data = DatabaseChangeData::References(vec![DatabaseReferenceChange {

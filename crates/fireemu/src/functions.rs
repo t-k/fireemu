@@ -8031,6 +8031,7 @@ root	unchanged	small	firstGen";
             assert_eq!(put("l2", 600 * 1024).0, 200);
             // the packet v2 ladder around the documented 1 MB
             assert_eq!(put("l6", 949_900).0, 200);
+            assert_eq!(put("l8", 1_023_900).0, 200, "accepted by production (k24)");
             assert_eq!(put("l7", 1_049_900).0, if strict { 400 } else { 200 });
             let (status, body) = put("l3", 2 * 1024 * 1024);
             if strict {

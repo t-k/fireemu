@@ -124,12 +124,14 @@ A web page can re-point a name it controls at `127.0.0.1` after it has loaded (D
 - names under `.internal`, the reserved suffix of the names container runtimes give a container for its host: `host.docker.internal` and `gateway.docker.internal` (Docker), `host.containers.internal` (Podman), `host.lima.internal` (Lima and Colima), `host.orb.internal` (OrbStack);
 - names under `.firebaseio.com` and `.firebasedatabase.app`, by which the Realtime Database selects a namespace;
 - names under `.cloudworkstations.dev`, the preview and port URLs of Firebase Studio and Cloud Workstations;
+- names under `.app.github.dev`, the forwarded-port URLs of GitHub Codespaces;
+- names under the special-use suffixes `.test`, `.local` and `.home.arpa`, which public DNS never answers: `/etc/hosts` aliases such as `myapp.test`, mDNS names such as `my-mac.local`, Kubernetes service names under the default `svc.cluster.local`, and home-network names;
 - with `network.allowNonLoopbackHosts`, single-label names such as a Compose service name;
 - the names in `network.allowedHosts`.
 
 A request without `Host` (HTTP/1.0) and HTTP/2 requests (gRPC clients) are not checked, because no browser sends them. The comparison ignores case, the port and one trailing dot. The Hub, the UI and the Logging emulator answer loopback names only. The official emulator does not check `Host`; production has no counterpart, so the check is the same in both profiles.
 
-Add the other names your clients use, for example a Kubernetes service, a name in `/etc/hosts`, an mDNS `.local` name or a tunnel. An entry is a name, a name with a leading dot for that domain and all its subdomains, or `"*"` to answer every `Host` (which turns the defence off):
+Add the other names your clients use, for example a tunnel, a name in `/etc/hosts` outside the special-use suffixes, or a Kubernetes service under a custom cluster domain. An entry is a name, a name with a leading dot for that domain and all its subdomains, or `"*"` to answer every `Host` (which turns the defence off):
 
 <Tabs syncKey="config-format">
 <TabItem label="TOML">
@@ -137,7 +139,7 @@ Add the other names your clients use, for example a Kubernetes service, a name i
 ```toml
 [network]
 allowNonLoopbackHosts = true
-allowedHosts = ["emulator.ci.example", ".svc.cluster.local"]
+allowedHosts = ["emulator.ci.example", ".corp.example"]
 ```
 
 </TabItem>
@@ -147,7 +149,7 @@ allowedHosts = ["emulator.ci.example", ".svc.cluster.local"]
 {
   "network": {
     "allowNonLoopbackHosts": true,
-    "allowedHosts": ["emulator.ci.example", ".svc.cluster.local"]
+    "allowedHosts": ["emulator.ci.example", ".corp.example"]
   }
 }
 ```
@@ -163,11 +165,9 @@ The entries for common environments:
 
 | Environment | Entry |
 |---|---|
-| GitHub Codespaces forwarded ports (`https://<codespace>-<port>.app.github.dev`) | `".app.github.dev"` |
-| A Kubernetes service reached by its FQDN | `".svc.cluster.local"` (or the exact service name) |
+| A Kubernetes service under a custom cluster domain | `".svc.<cluster domain>"` (or the exact service name) |
 | ngrok | the exact tunnel name, for example `"abc123.ngrok-free.app"` |
 | Cloudflare Tunnel | the exact public hostname of the tunnel |
-| An mDNS name on the LAN | `"my-mac.local"` |
-| A name in `/etc/hosts` | that name |
+| A name in `/etc/hosts` outside `.test`, `.local` and `.home.arpa` | that name |
 
-List exact tunnel names rather than the tunnel provider's whole domain: anyone can open a tunnel under it. Firebase Studio's `.cloudworkstations.dev` names need no entry. The policy is read when the daemon starts; restart it after changing `network.allowedHosts`.
+List exact tunnel names rather than the tunnel provider's whole domain: anyone can open a tunnel under it. Firebase Studio's `.cloudworkstations.dev`, Codespaces' `.app.github.dev`, mDNS `.local`, Kubernetes `svc.cluster.local` and `.test` names need no entry. The policy is read when the daemon starts; restart it after changing `network.allowedHosts`.

@@ -20,6 +20,9 @@
 //!   routes namespaces by, as the official emulator does (Google owns both);
 //! - names under `.cloudworkstations.dev`, the preview and port URLs of Firebase Studio and
 //!   Cloud Workstations, whose proxy passes the public `Host` through (Google owns the DNS);
+//! - names under the special-use suffixes `.test` (RFC 6761), `.local` (mDNS, RFC 6762) and
+//!   `.home.arpa` (RFC 8375), which public DNS never answers, and under `.app.github.dev`, the
+//!   forwarded-port URLs of GitHub Codespaces (GitHub owns the DNS; owner decision 2401);
 //! - with `network.allowNonLoopbackHosts`, single-label names such as a Compose service name
 //!   (public DNS answers no single-label name);
 //! - the names listed in `network.allowedHosts` (exact, `.suffix` for a domain and its
@@ -50,6 +53,10 @@ const DEFAULT_SUFFIXES: &[&str] = &[
     ".firebaseio.com",
     ".firebasedatabase.app",
     ".cloudworkstations.dev",
+    ".test",
+    ".local",
+    ".home.arpa",
+    ".app.github.dev",
 ];
 
 /// Where the refusal and the warnings send a user: the site page that documents the setting.

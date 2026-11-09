@@ -5,7 +5,7 @@
     "allowNonLoopbackHosts": true,
     "allowedHosts": [
       "emulator.ci.example",
-      ".svc.cluster.local"
+      ".corp.example"
     ]
   },
   "limits": {

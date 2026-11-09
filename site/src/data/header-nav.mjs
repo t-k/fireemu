@@ -4,6 +4,7 @@
 export const headerNav = [
 	{ label: 'Why Fireemu', slug: 'getting-started/why-fireemu', section: 'getting-started/why-fireemu' },
 	{ label: 'Docs', slug: 'getting-started/install', section: 'getting-started' },
+	{ label: 'Products', slug: 'products/firestore', section: 'products' },
 	{ label: 'Guides', slug: 'guides/configuration', section: 'guides' },
 	{ label: 'Compatibility', slug: 'compatibility', section: 'compatibility' },
 	{ label: 'Reference', slug: 'reference/cli', section: 'reference' },

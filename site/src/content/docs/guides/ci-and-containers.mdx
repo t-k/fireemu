@@ -24,11 +24,38 @@ jobs:
 
 Fireemu needs no Java and no download at startup: the npm package installs a native binary for the runner's platform.
 
-To also check what the development defaults let through, such as unsigned test tokens, add a job that runs with a `fireemu.toml` that sets [`productionExact`](../profiles/):
+To also check what the development defaults let through, such as unsigned test tokens, add a job that runs with a second configuration file that sets [`productionExact`](../profiles/), for example `fireemu.production-exact.toml`:
+
+<Tabs syncKey="config-format">
+<TabItem label="TOML">
+
+```toml
+schemaVersion = 1
+profile = "strict"
+productionExact = true
+firebaseJson = "firebase.json"
+```
+
+</TabItem>
+<TabItem label="JSON">
+
+```json
+{
+  "schemaVersion": 1,
+  "profile": "strict",
+  "productionExact": true,
+  "firebaseJson": "firebase.json"
+}
+```
+
+</TabItem>
+</Tabs>
 
 ```sh
-npx fireemu exec --config fireemu.production-exact.json -- npm test
+npx fireemu exec --config fireemu.production-exact.toml -- npm test
 ```
+
+With the JSON form, name the file `fireemu.production-exact.json`.
 
 ### Container jobs
 

@@ -38,3 +38,5 @@ Fireemu does not reproduce real quota accounting, billing, IAM, organization pol
 :::tip[Keep a production check]
 Fireemu is still in development. For the features and critical workflows your application uses, run the same tests against Fireemu and a dedicated Firebase test project (not your live project), and compare the results before relying on Fireemu alone in CI.
 :::
+
+Next: [Install and run](../install/).

@@ -19,7 +19,12 @@ Every product in the Local Emulator Suite of `firebase-tools` 15.28.2, the offic
 
 <ProductTable />
 
-Fireemu is compatible with the listed Local Emulator Suite products as shipped by firebase-tools 15.28.2 — Cloud Firestore, Firebase Authentication, Cloud Storage for Firebase, Cloud Functions, Cloud Pub/Sub and Eventarc, with Security Rules on the Firestore and Storage surfaces — under the `emulator` compatibility profile and the evidence recorded in [`spec/compatibility/contract.json`](https://github.com/t-k/fireemu/blob/main/spec/compatibility/contract.json); it makes no complete-suite and no unqualified superset claim while the Realtime Database is served without a parity claim (an open gap), Firebase Hosting is served as an open gap without a parity claim, App Hosting and Data Connect are deferred and Firebase Extensions is not planned.
+Fireemu is compatible with the Local Emulator Suite products that firebase-tools 15.28.2 ships and that Fireemu serves with parity (Cloud Firestore, Firebase Authentication, Cloud Storage for Firebase, Cloud Functions, Cloud Pub/Sub and Eventarc, with Security Rules on the Firestore and Storage surfaces), under the `emulator` compatibility profile and the evidence recorded in [`spec/compatibility/contract.json`](https://github.com/t-k/fireemu/blob/main/spec/compatibility/contract.json). It makes no complete-suite and no unqualified superset claim, because:
+
+- the Realtime Database is served without a parity claim against the official emulator (an open gap);
+- Firebase Hosting is served without a parity claim (an open gap);
+- App Hosting and Data Connect are deferred;
+- Firebase Extensions is not planned.
 
 ## Fireemu, the official emulator and production
 
@@ -39,7 +44,7 @@ Differences that most often change a test result. Fireemu's column is the defaul
 
 ## Production verification
 
-Fireemu compares its answers with recordings taken from real Firebase projects. An area is **verified against production** when every condition in its frozen inventory matches the recordings, or differs only in a reviewed and documented way (a known difference). Counts for an area in progress describe recorded conditions, not parent-wide verification. RTDB is currently in progress.
+Fireemu compares its answers with recordings taken from real Firebase projects. An area is **verified against production** when every condition in its frozen inventory matches the recordings, or differs only in a reviewed and documented way (a known difference). An area still being worked on is marked **In progress**, and its counts describe recorded conditions, not verification of the whole area.
 
 <ProductionAreas />
 

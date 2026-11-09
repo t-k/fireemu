@@ -65,7 +65,7 @@ options:
   -P, --project <id|alias>
         Project ID, or an alias from the .firebaserc next to the firebase.json (else the current directory). Default: the .firebaserc default, else daemon.authProject from --config, else demo-app.
   --only <list>
-        Comma-separated services to start: auth, firestore, storage, functions (or functions:<codebase>), eventarc, tasks, pubsub, database, appcheck. Default: Firestore, Auth, Storage and App Check; Functions when a codebase is configured (firebase.json or --functions), and with it Eventarc and Cloud Tasks; Pub/Sub when configured (emulators.pubsub, daemon.pubsubPort or --pubsub-port); the Realtime Database when configured (emulators.database, daemon.databasePort or --database-port).
+        Comma-separated services to start: auth, firestore, storage, functions (or functions:<codebase>), eventarc, tasks, pubsub, database, appcheck, hosting. Default: Firestore, Auth, Storage and App Check; Functions when a codebase is configured (firebase.json or --functions), and with it Eventarc and Cloud Tasks; Pub/Sub when configured (emulators.pubsub, daemon.pubsubPort or --pubsub-port); the Realtime Database when configured (emulators.database, daemon.databasePort or --database-port); Hosting when firebase.json has hosting.public.
   --firestore-port <n>
         Firestore port. Default: 8080 (0 picks a free port).
   --http-port <n>
@@ -74,6 +74,8 @@ options:
         Storage port. Default: 9199 (0 picks a free port).
   --functions-port <n>
         Functions port, used when a codebase is loaded. Default: 5001 (0 picks a free port).
+  --hosting-port <n>
+        Hosting port, used when firebase.json has hosting.public. Default: 5000 (0 picks a free port).
   --eventarc-port <n>
         Eventarc port. Eventarc starts exactly when a Functions backend is loaded; this option only sets the port. Default: 9299.
   --tasks-port <n>
@@ -131,7 +133,7 @@ options:
   -P, --project <id|alias>
         Project ID, or an alias from the .firebaserc next to the firebase.json (else the current directory). Default: the .firebaserc default, else daemon.authProject from --config, else demo-app.
   --only <list>
-        Comma-separated services to start: auth, firestore, storage, functions (or functions:<codebase>), eventarc, tasks, pubsub, database, appcheck. Default: Firestore, Auth, Storage and App Check; Functions when a codebase is configured (firebase.json or --functions), and with it Eventarc and Cloud Tasks; Pub/Sub when configured (emulators.pubsub, daemon.pubsubPort or --pubsub-port); the Realtime Database when configured (emulators.database, daemon.databasePort or --database-port).
+        Comma-separated services to start: auth, firestore, storage, functions (or functions:<codebase>), eventarc, tasks, pubsub, database, appcheck, hosting. Default: Firestore, Auth, Storage and App Check; Functions when a codebase is configured (firebase.json or --functions), and with it Eventarc and Cloud Tasks; Pub/Sub when configured (emulators.pubsub, daemon.pubsubPort or --pubsub-port); the Realtime Database when configured (emulators.database, daemon.databasePort or --database-port); Hosting when firebase.json has hosting.public.
   --firestore-port <n>
         Firestore port. Default: 8080 (0 picks a free port).
   --http-port <n>
@@ -140,6 +142,8 @@ options:
         Storage port. Default: 9199 (0 picks a free port).
   --functions-port <n>
         Functions port, used when a codebase is loaded. Default: 5001 (0 picks a free port).
+  --hosting-port <n>
+        Hosting port, used when firebase.json has hosting.public. Default: 5000 (0 picks a free port).
   --eventarc-port <n>
         Eventarc port. Eventarc starts exactly when a Functions backend is loaded; this option only sets the port. Default: 9299.
   --tasks-port <n>
@@ -232,7 +236,7 @@ options:
   -P, --project <id|alias>
         Project ID, or an alias from the .firebaserc next to the firebase.json (else the current directory). Default: the .firebaserc default, else daemon.authProject from --config, else demo-app.
   --only <list>
-        Comma-separated services to start: auth, firestore, storage, functions (or functions:<codebase>), eventarc, tasks, pubsub, database, appcheck. Default: Firestore, Auth, Storage and App Check; Functions when a codebase is configured (firebase.json or --functions), and with it Eventarc and Cloud Tasks; Pub/Sub when configured (emulators.pubsub, daemon.pubsubPort or --pubsub-port); the Realtime Database when configured (emulators.database, daemon.databasePort or --database-port).
+        Comma-separated services to start: auth, firestore, storage, functions (or functions:<codebase>), eventarc, tasks, pubsub, database, appcheck, hosting. Default: Firestore, Auth, Storage and App Check; Functions when a codebase is configured (firebase.json or --functions), and with it Eventarc and Cloud Tasks; Pub/Sub when configured (emulators.pubsub, daemon.pubsubPort or --pubsub-port); the Realtime Database when configured (emulators.database, daemon.databasePort or --database-port); Hosting when firebase.json has hosting.public.
   --firestore-port <n>
         Firestore port. Default: 8080 (0 picks a free port).
   --http-port <n>
@@ -241,6 +245,8 @@ options:
         Storage port. Default: 9199 (0 picks a free port).
   --functions-port <n>
         Functions port, used when a codebase is loaded. Default: 5001 (0 picks a free port).
+  --hosting-port <n>
+        Hosting port, used when firebase.json has hosting.public. Default: 5000 (0 picks a free port).
   --eventarc-port <n>
         Eventarc port. Eventarc starts exactly when a Functions backend is loaded; this option only sets the port. Default: 9299.
   --tasks-port <n>

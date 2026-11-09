@@ -67,7 +67,19 @@ assert(pr_steps.none? { |step| step["uses"].to_s.match?(%r{\Apnpm/action-setup@}
   assert(!pr_runs.include?(expensive), "the automatic pr job must not run #{expensive}")
 end
 
-platform_runs = jobs.fetch("platforms").fetch("steps").map { |step| step["run"] }.compact.join("\n")
+platform_steps = jobs.fetch("platforms").fetch("steps")
+platform_runs = platform_steps.map { |step| step["run"] }.compact.join("\n")
+# The Functions runner tests start a real Node and a real Python child, four at once, as the first
+# executions of those interpreters on a freshly provisioned runner. Their first start pages the image in from
+# disk (2026-11-09: 4 to 22 s on 24 fresh VMs, 60 s or more on two runs of 2026-11-06). Pay that before the tests,
+# outside any hello deadline.
+warm_index = platform_steps.index { |step| step["name"].to_s.start_with?("warm the interpreters") }
+platform_tests_index = platform_steps.index { |step| step["name"] == "tests" }
+assert(warm_index && platform_tests_index && warm_index < platform_tests_index, "the platform job must warm the Node and Python interpreters before the tests")
+warm_step = platform_steps[warm_index]
+assert(warm_step["if"] == "runner.os == 'Windows'", "the interpreter warm-up must run on Windows only")
+assert(!warm_step.key?("continue-on-error"), "the interpreter warm-up must not hide a missing interpreter")
+assert(warm_step["run"].to_s.match?(/^\s*(time )?node /) && warm_step["run"].to_s.match?(/^\s*(time )?python3 /), "the interpreter warm-up must start node and python3")
 windows_runs = platform_runs.split('= "Windows" ]; then', 2).last.to_s.split("else", 2).first
 assert(windows_runs.include?("--exclude fireemu-verification-quint"), "Windows must exclude the Unix-only Quint supervisor")
 assert(windows_runs.include?("--exclude traceability-check"), "Windows must exclude the Unix-only traceability supervisor")

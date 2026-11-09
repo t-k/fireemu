@@ -237,6 +237,17 @@ jobs:
       # The process-census integration suites shell out to `ps` and `kill` to prove that a
       # daemon leaves nothing running; they are POSIX-only by construction, so Windows runs the
       # in-crate unit tests. Making them portable is tracked in the distribution issue.
+      # The Functions runner tests start a real Node and a real Python child, four at once, and they
+      # are the first executions of those interpreters on a freshly provisioned runner. A first start
+      # pages the image in from disk with an idle CPU: 4 to 22 s on 24 fresh VMs, and 60 s or more on two
+      # runs of 2026-11-06, past the 60 s hello wait. Pay it here, where nothing has a deadline.
+      - name: warm the interpreters the runner tests start
+        if: runner.os == 'Windows'
+        shell: bash
+        timeout-minutes: 10
+        run: |
+          time node -e "for (const m of ['fs','http','net','crypto','path','os','child_process','readline','url','util','events']) require('node:' + m)"
+          time python3 -c "import http.server, json, os, pathlib, socketserver, sys, threading, time"
       - name: tests
         shell: bash
         run: |

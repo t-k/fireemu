@@ -116,6 +116,8 @@ test("the answers of the run's writes come from the journal, a refusal with its 
       },
     },
     { ts: "t", action: "phase", detail: "cleanup" },
+    { ts: "t" },
+    { ts: "t", action: null },
   ]
     .map((row) => JSON.stringify(row))
     .join("\n");
@@ -196,4 +198,33 @@ test("a local run may drop the frames of writes the recording never planned for,
   assert.equal(result.recording.dropped, 1);
   assert.equal(result.recording.frames, 1);
   assert.equal(maskLocalRun({ frames: [frame], steps, label: "x" }).recording.dropped, 0);
+});
+
+test("a dropped frame leaves no gap in the numbering, and a uid only a 2nd gen event names is masked too", () => {
+  const steps = buildSteps(MASKED_NONCE);
+  const stray = structuredClone(created);
+  stray.event.context.params.id = "nobody";
+  const second = {
+    handler: "k9CreatedV2",
+    generation: 2,
+    seq: 1,
+    event: {
+      params: { group: "ga", id: "a1" },
+      authType: "app_user",
+      authId: "only-second-gen",
+      data: { exists: true, key: "a1", value: { value: 1, run: MASKED_NONCE } },
+    },
+  };
+  const result = maskLocalRun({
+    frames: [stray, second],
+    steps,
+    label: "x",
+    dropUnattributed: true,
+  });
+  assert.deepEqual(
+    result.frames.map((f) => f.n),
+    [1],
+  );
+  assert.equal(JSON.stringify(result).includes("only-second-gen"), false);
+  assert.equal(result.frames[0].event.authId, "<uid>");
 });

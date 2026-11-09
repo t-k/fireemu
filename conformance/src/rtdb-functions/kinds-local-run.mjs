@@ -60,7 +60,7 @@ async function write(db, step, stepNumber, token) {
 /** The scenario whose steps a local run sends: all 21 of the first packet, or the user writes of packet v2. */
 export const scenarioFor = (stepSet) => (stepSet === "v2" ? KINDS_V2_SCENARIO : KINDS_SCENARIO);
 
-export async function runLocal({ fireemu, profile, out, steps: stepSet = "all" }) {
+export async function runLocal({ fireemu, profile, out, steps: stepSet }) {
   const scenario = scenarioFor(stepSet);
   if (!["strict", "emulator"].includes(profile)) throw new Error("--profile is strict or emulator");
   mkdirSync(out);
@@ -277,7 +277,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     fireemu: opt("--fireemu") ?? "fireemu",
     profile: opt("--profile") ?? "strict",
     out: opt("--out"),
-    steps: opt("--steps") ?? "all",
+    steps: opt("--steps"),
   });
   console.log(
     JSON.stringify({

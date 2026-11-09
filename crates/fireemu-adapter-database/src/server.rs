@@ -259,6 +259,26 @@ pub async fn serve(listener: TcpListener, database: Arc<Mutex<Database>>, config
 }
 
 async fn answer(shared: &Arc<Shared>, request: Request<Incoming>, remote: bool) -> Response<Body> {
+    if let Err(refusal) = fireemu_core_session::host_guard::admits_request(
+        request.version() == hyper::Version::HTTP_2,
+        request
+            .headers()
+            .get_all(hyper::header::HOST)
+            .iter()
+            .map(hyper::header::HeaderValue::as_bytes),
+    ) {
+        // DNS rebinding: a page whose name was re-pointed at this listener. Checked before
+        // the WebSocket upgrade and long polling, which a page can open too.
+        let mut response = Response::new(Full::new(Bytes::from(refusal.body())).boxed());
+        *response.status_mut() = hyper::StatusCode::FORBIDDEN;
+        response.headers_mut().insert(
+            hyper::header::CONTENT_TYPE,
+            hyper::header::HeaderValue::from_static(
+                fireemu_core_session::host_guard::REFUSAL_CONTENT_TYPE,
+            ),
+        );
+        return response;
+    }
     if is_websocket_upgrade(&request) {
         return upgrade(shared, request);
     }

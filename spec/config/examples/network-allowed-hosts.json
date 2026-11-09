@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "profile": "strict",
+  "network": {
+    "allowNonLoopbackHosts": true,
+    "allowedHosts": [
+      "emulator.ci.example",
+      ".svc.cluster.local"
+    ]
+  },
+  "limits": {
+    "catalog": "firestore-standard-2026-08-25",
+    "queryCatalog": "firestore-standard-query-2026-08-25"
+  },
+  "firestore": {
+    "edition": "standard",
+    "apiMode": "native"
+  }
+}

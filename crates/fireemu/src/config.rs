@@ -1264,6 +1264,9 @@ pub struct RuntimeConfig {
     /// a non-loopback address such as `0.0.0.0` (a container). The Hub, the UI and the Logging
     /// emulator stay on loopback, and the control API answers loopback peers only.
     pub allow_non_loopback_hosts: bool,
+    /// `network.allowedHosts`: the host names, beyond loopback names, IP addresses and the
+    /// container host names, that the product listeners answer (the DNS-rebinding defence).
+    pub allowed_hosts: Vec<fireemu_core_session::host_guard::AllowedHost>,
     /// `emulators.singleProjectMode`. fireemu isolates every project into its own session, so
     /// this is recorded and published rather than enforced separately.
     pub single_project_mode: bool,
@@ -1742,6 +1745,7 @@ impl Default for RuntimeConfig {
             logging_enabled: true,
             logging_addr_explicit: false,
             allow_non_loopback_hosts: false,
+            allowed_hosts: Vec::new(),
             single_project_mode: false,
             functions_source: None,
             functions_codebases: Vec::new(),
@@ -2010,6 +2014,7 @@ impl RuntimeConfig {
             "profile" => Some(json!(self.profile.as_str())),
             "productionExact" => Some(json!(self.production_exact)),
             "network.allowNonLoopbackHosts" => Some(json!(self.allow_non_loopback_hosts)),
+            "network.allowedHosts" => Some(json!(self.allowed_host_entries())),
             "projects.requireDemoPrefix" => Some(json!(self.require_demo_prefix)),
             "projects.unknownProjects" => Some(json!(if self.refuse_unknown_projects { "refuse" } else { "serve" })),
             "firestore.edition" => Some(json!(self.edition.as_config_str())),
@@ -2679,6 +2684,23 @@ fn emulator_addr(
 }
 
 impl RuntimeConfig {
+    /// The `Host` policy every product listener applies (the DNS-rebinding defence): the
+    /// `network.allowedHosts` entries, and single-label names (a Compose service name) when
+    /// `network.allowNonLoopbackHosts` exposed the emulators.
+    #[must_use]
+    pub fn host_policy(&self) -> fireemu_core_session::host_guard::HostPolicy {
+        fireemu_core_session::host_guard::HostPolicy::new(
+            self.allowed_hosts.clone(),
+            self.allow_non_loopback_hosts,
+        )
+    }
+
+    /// `network.allowedHosts` as configuration entries (normalized).
+    #[must_use]
+    pub fn allowed_host_entries(&self) -> Vec<String> {
+        self.allowed_hosts.iter().map(ToString::to_string).collect()
+    }
+
     /// The warning a strict configuration earns when `auth.totp` is declared and the project's
     /// multi-factor configuration does not enable TOTP: production enables TOTP only through
     /// that configuration, so `auth.totp` alone enables nothing under the strict profile.
@@ -5221,6 +5243,31 @@ impl RuntimeConfig {
                             )
                         })?;
                     }
+                    "allowedHosts" => {
+                        let entries = value.as_array().ok_or_else(|| {
+                            ConfigError(
+                                "network.allowedHosts must be an array of strings".to_owned(),
+                            )
+                        })?;
+                        cfg.allowed_hosts = entries
+                            .iter()
+                            .enumerate()
+                            .map(|(index, entry)| {
+                                let entry = entry.as_str().ok_or_else(|| {
+                                    ConfigError(format!(
+                                        "network.allowedHosts[{index}] must be a string"
+                                    ))
+                                })?;
+                                fireemu_core_session::host_guard::AllowedHost::parse(entry).map_err(
+                                    |reason| {
+                                        ConfigError(format!(
+                                            "network.allowedHosts[{index}]: {reason}"
+                                        ))
+                                    },
+                                )
+                            })
+                            .collect::<Result<_, _>>()?;
+                    }
                     other => {
                         return Err(ConfigError(format!("unknown config key network.{other}")))
                     }
@@ -6395,6 +6442,7 @@ mod tests {
                     "network.allowNonLoopbackHosts",
                     json!(cfg.allow_non_loopback_hosts),
                 ),
+                ("network.allowedHosts", json!(cfg.allowed_host_entries())),
                 ("projects.requireDemoPrefix", json!(cfg.require_demo_prefix)),
                 (
                     "projects.unknownProjects",
@@ -7946,6 +7994,66 @@ mod tests {
         )
         .expect_err("a host name is not an address");
         assert!(error.0.contains("an IP address"), "{}", error.0);
+    }
+
+    #[test]
+    fn network_allowed_hosts_are_parsed_and_validated() {
+        use fireemu_core_session::host_guard::AllowedHost;
+        let cfg = RuntimeConfig::from_json(&json!({"schemaVersion": 1})).unwrap();
+        assert!(cfg.allowed_hosts.is_empty());
+        let cfg = RuntimeConfig::from_json(&json!({
+            "schemaVersion": 1,
+            "network": {"allowedHosts": ["Emulator.CI.example", ".svc.cluster.local", "*"]}
+        }))
+        .unwrap();
+        assert_eq!(
+            cfg.allowed_hosts,
+            vec![
+                AllowedHost::Exact("emulator.ci.example".to_owned()),
+                AllowedHost::Suffix(".svc.cluster.local".to_owned()),
+                AllowedHost::Any,
+            ]
+        );
+        assert_eq!(
+            cfg.allowed_host_entries(),
+            ["emulator.ci.example", ".svc.cluster.local", "*"]
+        );
+        for (value, needle) in [
+            (
+                json!("fireemu"),
+                "network.allowedHosts must be an array of strings",
+            ),
+            (json!([1]), "network.allowedHosts[0] must be a string"),
+            (json!(["ok", "fireemu:8080"]), "network.allowedHosts[1]"),
+            (json!(["http://x"]), "is not a host name"),
+            (json!(["127.0.0.1"]), "every IP address is already admitted"),
+        ] {
+            let error = RuntimeConfig::from_json(
+                &json!({"schemaVersion": 1, "network": {"allowedHosts": value}}),
+            )
+            .unwrap_err();
+            assert!(error.0.contains(needle), "{value}: {}", error.0);
+        }
+    }
+
+    #[test]
+    fn the_host_policy_follows_the_network_section() {
+        use fireemu_core_session::host_guard::admits;
+        let host = |cfg: &RuntimeConfig, name: &str| {
+            admits(&cfg.host_policy(), false, [name.as_bytes()]).is_ok()
+        };
+        let default = RuntimeConfig::from_json(&json!({"schemaVersion": 1})).unwrap();
+        assert!(host(&default, "localhost:9199"));
+        assert!(!host(&default, "fireemu:9199"));
+        assert!(!host(&default, "ci.example"));
+        let exposed = RuntimeConfig::from_json(&json!({
+            "schemaVersion": 1,
+            "network": {"allowNonLoopbackHosts": true, "allowedHosts": ["ci.example"]}
+        }))
+        .unwrap();
+        assert!(host(&exposed, "fireemu:9199"));
+        assert!(host(&exposed, "ci.example"));
+        assert!(!host(&exposed, "evil.example"));
     }
 
     #[test]

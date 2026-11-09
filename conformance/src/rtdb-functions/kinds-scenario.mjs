@@ -93,6 +93,16 @@ export const KINDS_PINS = Object.freeze({
     "c492afe0fa1e5336d78be6f1fa76e594d357e0412cacfd9d963d2569389b7dea",
 });
 
+/**
+ * Packet v2 asks for the writes the first recording did not reach: RTDB-TRIGGERS-KINDS-20261108-01 stopped
+ * when production refused write k13 (a 2 MiB value), so k14 to k21 were never sent. k14 deletes the group
+ * the oversized values filled and means nothing without them. What remains is the user writes: the genuine
+ * user over REST with custom claims (k15 to k17) and over the web SDK on long polling (k18 to k21). They
+ * touch only the `gc` and `gs` groups, so the model of each step is the same with or without the steps
+ * before them.
+ */
+export const KINDS_V2_STEP_IDS = Object.freeze(["k15", "k16", "k17", "k18", "k19", "k20", "k21"]);
+
 export const KINDS_SCENARIO = Object.freeze({
   id: "kinds",
   codebase: CODEBASE,
@@ -116,4 +126,11 @@ export const KINDS_SCENARIO = Object.freeze({
     pageFile: fileURLToPath(new URL("./kinds-sdk-page.js", import.meta.url)),
     ids: Object.freeze(["k18", "k19", "k20", "k21"]),
   }),
+});
+
+export const KINDS_V2_SCENARIO = Object.freeze({
+  ...KINDS_SCENARIO,
+  id: "kinds2",
+  runDirPrefix: "kinds2",
+  buildSteps: (nonce) => buildSteps(nonce).filter((step) => KINDS_V2_STEP_IDS.includes(step.id)),
 });

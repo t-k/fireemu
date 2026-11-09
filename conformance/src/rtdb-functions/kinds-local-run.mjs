@@ -1,6 +1,7 @@
 // Runs the kinds fixture and writes against a local fireemu: the same steps the recorder sends to
 // production, REST for the admin and user-rest steps and the long-polling page for the SDK steps.
-// Usage: node kinds-local-run.mjs --fireemu <binary> --profile strict|emulator --out <new directory>
+// Usage: node kinds-local-run.mjs --fireemu <binary> --profile strict|emulator --out <new directory> [--steps v2]
+// (v2: only the user writes k15 to k21 of packet v2)
 
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -12,8 +13,8 @@ import { fileURLToPath } from "node:url";
 import { FRAME_MARKER, INSTANCE, PREFIX } from "./kinds-frames.mjs";
 import { MASKED_NONCE } from "./mask-recording.mjs";
 import { browserRunner, openSdk } from "./breadth-sdk.mjs";
-import { KINDS_CLAIMS, KINDS_SCENARIO, rulesFor } from "./kinds-scenario.mjs";
-import { buildSteps, observe } from "./kinds-sequence.mjs";
+import { KINDS_CLAIMS, KINDS_SCENARIO, KINDS_V2_SCENARIO, rulesFor } from "./kinds-scenario.mjs";
+import { observe } from "./kinds-sequence.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const QUIET_MS = 2500;
@@ -56,7 +57,11 @@ async function write(db, step, stepNumber, token) {
   return { step: step.id, n: stepNumber, status: response.status };
 }
 
-export async function runLocal({ fireemu, profile, out }) {
+/** The scenario whose steps a local run sends: all 21 of the first packet, or the user writes of packet v2. */
+export const scenarioFor = (stepSet) => (stepSet === "v2" ? KINDS_V2_SCENARIO : KINDS_SCENARIO);
+
+export async function runLocal({ fireemu, profile, out, steps: stepSet = "all" }) {
+  const scenario = scenarioFor(stepSet);
   if (!["strict", "emulator"].includes(profile)) throw new Error("--profile is strict or emulator");
   mkdirSync(out);
   const ports = {};
@@ -213,7 +218,7 @@ export async function runLocal({ fireemu, profile, out }) {
       () => ({ email, password, uid: localId, nonce: MASKED_NONCE }),
     );
     try {
-      const steps = buildSteps(MASKED_NONCE);
+      const steps = scenario.buildSteps(MASKED_NONCE);
       const writes = [];
       for (const [index, step] of steps.entries()) {
         writes.push(
@@ -272,6 +277,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     fireemu: opt("--fireemu") ?? "fireemu",
     profile: opt("--profile") ?? "strict",
     out: opt("--out"),
+    steps: opt("--steps") ?? "all",
   });
   console.log(
     JSON.stringify({

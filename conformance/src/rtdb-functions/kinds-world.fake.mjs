@@ -49,7 +49,6 @@ export function perfectFrames(steps, only = FIXTURE_HANDLERS.map((h) => h.name))
 
 import { KINDS_SCENARIO, KINDS_WINDOWS } from "./kinds-scenario.mjs";
 import { TARGETS } from "./kinds-targets.mjs";
-import { buildSteps } from "./kinds-sequence.mjs";
 
 /**
  * A fake world for the shared flow with the kinds scenario plugged in. `frames: "all"` delivers every
@@ -57,6 +56,7 @@ import { buildSteps } from "./kinds-sequence.mjs";
  * `options.kind`; `options.records` lists the handlers whose deploy is read back.
  */
 export function makeWorld(options = {}) {
+  const scenario = options.scenario ?? KINDS_SCENARIO;
   const events = [];
   let now = 0;
   const ops = {
@@ -78,16 +78,16 @@ export function makeWorld(options = {}) {
       state.functionSeen = options.kind !== "unknown";
     },
   };
-  const steps = buildSteps("fake");
+  const steps = scenario.buildSteps("fake");
   let delivered = false;
   const deps = {
     targets: TARGETS,
     steps,
     ops: { gcfv1: ops, gcfv2: ops },
     windows: KINDS_WINDOWS,
-    observe: KINDS_SCENARIO.observe,
-    judge: KINDS_SCENARIO.judge,
-    complete: KINDS_SCENARIO.complete,
+    observe: scenario.observe,
+    judge: scenario.judge,
+    complete: scenario.complete,
     preflight: async () => {
       events.push("preflight");
       if (options.preflightFails) throw Error("preflight");

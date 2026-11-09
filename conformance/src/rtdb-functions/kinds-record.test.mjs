@@ -7,7 +7,7 @@ import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { admitRun, executeRun, recordBreadth, requiredBreadthSources } from "./breadth-record.mjs";
 import { createBreadthBudget } from "./breadth-wiring.mjs";
-import { KINDS_PINS, KINDS_SCENARIO } from "./kinds-scenario.mjs";
+import { KINDS_PINS, KINDS_SCENARIO, KINDS_V2_SCENARIO } from "./kinds-scenario.mjs";
 import { makeWorld } from "./kinds-world.fake.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -134,82 +134,83 @@ test("admission checks the kinds fixture directory for files git does not track"
     assert.match((await run(line)).outcome, /fixture directory holds files git does not track/);
 });
 
-test("the kinds entry plugs the scenario into the budget, CLI, user, SDK and run directory", async () => {
-  const listeners = new Map();
-  const seen = {};
-  const fakeProcess = {
-    argv: ["node", "unused", "--key-file", "/fake/key"],
-    env: {},
-    on: (signal, cb) => listeners.set(signal, cb),
-    off: (signal) => listeners.delete(signal),
-  };
-  const deps = {
-    process: fakeProcess,
-    isAbsolute,
-    fileURLToPath,
-    join,
-    STAGE_DIR: "/fake/stage",
-    PRIVATE_ROOT: "/fake/private",
-    PROJECT: "demo",
-    ownerAdc: async () => ({ file: {}, path: "/fake/adc" }),
-    createBreadthBudget: (scenario) => (
-      (seen.budgetScenario = scenario),
-      createBreadthBudget(scenario)
-    ),
-    createTokenProvider: () => async () => "fake-access",
-    adcPreflight: async () => ({ ok: true }),
-    fetch: async () => ({}),
-    tokenProviderWithSecrets: () => ({ getToken: async () => "fake-access", secrets: [] }),
-    admitRun: async ({ deps: inner, fixtureDir }) => {
-      seen.fixtureDir = fixtureDir;
-      await inner.requiredSources();
-      const projectNumber = await inner.readPrivateProjectIdentity();
-      await inner.adcVerdict();
-      return { packetPins: {}, projectNumber };
-    },
-    requiredBreadthSources: async (options) => (seen.sources = options),
-    readFile: async () => "fake-key",
-    parseKeyFile: (x) => x,
-    readPrivateProjectIdentity: async () => "123456789012",
-    PROJECT_IDENTITY_FILE: "/fake/identity",
-    PROJECT_IDENTITY_SHA: "sha",
-    mkdir: async (dir) => (seen.runDir = dir),
-    randomBytes: () => Buffer.from("nonce"),
-    createControl: () => ({}),
-    BREADTH_HOSTS: [],
-    breadthCli: (run, scenario) => ((seen.cliScenario = scenario), run),
-    createAuth: (options) => ((seen.claims = options.claims), { signIn: async () => ({}) }),
-    executeRun: async ({ environment }) => {
-      seen.environmentScenario = environment.scenario;
-      environment.createAuth(() => {});
-      environment.createSdk({ uid: "u" });
-      return { outcome: "recorded", residual: false };
-    },
-    openSdk: (runner) => runner,
-    browserRunner: (options) => ((seen.browser = options), options),
-    INSTANCE: "fireemu-q-rtdb2",
-    exitCodeOf: () => 0,
-    console: { log() {} },
-    readdir: async () => [],
-    rm: async () => {},
-  };
-  const source = recordBreadth
-    .toString()
-    .replaceAll("import.meta.url", JSON.stringify(import.meta.url));
-  const entry = new Function(...Object.keys(deps), "scenario", `return (${source})(scenario);`);
-  await entry(...Object.values(deps), KINDS_SCENARIO);
-  assert.equal(seen.budgetScenario, KINDS_SCENARIO);
-  assert.equal(seen.cliScenario, KINDS_SCENARIO);
-  assert.equal(seen.environmentScenario, KINDS_SCENARIO);
-  assert.equal(seen.fixtureDir, "fixtures-kinds");
-  assert.deepEqual(seen.sources, { pins: KINDS_PINS, fixtureDir: "fixtures-kinds" });
-  assert.match(seen.runDir, /^\/fake\/private\/runs\/kinds-/u);
-  assert.deepEqual(seen.claims, { k9role: "claims", k9n: 3 });
-  assert.equal(seen.browser.pageFile, KINDS_SCENARIO.sdk.pageFile);
-  assert.deepEqual(seen.browser.ids, ["k18", "k19", "k20", "k21"]);
-  assert.deepEqual(seen.browser.caps, { http: 80, ws: 4 });
-  assert.equal(listeners.size, 0);
-});
+for (const scenario of [KINDS_SCENARIO, KINDS_V2_SCENARIO])
+  test(`the ${scenario.id} entry plugs the scenario into the budget, CLI, user, SDK and run directory`, async () => {
+    const listeners = new Map();
+    const seen = {};
+    const fakeProcess = {
+      argv: ["node", "unused", "--key-file", "/fake/key"],
+      env: {},
+      on: (signal, cb) => listeners.set(signal, cb),
+      off: (signal) => listeners.delete(signal),
+    };
+    const deps = {
+      process: fakeProcess,
+      isAbsolute,
+      fileURLToPath,
+      join,
+      STAGE_DIR: "/fake/stage",
+      PRIVATE_ROOT: "/fake/private",
+      PROJECT: "demo",
+      ownerAdc: async () => ({ file: {}, path: "/fake/adc" }),
+      createBreadthBudget: (scenario) => (
+        (seen.budgetScenario = scenario),
+        createBreadthBudget(scenario)
+      ),
+      createTokenProvider: () => async () => "fake-access",
+      adcPreflight: async () => ({ ok: true }),
+      fetch: async () => ({}),
+      tokenProviderWithSecrets: () => ({ getToken: async () => "fake-access", secrets: [] }),
+      admitRun: async ({ deps: inner, fixtureDir }) => {
+        seen.fixtureDir = fixtureDir;
+        await inner.requiredSources();
+        const projectNumber = await inner.readPrivateProjectIdentity();
+        await inner.adcVerdict();
+        return { packetPins: {}, projectNumber };
+      },
+      requiredBreadthSources: async (options) => (seen.sources = options),
+      readFile: async () => "fake-key",
+      parseKeyFile: (x) => x,
+      readPrivateProjectIdentity: async () => "123456789012",
+      PROJECT_IDENTITY_FILE: "/fake/identity",
+      PROJECT_IDENTITY_SHA: "sha",
+      mkdir: async (dir) => (seen.runDir = dir),
+      randomBytes: () => Buffer.from("nonce"),
+      createControl: () => ({}),
+      BREADTH_HOSTS: [],
+      breadthCli: (run, scenario) => ((seen.cliScenario = scenario), run),
+      createAuth: (options) => ((seen.claims = options.claims), { signIn: async () => ({}) }),
+      executeRun: async ({ environment }) => {
+        seen.environmentScenario = environment.scenario;
+        environment.createAuth(() => {});
+        environment.createSdk({ uid: "u" });
+        return { outcome: "recorded", residual: false };
+      },
+      openSdk: (runner) => runner,
+      browserRunner: (options) => ((seen.browser = options), options),
+      INSTANCE: "fireemu-q-rtdb2",
+      exitCodeOf: () => 0,
+      console: { log() {} },
+      readdir: async () => [],
+      rm: async () => {},
+    };
+    const source = recordBreadth
+      .toString()
+      .replaceAll("import.meta.url", JSON.stringify(import.meta.url));
+    const entry = new Function(...Object.keys(deps), "scenario", `return (${source})(scenario);`);
+    await entry(...Object.values(deps), scenario);
+    assert.equal(seen.budgetScenario, scenario);
+    assert.equal(seen.cliScenario, scenario);
+    assert.equal(seen.environmentScenario, scenario);
+    assert.equal(seen.fixtureDir, "fixtures-kinds");
+    assert.deepEqual(seen.sources, { pins: KINDS_PINS, fixtureDir: "fixtures-kinds" });
+    assert.match(seen.runDir, new RegExp(`^/fake/private/runs/${scenario.runDirPrefix}-`, "u"));
+    assert.deepEqual(seen.claims, { k9role: "claims", k9n: 3 });
+    assert.equal(seen.browser.pageFile, scenario.sdk.pageFile);
+    assert.deepEqual(seen.browser.ids, ["k18", "k19", "k20", "k21"]);
+    assert.deepEqual(seen.browser.caps, { http: 80, ws: 4 });
+    assert.equal(listeners.size, 0);
+  });
 
 test("a kinds run through the real executeRun writes the private output and cleans up", async () => {
   const dir = await mkdtemp(join(tmpdir(), "kinds-result-"));

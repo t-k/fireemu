@@ -20,6 +20,7 @@ test('the most specific section is current', () => {
 	assert.equal(currentNavSlug('/compatibility/limitations/'), 'compatibility');
 	assert.equal(currentNavSlug('/guides/time/'), 'guides/configuration');
 	assert.equal(currentNavSlug('/'), undefined);
-	assert.equal(currentNavSlug('/products/firestore/'), undefined);
+	assert.equal(currentNavSlug('/products/firestore/'), 'products/firestore');
+	assert.equal(currentNavSlug('/products/functions-python/'), 'products/firestore');
 	assert.equal(currentNavSlug('/compatibility-other/'), undefined);
 });

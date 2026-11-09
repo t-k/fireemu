@@ -17584,3 +17584,63 @@ mod body_tenant_selector_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod continue_url_domain_tests {
+    use super::*;
+    use fireemu_core_auth::mfa::TotpPolicy;
+    use fireemu_core_types::determinism::SplitMix64;
+    use proptest::prelude::*;
+
+    const HOSTS: [&str; 4] = ["a.test", "b.test", "c.test", "localhost"];
+
+    fn refused(answer: Option<JsonResponse>) -> bool {
+        answer.is_some_and(|response| {
+            response.status == 400
+                && response.body["error"]["message"]
+                    == "UNAUTHORIZED_DOMAIN : Domain not allowlisted by project"
+        })
+    }
+
+    fn body(host: &str) -> Value {
+        json!({"continueUrl": format!("https://{host}/done")})
+    }
+
+    fn domains(hosts: &[usize]) -> Vec<String> {
+        hosts.iter().map(|i| HOSTS[*i].to_owned()).collect()
+    }
+
+    proptest! {
+        /// A project store decides by its own list and ignores any snapshot; a tenant store
+        /// decides by the snapshot only, and without one refuses every host: its own list
+        /// (project defaults, or anything set directly) never decides.
+        #[test]
+        fn the_domains_checked_are_the_projects_for_a_project_and_the_snapshot_for_a_tenant(
+            own in proptest::sample::subsequence((0..HOSTS.len()).collect::<Vec<_>>(), 0..=HOSTS.len()),
+            snapshot in proptest::option::of(
+                proptest::sample::subsequence((0..HOSTS.len()).collect::<Vec<_>>(), 0..=HOSTS.len())
+            ),
+            host in 0..HOSTS.len(),
+            upper in any::<bool>(),
+        ) {
+            let spelled = if upper { HOSTS[host].to_uppercase() } else { HOSTS[host].to_owned() };
+            let own_list = domains(&own);
+            let snapshot = snapshot.map(|s| domains(&s));
+            let mut project = AuthStore::new("demo-app", SplitMix64::new(1), TotpPolicy::default());
+            project.set_authorized_domains_seed(own_list.clone()).unwrap();
+            let mut tenant =
+                AuthStore::new_tenant("demo-app", "tenant-a", SplitMix64::new(2), TotpPolicy::default());
+            tenant.set_authorized_domains_seed(own_list.clone()).unwrap();
+            let listed = |list: &[String]| list.iter().any(|d| d.eq_ignore_ascii_case(&spelled));
+            let request = body(&spelled);
+            prop_assert_eq!(
+                refused(unauthorized_continue_url(&project, snapshot.as_deref(), &request)),
+                !listed(&own_list)
+            );
+            prop_assert_eq!(
+                refused(unauthorized_continue_url(&tenant, snapshot.as_deref(), &request)),
+                !snapshot.as_deref().is_some_and(listed)
+            );
+        }
+    }
+}

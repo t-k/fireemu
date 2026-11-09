@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "parent": "FUNCTIONS-PYTHON",
-  "parentStatus": "IMPLEMENTING",
+  "parentStatus": "COMPAT_VERIFIED",
   "inventoryStatus": "PROPOSED",
   "oracleTrack": "masked-recorded-observations",
   "recordingPolicy": {
@@ -36,7 +36,20 @@
     }
   ],
   "closureReview": {
-    "decision": "PENDING"
+    "decision": "APPROVED",
+    "decidedOn": "2026-11-09",
+    "decider": "project coordinator",
+    "decisionRef": "owner ledger 2357; coordinator rulings 2026-11-09",
+    "reviewedCommit": "1d04df3f459584c7b552aad9a52576f276984cbb",
+    "reviews": [
+      {
+        "reviewer": "independent promotion reviewer",
+        "reportPath": "docs.local/reviews/2026-11-09-python-promotion-review.md",
+        "reportSha256": "f9e96ae5e1d512ad2f8e20d67318af750614ca71d2e44b3802e13b3adcbc0a30",
+        "reviewedCommit": "1d04df3f459584c7b552aad9a52576f276984cbb",
+        "outcome": "APPROVED"
+      }
+    ]
   },
   "conditions": [
     {
@@ -49,7 +62,7 @@
         "strict-replay",
         "emulator-replay"
       ],
-      "status": "PRODUCTION_RECORDED",
+      "status": "VERIFIED",
       "generations": [
         2
       ],
@@ -65,7 +78,8 @@
       "recordingAliases": [
         "pass-1",
         "pass-2"
-      ]
+      ],
+      "reviewRef": "f9e96ae5e1d512ad2f8e20d67318af750614ca71d2e44b3802e13b3adcbc0a30"
     },
     {
       "conditionId": "FUNCTIONS-PYTHON/pubsub-events",
@@ -77,7 +91,7 @@
         "strict-replay",
         "emulator-replay"
       ],
-      "status": "PRODUCTION_RECORDED",
+      "status": "VERIFIED",
       "generations": [
         2
       ],
@@ -93,7 +107,8 @@
       "recordingAliases": [
         "pass-1",
         "pass-2"
-      ]
+      ],
+      "reviewRef": "f9e96ae5e1d512ad2f8e20d67318af750614ca71d2e44b3802e13b3adcbc0a30"
     },
     {
       "conditionId": "FUNCTIONS-PYTHON/storage-events",
@@ -105,7 +120,7 @@
         "strict-replay",
         "emulator-replay"
       ],
-      "status": "PRODUCTION_RECORDED",
+      "status": "VERIFIED",
       "generations": [
         2
       ],
@@ -121,7 +136,8 @@
       "recordingAliases": [
         "pass-1",
         "pass-2"
-      ]
+      ],
+      "reviewRef": "f9e96ae5e1d512ad2f8e20d67318af750614ca71d2e44b3802e13b3adcbc0a30"
     },
     {
       "conditionId": "FUNCTIONS-PYTHON/eventarc-custom-events",
@@ -133,7 +149,7 @@
         "strict-replay",
         "emulator-replay"
       ],
-      "status": "PRODUCTION_RECORDED",
+      "status": "VERIFIED",
       "generations": [
         2
       ],
@@ -149,7 +165,8 @@
       "recordingAliases": [
         "pass-1",
         "pass-2"
-      ]
+      ],
+      "reviewRef": "f9e96ae5e1d512ad2f8e20d67318af750614ca71d2e44b3802e13b3adcbc0a30"
     },
     {
       "conditionId": "FUNCTIONS-PYTHON/scheduler-events",
@@ -161,7 +178,7 @@
         "strict-replay",
         "emulator-replay"
       ],
-      "status": "PRODUCTION_RECORDED",
+      "status": "VERIFIED",
       "generations": [
         2
       ],
@@ -177,7 +194,8 @@
       "recordingAliases": [
         "pass-1",
         "pass-2"
-      ]
+      ],
+      "reviewRef": "f9e96ae5e1d512ad2f8e20d67318af750614ca71d2e44b3802e13b3adcbc0a30"
     },
     {
       "conditionId": "FUNCTIONS-PYTHON/tasks-events",
@@ -189,7 +207,7 @@
         "strict-replay",
         "emulator-replay"
       ],
-      "status": "PRODUCTION_RECORDED",
+      "status": "VERIFIED",
       "generations": [
         2
       ],
@@ -205,7 +223,8 @@
       "recordingAliases": [
         "pass-1",
         "tasks-pass-2"
-      ]
+      ],
+      "reviewRef": "f9e96ae5e1d512ad2f8e20d67318af750614ca71d2e44b3802e13b3adcbc0a30"
     }
   ],
   "excludedFromParent": [

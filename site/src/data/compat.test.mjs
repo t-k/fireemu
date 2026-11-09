@@ -185,18 +185,18 @@ test('the home page counts the areas whose parent is verified against production
 	);
 });
 
-test('the Python parent remains in progress with recorded conditions and its declared differences listed', async () => {
+test('the Python parent is verified for the six recorded event families and lists its declared differences', async () => {
 	const data = await loadRepositoryData();
 	const python = data.closures.find((record) => record.parent === 'FUNCTIONS-PYTHON');
 	assert.ok(python);
 	const [row] = productionAreaRows([python]);
 	assert.equal(row.product, 'Cloud Functions');
 	assert.equal(row.title, 'Python functions');
-	assert.equal(row.status, 'In progress');
-	assert.equal(row.verified, 0);
+	assert.equal(row.status, 'Verified against production');
+	assert.equal(row.verified, 6);
 	assert.equal(row.total, 6, 'Auth blocking and deployment are excluded from the parent');
-	assert.equal(verifiedAreaCount([python]), 0);
-	assert.deepEqual(new Set(row.conditions.map((condition) => condition.status)), new Set(['PRODUCTION_RECORDED']));
+	assert.equal(verifiedAreaCount([python]), 1);
+	assert.deepEqual(new Set(row.conditions.map((condition) => condition.status)), new Set(['VERIFIED']));
 	assert.deepEqual(row.knownDifferences, python.declaredDifferences.map((entry) => entry.reason));
 	assert.equal(row.knownDifferences.length, 4);
 });

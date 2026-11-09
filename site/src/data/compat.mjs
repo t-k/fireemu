@@ -135,7 +135,7 @@ export const AREAS = {
 	'FUNCTIONS-PYTHON': {
 		product: 'Cloud Functions',
 		title: 'Python functions',
-		covers: 'Recorded Python SDK and request projections for Firestore, Pub/Sub, Storage, Eventarc, Scheduler and Tasks under the strict profile. Auth blocking remains open and deployment equivalence is not compared; this parent is not verified.',
+		covers: 'Recorded Python SDK and request projections for Firestore, Pub/Sub, Storage, Eventarc, Scheduler and Tasks under the strict profile. Auth blocking and deployment equivalence are outside this area and not claimed.',
 	},
 	'SCHEDULED-FUNCTIONS': {
 		product: 'Cloud Functions',

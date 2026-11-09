@@ -8,6 +8,10 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Changed
+
+- Python Cloud Functions (FUNCTIONS-PYTHON) is verified against production for the six recorded event families: Firestore, Pub/Sub, Cloud Storage, Eventarc custom events, Cloud Scheduler and Cloud Tasks, each from two independent production recordings in the strict profile. Auth blocking functions (still open) and deployment (not compared) are outside the claim; the emulator profile's declared differences are listed as known differences.
+
 ### Fixed
 
 - Cloud Storage answers every Firebase v0 route that takes an object name (upload in all forms, `PATCH`, `DELETE`, token management) with the same `400` for a path with an empty segment, so no rule sees one through that API; production was recorded for the reads, and the writes follow from that and are not recorded.

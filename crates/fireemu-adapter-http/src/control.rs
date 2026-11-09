@@ -78,6 +78,18 @@ impl IdleScope {
     }
 }
 
+/// Why a local Pub/Sub publish was refused. No message id was issued and no subscribed
+/// function received anything.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PublishMessagesError {
+    /// The topic or a message is invalid; the text says which.
+    Invalid(String),
+    /// The complete fan-out exceeds the shared event queue budget.
+    Capacity,
+    /// The runtime is shutting down or unavailable.
+    Unavailable,
+}
+
 /// Why a local event could not be admitted. No target has received it on refusal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PublishEventError {
@@ -139,8 +151,9 @@ pub trait FunctionsHook: Send + Sync {
     /// Status JSON (queue depths, functions).
     fn status(&self) -> Value;
     /// Publishes Pub/Sub messages (`{data, attributes, orderingKey}` each) on `topic`;
-    /// returns the message IDs.
-    fn publish(&self, topic: &str, messages: &[Value]) -> Result<Vec<String>, String>;
+    /// returns the message IDs. A refusal issues no id and delivers nothing.
+    fn publish(&self, topic: &str, messages: &[Value])
+        -> Result<Vec<String>, PublishMessagesError>;
     /// Injects one caller-described Remote Config update; no template is persisted.
     fn publish_remote_config(&self, _body: &Value) -> Result<usize, PublishEventError> {
         Err(PublishEventError::Unavailable)
@@ -3005,7 +3018,17 @@ fn publish_route(state: &ControlState, topic: &str, body: &Value) -> JsonRespons
     }
     match functions.publish(topic, &normalised) {
         Ok(ids) => ok(json!({"messageIds": ids})),
-        Err(e) => error(400, &format!("INVALID_ARGUMENT : {e}")),
+        Err(PublishMessagesError::Invalid(e)) => error(400, &format!("INVALID_ARGUMENT : {e}")),
+        // The request is valid; the local event queue is full, as for the Remote Config
+        // publish and a manual schedule run. Nothing was published and no id was issued.
+        Err(PublishMessagesError::Capacity) => error(
+            429,
+            "RESOURCE_EXHAUSTED : the functions event queue is at capacity",
+        ),
+        Err(PublishMessagesError::Unavailable) => error(
+            503,
+            "UNAVAILABLE : the functions runtime cannot admit events",
+        ),
     }
 }
 

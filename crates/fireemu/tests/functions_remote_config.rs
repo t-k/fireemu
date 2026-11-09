@@ -37,7 +37,11 @@ impl FunctionsHook for Hook {
     fn status(&self) -> Value {
         self.0.status()
     }
-    fn publish(&self, _: &str, _: &[Value]) -> Result<Vec<String>, String> {
+    fn publish(
+        &self,
+        _: &str,
+        _: &[Value],
+    ) -> Result<Vec<String>, fireemu_adapter_http::control::PublishMessagesError> {
         unreachable!()
     }
     fn project(&self) -> String {

@@ -31,6 +31,8 @@ Before anything starts, fireemu checks the environment and stops with the Fireba
 
 This release serves HTTP (`https_fn.on_request`), callable (`https_fn.on_call`), Firestore document triggers (`on_document_created`, `updated`, `deleted`, `written` and the `_with_auth_context` variants), Pub/Sub (`pubsub_fn.on_message_published`), Cloud Storage (`storage_fn.on_object_finalized`, `deleted`, `archived`, `metadata_updated`), Eventarc custom events (`eventarc_fn.on_custom_event_published`) and Realtime Database (`db_fn.on_value_created`, `updated`, `deleted`, `written`) triggers. It also serves scheduled functions (`scheduler_fn.on_schedule`), task queue functions (`tasks_fn.on_task_dispatched`) and Auth blocking functions (`identity_fn.before_user_created`, `before_user_signed_in`). A callable sees the user of the Auth emulator. A trigger for a product fireemu does not serve is reported when the codebase loads and never runs; discovery refuses such a codebase unless `functions.unservedTriggers` is `"report"`, as for the products listed below.
 
+Python codebases are verified against production for six event families, each from two independent production recordings under the `strict` profile: Firestore, Pub/Sub, Cloud Storage, Eventarc custom events, Cloud Scheduler and Cloud Tasks. The comparison covers the values and request projections the Python SDK sees; see the [compatibility tables](../../compatibility/#production-verification). Python Auth blocking functions are not verified, and deployment of a Python codebase to production was not compared. The emulator profile's differences from the recorded `strict` behaviour are listed as known differences in those tables and in the list below.
+
 Where it differs from production and from the Firebase CLI:
 
 - One Python process serves the whole codebase, where production gives each function its own instance and the CLI its own process. Module-level state is shared between functions, the `@init` callback runs once per process, on the first call of any function, and `FUNCTION_TARGET`, `FUNCTION_SIGNATURE_TYPE` and `K_SERVICE` name the function that started most recently when calls overlap.
@@ -163,4 +165,4 @@ npx fireemu up --inspect-functions 9229
 
 ## Production verification
 
-HTTP and callable functions, event triggers and scheduled functions are verified against recordings from deployed functions. See the [compatibility tables](../../compatibility/#production-verification).
+HTTP and callable functions, event triggers and scheduled functions are verified (Python codebases for the six event families named above) against recordings from deployed functions. See the [compatibility tables](../../compatibility/#production-verification).

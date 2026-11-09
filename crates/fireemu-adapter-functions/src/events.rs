@@ -2053,8 +2053,15 @@ fn database_event_payload(
         "@type".to_owned(),
         json!("type.googleapis.com/google.events.firebase.database.v1.ReferenceEventData"),
     );
-    data.insert("data".to_owned(), before.clone());
-    data.insert("delta".to_owned(), database_delta(before, after));
+    if production {
+        // Recorded (RTDB-TRIGGERS-KINDS-20261108-01, k7-k10): the node before the write carries no
+        // priority, and a created node's delta is its plain value.
+        data.insert("data".to_owned(), without_priorities(before));
+        data.insert("delta".to_owned(), production_database_delta(before, after));
+    } else {
+        data.insert("data".to_owned(), before.clone());
+        data.insert("delta".to_owned(), database_delta(before, after));
+    }
     payload["data"] = Value::Object(data);
     // Recorded: production sends no `datacontenttype`, and a 2nd gen event no auth for an admin or an
     // unauthenticated write; the SDK reports the type `unknown` and the context carries none.
@@ -2185,6 +2192,55 @@ fn database_value_at<'a>(value: &'a Value, path: &str) -> &'a Value {
         .fold(value, |current, part| {
             current.get(part).unwrap_or(&Value::Null)
         })
+}
+
+/// `node` in the database's export form without its priorities: a leaf with a priority is its plain value
+/// and an object loses its `.priority` member, at every depth.
+fn without_priorities(node: &Value) -> Value {
+    match node {
+        Value::Object(members) => match members.get(".value") {
+            Some(value) => without_priorities(value),
+            None => Value::Object(
+                members
+                    .iter()
+                    .filter(|(key, _)| key.as_str() != ".priority")
+                    .map(|(key, child)| (key.clone(), without_priorities(child)))
+                    .collect(),
+            ),
+        },
+        other => other.clone(),
+    }
+}
+
+/// [`database_delta`] in production's form: what is added or replaced whole is sent without priorities,
+/// and a changed priority of a node that stays is a `.priority` member (the SDK merges the delta into the
+/// node, so a priority-only write shows as `{".priority": 9}`). A leaf that carries a priority is compared
+/// by its value alone: a change of only its priority has no recorded form and sends the plain value.
+fn production_database_delta(before: &Value, after: &Value) -> Value {
+    let (Some(old), Some(new)) = (before.as_object(), after.as_object()) else {
+        return without_priorities(after);
+    };
+    if old.contains_key(".value") || new.contains_key(".value") {
+        return without_priorities(after);
+    }
+    let keys: std::collections::BTreeSet<_> = old.keys().chain(new.keys()).collect();
+    let mut delta = Map::new();
+    for key in keys {
+        let previous = old.get(key).unwrap_or(&Value::Null);
+        let next = new.get(key).unwrap_or(&Value::Null);
+        if previous == next {
+            continue;
+        }
+        delta.insert(
+            key.clone(),
+            if key == ".priority" {
+                next.clone()
+            } else {
+                production_database_delta(previous, next)
+            },
+        );
+    }
+    Value::Object(delta)
 }
 
 fn database_delta(before: &Value, after: &Value) -> Value {

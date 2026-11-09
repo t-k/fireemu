@@ -3023,6 +3023,7 @@ test("RTDB release entries bind every local producer to the installed binary", (
     "R33",
     "R34",
     "R35",
+    "R36",
   ]) {
     const run = RUNS.find((entry) => entry.id === id);
     assert.ok(run);
@@ -3047,6 +3048,7 @@ test("RTDB release entries bind every local producer to the installed binary", (
     ["R33", "sdk-rules-load"],
     ["R34", "breadth"],
     ["R35", "sdk-rules-syntax"],
+    ["R36", "kinds"],
   ])
     assert.equal(RUNS.find((entry) => entry.id === id).commands[0].argv[3], campaign, id);
 });
@@ -3112,6 +3114,7 @@ test("RTDB run entries expand the owned output and binary, and reject producer f
       "R33",
       "R34",
       "R35",
+      "R36",
     ]) {
       const run = clone(RUNS.find((entry) => entry.id === id));
       const result = await runEntry(run, context);
@@ -3490,7 +3493,7 @@ test("a timed-out RTDB entry does not parse a partial export before writing fail
   assert.equal(called, false);
 });
 
-test("R30 to R35 judge only a matching export of their own campaign bound to the installed binary", () => {
+test("R30 to R36 judge only a matching export of their own campaign bound to the installed binary", () => {
   const context = { readJson, binarySha256: BINARY };
   const runs = [
     ["R30", "sdk-rest", "RTDB-sdk-rest-comparison.json"],
@@ -3499,6 +3502,7 @@ test("R30 to R35 judge only a matching export of their own campaign bound to the
     ["R33", "sdk-rules-load", "RTDB-sdk-rules-load-comparison.json"],
     ["R34", "breadth", "RTDB-breadth-comparison.json"],
     ["R35", "sdk-rules-syntax", "RTDB-sdk-rules-syntax-comparison.json"],
+    ["R36", "kinds", "RTDB-kinds-comparison.json"],
   ];
   for (const [id, campaign, file] of runs) {
     const cmp = {

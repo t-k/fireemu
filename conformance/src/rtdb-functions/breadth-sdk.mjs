@@ -5,7 +5,39 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { LAUNCH } from "../../../tools/sdk-smoke-database/cv11-genuine-auth.mjs";
 
-export function createSdk({ page, config, email, password, uid, nonce }) {
+/**
+ * What the page said went wrong, safe to keep in the run's reasons: the first line, without Playwright's
+ * `page.evaluate:` prefix, the owned user's email, uid and password, the run's nonce and anything that looks
+ * like a token (24 or more characters of the base64url alphabet) masked, non-printable characters replaced,
+ * at most 160 characters.
+ */
+export function describeFailure(error, { email, uid, password, nonce } = {}) {
+  let text = String(error?.message ?? error ?? "")
+    .split("\n")[0]
+    .replace(/^page\.evaluate:\s*/u, "");
+  for (const [secret, label] of [
+    [email, "<email>"],
+    [uid, "<uid>"],
+    [password, "<password>"],
+    [nonce, "<nonce>"],
+  ])
+    if (secret) text = text.replaceAll(secret, label);
+  return text
+    .replace(/[A-Za-z0-9_-]{24,}/gu, "<masked>")
+    .replace(/[^\x20-\x7e]/gu, "?")
+    .slice(0, 160)
+    .trim();
+}
+
+export function createSdk({
+  page,
+  config,
+  email,
+  password,
+  uid,
+  nonce,
+  ids = ["w10", "w11", "w12"],
+}) {
   let state = "initial";
   const done = new Set();
   return {
@@ -29,23 +61,38 @@ export function createSdk({ page, config, email, password, uid, nonce }) {
       return result;
     },
     async write(id) {
-      if (state !== "ready" || !["w10", "w11", "w12"].includes(id) || done.has(id))
-        throw Error("write unavailable");
+      if (state !== "ready" || !ids.includes(id) || done.has(id)) throw Error("write unavailable");
       done.add(id);
       state = "stopped";
+      let result;
       try {
-        const result = await page.evaluate((arg) => window.__breadth(arg), { action: id, nonce });
-        if (result?.outcome !== "ok") throw Error("write rejected");
-        state = "ready";
-        return result;
-      } catch {
-        throw Error("write rejected");
+        result = await page.evaluate((arg) => window.__breadth(arg), { action: id, nonce });
+      } catch (error) {
+        const detail = describeFailure(error, { email, uid, password, nonce });
+        throw Error(detail ? `write rejected: ${detail}` : "write rejected");
       }
+      if (result?.outcome !== "ok") {
+        const detail = describeFailure(
+          [result?.outcome, result?.error].filter((part) => typeof part === "string").join(" "),
+          { email, uid, password, nonce },
+        );
+        throw Error(detail ? `write rejected: ${detail}` : "write rejected");
+      }
+      state = "ready";
+      return result;
     },
   };
 }
 
-export function browserRunner({ modules, allowHost, budget = { take() {} }, stop = {} }) {
+export function browserRunner({
+  modules,
+  allowHost,
+  budget = { take() {} },
+  stop = {},
+  pageFile,
+  ids,
+  caps = { http: 40, ws: 4 },
+}) {
   const require = createRequire(path.resolve(modules, "x.js"));
   const { chromium } = require("playwright");
   return async (config, credentials, observe) => {
@@ -54,7 +101,9 @@ export function browserRunner({ modules, allowHost, budget = { take() {} }, stop
       res.writeHead(200, { "content-type": script ? "text/javascript" : "text/html" });
       res.end(
         script
-          ? readFileSync(fileURLToPath(new URL("./breadth-sdk-page.js", import.meta.url)))
+          ? readFileSync(
+              pageFile ?? fileURLToPath(new URL("./breadth-sdk-page.js", import.meta.url)),
+            )
           : '<!doctype html><script type="module" src="/page.js"></script>',
       );
     });
@@ -84,7 +133,7 @@ export function browserRunner({ modules, allowHost, budget = { take() {} }, stop
           counts.blocked++;
           return route.abort();
         }
-        if (++counts.http > 40) {
+        if (++counts.http > caps.http) {
           exceeded = true;
           return route.abort();
         }
@@ -98,7 +147,7 @@ export function browserRunner({ modules, allowHost, budget = { take() {} }, stop
       });
       // Observed, never routed: the harness keeps Playwright out of the WebSocket path.
       page.on("websocket", (ws) => {
-        let refused = !allowHost(new URL(ws.url()).host) || ++counts.ws > 4;
+        let refused = !allowHost(new URL(ws.url()).host) || ++counts.ws > caps.ws;
         if (!refused) {
           try {
             budget.take("browserWs");
@@ -113,7 +162,7 @@ export function browserRunner({ modules, allowHost, budget = { take() {} }, stop
       });
       await page.goto(`http://${origin}/`);
       await page.waitForFunction(() => typeof window.__breadth === "function");
-      const sdk = createSdk({ page, config, ...credentials });
+      const sdk = createSdk({ page, config, ids, ...credentials });
       await sdk.signIn();
       if (exceeded) throw Error("browser request cap reached");
       await observe({

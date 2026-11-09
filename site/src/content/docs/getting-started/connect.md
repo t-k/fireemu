@@ -19,6 +19,7 @@ npx fireemu exec -- node ./scripts/seed.mjs
 | `FIREBASE_AUTH_EMULATOR_HOST` | Authentication `host:port` |
 | `FIREBASE_STORAGE_EMULATOR_HOST` | Storage `host:port` |
 | `STORAGE_EMULATOR_HOST` | Storage URL (`http://host:port`) for the Cloud Storage client libraries; with Storage App Check `enforced` and `appCheck.storageServerRequests` set to `"capability"` it also carries a per-run Admin capability (see [App Check](../../products/app-check/)) |
+| `FIREBASE_DATABASE_EMULATOR_HOST` | Realtime Database `host:port`, when the Realtime Database runs |
 | `PUBSUB_EMULATOR_HOST` | Pub/Sub `host:port`, when Pub/Sub runs |
 | `CLOUD_EVENTARC_EMULATOR_HOST` | Eventarc URL, when Functions run |
 | `CLOUD_TASKS_EMULATOR_HOST` | Cloud Tasks `host:port`, when Functions run |
@@ -63,6 +64,8 @@ connectFirestoreEmulator(getFirestore(app), '127.0.0.1', 8080);
 connectStorageEmulator(getStorage(app), '127.0.0.1', 9199);
 connectFunctionsEmulator(getFunctions(app), '127.0.0.1', 5001);
 ```
+
+The default ports are listed in [Install and run](../install/#default-ports). The Realtime Database client needs its own `databaseURL`; see [Realtime Database](../../products/realtime-database/#connect). Hosting is plain HTTP and needs no SDK setup ([Firebase Hosting](../../products/hosting/)).
 
 ## Security Rules unit tests
 

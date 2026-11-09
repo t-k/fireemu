@@ -131,9 +131,16 @@ For an existing `fireemu.toml`, add the settings you need to its `auth` section,
 
 ### Authorized domains
 
-Declare `auth.authorizedDomains`, for example `["localhost", "app.test"]`, to set the initial project-wide list in either profile. The list replaces the defaults, so include `localhost` if your tests use it. An empty list authorizes no host under `strict`; an absent or `null` setting keeps the existing defaults (`localhost` and the project's `firebaseapp.com` and `web.app` domains). Validation uses the Admin API's rules for the selected profile, including its conversion of numeric and boolean entries to strings and omission of `null` entries; use strings when writing the list. Fireemu intentionally keeps `localhost` in its defaults for development. The [recorded production sandbox baseline](https://github.com/t-k/fireemu/blob/main/conformance/auth-action-production.json) does not include it; new production projects may also omit it. This default is a Fireemu-only convenience, and declaring the list replaces it. Tenant-scoped strict action links currently check the tenant's default domains rather than this project declaration; support for the parent project's live list is pending.
+Declare `auth.authorizedDomains`, for example `["localhost", "app.test"]`, to set the initial project-wide list in either profile.
 
-An Admin update changes the live list. A session reset restores the declared list, when present, and preserves an Admin-written list when no initial list was declared. Projects created later receive the declaration word for word, independently of the default project's live list; listing a particular project's `firebaseapp.com` or `web.app` domain therefore gives later projects that same domain. Clearing accounts leaves the live list alone. Auth export/import carries accounts without the domain list or its declaration. The `emulator` profile accepts the setting and exposes the list, while continuing to allow action-link continue URLs outside it.
+- The list replaces the defaults, so include `localhost` if your tests use it. An empty list authorizes no host under `strict`; an absent or `null` setting keeps the existing defaults (`localhost` and the project's `firebaseapp.com` and `web.app` domains).
+- Validation uses the Admin API's rules for the selected profile, including its conversion of numeric and boolean entries to strings and omission of `null` entries; use strings when writing the list.
+- Fireemu intentionally keeps `localhost` in its defaults for development. The [recorded production sandbox baseline](https://github.com/t-k/fireemu/blob/main/conformance/auth-action-production.json) does not include it; new production projects may also omit it. This default is a Fireemu-only convenience, and declaring the list replaces it.
+- Tenant-scoped strict action links currently check the tenant's default domains rather than this project declaration; support for the parent project's live list is pending.
+- An Admin update changes the live list. A session reset restores the declared list, when present, and preserves an Admin-written list when no initial list was declared.
+- Projects created later receive the declaration word for word, independently of the default project's live list; listing a particular project's `firebaseapp.com` or `web.app` domain therefore gives later projects that same domain.
+- Clearing accounts leaves the live list alone. Auth export/import carries accounts without the domain list or its declaration.
+- The `emulator` profile accepts the setting and exposes the list, while continuing to allow action-link continue URLs outside it.
 
 ### Project- and tenant-specific settings
 
@@ -141,9 +148,15 @@ Use `auth.passwordPolicyOverrides` to specify different password policies for in
 
 ### OIDC and SAML providers
 
-Declare project OIDC and SAML resources with `auth.providers.oidc` and `auth.providers.saml`, using the Admin v2 resource fields and an ID-only `name` such as `oidc.fixture` or `saml.fixture`. Full resource names are refused. For example, `auth.providers.oidc = [{ name = "oidc.fixture", enabled = true, clientId = "local-client", issuer = "https://issuer.test", responseType = { idToken = true } }]` initializes that provider in both profiles. By default both profiles accept the fixture assertions the official emulator accepts (a JSON or unsigned ID token, a JSON SAML response, the sign-in widget); the `emulator` profile accepts them whether or not the provider is declared, and the `strict` profile refuses an `oidc.*` or `saml.*` provider that is not declared (or is disabled), as production does. With `auth.idpAssertions` set to `"signed"` (or `productionExact`, or `auth.idpSigners` present), strict OIDC sign-in needs matching public issuer keys in `auth.idpSigners`; no key is fetched. Strict SAML then uses the declared provider certificates and retains its existing assertion checks.
+Declare project OIDC and SAML resources with `auth.providers.oidc` and `auth.providers.saml`, using the Admin v2 resource fields and an ID-only `name` such as `oidc.fixture` or `saml.fixture`. Full resource names are refused. For example, `auth.providers.oidc = [{ name = "oidc.fixture", enabled = true, clientId = "local-client", issuer = "https://issuer.test", responseType = { idToken = true } }]` initializes that provider in both profiles.
 
-Each declared array replaces that provider kind; `[]` explicitly starts it empty, while an absent or `null` kind declares no initial resources. Admin operations change live resources until a session reset restores the declared kinds. Later session and routed projects inherit the declaration independently of the default project's live changes. Tenant resources and built-in providers remain separate. Clearing accounts preserves live resources; snapshots and Auth export/import transfer no provider resources or declarations. The `emulator` profile continues to accept its unsigned fixture credentials without requiring configured or enabled provider resources. These declarations require a canonical document with `schemaVersion = 1`; a Firebase deployment `auth.providers` section without that version remains deployment data and installs no provider seeds.
+- **Fixture assertions (the default).** Both profiles accept the fixture assertions the official emulator accepts (a JSON or unsigned ID token, a JSON SAML response, the sign-in widget). The `emulator` profile accepts them whether or not the provider is declared, and the `strict` profile refuses an `oidc.*` or `saml.*` provider that is not declared (or is disabled), as production does.
+- **Signed assertions.** With `auth.idpAssertions` set to `"signed"` (or `productionExact`, or `auth.idpSigners` present), strict OIDC sign-in needs matching public issuer keys in `auth.idpSigners`; no key is fetched. Strict SAML then uses the declared provider certificates and retains its existing assertion checks.
+- **Declared arrays replace.** Each declared array replaces that provider kind; `[]` explicitly starts it empty, while an absent or `null` kind declares no initial resources.
+- **Live changes.** Admin operations change live resources until a session reset restores the declared kinds. Later session and routed projects inherit the declaration independently of the default project's live changes. Tenant resources and built-in providers remain separate.
+- **Reset, snapshots and export.** Clearing accounts preserves live resources; snapshots and Auth export/import transfer no provider resources or declarations.
+- **Emulator profile.** It continues to accept its unsigned fixture credentials without requiring configured or enabled provider resources.
+- **Canonical files only.** These declarations require a canonical document with `schemaVersion = 1`; a Firebase deployment `auth.providers` section without that version remains deployment data and installs no provider seeds.
 
 ## Multi-factor authentication
 
@@ -271,6 +284,8 @@ See the [compatibility documentation](https://github.com/t-k/fireemu/blob/main/d
 
 ## Tokens
 
+Fireemu accepts a few unsigned tokens by default, so tests need no signing keys. Each default has its own setting, and [`productionExact`](../../guides/profiles/#where-fireemu-departs-from-production-on-purpose) switches them all to production's behavior:
+
 | Development default | Setting | With `productionExact` |
 |---|---|---|
 | Unsigned custom tokens from the Admin SDK in emulator mode are accepted | `auth.allowUnsignedCustomTokens` | Refused; configure `auth.customTokenSigners` with your service accounts' public keys |
@@ -338,4 +353,4 @@ This is a local fixed-window simulation, not Firebase's full quota accounting or
 
 ## Outside the supported scope
 
-Sign-in flows that talk to external identity providers, authorization-code exchange and SAML XML signature verification are outside the supported scope. See [Limitations](../../compatibility/limitations/) and the [configuration schema](../../reference/configuration/) for every setting.
+Sign-in flows that talk to external identity providers, hosted authorization-code exchange and live key discovery are outside the supported scope. Signed OIDC and SAML assertions of providers you configure are verified locally; see [OIDC and SAML providers](#oidc-and-saml-providers). See [Limitations](../../compatibility/limitations/) and the [configuration schema](../../reference/configuration/) for every setting.

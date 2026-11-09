@@ -54,11 +54,41 @@ A task enqueued with a `scheduleTime` (or `scheduleDelaySeconds`) waits until th
 
 In both profiles, task dispatch preserves the enqueued JSON body's bytes, including member order and whitespace; non-JSON bodies are still refused. Under `strict`, `X-CloudTasks-QueueName` is the bare queue ID, `X-CloudTasks-TaskETA` is Unix seconds with six decimal places, and `User-Agent` is `Google-Cloud-Tasks`. Task-supplied headers cannot override that user agent or the `X-CloudTasks-*`, `X-Google-*` and `X-AppEngine-*` families. The `emulator` profile retains the official emulator's internal queue name and header overrides.
 
-For a test that only needs current work to settle, send `POST /v1/sessions/default:awaitIdle` with `{ "scope": "runnable" }` (v0.26.0+). Future schedules and retry backoff do not block this scope; due tasks waiting on rate/concurrency and active HTTP requests still do. Omitting the scope waits for all work. See [waiting for runnable work](../../guides/time/#wait-for-runnable-work).
+For a test that only needs current work to settle, send `POST /v1/sessions/default:awaitIdle` with `{ "scope": "runnable" }` (since v0.26.0). Future schedules and retry backoff do not block this scope; due tasks waiting on rate/concurrency and active HTTP requests still do. Omitting the scope waits for all work. See [waiting for runnable work](../../guides/test-worlds/#wait-for-runnable-work).
+
+## Scheduled functions
+
+A schedule runs on Fireemu's virtual clock. Unless you pin a start time with `daemon.clockStart`, that clock follows real time, so occurrences come due as time passes; with a pinned start it stands still, and you move the clock to make occurrences due (or run a scheduled function immediately from the UI). See [Time and scheduled functions](../../guides/time/).
+
+Publishing a message to a first-generation schedule's `firebase-schedule-<function>-<region>` topic under `strict` also invokes the handler, preserving the original Pub/Sub data, attributes, ordering key and message ID. Normal scheduled occurrences and manual runs still invoke it once.
+
+## App Check in callables
+
+`enforceAppCheck` on callable functions works with no configuration: get a token from the debug-token exchange with any UUIDv4 and send it in `X-Firebase-AppCheck`. A call without a token, or with a malformed one, is refused with 401. Replay consumption is unavailable: a valid token on a Node callable with `consumeAppCheckToken: true` is refused with `APP_CHECK_REPLAY_UNSUPPORTED`. Python callables use the [verification and restrictions described for Python](../functions-python/#differences-from-production-and-the-firebase-cli). See [App Check](../app-check/).
+
+Under the `strict` profile the daemon also verifies a callable's `Authorization` bearer before it forwards the call, for Node and Python codebases alike. A request that carries more than one `Authorization` header is refused with 401 before anything is forwarded.
 
 ## Exports that never run
 
 An export Fireemu cannot serve (a function whose options fail to resolve, or an event type it does not recognise) is skipped, and each one is a `warning:` on standard error at start, followed by a summary line. A function that production would deploy and run never runs here, so a test that asserts "no side effect" passes for the wrong reason; read the warnings. `functions.unservedTriggers` still refuses the products Fireemu does not serve.
+
+## Runner output
+
+Function logs and runner standard error are forwarded to the local logs. If the runner exits before its startup handshake, diagnostics also include its exit status, captured standard error and a bounded tail of standard output. Application-written output is not automatically scrubbed of arbitrary secrets; avoid printing credentials or dumping the environment in function code.
+
+## Source reload
+
+Node codebases reload source changes automatically. Already-admitted invocations finish on their selected generation, subject to their invocation deadlines. A retired generation that does not finish is stopped one second after its latest outstanding invocation deadline, except in debugger mode. Edits before the watcher's first scan are detected, and reload snapshots are removed at shutdown. Changing the discovered trigger manifest requires restarting Fireemu; a rejected reload normally keeps the previous generation. A fixed `--inspect-functions <port>` is an exception: the previous runner must stop before the replacement can bind that port. Python codebases still require a restart.
+
+On Windows, reload snapshots are created with a protected DACL before source or local secret files are copied. Fireemu checks the snapshot directory, temporary parent and ancestors for unsafe permissions or reparse points, and refuses the snapshot if it cannot verify them. This requires Windows PowerShell; see [Troubleshooting](../../guides/troubleshooting/).
+
+## Debugging
+
+Run the Functions runner under the Node inspector with `--inspect-functions`:
+
+```sh
+npx fireemu up --inspect-functions 9229
+```
 
 ## Serving a fixed list of functions (`functions.manifest`)
 
@@ -101,36 +131,6 @@ For a codebase that exports `hello` (`onRequest`), `ping` (`onCall`) and `worker
   - an HTTP function the codebase does not export.
 
   With App Check off, these checks do not run; only the Blocking Auth match above applies. No override reaches the callable wrapper that a mislabelled entry points at: the runner is not told to skip token verification (only the App Check protocol does that), and the daemon strips the emulator-internal auth override fields (`x-callable-context-auth`, `x-original-auth`) from every request it forwards, task dispatch included. The wrapper's token check is the Auth emulator's, exactly as for an `onTaskDispatched` function reached by a task; under `strict` a task sent to such a queue, or a request to a callable that the file lists as an `onRequest` function (`"callable": false`), also passes the Bearer check a callable request passes (a preflight and a request with no credential do not), so a Bearer that is not one of the project's users is answered 401 before the code runs. For a task that is a failed dispatch, retried under the queue's retry policy until it gives up; each refusal prints a line naming the function (never the credential), and startup prints a warning naming it too. The 401 HTML body for a callable deployed as an `onRequest` function is provisional: that deployment shape has not been observed in production. The official emulator does not compare a `functions.yaml` with the code either.
-
-## Scheduled functions
-
-Starting with v0.27.0, publishing a message to a first-generation schedule's `firebase-schedule-<function>-<region>` topic under `strict` also invokes the handler, preserving the original Pub/Sub data, attributes, ordering key and message ID. Normal scheduled occurrences and manual runs still invoke it once.
-
-A schedule runs on Fireemu's virtual clock. Unless you pin a start time with `daemon.clockStart`, that clock follows real time, so occurrences come due as time passes; with a pinned start it stands still, and you move the clock to make occurrences due (or run a scheduled function immediately from the UI). See [Time and scheduled functions](../../guides/time/).
-
-## App Check in callables
-
-`enforceAppCheck` on callable functions works with no configuration: get a token from the debug-token exchange with any UUIDv4 and send it in `X-Firebase-AppCheck`. A call without a token, or with a malformed one, is refused with 401. Replay consumption is unavailable: a valid token on a Node callable with `consumeAppCheckToken: true` is refused with `APP_CHECK_REPLAY_UNSUPPORTED`. Python callables use the [verification and restrictions described for Python](../functions-python/#differences-from-production-and-the-firebase-cli). See [App Check](../app-check/).
-
-Under the `strict` profile the daemon also verifies a callable's `Authorization` bearer before it forwards the call, for Node and Python codebases alike. A request that carries more than one `Authorization` header is refused with 401 before anything is forwarded.
-
-## Runner output
-
-Function logs and runner standard error are forwarded to the local logs. If the runner exits before its startup handshake, diagnostics also include its exit status, captured standard error and a bounded tail of standard output. Application-written output is not automatically scrubbed of arbitrary secrets; avoid printing credentials or dumping the environment in function code.
-
-## Source reload
-
-Node codebases reload source changes automatically. Already-admitted invocations finish on their selected generation, subject to their invocation deadlines. A retired generation that does not finish is stopped one second after its latest outstanding invocation deadline, except in debugger mode. Edits before the watcher's first scan are detected, and reload snapshots are removed at shutdown. Changing the discovered trigger manifest requires restarting Fireemu; a rejected reload normally keeps the previous generation. A fixed `--inspect-functions <port>` is an exception: the previous runner must stop before the replacement can bind that port. Python codebases still require a restart.
-
-On Windows, reload snapshots are created with a protected DACL before source or local secret files are copied. Fireemu checks the snapshot directory, temporary parent and ancestors for unsafe permissions or reparse points, and refuses the snapshot if it cannot verify them. This requires Windows PowerShell; see [Troubleshooting](../../guides/troubleshooting/).
-
-## Debugging
-
-Run the Functions runner under the Node inspector with `--inspect-functions`:
-
-```sh
-npx fireemu up --inspect-functions 9229
-```
 
 ## Production verification
 

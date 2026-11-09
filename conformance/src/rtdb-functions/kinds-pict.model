@@ -1,0 +1,10 @@
+Writer: admin, user-rest, user-sdk
+Operation: leaf-set, leaf-update, leaf-remove, ancestor-group-set, ancestor-items-set, multi-path, ancestor-remove, root-multi-path
+Existing: absent, present, same
+Handler: created, updated, deleted, any, group
+Generation: v1, v2
+
+IF [Generation] = "v1" THEN [Handler] IN {"created", "updated", "deleted"};
+IF [Writer] = "user-rest" THEN [Operation] IN {"leaf-set", "leaf-update", "leaf-remove"};
+IF [Writer] = "user-sdk" THEN [Operation] IN {"leaf-set", "multi-path", "ancestor-remove"};
+IF [Existing] = "same" THEN [Operation] IN {"leaf-set", "ancestor-group-set", "ancestor-items-set"};

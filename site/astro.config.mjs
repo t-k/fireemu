@@ -65,6 +65,7 @@ export default defineConfig({
 						{ label: 'Profiles and productionExact', slug: 'guides/profiles' },
 						{ label: 'Security Rules', slug: 'guides/security-rules' },
 						{ label: 'Time and scheduled functions', slug: 'guides/time' },
+						{ label: 'Test worlds', slug: 'guides/test-worlds' },
 						{ label: 'Export and import data', slug: 'guides/data' },
 						{ label: 'Emulator UI', slug: 'guides/ui' },
 						{ label: 'CI and containers', slug: 'guides/ci-and-containers' },

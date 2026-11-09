@@ -4,7 +4,7 @@ description: A local Firebase emulator for tests and CI that follows production 
 template: splash
 hero:
   title: Test against Firebase as it behaves in production
-  tagline: Fireemu is a local emulator for Cloud Firestore, Authentication, Cloud Storage, Cloud Functions, Pub/Sub, and Eventarc. It mirrors production Firebase behavior, so a test that passes locally or in CI gives you confidence in how your app will behave after deployment.
+  tagline: Fireemu is a local emulator for Cloud Firestore, Authentication, Cloud Storage, Cloud Functions, Pub/Sub, Eventarc and the Realtime Database. It mirrors production Firebase behavior, so a test that passes locally or in CI gives you confidence in how your app will behave after deployment.
   actions:
     - text: Get started
       link: getting-started/install/
@@ -34,7 +34,7 @@ npx fireemu init
 npx fireemu exec -- npm test
 ```
 
-`fireemu exec` starts the emulators, sets the Firebase SDK emulator environment variables for your command, and exits with its status. `fireemu up` keeps them running with the Emulator UI at `http://127.0.0.1:4000`.
+`fireemu exec` starts the emulators, sets the Firebase SDK emulator environment variables for your command, and exits with its status. `fireemu up` keeps them running with the Emulator UI at `http://127.0.0.1:4000/ui/`.
 
 ## Why Fireemu
 
@@ -60,11 +60,11 @@ npx fireemu exec -- npm test
 | [Cloud Firestore](products/firestore/) | Supported | Standard and Enterprise editions, composite index validation, Security Rules |
 | [Firebase Authentication](products/auth/) (Identity Platform) | Supported | Sign-in methods, TOTP and SMS MFA, multi-tenancy, OIDC and SAML providers, blocking functions |
 | [Cloud Storage for Firebase](products/storage/) | Supported | Firebase and JSON APIs, Security Rules |
-| [Cloud Functions for Firebase](products/functions/) | Supported | HTTP, callable, event, scheduled, task queue and blocking functions |
+| [Cloud Functions for Firebase](products/functions/) | Supported | HTTP, callable, event, scheduled, task queue and blocking functions, from Node.js codebases and, on macOS and Linux, [Python codebases](products/functions-python/) |
 | [Cloud Pub/Sub, Eventarc](products/pubsub-eventarc/), Cloud Tasks | Supported | Topics, subscriptions, push and pull delivery, custom events, task queues |
 | [Firebase App Check](products/app-check/) | Local testing | Debug tokens |
-| [Firebase Realtime Database](products/realtime-database/) | Supported (recorded scope) | REST, realtime protocol, Security Rules, export and import, Functions triggers |
-| [Firebase Hosting](products/hosting/) | Served, no production parity claim yet | One `firebase.json` site: static files, redirects, rewrites (including to local functions), headers, clean URLs, localization |
+| [Firebase Realtime Database](products/realtime-database/) | Partially supported | REST, realtime protocol, Security Rules, export and import, Functions triggers; verified against production for the recorded cases |
+| [Firebase Hosting](products/hosting/) | Partially supported | Served without a production parity claim yet: one `firebase.json` site: static files, redirects, rewrites (including to local functions), headers, clean URLs, localization |
 | App Hosting, Data Connect | Not yet supported | |
 | Firebase Extensions | Not planned | |
 

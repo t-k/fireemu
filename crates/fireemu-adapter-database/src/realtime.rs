@@ -20,6 +20,7 @@ use fireemu_core_database::server_value::resolve;
 use fireemu_core_database::{
     Bound, BoundKey, ErrorKind, Json, Limit, Node, OrderBy, Path, QueryParams, ServerValueContext,
 };
+use fireemu_core_types::admission::EventAdmissionError;
 
 use crate::access::{auth_from_claims, Access, WriteOp};
 use crate::json_parse::{parse_frame, parse_frame_with_keys, parse_with_keys};
@@ -994,6 +995,9 @@ fn check_registered(
 fn change_failure(err: &crate::changes::ChangeError) -> Failure {
     match err {
         crate::changes::ChangeError::Database(error) => write_failure(error),
+        crate::changes::ChangeError::Admission(EventAdmissionError::PayloadTooLarge(_)) => {
+            invalid(crate::rest::PAYLOAD_TOO_LARGE)
+        }
         crate::changes::ChangeError::Admission(error) => {
             Failure::Status("unavailable", error.message().to_owned())
         }

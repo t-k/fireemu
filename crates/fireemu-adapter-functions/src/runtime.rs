@@ -7635,8 +7635,8 @@ mod task_completion_tests {
         assert!(!fits(0, super::MAX_ACTIVE_EVENT_BYTES + 1));
     }
 
-    /// The exact ids a control publish gets: the session's sequence, counted from the runtime
-    /// counter. Near `u64::MAX` the counter wraps on purpose instead of overflowing.
+    /// The exact ids a control publish gets: the session's sequence, counted from the message
+    /// position, which wraps modulo `BROKER_SPAN` (and not at the end of a `u64`).
     #[tokio::test]
     async fn control_publish_ids_are_the_sessions_sequence() {
         use fireemu_core_types::pubsub_message_id::session_runtime_message_id as expected;
@@ -7719,6 +7719,103 @@ mod task_completion_tests {
             );
             runtime.shutdown().await;
         }
+        base.shutdown().await;
+    }
+
+    /// A refused publish takes no ids and leaves the message position where it was, so the next
+    /// publish that succeeds continues the session's sequence from there.
+    #[tokio::test]
+    async fn a_refused_control_publish_leaves_the_message_position_unchanged() {
+        use fireemu_core_types::pubsub_message_id::{
+            session_runtime_message_id as expected, BROKER_SPAN,
+        };
+        let base = runtime().await;
+        let runtime = runtime_with(&base, &[("a", pubsub_on("jobs"))]);
+        let session = runtime.config.session.value();
+        let message = json!({"data": "YQ=="});
+        let position = |runtime: &FunctionsRuntime| runtime.inner.lock().unwrap().message_position;
+        runtime.inner.lock().unwrap().message_position = BROKER_SPAN - 1;
+        // Capacity: the queue is full.
+        runtime.inner.lock().unwrap().reserved_event_records = super::MAX_ACTIVE_EVENT_RECORDS;
+        assert_eq!(
+            runtime.publish("jobs", std::slice::from_ref(&message)),
+            Err(SourceEventAdmissionError::Capacity)
+        );
+        assert_eq!(position(&runtime), BROKER_SPAN - 1);
+        runtime.inner.lock().unwrap().reserved_event_records = 0;
+        // The next publish continues from the position, across the end of the span.
+        let ids = runtime
+            .publish("jobs", &[message.clone(), message.clone()])
+            .unwrap();
+        assert_eq!(
+            ids,
+            vec![
+                expected(session, BROKER_SPAN),
+                expected(session, BROKER_SPAN + 1)
+            ]
+        );
+        assert_eq!(position(&runtime), 1);
+        // Unavailable: the runtime is shutting down.
+        runtime.begin_shutdown();
+        assert_eq!(
+            runtime.publish("nobody", std::slice::from_ref(&message)),
+            Err(SourceEventAdmissionError::Unavailable)
+        );
+        assert_eq!(position(&runtime), 1);
+        runtime.shutdown().await;
+        base.shutdown().await;
+    }
+
+    /// Deliveries, publishes without subscribers, publishes with the triggers off and a reset,
+    /// mixed across the end of the span, give one unbroken sequence of different ids.
+    #[tokio::test]
+    async fn a_mixed_control_publish_sequence_across_the_span_boundary_is_one_sequence() {
+        use fireemu_core_types::pubsub_message_id::{
+            session_runtime_message_id as expected, BROKER_SPAN,
+        };
+        let base = runtime().await;
+        let runtime = runtime_with(&base, &[("a", pubsub_on("jobs"))]);
+        let session = runtime.config.session.value();
+        let message = json!({"data": "YQ=="});
+        runtime.inner.lock().unwrap().message_position = BROKER_SPAN - 3;
+        let mut ids: Vec<String> = Vec::new();
+        ids.extend(
+            runtime
+                .publish("jobs", std::slice::from_ref(&message))
+                .unwrap(),
+        );
+        ids.extend(
+            runtime
+                .publish("nobody", &[message.clone(), message.clone()])
+                .unwrap(),
+        );
+        runtime.set_background_triggers(false);
+        ids.extend(
+            runtime
+                .publish("jobs", std::slice::from_ref(&message))
+                .unwrap(),
+        );
+        runtime.set_background_triggers(true);
+        // A reset starts a new session of events but not a new sequence of message ids.
+        runtime.reset();
+        ids.extend(
+            runtime
+                .publish("jobs", &[message.clone(), message.clone()])
+                .unwrap(),
+        );
+        ids.extend(
+            runtime
+                .publish("nobody", std::slice::from_ref(&message))
+                .unwrap(),
+        );
+        let wanted: Vec<String> = (1..=ids.len() as u64)
+            .map(|n| expected(session, BROKER_SPAN - 3 + n))
+            .collect();
+        assert_eq!(ids, wanted);
+        let distinct: std::collections::BTreeSet<&String> = ids.iter().collect();
+        assert_eq!(distinct.len(), ids.len());
+        assert_eq!(runtime.inner.lock().unwrap().message_position, 4);
+        runtime.shutdown().await;
         base.shutdown().await;
     }
 

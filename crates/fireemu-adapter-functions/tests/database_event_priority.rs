@@ -237,3 +237,48 @@ proptest! {
         prop_assert_eq!(database_event_data_bytes(&json!({})), 0);
     }
 }
+
+#[test]
+fn a_leaf_with_a_priority_is_compared_by_its_value_and_sent_plain() {
+    let item = |value: Value| json!({"gp": {"items": {"p1": value}}});
+    let leaf = |value: i32, priority: i32| json!({".value": value, ".priority": priority});
+    // a changed value of a leaf that keeps its priority: the whole new value, never a `.value` member
+    let (data, delta) = event_data(
+        PRODUCTION,
+        "updated",
+        ITEM,
+        item(leaf(3, 2)),
+        item(leaf(4, 2)),
+    );
+    assert_eq!((data, delta), (json!(3), json!(4)));
+    // a leaf that becomes an object, and an object that becomes a leaf
+    let object = json!({".priority": 1, "a": 1});
+    let (data, delta) = event_data(
+        PRODUCTION,
+        "updated",
+        ITEM,
+        item(leaf(3, 2)),
+        item(object.clone()),
+    );
+    assert_eq!((data, delta), (json!(3), json!({"a": 1})));
+    let (data, delta) = event_data(PRODUCTION, "updated", ITEM, item(object), item(leaf(5, 9)));
+    assert_eq!((data, delta), (json!({"a": 1}), json!(5)));
+    // a leaf that only changes its priority has no recorded form: its plain value, equal to `data`
+    let (data, delta) = event_data(
+        PRODUCTION,
+        "updated",
+        ITEM,
+        item(leaf(3, 2)),
+        item(leaf(3, 8)),
+    );
+    assert_eq!((data, delta), (json!(3), json!(3)));
+    // a plain value next to an object with children
+    let (data, delta) = event_data(
+        PRODUCTION,
+        "updated",
+        ITEM,
+        item(json!(3)),
+        item(json!({"a": 1, ".priority": 4})),
+    );
+    assert_eq!((data, delta), (json!(3), json!({"a": 1})));
+}

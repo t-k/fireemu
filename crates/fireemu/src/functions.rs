@@ -3734,6 +3734,7 @@ fn database_json_lower_bound(
 /// `ChangeSink::capture_references_within`), and how many were left out because their
 /// snapshot can never fit `frame_limit`: above `scope` only the branch leading to it is
 /// followed, without comparing its unchanged siblings.
+#[cfg(test)]
 fn capture_database_references<'a>(
     patterns: &[fireemu_core_functions::manifest::DatabasePattern],
     before: impl Into<fireemu_adapter_database::changes::ScopeView<'a>>,

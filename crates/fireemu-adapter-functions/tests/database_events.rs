@@ -254,6 +254,16 @@ fn dropped_fanouts(runtime: &FunctionsRuntime) -> u64 {
         .map_or(0, |refusal| refusal.count)
 }
 
+fn refusals_named(runtime: &FunctionsRuntime, reason: &str) -> u64 {
+    runtime
+        .resources(fireemu_core_types::resources::RootBudget::DEFAULT)
+        .unwrap()
+        .refusals
+        .into_iter()
+        .find(|refusal| refusal.reason == reason)
+        .map_or(0, |refusal| refusal.count)
+}
+
 fn user_changes(count: usize) -> DatabaseChangeData {
     use fireemu_adapter_functions::events::DatabaseReferenceChange;
     DatabaseChangeData::References(
@@ -741,4 +751,39 @@ async fn strict_refuses_the_whole_write_when_one_of_its_events_is_over_the_limit
         0
     );
     runtime.shutdown().await;
+}
+
+/// The limit the strict profile enforces is a constant of the record (the upper end of what 2026-11-08
+/// bounded), and only the strict profile has one; a refusal is counted in the resource report by its own
+/// reason, apart from the capacity refusals and the dropped fanouts.
+#[tokio::test]
+async fn the_strict_profile_has_the_recorded_event_limit_and_counts_its_refusals() {
+    use fireemu_adapter_functions::events::DatabaseReferenceChange;
+    use fireemu_adapter_functions::runtime::DATABASE_EVENT_LIMIT_BYTES;
+    assert_eq!(DATABASE_EVENT_LIMIT_BYTES, 2_097_152);
+    let (strict, _) = runtime(false).await;
+    let (emulator, _) = official_runtime().await;
+    assert_eq!(strict.database_event_limit(), Some(2_097_152));
+    assert_eq!(emulator.database_event_limit(), None);
+    let mut change = commit();
+    change.data = DatabaseChangeData::References(vec![DatabaseReferenceChange {
+        reference: "/users/a".to_owned(),
+        before: serde_json::Value::Null,
+        after: json!("x".repeat(DATABASE_EVENT_LIMIT_BYTES)),
+    }]);
+    assert!(matches!(
+        strict.reserve_database_events(&change),
+        Err(SourceEventAdmissionError::PayloadTooLarge)
+    ));
+    assert_eq!(
+        refusals_named(&strict, "admission.payload_too_large"),
+        1,
+        "counted by its own reason"
+    );
+    assert_eq!(refusals_named(&strict, "admission.capacity"), 0);
+    assert_eq!(dropped_fanouts(&strict), 0);
+    drop(emulator.reserve_database_events(&change).unwrap());
+    assert_eq!(refusals_named(&emulator, "admission.payload_too_large"), 0);
+    strict.shutdown().await;
+    emulator.shutdown().await;
 }

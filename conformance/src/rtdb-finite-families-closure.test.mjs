@@ -35,6 +35,8 @@ const SYNTAX_BUILD = {
   sourceCommit: "f1f4949224bb4e2993a3523be6c956470d21e54f",
   binarySha256: "73572d1346b4a5ad65b3c7350916fe9d5cfef7b3e1fabac246c14bbc58bcfaa8",
 };
+// The kinds closure build, and the commit of the replay tools it was judged with (the Rust sources are the same).
+const KINDS_TOOL_COMMIT = "e896ac34e42d305f679f102e2b1815594346cca0";
 const KINDS_BUILD = {
   sourceCommit: "5f866b2a3b88c38f35c998fd5101334649fdebe1",
   binarySha256: "766d3af53a27f495e4463c696d816418595b9584b319e5bd2977456cd1d38cc9",
@@ -663,7 +665,7 @@ test("the trigger kinds recordings of 2026-11-08 and 2026-11-09 bind both fixtur
   for (const { path: toolPath, sha256 } of evidence.tool)
     assert.equal(sha(toolPath), sha256, toolPath);
   assert.equal(evidence.binding.sourceCommit, KINDS_BUILD.sourceCommit);
-  assert.equal(evidence.binding.toolCommit, KINDS_BUILD.sourceCommit);
+  assert.equal(evidence.binding.toolCommit, KINDS_TOOL_COMMIT);
   assert.equal(evidence.binding.binarySha256, KINDS_BUILD.binarySha256);
   assert.equal(evidence.binding.productionRequests, 0);
   const strict = evidence.profiles.strict;
@@ -696,6 +698,7 @@ test("the trigger kinds recordings of 2026-11-08 and 2026-11-09 bind both fixtur
   assert.equal(entry.evidence.fixtureSha256, sha(entry.evidence.fixturePath));
   assert.equal(entry.evidence.secondFixtureSha256, sha(entry.evidence.secondFixturePath));
   assert.equal(entry.evidence.sourceCommit, KINDS_BUILD.sourceCommit);
+  assert.equal(entry.evidence.toolCommit, KINDS_TOOL_COMMIT);
   assert.equal(entry.evidence.binarySha256, KINDS_BUILD.binarySha256);
   assert.equal(entry.evidence.productionRequests, 0);
   for (const file of entry.evidence.tests) assert.ok(exists(file), file);

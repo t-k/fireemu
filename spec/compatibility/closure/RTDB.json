@@ -1895,11 +1895,11 @@
         "secondFixtureSha256": "ab6de0f1ed95b4ed17863865835c4425839b04deff7124faaa6f7cdab9920947",
         "comparisonTool": "conformance/src/rtdb-functions/kinds-compare.mjs",
         "comparisonPath": "spec/compatibility/closure/evidence/RTDB-kinds-comparison.json",
-        "comparisonSha256": "b9e26bf356ec22326cd50201044ae6b5d0570fade5f9f80536111f2c9fccacb2",
+        "comparisonSha256": "b65efb39c849008b68156ed8dee8d8ed07669c8e3b6deda6e160a50a1171fb12",
         "release": "kinds-closure-build",
         "sourceCommit": "5f866b2a3b88c38f35c998fd5101334649fdebe1",
         "binarySha256": "766d3af53a27f495e4463c696d816418595b9584b319e5bd2977456cd1d38cc9",
-        "toolCommit": "5f866b2a3b88c38f35c998fd5101334649fdebe1",
+        "toolCommit": "e896ac34e42d305f679f102e2b1815594346cca0",
         "rows": {
           "strict": {
             "MATCH": 115,
@@ -2179,7 +2179,7 @@
       },
       {
         "path": "spec/compatibility/closure/evidence/RTDB-kinds-comparison.json",
-        "sha256": "b9e26bf356ec22326cd50201044ae6b5d0570fade5f9f80536111f2c9fccacb2",
+        "sha256": "b65efb39c849008b68156ed8dee8d8ed07669c8e3b6deda6e160a50a1171fb12",
         "rows": 119,
         "summary": {
           "strict": {

@@ -61,6 +61,13 @@ pub const RETRY_MAX_BACKOFF_SECONDS: i64 = 600;
 pub const MAX_ACTIVE_EVENT_RECORDS: usize = 4096;
 /// The admission-refusal category of RTDB writes applied without their trigger events.
 pub const DATABASE_FANOUT_DROPPED: &str = "database_fanout_dropped";
+/// The largest Realtime Database trigger event, in bytes of its `data` plus its `delta` as compact JSON,
+/// that the strict profile accepts; a write with a larger event is refused with 400. Production refused a
+/// write whose events held a 2 MiB value and accepted one whose largest event held about 720 KB
+/// (RTDB-TRIGGERS-KINDS-20261108-01, writes k13 and k12), and its documentation names 1 MB per event
+/// without saying how the size is counted; the record fixes the limit only inside that range, so this is
+/// its upper end: no write the record accepted is refused. The emulator profile has no such limit.
+pub const DATABASE_EVENT_LIMIT_BYTES: usize = 2 * 1024 * 1024;
 /// Logical events whose causal phases the runtime keeps for `await-idle` diagnostics
 /// (spec 10.5). Older entries are evicted and counted; eviction is never a completion.
 pub const MAX_CAUSALITY_ENTRIES: usize = 512;
@@ -992,6 +999,9 @@ pub enum SourceEventAdmissionError {
     Unavailable,
     /// A generated logical event was invalid.
     InvalidEvent,
+    /// One event of the write is larger than a function can receive from the source (the strict profile of
+    /// a Realtime Database write); the write is refused, not dropped.
+    PayloadTooLarge,
 }
 
 /// A bounded Eventarc publication refusal.
@@ -2638,6 +2648,14 @@ impl FunctionsRuntime {
         first
     }
 
+    /// The largest trigger event the profile accepts from a Realtime Database write, if it has a limit:
+    /// the strict profile ([`DATABASE_EVENT_LIMIT_BYTES`]); the emulator profile has none.
+    #[must_use]
+    pub fn database_event_limit(&self) -> Option<usize> {
+        (self.config.database_event_shape == crate::events::DatabaseEventShape::Production)
+            .then_some(DATABASE_EVENT_LIMIT_BYTES)
+    }
+
     /// Reserves an RTDB source operation's complete trigger fanout before data publication.
     /// What can never be delivered is settled first, on real serialized sizes, whatever the
     /// queue holds: an event larger than an invocation frame is dropped alone, and a fanout of
@@ -2688,6 +2706,15 @@ impl FunctionsRuntime {
                             crate::events::DatabaseEventShape::Official =>
                                 crate::events::event_id_uuid(&seed),
                         });
+                        // Recorded: the strict profile refuses a write whose event is too large
+                        // for a function, and applies nothing (the emulator profile never does).
+                        if self.config.database_event_shape
+                            == crate::events::DatabaseEventShape::Production
+                            && crate::events::database_event_data_bytes(&payload)
+                                > DATABASE_EVENT_LIMIT_BYTES
+                        {
+                            return Err(SourceEventAdmissionError::PayloadTooLarge);
+                        }
                         // The event is serialized once, only to count its bytes; that length
                         // sizes both its invocation frame and its retained bytes.
                         let mut payload_bytes = FrameByteCount::default();
@@ -2830,6 +2857,7 @@ impl FunctionsRuntime {
             SourceEventAdmissionError::Capacity => "capacity",
             SourceEventAdmissionError::Unavailable => "unavailable",
             SourceEventAdmissionError::InvalidEvent => "invalid_event",
+            SourceEventAdmissionError::PayloadTooLarge => "payload_too_large",
         };
         if let Ok(mut inner) = self.inner.lock() {
             *inner.admission_refusals.entry(category).or_default() += 1;

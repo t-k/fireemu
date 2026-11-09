@@ -133,6 +133,16 @@ async fn runtime(fail_once: bool) -> (Arc<FunctionsRuntime>, Arc<Mutex<VirtualCl
     .await
 }
 
+/// The emulator profile's runtime: events above the strict profile's recorded size limit are delivered,
+/// up to the invocation frame.
+async fn official_runtime() -> (Arc<FunctionsRuntime>, Arc<Mutex<VirtualClock>>) {
+    runtime_shaped(
+        false,
+        fireemu_adapter_functions::events::DatabaseEventShape::Official,
+    )
+    .await
+}
+
 async fn runtime_shaped(
     fail_once: bool,
     shape: fireemu_adapter_functions::events::DatabaseEventShape,
@@ -305,7 +315,7 @@ fn outbox_bytes(runtime: &FunctionsRuntime) -> u64 {
 async fn database_fanout_of_exactly_the_whole_budget_is_reserved() {
     use fireemu_adapter_functions::events::DatabaseReferenceChange;
     use fireemu_adapter_functions::runtime::MAX_ACTIVE_EVENT_BYTES;
-    let (runtime, _) = runtime(false).await;
+    let (runtime, _) = official_runtime().await;
     let mut change = commit();
     change.data = user_changes(MAX_ACTIVE_EVENT_RECORDS);
     let reservation = runtime.reserve_database_events(&change).unwrap();
@@ -377,7 +387,7 @@ async fn an_oversized_fanout_is_dropped_even_while_the_queue_is_busy() {
 #[tokio::test]
 async fn only_the_event_larger_than_a_frame_is_dropped() {
     use fireemu_adapter_functions::events::DatabaseReferenceChange;
-    let (runtime, _) = runtime(false).await;
+    let (runtime, _) = official_runtime().await;
     let mut change = commit();
     change.data = DatabaseChangeData::References(vec![
         DatabaseReferenceChange {
@@ -410,7 +420,7 @@ async fn only_the_event_larger_than_a_frame_is_dropped() {
 #[tokio::test]
 async fn a_refused_write_counts_no_dropped_event() {
     use fireemu_adapter_functions::events::DatabaseReferenceChange;
-    let (runtime, _) = runtime(false).await;
+    let (runtime, _) = official_runtime().await;
     let mut held = commit();
     held.data = user_changes(MAX_ACTIVE_EVENT_RECORDS);
     let holding = runtime.reserve_database_events(&held).unwrap();
@@ -478,7 +488,7 @@ async fn database_fanout_that_fits_an_empty_queue_is_refused_only_while_the_queu
 #[tokio::test]
 async fn database_ipc_capacity_counts_json_escaping_and_the_invoke_envelope() {
     use fireemu_adapter_functions::events::DatabaseReferenceChange;
-    let (runtime, _) = runtime(false).await;
+    let (runtime, _) = official_runtime().await;
     for (character, bytes, accepted) in [
         ('a', 7 * 1024 * 1024, true),
         ('a', 8 * 1024 * 1024, false),
@@ -628,4 +638,107 @@ async fn the_event_id_the_function_receives_follows_the_profile_shape() {
         runtime.shutdown().await;
         dispatch.await.unwrap();
     }
+}
+
+/// RTDB-TRIGGERS-KINDS-20261108-01: a 100 KiB (k11) and a 600 KiB (k12) value were accepted, a 2 MiB value
+/// (k13) was refused with 400 "function payload exceeding the maximum size allowed". The size of an event is
+/// its `data` plus its `delta`; the limit is the largest value the record allows (see the constant).
+#[tokio::test]
+async fn strict_refuses_an_event_over_the_recorded_limit_and_the_emulator_profile_delivers_it() {
+    use fireemu_adapter_functions::events::DatabaseReferenceChange;
+    use fireemu_adapter_functions::runtime::DATABASE_EVENT_LIMIT_BYTES;
+    let created = |after: serde_json::Value| {
+        let mut change = commit();
+        change.data = DatabaseChangeData::References(vec![DatabaseReferenceChange {
+            reference: "/users/a".to_owned(),
+            before: serde_json::Value::Null,
+            after,
+        }]);
+        change
+    };
+    let (strict, _) = runtime(false).await;
+    let (emulator, _) = official_runtime().await;
+    // `data` is null (4 bytes) and the delta the string with its quotes: the size is n + 6
+    for (n, refused) in [
+        (DATABASE_EVENT_LIMIT_BYTES - 7, false),
+        (DATABASE_EVENT_LIMIT_BYTES - 6, false),
+        (DATABASE_EVENT_LIMIT_BYTES - 5, true),
+        (DATABASE_EVENT_LIMIT_BYTES + 100, true),
+    ] {
+        let change = created(json!("x".repeat(n)));
+        let result = strict.reserve_database_events(&change);
+        assert_eq!(
+            matches!(result, Err(SourceEventAdmissionError::PayloadTooLarge)),
+            refused,
+            "n = {n}"
+        );
+        assert_eq!(
+            strict.source_event_accounting().unwrap().reserved_records,
+            usize::from(!refused),
+            "n = {n}"
+        );
+        drop(result);
+        let reservation = emulator
+            .reserve_database_events(&change)
+            .expect("the emulator profile delivers it");
+        assert_eq!(
+            emulator.source_event_accounting().unwrap().reserved_records,
+            1
+        );
+        drop(reservation);
+    }
+    assert_eq!(
+        dropped_fanouts(&strict),
+        0,
+        "a refusal is not a dropped fanout"
+    );
+    assert_eq!(dropped_fanouts(&emulator), 0);
+    // the recorded shapes: 100 KiB and 600 KiB objects fit, the 2 MiB one does not
+    for (blob, refused) in [
+        (100 * 1024, false),
+        (600 * 1024, false),
+        (2 * 1024 * 1024, true),
+    ] {
+        let change =
+            created(json!({"blob": "x".repeat(blob), "run": "d50ee0298ed004bd", "value": 2}));
+        let result = strict.reserve_database_events(&change);
+        assert_eq!(
+            matches!(result, Err(SourceEventAdmissionError::PayloadTooLarge)),
+            refused,
+            "blob {blob}"
+        );
+    }
+    strict.shutdown().await;
+    emulator.shutdown().await;
+}
+
+/// One event over the limit refuses the whole write, whatever else it changes, and the event measured is
+/// the largest of the write (an update's `data` is the node before it).
+#[tokio::test]
+async fn strict_refuses_the_whole_write_when_one_of_its_events_is_over_the_limit() {
+    use fireemu_adapter_functions::events::DatabaseReferenceChange;
+    use fireemu_adapter_functions::runtime::DATABASE_EVENT_LIMIT_BYTES;
+    let (runtime, _) = runtime(false).await;
+    let mut change = commit();
+    change.data = DatabaseChangeData::References(vec![
+        DatabaseReferenceChange {
+            reference: "/users/small".to_owned(),
+            before: serde_json::Value::Null,
+            after: json!(1),
+        },
+        DatabaseReferenceChange {
+            reference: "/users/big".to_owned(),
+            before: json!("a".repeat(DATABASE_EVENT_LIMIT_BYTES)),
+            after: json!("b"),
+        },
+    ]);
+    assert!(matches!(
+        runtime.reserve_database_events(&change),
+        Err(SourceEventAdmissionError::PayloadTooLarge)
+    ));
+    assert_eq!(
+        runtime.source_event_accounting().unwrap().reserved_records,
+        0
+    );
+    runtime.shutdown().await;
 }

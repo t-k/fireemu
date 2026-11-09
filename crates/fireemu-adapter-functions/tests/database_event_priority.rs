@@ -215,3 +215,25 @@ proptest! {
         prop_assert!(!has_priority_key(&data), "{data}");
     }
 }
+
+proptest! {
+    // The size an event counts against the source's limit is the compact JSON of `data` plus `delta`, in
+    // both shapes, whatever the nodes hold.
+    #[test]
+    fn the_event_size_is_the_compact_json_of_data_plus_delta(before in node(), after in node(), strict in any::<bool>()) {
+        use fireemu_adapter_functions::events::database_event_data_bytes;
+        prop_assume!(before != after);
+        let shape = if strict { PRODUCTION } else { OFFICIAL };
+        let function = manifest(2, "written", ITEM);
+        let commit = commit(
+            json!({"gp": {"items": {"p1": before}}}),
+            json!({"gp": {"items": {"p1": after}}}),
+        );
+        for (_, event) in database_event_payloads_for(&commit, &function.functions[0], shape) {
+            let expected = serde_json::to_vec(&event["data"]["data"]).unwrap().len()
+                + serde_json::to_vec(&event["data"]["delta"]).unwrap().len();
+            prop_assert_eq!(database_event_data_bytes(&event), expected);
+        }
+        prop_assert_eq!(database_event_data_bytes(&json!({})), 0);
+    }
+}

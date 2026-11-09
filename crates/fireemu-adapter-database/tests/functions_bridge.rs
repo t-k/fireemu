@@ -11,6 +11,8 @@ use serde_json::{json, Value};
 #[derive(Debug, Default)]
 struct Sink {
     reject: AtomicBool,
+    /// Refuse with the payload-too-large admission error instead of the capacity one.
+    too_large: AtomicBool,
     published: Arc<Mutex<Vec<CommittedChange>>>,
 }
 
@@ -30,6 +32,11 @@ impl ChangeSink for Sink {
         &self,
         change: &CommittedChange,
     ) -> Result<Box<dyn Publication>, EventAdmissionError> {
+        if self.too_large.load(Ordering::SeqCst) {
+            return Err(EventAdmissionError::PayloadTooLarge(
+                "test payload".to_owned(),
+            ));
+        }
         if self.reject.load(Ordering::SeqCst) {
             return Err(EventAdmissionError::Capacity("test capacity".to_owned()));
         }
@@ -146,6 +153,101 @@ fn admission_refusal_preserves_source_and_never_activates_an_event() {
     sink.reject.store(false, Ordering::SeqCst);
     assert_eq!(call(&mut db, "PUT", "/x.json?ns=ns", &[], "1").status, 200);
     assert_eq!(sink.published.lock().unwrap().len(), 1);
+}
+
+/// RTDB-TRIGGERS-KINDS-20261108-01 (k13): production answered a write of 2 MiB whose trigger payload was too
+/// large with 400 and this body (98 bytes), and the data was not written.
+const PAYLOAD_REFUSAL: &str = "{\n  \"error\" : \"This request would cause a function payload exceeding the maximum size allowed.\"\n}\n";
+
+#[test]
+fn a_payload_over_the_trigger_limit_is_refused_with_the_recorded_400_and_applies_nothing() {
+    assert_eq!(PAYLOAD_REFUSAL.len(), 98);
+    let (mut db, sink) = fixture();
+    sink.too_large.store(true, Ordering::SeqCst);
+    for (method, target, body) in [
+        ("PUT", "/x.json?ns=ns", "1"),
+        ("PATCH", "/x.json?ns=ns", r#"{"a":1}"#),
+        ("POST", "/x.json?ns=ns", "1"),
+        ("DELETE", "/x.json?ns=ns", ""),
+    ] {
+        // DELETE of an absent node changes nothing and reserves nothing, so seed it first
+        let response = call(&mut db, method, target, &[], body);
+        if method == "DELETE" {
+            sink.too_large.store(false, Ordering::SeqCst);
+            assert_eq!(call(&mut db, "PUT", target, &[], "1").status, 200);
+            sink.too_large.store(true, Ordering::SeqCst);
+            let response = call(&mut db, method, target, &[], body);
+            assert_eq!(response.status, 400, "{method}");
+            assert_eq!(String::from_utf8(response.body).unwrap(), PAYLOAD_REFUSAL);
+            assert_eq!(
+                serde_json::from_slice::<Value>(&call(&mut db, "GET", target, &[], "").body)
+                    .unwrap(),
+                json!(1),
+                "the refused delete removed nothing"
+            );
+            continue;
+        }
+        assert_eq!(response.status, 400, "{method}");
+        assert_eq!(
+            String::from_utf8(response.body).unwrap(),
+            PAYLOAD_REFUSAL,
+            "{method}"
+        );
+        assert_eq!(
+            serde_json::from_slice::<Value>(&call(&mut db, "GET", target, &[], "").body).unwrap(),
+            Value::Null,
+            "{method} wrote nothing"
+        );
+    }
+    assert_eq!(sink.published.lock().unwrap().len(), 1, "only the seed");
+}
+
+/// The SDK's own write is not recorded: the refusal is answered on the wire with the same text and the data
+/// is not written.
+#[test]
+fn a_realtime_write_over_the_trigger_limit_is_refused_with_the_same_text() {
+    use fireemu_adapter_database::realtime::Opened;
+    let (mut db, sink) = fixture();
+    sink.too_large.store(true, Ordering::SeqCst);
+    let mut session = match db
+        .open_realtime("/.ws?v=5&ns=ns", Some("127.0.0.1:9000"), 1234)
+        .unwrap()
+    {
+        Opened::Session(session, _) => session,
+        other @ Opened::Shutdown(_) => panic!("unexpected connection: {other:?}"),
+    };
+    let received = session.receive(
+        &mut db,
+        r#"{"t":"d","d":{"r":1,"a":"p","b":{"p":"/x","d":1}}}"#,
+        1234,
+    );
+    let reply: Value = serde_json::from_str(&received.replies[0]).unwrap();
+    assert_eq!(reply["d"]["b"]["s"], "invalid_parameters", "{reply}");
+    assert_eq!(
+        reply["d"]["b"]["d"],
+        "This request would cause a function payload exceeding the maximum size allowed."
+    );
+    assert_eq!(
+        serde_json::from_slice::<Value>(&call(&mut db, "GET", "/x.json?ns=ns", &[], "").body)
+            .unwrap(),
+        Value::Null
+    );
+}
+
+#[test]
+fn a_deferred_disconnect_write_over_the_trigger_limit_is_dropped_not_retried() {
+    let (mut db, sink) = fixture();
+    sink.too_large.store(true, Ordering::SeqCst);
+    disconnect_write(&mut db);
+    sink.too_large.store(false, Ordering::SeqCst);
+    db.drain_events();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&call(&mut db, "GET", "/x.json?ns=ns", &[], "").body)
+            .unwrap(),
+        Value::Null,
+        "a payload refusal is final, unlike a full queue"
+    );
+    assert!(sink.published.lock().unwrap().is_empty());
 }
 
 #[test]

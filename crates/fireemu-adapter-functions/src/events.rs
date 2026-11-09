@@ -2194,6 +2194,30 @@ fn database_value_at<'a>(value: &'a Value, path: &str) -> &'a Value {
         })
 }
 
+/// The size an RTDB trigger event counts against the source's limit: the compact JSON bytes of its `data`
+/// (the node before the write) plus its `delta`.
+#[must_use]
+pub fn database_event_data_bytes(payload: &Value) -> usize {
+    #[derive(Default)]
+    struct Count(usize);
+    impl std::io::Write for Count {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0 = self.0.saturating_add(bytes.len());
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut count = Count::default();
+    for member in ["data", "delta"] {
+        if let Some(value) = payload.get("data").and_then(|data| data.get(member)) {
+            let _ = serde_json::to_writer(&mut count, value);
+        }
+    }
+    count.0
+}
+
 /// `node` in the database's export form without its priorities: a leaf with a priority is its plain value
 /// and an object loses its `.priority` member, at every depth.
 fn without_priorities(node: &Value) -> Value {

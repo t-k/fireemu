@@ -354,6 +354,9 @@ pub fn status_from_error(e: &FirestoreError) -> tonic::Status {
                 EventAdmissionError::InvalidEvent(message) => {
                     tonic::Status::internal(message.clone())
                 }
+                EventAdmissionError::PayloadTooLarge(message) => {
+                    tonic::Status::invalid_argument(message.clone())
+                }
             }
         }
         FirestoreError::Unimplemented(m) => tonic::Status::unimplemented(m.clone()),
@@ -392,6 +395,10 @@ mod admission_status_tests {
             (
                 EventAdmissionError::InvalidEvent("invalid".to_owned()),
                 tonic::Code::Internal,
+            ),
+            (
+                EventAdmissionError::PayloadTooLarge("large".to_owned()),
+                tonic::Code::InvalidArgument,
             ),
         ];
         for (error, expected) in cases {

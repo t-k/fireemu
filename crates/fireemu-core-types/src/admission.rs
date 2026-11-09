@@ -11,6 +11,9 @@ pub enum EventAdmissionError {
     Unavailable(String),
     /// The configured trigger produced an event that cannot be represented.
     InvalidEvent(String),
+    /// An event of the write is larger than the source product lets a function receive; the write is refused
+    /// and nothing is applied (Realtime Database: HTTP 400, recorded 2026-11-08).
+    PayloadTooLarge(String),
 }
 
 impl EventAdmissionError {
@@ -18,9 +21,10 @@ impl EventAdmissionError {
     #[must_use]
     pub fn message(&self) -> &str {
         match self {
-            Self::Capacity(message) | Self::Unavailable(message) | Self::InvalidEvent(message) => {
-                message
-            }
+            Self::Capacity(message)
+            | Self::Unavailable(message)
+            | Self::InvalidEvent(message)
+            | Self::PayloadTooLarge(message) => message,
         }
     }
 }

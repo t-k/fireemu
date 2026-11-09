@@ -3520,13 +3520,14 @@ impl fireemu_adapter_database::changes::ChangeSink for FunctionsDatabaseSink {
     > {
         use fireemu_adapter_functions::protocol::MAX_FRAME_BYTES;
         use fireemu_adapter_functions::runtime::MAX_ACTIVE_EVENT_RECORDS;
-        match capture_database_references(
+        match capture_database_references_limited(
             &self.patterns(namespace),
             before,
             after,
             scope,
             MAX_ACTIVE_EVENT_RECORDS,
             MAX_FRAME_BYTES,
+            self.runtime.database_event_limit(),
         ) {
             Ok((references, frame_drops)) => {
                 if references.is_empty() {
@@ -3634,6 +3635,8 @@ struct DatabaseReferenceCapture {
     references: BTreeSet<fireemu_adapter_database::changes::Path>,
     record_limit: usize,
     frame_limit: usize,
+    /// The strict profile's event limit: a reference provably over it refuses the write.
+    refuse_over: Option<usize>,
     frame_drops: usize,
 }
 
@@ -3652,11 +3655,21 @@ impl DatabaseReferenceCapture {
         let objects = |node: Option<fireemu_adapter_database::changes::NodeView<'_>>| {
             matches!(node.map(|node| node.leaf().is_none()), Some(true))
         };
-        let mut bound = database_json_lower_bound(before, self.frame_limit);
+        let limit = self
+            .refuse_over
+            .map_or(self.frame_limit, |over| over.min(self.frame_limit));
+        let mut bound = database_json_lower_bound(before, limit);
         if !(objects(before) && objects(after)) {
-            bound = bound.saturating_add(database_json_lower_bound(after, self.frame_limit));
+            bound = bound.saturating_add(database_json_lower_bound(after, limit));
         }
-        if bound > self.frame_limit {
+        if bound > limit {
+            if self.refuse_over.is_some_and(|over| bound > over) {
+                return Err(
+                    fireemu_core_types::admission::EventAdmissionError::PayloadTooLarge(
+                        "a trigger event is larger than a function can receive".to_owned(),
+                    ),
+                );
+            }
             self.frame_drops += 1;
             return Ok(());
         }
@@ -3732,11 +3745,37 @@ fn capture_database_references<'a>(
     (Vec<fireemu_adapter_database::changes::Path>, usize),
     fireemu_core_types::admission::EventAdmissionError,
 > {
+    capture_database_references_limited(
+        patterns,
+        before,
+        after,
+        scope,
+        record_limit,
+        frame_limit,
+        None,
+    )
+}
+
+/// [`capture_database_references`] that, given `refuse_over`, refuses the write instead of leaving out a
+/// reference whose snapshot is provably larger than that many bytes (the strict profile's event limit).
+fn capture_database_references_limited<'a>(
+    patterns: &[fireemu_core_functions::manifest::DatabasePattern],
+    before: impl Into<fireemu_adapter_database::changes::ScopeView<'a>>,
+    after: &fireemu_adapter_database::changes::Tree,
+    scope: &fireemu_adapter_database::changes::Path,
+    record_limit: usize,
+    frame_limit: usize,
+    refuse_over: Option<usize>,
+) -> Result<
+    (Vec<fireemu_adapter_database::changes::Path>, usize),
+    fireemu_core_types::admission::EventAdmissionError,
+> {
     let before = before.into();
     let mut capture = DatabaseReferenceCapture {
         references: BTreeSet::new(),
         record_limit,
         frame_limit,
+        refuse_over,
         frame_drops: 0,
     };
     for pattern in patterns {
@@ -3857,6 +3896,10 @@ fn functions_event_admission_error(
         ),
         SourceEventAdmissionError::InvalidEvent => EventAdmissionError::InvalidEvent(
             "Functions trigger produced an invalid logical event".into(),
+        ),
+        SourceEventAdmissionError::PayloadTooLarge => EventAdmissionError::PayloadTooLarge(
+            "This request would cause a function payload exceeding the maximum size allowed."
+                .into(),
         ),
     }
 }
@@ -6820,7 +6863,8 @@ impl FunctionsHook for Hook {
         self.0
             .publish_remote_config(body)
             .map_err(|error| match error {
-                SourceEventAdmissionError::InvalidEvent => PublishEventError::Invalid,
+                SourceEventAdmissionError::InvalidEvent
+                | SourceEventAdmissionError::PayloadTooLarge => PublishEventError::Invalid,
                 SourceEventAdmissionError::Capacity => PublishEventError::Capacity,
                 SourceEventAdmissionError::Unavailable => PublishEventError::Unavailable,
             })
@@ -7065,7 +7109,8 @@ impl PubSubBridge {
                 fireemu_adapter_functions::runtime::SourceEventAdmissionError::Unavailable => {
                     fireemu_adapter_pubsub::TopicDeliveryError::Unavailable
                 }
-                fireemu_adapter_functions::runtime::SourceEventAdmissionError::InvalidEvent => {
+                fireemu_adapter_functions::runtime::SourceEventAdmissionError::InvalidEvent
+                | fireemu_adapter_functions::runtime::SourceEventAdmissionError::PayloadTooLarge => {
                     fireemu_adapter_pubsub::TopicDeliveryError::InvalidEvent
                 }
             })
@@ -7170,6 +7215,29 @@ mod tests {
     async fn database_bridge_runtime_with(
         manifest: &serde_json::Value,
     ) -> Arc<fireemu_adapter_functions::runtime::FunctionsRuntime> {
+        database_bridge_runtime_shaped(
+            manifest,
+            fireemu_adapter_functions::events::DatabaseEventShape::default(),
+        )
+        .await
+    }
+
+    /// The emulator profile's runtime: it has no event size limit, so an event larger than a frame (or a
+    /// fanout larger than the budget) is dropped and the write applied.
+    async fn database_bridge_emulator_runtime_with(
+        manifest: &serde_json::Value,
+    ) -> Arc<fireemu_adapter_functions::runtime::FunctionsRuntime> {
+        database_bridge_runtime_shaped(
+            manifest,
+            fireemu_adapter_functions::events::DatabaseEventShape::Official,
+        )
+        .await
+    }
+
+    async fn database_bridge_runtime_shaped(
+        manifest: &serde_json::Value,
+        shape: fireemu_adapter_functions::events::DatabaseEventShape,
+    ) -> Arc<fireemu_adapter_functions::runtime::FunctionsRuntime> {
         use fireemu_adapter_functions::runner::{Runner, SpawnSpec};
         use fireemu_adapter_functions::runtime::{FunctionsConfig, FunctionsRuntime};
         use fireemu_core_types::time::LogicalInstant;
@@ -7196,7 +7264,10 @@ while True:
         let manifest = parse_manifest(manifest).unwrap();
         FunctionsRuntime::new(
             manifest,
-            FunctionsConfig::for_tests(1000, "test".to_owned()),
+            FunctionsConfig {
+                database_event_shape: shape,
+                ..FunctionsConfig::for_tests(1000, "test".to_owned())
+            },
             Arc::new(Mutex::new(VirtualClock::new(
                 LogicalInstant::from_unix_seconds(100),
             ))),
@@ -7347,6 +7418,44 @@ while True:
             super::capture_database_references(&patterns, &before, &after, &root, 2, at_bound - 1)
                 .unwrap(),
             (vec![root.child("users").child("b")], 1)
+        );
+    }
+
+    /// RTDB-TRIGGERS-KINDS-20261108-01 (k13): where the strict profile refuses a write whose event is too
+    /// large, the capture refuses it from the same lower bound that otherwise leaves the reference out for
+    /// not fitting a frame, before anything is exported.
+    #[test]
+    fn database_bridge_capture_refuses_a_snapshot_provably_over_the_event_limit_when_asked() {
+        use fireemu_core_functions::manifest::DatabasePattern;
+        use fireemu_core_types::admission::EventAdmissionError;
+        let root = fireemu_adapter_database::changes::Path::root();
+        let before = database_bridge_tree(&json!({"users":{"a":"before","b":1}}));
+        let after = database_bridge_tree(&json!({"users":{"a":"x".repeat(4 * 1024 * 1024),"b":2}}));
+        let patterns = [DatabasePattern::parse("/users/{uid}").unwrap()];
+        let at_bound = 8 + 4 * 1024 * 1024 + 2;
+        let capture = |refuse_over: Option<usize>| {
+            super::capture_database_references_limited(
+                &patterns,
+                &before,
+                &after,
+                &root,
+                8,
+                usize::MAX,
+                refuse_over,
+            )
+        };
+        assert!(matches!(
+            capture(Some(at_bound - 1)),
+            Err(EventAdmissionError::PayloadTooLarge(_))
+        ));
+        assert_eq!(capture(Some(at_bound)).unwrap().0.len(), 2);
+        assert_eq!(capture(None).unwrap().0.len(), 2);
+        // the frame rule is unchanged when nothing is asked: left out and counted
+        assert_eq!(
+            super::capture_database_references(&patterns, &before, &after, &root, 8, at_bound - 1)
+                .unwrap()
+                .1,
+            1
         );
     }
 
@@ -7644,7 +7753,8 @@ root	unchanged	small	firstGen";
             let mut function = function;
             function["name"] = json!("usersChanged");
             function["trigger"] = json!({"type":"database","eventType":"google.firebase.database.ref.v1.written","instance":"*","ref":"/users/{uid}"});
-            let runtime = database_bridge_runtime_with(&json!({"functions":[function]})).await;
+            let runtime =
+                database_bridge_emulator_runtime_with(&json!({"functions":[function]})).await;
             let delivering = *region != "europeWest1";
             // The value a changed write puts at /users/a/v.
             let leaf = match *fanout {
@@ -7863,11 +7973,89 @@ root	unchanged	small	firstGen";
     /// serialize the whole branch under the database lock before the event was dropped. A cheap
     /// lower bound of the snapshot's JSON size now proves the event can never fit, so the
     /// write stays fast; the event is counted as dropped.
+    /// RTDB-TRIGGERS-KINDS-20261108-01 (k11 to k13), through the real sink and the REST handler: a 100 KiB and a
+    /// 600 KiB value are accepted, a 2 MiB one is refused with 400 and the text production sent, and the
+    /// data is not written; the emulator profile applies all three.
+    #[tokio::test]
+    async fn database_bridge_strict_refuses_a_write_with_an_event_over_the_limit_and_the_emulator_applies_it(
+    ) {
+        use fireemu_adapter_database::rest::{Database, Handled, HttpRequest, RestOptions};
+        use fireemu_adapter_functions::events::DatabaseEventShape;
+        let manifest = json!({"functions":[{"name":"leafCreated","generation":2,"region":"us-central1","trigger":{
+            "type":"database","eventType":"google.firebase.database.ref.v1.created","instance":"*",
+            "ref":"/gl/items/{id}"
+        }}]});
+        for (shape, strict) in [
+            (DatabaseEventShape::Production, true),
+            (DatabaseEventShape::Official, false),
+        ] {
+            let runtime = database_bridge_runtime_shaped(&manifest, shape).await;
+            let mut database = Database::new(RestOptions::default(), 1);
+            database.set_change_sink(super::database_sink(
+                &runtime,
+                "demo-app",
+                "us-central1",
+                "firebaseio.com",
+            ));
+            let mut put = |id: &str, blob: usize| {
+                let Handled::Response { response, .. } = database.handle(
+                    &HttpRequest {
+                        method: "PUT".to_owned(),
+                        target: format!("/gl/items/{id}.json?ns=demo-app-default-rtdb"),
+                        headers: Vec::new(),
+                        body: serde_json::to_vec(&json!({"blob": "x".repeat(blob), "value": 1}))
+                            .unwrap(),
+                    },
+                    100_000,
+                ) else {
+                    panic!("a PUT must not create a stream")
+                };
+                (response.status, String::from_utf8(response.body).unwrap())
+            };
+            assert_eq!(put("l1", 100 * 1024).0, 200);
+            assert_eq!(put("l2", 600 * 1024).0, 200);
+            let (status, body) = put("l3", 2 * 1024 * 1024);
+            if strict {
+                assert_eq!(status, 400);
+                assert_eq!(
+                    body,
+                    "{\n  \"error\" : \"This request would cause a function payload exceeding the maximum size allowed.\"\n}\n"
+                );
+            } else {
+                assert_eq!(status, 200, "{body}");
+            }
+            let tree = database.tree("demo-app-default-rtdb").unwrap();
+            assert_eq!(
+                tree.root()
+                    .and_then(|root| root.child("gl"))
+                    .and_then(|gl| gl.child("items"))
+                    .and_then(|items| items.child("l3"))
+                    .is_some(),
+                !strict,
+                "the refused write is not applied"
+            );
+            // a write no trigger reference can reach is never measured
+            let Handled::Response { response, .. } = database.handle(
+                &HttpRequest {
+                    method: "PUT".to_owned(),
+                    target: "/elsewhere.json?ns=demo-app-default-rtdb".to_owned(),
+                    headers: Vec::new(),
+                    body: serde_json::to_vec(&json!("y".repeat(3 * 1024 * 1024))).unwrap(),
+                },
+                100_001,
+            ) else {
+                panic!("a PUT must not create a stream")
+            };
+            assert_eq!(response.status, 200);
+            runtime.shutdown().await;
+        }
+    }
+
     #[tokio::test]
     async fn database_bridge_drops_a_frame_sized_snapshot_without_exporting_it() {
         use fireemu_adapter_database::rest::{Database, Handled, HttpRequest, RestOptions};
         use fireemu_adapter_functions::runtime::DATABASE_FANOUT_DROPPED;
-        let runtime = database_bridge_runtime_with(
+        let runtime = database_bridge_emulator_runtime_with(
             &json!({"functions":[{"name":"topChanged","generation":2,"region":"us-central1","trigger":{
                 "type":"database","eventType":"google.firebase.database.ref.v1.written","instance":"*","ref":"/{top}"
             }}]}),

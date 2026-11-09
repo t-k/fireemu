@@ -1530,6 +1530,7 @@ fn core_err(e: StorageError) -> (u16, String, &'static str) {
                 EventAdmissionError::Capacity(message) => (429, message, "rateLimitExceeded"),
                 EventAdmissionError::Unavailable(message) => (503, message, "backendError"),
                 EventAdmissionError::InvalidEvent(message) => (500, message, "internalError"),
+                EventAdmissionError::PayloadTooLarge(message) => (400, message, "invalid"),
             }
         }
     }
@@ -7492,6 +7493,12 @@ mod storage_rules_registry_tests {
                 EventAdmissionError::InvalidEvent("invalid".to_owned()),
             )),
             (500, "invalid".to_owned(), "internalError")
+        );
+        assert_eq!(
+            core_err(StorageError::EventAdmission(
+                EventAdmissionError::PayloadTooLarge("large".to_owned()),
+            )),
+            (400, "large".to_owned(), "invalid")
         );
     }
 }

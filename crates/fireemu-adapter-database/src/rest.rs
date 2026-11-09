@@ -24,6 +24,7 @@ use fireemu_core_database::{
     Content, DatabaseError, ErrorKind, Format, Json, Limits, Node, Path, Priority, QueryParams,
     ServerValueContext, Tree,
 };
+use fireemu_core_types::admission::EventAdmissionError;
 
 use crate::access::{Access, LoadedRules, WriteOp};
 pub use crate::access::{Credentials, IdTokenVerifier};
@@ -1603,9 +1604,14 @@ impl Database {
 
     fn retry_disconnects(&mut self, now_millis: i64) {
         while let Some(job) = self.deferred_disconnects.pop_front() {
+            // A payload refusal is final (the write can never be admitted): the job is dropped.
             if matches!(
                 self.apply_disconnect(&job, now_millis),
-                Err(crate::changes::ChangeError::Admission(_))
+                Err(crate::changes::ChangeError::Admission(
+                    EventAdmissionError::Capacity(_)
+                        | EventAdmissionError::Unavailable(_)
+                        | EventAdmissionError::InvalidEvent(_)
+                ))
             ) {
                 // Retry at the server's next flush; never spin on unavailable capacity.
                 self.deferred_disconnects.push_front(job);
@@ -2338,6 +2344,10 @@ fn written(
     json_response(&output_json(node, Format::Export), output, tag)
 }
 
+/// The text of the 400 for a write whose trigger event is too large for a function (recorded 2026-11-08).
+pub(crate) const PAYLOAD_TOO_LARGE: &str =
+    "This request would cause a function payload exceeding the maximum size allowed.";
+
 /// The refusal for a write the tree did not accept: the official emulator's own text for a
 /// priority on an absent node, `otherwise` for anything else.
 fn change_refusal(
@@ -2346,6 +2356,10 @@ fn change_refusal(
 ) -> Refusal {
     match err {
         crate::changes::ChangeError::Database(error) => write_refusal(error, otherwise),
+        // Recorded 2026-11-08: a write whose trigger event is too large is refused with this 400.
+        crate::changes::ChangeError::Admission(EventAdmissionError::PayloadTooLarge(_)) => {
+            Refusal::bad(PAYLOAD_TOO_LARGE)
+        }
         crate::changes::ChangeError::Admission(_) => {
             Refusal::new(503, "Functions event admission unavailable")
         }

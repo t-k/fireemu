@@ -383,6 +383,76 @@ fn form_to_json(text: &str, refresh: bool) -> serde_json::Value {
     serde_json::Value::Object(map)
 }
 
+/// A JSON value read without `serde_json`'s `RawValue` handling. `serde_json::Value` treats an
+/// object whose first key is `$serde_json::private::RawValue` as its embedded JSON text when the
+/// `raw_value` feature is on (it is, in the full binary), so `{"grant_type":{"$serde_json::...":
+/// "\"refresh_token\""}}` would read as the string `refresh_token`. Production reads that key as
+/// an ordinary member, which makes the value an object, so every level here is read as a plain
+/// JSON value: only the value shapes, never the marker.
+struct PlainJson(serde_json::Value);
+
+impl<'de> serde::Deserialize<'de> for PlainJson {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::{MapAccess, SeqAccess, Visitor};
+        use serde_json::Value;
+
+        struct PlainVisitor;
+        impl<'de> Visitor<'de> for PlainVisitor {
+            type Value = PlainJson;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("any valid JSON value")
+            }
+
+            fn visit_bool<E>(self, value: bool) -> Result<PlainJson, E> {
+                Ok(PlainJson(Value::Bool(value)))
+            }
+
+            fn visit_i64<E>(self, value: i64) -> Result<PlainJson, E> {
+                Ok(PlainJson(Value::Number(value.into())))
+            }
+
+            fn visit_u64<E>(self, value: u64) -> Result<PlainJson, E> {
+                Ok(PlainJson(Value::Number(value.into())))
+            }
+
+            fn visit_f64<E>(self, value: f64) -> Result<PlainJson, E> {
+                Ok(PlainJson(
+                    serde_json::Number::from_f64(value).map_or(Value::Null, Value::Number),
+                ))
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<PlainJson, E> {
+                Ok(PlainJson(Value::String(value.to_owned())))
+            }
+
+            fn visit_unit<E>(self) -> Result<PlainJson, E> {
+                Ok(PlainJson(Value::Null))
+            }
+
+            fn visit_seq<A: SeqAccess<'de>>(self, mut items: A) -> Result<PlainJson, A::Error> {
+                let mut values = Vec::new();
+                while let Some(PlainJson(value)) = items.next_element()? {
+                    values.push(value);
+                }
+                Ok(PlainJson(Value::Array(values)))
+            }
+
+            fn visit_map<A: MapAccess<'de>>(self, mut entries: A) -> Result<PlainJson, A::Error> {
+                let mut members = serde_json::Map::new();
+                while let Some((key, PlainJson(value))) =
+                    entries.next_entry::<String, PlainJson>()?
+                {
+                    members.insert(key, value);
+                }
+                Ok(PlainJson(Value::Object(members)))
+            }
+        }
+
+        deserializer.deserialize_any(PlainVisitor)
+    }
+}
+
 fn ordered_refresh_json(bytes: &[u8]) -> Option<serde_json::Value> {
     use serde::de::{Deserializer, MapAccess, Visitor};
 
@@ -396,7 +466,7 @@ fn ordered_refresh_json(bytes: &[u8]) -> Option<serde_json::Value> {
 
         fn visit_map<M: MapAccess<'de>>(self, mut entries: M) -> Result<Self::Value, M::Error> {
             let mut fields = serde_json::Map::new();
-            while let Some((key, value)) = entries.next_entry::<String, serde_json::Value>()? {
+            while let Some((key, PlainJson(value))) = entries.next_entry::<String, PlainJson>()? {
                 let key = match key.as_str() {
                     "grantType" => "grant_type",
                     "refreshToken" => "refresh_token",
@@ -511,6 +581,8 @@ async fn serve_inner(
 #[cfg(test)]
 mod tests {
     use super::{is_remote_peer, refuses_remote_control};
+    use proptest::prelude::*;
+    use serde_json::json;
     use std::net::IpAddr;
 
     #[test]
@@ -527,6 +599,208 @@ mod tests {
         assert_eq!(value["refresh_token"], "last");
         assert_eq!(value["grant_type"], "refresh_token");
         assert!(super::ordered_refresh_json(br"{} trailing").is_none());
+    }
+
+    const RAW_VALUE_MARKER: &str = "$serde_json::private::RawValue";
+
+    #[test]
+    fn a_nested_raw_value_marker_is_an_ordinary_object_member() {
+        // `serde_json::Value` alone would read each of these as the embedded JSON text.
+        for (body, field, expected) in [
+            (
+                r#"{"grant_type":{"$serde_json::private::RawValue":"\"refresh_token\""}}"#,
+                "grant_type",
+                json!({"$serde_json::private::RawValue":"\"refresh_token\""}),
+            ),
+            (
+                r#"{"grantType":[{"$serde_json::private::RawValue":"1"}]}"#,
+                "grant_type",
+                json!([{"$serde_json::private::RawValue":"1"}]),
+            ),
+            (
+                r#"{"refreshToken":{"x":{"$serde_json::private::RawValue":"null"}}}"#,
+                "refresh_token",
+                json!({"x":{"$serde_json::private::RawValue":"null"}}),
+            ),
+        ] {
+            let value = super::ordered_refresh_json(body.as_bytes()).unwrap();
+            assert_eq!(value[field], expected, "{body}");
+            assert!(
+                value[field].is_object() || value[field].is_array(),
+                "{body}"
+            );
+        }
+        // The marker with a payload that is not JSON text is still read as the member it is.
+        let value = super::ordered_refresh_json(
+            br#"{"a":{"$serde_json::private::RawValue":null},"b":{"$serde_json::private::RawValue":"nope"}}"#,
+        )
+        .unwrap();
+        assert_eq!(value["a"], json!({RAW_VALUE_MARKER: null}));
+        assert_eq!(value["b"], json!({RAW_VALUE_MARKER: "nope"}));
+    }
+
+    /// A JSON tree whose objects keep their members in wire order, duplicates included.
+    #[derive(Clone, Debug)]
+    enum Tree {
+        Null,
+        Bool(bool),
+        Int(i64),
+        /// Only in marker-free trees: its rendering is compared with `serde_json::Value`.
+        Float(f64),
+        Text(String),
+        List(Vec<Tree>),
+        Object(Vec<(String, Tree)>),
+    }
+
+    impl Tree {
+        fn render(&self, out: &mut String) {
+            match self {
+                Tree::Null => out.push_str("null"),
+                Tree::Bool(b) => out.push_str(&b.to_string()),
+                Tree::Int(n) => out.push_str(&n.to_string()),
+                Tree::Float(f) => {
+                    let _ = std::fmt::Write::write_fmt(out, format_args!("{f:e}"));
+                }
+                Tree::Text(t) => out.push_str(&serde_json::to_string(t).unwrap()),
+                Tree::List(items) => {
+                    out.push('[');
+                    for (i, item) in items.iter().enumerate() {
+                        if i > 0 {
+                            out.push(',');
+                        }
+                        item.render(out);
+                    }
+                    out.push(']');
+                }
+                Tree::Object(members) => {
+                    out.push('{');
+                    for (i, (key, value)) in members.iter().enumerate() {
+                        if i > 0 {
+                            out.push(',');
+                        }
+                        out.push_str(&serde_json::to_string(key).unwrap());
+                        out.push(':');
+                        value.render(out);
+                    }
+                    out.push('}');
+                }
+            }
+        }
+
+        /// What a reader without any marker handling builds; the later duplicate wins.
+        fn plain(&self) -> serde_json::Value {
+            match self {
+                Tree::Null => serde_json::Value::Null,
+                Tree::Bool(b) => json!(b),
+                Tree::Int(n) => json!(n),
+                Tree::Float(_) => unreachable!("floats are compared with serde_json::Value"),
+                Tree::Text(t) => json!(t),
+                Tree::List(items) => items.iter().map(Tree::plain).collect(),
+                Tree::Object(members) => {
+                    let mut map = serde_json::Map::new();
+                    for (key, value) in members {
+                        map.insert(key.clone(), value.plain());
+                    }
+                    serde_json::Value::Object(map)
+                }
+            }
+        }
+    }
+
+    fn tree(with_floats: bool) -> impl Strategy<Value = Tree> {
+        let float = if with_floats {
+            proptest::num::f64::NORMAL.prop_map(Tree::Float).boxed()
+        } else {
+            Just(Tree::Null).boxed()
+        };
+        let leaf = prop_oneof![
+            Just(Tree::Null),
+            float,
+            any::<bool>().prop_map(Tree::Bool),
+            any::<i64>().prop_map(Tree::Int),
+            any::<u64>().prop_map(|n| Tree::Text(n.to_string())),
+            // Often valid JSON text, so a reader that unwraps the marker would accept it.
+            prop_oneof![
+                "[a-z\"\\\\{}\\[\\]0-9,:]{0,8}",
+                Just("\"refresh_token\"".to_owned()),
+                Just("{\"a\":1}".to_owned()),
+            ]
+            .prop_map(Tree::Text),
+        ];
+        leaf.prop_recursive(4, 32, 4, move |inner| {
+            let key = prop_oneof![
+                Just("a".to_owned()),
+                Just("grant_type".to_owned()),
+                Just("grantType".to_owned()),
+                Just(if with_floats { "b" } else { RAW_VALUE_MARKER }.to_owned()),
+            ];
+            prop_oneof![
+                proptest::collection::vec(inner.clone(), 0..4).prop_map(Tree::List),
+                proptest::collection::vec((key, inner), 0..4).prop_map(Tree::Object),
+            ]
+        })
+    }
+
+    proptest! {
+        /// Without a marker the reader is `serde_json::Value`'s: same numbers, strings, nesting
+        /// and last-duplicate-wins, so the fix changes nothing but the marker.
+        #[test]
+        fn without_a_marker_the_ordered_reader_matches_serde_json_value(
+            members in proptest::collection::vec(
+                (
+                    prop_oneof![
+                        Just("a".to_owned()),
+                        Just("grant_type".to_owned()),
+                        Just("refresh_token".to_owned()),
+                    ],
+                    tree(true),
+                ),
+                0..5,
+            )
+        ) {
+            let mut text = String::new();
+            Tree::Object(members).render(&mut text);
+            let expected: serde_json::Value = serde_json::from_str(&text).unwrap();
+            prop_assert_eq!(super::ordered_refresh_json(text.as_bytes()), Some(expected), "{}", text);
+        }
+
+        /// Only the two top-level spellings are renamed; every nested level, marker included,
+        /// reads as plain JSON.
+        #[test]
+        fn the_ordered_reader_matches_a_plain_reader_at_every_depth(
+            members in proptest::collection::vec(
+                (
+                    prop_oneof![
+                        Just("a".to_owned()),
+                        Just("grant_type".to_owned()),
+                        Just("grantType".to_owned()),
+                        Just("refresh_token".to_owned()),
+                        Just("refreshToken".to_owned()),
+                        Just(RAW_VALUE_MARKER.to_owned()),
+                    ],
+                    tree(false),
+                ),
+                0..5,
+            )
+        ) {
+            let mut text = String::new();
+            Tree::Object(members.clone()).render(&mut text);
+            let mut expected = serde_json::Map::new();
+            for (key, value) in &members {
+                let key = match key.as_str() {
+                    "grantType" => "grant_type",
+                    "refreshToken" => "refresh_token",
+                    other => other,
+                };
+                expected.insert(key.to_owned(), value.plain());
+            }
+            prop_assert_eq!(
+                super::ordered_refresh_json(text.as_bytes()),
+                Some(serde_json::Value::Object(expected)),
+                "{}",
+                text
+            );
+        }
     }
 
     #[test]

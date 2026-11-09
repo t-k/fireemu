@@ -232,7 +232,7 @@
     },
     {
       "id": "R14",
-      "decision": "R13 is extended by one pair of recordings: the RTDB trigger kinds of 2026-11-08 and 2026-11-09 (RTDB/functions-trigger-kinds-user-ladder-and-event-limit, runs RTDB-TRIGGERS-KINDS-20261108-01 and RTDB-TRIGGERS-KINDS-20261109-02): per-kind handlers on a nested pattern, an any-instance handler and an ancestor group handler, a real user's REST and SDK writes, transactions and onDisconnect writes, priorities, and the event size ladder with the strict profile's 1,048,576-byte event limit, for the 25 recorded writes and 115 production deliveries only. The strict profile, replayed on the kinds closure build (an unpublished release-profile build of source commit 5f866b2a3, binary 766d3af5..., --locked, RUSTC_WRAPPER empty, a fresh worktree-local target directory), matches production in all 43 rows of the second recording and in 72 of 76 rows of the first; the four rows of k12 (a 600 KiB create production did not deliver once, and delivered for the same shape in the second recording) are listed in /knownGaps/triggerEventSizeThresholdAndCounting. The exact size threshold, how production counts the size and the form of the refusal over the SDK connection are not verified and are not claimed. The parent status and the scope R12 and R13 state are otherwise unchanged; the other conditions stay bound to the closure builds they name.",
+      "decision": "R13 is extended by one pair of recordings: the RTDB trigger kinds of 2026-11-08 and 2026-11-09 (RTDB/functions-trigger-kinds-user-ladder-and-event-limit, runs RTDB-TRIGGERS-KINDS-20261108-01 and RTDB-TRIGGERS-KINDS-20261109-02): per-kind handlers on a nested pattern, an any-instance handler and an ancestor group handler, a real user's REST and SDK writes, transactions and onDisconnect writes, priorities, and the event size ladder with the strict profile's 1,048,576-byte event limit, for the 25 recorded writes and 115 production deliveries only. The strict profile, replayed on the kinds closure build (an unpublished release-profile build of source commit d44b0407f, binary c67959af..., --locked, RUSTC_WRAPPER empty, a fresh worktree-local target directory), matches production in all 43 rows of the second recording and in 72 of 76 rows of the first; the four rows of k12 (a 600 KiB create production did not deliver once, and delivered for the same shape in the second recording) are listed in /knownGaps/triggerEventSizeThresholdAndCounting. The exact size threshold, how production counts the size and the form of the refusal over the SDK connection are not verified and are not claimed. The parent status and the scope R12 and R13 state are otherwise unchanged; the other conditions stay bound to the closure builds they name.",
       "rationale": "The recordings close the per-kind, ancestor, user-write, transaction, onDisconnect and priority gaps that /knownGaps/triggerDeliveryBeyondBreadth named, and give the strict profile an event size limit that production was shown to enforce; what the ladder cannot show stays a named gap.",
       "amends": "R13",
       "status": "FROZEN",
@@ -1895,11 +1895,11 @@
         "secondFixtureSha256": "ab6de0f1ed95b4ed17863865835c4425839b04deff7124faaa6f7cdab9920947",
         "comparisonTool": "conformance/src/rtdb-functions/kinds-compare.mjs",
         "comparisonPath": "spec/compatibility/closure/evidence/RTDB-kinds-comparison.json",
-        "comparisonSha256": "b65efb39c849008b68156ed8dee8d8ed07669c8e3b6deda6e160a50a1171fb12",
+        "comparisonSha256": "26214624e3cc8057762bd8edef8d219885a871624738d605529405ac51362e9f",
         "release": "kinds-closure-build",
-        "sourceCommit": "5f866b2a3b88c38f35c998fd5101334649fdebe1",
-        "binarySha256": "766d3af53a27f495e4463c696d816418595b9584b319e5bd2977456cd1d38cc9",
-        "toolCommit": "e896ac34e42d305f679f102e2b1815594346cca0",
+        "sourceCommit": "d44b0407f56dc0359bd1d7b0123b145eb5cc61a4",
+        "binarySha256": "c67959af1be939fd489acf50914ef475fc70924ede0390cd73408d1247c04825",
+        "toolCommit": "d44b0407f56dc0359bd1d7b0123b145eb5cc61a4",
         "rows": {
           "strict": {
             "MATCH": 115,
@@ -2179,7 +2179,7 @@
       },
       {
         "path": "spec/compatibility/closure/evidence/RTDB-kinds-comparison.json",
-        "sha256": "b65efb39c849008b68156ed8dee8d8ed07669c8e3b6deda6e160a50a1171fb12",
+        "sha256": "26214624e3cc8057762bd8edef8d219885a871624738d605529405ac51362e9f",
         "rows": 119,
         "summary": {
           "strict": {
@@ -2207,7 +2207,7 @@
             }
           }
         },
-        "binding": "the kinds closure build, an unpublished release-profile build of source commit 5f866b2a3 (binary 766d3af5...), --locked, RUSTC_WRAPPER empty"
+        "binding": "the kinds closure build, an unpublished release-profile build of source commit d44b0407f (binary c67959af...), --locked, RUSTC_WRAPPER empty"
       }
     ],
     "productionRequests": 0,

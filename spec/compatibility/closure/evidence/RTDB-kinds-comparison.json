@@ -74,24 +74,24 @@
     "strict": [
       {
         "path": "conformance/src/rtdb-functions/recorded/local-strict-rtdb-kinds.json",
-        "sha256": "40e3e477a894aa761b91d50018f91ae8fc0db5940ac3b673d2c2d7c4e0cfff0d",
+        "sha256": "f60e08ce9cb53b3cf068c12f3937cdcaa75b5dfd0eba10dce7bb47a8682f8518",
         "frames": 113
       },
       {
         "path": "conformance/src/rtdb-functions/recorded/local-strict-rtdb-kinds-user-ladder.json",
-        "sha256": "2ae101f9006260cc3dc850d52e9b3a697b73587705af13540b3b6d4cbae75bcc",
+        "sha256": "e5aa122b3eb0afb44785d7f6da6d4b5bc6fc1bc6b484013405df0921cba3b86d",
         "frames": 43
       }
     ],
     "emulator": [
       {
         "path": "conformance/src/rtdb-functions/recorded/local-emulator-rtdb-kinds.json",
-        "sha256": "b58d1a8a9d9631446fb578caf2019fa938ca937875dcff66348a5400bbd97fff",
+        "sha256": "b8b0560f73a64a816ef0ce889f9f6c3a9ec91abdb8f8180145524efa82d6382a",
         "frames": 121
       },
       {
         "path": "conformance/src/rtdb-functions/recorded/local-emulator-rtdb-kinds-user-ladder.json",
-        "sha256": "58ffd7539aa7ffb2b3c000d5dbb368e43e4a57d73804d8408682d1bd30d80b50",
+        "sha256": "293d82700fa6e090541305cc7696e6b9cfa3c8910351fb6d50dc4e5706c601b1",
         "frames": 51
       }
     ]
@@ -161,20 +161,20 @@
   "command": "node conformance/src/rtdb-release-replay.mjs local kinds --fireemu <binary> --out <new dir> --export <file> (Node 22, fixtures-kinds installed with npm ci); it runs node conformance/src/rtdb-functions/kinds-replay-run.mjs --fireemu <binary> --profile strict --out <dir> (both producer runs) and judges them with adjudicateKinds; the emulator profile is run with node conformance/src/rtdb-functions/kinds-local-run.mjs --fireemu <binary> --profile emulator --out <new dir> [--steps v2] and masked with kinds-mask.mjs --local",
   "binding": {
     "release": "closure-build",
-    "releaseAsset": "unpublished release-profile build of source commit 5f866b2a3b88c38f35c998fd5101334649fdebe1 (cargo build --release --locked --manifest-path <worktree>/Cargo.toml -p fireemu --bin fireemu, RUSTC_WRAPPER empty, fresh worktree-local target directory)",
-    "releaseAssetSha256": "766d3af53a27f495e4463c696d816418595b9584b319e5bd2977456cd1d38cc9",
-    "sourceCommit": "5f866b2a3b88c38f35c998fd5101334649fdebe1",
+    "releaseAsset": "unpublished release-profile build of source commit d44b0407f56dc0359bd1d7b0123b145eb5cc61a4 (cargo build --release --locked --manifest-path <worktree>/Cargo.toml -p fireemu --bin fireemu, RUSTC_WRAPPER empty, fresh worktree-local target directory)",
+    "releaseAssetSha256": "c67959af1be939fd489acf50914ef475fc70924ede0390cd73408d1247c04825",
+    "sourceCommit": "d44b0407f56dc0359bd1d7b0123b145eb5cc61a4",
     "tagObject": null,
-    "binarySha256": "766d3af53a27f495e4463c696d816418595b9584b319e5bd2977456cd1d38cc9",
+    "binarySha256": "c67959af1be939fd489acf50914ef475fc70924ede0390cd73408d1247c04825",
     "version": "fireemu 0.46.0",
-    "toolCommit": "e896ac34e42d305f679f102e2b1815594346cca0",
+    "toolCommit": "d44b0407f56dc0359bd1d7b0123b145eb5cc61a4",
     "host": "Darwin arm64",
     "productionRequests": 0
   },
   "profiles": {
     "strict": {
       "profile": "strict",
-      "binarySha256": "766d3af53a27f495e4463c696d816418595b9584b319e5bd2977456cd1d38cc9",
+      "binarySha256": "c67959af1be939fd489acf50914ef475fc70924ede0390cd73408d1247c04825",
       "match": true,
       "first": {
         "totals": {
@@ -208,7 +208,7 @@
     },
     "emulator": {
       "profile": "emulator",
-      "binarySha256": "766d3af53a27f495e4463c696d816418595b9584b319e5bd2977456cd1d38cc9",
+      "binarySha256": "c67959af1be939fd489acf50914ef475fc70924ede0390cd73408d1247c04825",
       "match": false,
       "first": {
         "rows": 80,

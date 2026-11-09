@@ -36,10 +36,10 @@ const SYNTAX_BUILD = {
   binarySha256: "73572d1346b4a5ad65b3c7350916fe9d5cfef7b3e1fabac246c14bbc58bcfaa8",
 };
 // The kinds closure build, and the commit of the replay tools it was judged with (the Rust sources are the same).
-const KINDS_TOOL_COMMIT = "e896ac34e42d305f679f102e2b1815594346cca0";
+const KINDS_TOOL_COMMIT = "d44b0407f56dc0359bd1d7b0123b145eb5cc61a4";
 const KINDS_BUILD = {
-  sourceCommit: "5f866b2a3b88c38f35c998fd5101334649fdebe1",
-  binarySha256: "766d3af53a27f495e4463c696d816418595b9584b319e5bd2977456cd1d38cc9",
+  sourceCommit: "d44b0407f56dc0359bd1d7b0123b145eb5cc61a4",
+  binarySha256: "c67959af1be939fd489acf50914ef475fc70924ede0390cd73408d1247c04825",
 };
 const EVENTS_FIXTURE = "tools/sdk-smoke-database/fixtures/production-sdk-events.json";
 

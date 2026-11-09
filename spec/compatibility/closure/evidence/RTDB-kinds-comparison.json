@@ -1,0 +1,279 @@
+{
+  "kind": "rtdb-production-comparison-v1",
+  "parent": "RTDB",
+  "comparison": "trigger-kinds-user-ladder-and-event-limit",
+  "conditions": ["RTDB/functions-trigger-kinds-user-ladder-and-event-limit"],
+  "production": {
+    "project": "fireemu-oracle-query",
+    "instance": "fireemu-q-rtdb2",
+    "region": "us-central1",
+    "functions": [
+      "k9CreatedV2",
+      "k9UpdatedV2",
+      "k9DeletedV2",
+      "k9AnyWrittenV2",
+      "k9GroupWrittenV2",
+      "k9CreatedV1",
+      "k9UpdatedV1",
+      "k9DeletedV1"
+    ],
+    "recordings": [
+      {
+        "recording": "RTDB-TRIGGERS-KINDS-20261108-01",
+        "recordedOn": "2026-11-08",
+        "writes": "k1 to k13 (k13 refused, run stopped)",
+        "frames": 72,
+        "rows": 76,
+        "requests": 247,
+        "sandboxLedger": {
+          "booking": 1283,
+          "close": 1289
+        },
+        "packetSha256": "cc135b8d649ec1da597e3a0317fd1fadfb2ab5ad044c535b9ec8f95889b09734",
+        "scriptSha256": "ce416e9567f7b926935cfaa93a0289709111126a67ded04161ab719ae9b00ab2",
+        "recorderOutcome": "stopped-needs-review"
+      },
+      {
+        "recording": "RTDB-TRIGGERS-KINDS-20261109-02",
+        "recordedOn": "2026-11-09",
+        "writes": "k15 to k26",
+        "frames": 43,
+        "rows": 43,
+        "requests": 279,
+        "sandboxLedger": {
+          "booking": 1296,
+          "close": 1297
+        },
+        "packetSha256": "218146607b14615be5846d931a9bce1a862c09226085c3c985220106b82fe943",
+        "scriptSha256": "447ece53747b3a47d56141d6d818f364b5e77f1420925b895c9b495a92fee7cb",
+        "recorderOutcome": "recorded"
+      }
+    ],
+    "stoppedRunNotUsed": {
+      "envelope": "RTDB-TRIGGERS-KINDS-20261109-01",
+      "sandboxLedger": {
+        "booking": 1294,
+        "close": 1295
+      },
+      "note": "stopped at k19 (the SDK transaction failed: no read in the Rules); its 5 frames come from one early log read and are not compared"
+    }
+  },
+  "fixtures": [
+    {
+      "path": "conformance/src/rtdb-functions/recorded/production-rtdb-kinds.json",
+      "sha256": "bfe1458f6189058814afeb335406a35b5f31ca0a0dec57b7f8cd6309d0298764",
+      "frames": 72
+    },
+    {
+      "path": "conformance/src/rtdb-functions/recorded/production-rtdb-kinds-user-ladder.json",
+      "sha256": "ab6de0f1ed95b4ed17863865835c4425839b04deff7124faaa6f7cdab9920947",
+      "frames": 43
+    }
+  ],
+  "localRecordings": {
+    "strict": [
+      {
+        "path": "conformance/src/rtdb-functions/recorded/local-strict-rtdb-kinds.json",
+        "sha256": "81dea60175c52d517cdcdadb286589ac442ff1f6c9c4b5b1c6ecd8af47b67d8b",
+        "frames": 113
+      },
+      {
+        "path": "conformance/src/rtdb-functions/recorded/local-strict-rtdb-kinds-user-ladder.json",
+        "sha256": "a1a0eb7cc98e7c2c47ae63d964707f03a5225a4b6f9acec77ee099e2cc824d41",
+        "frames": 43
+      }
+    ],
+    "emulator": [
+      {
+        "path": "conformance/src/rtdb-functions/recorded/local-emulator-rtdb-kinds.json",
+        "sha256": "4fa613edad108e35818d42ef1fee377655aa009fdb6b8fd82a564c12bf60696b",
+        "frames": 121
+      },
+      {
+        "path": "conformance/src/rtdb-functions/recorded/local-emulator-rtdb-kinds-user-ladder.json",
+        "sha256": "2244d4bee1ed6b8154f6f8590f9bd4be6c33611c6b4d836403abcfa6928fb672",
+        "frames": 51
+      }
+    ]
+  },
+  "tool": [
+    {
+      "path": "conformance/src/rtdb-functions/kinds-compare.mjs",
+      "sha256": "ea6b301e437ed4b810650008f7bcc34452eb6942bf370fc2dd743043f3c27144"
+    },
+    {
+      "path": "conformance/src/rtdb-functions/kinds-frames.mjs",
+      "sha256": "1d0a271cde32d374c80355f69cb8ffbdbbb4b7147a239a19c45586364e3659f0"
+    },
+    {
+      "path": "conformance/src/rtdb-functions/kinds-judge.mjs",
+      "sha256": "e88111b2e943e3b1a133801f2c3e16754231365fffb1d14b9200fb677d451ba4"
+    },
+    {
+      "path": "conformance/src/rtdb-functions/kinds-sequence.mjs",
+      "sha256": "a043d4922e732f5eb730d03b1dfd33f0b775a81f39009aa8f4c379df21e69e06"
+    },
+    {
+      "path": "conformance/src/rtdb-functions/kinds-scenario.mjs",
+      "sha256": "414328ed184f61cd2df835747443a2825bc8505762d3f24b06ae1d6f7af2a809"
+    },
+    {
+      "path": "conformance/src/rtdb-functions/kinds-mask.mjs",
+      "sha256": "ce60f498be762f6eb28b783ba6e4df0732d7881f1c3aae0d7fc04c4efbae3f9b"
+    },
+    {
+      "path": "conformance/src/rtdb-functions/kinds-local-run.mjs",
+      "sha256": "3ed1e4a9fac170d613df05e0b3a23f3ca9361c77b92997d9294b4297c22c53fa"
+    },
+    {
+      "path": "conformance/src/rtdb-functions/kinds-replay.mjs",
+      "sha256": "5066e1dd005cbb8c666f27bb3fc9d79714fd22ce7e85bd9b25bb84685d084e9d"
+    },
+    {
+      "path": "conformance/src/rtdb-functions/kinds-replay-run.mjs",
+      "sha256": "940608feb502ac387a33e35803077ff47dd5d0040206d9bd8aca06bea7574cce"
+    },
+    {
+      "path": "conformance/src/rtdb-functions/kinds-sdk-page.js",
+      "sha256": "66dfdfbc79faa47f06b8cd356e7316160f30e28d5ac264ba543264f4fa938969"
+    },
+    {
+      "path": "conformance/src/rtdb-functions/breadth-sdk.mjs",
+      "sha256": "3de3d677e013b3f6788c91781230b74673e336ce03bd37384a307d58979dd4cb"
+    },
+    {
+      "path": "conformance/src/rtdb-functions/mask-recording.mjs",
+      "sha256": "4ce861f7f3acdd5e1c2a5731ed89ead479aeba8217e81e06eb6fa17fa233df5c"
+    },
+    {
+      "path": "conformance/src/rtdb-functions/fixtures-kinds/index.js",
+      "sha256": "a123b78fd592a920bedb74e4c8052ea3d4f0b64e88c594db8ea5af187146b09d"
+    },
+    {
+      "path": "conformance/src/rtdb-functions/fixtures-kinds/frames.js",
+      "sha256": "d7774ca01875c6805b9cc132ab158c460b8597fdbfe1d54390ccbb4d29d32bbf"
+    },
+    {
+      "path": "conformance/src/rtdb-functions/fixtures-kinds/package-lock.json",
+      "sha256": "c492afe0fa1e5336d78be6f1fa76e594d357e0412cacfd9d963d2569389b7dea"
+    }
+  ],
+  "command": "node conformance/src/rtdb-release-replay.mjs local kinds --fireemu <binary> --out <new dir> --export <file> (Node 22, fixtures-kinds installed with npm ci); it runs node conformance/src/rtdb-functions/kinds-replay-run.mjs --fireemu <binary> --profile strict --out <dir> (both producer runs) and judges them with adjudicateKinds; the emulator profile is run with node conformance/src/rtdb-functions/kinds-local-run.mjs --fireemu <binary> --profile emulator --out <new dir> [--steps v2] and masked with kinds-mask.mjs --local",
+  "binding": {
+    "release": "closure-build",
+    "releaseAsset": "unpublished release-profile build of source commit 5f866b2a3b88c38f35c998fd5101334649fdebe1 (cargo build --release --locked --manifest-path <worktree>/Cargo.toml -p fireemu --bin fireemu, RUSTC_WRAPPER empty, fresh worktree-local target directory)",
+    "releaseAssetSha256": "766d3af53a27f495e4463c696d816418595b9584b319e5bd2977456cd1d38cc9",
+    "sourceCommit": "5f866b2a3b88c38f35c998fd5101334649fdebe1",
+    "tagObject": null,
+    "binarySha256": "766d3af53a27f495e4463c696d816418595b9584b319e5bd2977456cd1d38cc9",
+    "version": "fireemu 0.46.0",
+    "toolCommit": "5f866b2a3b88c38f35c998fd5101334649fdebe1",
+    "host": "Darwin arm64",
+    "productionRequests": 0
+  },
+  "profiles": {
+    "strict": {
+      "profile": "strict",
+      "binarySha256": "766d3af53a27f495e4463c696d816418595b9584b319e5bd2977456cd1d38cc9",
+      "match": true,
+      "first": {
+        "totals": {
+          "rows": 76,
+          "match": 72,
+          "difference": 4
+        },
+        "differing": ["k12", "k12", "k12", "k12"],
+        "unattributed": {
+          "production": [],
+          "local": []
+        },
+        "writesAnswered": true,
+        "droppedLocalFrames": 1
+      },
+      "second": {
+        "totals": {
+          "rows": 43,
+          "match": 43,
+          "difference": 0
+        },
+        "differing": [],
+        "unattributed": {
+          "production": [],
+          "local": []
+        },
+        "writesAnswered": true,
+        "droppedLocalFrames": 0
+      },
+      "declared": "k12 of the first recording (4 rows, production 0 deliveries, fireemu 1 each): the 600 KiB create was not delivered once in production and was delivered for the same shape in the second recording (k22); a one-off, unexplained, listed in the condition's knownGaps, not a difference of behaviour"
+    },
+    "emulator": {
+      "profile": "emulator",
+      "binarySha256": "766d3af53a27f495e4463c696d816418595b9584b319e5bd2977456cd1d38cc9",
+      "match": false,
+      "first": {
+        "rows": 80,
+        "match": 0,
+        "difference": 80,
+        "unattributed": {
+          "production": 0,
+          "local": 0
+        },
+        "deliveredWhereProductionDeliveredNothing": ["k12", "k13"]
+      },
+      "second": {
+        "rows": 51,
+        "match": 0,
+        "difference": 51,
+        "unattributed": {
+          "production": 0,
+          "local": 0
+        },
+        "deliveredWhereProductionDeliveredNothing": ["k25", "k26"]
+      },
+      "declared": "/knownDifferences/triggerEventShapeEmulatorProfile (the official emulator's event shape), /knownDifferences/triggerPrioritiesAndSizeEmulatorProfile (priorities kept in an event; no event size limit, so the refused rungs k25 and k26 are delivered)"
+    }
+  },
+  "replay": {
+    "resources": {
+      "package-lock.json": "c492afe0fa1e5336d78be6f1fa76e594d357e0412cacfd9d963d2569389b7dea",
+      "index.js": "a123b78fd592a920bedb74e4c8052ea3d4f0b64e88c594db8ea5af187146b09d",
+      "frames.js": "d7774ca01875c6805b9cc132ab158c460b8597fdbfe1d54390ccbb4d29d32bbf",
+      "node_modules/firebase-functions/package.json": "6c83ebb5448b1717adee7af15798b76634207426318380d890160e5516b1a563",
+      "node_modules/firebase-admin/package.json": "a0d177a7c7fba16efc9cd1eb836648a5a6ae9221c77297b3032735cf1c3a5d28"
+    },
+    "sources": {
+      "conformance/src/rtdb-functions/kinds-replay-run.mjs": "940608feb502ac387a33e35803077ff47dd5d0040206d9bd8aca06bea7574cce",
+      "conformance/src/rtdb-functions/kinds-replay.mjs": "5066e1dd005cbb8c666f27bb3fc9d79714fd22ce7e85bd9b25bb84685d084e9d",
+      "conformance/src/rtdb-functions/kinds-local-run.mjs": "3ed1e4a9fac170d613df05e0b3a23f3ca9361c77b92997d9294b4297c22c53fa",
+      "conformance/src/rtdb-functions/kinds-compare.mjs": "ea6b301e437ed4b810650008f7bcc34452eb6942bf370fc2dd743043f3c27144",
+      "conformance/src/rtdb-functions/kinds-mask.mjs": "ce60f498be762f6eb28b783ba6e4df0732d7881f1c3aae0d7fc04c4efbae3f9b",
+      "conformance/src/rtdb-functions/kinds-sequence.mjs": "a043d4922e732f5eb730d03b1dfd33f0b775a81f39009aa8f4c379df21e69e06",
+      "conformance/src/rtdb-functions/kinds-scenario.mjs": "414328ed184f61cd2df835747443a2825bc8505762d3f24b06ae1d6f7af2a809",
+      "conformance/src/rtdb-functions/kinds-frames.mjs": "1d0a271cde32d374c80355f69cb8ffbdbbb4b7147a239a19c45586364e3659f0",
+      "conformance/src/rtdb-functions/kinds-sdk-page.js": "66dfdfbc79faa47f06b8cd356e7316160f30e28d5ac264ba543264f4fa938969",
+      "conformance/src/rtdb-functions/breadth-sdk.mjs": "3de3d677e013b3f6788c91781230b74673e336ce03bd37384a307d58979dd4cb",
+      "conformance/src/rtdb-functions/recorded/production-rtdb-kinds.json": "bfe1458f6189058814afeb335406a35b5f31ca0a0dec57b7f8cd6309d0298764",
+      "conformance/src/rtdb-functions/recorded/production-rtdb-kinds-user-ladder.json": "ab6de0f1ed95b4ed17863865835c4425839b04deff7124faaa6f7cdab9920947",
+      "conformance/src/rtdb-release-replay.mjs": "3026949853e5fc8581d9a19ccc7cf48022c2cc064e8c706b09e06d2cd7422c1f",
+      "tools/sdk-smoke-database/cv11-genuine-auth.mjs": "d11f99646d940533627c643834314dfa18c96f87293f0e98a3c34ca413b4b002",
+      "tools/sdk-smoke-database/adc-preflight.mjs": "461845ad6ca7b09d910f0bdc79cd4224e10fc8d0801f47ac81efb248f6502907",
+      "tools/sdk-smoke-database/rtdb-admin.mjs": "f947b00861c3a2f34b8c6d7c321cd6843043b84c83d6ad89fd12ebc3ce530db8",
+      "tools/sdk-smoke-database/rtdb-residual.mjs": "9701d81e7ff80f2e764da7c4443902ba8f24cf98d03c9f4f8c1fbee3015180d9",
+      "tools/sdk-smoke-database/rtdb-residual-judge.mjs": "c86a91ea4a9efac4c294a042ef33c431ef71b71ead889de22b269c3f6a7b8356",
+      "tools/sdk-smoke-database/cv07-ondisconnect.mjs": "1aba51a0ecb48857b19edd5b2c93ba1322a3cc14ac6766893f071fdd2b5ea04a",
+      "tools/sdk-smoke-database/production-live.mjs": "18bc8d5e0d5b5cceb7e41aac4d76668b03f5e1bc37725f3ea7b31aeb5e126e79",
+      "tools/sdk-smoke-database/jar.mjs": "2648dbdb0fc0312bd92e61a5ac7f6edb6e36737be003b439884cb666a8885801",
+      "tools/sdk-smoke-database/compare.mjs": "6267b3c48476481de57aa5c0723650901a51ce7c768862e22f22d358c972c994",
+      "conformance/src/rtdb-functions/frames.mjs": "ac7b3de0bf0e36c0a4afe589872460fc9b1f3978c29719724d61bbd4aab92d04",
+      "conformance/src/rtdb-functions/mask-recording.mjs": "4ce861f7f3acdd5e1c2a5731ed89ead479aeba8217e81e06eb6fa17fa233df5c",
+      "conformance/src/rtdb-functions/firebase.json": "55d0c9c1cc167b7eec811eb58120a0762577189816e3e5ca8ca9122b449270cf"
+    }
+  },
+  "facts": [
+    "2nd gen per-kind handlers (onValueCreated, onValueUpdated, onValueDeleted, onValueWritten) and 1st gen per-kind handlers receive one event per changed leaf of the kind they declare, on /k9-rtdb/{group}/items/{id}; an any-instance (`*`) handler and an ancestor group handler (/k9-rtdb/{group}) receive the same writes",
+    "a user's REST write (a real email/password user with custom claims) carries authType app_user with authId the uid in 2nd gen, and authType USER with context.auth.token in 1st gen; SDK long-polling set, two transactions and onDisconnect remove and set are delivered as ordinary writes",
+    "strict events carry no priorities: a priority-only write delivers the delta {\".priority\": n}",
+    "the payload ladder: events of 614,4xx, 949,9xx and 1,023,9xx bytes (answers 200) are delivered to the three item handlers and the group handler; 1,049,9xx and 1,499,9xx (and 2 MiB in the first recording) are refused with 400 and the 98-byte text `This request would cause a function payload exceeding the maximum size allowed.`, delivering nothing and writing nothing"
+  ],
+  "scope": "The 25 recorded writes only (k1 to k13 of the first recording, k15 to k26 of the second; k14 was not recorded), 8 handlers on one instance and one region, 115 production deliveries (76 + 43 compared rows). The strict profile matches production in all 43 rows of the second recording and in 72 of 76 of the first (the four rows of k12 are the declared one-off). The event size limit is set to 1,048,576 bytes between the recorded accepted 1,023,9xx and refused 1,049,9xx events: the exact threshold, how production counts the size (node before plus delta, the delta alone, or the whole event) and the form of the refusal over the SDK connection are not verified. Not compared: delivery latency, retry timing and the order of deliveries across handlers."
+}

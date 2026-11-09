@@ -2030,7 +2030,7 @@ test("FS-LISTEN-SDK uses its disclosed exclusion as a verified closure", () => {
   assert.ok(reviewed.excluded.some((entry) => entry.kind === "fs-listen-sdk-comparison-v1"));
 });
 
-test("RTDB retains its fourteen disclosed comparisons", () => {
+test("RTDB retains its sixteen disclosed comparisons", () => {
   const closures = committedClosures();
   const rtdb = closures.find((entry) => entry.closure.parent === "RTDB");
   assert.equal(rtdb.closure.parentStatus, "COMPAT_VERIFIED");
@@ -2057,10 +2057,11 @@ test("RTDB retains its fourteen disclosed comparisons", () => {
       "spec/compatibility/closure/evidence/RTDB-sdk-rules-load-comparison.json",
       "spec/compatibility/closure/evidence/RTDB-sdk-rules-syntax-comparison.json",
       "spec/compatibility/closure/evidence/RTDB-sdk-tokens-comparison.json",
+      "spec/compatibility/closure/evidence/RTDB-kinds-comparison.json",
     ].toSorted(),
   );
   assert.ok(planned.every((entry) => entry.parents.join() === "RTDB" && entry.runIds.length === 1));
-  assert.equal(new Set(planned.map((entry) => entry.runIds[0])).size, 14);
+  assert.equal(new Set(planned.map((entry) => entry.runIds[0])).size, 15);
   assert.deepEqual(
     planned.find((entry) => entry.path.endsWith("RTDB-sdk-small-comparison.json")).runIds,
     ["R28"],
@@ -2210,7 +2211,7 @@ test("R20 declares the real check and evidence-reusing export CLI with scoped de
     assert.deepEqual(command.expectedExitCodes, [0]);
     assert.deepEqual(command.env, {});
   }
-  for (const other of RUNS.filter(({ id }) => id !== "R20" && !/^R(2[2-9]|3[0-5])$/.test(id)))
+  for (const other of RUNS.filter(({ id }) => id !== "R20" && !/^R(2[2-9]|3[0-6])$/.test(id)))
     for (const command of other.commands) assert.equal(command.timeoutMs, undefined, other.id);
   assert.match(strictProductionJob(), /timeout-minutes: 180\n/);
 });

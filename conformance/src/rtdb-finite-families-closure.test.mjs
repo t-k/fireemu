@@ -35,6 +35,10 @@ const SYNTAX_BUILD = {
   sourceCommit: "f1f4949224bb4e2993a3523be6c956470d21e54f",
   binarySha256: "73572d1346b4a5ad65b3c7350916fe9d5cfef7b3e1fabac246c14bbc58bcfaa8",
 };
+const KINDS_BUILD = {
+  sourceCommit: "5f866b2a3b88c38f35c998fd5101334649fdebe1",
+  binarySha256: "766d3af53a27f495e4463c696d816418595b9584b319e5bd2977456cd1d38cc9",
+};
 const EVENTS_FIXTURE = "tools/sdk-smoke-database/fixtures/production-sdk-events.json";
 
 const closure = () => json(CLOSURE);
@@ -616,7 +620,7 @@ test("the trigger gaps the breadth recording closes are gone, and what it leaves
   const beyond = record.knownGaps.triggerDeliveryBeyondBreadth.statement;
   for (const item of [
     "wildcard instance",
-    "per-kind handlers",
+    "service account",
     "latency",
     "retry timing",
     "order of deliveries",
@@ -624,6 +628,113 @@ test("the trigger gaps the breadth recording closes are gone, and what it leaves
     assert.ok(beyond.includes(item), item);
   assert.match(record.knownGaps.credentialsBeyondInvalidRest.statement, /WebSocket auth/);
   assert.match(record.knownGaps.credentialsBeyondInvalidRest.statement, /generated/);
+});
+
+test("the trigger kinds recordings of 2026-11-08 and 2026-11-09 bind both fixtures, the local recordings, the replay and their own closure build (R14)", () => {
+  const path = `${EV}RTDB-kinds-comparison.json`;
+  const evidence = json(path);
+  assert.equal(evidence.kind, "rtdb-production-comparison-v1");
+  assert.equal(evidence.parent, "RTDB");
+  assert.deepEqual(evidence.conditions, [
+    "RTDB/functions-trigger-kinds-user-ladder-and-event-limit",
+  ]);
+  assert.deepEqual(
+    evidence.production.recordings.map((r) => [r.recording, r.frames, r.rows]),
+    [
+      ["RTDB-TRIGGERS-KINDS-20261108-01", 72, 76],
+      ["RTDB-TRIGGERS-KINDS-20261109-02", 43, 43],
+    ],
+  );
+  assert.deepEqual(
+    evidence.production.recordings.map((r) => r.sandboxLedger),
+    [
+      { booking: 1283, close: 1289 },
+      { booking: 1296, close: 1297 },
+    ],
+  );
+  for (const file of [
+    ...evidence.fixtures,
+    ...evidence.localRecordings.strict,
+    ...evidence.localRecordings.emulator,
+  ]) {
+    assert.equal(file.sha256, sha(file.path), file.path);
+    assert.equal(json(file.path).frames.length, file.frames, file.path);
+  }
+  for (const { path: toolPath, sha256 } of evidence.tool)
+    assert.equal(sha(toolPath), sha256, toolPath);
+  assert.equal(evidence.binding.sourceCommit, KINDS_BUILD.sourceCommit);
+  assert.equal(evidence.binding.toolCommit, KINDS_BUILD.sourceCommit);
+  assert.equal(evidence.binding.binarySha256, KINDS_BUILD.binarySha256);
+  assert.equal(evidence.binding.productionRequests, 0);
+  const strict = evidence.profiles.strict;
+  assert.equal(strict.binarySha256, KINDS_BUILD.binarySha256);
+  assert.equal(strict.match, true);
+  assert.deepEqual(strict.first.totals, { rows: 76, match: 72, difference: 4 });
+  assert.deepEqual(strict.first.differing, ["k12", "k12", "k12", "k12"]);
+  assert.deepEqual(strict.second.totals, { rows: 43, match: 43, difference: 0 });
+  for (const run of [strict.first, strict.second]) {
+    assert.deepEqual(run.unattributed, { production: [], local: [] });
+    assert.equal(run.writesAnswered, true);
+  }
+  const emulator = evidence.profiles.emulator;
+  assert.equal(emulator.match, false);
+  assert.deepEqual(emulator.first.deliveredWhereProductionDeliveredNothing, ["k12", "k13"]);
+  assert.deepEqual(emulator.second.deliveredWhereProductionDeliveredNothing, ["k25", "k26"]);
+  // the replay's own bindings: the export of the kinds campaign names the sources and SDK versions it ran on
+  assert.ok(
+    Object.hasOwn(evidence.replay.sources, "conformance/src/rtdb-functions/kinds-replay.mjs"),
+  );
+  assert.ok(
+    Object.hasOwn(evidence.replay.resources, "node_modules/firebase-functions/package.json"),
+  );
+  const entry = condition("RTDB/functions-trigger-kinds-user-ladder-and-event-limit");
+  assert.ok(entry);
+  assert.equal(entry.status, "VERIFIED");
+  assert.equal(entry.source, "spec/compatibility/contract.json#database");
+  assert.equal(entry.evidence.comparisonPath, path);
+  assert.equal(entry.evidence.comparisonSha256, sha(path));
+  assert.equal(entry.evidence.fixtureSha256, sha(entry.evidence.fixturePath));
+  assert.equal(entry.evidence.secondFixtureSha256, sha(entry.evidence.secondFixturePath));
+  assert.equal(entry.evidence.sourceCommit, KINDS_BUILD.sourceCommit);
+  assert.equal(entry.evidence.binarySha256, KINDS_BUILD.binarySha256);
+  assert.equal(entry.evidence.productionRequests, 0);
+  for (const file of entry.evidence.tests) assert.ok(exists(file), file);
+  const regression = closure().integratedRegression.comparisons.find((c) => c.path === path);
+  assert.ok(regression, path);
+  assert.equal(regression.sha256, sha(path));
+  const r14 = closure().scopeDecisions.find((s) => s.id === "R14");
+  assert.equal(r14.amends, "R13");
+  assert.ok(r14.decision.includes("RTDB/functions-trigger-kinds-user-ladder-and-event-limit"));
+  assert.doesNotMatch(r14.decisionRef, /docs\.local/);
+  assert.equal(closure().parentStatus, "COMPAT_VERIFIED");
+});
+
+test("what the trigger kinds recordings do not show stays a named gap and a declared difference", () => {
+  const record = closure();
+  const gap = record.knownGaps.triggerEventSizeThresholdAndCounting.statement;
+  for (const item of [
+    "1,048,576",
+    "exact threshold",
+    "counts the node before plus the delta",
+    "invalid_parameters",
+    "produces no event",
+    "k12",
+  ])
+    assert.ok(gap.includes(item), item);
+  const difference = record.knownDifferences.triggerPrioritiesAndSizeEmulatorProfile;
+  assert.equal(difference.evidence, `${EV}RTDB-kinds-comparison.json`);
+  assert.match(difference.statement, /priorities/);
+  assert.match(difference.statement, /no event size limit/);
+  const keys = record.closureBasis.notClaimedItems.map((item) => item.key);
+  assert.ok(keys.includes("notClaimed_trigger_event_size_threshold"));
+  // the per-kind, ancestor, user, transaction, onDisconnect and priority cases are no longer gaps
+  const beyond = record.knownGaps.triggerDeliveryBeyondBreadth.statement;
+  for (const closed of [
+    "per-kind handlers",
+    "SDK writes over long polling",
+    "onDisconnect, by a transaction",
+  ])
+    assert.ok(!beyond.includes(closed), closed);
 });
 
 test("scope decision R11 amends R2 for the recorded cases and keeps the parent open", () => {

@@ -69,7 +69,7 @@ test("the planned writes of the two producer runs are pinned", () => {
 });
 
 test("the strict recordings are the closure replay: 43 of 43 rows and 72 of 76 with only k12 apart", () => {
-  const result = adjudicateKinds(stage());
+  const result = run(stage());
   assert.equal(result.match, true, JSON.stringify(result));
   assert.deepEqual(result.result.first.totals, { rows: 76, match: 72, difference: 4 });
   assert.deepEqual(result.result.first.differing, ["k12", "k12", "k12", "k12"]);

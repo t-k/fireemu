@@ -8,6 +8,10 @@ The strict profile follows the recorded projections. Emulator differences includ
 
 The owner answered the three independent `scopeDecisions` on 2026-11-06: limit the eventual claim to recorded strict cases, declare the individually compared request/OIDC differences while retaining unverified behavior as unresolved, and keep Auth blocking OPEN. The answers do not promote the parent, waive any family prerequisite or authorize production requests. Closure review remains pending.
 
+## Scope of the parent
+
+The parent claims only the six recorded event families listed in `conditions`. Auth blocking (OPEN) and the deployment comparison (NOT_COMPARED) are listed in `excludedFromParent` with their reasons and the owner line (ledger 2357); they are handled separately and are not part of the claim. The declared emulator differences stay DECLARED_UNVERIFIED, outside the strict claim. A leaf can be VERIFIED only through a `reviewRef` that names the digest of an approved review report recorded in `closureReview`; `compare.mjs` refuses any other VERIFIED leaf. `spec/compatibility/closure/evidence/FUNCTIONS-PYTHON-comparison.json` holds the six pass-against-pass rows (five MATCH and the Tasks MATCH_LAYOUT); the closure test recomputes it from the committed fixtures, and the release job lists its kind as an excluded kind.
+
 Run the two `conformance/src/functions-python-*.test.mjs` files with `node --test`, and run `tools/runner-python/tests/test_closure_replay.py` with the Python environment installed from the hash-pinned Functions smoke requirements. Existing conformance and Python CI test discovery includes these files. The JavaScript tests check inventory, fixture integrity and exact difference classification; the Python tests produce actual current-runner outputs. Neither test suite sends a production request.
 
 ## Offline recordings

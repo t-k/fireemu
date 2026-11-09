@@ -185,6 +185,7 @@ function differenceTexts(record) {
 	const texts = [];
 	for (const entry of record.approvedKnownDifferences ?? []) texts.push(entry.reason);
 	for (const entry of Object.values(record.knownDifferences ?? {})) texts.push(entry.statement);
+	for (const entry of record.declaredDifferences ?? []) texts.push(entry.reason);
 	return texts.filter((text) => typeof text === 'string' && text.length > 0);
 }
 

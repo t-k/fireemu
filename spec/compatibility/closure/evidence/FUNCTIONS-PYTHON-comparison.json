@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "kind": "functions-python-pass-comparison-v1",
+  "parent": "FUNCTIONS-PYTHON",
+  "rows": [
+    {
+      "row": "functions-python/firestore-events#pass-comparison",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-python/pubsub-events#pass-comparison",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-python/storage-events#pass-comparison",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-python/eventarc-custom-events#pass-comparison",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-python/scheduler-events#pass-comparison",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-python/tasks-events#pass-comparison",
+      "status": "MATCH_LAYOUT"
+    }
+  ]
+}

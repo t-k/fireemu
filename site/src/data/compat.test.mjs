@@ -185,7 +185,7 @@ test('the home page counts the areas whose parent is verified against production
 	);
 });
 
-test('the Python parent remains in progress with recorded, open and un-compared conditions', async () => {
+test('the Python parent remains in progress with recorded conditions and its declared differences listed', async () => {
 	const data = await loadRepositoryData();
 	const python = data.closures.find((record) => record.parent === 'FUNCTIONS-PYTHON');
 	assert.ok(python);
@@ -194,10 +194,11 @@ test('the Python parent remains in progress with recorded, open and un-compared 
 	assert.equal(row.title, 'Python functions');
 	assert.equal(row.status, 'In progress');
 	assert.equal(row.verified, 0);
-	assert.equal(row.total, 8);
+	assert.equal(row.total, 6, 'Auth blocking and deployment are excluded from the parent');
 	assert.equal(verifiedAreaCount([python]), 0);
-	assert.deepEqual(new Set(row.conditions.map((condition) => condition.status)), new Set(['PRODUCTION_RECORDED', 'OPEN', 'NOT_COMPARED']));
-	assert.deepEqual(row.knownDifferences, []);
+	assert.deepEqual(new Set(row.conditions.map((condition) => condition.status)), new Set(['PRODUCTION_RECORDED']));
+	assert.deepEqual(row.knownDifferences, python.declaredDifferences.map((entry) => entry.reason));
+	assert.equal(row.knownDifferences.length, 4);
 });
 
 for (const status of ['PRODUCTION_RECORDED', 'OPEN', 'NOT_COMPARED']) {

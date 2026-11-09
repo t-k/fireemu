@@ -455,6 +455,7 @@ test("the excluded kinds are exactly the ones the release discloses", () => {
     "fs-listen-sdk-comparison-v1",
     "fs-text-search-replay-comparison-v1",
     "functions-events-comparison",
+    "functions-python-pass-comparison-v1",
     "pubsub-production-comparison-v1",
     "scheduled-functions-calendar-comparison-v1",
     "scheduled-functions-comparison-v1",
@@ -2580,8 +2581,35 @@ test("the exact EVENTARC gzip canonical preserves decoded bytes and plain artifa
   }
 });
 
+test("the Python parent names its pass comparison as an excluded kind before and after promotion", () => {
+  const python = () =>
+    committedClosures().find(({ closure }) => closure.parent === "FUNCTIONS-PYTHON");
+  const path = python().closure.integratedRegression.comparisons[0].path;
+  const kind = readJson(path).kind;
+  assert.equal(
+    RUNS.some((run) => run.kind === kind),
+    false,
+  );
+  for (const status of ["IMPLEMENTING", "COMPAT_VERIFIED"]) {
+    const closures = committedClosures();
+    closures.find(({ closure }) => closure.parent === "FUNCTIONS-PYTHON").closure.parentStatus =
+      status;
+    const plan = planComparisons(closures, readJson);
+    assert.deepEqual(plan.errors, [], status);
+    const excluded = plan.excluded.find((item) => item.path === path);
+    assert.deepEqual(excluded?.parents, ["FUNCTIONS-PYTHON"]);
+    assert.equal(excluded.kind, kind);
+  }
+  // The committed file is read as it is: an unknown kind or a missing comparison fails closed.
+  const changed = committedClosures();
+  const read = (p) => (p === path ? { kind: "functions-python-other-v1" } : readJson(p));
+  assert.ok(
+    planComparisons(changed, read).errors.some((e) => e.includes("functions-python-other-v1")),
+  );
+});
+
 test("reopened parents require comparisons while unrelated pending parents stay excluded", () => {
-  for (const parent of ["RTDB", "FS-PIPELINE"]) {
+  for (const parent of ["RTDB", "FS-PIPELINE", "FUNCTIONS-PYTHON"]) {
     const closures = committedClosures();
     const entry = closures.find(({ closure }) => closure.parent === parent);
     entry.closure.parentStatus = "IMPLEMENTING";

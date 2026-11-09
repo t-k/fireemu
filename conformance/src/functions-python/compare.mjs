@@ -61,11 +61,52 @@ const recordingKinds = [
 ];
 export const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
-/** A candidate inventory, never a promotion operation or an acceptance of differences. */
+const COMPARISON_PATH = "spec/compatibility/closure/evidence/FUNCTIONS-PYTHON-comparison.json";
+const isDigest = (v) => typeof v === "string" && /^[0-9a-f]{64}$/.test(v);
+const isCommit = (v) => typeof v === "string" && /^[0-9a-f]{40}$/.test(v);
+const isText = (v) => typeof v === "string" && v.trim().length > 0;
+
+/** A review that can back a promotion: approved, with every report pinned by digest and commit. */
+function assertApprovedReview(review) {
+  assert.equal(review.decision, "APPROVED", "a promotion needs an approved review");
+  for (const key of ["decidedOn", "decider", "decisionRef"]) assert.ok(isText(review[key]), key);
+  assert.ok(isCommit(review.reviewedCommit), "reviewed commit");
+  assert.ok(Array.isArray(review.reviews) && review.reviews.length > 0, "recorded reviews");
+  for (const r of review.reviews) {
+    assert.ok(isText(r.reviewer), "reviewer");
+    assert.ok(
+      isText(r.reportPath) && !r.reportPath.startsWith("/") && !r.reportPath.includes(".."),
+      "review report path",
+    );
+    assert.ok(isDigest(r.reportSha256), "review report digest");
+    assert.ok(isCommit(r.reviewedCommit), "review commit");
+    assert.equal(r.outcome, "APPROVED", "review outcome");
+  }
+}
+
+/**
+ * The recorded inventory of the parent. Without an approved review the parent stays
+ * IMPLEMENTING and no leaf is VERIFIED; a leaf is VERIFIED only through a review reference
+ * naming the digest of an approved review report recorded in the closure (fail closed).
+ */
 export function validate(record, corpus, fixtureBytes, secondBytes, tasksBytes) {
   assert.equal(record.parent, "FUNCTIONS-PYTHON");
-  assert.equal(record.parentStatus, "IMPLEMENTING", "parent must remain pending");
-  assert.equal(record.closureReview.decision, "PENDING");
+  const promoted = record.parentStatus === "COMPAT_VERIFIED";
+  assert.ok(promoted || record.parentStatus === "IMPLEMENTING", "parent status");
+  if (promoted) assertApprovedReview(record.closureReview);
+  else assert.equal(record.closureReview.decision, "PENDING", "no review, no promotion");
+  const reviewRefs = new Set(
+    promoted ? record.closureReview.reviews.map((r) => r.reportSha256) : [],
+  );
+  const entry = record.integratedRegression?.comparisons?.[0];
+  assert.ok(
+    record.integratedRegression?.comparisons?.length === 1 &&
+      entry.path === COMPARISON_PATH &&
+      isDigest(entry.sha256) &&
+      record.integratedRegression.productionRequests === 0,
+    "integrated regression",
+  );
+  const all = [...record.conditions, ...record.excludedFromParent];
   assert.deepEqual(
     record.scopeDecisions.map((d) => d.id),
     ["PY1", "PY2", "PY3"],
@@ -80,13 +121,14 @@ export function validate(record, corpus, fixtureBytes, secondBytes, tasksBytes) 
     assert.ok(d.question && d.recommendation, d.id);
   }
   assert.deepEqual(
-    record.conditions.map((c) => c.conditionId),
+    all.map((c) => c.conditionId),
     families.map((f) => `FUNCTIONS-PYTHON/${f}`),
     "exact condition inventory",
   );
+  assert.equal(record.conditions.length, 6, "the parent covers the six event families");
   assert.deepEqual(
     corpus.conditions.map((c) => c.id),
-    record.conditions.map((c) => c.conditionId),
+    all.map((c) => c.conditionId),
   );
   assert.equal(corpus.fixtureSha256, digest(fixtureBytes), "fixture digest");
   assert.deepEqual(record.recordings, corpus.recordings, "recording provenance inventory");
@@ -162,7 +204,7 @@ export function validate(record, corpus, fixtureBytes, secondBytes, tasksBytes) 
     else assert.equal(record.conditions[i].passComparison, undefined, "pass comparison");
     familyPasses.push(aliases.length);
   }
-  for (const condition of record.conditions.slice(6))
+  for (const condition of record.excludedFromParent)
     assert.equal(condition.passComparison, undefined, "pass comparison");
   assert.deepEqual(
     record.recordingPolicy,
@@ -176,12 +218,24 @@ export function validate(record, corpus, fixtureBytes, secondBytes, tasksBytes) 
     "fixture condition inventory",
   );
   for (const [i, row] of fixture.observations.entries()) {
-    const condition = record.conditions[i];
-    assert.equal(
-      condition.status,
-      i === 6 ? "OPEN" : i === 7 ? "NOT_COMPARED" : "PRODUCTION_RECORDED",
-      "no verified condition",
-    );
+    const condition = all[i];
+    if (i < 6) {
+      assert.equal(
+        condition.status,
+        promoted ? "VERIFIED" : "PRODUCTION_RECORDED",
+        "a leaf is VERIFIED only with the approved parent review",
+      );
+      if (promoted) {
+        assert.ok(reviewRefs.has(condition.reviewRef), "verified leaf needs a review reference");
+        assert.equal(condition.observedPasses, 2, "verified leaf has two passes");
+        assert.ok(["MATCH", "MATCH_LAYOUT"].includes(condition.passComparison), "pass comparison");
+      } else assert.equal(condition.reviewRef, undefined, "no review reference without a review");
+    } else {
+      assert.equal(condition.status, i === 6 ? "OPEN" : "NOT_COMPARED", "excluded condition");
+      assert.ok(isText(condition.reason) && condition.reason.length > 40, "exclusion reason");
+      assert.match(condition.authority ?? "", /owner ledger 2357/, "exclusion authority");
+      assert.equal(condition.reviewRef, undefined, "excluded condition is never reviewed");
+    }
     assert.deepEqual(condition.generations, [2]);
     assert.deepEqual(condition.profiles, {
       strict: "LIMITED_TO_RECORDED_CASES",

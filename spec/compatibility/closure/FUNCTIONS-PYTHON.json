@@ -206,7 +206,9 @@
         "pass-1",
         "tasks-pass-2"
       ]
-    },
+    }
+  ],
+  "excludedFromParent": [
     {
       "conditionId": "FUNCTIONS-PYTHON/auth-blocking",
       "recipeIds": [
@@ -225,7 +227,9 @@
         "emulator": "NO_PRODUCTION_CLAIM"
       },
       "fixturePath": "conformance/functions-python/fixtures/observations.json",
-      "fixtureSha256": "515fbf2c16de0a7e5c7b6b18f2c77c65d2845e786dcfa5554712e34b255de47a"
+      "fixtureSha256": "515fbf2c16de0a7e5c7b6b18f2c77c65d2845e786dcfa5554712e34b255de47a",
+      "reason": "Excluded from the parent claim: one production observation only (client 503, SDK success path never observed; owner decision PY3 keeps it OPEN). It is handled separately later and stays OPEN.",
+      "authority": "owner ledger 2357 (2026-11-08): the parent goes to promotion review on the recorded scope; Auth blocking (OPEN) and the deployment comparison (NOT_COMPARED) are out of scope, stated here, and handled separately later; the coordinator decides the promotion after the review (coordinator ruling 2026-11-09)."
     },
     {
       "conditionId": "FUNCTIONS-PYTHON/deployment",
@@ -245,7 +249,9 @@
         "emulator": "NO_PRODUCTION_CLAIM"
       },
       "fixturePath": "conformance/functions-python/fixtures/observations.json",
-      "fixtureSha256": "515fbf2c16de0a7e5c7b6b18f2c77c65d2845e786dcfa5554712e34b255de47a"
+      "fixtureSha256": "515fbf2c16de0a7e5c7b6b18f2c77c65d2845e786dcfa5554712e34b255de47a",
+      "reason": "Excluded from the parent claim: only the production function inventory was recorded; local discovery and deployed-resource equivalence were never compared. It is handled separately later and stays NOT_COMPARED.",
+      "authority": "owner ledger 2357 (2026-11-08): the parent goes to promotion review on the recorded scope; Auth blocking (OPEN) and the deployment comparison (NOT_COMPARED) are out of scope, stated here, and handled separately later; the coordinator decides the promotion after the review (coordinator ruling 2026-11-09)."
     }
   ],
   "releaseRegressions": [
@@ -253,6 +259,22 @@
     "conformance/src/functions-python-replay.test.mjs",
     "tools/runner-python/tests/test_closure_replay.py"
   ],
+  "integratedRegression": {
+    "comparisons": [
+      {
+        "path": "spec/compatibility/closure/evidence/FUNCTIONS-PYTHON-comparison.json",
+        "sha256": "cafef06cf8d9b29ed164f113be3049f61ae2def30332ee20f47900f9aae67fe2",
+        "rows": 6,
+        "summary": {
+          "MATCH": 5,
+          "MATCH_LAYOUT": 1
+        }
+      }
+    ],
+    "productionRequests": 0,
+    "result": "COMPARED_PER_FAMILY_ON_RECORDED_FIXTURES",
+    "releaseBindingNote": "The comparison is the pass-against-pass comparison of the committed masked production fixtures, recomputed by conformance/src/functions-python-closure.test.mjs on every commit. The real pinned Python SDK replay through current dispatch in both profiles runs in tools/runner-python/tests/test_closure_replay.py (the functions-python CI job). No release binary is compared and the release job cannot rerun the recordings (see the excluded kind in conformance/src/release-strict-regression.mjs)."
+  },
   "limitations": [
     "Two production passes per event family: pass 1 and pass 2 for five families, pass 1 and the separate Tasks pass for Tasks. Passes compare only the selected finite projections; complete payloads, log resources and network totals are not compared.",
     "Synthetic identity and timestamp aliases preserve selected types and formats; they do not establish identity parity.",

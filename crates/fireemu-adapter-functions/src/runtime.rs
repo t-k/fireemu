@@ -24,6 +24,7 @@ use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_storage::store::StorageEvent;
 use fireemu_core_types::determinism::Clock;
 use fireemu_core_types::ids::{CorrelationId, Epoch, EventId, SessionId};
+use fireemu_core_types::pubsub_message_id::BROKER_SPAN;
 use fireemu_core_types::resources::{
     Gauge, Refusal, RetentionRoot, RootBudget, ServiceResources, Unit,
 };
@@ -773,13 +774,13 @@ struct PendingAuthEvent {
     targets: Vec<(String, usize)>,
 }
 
-/// How an attempt to admit one user event ended.
-enum AuthAdmission {
-    Admitted,
-    /// The queue has no room for the whole event yet.
-    Full,
-    /// The event can never be queued (its payload exceeds the frame limit).
-    Unrepresentable,
+/// The deliveries of one user event, planned for the ordinal the next event will get: the
+/// payload of each matching function with its copy count, and the records and bytes the whole
+/// event needs.
+struct AuthPlan<'a> {
+    deliveries: Vec<(&'a str, usize, Value)>,
+    records: usize,
+    bytes: usize,
 }
 
 struct QueuedPayload {
@@ -2491,6 +2492,12 @@ impl FunctionsRuntime {
             .checked_add(subject.len())
     }
 
+    /// Whether an event of `records` records and `bytes` retained bytes fits the whole queue when
+    /// the queue is empty; if not, it can never be admitted.
+    const fn fits_an_empty_queue(records: usize, bytes: usize) -> bool {
+        records <= MAX_ACTIVE_EVENT_RECORDS && bytes <= MAX_ACTIVE_EVENT_BYTES
+    }
+
     fn can_admit_events(inner: &Inner, source: EventSource, count: usize, bytes: usize) -> bool {
         let global = inner
             .payloads
@@ -3377,12 +3384,23 @@ impl FunctionsRuntime {
             .inner
             .lock()
             .map_err(|_| SourceEventAdmissionError::Unavailable)?;
+        // A runtime that is shutting down publishes nothing, whoever would have received it.
+        if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(Self::refuse(
+                &mut inner,
+                SourceEventAdmissionError::Unavailable,
+            ));
+        }
         // The broker draws its ids from the other half of the id space, so this message's id
-        // cannot equal one the broker gives. The ids are counted from the runtime counter
-        // without taking them, so a refusal consumes none.
+        // cannot equal one the broker gives. The session shifts the runtime's own half, so a
+        // restart into another session does not repeat the previous run's ids (the CloudEvent id
+        // is the message id). The ids are counted from the runtime counter without taking
+        // them, so a refusal consumes none.
         let first = inner.next_event;
+        let shift = u64::try_from(self.config.session.value() % u128::from(BROKER_SPAN))
+            .unwrap_or_default();
         let ids: Vec<String> = (1..=messages.len() as u64)
-            .map(|n| fireemu_core_types::pubsub_message_id::runtime_message_id(first + n))
+            .map(|n| fireemu_core_types::pubsub_message_id::runtime_message_id(first + n + shift))
             .collect();
         let message_count = u64::try_from(messages.len()).unwrap_or(u64::MAX);
         if !self.background_triggers_enabled() {
@@ -3392,19 +3410,31 @@ impl FunctionsRuntime {
         }
         let subject = format!("topics/{topic}");
         let mut drafts = Vec::new();
+        // The budget is checked as each target is planned, before its copies are expanded, so a
+        // publish that cannot fit never builds the messages x subscribers x copies vector.
+        let (mut records, mut bytes) = (0_usize, 0_usize);
         for (message, message_id) in messages.iter().zip(&ids) {
             for function in self.pubsub_matches(topic, true) {
                 let payload =
                     Arc::new(self.pubsub_payload(function, message_id, topic, message, time));
-                let Some(retained_bytes) =
+                let copies = self.delivery_copies(&function.name, EVENT_TYPE);
+                let fits =
                     Self::retained_event_bytes(&function.name, EVENT_TYPE, &subject, &payload)
-                else {
+                        .and_then(|one| {
+                            let next_records = records.checked_add(copies)?;
+                            let next_bytes = one.checked_mul(copies)?.checked_add(bytes)?;
+                            (next_records <= MAX_ACTIVE_EVENT_RECORDS
+                                && next_bytes <= MAX_ACTIVE_EVENT_BYTES)
+                                .then_some((one, next_records, next_bytes))
+                        });
+                let Some((retained_bytes, next_records, next_bytes)) = fits else {
                     return Err(Self::refuse(
                         &mut inner,
                         SourceEventAdmissionError::Capacity,
                     ));
                 };
-                for _ in 0..self.delivery_copies(&function.name, EVENT_TYPE) {
+                (records, bytes) = (next_records, next_bytes);
+                for _ in 0..copies {
                     drafts.push(DeliveryDraft {
                         function: function.name.clone(),
                         event_type: EVENT_TYPE.to_owned(),
@@ -4072,34 +4102,38 @@ impl FunctionsRuntime {
         let Ok(mut inner) = self.inner.lock() else {
             return;
         };
-        let mut admitted = false;
+        let (mut admitted, mut discarded) = (false, false);
         while let Some(front) = inner.pending_auth.front() {
             if !self.background_triggers_enabled() {
                 // Dropped by contract (never held for a later replay), as at the source.
                 inner.pending_auth.clear();
+                discarded = true;
                 break;
             }
             let (kind, time) = (front.kind, front.time);
             let user = front.user.clone();
             let targets = front.targets.clone();
-            match self.try_admit_auth(&mut inner, kind, &user, time, &targets) {
-                AuthAdmission::Admitted => {
-                    admitted = true;
-                    inner.pending_auth.pop_front();
-                }
-                AuthAdmission::Full => break,
-                AuthAdmission::Unrepresentable => {
-                    inner.pending_auth.pop_front();
-                    Self::count_dropped_auth_event(
-                        &mut inner,
-                        "its payload exceeds the frame limit",
-                    );
-                }
+            let Some(plan) = self.plan_auth(inner.next_event, kind, &user, time, &targets) else {
+                inner.pending_auth.pop_front();
+                Self::count_dropped_auth_event(
+                    &mut inner,
+                    "its deliveries can never fit the event queue",
+                );
+                discarded = true;
+                continue;
+            };
+            if !self.admit_auth_plan(&mut inner, kind, &user, time, plan) {
+                break;
             }
+            admitted = true;
+            inner.pending_auth.pop_front();
         }
         drop(inner);
         if admitted {
             self.wake.notify_one();
+        }
+        if admitted || discarded {
+            self.idle.notify_waiters();
         }
     }
 
@@ -4112,49 +4146,63 @@ impl FunctionsRuntime {
         eprintln!("[functions] an Auth user event was dropped: {reason}");
     }
 
-    /// Enqueues one user event for every target, all or none: every copy of every matching
-    /// function fits, or nothing is enqueued. The payload id is the ordinal the delivery's
-    /// first copy gets, so it names the event it becomes.
-    fn try_admit_auth(
+    /// Plans the deliveries of one user event for every target that still exists. The payload
+    /// id is the ordinal the delivery's first copy gets, so it names the event it becomes.
+    /// `None` when the event can never be queued: a payload that cannot be sized, or more
+    /// records or bytes than the whole queue holds.
+    fn plan_auth<'a>(
         &self,
-        inner: &mut Inner,
+        next_event: u64,
         kind: AuthEvent,
         user: &fireemu_core_auth::store::UserRecord,
         time: LogicalInstant,
-        targets: &[(String, usize)],
-    ) -> AuthAdmission {
+        targets: &'a [(String, usize)],
+    ) -> Option<AuthPlan<'a>> {
         let subject = format!("users/{}", user.local_id.as_str());
-        let session = self.config.session;
-        let mut ordinal = inner.next_event;
-        let mut plan = Vec::with_capacity(targets.len());
+        let mut ordinal = next_event;
+        let mut deliveries = Vec::with_capacity(targets.len());
         let (mut records, mut bytes) = (0_usize, 0_usize);
         for (function, copies) in targets {
             if self.manifest.get(function).is_none() {
                 continue; // reloaded away while the event was held
             }
-            let id = format!("{}-{}", session.value(), ordinal + 1);
+            let id = format!("{}-{}", self.config.session.value(), ordinal + 1);
             let payload = auth_event(&id, &self.config.project, kind, user, time);
-            let Some(one) =
-                Self::retained_event_bytes(function, kind.event_type(), &subject, &payload)
-            else {
-                return AuthAdmission::Unrepresentable;
-            };
-            records = records.saturating_add(*copies);
-            bytes = bytes.saturating_add(one.saturating_mul(*copies));
+            let one = Self::retained_event_bytes(function, kind.event_type(), &subject, &payload)?;
+            records = records.checked_add(*copies)?;
+            bytes = bytes.checked_add(one.checked_mul(*copies)?)?;
+            if !Self::fits_an_empty_queue(records, bytes) {
+                return None;
+            }
             ordinal += *copies as u64;
-            plan.push((function, *copies, payload));
+            deliveries.push((function.as_str(), *copies, payload));
         }
-        if plan.is_empty() {
-            return AuthAdmission::Admitted;
+        Some(AuthPlan {
+            deliveries,
+            records,
+            bytes,
+        })
+    }
+
+    /// Enqueues a planned user event, all or none. `false` when the queue has no room for the
+    /// whole event yet.
+    fn admit_auth_plan(
+        &self,
+        inner: &mut Inner,
+        kind: AuthEvent,
+        user: &fireemu_core_auth::store::UserRecord,
+        time: LogicalInstant,
+        plan: AuthPlan<'_>,
+    ) -> bool {
+        if !Self::can_admit_events(inner, EventSource::Auth, plan.records, plan.bytes) {
+            return false;
         }
-        if !Self::can_admit_events(inner, EventSource::Auth, records, bytes) {
-            return AuthAdmission::Full;
-        }
-        for (function, copies, payload) in plan {
+        let subject = format!("users/{}", user.local_id.as_str());
+        for (function, copies, payload) in plan.deliveries {
             for _ in 0..copies {
                 let admitted = Self::enqueue(
                     inner,
-                    session,
+                    self.config.session,
                     EventSource::Auth,
                     function,
                     kind.event_type(),
@@ -4166,7 +4214,7 @@ impl FunctionsRuntime {
                 debug_assert!(admitted, "a planned Auth delivery fits");
             }
         }
-        AuthAdmission::Admitted
+        true
     }
 
     /// Turns a user lifecycle event into events for every matching Auth trigger.
@@ -4203,23 +4251,25 @@ impl FunctionsRuntime {
         if targets.is_empty() {
             return;
         }
+        // The triggers may have gone off since the check above; they are read again under the
+        // lock that `set_background_triggers` takes to drop what is held.
+        if !self.background_triggers_enabled() {
+            return;
+        }
+        let Some(plan) = self.plan_auth(inner.next_event, kind, &event.user, time, &targets) else {
+            Self::count_dropped_auth_event(
+                &mut inner,
+                "its deliveries can never fit the event queue",
+            );
+            return;
+        };
         // An older held event goes first, so a newer one never overtakes it.
-        if inner.pending_auth.is_empty() {
-            match self.try_admit_auth(&mut inner, kind, &event.user, time, &targets) {
-                AuthAdmission::Admitted => {
-                    drop(inner);
-                    self.wake.notify_one();
-                    return;
-                }
-                AuthAdmission::Unrepresentable => {
-                    Self::count_dropped_auth_event(
-                        &mut inner,
-                        "its payload exceeds the frame limit",
-                    );
-                    return;
-                }
-                AuthAdmission::Full => {}
-            }
+        if inner.pending_auth.is_empty()
+            && self.admit_auth_plan(&mut inner, kind, &event.user, time, plan)
+        {
+            drop(inner);
+            self.wake.notify_one();
+            return;
         }
         if inner.pending_auth.len() >= MAX_PENDING_AUTH_EVENTS {
             Self::count_dropped_auth_event(
@@ -7283,6 +7333,15 @@ mod task_completion_tests {
         base: &Arc<FunctionsRuntime>,
         functions: &[(&str, Trigger)],
     ) -> Arc<FunctionsRuntime> {
+        runtime_with_session(base, functions, base.config.session)
+    }
+
+    /// [`runtime_with`] in the given session (what a daemon start without `daemon.seed` draws).
+    fn runtime_with_session(
+        base: &Arc<FunctionsRuntime>,
+        functions: &[(&str, Trigger)],
+        session: SessionId,
+    ) -> Arc<FunctionsRuntime> {
         let mut manifest = base.manifest.clone();
         let template = manifest.get("echo").unwrap().clone();
         manifest.functions = functions
@@ -7303,7 +7362,10 @@ mod task_completion_tests {
                 spawn: None,
                 cleanup_dir: None,
             }],
-            base.config.clone(),
+            FunctionsConfig {
+                session,
+                ..base.config.clone()
+            },
             base.clock.clone(),
             super::FunctionsHttpProfile::Strict,
         )
@@ -7469,6 +7531,286 @@ mod task_completion_tests {
             report.refusals
         );
         runtime.inner.lock().unwrap().reserved_event_records = 0;
+        runtime.shutdown().await;
+        base.shutdown().await;
+    }
+
+    /// M1: the message id of a control publish, which the `CloudEvent` id reuses, is a function of
+    /// the session as well as of the counter: a restart into another session does not repeat the
+    /// previous run's first id, and one session replays its ids.
+    #[tokio::test]
+    async fn control_publish_ids_follow_the_session() {
+        let base = runtime().await;
+        let first_id = |session: u128| {
+            let runtime =
+                runtime_with_session(&base, &[("a", pubsub_on("jobs"))], SessionId::new(session));
+            let ids = runtime
+                .publish("jobs", &[json!({"data": "YQ=="}), json!({"data": "Yg=="})])
+                .unwrap();
+            let event_id = {
+                let inner = runtime.inner.lock().unwrap();
+                let id = inner.payloads.keys().next().unwrap();
+                inner.payloads[id].payload["id"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned()
+            };
+            (ids, event_id, runtime)
+        };
+        let (one, one_event, r1) = first_id(1_234_567_890_123);
+        let (again, again_event, r2) = first_id(1_234_567_890_123);
+        let (other, other_event, r3) = first_id(9_876_543_210_987);
+        assert_eq!(one, again, "one session replays its ids");
+        assert_eq!(one_event, again_event);
+        assert_ne!(one[0], other[0], "another session starts elsewhere");
+        assert_ne!(
+            one_event, other_event,
+            "the CloudEvent id follows the message id"
+        );
+        assert_ne!(one[0], one[1]);
+        for id in one.iter().chain(&other) {
+            assert!(
+                id.len() == 17 && id.bytes().all(|b| b.is_ascii_digit()),
+                "{id}"
+            );
+        }
+        for r in [r1, r2, r3] {
+            r.shutdown().await;
+        }
+        base.shutdown().await;
+    }
+
+    /// The boundary of an event that can never be admitted: exactly the queue's records or
+    /// bytes still fits an empty queue, one more does not.
+    #[test]
+    fn an_event_fits_an_empty_queue_up_to_exactly_its_limits() {
+        let fits = FunctionsRuntime::fits_an_empty_queue;
+        assert!(fits(0, 0));
+        assert!(fits(super::MAX_ACTIVE_EVENT_RECORDS, 0));
+        assert!(fits(0, super::MAX_ACTIVE_EVENT_BYTES));
+        assert!(fits(
+            super::MAX_ACTIVE_EVENT_RECORDS,
+            super::MAX_ACTIVE_EVENT_BYTES
+        ));
+        assert!(!fits(super::MAX_ACTIVE_EVENT_RECORDS + 1, 0));
+        assert!(!fits(0, super::MAX_ACTIVE_EVENT_BYTES + 1));
+    }
+
+    /// The exact id a control publish gets: the runtime's half of the id space, counted from
+    /// the session's shift (a session beyond the span wraps).
+    #[tokio::test]
+    async fn control_publish_ids_are_the_counter_shifted_by_the_session_modulo_the_span() {
+        use fireemu_core_types::pubsub_message_id::{runtime_message_id, BROKER_SPAN};
+        let base = runtime().await;
+        for session in [
+            0_u128,
+            42,
+            u128::from(BROKER_SPAN) + 7,
+            18_446_744_073_709_551_000,
+        ] {
+            let runtime =
+                runtime_with_session(&base, &[("a", pubsub_on("jobs"))], SessionId::new(session));
+            let shift = u64::try_from(session % u128::from(BROKER_SPAN)).unwrap();
+            let ids = runtime
+                .publish("jobs", &[json!({"data": "YQ=="}), json!({"data": "Yg=="})])
+                .unwrap();
+            assert_eq!(
+                ids,
+                vec![runtime_message_id(1 + shift), runtime_message_id(2 + shift)],
+                "session {session}"
+            );
+            // The second publish continues after both message ids and the delivery.
+            let next = runtime.publish("jobs", &[json!({"data": "Yw=="})]).unwrap();
+            assert_ne!(next[0], ids[0]);
+            assert_ne!(next[0], ids[1]);
+            runtime.shutdown().await;
+        }
+        base.shutdown().await;
+    }
+
+    /// M2: an Auth user event whose fan-out is larger than the whole queue can never be admitted.
+    /// It is dropped on the spot, counted and logged; it does not block the events behind it, the
+    /// runtime goes idle, and the held events before it are not lost.
+    #[tokio::test]
+    async fn an_auth_event_larger_than_the_queue_is_dropped_and_blocks_nothing() {
+        use fireemu_core_functions::manifest::AuthEvent;
+        let base = runtime().await;
+        let runtime = runtime_with(
+            &base,
+            &[
+                ("a", auth_on(AuthEvent::Created)),
+                ("b", auth_on(AuthEvent::Created)),
+                ("c", auth_on(AuthEvent::Deleted)),
+            ],
+        );
+        let faults = Arc::new(Mutex::new(FaultState::default()));
+        faults.lock().unwrap().install(FaultPlan {
+            seed: 1,
+            rules: vec![FaultRule {
+                matches: FaultMatch {
+                    operation: "functions.deliver".to_owned(),
+                    nth: None,
+                    function: None,
+                    event_type: Some(AuthEvent::Created.event_type().to_owned()),
+                },
+                action: FaultAction::Duplicate { count: 3071 },
+            }],
+        });
+        runtime.set_faults(faults);
+        let dropped = |runtime: &FunctionsRuntime| {
+            runtime
+                .inner
+                .lock()
+                .unwrap()
+                .admission_refusals
+                .get("auth_event_dropped")
+                .copied()
+                .unwrap_or(0)
+        };
+        // 2 functions x 3072 copies = 6144 records against 4096: with nothing held ...
+        runtime.on_user_event(&user_event(UserEventKind::Created, "big@example.com"));
+        assert_eq!(
+            auth_pending(&runtime),
+            0,
+            "it never waits for room it cannot get"
+        );
+        assert_eq!(dropped(&runtime), 1);
+        assert!(runtime.is_idle(), "nothing is outstanding");
+        // ... and with an older event held ahead of it.
+        runtime.inner.lock().unwrap().reserved_event_records = super::MAX_ACTIVE_EVENT_RECORDS;
+        runtime.on_user_event(&user_event(UserEventKind::Deleted, "held@example.com"));
+        runtime.on_user_event(&user_event(UserEventKind::Created, "big2@example.com"));
+        assert_eq!(dropped(&runtime), 2);
+        assert_eq!(auth_pending(&runtime), 1, "only the admissible event waits");
+        runtime.inner.lock().unwrap().reserved_event_records = 0;
+        runtime.admit_pending_auth();
+        assert_eq!(auth_pending(&runtime), 0);
+        assert_eq!(
+            payload_subjects(&runtime),
+            vec!["held@example.com".to_owned()]
+        );
+        runtime.shutdown().await;
+        base.shutdown().await;
+    }
+
+    /// S1: a control publish whose fan-out cannot fit is refused while its drafts are planned,
+    /// not after the whole messages x subscribers x copies vector is built.
+    #[tokio::test]
+    async fn control_publish_refuses_overflow_before_expanding_the_remaining_targets() {
+        let base = runtime().await;
+        for (data, expected_visits) in [("YQ==".to_owned(), 2), ("A".repeat(64 * 1024), 1)] {
+            let functions: Vec<(String, Trigger)> = (0..4)
+                .map(|n| (format!("f{n}"), pubsub_on("jobs")))
+                .collect();
+            let functions: Vec<(&str, Trigger)> = functions
+                .iter()
+                .map(|(n, t)| (n.as_str(), t.clone()))
+                .collect();
+            let runtime = runtime_with(&base, &functions);
+            let faults = Arc::new(Mutex::new(FaultState::default()));
+            faults.lock().unwrap().install(FaultPlan {
+                seed: 1,
+                rules: vec![FaultRule {
+                    matches: FaultMatch {
+                        operation: "functions.deliver".into(),
+                        nth: None,
+                        function: None,
+                        event_type: None,
+                    },
+                    action: FaultAction::Duplicate {
+                        count: if data.len() > 100 { 1023 } else { 3000 },
+                    },
+                }],
+            });
+            runtime.set_faults(faults.clone());
+            assert_eq!(
+                runtime.publish("jobs", &[json!({"data": data})]),
+                Err(SourceEventAdmissionError::Capacity)
+            );
+            assert!(runtime.inner.lock().unwrap().payloads.is_empty());
+            assert_eq!(
+                faults.lock().unwrap().counters()["functions.deliver"],
+                expected_visits,
+                "stop planning once the record or byte budget cannot fit"
+            );
+            runtime.shutdown().await;
+        }
+        base.shutdown().await;
+    }
+
+    /// A publish to a runtime that is shutting down is unavailable, also when it has nobody to
+    /// deliver to: the answer does not depend on the topic's subscribers or on the triggers.
+    #[tokio::test]
+    async fn control_publish_during_shutdown_is_unavailable_whatever_the_fan_out() {
+        let base = runtime().await;
+        let runtime = runtime_with(&base, &[("a", pubsub_on("jobs"))]);
+        let message = json!({"data": "YQ=="});
+        runtime.begin_shutdown();
+        for topic in ["jobs", "nobody"] {
+            assert_eq!(
+                runtime.publish(topic, std::slice::from_ref(&message)),
+                Err(SourceEventAdmissionError::Unavailable),
+                "{topic}"
+            );
+        }
+        runtime.set_background_triggers(false);
+        assert_eq!(
+            runtime.publish("jobs", &[message]),
+            Err(SourceEventAdmissionError::Unavailable),
+            "triggers off"
+        );
+        runtime.shutdown().await;
+        base.shutdown().await;
+    }
+
+    /// Switching the triggers off between `on_user_event`'s first check and its lock must not
+    /// leave the event held (the flag is read again under the lock).
+    #[tokio::test]
+    async fn disabling_the_triggers_while_an_auth_event_waits_for_the_lock_holds_nothing() {
+        use fireemu_core_functions::manifest::AuthEvent;
+        let base = runtime().await;
+        let runtime = runtime_with(&base, &[("created", auth_on(AuthEvent::Created))]);
+        runtime.inner.lock().unwrap().reserved_event_records = super::MAX_ACTIVE_EVENT_RECORDS;
+        let event = user_event(UserEventKind::Created, "u@example.com");
+        let guard = runtime.inner.lock().unwrap();
+        let caller = {
+            let runtime = Arc::clone(&runtime);
+            std::thread::spawn(move || runtime.on_user_event(&event))
+        };
+        std::thread::sleep(Duration::from_millis(300));
+        runtime
+            .background_triggers
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        drop(guard);
+        caller.join().unwrap();
+        assert_eq!(auth_pending(&runtime), 0);
+        runtime.inner.lock().unwrap().reserved_event_records = 0;
+        runtime.shutdown().await;
+        base.shutdown().await;
+    }
+
+    /// Dropping the held events when the triggers go off wakes `await-idle` waiters: a
+    /// runtime whose only outstanding work was a held event is idle now.
+    #[tokio::test]
+    async fn disabling_the_triggers_wakes_idle_waiters_when_it_drops_held_events() {
+        use fireemu_core_functions::manifest::AuthEvent;
+        let base = runtime().await;
+        let runtime = runtime_with(&base, &[("created", auth_on(AuthEvent::Created))]);
+        runtime.inner.lock().unwrap().reserved_event_records = super::MAX_ACTIVE_EVENT_RECORDS;
+        runtime.on_user_event(&user_event(UserEventKind::Created, "u@example.com"));
+        assert_eq!(auth_pending(&runtime), 1);
+        runtime.inner.lock().unwrap().reserved_event_records = 0;
+        // Let the start-up wake-ups pass, so only the switch-off can wake the waiter.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let idle = runtime.idle_notify();
+        let notified = idle.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        runtime.set_background_triggers(false);
+        assert!(runtime.is_idle());
+        tokio::time::timeout(Duration::from_secs(2), notified)
+            .await
+            .expect("the waiter is woken");
         runtime.shutdown().await;
         base.shutdown().await;
     }

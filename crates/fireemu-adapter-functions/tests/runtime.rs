@@ -250,6 +250,38 @@ async fn start_runtime(
     (runtime, clock)
 }
 
+/// A runtime in `session` whose runner logs every invoke frame to `log`.
+async fn start_in_session(
+    session: u128,
+    log: &Path,
+) -> (Arc<FunctionsRuntime>, Arc<Mutex<VirtualClock>>) {
+    let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py");
+    let spec = SpawnSpec {
+        command: vec!["python3".to_owned(), script.to_owned()],
+        cwd: None,
+        env: vec![(
+            "FIREEMU_FAKE_FRAME_LOG".to_owned(),
+            log.display().to_string(),
+        )],
+        hello_timeout: RUNNER_HELLO_TIMEOUT,
+    };
+    let runner = Runner::spawn_spec(&spec).await.unwrap();
+    let manifest = parse_manifest(runner.hello().manifest.as_ref().unwrap()).unwrap();
+    let clock = Arc::new(Mutex::new(VirtualClock::new(START)));
+    let runtime = FunctionsRuntime::new(
+        manifest,
+        FunctionsConfig {
+            session: fireemu_core_types::ids::SessionId::new(session),
+            ..FunctionsConfig::for_tests(1000, "s".into())
+        },
+        clock.clone(),
+        Arc::new(runner),
+        Some(spec),
+    );
+    tokio::spawn(runtime.clone().dispatch_loop());
+    (runtime, clock)
+}
+
 async fn wait_for_runner(runtime: &FunctionsRuntime) {
     let deadline = tokio::time::Instant::now() + RUNNER_HELLO_TIMEOUT + Duration::from_secs(1);
     while !runtime.runner_alive() {
@@ -4323,6 +4355,88 @@ async fn an_auth_event_refused_at_capacity_is_delivered_when_a_delivery_complete
     assert_eq!(runtime.status()["authEventsPending"], 0);
     drop(reservation);
     runtime.shutdown().await;
+}
+
+/// The id each kind of source gets for the first event of a boot, as the runner receives it
+/// (the frames of the handlers it was handed), keyed by function.
+async fn first_delivered_ids(session: u128) -> std::collections::BTreeMap<String, String> {
+    let dir = std::env::temp_dir().join(format!(
+        "fireemu-session-ids-{}-{session}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let log = dir.join("frames");
+    let (runtime, _clock) = start_in_session(session, &log).await;
+    // Each source gets its first event of the boot, one at a time so the ordinals are alike.
+    let wanted = ["onJob", "onUser", "slow", "ok"];
+    runtime
+        .publish("jobs", &[serde_json::json!({"data": "YQ=="})])
+        .unwrap();
+    runtime.on_user_event(&auth_user_events()[0]);
+    runtime.on_storage_event(&slow_object("late.txt"));
+    runtime
+        .reserve_commit_events(&commit(vec![DocumentChange {
+            path: doc("items/a", 1).path,
+            before: None,
+            after: Some(doc("items/a", 1).into()),
+        }]))
+        .unwrap()
+        .publish();
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let ids = loop {
+        let text = std::fs::read_to_string(&log).unwrap_or_default();
+        let mut ids = std::collections::BTreeMap::new();
+        for line in text.lines() {
+            let frame: serde_json::Value = serde_json::from_str(line).unwrap();
+            let function = frame["function"].as_str().unwrap().to_owned();
+            let event = &frame["event"];
+            let id = event["id"]
+                .as_str()
+                .or_else(|| event["eventId"].as_str())
+                .or_else(|| frame["context"]["eventId"].as_str())
+                .unwrap_or_else(|| panic!("no event id in {frame}"))
+                .to_owned();
+            ids.entry(function).or_insert(id);
+        }
+        if wanted.iter().all(|name| ids.contains_key(*name)) {
+            break ids;
+        }
+        assert!(std::time::Instant::now() < deadline, "frames: {text}");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    runtime.shutdown().await;
+    std::fs::remove_dir_all(&dir).unwrap();
+    wanted
+        .iter()
+        .map(|name| ((*name).to_owned(), ids[*name].clone()))
+        .collect()
+}
+
+/// M1: two boots in different sessions (a start without `daemon.seed`) deliver different ids for
+/// the first Pub/Sub, Auth, Storage and Firestore event, so a handler that remembers processed
+/// event ids across a restart is never told a new event is a repeat. One session replays its
+/// ids, and the pinned session 42 keeps the documented golden ids.
+#[tokio::test]
+async fn two_boots_deliver_different_ids_and_a_pinned_seed_replays_its_own() {
+    let boot_a = first_delivered_ids(7_391_204_883_201).await;
+    let boot_b = first_delivered_ids(1_048_822_093_516).await;
+    let boot_a_again = first_delivered_ids(7_391_204_883_201).await;
+    assert_eq!(boot_a, boot_a_again, "one session replays its ids");
+    for function in ["onJob", "onUser", "slow", "ok"] {
+        assert_ne!(
+            boot_a[function], boot_b[function],
+            "{function}: the first event of two boots shares an id"
+        );
+    }
+    let pinned = first_delivered_ids(42).await;
+    // The Auth id is the documented golden of session 42 and one of its first ordinals.
+    assert!(
+        (1..=8).any(|ordinal| pinned["onUser"]
+            == fireemu_adapter_functions::events::event_id_uuid(&format!("42-{ordinal}"))),
+        "{}",
+        pinned["onUser"]
+    );
 }
 
 #[test]

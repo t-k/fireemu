@@ -24,6 +24,7 @@ pub mod pagination;
 pub mod state;
 pub mod subscription;
 
+pub use configuration::{MessageStoragePolicy, TopicUpdate};
 pub use error::{Code, PubSubError, Result};
 pub use filter::Filter;
 pub use fireemu_core_types::pubsub_message_id::{

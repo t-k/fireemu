@@ -537,7 +537,7 @@
     "crates/fireemu-adapter-http/src/app_check.rs": "92cc13fab652805b8b6153c185c3276dfef7a4969ddc13499fef0117371f36dd",
     "crates/fireemu-adapter-http/src/control.rs": "f74054a297f985603f7b7149def313ad0b933d53c8dcb95ebd181b86ee64a6c4",
     "crates/fireemu-adapter-http/src/identity_framing.rs": "ed86d9470294d42d4e6cb355c4a05b429ebe5dd71d4a38f44ea3a3b2783a6e4b",
-    "crates/fireemu-adapter-http/src/identity_toolkit.rs": "5950386860b891228028d1a06f195a918d03526e96393e5d87cdd32e8d4993ae",
+    "crates/fireemu-adapter-http/src/identity_toolkit.rs": "f5e46b3e6ff5aec62694449ef767819820be975e9080c3f9e22154a7d66a2023",
     "crates/fireemu-adapter-http/src/identity_toolkit/authorized_domains.rs": "9ce1bbcf7eaa8688a206a29ead1e9c1c6ed21d305585fef658bba916d8d4539e",
     "crates/fireemu-adapter-http/src/identity_toolkit/config_proto.rs": "7ac5a205e8d1be66ea4c59d68b62f1a29f7053d05b7a351611e35c77c1b05462",
     "crates/fireemu-adapter-http/src/identity_toolkit/custom_token.rs": "ec5b7b8b738e502d4ae99f2051399cf604e111aa25b27c96ca0010434e9981e7",

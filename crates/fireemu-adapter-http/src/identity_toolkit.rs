@@ -2545,6 +2545,7 @@ fn dispatch_with_blocking_hook(
     quota_reservation: &mut Option<SignupReservation>,
     idp_trust: Option<&crate::oidc::LocalOidcTrust>,
     saml_trust: Option<&strict_saml::StrictSaml>,
+    parent_authorized_domains: Option<&[String]>,
 ) -> JsonResponse {
     // A configuration that changes while the request runs is a retryable conflict in the strict
     // profile, fireemu's own guard; the emulator profile goes on with the configuration it finds,
@@ -2608,7 +2609,7 @@ fn dispatch_with_blocking_hook(
         body,
         headers,
         at,
-        &blocking_dispatch_options(state),
+        &blocking_dispatch_options(state, parent_authorized_domains),
     );
     if revision_changed() {
         return error(409, "BLOCKING_FUNCTION_CONFIGURATION_CHANGED");
@@ -2910,7 +2911,7 @@ fn dispatch_with_blocking_hook(
                 body,
                 headers,
                 at,
-                &blocking_dispatch_options(state),
+                &blocking_dispatch_options(state, parent_authorized_domains),
             )
         };
         if committed_response.status != 200 {
@@ -4656,7 +4657,11 @@ fn handle_with_policy_inner(
             None => None,
         }
     };
-    if !state.stateless_refresh_tokens && store_tenant.is_some() {
+    // Strict: a tenant-scoped request is authorized against the parent project, whose live
+    // Config holds the authorized domains (a Tenant resource has none). The list is read here,
+    // under the parent lock this admission already takes before the tenant store's lock, so no
+    // lock is nested later and the request sees one consistent project configuration.
+    let parent_authorized_domains = if !state.stateless_refresh_tokens && store_tenant.is_some() {
         let Some(parent) = state
             .registry
             .as_ref()
@@ -4675,7 +4680,10 @@ fn handle_with_policy_inner(
                 _ => error(404, "TENANT_NOT_FOUND"),
             };
         }
-    }
+        Some(parent.authorized_domains())
+    } else {
+        None
+    };
     let tenant_metadata = store_tenant.as_deref().and_then(|tenant| {
         state
             .registry
@@ -5068,7 +5076,8 @@ fn handle_with_policy_inner(
             body,
             headers,
             at,
-            &state.into(),
+            &DispatchOptions::from(state)
+                .with_parent_authorized_domains(parent_authorized_domains.as_deref()),
         );
         let retain_candidate = response.status == 200
             && pending_routed_project.is_some()
@@ -5144,6 +5153,7 @@ fn handle_with_policy_inner(
             &mut quota_reservation,
             idp_trust,
             strict_saml_trust.as_ref(),
+            parent_authorized_domains.as_deref(),
         )
     } else if let Some(reservation) = quota_reservation.clone() {
         // Run quota-accounted creation on an isolated store copy. This gives the quota
@@ -5157,7 +5167,8 @@ fn handle_with_policy_inner(
             dispatch_body,
             headers,
             at,
-            &state.into(),
+            &DispatchOptions::from(state)
+                .with_parent_authorized_domains(parent_authorized_domains.as_deref()),
         );
         // Determine creation from the request's returned identity and the isolated store
         // transition. A global user-count delta is not a per-request result: another actor may
@@ -5199,7 +5210,8 @@ fn handle_with_policy_inner(
             dispatch_body,
             headers,
             at,
-            &state.into(),
+            &DispatchOptions::from(state)
+                .with_parent_authorized_domains(parent_authorized_domains.as_deref()),
         );
         drop(store);
         response
@@ -5376,14 +5388,30 @@ struct DispatchOptions {
     inbound_credential_policy: fireemu_core_functions::manifest::BlockingAuthTokenPolicy,
     /// The strict daemon's OIDC issuers (keys and authorization endpoints).
     idp_signers: Option<Arc<IdpSignerTrust>>,
+    /// The parent project's live authorized domains, read when a strict tenant-scoped request
+    /// was admitted. A tenant store holds only the project defaults, so a tenant-scoped action
+    /// link never checks its own list; without this snapshot it is refused.
+    parent_authorized_domains: Option<Vec<String>>,
+}
+
+impl DispatchOptions {
+    /// The same options for a request admitted with the parent project's authorized domains.
+    fn with_parent_authorized_domains(mut self, domains: Option<&[String]>) -> Self {
+        self.parent_authorized_domains = domains.map(<[String]>::to_vec);
+        self
+    }
 }
 
 /// The options of a request whose blocking trigger is selected: it keeps secure tokens.
-fn blocking_dispatch_options(state: &AuthState) -> DispatchOptions {
+fn blocking_dispatch_options(
+    state: &AuthState,
+    parent_authorized_domains: Option<&[String]>,
+) -> DispatchOptions {
     DispatchOptions {
         legacy_tokens: false,
         ..state.into()
     }
+    .with_parent_authorized_domains(parent_authorized_domains)
 }
 
 impl From<&AuthState> for DispatchOptions {
@@ -5400,6 +5428,7 @@ impl From<&AuthState> for DispatchOptions {
                 IdpAssertionPolicy::SignedOidc(signers) => Some(signers.clone()),
                 IdpAssertionPolicy::Fixture => None,
             },
+            parent_authorized_domains: None,
             inbound_credential_policy: state.blocking.as_deref().map_or_else(
                 fireemu_core_functions::manifest::BlockingAuthTokenPolicy::default,
                 |blocking| {
@@ -5488,6 +5517,7 @@ fn dispatch(
             headers,
             false,
             !options.stateless_refresh_tokens,
+            options.parent_authorized_domains.as_deref(),
         ),
         Handler::ResetPassword => reset_password(store, body, at, options.stateless_refresh_tokens),
         Handler::SignInWithEmailLink => {
@@ -5610,6 +5640,7 @@ fn dispatch(
                 headers,
                 true,
                 !options.stateless_refresh_tokens,
+                options.parent_authorized_domains.as_deref(),
             )
         }
         // Stateful refresh sessions mark the strict profile.
@@ -13564,6 +13595,7 @@ fn send_oob_code(
     headers: &RequestHeaders,
     privileged: bool,
     strict: bool,
+    parent_authorized_domains: Option<&[String]>,
 ) -> JsonResponse {
     let return_oob_link = match opt_bool(body, "returnOobLink") {
         Ok(Some(value)) => value,
@@ -13722,7 +13754,9 @@ fn send_oob_code(
             if absolute_uri_host(url).is_none() {
                 return error(400, "INVALID_CONTINUE_URI : Missing domain in continue url");
             }
-            if let Some(response) = unauthorized_continue_url(store, body) {
+            if let Some(response) =
+                unauthorized_continue_url(store, parent_authorized_domains, body)
+            {
                 return response;
             }
         }
@@ -13829,11 +13863,27 @@ fn mobile_link(store: &AuthStore, body: &Value, link: String) -> String {
 }
 
 /// The refusal of a continue URL whose host is not one of the project's authorized domains.
-fn unauthorized_continue_url(store: &AuthStore, body: &Value) -> Option<JsonResponse> {
+///
+/// Authorized domains belong to the project, so a tenant store never answers for them: a
+/// tenant-scoped request is checked against `parent_authorized_domains`, the parent project's
+/// live list read at admission. A tenant request that carries none (an entry that did not read
+/// the parent) is refused rather than checked against the tenant store's project defaults,
+/// which would accept a domain the project removed.
+fn unauthorized_continue_url(
+    store: &AuthStore,
+    parent_authorized_domains: Option<&[String]>,
+    body: &Value,
+) -> Option<JsonResponse> {
     let url = str_field(body, "continueUrl")?;
     let host = absolute_uri_host(url)?;
-    if store
-        .authorized_domains()
+    let own;
+    let domains: &[String] = if store.tenant_id().is_some() {
+        parent_authorized_domains.unwrap_or(&[])
+    } else {
+        own = store.authorized_domains();
+        &own
+    };
+    if domains
         .iter()
         .any(|domain| domain.eq_ignore_ascii_case(&host))
     {

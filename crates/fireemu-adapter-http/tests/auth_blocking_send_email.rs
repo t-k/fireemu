@@ -602,6 +602,62 @@ fn a_refused_tenant_admin_link_leaves_no_code() {
     assert_eq!(mails.lock().unwrap().len(), 2);
 }
 
+/// Strict: a tenant mail that runs `beforeSendEmail` is checked against the parent project's
+/// live authorized domains, on the speculative run and on the commit run alike; the tenant
+/// store's own project defaults decide nothing. A refused link runs no function and leaves no
+/// code.
+#[test]
+fn a_tenant_mail_with_a_blocking_function_checks_the_parent_projects_domains() {
+    let (s, mails) = state(true, true);
+    let tenant = create_tenant(&s);
+    create_account(
+        &s,
+        &format!("{V1}/projects/demo-app/tenants/{tenant}/accounts"),
+        "domains@example.com",
+    );
+    let (status, body) = admin(
+        &s,
+        "PATCH",
+        "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config?updateMask=authorizedDomains",
+        &json!({"authorizedDomains": ["project.test"]}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let admin_path = format!("{V1}/projects/demo-app/tenants/{tenant}/accounts:sendOobCode");
+    let body = |host: &str| json!({"requestType": "PASSWORD_RESET", "email": "domains@example.com", "continueUrl": format!("https://{host}/done")});
+    let sent = |s: &AuthState, host: &str, client_route: bool| {
+        if client_route {
+            let mut request = body(host);
+            request["tenantId"] = json!(tenant);
+            client(s, &format!("{V1}/accounts:sendOobCode"), &request)
+        } else {
+            let mut request = body(host);
+            request["returnOobLink"] = json!(true);
+            admin(s, "POST", &admin_path, &request)
+        }
+    };
+    for client_route in [false, true] {
+        for host in ["localhost", "demo-app.firebaseapp.com"] {
+            let before = codes(&s, &tenant);
+            let mails_before = mails.lock().unwrap().len();
+            let (status, answer) = sent(&s, host, client_route);
+            assert_eq!(
+                (status, answer["error"]["message"].as_str()),
+                (
+                    400,
+                    Some("UNAUTHORIZED_DOMAIN : Domain not allowlisted by project")
+                ),
+                "{host} client={client_route}: {answer}"
+            );
+            assert_eq!(codes(&s, &tenant), before, "{host}: no code");
+            assert_eq!(mails.lock().unwrap().len(), mails_before, "{host}: no mail");
+        }
+        let mails_before = mails.lock().unwrap().len();
+        let (status, answer) = sent(&s, "project.test", client_route);
+        assert_eq!(status, 200, "client={client_route}: {answer}");
+        assert_eq!(mails.lock().unwrap().len(), mails_before + 1);
+    }
+}
+
 /// Refuses every mail once switched on.
 struct SwitchHook {
     refuse: AtomicBool,

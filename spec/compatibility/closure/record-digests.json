@@ -215,7 +215,7 @@
     "spec/compatibility/closure/evidence/RTDB-breadth-comparison.json": "9d466fb78acab323f2512065d6e50cc2067b51f4cc09c4060a982d4fbcfc0dab",
     "spec/compatibility/closure/evidence/RTDB-functions-trigger-comparison.json": "ff564dcd7534a365c4b07013e89bc1c2d8ee156e7ed115082f5662ef9c9d7fae",
     "spec/compatibility/closure/evidence/RTDB-genuine-auth-comparison.json": "4e1fd3c38fc3751e16ef588b18ad760f0c2e07b730df9da3e9ae21aa25fb9ca1",
-    "spec/compatibility/closure/evidence/RTDB-kinds-comparison.json": "26214624e3cc8057762bd8edef8d219885a871624738d605529405ac51362e9f",
+    "spec/compatibility/closure/evidence/RTDB-kinds-comparison.json": "b74644aa6e2fb7f8046f1d92507c498337f34553ab92fe5bc1c19651f8b791cb",
     "spec/compatibility/closure/evidence/RTDB-next4-v034-comparison.json": "6fcd219e5072eb16424b3846f52de9f8513b019954904329d671f397c717f9a5",
     "spec/compatibility/closure/evidence/RTDB-next4-v035-comparison.json": "b5bcee217f826c2af9f8a8b6452fb0f925a6b1d7e46019ff1d3ebb92a1c47db9",
     "spec/compatibility/closure/evidence/RTDB-priority-v035-comparison.json": "7375f338b22d042890bc0f2ed298fd61f9dd56536081a337c99095175867b897",

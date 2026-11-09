@@ -1866,7 +1866,7 @@
         "1st gen onCreate, onUpdate and onDelete and 2nd gen onValueCreated, onValueUpdated and onValueDeleted handlers on the nested pattern /k9-rtdb/{group}/items/{id}, a 2nd gen onValueWritten handler on any instance (`*`) and an ancestor group handler on /k9-rtdb/{group}: single-leaf, ancestor, items-level, root multi-path and ancestor-remove writes (k1 to k12), where each handler receives one event per changed leaf of the kind it declares and none for an unchanged leaf",
         "priorities and .value nodes: a priority-only write and a write of a value with a priority deliver events without priorities (a priority-only write delivers the delta {\".priority\": n}); strict events carry none",
         "a real email/password user with custom claims: REST create, update and delete (2nd gen authType app_user with authId the uid, 1st gen authType USER with context.auth.token), and through the web SDK over long polling a set, two transactions and an onDisconnect remove and set, delivered as ordinary writes (k15 to k21)",
-        "the payload ladder: events of 614,4xx, 949,9xx and 1,023,9xx bytes are accepted (200) and delivered to the three item handlers and the group handler; events of 1,049,9xx and 1,499,9xx bytes (and 2 MiB in the first recording) are refused with 400 and the 98-byte text `This request would cause a function payload exceeding the maximum size allowed.`, deliver nothing and write nothing; the strict profile refuses above 1,048,576 bytes (fireemu counts the node before plus the delta as compact JSON), and the emulator profile has no limit",
+        "the payload ladder: events of 614,4xx, 949,9xx and 1,023,9xx bytes are accepted (200) and delivered to the three item handlers and the group handler; events of 1,049,9xx and 1,499,9xx bytes (and 2 MiB in the first recording) are refused with 400 and a 98-byte body (the whole JSON body, `{\"error\" : \"This request would cause a function payload exceeding the maximum size allowed.\"}` with its line breaks, not the message alone), deliver nothing and write nothing; the strict profile refuses above 1,048,576 bytes (fireemu counts the node before plus the delta as compact JSON), and the emulator profile has no limit",
         "not claimed by these rows: the exact threshold between 1,023,950 and 1,049,850 bytes, how production counts the size (node before plus delta, the delta alone, or the whole event) and the form of the refusal over the SDK connection; the 600 KiB create k12 of the first recording, which production did not deliver once and delivered in the second (RTDB-TRIGGERS-KINDS-20261109-02, k22)"
       ],
       "status": "VERIFIED",
@@ -1895,7 +1895,7 @@
         "secondFixtureSha256": "ab6de0f1ed95b4ed17863865835c4425839b04deff7124faaa6f7cdab9920947",
         "comparisonTool": "conformance/src/rtdb-functions/kinds-compare.mjs",
         "comparisonPath": "spec/compatibility/closure/evidence/RTDB-kinds-comparison.json",
-        "comparisonSha256": "26214624e3cc8057762bd8edef8d219885a871624738d605529405ac51362e9f",
+        "comparisonSha256": "b74644aa6e2fb7f8046f1d92507c498337f34553ab92fe5bc1c19651f8b791cb",
         "release": "kinds-closure-build",
         "sourceCommit": "d44b0407f56dc0359bd1d7b0123b145eb5cc61a4",
         "binarySha256": "c67959af1be939fd489acf50914ef475fc70924ede0390cd73408d1247c04825",
@@ -2179,7 +2179,7 @@
       },
       {
         "path": "spec/compatibility/closure/evidence/RTDB-kinds-comparison.json",
-        "sha256": "26214624e3cc8057762bd8edef8d219885a871624738d605529405ac51362e9f",
+        "sha256": "b74644aa6e2fb7f8046f1d92507c498337f34553ab92fe5bc1c19651f8b791cb",
         "rows": 119,
         "summary": {
           "strict": {

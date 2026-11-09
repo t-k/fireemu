@@ -420,7 +420,9 @@ pub(super) fn glob(pattern: &str, path: &str) -> bool {
 }
 
 pub(super) fn glob_with_dot(pattern: &str, path: &str, dot: bool) -> bool {
-    if pattern.starts_with('#') {
+    // superstatic's configMatcher tests `config.glob || config.source`, so an empty pattern is no
+    // pattern at all and matches nothing (not even `/`, which the trailing-slash rule would allow).
+    if pattern.is_empty() || pattern.starts_with('#') {
         return false;
     }
     let negative = pattern.chars().take_while(|ch| *ch == '!').count();
@@ -472,10 +474,11 @@ pub(super) fn deploy_ignore(pattern: &str, path: &str, public_root: &str) -> boo
 }
 
 pub(super) fn matches(rule: &serde_json::Value, path: &str) -> bool {
-    if let Some(pattern) = rule
-        .get("glob")
-        .or_else(|| rule.get("source"))
-        .and_then(serde_json::Value::as_str)
+    // The first non-empty of `glob` and `source`, as in `config.glob || config.source`.
+    if let Some(pattern) = ["glob", "source"]
+        .iter()
+        .filter_map(|key| rule.get(*key).and_then(serde_json::Value::as_str))
+        .find(|pattern| !pattern.is_empty())
     {
         glob(pattern, path)
     } else {
@@ -543,6 +546,13 @@ mod tests {
     #[test]
     fn repeated_slashes_collapse_like_the_pinned_minimatch() {
         let rows: &[(&str, &str, bool)] = &[
+            ("", "/", false),
+            ("", "//", false),
+            ("", "", false),
+            ("", "/a", false),
+            ("/", "/", true),
+            ("/", "//", true),
+            ("//", "/", true),
             ("/a/b", "/a/b/", true),
             ("/data.json", "/data.json/", true),
             ("/a", "/a/", true),
@@ -679,6 +689,34 @@ mod tests {
             for pattern in [plain.as_str(), "/**", "/a*", "/*/**"] {
                 proptest::prop_assert_eq!(glob(pattern, &padded), glob(pattern, &format!("{plain}{}", if tail { "/" } else { "" })));
             }
+        }
+    }
+    #[test]
+    fn an_empty_source_falls_through_to_the_regex_like_superstatic() {
+        let rule = |value: serde_json::Value| matches(&value, "/a");
+        assert!(!rule(serde_json::json!({"source": ""})));
+        assert!(!rule(serde_json::json!({"glob": "", "source": ""})));
+        assert!(rule(serde_json::json!({"source": "", "regex": "^/a$"})));
+        assert!(rule(serde_json::json!({"glob": "", "source": "/a"})));
+        assert!(!matches(&serde_json::json!({"source": ""}), "/"));
+    }
+    // glob 10.5.0 matches by UTF-16 unit: `?` takes half of an astral character. Measured with the
+    // real listFiles (docs.local probe, 2026-11-09). fireemu counts characters; tracked by the open
+    // issue hosting-ignore-astral-utf16-units.
+    #[test]
+    #[ignore = "known gap: hosting-ignore-astral-utf16-units"]
+    fn astral_characters_count_as_two_utf16_units_in_deploy_ignore() {
+        for (pattern, ignored) in [
+            ("?.json", false),
+            ("??.json", true),
+            ("[\u{1f600}].json", false),
+            ("*.json", true),
+        ] {
+            assert_eq!(
+                deploy_ignore(pattern, "\u{1f600}.json", "/public/root"),
+                ignored,
+                "{pattern}"
+            );
         }
     }
     proptest::proptest! {

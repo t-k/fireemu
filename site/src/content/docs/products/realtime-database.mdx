@@ -25,7 +25,7 @@ npx fireemu exec --only database -- npm test
 }
 ```
 
-Since v0.29.0 a `firebase.json` with `emulators.database`, which `firebase init` writes, starts the database where earlier versions only reported it. A busy port stops the start (`error: bind 127.0.0.1:9000: Address already in use`); 9000 is also PHP-FPM's default, so choose another with `--database-port` or `emulators.database.port`, or leave the database out with `--only`.
+A busy port stops the start (`error: bind 127.0.0.1:9000: Address already in use`); 9000 is also PHP-FPM's default, so choose another with `--database-port` or `emulators.database.port`, or leave the database out with `--only`.
 
 The start banner shows the address and the rules in force:
 
@@ -180,6 +180,70 @@ Run it with `npx fireemu exec --only database -- node test.mjs`. To test product
 - A `matches()` call that exceeds the regular-expression engine's step or depth budget is an error, so the rule is false whether or not it is negated.
 - A write's path is at most 768 bytes and its data at most 32 levels deep, as production documents.
 
+## Export, import and snapshots
+
+`emulators:export`, `--export-on-exit` and the Hub's export write `database_export/<instance>.json` for every instance that holds data or was imported, in the export format of `GET /.json?format=export` (priorities kept), with the `database` section of `firebase-export-metadata.json` that firebase-tools writes. The files are byte-identical to the Firebase CLI's for the same data, and each tool imports the other's export.
+
+```sh
+npx fireemu exec --only database --export-on-exit ./emulator-data -- npm test
+npx fireemu exec --only database --import ./emulator-data -- npm test
+```
+
+```text
+emulator-data/
+  firebase-export-metadata.json
+  database_export/
+    demo-app-default-rtdb.json
+```
+
+`--import` writes each file as the `owner` credential with `disableTriggers=true`, as firebase-tools does, before the command starts. The file name, lowercased, is the instance. A file named after an invalid instance, or one the database would refuse (invalid JSON, an invalid key, data nested too deep), stops the start before any other product's data is installed. An export's database section is skipped, with a note, when the database is not selected.
+
+Session snapshots and resets include the instances of the session's project. A restore or reset is seen by open listeners and event streams, cancels those the rules no longer allow on the restored data, and drops the `onDisconnect` writes registered for those instances. In [test worlds](https://github.com/t-k/fireemu/blob/main/docs/test-worlds.md), select `database` in `services`; `world.endpoints.database` and `FIREBASE_DATABASE_EMULATOR_HOST` route to it, and its data survives export, import and reset.
+
+## Rules coverage
+
+`/.inspect/coverage?ns=<instance>` (an HTML viewer) and `/.inspect/coverage.json?ns=<instance>` report, for each expression of the loaded rules, the results it produced, as the official emulator does. Collection is always on and costs one hash lookup per recorded result. So that a long run stays fast and small, each expression keeps its first 64 distinct results (and at most 64 KiB of string values); later new results are counted in `values-omitted` instead of being listed. Snapshot values such as `data` and `root` are a new identity on every evaluation, so their lists fill quickly. Loading changed rules starts a new report; loading the same text again keeps it.
+
+## Local Functions triggers
+
+Local v1 and v2 database handlers receive create, update, delete and write events scoped to their project, instance and reference pattern. The runner supplies the Firebase SDK snapshot objects. Unchanged writes do not emit a change event. Source mutations and their reserved event batch commit together. A write that cannot reach any trigger reference is applied without capturing snapshots, so a trigger on one path adds no cost to writes elsewhere. While the local event queue is full, a write whose events would fit an empty queue is refused with 503 and succeeds on a retry once deliveries drain. A write whose events can never fit (more than 4096 events or 64 MiB of serialized events, for example one `PUT` of 5,000 children under a `/users/{uid}` trigger) is applied, as production applies it, without its events, whatever the queue holds. An event larger than an invocation frame (16 MiB) is dropped alone, and the write's other events are delivered. The first drop prints a warning, and each is counted as `admission.database_fanout_dropped` in the resource diagnostics. Local instances are in `us-central1`: a 2nd-gen trigger in another region does not fire, and a warning at load says so, as the official emulator warns; in production it fires only for instances in its own region. Session reset excludes concurrent database mutation while clearing source data and retiring the Functions epoch.
+
+Production observations cover a fixed sequence of administrator and unauthenticated writes to v1 and v2 handlers. For those recorded deliveries, the strict profile uses the observed event ID, millisecond timestamp, source and authentication metadata forms. Event IDs are deterministic for the configured seed and event sequence, so repeating a seed replays the same IDs. Additional recordings cover 12 writes by an email/password user over REST and the web SDK, including ancestor and multi-path writes and redelivery after a failed invocation. The strict profile uses the recorded production metadata; the emulator profile retains its documented official-emulator event shape. Delivery latency, retry timing, cross-handler order, other providers and unrecorded write or handler shapes remain unverified.
+
+## Emulator UI
+
+The Realtime Database page of the [Emulator UI](../../guides/ui/) browses the data at a path, replaces, patches or deletes it as the local administrator (so these edits do not test client permissions), reads and replaces the instance's rules, and runs an anonymous request to see how the rules answer it.
+
+## Differences from production
+
+Fireemu is compared with production only for the recorded cases. They are:
+
+- **REST.** PUT, GET and PATCH values and priorities, finite POST-generated key and readback, DELETE, `shallow`, `print=silent` and small `writeSizeLimit` forms, `format=export`, finite `orderBy` query-bound forms including `startAt`, `endAt`, `startAfter`, `endBefore`, `equalTo`, `limitToFirst` and `limitToLast`, ETag and `if-match`, and the recorded errors. The recorded scope also includes 72 REST option and refusal cases (including `timeout`, `$priority`, method overrides, callbacks and downloads) and generated invalid REST credentials.
+- **Rules.** Finite Rules loading, `.validate`, cascading, `data`/`newData`/`root` and query-dependent Rules cases, plus owner and UID `.read` and `.write` evaluation: 70 Rules cases, seven further Rules documents, and nine documents for `query.endBefore`, `query.isOrderByChild()`, `OrderByKey`, `OrderByValue`, `OrderByPriority`, `http.encodeURL()`, method reads without a call and a ternary callee, with 33 reads and writes under them.
+- **Event streams.** Anonymous event streams.
+- **Web SDK.** Value listeners, reconnect with queued writes, child and value event order for two `orderByChild` windows with query-scoped unsubscribe and cancellation, `onDisconnect` set, remove, update, cancel and re-register with server values and a Rules change before firing, the recorded numeric-priority child-cancel case and the three recorded re-registration, nested-priority and string-priority shapes, one transaction schedule and email/password Auth over WebSocket and long polling. Additional recordings cover SDK child events with `prevName` for key, priority, value-range and `equalTo` windows, keyed bounds on tied values, parent/child listener fan-out, transactions on an absent node and an object and an aborted transaction, and `get` of windows and missing paths over WebSocket and long polling.
+- **Admin SDK.** The Node Admin SDK was recorded over WebSocket under deny-all Rules with a user OAuth access token; service-account credentials are not claimed.
+- **Functions triggers.** RTDB-triggered Functions created, updated, deleted and written handlers in both generations for the recorded admin and unauthenticated writes (the finite end-user trigger deliveries described above).
+
+Within the recorded scope, these differences are known:
+
+- Ranged reads without a limit, shallow reads and PATCH responses use the official emulator's map ordering: up to four entries retain insertion order, while larger maps use key hashes. PATCH preserves the recorded member order for nested responses, including pretty and callback output. General JSON member-order parity with production is not claimed.
+- A long-polling client that goes offline without closing has its `onDisconnect` writes run when the idle connection is dropped, about 100 s to 105 s after its last request; production ran them after 99.3 s to 104.0 s.
+- Under `strict`, event streams carry `Connection: close`, and the HTTP/1.1 connection closes after the `cancel` event and the end of the chunked response. The recorded event bytes match production, but the recorded production response was close-delimited without transfer encoding, whereas Fireemu uses native HTTP/1.1 chunked framing. This transfer-framing difference is an owner-approved development exception (2026-10-31); event contents, cancellation and EOF remain subject to their existing evidence requirements. The `emulator` profile retains its existing connection behavior; broader stream lifecycle behavior remains unverified.
+- Production's Google-signed Firebase ID tokens are not accepted. Tokens issued by Fireemu's Auth and the `owner` credential are, and `strict` refuses another `gauth` credential with production's `permission_denied`.
+
+Additional finite server-value, Rules language, Rules method and Rules operator cases were recorded and replayed in both profiles; they do not establish parity for unrecorded inputs.
+
+The finite REST, Rules, SDK and trigger cases above were recorded; other push ID forms, server values, query bounds, timeouts and write-size options remain unverified. Rules validation, cascading, snapshots, query members, claims and index diagnostics beyond the recorded cases still use the official emulator as a provisional reference. SDK events, transactions, multi-location updates and onDisconnect shapes beyond the recorded cases, service-account Admin credentials, and broader Functions trigger delivery and timing are not claimed.
+
+## Not supported yet
+
+- Android, Apple, Unity and the Java and Python Admin SDKs are outside the current Node and Web scope.
+
+## Provisional behavior
+
+Where production has not been observed, recorded official-emulator behavior is the provisional reference, subject to the known differences listed above. These comparisons do not establish production equivalence and may change after production observations. They cover number forms such as `1.0`, a write of an equal value, priorities, refusal texts, long-polling framing, how `onDisconnect` writes combine, the credentials of each profile, the regular-expression dialect, where the official emulator refuses a key of 768 bytes in a write's body but accepts it in the path, and the patterns it cannot determinize.
+
 ## Differences from the official emulator
 
 Comparison with the official emulator is limited to recorded cases. The listed unsupported syntax and evaluation cases are refused when rules load or produce rule errors; this does not establish equivalent resource-limit admission. Character classes (names, white space and the format characters the official emulator's reader skips) use Java 21's tables. Operators and methods were compared with the official emulator for the recorded operand types. Objects compare by identity, as in the official emulator: `auth` and `query` each equal themselves, and two snapshots are equal when they read the same version of the tree (`root` and `data` read the tree before a write, `newData` the tree after it) at the same location, so `data` at `/t/o` equals `root.child('t').child('o')` and never equals `newData`. A direct comparison of two snapshots or of `query` with itself is still refused when Rules load, as there; the comparison runs when a ternary lets it past that check. Objects read from `auth` members and the values `val()` gives for a location with children are new objects each time and equal nothing.
@@ -222,59 +286,3 @@ The eight recorded patterns refused by the official emulator's determinization r
 - A request that gives a query parameter more than once, or more than one credential (`auth`, `access_token` and an `Authorization` header), is refused with 400. The official emulator takes the first value, and `auth` before the others.
 - Malformed realtime wire queries receive a connection-error control message, without automatically dropping the connection or sending a close frame. These include unknown fields, a non-string index (`i`), non-boolean inclusive flags (`sin`, `ein`), a non-string limit side (`vf`), bound names (`sn`, `en`) other than strings or null, and a limit written as a floating-point number (even `2.0`). Type checks still apply to flags, side and names when their corresponding bound or limit is absent. A null bound name means no name; otherwise-valid inclusive flags and names without a bound, and a side without a limit, have no effect. A supplied integer limit must be positive and fit in 32 unsigned bits. Nonnumeric limits and integer limits outside that range receive `invalid_parameters` instead. A supplied limit also requires side `l` or `r`; Fireemu refuses a missing or other side where the official emulator can read it as neither side. These are realtime protocol responses, not HTTP 400 responses.
 - A few rules both refuse are refused with another message or at another column.
-
-## Export, import and snapshots
-
-`emulators:export`, `--export-on-exit` and the Hub's export write `database_export/<instance>.json` for every instance that holds data or was imported, in the export format of `GET /.json?format=export` (priorities kept), with the `database` section of `firebase-export-metadata.json` that firebase-tools writes. The files are byte-identical to the Firebase CLI's for the same data, and each tool imports the other's export.
-
-```sh
-npx fireemu exec --only database --export-on-exit ./emulator-data -- npm test
-npx fireemu exec --only database --import ./emulator-data -- npm test
-```
-
-```text
-emulator-data/
-  firebase-export-metadata.json
-  database_export/
-    demo-app-default-rtdb.json
-```
-
-`--import` writes each file as the `owner` credential with `disableTriggers=true`, as firebase-tools does, before the command starts. The file name, lowercased, is the instance. A file named after an invalid instance, or one the database would refuse (invalid JSON, an invalid key, data nested too deep), stops the start before any other product's data is installed. An export's database section is skipped, with a note, when the database is not selected.
-
-Session snapshots and resets include the instances of the session's project. A restore or reset is seen by open listeners and event streams, cancels those the rules no longer allow on the restored data, and drops the `onDisconnect` writes registered for those instances. In [test worlds](https://github.com/t-k/fireemu/blob/main/docs/test-worlds.md), select `database` in `services`; `world.endpoints.database` and `FIREBASE_DATABASE_EMULATOR_HOST` route to it, and its data survives export, import and reset.
-
-## Rules coverage
-
-`/.inspect/coverage?ns=<instance>` (an HTML viewer) and `/.inspect/coverage.json?ns=<instance>` report, for each expression of the loaded rules, the results it produced, as the official emulator does. Collection is always on and costs one hash lookup per recorded result. So that a long run stays fast and small, each expression keeps its first 64 distinct results (and at most 64 KiB of string values); later new results are counted in `values-omitted` instead of being listed. Snapshot values such as `data` and `root` are a new identity on every evaluation, so their lists fill quickly. Loading changed rules starts a new report; loading the same text again keeps it.
-
-## Local Functions triggers
-
-Local v1 and v2 database handlers receive create, update, delete and write events scoped to their project, instance and reference pattern. The runner supplies the Firebase SDK snapshot objects. Unchanged writes do not emit a change event. Source mutations and their reserved event batch commit together. A write that cannot reach any trigger reference is applied without capturing snapshots, so a trigger on one path adds no cost to writes elsewhere. While the local event queue is full, a write whose events would fit an empty queue is refused with 503 and succeeds on a retry once deliveries drain. A write whose events can never fit (more than 4096 events or 64 MiB of serialized events, for example one `PUT` of 5,000 children under a `/users/{uid}` trigger) is applied, as production applies it, without its events, whatever the queue holds. An event larger than an invocation frame (16 MiB) is dropped alone, and the write's other events are delivered. The first drop prints a warning, and each is counted as `admission.database_fanout_dropped` in the resource diagnostics. Local instances are in `us-central1`: a 2nd-gen trigger in another region does not fire, and a warning at load says so, as the official emulator warns; in production it fires only for instances in its own region. Session reset excludes concurrent database mutation while clearing source data and retiring the Functions epoch.
-
-Production observations cover a fixed sequence of administrator and unauthenticated writes to v1 and v2 handlers. For those recorded deliveries, the strict profile uses the observed event ID, millisecond timestamp, source and authentication metadata forms. Event IDs are deterministic for the configured seed and event sequence, so repeating a seed replays the same IDs. Additional recordings cover 12 writes by an email/password user over REST and the web SDK, including ancestor and multi-path writes and redelivery after a failed invocation. The strict profile uses the recorded production metadata; the emulator profile retains its documented official-emulator event shape. Delivery latency, retry timing, cross-handler order, other providers and unrecorded write or handler shapes remain unverified.
-
-## Emulator UI
-
-The Realtime Database page of the [Emulator UI](../../guides/ui/) browses the data at a path, replaces, patches or deletes it as the local administrator (so these edits do not test client permissions), reads and replaces the instance's rules, and runs an anonymous request to see how the rules answer it.
-
-## Differences from production
-
-The recorded cases are REST PUT, GET and PATCH values and priorities, finite POST-generated key and readback, DELETE, `shallow`, `print=silent` and small `writeSizeLimit` forms, `format=export`, finite `orderBy` query-bound forms including `startAt`, `endAt`, `startAfter`, `endBefore`, `equalTo`, `limitToFirst` and `limitToLast`, ETag and `if-match`, and the recorded errors; finite Rules loading, `.validate`, cascading, `data`/`newData`/`root` and query-dependent Rules cases, plus owner and UID `.read` and `.write` evaluation; anonymous event streams; and the web SDK's value listeners, reconnect with queued writes, child and value event order for two `orderByChild` windows with query-scoped unsubscribe and cancellation, `onDisconnect` set, remove, update, cancel and re-register with server values and a Rules change before firing, the recorded numeric-priority child-cancel case and the three recorded re-registration, nested-priority and string-priority shapes, one transaction schedule and email/password Auth over WebSocket and long polling; and RTDB-triggered Functions created, updated, deleted and written handlers in both generations for the recorded admin and unauthenticated writes. Additional recordings cover SDK child events with `prevName` for key, priority, value-range and `equalTo` windows, keyed bounds on tied values, parent/child listener fan-out, transactions on an absent node and an object and an aborted transaction, and `get` of windows and missing paths over WebSocket and long polling. The Node Admin SDK was recorded over WebSocket under deny-all Rules with a user OAuth access token; service-account credentials are not claimed. The recorded scope also includes 72 REST option and refusal cases (including `timeout`, `$priority`, method overrides, callbacks and downloads), 70 Rules cases, seven further Rules documents, nine documents for `query.endBefore`, `query.isOrderByChild()`, `OrderByKey`, `OrderByValue`, `OrderByPriority`, `http.encodeURL()`, method reads without a call and a ternary callee with 33 reads and writes under them, generated invalid REST credentials, and the finite end-user trigger deliveries above. Within the recorded scope, these differences are known:
-
-- The PATCH and event-stream changes below are available from v0.33.0.
-- Ranged reads without a limit, shallow reads and PATCH responses use the official emulator's map ordering: up to four entries retain insertion order, while larger maps use key hashes. PATCH preserves the recorded member order for nested responses, including pretty and callback output. General JSON member-order parity with production is not claimed.
-- A long-polling client that goes offline without closing has its `onDisconnect` writes run when the idle connection is dropped, about 100 s to 105 s after its last request; production ran them after 99.3 s to 104.0 s.
-- Under `strict`, event streams carry `Connection: close`, and the HTTP/1.1 connection closes after the `cancel` event and the end of the chunked response. The recorded event bytes match production, but the recorded production response was close-delimited without transfer encoding, whereas Fireemu uses native HTTP/1.1 chunked framing. This transfer-framing difference is an owner-approved development exception (2026-10-31); event contents, cancellation and EOF remain subject to their existing evidence requirements. The `emulator` profile retains its existing connection behavior; broader stream lifecycle behavior remains unverified.
-- Production's Google-signed Firebase ID tokens are not accepted. Tokens issued by Fireemu's Auth and the `owner` credential are, and `strict` refuses another `gauth` credential with production's `permission_denied`.
-
-Additional finite server-value, Rules language, Rules method and Rules operator cases were recorded and replayed in both profiles; they do not establish parity for unrecorded inputs.
-
-The finite REST, Rules, SDK and trigger cases above were recorded; other push ID forms, server values, query bounds, timeouts and write-size options remain unverified. Rules validation, cascading, snapshots, query members, claims and index diagnostics beyond the recorded cases still use the official emulator as a provisional reference. SDK events, transactions, multi-location updates and onDisconnect shapes beyond the recorded cases, service-account Admin credentials, and broader Functions trigger delivery and timing are not claimed.
-
-## Not supported yet
-
-- Android, Apple, Unity and the Java and Python Admin SDKs are outside the current Node and Web scope.
-
-## Provisional behavior
-
-Where production has not been observed, recorded official-emulator behavior is the provisional reference, subject to the known differences listed above. These comparisons do not establish production equivalence and may change after production observations. They cover number forms such as `1.0`, a write of an equal value, priorities, refusal texts, long-polling framing, how `onDisconnect` writes combine, the credentials of each profile, the regular-expression dialect, where the official emulator refuses a key of 768 bytes in a write's body but accepts it in the path, and the patterns it cannot determinize.

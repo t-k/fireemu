@@ -99,7 +99,14 @@ npx fireemu emulators:exec -- npm test
 
 ## Choose services
 
-By default Fireemu starts Firestore, Authentication, Storage and App Check; Functions when a codebase is configured, and with it Eventarc and Cloud Tasks; Pub/Sub when it is configured; and Hosting when `firebase.json` has a `hosting.public` directory. Use `--only` to choose:
+By default Fireemu starts Firestore, Authentication, Storage and App Check. These start only when configured:
+
+- **Functions**, and with it Eventarc and Cloud Tasks, when a codebase is configured.
+- **Pub/Sub**, when `emulators.pubsub`, `daemon.pubsubPort` or `--pubsub-port` is set.
+- **Realtime Database**, when `emulators.database`, `daemon.databasePort` or `--database-port` is set.
+- **Hosting**, when `firebase.json` has a `hosting.public` directory.
+
+Use `--only` to choose exactly which services start:
 
 ```sh
 npx fireemu up --only auth,firestore,storage
@@ -122,10 +129,15 @@ Fireemu uses the same default ports as the Local Emulator Suite. A port set in `
 | Cloud Functions | 5001 | `--functions-port` |
 | Cloud Firestore | 8080 | `--firestore-port` |
 | Cloud Pub/Sub | 8085 | `--pubsub-port` |
+| Realtime Database | 9000 | `--database-port` |
 | Authentication | 9099 | `--http-port` |
 | Cloud Storage | 9199 | `--storage-port` |
 | Eventarc | 9299 | `--eventarc-port` |
 | Cloud Tasks | 9499 | `--tasks-port` |
+
+## Next steps
+
+[Connect your app](../connect/) to the emulators, or see [Migrate from the Local Emulator Suite](../migrate/) if you already use `firebase emulators:exec`.
 
 ## Get help
 

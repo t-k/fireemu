@@ -3,7 +3,7 @@ title: CLI
 description: Commands and options of the fireemu command.
 ---
 
-This reference lists common fireemu commands and options. Run `npx fireemu --help`, or `npx fireemu help <command>`, for the help of the version you have installed.
+This reference lists common fireemu commands and options. Run `npx fireemu --help`, or `npx fireemu help <command>`, for the help of the version you have installed. The blocks below are the help text of the current release; `exec` and `capabilities` accept every option of `up`, which is listed once under [up](#up).
 
 | Command | What it does |
 |---|---|
@@ -123,57 +123,9 @@ Starts the same emulators as `up`, runs the command with the emulator host envir
 
 With "shell script" (the official form) the script is run by the system shell. With `--` the command is run as exactly that program and argv, without a shell. Everything after `--` belongs to the command, including --help; a `--help` inside the script text is script text.
 
-options:
-  --config <file>
-        Configuration file: TOML (.toml) or JSON (any other extension), with schemaVersion 1, or a firebase.json. Default: ./fireemu.toml or ./fireemu.json when neither --config nor --firebase-json is given (both present is an error; remove one), else the nearest firebase.json (see --no-config-discovery), else the built-in defaults.
-  --firebase-json <file>
-        Read ports, rules, indexes and Functions codebases from this firebase.json. Takes precedence over one referenced by --config. Default: the one ./fireemu.toml or ./fireemu.json names, else, without either, the nearest firebase.json in the current directory or a parent.
-  --no-config-discovery
-        Do not search for ./fireemu.toml, ./fireemu.json or the nearest firebase.json when neither --config nor --firebase-json is given; use the built-in defaults. Also silences the warning for a discovered file that was skipped because of its owner or permissions. Default: the search is on.
-  -P, --project <id|alias>
-        Project ID, or an alias from the .firebaserc next to the firebase.json (else the current directory). Default: the .firebaserc default, else daemon.authProject from --config, else demo-app.
-  --only <list>
-        Comma-separated services to start: auth, firestore, storage, functions (or functions:<codebase>), eventarc, tasks, pubsub, database, appcheck, hosting. Default: Firestore, Auth, Storage and App Check; Functions when a codebase is configured (firebase.json or --functions), and with it Eventarc and Cloud Tasks; Pub/Sub when configured (emulators.pubsub, daemon.pubsubPort or --pubsub-port); the Realtime Database when configured (emulators.database, daemon.databasePort or --database-port); Hosting when firebase.json has hosting.public.
-  --firestore-port <n>
-        Firestore port. Default: 8080 (0 picks a free port).
-  --http-port <n>
-        Auth (Identity Toolkit) port. Default: 9099 (0 picks a free port).
-  --storage-port <n>
-        Storage port. Default: 9199 (0 picks a free port).
-  --functions-port <n>
-        Functions port, used when a codebase is loaded. Default: 5001 (0 picks a free port).
-  --hosting-port <n>
-        Hosting port, used when firebase.json has hosting.public. Default: 5000 (0 picks a free port).
-  --eventarc-port <n>
-        Eventarc port. Eventarc starts exactly when a Functions backend is loaded; this option only sets the port. Default: 9299.
-  --tasks-port <n>
-        Cloud Tasks port. Cloud Tasks starts exactly when a Functions backend is loaded; this option only sets the port. Default: 9499.
-  --pubsub-port <n>
-        Pub/Sub port. Without --only, giving it also starts Pub/Sub; with --only, Pub/Sub starts only when the list names pubsub. Default: 8085.
-  --database-port <n>
-        Realtime Database port. Without --only, giving it also starts the Realtime Database; with --only, it starts only when the list names database. Default: 9000.
-  --functions <dir>
-        Load exactly one Functions codebase from this directory, whatever firebase.json declares. Default: the codebases firebase.json declares.
+options: every option of `up` (listed under up above), and:
   --ui
         Start the UI while the command runs (exec does not start it otherwise, as in `firebase emulators:exec`). --ui-port overrides.
-  --ui-port <n|auto>
-        UI port; auto assigns an available port, 0 disables the UI. Default: 4000 for up (the UI is skipped if that port is busy), off for exec.
-  --hub-port <n|auto>
-        Emulator Hub port; auto assigns an available port, 0 disables it. Default: 4400.
-  --logging-port <n>
-        Logging emulator port; 0 disables it. Default: 4500.
-  --inspect-functions [port]
-        Run the Functions runner under the Node inspector on this port (1024-65535); without a port, or with `true`, a free port. Refused when functions.runner is not node. Default: off.
-  --log-verbosity quiet|silent|info|debug
-        quiet and silent print errors only; info adds the banner and notices; debug also prints the resolved configuration. Case-insensitive. Default: info.
-  --import <dir>
-        Import an export directory (from --export-on-exit or emulators:export) at start; it must exist. Default: start empty.
-  --export-on-exit [dir]
-        Export all state to this directory when the emulators stop; without a directory, the --import directory. Refused for the working directory or a parent of it, and unavailable on Windows. Default: no export.
-  --ready-file <file>
-        Publish endpoint discovery, including a control capability, to this private file once every listener is bound, and remove it on graceful shutdown. For tooling such as fireemu/testing. Default: none.
-  --owner-stdin
-        Shut down when standard input is closed. For tooling such as fireemu/testing. Default: off.
   -h, --help
         Print this help and exit.
 ```
@@ -226,55 +178,7 @@ usage:
 
 Prints the capability manifest for the profile the options resolve to. It accepts the same options as `up` and validates them the same way, but only --config (the profile it names) changes the result.
 
-options:
-  --config <file>
-        Configuration file: TOML (.toml) or JSON (any other extension), with schemaVersion 1, or a firebase.json. Default: ./fireemu.toml or ./fireemu.json when neither --config nor --firebase-json is given (both present is an error; remove one), else the nearest firebase.json (see --no-config-discovery), else the built-in defaults.
-  --firebase-json <file>
-        Read ports, rules, indexes and Functions codebases from this firebase.json. Takes precedence over one referenced by --config. Default: the one ./fireemu.toml or ./fireemu.json names, else, without either, the nearest firebase.json in the current directory or a parent.
-  --no-config-discovery
-        Do not search for ./fireemu.toml, ./fireemu.json or the nearest firebase.json when neither --config nor --firebase-json is given; use the built-in defaults. Also silences the warning for a discovered file that was skipped because of its owner or permissions. Default: the search is on.
-  -P, --project <id|alias>
-        Project ID, or an alias from the .firebaserc next to the firebase.json (else the current directory). Default: the .firebaserc default, else daemon.authProject from --config, else demo-app.
-  --only <list>
-        Comma-separated services to start: auth, firestore, storage, functions (or functions:<codebase>), eventarc, tasks, pubsub, database, appcheck, hosting. Default: Firestore, Auth, Storage and App Check; Functions when a codebase is configured (firebase.json or --functions), and with it Eventarc and Cloud Tasks; Pub/Sub when configured (emulators.pubsub, daemon.pubsubPort or --pubsub-port); the Realtime Database when configured (emulators.database, daemon.databasePort or --database-port); Hosting when firebase.json has hosting.public.
-  --firestore-port <n>
-        Firestore port. Default: 8080 (0 picks a free port).
-  --http-port <n>
-        Auth (Identity Toolkit) port. Default: 9099 (0 picks a free port).
-  --storage-port <n>
-        Storage port. Default: 9199 (0 picks a free port).
-  --functions-port <n>
-        Functions port, used when a codebase is loaded. Default: 5001 (0 picks a free port).
-  --hosting-port <n>
-        Hosting port, used when firebase.json has hosting.public. Default: 5000 (0 picks a free port).
-  --eventarc-port <n>
-        Eventarc port. Eventarc starts exactly when a Functions backend is loaded; this option only sets the port. Default: 9299.
-  --tasks-port <n>
-        Cloud Tasks port. Cloud Tasks starts exactly when a Functions backend is loaded; this option only sets the port. Default: 9499.
-  --pubsub-port <n>
-        Pub/Sub port. Without --only, giving it also starts Pub/Sub; with --only, Pub/Sub starts only when the list names pubsub. Default: 8085.
-  --database-port <n>
-        Realtime Database port. Without --only, giving it also starts the Realtime Database; with --only, it starts only when the list names database. Default: 9000.
-  --functions <dir>
-        Load exactly one Functions codebase from this directory, whatever firebase.json declares. Default: the codebases firebase.json declares.
-  --ui-port <n|auto>
-        UI port; auto assigns an available port, 0 disables the UI. Default: 4000 for up (the UI is skipped if that port is busy), off for exec.
-  --hub-port <n|auto>
-        Emulator Hub port; auto assigns an available port, 0 disables it. Default: 4400.
-  --logging-port <n>
-        Logging emulator port; 0 disables it. Default: 4500.
-  --inspect-functions [port]
-        Run the Functions runner under the Node inspector on this port (1024-65535); without a port, or with `true`, a free port. Refused when functions.runner is not node. Default: off.
-  --log-verbosity quiet|silent|info|debug
-        quiet and silent print errors only; info adds the banner and notices; debug also prints the resolved configuration. Case-insensitive. Default: info.
-  --import <dir>
-        Import an export directory (from --export-on-exit or emulators:export) at start; it must exist. Default: start empty.
-  --export-on-exit [dir]
-        Export all state to this directory when the emulators stop; without a directory, the --import directory. Refused for the working directory or a parent of it, and unavailable on Windows. Default: no export.
-  --ready-file <file>
-        Publish endpoint discovery, including a control capability, to this private file once every listener is bound, and remove it on graceful shutdown. For tooling such as fireemu/testing. Default: none.
-  --owner-stdin
-        Shut down when standard input is closed. For tooling such as fireemu/testing. Default: off.
+options: every option of `up` (listed under up above); only --config and --firebase-json change the result.
   -h, --help
         Print this help and exit.
 ```

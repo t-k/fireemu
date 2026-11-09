@@ -158,7 +158,7 @@ initializeAppCheck(app, { provider: new CustomProvider({ getToken: exchangeDebug
 
 `enforceAppCheck: true` on a Node callable refuses a call without a valid token with the callable `UNAUTHENTICATED` error before the function runs (a 401 response, or the `200` SSE error record for a streaming call), and a valid token fills `request.app`. Replay protection is not supported: a call that presents a valid token to a callable with `consumeAppCheckToken: true` is refused with 501 `APP_CHECK_REPLAY_UNSUPPORTED`, so a test can never pass on a token that production would have consumed.
 
-Tokens are signed with a key that belongs to one daemon instance. Node callables and other daemon-verified services reject them after a session reset or snapshot restore. Python callables verify token signatures and claims using the signing keys and real time, without checking current app state or project epoch, so resetting a project or disabling an app does not revoke an otherwise valid token before expiry. Python also refuses token consumption and explicit App Check configuration; see [Python codebases](../functions/#python-codebases) for setup and restrictions.
+Tokens are signed with a key that belongs to one daemon instance. Node callables and other daemon-verified services reject them after a session reset or snapshot restore. Python callables verify token signatures and claims using the signing keys and real time, without checking current app state or project epoch, so resetting a project or disabling an app does not revoke an otherwise valid token before expiry. Python also refuses token consumption and explicit App Check configuration; see [Cloud Functions (Python)](../functions-python/#differences-from-production-and-the-firebase-cli) for setup and restrictions.
 
 ## Ordinary HTTP functions (`onRequest`)
 
@@ -201,7 +201,7 @@ The runner patches the `firebase-admin` it resolves from your codebase before yo
 | Bundled Functions runner | `FUNCTIONS_EMULATOR=true` and the same App Check host/JWKS variables when App Check is available, even when Auth is not selected. Inherited, dotenv or local secret values cannot replace these two routes; they are removed when App Check is unavailable. |
 | Parent test process | World variables are not installed into `process.env`; use `world.environment` explicitly. |
 
-Use `FIREEMU_APP_CHECK_JWKS_URL` inside the runner. Do not derive the key URL from a request header or an unverified token. This example deliberately supports loopback only. In v0.23.0 the runner does not receive the App Check variables: selecting Auth and deriving `/v1/jwks` from `FIREBASE_AUTH_EMULATOR_HOST` is a version-specific workaround, not a requirement of App Check itself.
+Use `FIREEMU_APP_CHECK_JWKS_URL` inside the runner. Do not derive the key URL from a request header or an unverified token. This example deliberately supports loopback only.
 
 ### Local signature and claim verification without the Admin SDK
 

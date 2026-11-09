@@ -38,101 +38,7 @@ apiMode = "native"
 </TabItem>
 </Tabs>
 
-`edition` accepts `standard` and `enterprise`. The Enterprise Pipeline API supports a limited subset of read operations; see [Enterprise pipelines](#enterprise-pipelines) and [Limitations](../../compatibility/limitations/).
-
-## Enterprise pipelines
-
-In v0.40.0, the recorded empty `array()` and `map()` constructors return empty values. Other constructor shapes remain outside these observations.
-
-Enterprise pipelines are verified against production for the recorded corpus: 1,951 recorded cases, of which 1,906 match, 17 match within production's own variation (response framing and random `sample` positions), 26 differ only in a way the project owner accepted (the order of aggregate groups, the legal selection of groups under a `limit` or `offset` after unsorted groups, the order of rows tied on every sort key, and a value that depends on the clock) and 2 gRPC requests the recorder could not send are covered by a later observation. Shapes that were not recorded are not claimed, and the strict profile refuses many of them as unobserved; the [Production verification](../../compatibility/#production-verification) table lists the not-claimed items.
-
-On an Enterprise database, fireemu runs pipelines from the Admin SDK (gRPC) and the Web SDK's `firebase/firestore/lite/pipelines` (REST `:executePipeline`). The supported subset starts with a `collection`, `collection_group`, `documents` or finite `database` input, followed by `where`, `select`, `sort`, `add_fields`, `remove_fields`, `distinct`, `aggregate`, `offset`, `limit` and `unnest` stages in any order and number. Aggregates include `count`, `count_distinct`, `sum`, `average`, `minimum` and `maximum`, with or without groups.
-
-| Expression | Supported |
-|---|---|
-| Fields | Nested paths (`a.b`) and `__name__` (the document reference) |
-| Literals | Values of every type, including arrays and maps of literals and vectors of doubles |
-| Comparisons | `equal`, `not_equal`, `less_than`, `less_than_or_equal`, `greater_than` and `greater_than_or_equal`, anywhere an expression stands |
-| Construction | `array(...)` and `map(...)` |
-| Array access | `array_length`, `array_first`, `array_last`, `array_get`, `array_slice`, `array_first_n`, `array_last_n`, `array_index_of`, `array_index_of_all`, `join`, `maximum_n` and `minimum_n` |
-| Array helpers | `array_concat` and `array_reverse` |
-| Timestamp functions | `current_timestamp`, `timestamp_add`, `timestamp_subtract`, `timestamp_trunc`, `timestamp_diff`, `timestamp_extract`, `unix_micros_to_timestamp`, `unix_millis_to_timestamp`, `unix_seconds_to_timestamp`, `timestamp_to_unix_micros`, `timestamp_to_unix_millis` and `timestamp_to_unix_seconds` |
-| Map functions | `map_get`, `map_set`, `map_remove`, `map_merge`, `map_keys`, `map_values` and `map_entries` |
-| Regular expressions | `regex_contains`, `regex_match`, `regex_find` and `regex_find_all` |
-| Document functions | `documentId`, `collectionId` and `parent` |
-| Logic, existence, type and membership | `and`, `or`, `not`, `xor`, `nor`, `exists`, `is_absent`, `is_error`, `type`, `is_type`, `array_contains`, `array_contains_all`, `array_contains_any`, `equal_any` and `not_equal_any` |
-| String | `byte_length`, `string_index_of`, `string_repeat`, `string_replace_all`, `string_replace_one`, `string_reverse`, `concat`, `to_lower`, `to_upper`, `starts_with`, `ends_with`, `string_contains`, `char_length`, `substring`, `trim`, `ltrim`, `rtrim` and `split` |
-| Vector scalars | `vector_length`, `dot_product`, `euclidean_distance` and `cosine_distance` |
-| Lazy control | `if_absent`, `if_null`, `if_error`, `conditional` and `switch_on` |
-| Math | `add`, `subtract`, `multiply`, `divide`, `mod`, `abs`, `round`, `floor`, `ceil` and `pow` |
-
-In v0.41.0, additional recorded forms include `like`, `rand`, `array_filter` and `array_transform`. Input types, lambda placement and combinations remain bounded. Random values do not reproduce production's random sequence.
-
-The same release adds recorded scalar forms of `minimum`, `maximum`, `sum` and `negate`, including captured integer, finite-double, mixed numeric and null/absent cases. The recorded `sum([])` returns null. Other types, non-finite inputs and numerical extremes remain outside this finite compatibility claim.
-
-Additional recorded generic forms include `cmp`, `storage_size`, `coalesce`, `get_field`, `offset`, `reverse`, `length`, `string_concat`, `namespace`, `has_ancestor`, `reference_slice`, `replace_document_id` and `autogen_document_id`. Each observation covers its declared input types: for example, `storage_size` currently supports strings, while recorded `reverse` forms cover strings, bytes and arrays. Generated document IDs follow the finite 20-character ASCII-alphanumeric contract; these observations do not establish entropy or global uniqueness.
-
-The array and map functions listed in the v0.33.0 changelog, regular-expression and timestamp functions, zero-count changes and the recorded `array_reverse` and duplicate-alias `INTERNAL` responses are available from v0.33.0; the additional array functions and `unnest` are available in v0.34.0. The functions are available in both profiles. The production comparison covers the recorded cases, not every input type or combination. `map_set` retains an explicit null value and removes a key whose value is absent; a null or absent input map yields an absent result, while the other listed map functions return null for that input; that removal follows the documented API and has not been observed in production. Map keys, values and entries use Fireemu's deterministic map order, and corresponding keys and values stay paired. The recorded production map agrees for its two keys; production ordering for other maps is unverified.
-
-In v0.36.0 the emulator profile also evaluates `sqrt`, `exp`, `ln`, `log`, `log10` and `trunc` with omitted or zero precision. Nonzero truncation precision and finite exponential subnormal outputs are unobserved. Strict admits finite recorded numeric and error shapes in their supported contexts; unrecorded numeric, domain, null, type and precedence cases remain gated. These functions do not establish general production parity.
-
-In v0.37.0, the added string functions operate on their supported shapes; strict refuses unrecorded types and non-ASCII search offsets, and repeat and replacement apply a local output-size bound. Strict `array_index_of_all` accepts the observed integer forms. Vector scalar functions refuse unrecorded, empty, mismatched or non-finite binary vectors and unsupported numerical extremes; these bounds do not establish general production compatibility.
-
-The additional array functions and `unnest` cover the recorded input shapes; unrecorded combinations and ordering remain unverified. Strict Firestore REST accepts the recorded standard and URL-safe base64 forms and the protobuf `bytes_value` alias, and rejects recorded CR/LF and mixed-alphabet forms. The ordinary emulator profile retains permissive decoding for development; its extra accepted forms are not a production compatibility claim.
-
-Pipeline timestamps use microsecond precision. `current_timestamp` samples the configured clock once per request and stays fixed throughout that pipeline evaluation. Zone-aware truncation and extraction use named IANA zones; the production recordings cover only specific zone cases. Ambiguous or nonexistent local daylight-saving boundaries are refused as unobserved, and custom GMT offset semantics are not implemented. Other time zones, boundaries and input combinations are not established as production-compatible by those recordings.
-
-The regex functions use a bounded local engine. Under `strict`, patterns outside a conservative common RE2 grammar are refused as unobserved, including shorthand classes and word boundaries, Unicode property escapes, brace repetitions, nested classes and class set operators. Ordinary Unicode literals, simple classes and the recorded inline case flag remain supported. The `emulator` profile uses the local engine without that strict grammar guard; its behavior outside recorded cases is not established as production parity. `regex_match` requires a full-string match; the recorded `regex_find` capture case returns the first capture.
-
-A `limit` of zero passes no rows to the next stage and an `offset` of zero passes all rows through, in both profiles. The strict profile follows the recorded production cases for these inputs.
-
-The strict profile reproduces production's recorded `INTERNAL` response for `array_reverse()` with no arguments and empty options, and for a duplicate select alias when one spelling is quoted and the other is unquoted. Fireemu writes a fixed explanation to standard error without request values. A zero-argument `array_reverse()` with nonempty options keeps its prior refusal, and the emulator profile retains its prior validation behavior. These errors cover the recorded forms only; adjust the call or alias to proceed.
-
-In v0.41.0, strict native gRPC also reproduces the recorded `INTERNAL` errors for finite integer forms of `bit_not`, `bit_left_shift` and `bit_right_shift`. The console explains this behavior without including request values. These observations establish error compatibility for the declared native request shapes; successful bit-operation semantics and REST error parity remain unverified. The emulator profile retains its prior refusal.
-
-The same release matches additional recorded validation-priority cases and preserves structured `ErrorInfo` for the captured ordered REST `collection_id` type error. Other precedence combinations and ambiguous native map order remain gated. The captured native gRPC `geo_distance` select call with two valid geo points returns its search-only `INVALID_ARGUMENT` diagnostic; geo search remains outside this pipeline compatibility claim. In both profiles, the recorded nested aggregate scalar `sum` call on an integer returns `INVALID_ARGUMENT` with the production `array_sum` diagnostic: expected Array, got LONG. Supply an array to that scalar call; other argument shapes retain their existing gates.
-
-A `where` keeps a row only when its condition (a comparison, a field or another supported function) is `true`. A `select` sets at most 64 fields, as in production. Results without a `select` carry the document's name, create time and update time, and answers normally carry the execution time; a missing-only `documents` input retains its selected execution time. A small answer comes as production frames it: all results in one response message over gRPC, or in one array element over REST. Fireemu cuts a larger answer at about 1 MiB of results; production recordings show variable boundaries; large-answer framing is not verified. `select({__name__: field("__name__")})` answers the document name, including the recorded forms beside other aliases or with quoted aliases and values; unrecorded forms remain `UNIMPLEMENTED` under `strict`. Without `sort`, recorded collection reads follow ascending CRC-32 of document IDs; collection groups use parent path then that order. Non-ASCII IDs and CRC-32 ties are unverified, as are aggregate group order and ordering of ties under a limit. A stored `-0.0` reads back as `-0.0`, as in production; the official emulator stores it as `0.0`.
-
-The recorded matching answers cover specific request shapes from the FS-ENT-ORACLE observations, including comparisons, literal values, select aliases, document functions, stage ordering and the supported string and math functions. Other recorded and unrecorded shapes remain unverified. Under `strict`, a refusal is generally answered only when the request has the shape of a request production refused, with that request's text, and is `UNIMPLEMENTED` otherwise; the gRPC depth exceptions described below also apply. A shape keeps the stages, function names, value kinds and every map's entries in order, and replaces only plain field names and values of the same kind, so `select({total: documentId(field)})` is answered like the recorded `select({v: documentId(field)})`. A REST body keeps its key order; over gRPC a map of two or more entries has no order, so `strict` generally answers no refusal of such a request there, except for the recorded gRPC select-width case described below. Where production has not been observed, the profiles differ:
-
-| Input | `strict` | `emulator` |
-|---|---|---|
-| A document function of a collection reference with a non-ASCII name | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, the index counted in UTF-16 units |
-| Recorded reserved map-key refusals | `INVALID_ARGUMENT` for the recorded shapes; unrecorded shapes remain gated | `INVALID_ARGUMENT`, naming a reserved key first |
-| Recorded document-function wrong-type requests | `INVALID_ARGUMENT` for the recorded REST shapes; unordered gRPC vector maps remain `UNIMPLEMENTED` | `INVALID_ARGUMENT`, naming the type |
-| A `map(...)` key that is a double, null or another type than an integer or boolean | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, naming the type |
-| A vector literal with integer or NaN elements, no element, without `value` or with another key | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, the official text |
-| A vector literal with an infinite element | `UNIMPLEMENTED` | The vector |
-| A `__type__` key that is not a string, or a reference literal that names no document | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, the official text |
-| Two refusals in one pipeline | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, one of them |
-| A refusal production recorded only in another stage, such as a literal holding a field inside a `where` condition | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, the official text |
-| A vector literal with a negative-zero element | `UNIMPLEMENTED` | The vector |
-| Recorded empty or reserved literal-key refusals, including `__name__` and multi-key cases | `INVALID_ARGUMENT` over REST and for unambiguous gRPC; three unordered multi-key gRPC cases remain `UNIMPLEMENTED` | `INVALID_ARGUMENT`, naming one key |
-| Recorded wrong-type `limit` and `offset` arguments and a negative `offset` | `INVALID_ARGUMENT` for the recorded shapes; other shapes remain gated | `INVALID_ARGUMENT`, the official text |
-| A `limit` of 0 or an `offset` of 0 | The recorded zero-count behavior | The same zero-count behavior |
-| A `select` alias inside another in another order than production's `{m, m.r}`, such as `{a.b, a}` | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, naming the later alias over REST (as the official emulator does) and the child over gRPC |
-| An unrecorded `select` with two fields that both fail when evaluated, such as `{a: documentId("s"), b: parent(true)}` | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, the first in key order |
-| A vector inside an array, or a `__type__` key beside other keys in a literal | `UNIMPLEMENTED` | The official answer |
-| An unrecorded wrong argument count for a supported function | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, fireemu's text |
-| Function options | The recorded single-integer `x` option on `document_id(__name__)` is accepted in its two-stage projection form in v0.41.0; other options remain gated | Ignored, as the official emulator ignores them |
-| An empty `select` map or a later stage's check after a function or stage value fireemu does not check (production names an unknown function first) | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, the empty map or the later check |
-| An empty map or another refusal beside a function call that fails on its constants, such as `map(1.5, i)`, or beside any other part `strict` does not answer | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, the empty map or the other refusal |
-| An unrecorded stage argument count or options | `UNIMPLEMENTED` | Depends on the stage and argument shape |
-| An empty `array()` or `map()` | The recorded empty array or map | An empty array or map |
-| An `aggregate` without its groups argument | `INVALID_ARGUMENT` with production's arity text for the recorded shape (directly after the collection, a non-empty map of plain aliases to `count`), else `UNIMPLEMENTED` | `INVALID_ARGUMENT` with the same text |
-
-In v0.35.0, finite `union` branches can use collection inputs with row-local `where` and `select`; unsupported child stages and inputs are refused. Source reads share a snapshot, and nested branches have local depth and size limits. `sample(size, mode)` supports `documents` sampling without replacement and `percent` sampling in input order: for example, `sample(0.5, "percent")` uses a 0.5 probability per row, while `sample(2, "documents")` selects up to two rows. Random results vary and do not reproduce production's random sequence.
-
-Finite `replace_with` supports full replacement and the implemented overwrite and keep merge modes; full replacement drops source document metadata. Finite `find_nearest` supports Euclidean, cosine and dot-product measures with the locally required limit and distance-field options. Other shapes remain unverified or refused. Both the gRPC and REST routes serve finite `documents`, `collection` and `collection_group` inputs with a read time, an existing transaction or a new transaction, and auto-commit of an existing or new transaction, in the recorded shapes. A read time with auto-commit, and `database`, `union` or `search` inputs with a selector remain refused. Unsupported execution shapes are explicitly refused. Recorded validation failures can return `INVALID_ARGUMENT` without making a suggested function executable. Recorded matches establish compatibility only for the recorded request shapes; other shapes remain unverified.
-
-In v0.38.0, finite recorded forms of `array_agg`, `array_agg_distinct`, `first`, `last` and `count_if` are supported. Bounded subcollection and correlated scalar subquery forms share a source snapshot; unsupported inputs, stages and bindings are refused, and local resource limits apply. Aggregate ordering and unrecorded forms are not claimed as production parity.
-
-In v0.38.1, ordinary REST reports the recorded depth diagnostic for deeply nested pipeline JSON, and strict gRPC admits the recorded 65-field `select` refusal. gRPC function expressions over 32 levels are refused in both profiles; strict gRPC also maps protobuf recursion failures to the recorded invalid-argument diagnostic. The gRPC limits and diagnostics generalize beyond the observed chains; error precedence and other unrecorded cases remain unverified.
-
-In v0.39.0, selecting a missing nested alias preserves its empty parent maps. Production recorded three dotted-alias cases; other missing-expression shapes are generalized from those observations.
-
-In v0.39.0, a supported correlated scalar subquery may apply an additional string-equality filter before checking cardinality. The recorded single-result request returns the selected value, and the recorded multiple-result request receives the production `INVALID_ARGUMENT` diagnostic. These observations cover only those recorded request shapes; zero-result behavior and other scalar forms remain unverified.
+`edition` accepts `standard` and `enterprise`. The Enterprise Pipeline API supports a limited subset of read operations; see [Enterprise text search](#enterprise-text-search), [Enterprise pipelines](#enterprise-pipelines) and [Limitations](../../compatibility/limitations/).
 
 ## Composite indexes
 
@@ -145,7 +51,7 @@ Production refuses a query whose composite index is not defined. The official em
 
 The `emulator` profile always runs the query, as the official emulator does, while reporting missing-index suggestions on standard error.
 
-An OR query can require a separate composite index for each branch. Since v0.26.0, supplementary diagnostics list all distinct missing branch indexes in one attempt. Under `strict` with `refuse`, the SDK still receives its existing `FAILED_PRECONDITION` response and first creation link; the additional branch definitions are on standard error. Under `report`, the control API report also collects the distinct missing definitions.
+An OR query can require a separate composite index for each branch. Supplementary diagnostics list all distinct missing branch indexes in one attempt. Under `strict` with `refuse`, the SDK still receives its existing `FAILED_PRECONDITION` response and first creation link; the additional branch definitions are on standard error. Under `report`, the control API report also collects the distinct missing definitions.
 
 ### Fail a CI job on a missing index
 
@@ -243,10 +149,6 @@ A missing or empty `queryScope` is read as `COLLECTION`, and the older `collecti
 
 The `emulator` profile loads the file as before, because the official emulator never reads it.
 
-Supported text definitions in `firestore.indexes.json` (`searchConfig.textSpec`) enter the local text catalog on Enterprise databases and serve `collection(...).search({ query: documentMatches(...) })`. Search indexes remain separate from ordinary query planning. Standard edition still accepts valid search-index configuration without serving search, and geo search is unsupported.
-
-The local `fireemu-lexical-v1` engine uses deterministic Unicode normalization and word segmentation, AND terms, positional phrases, exclusions and indexed-field restrictions. Creation-time ordering is supported, and score ordering follows the recorded production result orders; numeric `score()` values are approximations. There is no stemming, synonym expansion, typo correction or language autodetection. `productionExact` refuses search until corresponding production behavior is recorded. Explicit Fireemu control actions advance, complete, fail and repair a generation-scoped build. See the [local text search guide](https://github.com/t-k/fireemu/blob/main/docs/text-search.md) for setup, controls and exact limits. Text search was added in v0.30.0.
-
 ## Query limits
 
 Under the `strict` profile, the Standard edition query limits are enforced as production enforces them. Setting `firestore.enforceLimits` to `false` lets queries pass that production refuses, so leave it on unless you have a specific reason. Under `strict` the key switches only these query limits (at most 30 disjunctions, 10 `not-in` values, and so on): the limits on writes, transactions and indexes, and REST and WebChannel behavior, are unaffected by this switch. Under the `emulator` profile, `true` also asks for those production limits.
@@ -259,13 +161,13 @@ A WebChannel Listen or Write opening refused for credentials or [App Check](../a
 
 ## Transactions and history
 
-Like production, Fireemu keeps every version of a document written in the last hour, so a `read_time` read, a read-only transaction or a resumed listener can see it. Transactions lock what they read, as production does. Starting with v0.27.0, contended gRPC and WebChannel writes wait without occupying runtime workers. Canceling a waiting Commit ends that request's deadlock wait; its transaction keeps read locks until it commits, rolls back or expires.
+Like production, Fireemu keeps every version of a document written in the last hour, so a `read_time` read, a read-only transaction or a resumed listener can see it. Transactions lock what they read, as production does. Contended gRPC and WebChannel writes wait without occupying runtime workers. Canceling a waiting Commit ends that request's deadlock wait; its transaction keeps read locks until it commits, rolls back or expires.
 
 A test that updates the same documents many times therefore holds many versions in memory. These local limits, which production does not have, bound it:
 
 - Each database retains at most 1 GiB of logical history bytes and 1,000,000 versions, each session 1 GiB and 1,000,000 versions, and the daemon 4 GiB and 4,000,000 versions. Logical bytes follow Firestore's storage size model and are not the process's memory, which can be several times larger.
 - On a pinned clock (`daemon.clockStart`), time does not pass on its own, so a database keeps at most 1,024 versions of any one document. This limit works like `maxVersionsPerPath` below: once a document goes past it, older snapshots are released for the whole database.
-- Starting with v0.27.0, strict Listen retains the latest 4,096 boundary records per live database. A resumed stream echoes the original boundary's `read_time`, then sends the new snapshot time with `CURRENT`. Token bytes are opaque and may change without a write. An expired record or expired document history triggers `RESET` and a full replay; reset, restore and daemon restart discard the records. This bound is local to Fireemu and is not a production limit.
+- Strict Listen retains the latest 4,096 boundary records per live database. A resumed stream echoes the original boundary's `read_time`, then sends the new snapshot time with `CURRENT`. Token bytes are opaque and may change without a write. An expired record or expired document history triggers `RESET` and a full replay; reset, restore and daemon restart discard the records. This bound is local to Fireemu and is not a production limit.
 - A commit that would cross a limit is refused whole with `RESOURCE_EXHAUSTED` and the message `Firestore retained history capacity is exhausted`.
 
 Versions older than an hour are released by the next commit after the clock passes them. To use less memory, lower the limits in `firestore.history`:
@@ -337,6 +239,114 @@ PUT /emulator/v1/projects/{project}/databases/{database}:securityRules
 
 This is the route `PUT /emulator/v1/projects/{project}:securityRules` uses for the `(default)` database, with the same body and answers. The rules set this way last until the database is deleted; they are not part of a snapshot. The `emulator` profile keeps the official emulator's behavior: a database that has no rules of its own is served by the `(default)` database's rules (rules loaded for it with the route above apply to it).
 
+## Enterprise text search
+
+Supported text definitions in `firestore.indexes.json` (`searchConfig.textSpec`) enter the local text catalog on Enterprise databases and serve `collection(...).search({ query: documentMatches(...) })`. Search indexes remain separate from ordinary query planning. Standard edition still accepts valid search-index configuration without serving search, and geo search is unsupported.
+
+The local `fireemu-lexical-v1` engine uses deterministic Unicode normalization and word segmentation, AND terms, positional phrases, exclusions and indexed-field restrictions. Creation-time ordering is supported, and score ordering follows the recorded production result orders; numeric `score()` values are approximations. There is no stemming, synonym expansion, typo correction or language autodetection. `productionExact` refuses search until corresponding production behavior is recorded. Explicit Fireemu control actions advance, complete, fail and repair a generation-scoped build. See the [local text search guide](https://github.com/t-k/fireemu/blob/main/docs/text-search.md) for setup, controls and exact limits.
+
+## Enterprise pipelines
+
+Enterprise pipelines are verified against production for the recorded corpus: 1,951 recorded cases, of which 1,906 match, 17 match within production's own variation (response framing and random `sample` positions), 26 differ only in a way the project owner accepted (the order of aggregate groups, the legal selection of groups under a `limit` or `offset` after unsorted groups, the order of rows tied on every sort key, and a value that depends on the clock) and 2 gRPC requests the recorder could not send are covered by a later observation. Shapes that were not recorded are not claimed, and the strict profile refuses many of them as unobserved; the [Production verification](../../compatibility/#production-verification) table lists the not-claimed items.
+
+On an Enterprise database, fireemu runs pipelines from the Admin SDK (gRPC) and the Web SDK's `firebase/firestore/lite/pipelines` (REST `:executePipeline`). The supported subset starts with a `collection`, `collection_group`, `documents` or finite `database` input, followed by `where`, `select`, `sort`, `add_fields`, `remove_fields`, `distinct`, `aggregate`, `offset`, `limit` and `unnest` stages in any order and number. Aggregates include `count`, `count_distinct`, `sum`, `average`, `minimum` and `maximum`, with or without groups.
+
+| Expression | Supported |
+|---|---|
+| Fields | Nested paths (`a.b`) and `__name__` (the document reference) |
+| Literals | Values of every type, including arrays and maps of literals and vectors of doubles |
+| Comparisons | `equal`, `not_equal`, `less_than`, `less_than_or_equal`, `greater_than` and `greater_than_or_equal`, anywhere an expression stands |
+| Construction | `array(...)` and `map(...)` |
+| Array access | `array_length`, `array_first`, `array_last`, `array_get`, `array_slice`, `array_first_n`, `array_last_n`, `array_index_of`, `array_index_of_all`, `join`, `maximum_n` and `minimum_n` |
+| Array helpers | `array_concat` and `array_reverse` |
+| Timestamp functions | `current_timestamp`, `timestamp_add`, `timestamp_subtract`, `timestamp_trunc`, `timestamp_diff`, `timestamp_extract`, `unix_micros_to_timestamp`, `unix_millis_to_timestamp`, `unix_seconds_to_timestamp`, `timestamp_to_unix_micros`, `timestamp_to_unix_millis` and `timestamp_to_unix_seconds` |
+| Map functions | `map_get`, `map_set`, `map_remove`, `map_merge`, `map_keys`, `map_values` and `map_entries` |
+| Regular expressions | `regex_contains`, `regex_match`, `regex_find` and `regex_find_all` |
+| Document functions | `documentId`, `collectionId` and `parent` |
+| Logic, existence, type and membership | `and`, `or`, `not`, `xor`, `nor`, `exists`, `is_absent`, `is_error`, `type`, `is_type`, `array_contains`, `array_contains_all`, `array_contains_any`, `equal_any` and `not_equal_any` |
+| String | `byte_length`, `string_index_of`, `string_repeat`, `string_replace_all`, `string_replace_one`, `string_reverse`, `concat`, `to_lower`, `to_upper`, `starts_with`, `ends_with`, `string_contains`, `char_length`, `substring`, `trim`, `ltrim`, `rtrim` and `split` |
+| Vector scalars | `vector_length`, `dot_product`, `euclidean_distance` and `cosine_distance` |
+| Lazy control | `if_absent`, `if_null`, `if_error`, `conditional` and `switch_on` |
+| Math | `add`, `subtract`, `multiply`, `divide`, `mod`, `abs`, `round`, `floor`, `ceil` and `pow` |
+
+### More recorded forms
+
+The recorded empty `array()` and `map()` constructors return empty values. Other constructor shapes remain outside these observations.
+
+Additional recorded forms include `like`, `rand`, `array_filter` and `array_transform`. Input types, lambda placement and combinations remain bounded. Random values do not reproduce production's random sequence.
+
+Recorded scalar forms of `minimum`, `maximum`, `sum` and `negate` are also supported, including captured integer, finite-double, mixed numeric and null/absent cases. The recorded `sum([])` returns null. Other types, non-finite inputs and numerical extremes remain outside this finite compatibility claim.
+
+Additional recorded generic forms include `cmp`, `storage_size`, `coalesce`, `get_field`, `offset`, `reverse`, `length`, `string_concat`, `namespace`, `has_ancestor`, `reference_slice`, `replace_document_id` and `autogen_document_id`. Each observation covers its declared input types: for example, `storage_size` currently supports strings, while recorded `reverse` forms cover strings, bytes and arrays. Generated document IDs follow the finite 20-character ASCII-alphanumeric contract; these observations do not establish entropy or global uniqueness.
+
+The array, map, regular-expression and timestamp functions above, `unnest` and the zero-count behavior are available in both profiles. The production comparison covers the recorded cases, not every input type or combination. `map_set` retains an explicit null value and removes a key whose value is absent; a null or absent input map yields an absent result, while the other listed map functions return null for that input; that removal follows the documented API and has not been observed in production. Map keys, values and entries use Fireemu's deterministic map order, and corresponding keys and values stay paired. The recorded production map agrees for its two keys; production ordering for other maps is unverified.
+
+The emulator profile also evaluates `sqrt`, `exp`, `ln`, `log`, `log10` and `trunc` with omitted or zero precision. Nonzero truncation precision and finite exponential subnormal outputs are unobserved. Strict admits finite recorded numeric and error shapes in their supported contexts; unrecorded numeric, domain, null, type and precedence cases remain gated. These functions do not establish general production parity.
+
+The string functions operate on their supported shapes; strict refuses unrecorded types and non-ASCII search offsets, and repeat and replacement apply a local output-size bound. Strict `array_index_of_all` accepts the observed integer forms. Vector scalar functions refuse unrecorded, empty, mismatched or non-finite binary vectors and unsupported numerical extremes; these bounds do not establish general production compatibility.
+
+The additional array functions and `unnest` cover the recorded input shapes; unrecorded combinations and ordering remain unverified. Strict Firestore REST accepts the recorded standard and URL-safe base64 forms and the protobuf `bytes_value` alias, and rejects recorded CR/LF and mixed-alphabet forms. The ordinary emulator profile retains permissive decoding for development; its extra accepted forms are not a production compatibility claim.
+
+### Behavior details
+
+Pipeline timestamps use microsecond precision. `current_timestamp` samples the configured clock once per request and stays fixed throughout that pipeline evaluation. Zone-aware truncation and extraction use named IANA zones; the production recordings cover only specific zone cases. Ambiguous or nonexistent local daylight-saving boundaries are refused as unobserved, and custom GMT offset semantics are not implemented. Other time zones, boundaries and input combinations are not established as production-compatible by those recordings.
+
+The regex functions use a bounded local engine. Under `strict`, patterns outside a conservative common RE2 grammar are refused as unobserved, including shorthand classes and word boundaries, Unicode property escapes, brace repetitions, nested classes and class set operators. Ordinary Unicode literals, simple classes and the recorded inline case flag remain supported. The `emulator` profile uses the local engine without that strict grammar guard; its behavior outside recorded cases is not established as production parity. `regex_match` requires a full-string match; the recorded `regex_find` capture case returns the first capture.
+
+A `limit` of zero passes no rows to the next stage and an `offset` of zero passes all rows through, in both profiles. The strict profile follows the recorded production cases for these inputs.
+
+The strict profile reproduces production's recorded `INTERNAL` response for `array_reverse()` with no arguments and empty options, and for a duplicate select alias when one spelling is quoted and the other is unquoted. Fireemu writes a fixed explanation to standard error without request values. A zero-argument `array_reverse()` with nonempty options keeps its prior refusal, and the emulator profile retains its prior validation behavior. These errors cover the recorded forms only; adjust the call or alias to proceed.
+
+Strict native gRPC also reproduces the recorded `INTERNAL` errors for finite integer forms of `bit_not`, `bit_left_shift` and `bit_right_shift`. The console explains this behavior without including request values. These observations establish error compatibility for the declared native request shapes; successful bit-operation semantics and REST error parity remain unverified. The emulator profile retains its prior refusal.
+
+Additional recorded validation-priority cases match, and structured `ErrorInfo` is preserved for the captured ordered REST `collection_id` type error. Other precedence combinations and ambiguous native map order remain gated. The captured native gRPC `geo_distance` select call with two valid geo points returns its search-only `INVALID_ARGUMENT` diagnostic; geo search remains outside this pipeline compatibility claim. In both profiles, the recorded nested aggregate scalar `sum` call on an integer returns `INVALID_ARGUMENT` with the production `array_sum` diagnostic: expected Array, got LONG. Supply an array to that scalar call; other argument shapes retain their existing gates.
+
+A `where` keeps a row only when its condition (a comparison, a field or another supported function) is `true`. A `select` sets at most 64 fields, as in production. Results without a `select` carry the document's name, create time and update time, and answers normally carry the execution time; a missing-only `documents` input retains its selected execution time. A small answer comes as production frames it: all results in one response message over gRPC, or in one array element over REST. Fireemu cuts a larger answer at about 1 MiB of results; production recordings show variable boundaries; large-answer framing is not verified. `select({__name__: field("__name__")})` answers the document name, including the recorded forms beside other aliases or with quoted aliases and values; unrecorded forms remain `UNIMPLEMENTED` under `strict`. Without `sort`, recorded collection reads follow ascending CRC-32 of document IDs; collection groups use parent path then that order. Non-ASCII IDs and CRC-32 ties are unverified, as are aggregate group order and ordering of ties under a limit. A stored `-0.0` reads back as `-0.0`, as in production; the official emulator stores it as `0.0`.
+
+### Differences between profiles
+
+The recorded matching answers cover specific request shapes from the FS-ENT-ORACLE observations, including comparisons, literal values, select aliases, document functions, stage ordering and the supported string and math functions. Other recorded and unrecorded shapes remain unverified. Under `strict`, a refusal is generally answered only when the request has the shape of a request production refused, with that request's text, and is `UNIMPLEMENTED` otherwise; the gRPC depth exceptions described below also apply. A shape keeps the stages, function names, value kinds and every map's entries in order, and replaces only plain field names and values of the same kind, so `select({total: documentId(field)})` is answered like the recorded `select({v: documentId(field)})`. A REST body keeps its key order; over gRPC a map of two or more entries has no order, so `strict` generally answers no refusal of such a request there, except for the recorded gRPC select-width case described below. Where production has not been observed, the profiles differ:
+
+| Input | `strict` | `emulator` |
+|---|---|---|
+| A document function of a collection reference with a non-ASCII name | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, the index counted in UTF-16 units |
+| Recorded reserved map-key refusals | `INVALID_ARGUMENT` for the recorded shapes; unrecorded shapes remain gated | `INVALID_ARGUMENT`, naming a reserved key first |
+| Recorded document-function wrong-type requests | `INVALID_ARGUMENT` for the recorded REST shapes; unordered gRPC vector maps remain `UNIMPLEMENTED` | `INVALID_ARGUMENT`, naming the type |
+| A `map(...)` key that is a double, null or another type than an integer or boolean | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, naming the type |
+| A vector literal with integer or NaN elements, no element, without `value` or with another key | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, the official text |
+| A vector literal with an infinite element | `UNIMPLEMENTED` | The vector |
+| A `__type__` key that is not a string, or a reference literal that names no document | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, the official text |
+| Two refusals in one pipeline | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, one of them |
+| A refusal production recorded only in another stage, such as a literal holding a field inside a `where` condition | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, the official text |
+| A vector literal with a negative-zero element | `UNIMPLEMENTED` | The vector |
+| Recorded empty or reserved literal-key refusals, including `__name__` and multi-key cases | `INVALID_ARGUMENT` over REST and for unambiguous gRPC; three unordered multi-key gRPC cases remain `UNIMPLEMENTED` | `INVALID_ARGUMENT`, naming one key |
+| Recorded wrong-type `limit` and `offset` arguments and a negative `offset` | `INVALID_ARGUMENT` for the recorded shapes; other shapes remain gated | `INVALID_ARGUMENT`, the official text |
+| A `limit` of 0 or an `offset` of 0 | The recorded zero-count behavior | The same zero-count behavior |
+| A `select` alias inside another in another order than production's `{m, m.r}`, such as `{a.b, a}` | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, naming the later alias over REST (as the official emulator does) and the child over gRPC |
+| An unrecorded `select` with two fields that both fail when evaluated, such as `{a: documentId("s"), b: parent(true)}` | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, the first in key order |
+| A vector inside an array, or a `__type__` key beside other keys in a literal | `UNIMPLEMENTED` | The official answer |
+| An unrecorded wrong argument count for a supported function | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, fireemu's text |
+| Function options | The recorded single-integer `x` option on `document_id(__name__)` is accepted in its two-stage projection form; other options remain gated | Ignored, as the official emulator ignores them |
+| An empty `select` map or a later stage's check after a function or stage value fireemu does not check (production names an unknown function first) | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, the empty map or the later check |
+| An empty map or another refusal beside a function call that fails on its constants, such as `map(1.5, i)`, or beside any other part `strict` does not answer | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, the empty map or the other refusal |
+| An unrecorded stage argument count or options | `UNIMPLEMENTED` | Depends on the stage and argument shape |
+| An empty `array()` or `map()` | The recorded empty array or map | An empty array or map |
+| An `aggregate` without its groups argument | `INVALID_ARGUMENT` with production's arity text for the recorded shape (directly after the collection, a non-empty map of plain aliases to `count`), else `UNIMPLEMENTED` | `INVALID_ARGUMENT` with the same text |
+
+### Unions, sampling, subqueries and other stages
+
+Finite `union` branches can use collection inputs with row-local `where` and `select`; unsupported child stages and inputs are refused. Source reads share a snapshot, and nested branches have local depth and size limits. `sample(size, mode)` supports `documents` sampling without replacement and `percent` sampling in input order: for example, `sample(0.5, "percent")` uses a 0.5 probability per row, while `sample(2, "documents")` selects up to two rows. Random results vary and do not reproduce production's random sequence.
+
+Finite `replace_with` supports full replacement and the implemented overwrite and keep merge modes; full replacement drops source document metadata. Finite `find_nearest` supports Euclidean, cosine and dot-product measures with the locally required limit and distance-field options. Other shapes remain unverified or refused. Both the gRPC and REST routes serve finite `documents`, `collection` and `collection_group` inputs with a read time, an existing transaction or a new transaction, and auto-commit of an existing or new transaction, in the recorded shapes. A read time with auto-commit, and `database`, `union` or `search` inputs with a selector remain refused. Unsupported execution shapes are explicitly refused. Recorded validation failures can return `INVALID_ARGUMENT` without making a suggested function executable. Recorded matches establish compatibility only for the recorded request shapes; other shapes remain unverified.
+
+Finite recorded forms of `array_agg`, `array_agg_distinct`, `first`, `last` and `count_if` are supported. Bounded subcollection and correlated scalar subquery forms share a source snapshot; unsupported inputs, stages and bindings are refused, and local resource limits apply. Aggregate ordering and unrecorded forms are not claimed as production parity.
+
+Ordinary REST reports the recorded depth diagnostic for deeply nested pipeline JSON, and strict gRPC admits the recorded 65-field `select` refusal. gRPC function expressions over 32 levels are refused in both profiles; strict gRPC also maps protobuf recursion failures to the recorded invalid-argument diagnostic. The gRPC limits and diagnostics generalize beyond the observed chains; error precedence and other unrecorded cases remain unverified.
+
+Selecting a missing nested alias preserves its empty parent maps. Production recorded three dotted-alias cases; other missing-expression shapes are generalized from those observations.
+
+A supported correlated scalar subquery may apply an additional string-equality filter before checking cardinality. The recorded single-result request returns the selected value, and the recorded multiple-result request receives the production `INVALID_ARGUMENT` diagnostic. These observations cover only those recorded request shapes; zero-result behavior and other scalar forms remain unverified.
+
 ## Production verification
 
-Writes and limits, queries and indexes, transactions, real-time listeners, Security Rules and database administration are verified against recordings from real Firestore. See the [compatibility tables](../../compatibility/#production-verification).
+Writes and limits, queries and indexes, transactions, real-time listeners, Security Rules, database administration, Enterprise full-text search and Enterprise pipelines are verified against recordings from real Firestore, for the recorded cases of each area. See the [compatibility tables](../../compatibility/#production-verification).

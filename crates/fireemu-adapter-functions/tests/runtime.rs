@@ -4430,13 +4430,13 @@ async fn two_boots_deliver_different_ids_and_a_pinned_seed_replays_its_own() {
         );
     }
     let pinned = first_delivered_ids(42).await;
-    // The Auth id is the documented golden of session 42 and one of its first ordinals.
-    assert!(
-        (1..=8).any(|ordinal| pinned["onUser"]
-            == fireemu_adapter_functions::events::event_id_uuid(&format!("42-{ordinal}"))),
-        "{}",
-        pinned["onUser"]
-    );
+    // The documented golden of `event_id_uuid("42-2")`: the Auth event is the second event of the
+    // boot, after the one Pub/Sub delivery.
+    assert_eq!(pinned["onUser"], "637a85d9-e582-43b9-a01a-b56a34eb0571");
+    // The first control publish of session 42 (the derivation's pin in fireemu-core-types).
+    assert_eq!(pinned["onJob"], "22251127104849513");
+    // Two pinned runs deliver the same ids for every source.
+    assert_eq!(pinned, first_delivered_ids(42).await);
 }
 
 #[test]

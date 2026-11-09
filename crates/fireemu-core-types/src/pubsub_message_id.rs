@@ -16,6 +16,8 @@
 //! into that range by a fixed permutation, so a recorded run replays with the same ids and two
 //! messages of one counter never share an id.
 
+use crate::determinism::{DeterministicRng, SplitMix64};
+
 /// The first id of the range: `22250000000000000`, seventeen digits.
 const FIRST: u64 = 22_250_000_000_000_000;
 /// The width of the range, `10^13` (`2^13 * 5^13`): the ids stay below `22260000000000000`.
@@ -47,6 +49,53 @@ pub fn pubsub_message_id(counter: u64) -> String {
 pub fn runtime_message_id(counter: u64) -> String {
     let own = (counter.max(1) - 1) % BROKER_SPAN + 1;
     pubsub_message_id(BROKER_SPAN + own)
+}
+
+/// The multiplier and offset of `session`'s sequence: an affine permutation of the runtime half,
+/// `position -> multiplier * position + offset (mod BROKER_SPAN)`. The multiplier is coprime to
+/// `BROKER_SPAN` (`2^12 * 5^13`), so the map is a bijection and one session never repeats an id
+/// inside `BROKER_SPAN` consecutive counters. Both numbers come from the whole session through
+/// `SplitMix64`, so neighbouring sessions get unrelated multipliers: their sequences are not
+/// shifted copies of each other.
+fn session_permutation(session: u128) -> (u128, u128) {
+    // The session is below 2^64 in practice; the high half is folded in so that no session is
+    // ignored.
+    let lo = u64::try_from(session & u128::from(u64::MAX)).unwrap_or_default();
+    let hi = u64::try_from(session >> 64).unwrap_or_default();
+    let mut rng = SplitMix64::new(SplitMix64::new(lo).next_u64().wrapping_add(hi));
+    let span = u128::from(BROKER_SPAN);
+    let mut multiplier = u128::from(rng.next_u64()) | 1;
+    // Odd and not a multiple of 5: coprime to the span's only prime factors (2 and 5), and so is
+    // the residue modulo the span, which both factors divide.
+    while multiplier % 5 == 0 {
+        multiplier += 2;
+    }
+    let offset = u128::from(rng.next_u64()) % span;
+    (multiplier % span, offset)
+}
+
+/// The id of a message the Functions runtime publishes itself in `session`, `counter`th. It lies
+/// in the runtime's half of the id space, so it is never a broker id.
+///
+/// Collision policy. The runtime half holds `BROKER_SPAN` (5 * 10^12) ids, far fewer than the
+/// sessions a daemon can draw, so two different sessions cannot be made disjoint for ever; what
+/// is guaranteed is the following.
+/// - Within one session, `BROKER_SPAN` consecutive counters (counter values are positions
+///   modulo `BROKER_SPAN`, so `0` and `u64::MAX` are valid) give `BROKER_SPAN` different ids; after
+///   that the ids repeat, since the runtime cannot refuse a publish.
+/// - Different sessions get different, unrelated permutations of the half (not rotations of one
+///   sequence), so the chance that two sessions give the same id to their first messages is about
+///   `1 / BROKER_SPAN`, and a collision between the first `n` ids of two sessions is about
+///   `n^2 / BROKER_SPAN`; it is not impossible.
+/// - A pinned session (`daemon.seed`) is a fixed function of the counter, so a replay repeats its
+///   ids exactly.
+#[must_use]
+pub fn session_runtime_message_id(session: u128, counter: u64) -> String {
+    let (multiplier, offset) = session_permutation(session);
+    // `multiplier < 5 * 10^12` and `counter < 2^64`: the product fits in 128 bits, and the
+    // reduction below makes the counter a position modulo the span.
+    let own = (multiplier * u128::from(counter) + offset) % u128::from(BROKER_SPAN) + 1;
+    pubsub_message_id(BROKER_SPAN + u64::try_from(own).unwrap_or(1))
 }
 
 #[cfg(test)]
@@ -181,6 +230,162 @@ mod tests {
         #[test]
         fn a_broker_id_never_equals_a_runtime_id(broker in 1_u64..=BROKER_SPAN, runtime in 1_u64..u64::MAX) {
             prop_assert_ne!(pubsub_message_id(broker), runtime_message_id(runtime));
+        }
+    }
+
+    // ---- session_runtime_message_id ----
+
+    use super::session_runtime_message_id as in_session;
+
+    const PINNED_FIRST_IDS: [&str; 10] = [
+        "22256173686882288",
+        "22254193556835994",
+        "22255209165547862",
+        "22257067983734532",
+        "22258447109971514",
+        "22257408873504949",
+        "22254521146506329",
+        "22251836337370604",
+        "22253932274567561",
+        "22257880598311839",
+    ];
+
+    /// The two collisions the rotation `counter + session % BROKER_SPAN` had: sessions a span
+    /// apart shared a whole sequence, and neighbouring sessions shared a shifted copy of it.
+    #[test]
+    fn sessions_do_not_share_or_shift_each_others_sequences() {
+        assert_ne!(in_session(42, 1), in_session(5_000_000_000_042, 1));
+        assert_ne!(in_session(41, 2), in_session(42, 1));
+        // No id of one session's first 64 is any id of another's, for these neighbours.
+        let first = |session: u128| -> HashSet<String> {
+            (1..=64)
+                .map(|counter| in_session(session, counter))
+                .collect()
+        };
+        for (a, b) in [
+            (41_u128, 42_u128),
+            (42, 43),
+            (42, 5_000_000_000_042),
+            (0, 1),
+            (u128::from(BROKER_SPAN) - 1, u128::from(BROKER_SPAN)),
+            (u128::from(u64::MAX) - 1, u128::from(u64::MAX)),
+        ] {
+            assert_eq!(first(a).len(), 64, "{a}");
+            assert!(first(a).is_disjoint(&first(b)), "{a} and {b} share an id");
+        }
+    }
+
+    /// A session whose old shift was the span's last residue: consecutive publishes cross the
+    /// wrap of the runtime half without repeating.
+    #[test]
+    fn the_last_residue_session_publishes_consecutive_distinct_ids() {
+        let session = u128::from(BROKER_SPAN) - 1;
+        let ids: HashSet<String> = (1..=1000)
+            .map(|counter| in_session(session, counter))
+            .collect();
+        assert_eq!(ids.len(), 1000);
+        for id in &ids {
+            assert!(in_the_recorded_range(id), "{id}");
+        }
+    }
+
+    /// The counter and session extremes neither overflow nor leave the runtime's half.
+    #[test]
+    fn extreme_counters_and_sessions_stay_in_the_runtime_half() {
+        for session in [0_u128, 42, u128::from(u64::MAX), u128::MAX] {
+            for counter in [
+                0_u64,
+                1,
+                BROKER_SPAN,
+                BROKER_SPAN + 1,
+                u64::MAX - 1,
+                u64::MAX,
+            ] {
+                let id = in_session(session, counter);
+                assert!(in_the_recorded_range(&id), "{session} {counter}");
+                for broker in [1_u64, 2, BROKER_SPAN] {
+                    assert_ne!(id, pubsub_message_id(broker));
+                }
+            }
+        }
+    }
+
+    /// The pinned seed 42 keeps these ids (a replay): the first three control publishes. The values
+    /// are pins of the derivation above, not production ids (production ids are random).
+    #[test]
+    fn the_pinned_session_42_has_pinned_ids() {
+        assert_eq!(in_session(42, 1), "22251127104849513");
+        assert_eq!(in_session(42, 2), "22257962651021344");
+        assert_eq!(in_session(42, 3), "22259798197193175");
+    }
+
+    /// The permutation of any session is a bijection of the runtime half: its multiplier is
+    /// coprime to the span (odd, no factor 5) and both numbers are below the span.
+    #[test]
+    fn a_sessions_permutation_is_a_bijection_of_the_half() {
+        let mut runner = proptest::test_runner::TestRunner::default();
+        runner
+            .run(&any::<u128>(), |session| {
+                let (multiplier, offset) = super::session_permutation(session);
+                prop_assert!(multiplier < u128::from(BROKER_SPAN));
+                prop_assert!(offset < u128::from(BROKER_SPAN));
+                prop_assert!(multiplier % 2 == 1, "{multiplier}");
+                prop_assert!(multiplier % 5 != 0, "{multiplier}");
+                Ok(())
+            })
+            .unwrap();
+        // Sessions that differ only in their high half are different sessions.
+        assert_ne!(in_session(7, 1), in_session(7 + (1_u128 << 64), 1));
+        assert_ne!(
+            super::session_permutation(7),
+            super::session_permutation(7 + (1_u128 << 64))
+        );
+        assert_ne!(
+            super::session_permutation(1_u128 << 64),
+            super::session_permutation(1_u128 << 65)
+        );
+    }
+
+    /// The first control-publish id of sessions 0 to 9, pinned: some of these sessions draw a
+    /// multiplier that needs the coprimality adjustment, so the adjustment is pinned too.
+    #[test]
+    fn the_first_ids_of_the_first_sessions_are_pinned() {
+        let ids: Vec<String> = (0_u128..10).map(|session| in_session(session, 1)).collect();
+        assert_eq!(ids, PINNED_FIRST_IDS.map(str::to_owned));
+    }
+
+    proptest! {
+        /// Within one session no two of up to a span's counters share an id.
+        #[test]
+        fn one_session_never_repeats_inside_the_span(
+            session in any::<u128>(),
+            first in 1_u64..u64::MAX / 2,
+            gap in 1_u64..BROKER_SPAN,
+        ) {
+            prop_assert_ne!(in_session(session, first), in_session(session, first + gap));
+        }
+
+        /// Whatever the session and counter, a runtime id is never a broker id.
+        #[test]
+        fn a_session_id_is_never_a_broker_id(
+            session in any::<u128>(),
+            counter in any::<u64>(),
+            broker in 1_u64..=BROKER_SPAN,
+        ) {
+            prop_assert_ne!(in_session(session, counter), pubsub_message_id(broker));
+        }
+
+        /// Sessions that differ, near each other or not, do not overlap in their first ids.
+        #[test]
+        fn different_sessions_do_not_overlap_in_their_first_ids(
+            a in any::<u64>(),
+            step in 1_u64..=1_000_000,
+        ) {
+            let b = a.wrapping_add(step);
+            let first = |session: u64| -> HashSet<String> {
+                (1..=32).map(|counter| in_session(u128::from(session), counter)).collect()
+            };
+            prop_assert!(first(a).is_disjoint(&first(b)));
         }
     }
 }

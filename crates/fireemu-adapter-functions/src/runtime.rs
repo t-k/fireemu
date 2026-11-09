@@ -24,7 +24,6 @@ use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_storage::store::StorageEvent;
 use fireemu_core_types::determinism::Clock;
 use fireemu_core_types::ids::{CorrelationId, Epoch, EventId, SessionId};
-use fireemu_core_types::pubsub_message_id::BROKER_SPAN;
 use fireemu_core_types::resources::{
     Gauge, Refusal, RetentionRoot, RootBudget, ServiceResources, Unit,
 };
@@ -3397,10 +3396,13 @@ impl FunctionsRuntime {
         // is the message id). The ids are counted from the runtime counter without taking
         // them, so a refusal consumes none.
         let first = inner.next_event;
-        let shift = u64::try_from(self.config.session.value() % u128::from(BROKER_SPAN))
-            .unwrap_or_default();
         let ids: Vec<String> = (1..=messages.len() as u64)
-            .map(|n| fireemu_core_types::pubsub_message_id::runtime_message_id(first + n + shift))
+            .map(|n| {
+                fireemu_core_types::pubsub_message_id::session_runtime_message_id(
+                    self.config.session.value(),
+                    first.wrapping_add(n),
+                )
+            })
             .collect();
         let message_count = u64::try_from(messages.len()).unwrap_or(u64::MAX);
         if !self.background_triggers_enabled() {
@@ -7596,35 +7598,51 @@ mod task_completion_tests {
         assert!(!fits(0, super::MAX_ACTIVE_EVENT_BYTES + 1));
     }
 
-    /// The exact id a control publish gets: the runtime's half of the id space, counted from
-    /// the session's shift (a session beyond the span wraps).
+    /// The exact ids a control publish gets: the session's sequence, counted from the runtime
+    /// counter. Near `u64::MAX` the counter wraps on purpose instead of overflowing.
     #[tokio::test]
-    async fn control_publish_ids_are_the_counter_shifted_by_the_session_modulo_the_span() {
-        use fireemu_core_types::pubsub_message_id::{runtime_message_id, BROKER_SPAN};
+    async fn control_publish_ids_are_the_sessions_sequence() {
+        use fireemu_core_types::pubsub_message_id::session_runtime_message_id as expected;
         let base = runtime().await;
-        for session in [
-            0_u128,
-            42,
-            u128::from(BROKER_SPAN) + 7,
-            18_446_744_073_709_551_000,
-        ] {
+        for session in [0_u128, 42, 5_000_000_000_042, u128::from(u64::MAX)] {
             let runtime =
                 runtime_with_session(&base, &[("a", pubsub_on("jobs"))], SessionId::new(session));
-            let shift = u64::try_from(session % u128::from(BROKER_SPAN)).unwrap();
             let ids = runtime
                 .publish("jobs", &[json!({"data": "YQ=="}), json!({"data": "Yg=="})])
                 .unwrap();
             assert_eq!(
                 ids,
-                vec![runtime_message_id(1 + shift), runtime_message_id(2 + shift)],
+                vec![expected(session, 1), expected(session, 2)],
                 "session {session}"
             );
-            // The second publish continues after both message ids and the delivery.
+            // The next publish continues after both message ids and the delivery.
             let next = runtime.publish("jobs", &[json!({"data": "Yw=="})]).unwrap();
-            assert_ne!(next[0], ids[0]);
-            assert_ne!(next[0], ids[1]);
+            assert!(!ids.contains(&next[0]));
             runtime.shutdown().await;
         }
+        // A counter at the end of u64 wraps instead of overflowing, and still gives distinct ids.
+        let runtime = runtime_with(&base, &[("a", pubsub_on("jobs"))]);
+        runtime.inner.lock().unwrap().next_event = u64::MAX - 1;
+        let ids = runtime
+            .publish(
+                "nobody",
+                &[
+                    json!({"data": "YQ=="}),
+                    json!({"data": "Yg=="}),
+                    json!({"data": "Yw=="}),
+                ],
+            )
+            .unwrap();
+        let session = runtime.config.session.value();
+        assert_eq!(
+            ids,
+            vec![
+                expected(session, u64::MAX),
+                expected(session, 0),
+                expected(session, 1)
+            ]
+        );
+        runtime.shutdown().await;
         base.shutdown().await;
     }
 

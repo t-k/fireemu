@@ -167,60 +167,124 @@ pub enum FutureClaims {
     #[default]
     Refuse,
     /// The `emulator` profile: firebase-tools 15.28.2 decodes an ID token without verifying it
-    /// and reads only `iat`, against the user's `validSince` when the user has one
-    /// (`parseIdToken`, `lib/emulator/auth/operations.js:1715-1731`). So a future time claim is
-    /// accepted, and a claim may be missing, a numeric string or a fraction: it is read as
-    /// JavaScript's `Number(value)` would, floored to a whole second, and one that is no number
-    /// counts as missing. An `exp` that is present still ends the token's life, with its
-    /// allowance (ledger 22); a missing one does not. Revocation compares `auth_time`, else
-    /// `iat`; with neither, the token is refused only for a user the official emulator would
-    /// have given a `validSince` (see `official_valid_since_is_set`).
+    /// and reads one time claim, `iat`, against the user's `validSince` and only when the user
+    /// has one (`parseIdToken`, `lib/emulator/auth/operations.js:1727`:
+    /// `!user.validSince || decoded.payload.iat >= Number(user.validSince)`). So the profile
+    /// follows that line exactly: a future time claim is accepted, `auth_time` is never read,
+    /// and `iat` is compared as JavaScript compares it (`Number(iat)`, see [`js_number`]; a
+    /// value that is not a number fails the comparison) for an account that has a `validSince`
+    /// (see `official_valid_since_is_set`) and is not compared at all for any other. A usable
+    /// `auth_time` never stands in for an `iat` that does not compare. An `exp` that is present
+    /// still ends the token's life, with the surface's allowance (ledger 22), and is read the
+    /// same way: only an `exp` that is not a number counts as none.
     Accept,
 }
 
-/// A time claim as firebase-tools' JavaScript reads it (`Number(value)`), floored to a whole
-/// second. A claim that is missing, `null`, a boolean, a container, or a string that is no
-/// decimal number (including a non-finite one) is `None`: the comparison it takes part in is
-/// false in JavaScript, as for a missing claim. (JavaScript also reads `Infinity` and hex
-/// forms as numbers; no hand-made token is expected to carry them, so they count as missing
-/// here.)
-fn lenient_seconds(value: Option<&JsonValue>) -> Option<i64> {
-    fn floor(number: f64) -> Option<i64> {
-        // The cast saturates, which is all a second this far from now needs.
-        #[allow(clippy::cast_possible_truncation)]
-        number.is_finite().then(|| number.floor() as i64)
-    }
-    match value? {
-        JsonValue::Int(seconds) => Some(*seconds),
-        JsonValue::Float(number) => floor(*number),
-        JsonValue::String(text) => {
-            let text = text.trim();
-            if text.is_empty() {
-                return Some(0);
-            }
-            if let Ok(seconds) = text.parse::<i64>() {
-                return Some(seconds);
-            }
-            // Rust would also read `inf` and `nan`, which `Number` reads differently.
-            text.chars()
-                .all(|c| c.is_ascii_digit() || matches!(c, '+' | '-' | '.' | 'e' | 'E'))
-                .then(|| text.parse::<f64>().ok().and_then(floor))
-                .flatten()
-        }
-        _ => None,
+/// JavaScript's `Number(value)` of a decoded JSON value; `None` is `NaN`. `null` and `false` are
+/// 0, `true` is 1, an array is its elements joined with `,` and read as a string (`[]` is 0,
+/// `[1]` is 1, `[1,2]` is `NaN`), an object is `NaN`, and a string is read by
+/// [`string_to_number`].
+fn js_number(value: &JsonValue) -> Option<f64> {
+    match value {
+        JsonValue::Null => Some(0.0),
+        JsonValue::Bool(flag) => Some(f64::from(u8::from(*flag))),
+        #[allow(clippy::cast_precision_loss)]
+        JsonValue::Int(number) => Some(*number as f64),
+        JsonValue::Float(number) => Some(*number),
+        JsonValue::String(text) => string_to_number(text),
+        JsonValue::Array(_) => string_to_number(&js_join(value)),
+        JsonValue::Object(_) => None,
     }
 }
 
-/// Whether the official emulator would hold a `validSince` for this account: it sets one when
-/// a password is set or changed, on an Admin import and on a revocation, and an anonymous or
-/// custom-token account has none (`operations.js:169`, `:341`, `:634`, `:862`). This store
-/// holds a `tokens_valid_after` for every account, so the cases are rebuilt from what it
+/// `Array.prototype.toString` of a JSON value: `null` is empty, an array is its elements
+/// joined with `,`, and an object is `[object Object]`.
+fn js_join(value: &JsonValue) -> String {
+    match value {
+        JsonValue::Null => String::new(),
+        JsonValue::Bool(flag) => flag.to_string(),
+        JsonValue::Int(number) => number.to_string(),
+        JsonValue::Float(number) => number.to_string(),
+        JsonValue::String(text) => text.clone(),
+        JsonValue::Array(items) => items.iter().map(js_join).collect::<Vec<_>>().join(","),
+        JsonValue::Object(_) => "[object Object]".to_owned(),
+    }
+}
+
+/// ECMAScript `StringToNumber`: surrounding white space is dropped (the code points JavaScript
+/// calls white space or line terminators, which includes U+FEFF and not U+0085), an empty string
+/// is 0, `Infinity` with an optional sign is infinite, `0x`, `0o` and `0b` read an unsigned
+/// integer in that base, and anything else must be a signed decimal literal (digits with an
+/// optional fraction and an optional exponent, which may overflow to infinity). A string that is
+/// none of these is `NaN`.
+fn string_to_number(text: &str) -> Option<f64> {
+    let text = text.trim_matches(|c: char| (c.is_whitespace() && c != '\u{85}') || c == '\u{feff}');
+    if text.is_empty() {
+        return Some(0.0);
+    }
+    match text {
+        "Infinity" | "+Infinity" => return Some(f64::INFINITY),
+        "-Infinity" => return Some(f64::NEG_INFINITY),
+        _ => {}
+    }
+    let radix_digits = |prefixes: [&str; 2], radix: u32| {
+        let digits = prefixes
+            .iter()
+            .find_map(|prefix| text.strip_prefix(prefix))?;
+        (!digits.is_empty()).then_some(())?;
+        digits.chars().try_fold(0.0_f64, |acc, c| {
+            c.to_digit(radix)
+                .map(|d| acc * f64::from(radix) + f64::from(d))
+        })
+    };
+    for (prefixes, radix) in [(["0x", "0X"], 16), (["0o", "0O"], 8), (["0b", "0B"], 2)] {
+        if text.get(..2).is_some_and(|head| prefixes.contains(&head)) {
+            return radix_digits(prefixes, radix);
+        }
+    }
+    // The decimal literal grammar, checked before Rust parses it so that `inf`, `nan` and `_`
+    // (which Rust would read) stay `NaN`.
+    let unsigned = text.strip_prefix(['+', '-']).unwrap_or(text);
+    let (mantissa, exponent) = match unsigned.find(['e', 'E']) {
+        Some(at) => (&unsigned[..at], Some(&unsigned[at + 1..])),
+        None => (unsigned, None),
+    };
+    let (whole, fraction) = mantissa
+        .split_once('.')
+        .map_or((mantissa, None), |(w, f)| (w, Some(f)));
+    let digits = |part: &str| part.bytes().all(|b| b.is_ascii_digit());
+    let mantissa_ok = digits(whole)
+        && fraction.is_none_or(digits)
+        && !(whole.is_empty() && fraction.is_none_or(str::is_empty));
+    let exponent_ok = exponent.is_none_or(|part| {
+        let part = part.strip_prefix(['+', '-']).unwrap_or(part);
+        !part.is_empty() && digits(part)
+    });
+    (mantissa_ok && exponent_ok)
+        .then(|| text.parse::<f64>().ok())
+        .flatten()
+}
+
+/// A `validSince` instant as the whole-second number firebase-tools compares with.
+#[allow(clippy::cast_precision_loss)]
+fn valid_since_seconds(instant: LogicalInstant) -> f64 {
+    instant.as_nanos().div_euclid(1_000_000_000) as f64
+}
+
+/// Whether firebase-tools holds a `validSince` for this account, which is the only case in which
+/// `parseIdToken` compares `iat` at all (`operations.js:1727`). It sets one when a password is
+/// set or reset (`:169`, `:861`, `:634`, so also at a password sign-up and for a removed
+/// password, which leaves it), when tokens are revoked (`:861`, and the email change and the
+/// disable that revoke), when an email is changed through `accounts:update` (`:861`; this store
+/// revokes the tokens there) and on an import (`:341`). An account made through the Admin API
+/// without a password, or by an anonymous, custom-token or federated sign-in, has none. This
+/// store holds a `tokens_valid_after` for every account, so the cases are rebuilt from what it
 /// remembers.
 fn official_valid_since_is_set(store: &AuthStore, user: &crate::store::UserRecord) -> bool {
     store.has_password(&user.local_id)
         || user.removed_password_updated_at.is_some()
         || user.tokens_revoked
-        || user.admin_created
+        || user.imported
 }
 
 /// Token signing mode (`auth.idTokenSigning`).
@@ -1098,11 +1162,15 @@ fn verify_id_token_account(
         }
         // `check_auth_time` answers a strict token's missing `auth_time` with `Malformed`.
         (FutureClaims::Refuse, None) => return Err(JwtError::Malformed),
-        (FutureClaims::Accept, auth_time) => {
-            match auth_time.or_else(|| lenient_seconds(decoded.payload.get("iat"))) {
-                Some(basis) => LogicalInstant::from_unix_seconds(basis) < user.tokens_valid_after,
-                None => official_valid_since_is_set(store, user),
-            }
+        // `operations.js:1727`: the token is compared by its `iat` alone, and only for an
+        // account that has a `validSince`; `auth_time` is not read. `NaN` fails the comparison.
+        (FutureClaims::Accept, _) => {
+            official_valid_since_is_set(store, user)
+                && !decoded
+                    .payload
+                    .get("iat")
+                    .and_then(js_number)
+                    .is_some_and(|iat| iat >= valid_since_seconds(user.tokens_valid_after))
         }
     };
     if revoked {
@@ -1289,13 +1357,27 @@ fn validate_token_claims(
             return Err(JwtError::WrongSessionEpoch { expected, actual });
         }
     }
-    let exp = match future {
-        FutureClaims::Refuse => Some(decoded.exp().ok_or(JwtError::Malformed)?),
-        FutureClaims::Accept => lenient_seconds(decoded.payload.get("exp")),
-    };
     let now_secs = i64::try_from(now.as_nanos().div_euclid(1_000_000_000)).unwrap_or(i64::MAX);
-    if exp.is_some_and(|exp| now_secs >= exp.saturating_add(leeway_seconds)) {
-        return Err(JwtError::Expired);
+    match future {
+        FutureClaims::Refuse => {
+            let exp = decoded.exp().ok_or(JwtError::Malformed)?;
+            if now_secs >= exp.saturating_add(leeway_seconds) {
+                return Err(JwtError::Expired);
+            }
+        }
+        // Whatever `Number(exp)` is; only `NaN` (an object, an unparsable string, a missing
+        // claim) is no `exp`.
+        FutureClaims::Accept => {
+            #[allow(clippy::cast_precision_loss)]
+            let expired = decoded
+                .payload
+                .get("exp")
+                .and_then(js_number)
+                .is_some_and(|exp| now_secs as f64 >= exp + leeway_seconds as f64);
+            if expired {
+                return Err(JwtError::Expired);
+            }
+        }
     }
     // Firebase's ID-token contract requires `iat` and `auth_time` to be present integers not
     // in the future (strict; the emulator profile accepts any shape and any time, ledgers 781
@@ -1316,14 +1398,14 @@ fn validate_token_claims(
 }
 
 /// `auth_time`, which a strict token must carry as an integer not in the future (`Some`
-/// then); under `future` accepting it, whatever second it reads as, or `None`.
+/// then). The emulator profile never reads it (`None`).
 fn check_auth_time(
     decoded: &DecodedToken,
     now: LogicalInstant,
     future: FutureClaims,
 ) -> Result<Option<i64>, JwtError> {
     if future == FutureClaims::Accept {
-        return Ok(lenient_seconds(decoded.payload.get("auth_time")));
+        return Ok(None);
     }
     let now_secs = i64::try_from(now.as_nanos().div_euclid(1_000_000_000)).unwrap_or(i64::MAX);
     let auth_time = decoded

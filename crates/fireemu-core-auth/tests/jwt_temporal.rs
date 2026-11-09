@@ -403,10 +403,13 @@ proptest::proptest! {
         ..proptest::test_runner::Config::default()
     })]
 
-    /// Security review T2: the emulator profile's policy differs from strict's only on the two
-    /// future-time comparisons. For any `iat`, `auth_time` and `exp` around now, Identity
-    /// Toolkit's and Firestore's verifiers give the same answer under `Accept` and `Refuse`
-    /// whenever neither claim is later than now; otherwise `Refuse` refuses.
+    /// Security review T2: the emulator profile's policy differs from strict's on the two
+    /// future-time comparisons and, for an account without a `validSince` (this fixture's
+    /// passwordless one), on revocation, which firebase-tools does not apply to it (ledger 787).
+    /// For any `iat`, `auth_time` and `exp` around now, Firestore's verifier gives the same
+    /// answer under `Accept` and `Refuse` whenever neither claim is later than now, and Identity
+    /// Toolkit's does too except that `Accept` does not call the token revoked; otherwise
+    /// `Refuse` refuses.
     #[test]
     fn accept_and_refuse_differ_only_on_future_iat_or_auth_time(
         iat_offset in -7_200i64..=7_200,
@@ -424,7 +427,10 @@ proptest::proptest! {
         let accept_lookup = verify_id_token(&token, &strict, at(NOW));
         let accept_firestore = verify_firestore_token(&token, &strict, at(NOW)).map(|_| ());
         if iat_offset <= 0 && auth_offset <= 0 {
-            proptest::prop_assert_eq!(&accept_lookup, &refuse_lookup);
+            match refuse_lookup {
+                Err(JwtError::Revoked) | Ok(_) => proptest::prop_assert!(accept_lookup.is_ok()),
+                Err(_) => proptest::prop_assert_eq!(&accept_lookup, &refuse_lookup),
+            }
             proptest::prop_assert_eq!(&accept_firestore, &refuse_firestore);
         } else {
             proptest::prop_assert!(refuse_lookup.is_err());

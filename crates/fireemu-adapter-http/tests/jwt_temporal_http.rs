@@ -533,107 +533,246 @@ fn fractional(second: i64) -> Value {
     serde_json::from_str(&format!("{second}.5")).unwrap()
 }
 
-/// Ledger 787: the emulator profile accepts the hand-made ID token shapes firebase-tools 15.28.2
-/// accepts (`parseIdToken` reads `iat` only, against the user's `validSince`): a missing,
-/// string or fractional `iat`, a missing `auth_time`, a missing or non-numeric `exp`. Strict
-/// refuses each with `INVALID_ID_TOKEN`. An `exp` past Identity Toolkit's 300 s allowance
-/// (ledger 22) is refused in both, and so are an `iat` and `auth_time` that are both unusable
-/// for a user holding a `validSince` (a password user), with `TOKEN_EXPIRED` as firebase-tools
-/// answers it.
+fn lookup_answer(state: &AuthState, token: &str) -> (u16, String) {
+    let response = handle(state, "POST", LOOKUP, &json!({"idToken": token}));
+    (
+        response.status,
+        response.body["error"]["message"]
+            .as_str()
+            .unwrap_or("")
+            .to_owned(),
+    )
+}
+
+/// The token of `original` re-pointed at account `uid`, with the claims `edits` changes.
+fn retargeted(
+    original: &str,
+    signer: &RsaSigner,
+    uid: &str,
+    edits: &[(&str, Option<Value>)],
+) -> String {
+    let mut token = revised_token(original, signer, "sub", Some(json!(uid)));
+    token = revised_token(&token, signer, "user_id", Some(json!(uid)));
+    for (key, value) in edits {
+        token = revised_token(&token, signer, key, value.clone());
+    }
+    token
+}
+
+/// Ledger 787 and the coordinator's ruling of 2026-11-10: the emulator profile follows
+/// firebase-tools 15.28.2 `parseIdToken` (`operations.js:1727`), which compares `iat` alone,
+/// with `Number()`, and only for an account that has a `validSince` (this one has a password).
+/// A missing, text or non-comparing `iat` is `TOKEN_EXPIRED` whatever `auth_time` says; a
+/// numeric string, a fraction, `Infinity` or a one-element array compares and passes; a missing
+/// or non-numeric `auth_time` or `exp` is accepted, while an `exp` that `Number()` makes a
+/// number still ends the token's life (ledger 22). Strict refuses each odd shape with
+/// `INVALID_ID_TOKEN`.
 #[test]
+#[allow(clippy::too_many_lines)]
 fn hand_made_token_shapes_follow_firebase_tools_in_the_emulator_profile_and_strict_refuses_them() {
     for profile in [Profile::Emulator, Profile::Strict] {
         let (state, signer, original, _) = setup_with(profile, true);
-        let message = |token: &str| {
-            let response = handle(&state, "POST", LOOKUP, &json!({"idToken": token}));
-            (
-                response.status,
-                response.body["error"]["message"]
-                    .as_str()
-                    .unwrap_or("")
-                    .to_owned(),
-            )
-        };
-        let accepted = (200, String::new());
+        let ok = (200, String::new());
         let invalid = (400, "INVALID_ID_TOKEN".to_owned());
-        for (label, edits) in [
-            ("iat missing", vec![("iat", None)]),
+        let expired = (400, "TOKEN_EXPIRED".to_owned());
+        let with_emulator = |emulator: &(u16, String)| {
+            if profile == Profile::Emulator {
+                emulator.clone()
+            } else {
+                invalid.clone()
+            }
+        };
+        for (label, edits, emulator) in [
+            ("iat missing", vec![("iat", None)], &expired),
+            (
+                "iat text",
+                vec![("iat", Some(json!("yesterday")))],
+                &expired,
+            ),
+            ("iat null", vec![("iat", Some(json!(null)))], &expired),
+            ("iat NaN", vec![("iat", Some(json!("NaN")))], &expired),
+            (
+                "iat -Infinity",
+                vec![("iat", Some(json!("-Infinity")))],
+                &expired,
+            ),
+            ("iat -1e309", vec![("iat", Some(json!("-1e309")))], &expired),
+            (
+                "iat hex too small",
+                vec![("iat", Some(json!("0x1")))],
+                &expired,
+            ),
             (
                 "iat numeric string",
                 vec![("iat", Some(json!(NOW.to_string())))],
+                &ok,
             ),
-            ("iat float", vec![("iat", Some(fractional(NOW)))]),
-            ("iat text", vec![("iat", Some(json!("yesterday")))]),
-            ("auth_time missing", vec![("auth_time", None)]),
+            ("iat float", vec![("iat", Some(fractional(NOW)))], &ok),
+            ("iat Infinity", vec![("iat", Some(json!("Infinity")))], &ok),
+            ("iat 1e400", vec![("iat", Some(json!("1e400")))], &ok),
+            ("iat array", vec![("iat", Some(json!([NOW])))], &ok),
+            ("auth_time missing", vec![("auth_time", None)], &ok),
             (
                 "auth_time numeric string",
                 vec![("auth_time", Some(json!(NOW.to_string())))],
+                &ok,
             ),
-            ("exp missing", vec![("exp", None)]),
+            (
+                "auth_time text",
+                vec![("auth_time", Some(json!("soon")))],
+                &ok,
+            ),
+            ("exp missing", vec![("exp", None)], &ok),
             (
                 "exp numeric string",
                 vec![("exp", Some(json!((NOW + 3600).to_string())))],
+                &ok,
             ),
-            ("exp text", vec![("exp", Some(json!("never")))]),
+            ("exp text", vec![("exp", Some(json!("never")))], &ok),
+            ("exp Infinity", vec![("exp", Some(json!("Infinity")))], &ok),
+            ("exp false", vec![("exp", Some(json!(false)))], &invalid),
+            ("exp null", vec![("exp", Some(json!(null)))], &invalid),
+            ("exp array", vec![("exp", Some(json!([1])))], &invalid),
+            ("exp hex", vec![("exp", Some(json!("0x1")))], &invalid),
+            (
+                "exp -Infinity",
+                vec![("exp", Some(json!("-Infinity")))],
+                &invalid,
+            ),
+            (
+                "exp past the allowance",
+                vec![("exp", Some(json!(NOW - 301)))],
+                &invalid,
+            ),
+            (
+                "exp string past the allowance",
+                vec![("exp", Some(json!((NOW - 301).to_string())))],
+                &invalid,
+            ),
+            (
+                "exp fraction past the allowance",
+                vec![("exp", Some(fractional(NOW - 301)))],
+                &invalid,
+            ),
+            (
+                "neither iat nor auth_time",
+                vec![("iat", None), ("auth_time", None)],
+                &expired,
+            ),
         ] {
             let mut token = original.clone();
             for (key, value) in edits {
                 token = revised_token(&token, signer.as_ref(), key, value);
             }
-            let expected = if profile == Profile::Emulator {
-                &accepted
-            } else {
-                &invalid
-            };
-            assert_eq!(&message(&token), expected, "{profile:?} {label}");
-        }
-        // Both comparison claims unusable: firebase-tools answers TOKEN_EXPIRED for a user with
-        // a validSince (this one has a password); strict never gets that far.
-        let mut both = revised_token(&original, signer.as_ref(), "iat", None);
-        both = revised_token(&both, signer.as_ref(), "auth_time", None);
-        let expected = if profile == Profile::Emulator {
-            (400, "TOKEN_EXPIRED".to_owned())
-        } else {
-            invalid.clone()
-        };
-        assert_eq!(
-            message(&both),
-            expected,
-            "{profile:?} neither iat nor auth_time"
-        );
-        // exp is still honoured when it is there (ledger 22), in every form.
-        for stale in [
-            json!(NOW - 301),
-            json!((NOW - 301).to_string()),
-            fractional(NOW - 301),
-        ] {
-            let token = revised_token(&original, signer.as_ref(), "exp", Some(stale.clone()));
-            assert_eq!(message(&token), invalid, "{profile:?} exp={stale}");
+            assert_eq!(
+                lookup_answer(&state, &token),
+                with_emulator(emulator),
+                "{profile:?} {label}"
+            );
         }
     }
 }
 
-/// An account the official emulator gives no `validSince` (anonymous) has no revocation bound
-/// to compare, so its token with neither `iat` nor `auth_time` is accepted in the emulator
-/// profile, as firebase-tools accepts it; strict refuses the shape.
+/// firebase-tools holds no `validSince` for an anonymous account, so nothing is compared and a
+/// token with neither `iat` nor `auth_time` passes; a passwordless account made through the Admin
+/// API has none either (`operations.js:164-169`); an imported one always has (`:341`), and an
+/// email change through `accounts:update` sets it (`:861-862`). Strict refuses the shape.
 #[test]
-fn an_anonymous_account_token_without_iat_or_auth_time_is_accepted_only_in_the_emulator_profile() {
+fn which_accounts_have_a_valid_since_decides_a_token_without_iat() {
     for profile in [Profile::Emulator, Profile::Strict] {
-        let (state, signer, _, _) = setup_with(profile, true);
+        let (state, signer, original, _) = setup_with(profile, true);
+        let bare = |uid: &str| {
+            retargeted(
+                &original,
+                signer.as_ref(),
+                uid,
+                &[("iat", None), ("auth_time", None)],
+            )
+        };
+        let expect = |holds: bool| match (profile, holds) {
+            (Profile::Strict, _) => (400, "INVALID_ID_TOKEN".to_owned()),
+            (Profile::Emulator, true) => (400, "TOKEN_EXPIRED".to_owned()),
+            (Profile::Emulator, false) => (200, String::new()),
+        };
         let anonymous = handle(&state, "POST", SIGN_UP, &json!({"returnSecureToken": true}));
-        assert_eq!(anonymous.status, 200, "{}", anonymous.body);
-        let original = anonymous.body["idToken"].as_str().unwrap().to_owned();
-        let bare = revised_token(
-            &revised_token(&original, signer.as_ref(), "iat", None),
-            signer.as_ref(),
-            "auth_time",
-            None,
+        let anonymous = anonymous.body["localId"].as_str().unwrap().to_owned();
+        assert_eq!(
+            lookup_answer(&state, &bare(&anonymous)),
+            expect(false),
+            "{profile:?} anonymous"
         );
-        let response = handle(&state, "POST", LOOKUP, &json!({"idToken": bare}));
-        match profile {
-            Profile::Emulator => assert_eq!(response.status, 200, "{}", response.body),
-            Profile::Strict => assert_eq!(response.status, 400, "{}", response.body),
-        }
+
+        let created = handle_with(
+            &state,
+            "POST",
+            "/identitytoolkit.googleapis.com/v1/projects/demo-app/accounts",
+            &owner(),
+            &json!({"email": "admin-made@example.invalid", "localId": "admin-made"}),
+        );
+        assert_eq!(created.status, 200, "{}", created.body);
+        assert_eq!(
+            lookup_answer(&state, &bare("admin-made")),
+            expect(false),
+            "{profile:?} admin-created without a password"
+        );
+
+        let created = handle_with(
+            &state,
+            "POST",
+            "/identitytoolkit.googleapis.com/v1/projects/demo-app/accounts",
+            &owner(),
+            &json!({"email": "admin-pw@example.invalid", "localId": "admin-pw", "password": "password1"}),
+        );
+        assert_eq!(created.status, 200, "{}", created.body);
+        assert_eq!(
+            lookup_answer(&state, &bare("admin-pw")),
+            expect(true),
+            "{profile:?} admin-created with a password"
+        );
+
+        let imported = handle_with(
+            &state,
+            "POST",
+            "/identitytoolkit.googleapis.com/v1/projects/demo-app/accounts:batchCreate",
+            &owner(),
+            &json!({"users": [{"localId": "imported", "email": "imported@example.invalid"}]}),
+        );
+        assert_eq!(imported.status, 200, "{}", imported.body);
+        assert_eq!(
+            lookup_answer(&state, &bare("imported")),
+            expect(true),
+            "{profile:?} imported"
+        );
+
+        // An email change through accounts:update, by the user and by the Admin API.
+        let changed = handle_with(
+            &state,
+            "POST",
+            "/identitytoolkit.googleapis.com/v1/projects/demo-app/accounts:update",
+            &owner(),
+            &json!({"localId": "admin-made", "email": "changed-by-admin@example.invalid"}),
+        );
+        assert_eq!(changed.status, 200, "{}", changed.body);
+        assert_eq!(
+            lookup_answer(&state, &bare("admin-made")),
+            expect(true),
+            "{profile:?} email changed by the Admin API"
+        );
+        let second = handle(&state, "POST", SIGN_UP, &json!({"returnSecureToken": true}));
+        let second_uid = second.body["localId"].as_str().unwrap().to_owned();
+        let second_token = second.body["idToken"].as_str().unwrap().to_owned();
+        let changed = handle(
+            &state,
+            "POST",
+            UPDATE,
+            &json!({"idToken": second_token, "email": "self-service@example.invalid", "returnSecureToken": true}),
+        );
+        assert_eq!(changed.status, 200, "{}", changed.body);
+        assert_eq!(
+            lookup_answer(&state, &bare(&second_uid)),
+            expect(true),
+            "{profile:?} email changed by the user"
+        );
     }
 }
 

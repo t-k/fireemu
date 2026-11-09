@@ -1,29 +1,153 @@
 //! Hand-made ID token shapes: what the `emulator` profile admits that firebase-tools 15.28.2
-//! admits, and that the `strict` profile still refuses (owner decision ledger 787).
+//! admits, and that the `strict` profile still refuses (owner decision ledger 787, with the
+//! coordinator's ruling of 2026-11-10 on revocation and expiry).
 //!
-//! These are local regression cases, not production observations. firebase-tools'
-//! `parseIdToken` (`lib/emulator/auth/operations.js:1715-1731`) decodes a token without
-//! verifying it and reads only the tenant, the user, `iat` (against the user's `validSince`,
-//! when the user has one) and `disabled`; the emulator profile follows it, keeping the expiry
-//! check of an `exp` that is present (ledger 22). The tables below are the reference model,
-//! written from that source and not from the implementation.
+//! These are local regression cases, not production observations. The reference model below
+//! is written from two sources only, and shares nothing with `jwt.rs`:
+//!
+//! - firebase-tools 15.28.2 `parseIdToken` (`lib/emulator/auth/operations.js:1715-1731`): the
+//!   token is decoded without verification, and the only time check is
+//!   `!user.validSince || decoded.payload.iat >= Number(user.validSince)` (`:1727`). `auth_time`
+//!   and `exp` are never read, and `iat` is compared as JavaScript compares it, so a value is
+//!   first turned into a number (`Number(value)`; `NaN` makes the comparison false).
+//! - the expiry contract of ledger 22: an `exp` that is present ends the token's life, with the
+//!   surface's allowance, and is read the same way (`Number(exp)`); only an `exp` that is `NaN`
+//!   counts as none.
+//!
+//! `NUMBERS` was produced by Node, not by this crate:
+//! `Number(JSON.parse(raw))` for each raw JSON text (Node 24).
 
-use fireemu_core_auth::claims::{ClaimValue, IdTokenClaims};
+#![allow(
+    clippy::cast_precision_loss,
+    clippy::format_push_string,
+    clippy::type_complexity
+)]
+
+use fireemu_core_auth::claims::{ClaimValue, CustomClaims, IdTokenClaims};
 use fireemu_core_auth::jwt::{
     encode_payload_with, verify_firestore_token, verify_id_token, verify_rules_token, FutureClaims,
     JwtError, RulesTokenPolicy, TokenAcceptance,
 };
 use fireemu_core_auth::mfa::TotpPolicy;
-use fireemu_core_auth::store::{AuthStore, LocalId, NewUser};
+use fireemu_core_auth::store::{AuthStore, ImportedUser, LocalId, NewUser, Provider};
 use fireemu_core_types::determinism::SplitMix64;
 use fireemu_core_types::json::{parse, JsonValue};
 use fireemu_core_types::time::LogicalInstant;
 
 const NOW: i64 = 1_788_004_860;
 const PROJECT: &str = "demo-hand-made";
+const CREATED_AT: i64 = NOW - 300;
+const REVOKED_AT: i64 = NOW - 100;
+const EXPIRED: i64 = NOW - 1000;
 
 fn at(seconds: i64) -> LogicalInstant {
     LogicalInstant::from_unix_seconds(seconds)
+}
+
+/// `Number(JSON.parse(raw))`; `None` is `NaN`. Written out by Node, so its digits are not regrouped.
+#[allow(clippy::unreadable_literal, clippy::approx_constant)]
+const NUMBERS: &[(&str, Option<f64>)] = &[
+    ("null", Some(0.0)),
+    ("true", Some(1.0)),
+    ("false", Some(0.0)),
+    ("[]", Some(0.0)),
+    ("[1]", Some(1.0)),
+    ("[0]", Some(0.0)),
+    ("[1788004860]", Some(1788004860.0)),
+    ("[[1788004860]]", Some(1788004860.0)),
+    ("[1,2]", None),
+    ("[null]", Some(0.0)),
+    ("[true]", None),
+    ("[\"7\"]", Some(7.0)),
+    ("[[],[]]", None),
+    ("{}", None),
+    ("{\"a\":1}", None),
+    ("\"\"", Some(0.0)),
+    ("\"   \"", Some(0.0)),
+    ("\"12\"", Some(12.0)),
+    ("\" 12 \"", Some(12.0)),
+    ("\"+5\"", Some(5.0)),
+    ("\"-0\"", Some(-0.0)),
+    ("\"1e3\"", Some(1000.0)),
+    ("\"1.5\"", Some(1.5e+0)),
+    ("\".5\"", Some(5e-1)),
+    ("\"5.\"", Some(5.0)),
+    ("\"+.5e-3\"", Some(5e-4)),
+    ("\"-1788004860\"", Some(-1788004860.0)),
+    ("\"1788004860\"", Some(1788004860.0)),
+    ("\"1788004860.5\"", Some(1.7880048605e+9)),
+    ("\"Infinity\"", Some(f64::INFINITY)),
+    ("\"+Infinity\"", Some(f64::INFINITY)),
+    ("\"-Infinity\"", Some(f64::NEG_INFINITY)),
+    ("\"infinity\"", None),
+    ("\"INFINITY\"", None),
+    ("\"inf\"", None),
+    ("\"-inf\"", None),
+    ("\"NaN\"", None),
+    ("\"nan\"", None),
+    ("\"1e400\"", Some(f64::INFINITY)),
+    ("\"-1e309\"", Some(f64::NEG_INFINITY)),
+    ("\"1e309\"", Some(f64::INFINITY)),
+    ("\"1e-400\"", Some(0.0)),
+    ("\"0x1\"", Some(1.0)),
+    ("\"0X1F\"", Some(31.0)),
+    ("\"0x6A92B4FC\"", Some(1787999484.0)),
+    (
+        "\"0xffffffffffffffffffffffffffffffff\"",
+        Some(3.402823669209385e+38),
+    ),
+    ("\"0o17\"", Some(15.0)),
+    ("\"0b101\"", Some(5.0)),
+    ("\"-0x1\"", None),
+    ("\"+0x1\"", None),
+    ("\"0x\"", None),
+    ("\"0xg\"", None),
+    ("\"0b2\"", None),
+    ("\"0o8\"", None),
+    ("\"1_0\"", None),
+    ("\"1e\"", None),
+    ("\"e5\"", None),
+    ("\"--1\"", None),
+    ("\"1 2\"", None),
+    ("\"1,5\"", None),
+    ("\"abc\"", None),
+    ("\"\\u00a01788004860\\u00a0\"", Some(1788004860.0)),
+    ("\"\\ufeff5\"", Some(5.0)),
+    ("\"\\u00855\"", None),
+    ("\"\\u20285\\u2029\"", Some(5.0)),
+    ("\"\\t\\n5\\r\\u000b\\f\"", Some(5.0)),
+    ("\"\\u200b5\"", None),
+    ("0", Some(0.0)),
+    ("-1", Some(-1.0)),
+    ("1788004860", Some(1788004860.0)),
+    ("1788004860.5", Some(1.7880048605e+9)),
+    ("-1788004860.5", Some(-1.7880048605e+9)),
+    ("1e308", Some(1e+308)),
+    ("1.7976931348623157e308", Some(1.7976931348623157e+308)),
+    ("-1e308", Some(-1e+308)),
+    ("9007199254740993", Some(9.007199254740992e+15)),
+    ("9223372036854775807", Some(9.223372036854776e+18)),
+    ("9223372036854775808", Some(9.223372036854776e+18)),
+    ("-9223372036854775808", Some(-9.223372036854776e+18)),
+    ("1e400", Some(f64::INFINITY)),
+    ("-1e400", Some(f64::NEG_INFINITY)),
+    ("5e-324", Some(5e-324)),
+    ("0.0", Some(0.0)),
+    ("-0.0", Some(-0.0)),
+];
+
+// ---------------------------------------------------------------------------------------
+// The reference model
+// ---------------------------------------------------------------------------------------
+
+/// `operations.js:1727`: `!user.validSince || iat >= Number(user.validSince)`.
+fn official_accepts(valid_since: Option<i64>, iat: Option<f64>) -> bool {
+    valid_since.is_none_or(|since| iat.is_some_and(|number| number >= since as f64))
+}
+
+/// The expiry contract: a present `exp` ends the token's life `leeway` seconds after it.
+fn expired(exp: Option<f64>, leeway: i64) -> bool {
+    exp.is_some_and(|number| NOW as f64 >= number + leeway as f64)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -32,101 +156,93 @@ enum Profile {
     Emulator,
 }
 
+/// Every way an account comes to exist or lose its `validSince` in firebase-tools. `None` for
+/// the `validSince` below means firebase-tools holds none for that account.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Shape {
-    /// An integer in the expected place.
-    Int,
-    Missing,
-    /// The integer written as a JSON string.
-    NumString,
-    /// The integer minus a fraction, as a JSON float.
-    Float,
-    /// A string that is no number.
-    TextString,
-    Null,
-    Bool,
-    /// An integer exp far in the past (only for `exp`).
-    Expired,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum UserKind {
-    /// No password and no revocation: the official emulator gives it no `validSince`.
-    Plain,
-    /// A password: the official emulator sets `validSince` when the password is set.
+enum Account {
+    /// Anonymous sign-in: no `validSince` (`signUp` without a password).
+    Anonymous,
+    /// An email address and no password: `signUp` sets `validSince` only for a password.
+    EmailOnly,
+    /// Created through the Admin API without a password (`operations.js:164-169`).
+    AdminCreatedPasswordless,
+    /// A password set at sign-up (`:169`).
     Password,
-    /// Refresh tokens revoked at `NOW - 100`.
+    /// A password that was removed afterwards: `validSince` stays.
+    PasswordRemoved,
+    /// An import sets it always (`:341`).
+    Imported,
+    /// Tokens revoked (`reqBody.validSince`, `:861-862`).
     Revoked,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Surface {
-    Toolkit,
-    Firestore,
-    Rules,
-}
+const ACCOUNTS: [Account; 7] = [
+    Account::Anonymous,
+    Account::EmailOnly,
+    Account::AdminCreatedPasswordless,
+    Account::Password,
+    Account::PasswordRemoved,
+    Account::Imported,
+    Account::Revoked,
+];
 
-const IAT: i64 = NOW;
-const AUTH_TIME: i64 = NOW - 300;
-const EXP: i64 = NOW + 3600;
-const EXPIRED: i64 = NOW - 1000;
-const REVOKED_AT: i64 = NOW - 100;
-const CREATED_AT: i64 = NOW - 300;
-
-/// The JSON of `claim` in `shape` around `base`, and the whole second the official emulator's
-/// numeric coercion gives it (`None` when it coerces to nothing usable).
-fn written(shape: Shape, base: i64) -> (Option<String>, Option<i64>) {
-    match shape {
-        Shape::Int => (Some(base.to_string()), Some(base)),
-        Shape::Missing => (None, None),
-        Shape::NumString => (Some(format!("\"{base}\"")), Some(base)),
-        Shape::Float => (Some(format!("{base}.5")), Some(base)),
-        Shape::TextString => (Some("\"soon\"".to_owned()), None),
-        Shape::Null => (Some("null".to_owned()), None),
-        Shape::Bool => (Some("true".to_owned()), None),
-        Shape::Expired => (Some(EXPIRED.to_string()), Some(EXPIRED)),
-    }
-}
-
-fn token(claims: &IdTokenClaims, iat: Shape, auth_time: Shape, exp: Shape) -> String {
-    let JsonValue::Object(mut members) = parse(&claims.canonical_json()).unwrap() else {
-        panic!("claims must encode an object");
-    };
-    for (key, shape, base) in [
-        ("iat", iat, IAT),
-        ("auth_time", auth_time, AUTH_TIME),
-        ("exp", exp, EXP),
-    ] {
-        match written(shape, base).0 {
-            Some(raw) => {
-                members.insert(key.to_owned(), parse(&raw).unwrap());
-            }
-            None => {
-                members.remove(key);
-            }
+impl Account {
+    /// The `validSince` firebase-tools holds for the account, as the store sees the instants.
+    fn valid_since(self) -> Option<i64> {
+        match self {
+            Self::Anonymous | Self::EmailOnly | Self::AdminCreatedPasswordless => None,
+            Self::Password | Self::PasswordRemoved | Self::Imported => Some(CREATED_AT),
+            Self::Revoked => Some(REVOKED_AT),
         }
     }
-    let mut payload = String::new();
-    ClaimValue::from_json(&JsonValue::Object(members)).write_canonical_json(&mut payload);
-    encode_payload_with(&payload, None)
 }
 
-fn store_for(profile: Profile, user: UserKind) -> (AuthStore, LocalId) {
+// ---------------------------------------------------------------------------------------
+// Fixtures
+// ---------------------------------------------------------------------------------------
+
+fn store_for(profile: Profile, account: Account) -> (AuthStore, LocalId) {
     let mut store = AuthStore::new(PROJECT, SplitMix64::new(11), TotpPolicy::default());
-    let uid = match user {
-        UserKind::Password => store
-            .create_user_with_password(
-                NewUser::email("hand-made@example.invalid"),
-                "password1",
-                at(CREATED_AT),
-            )
+    let email = "hand-made@example.invalid";
+    let uid = match account {
+        Account::Anonymous => store
+            .create_user(NewUser::anonymous(), at(CREATED_AT))
             .unwrap(),
-        UserKind::Plain | UserKind::Revoked => store
-            .create_user(NewUser::email("hand-made@example.invalid"), at(CREATED_AT))
+        Account::EmailOnly | Account::AdminCreatedPasswordless | Account::Revoked => store
+            .create_user(NewUser::email(email), at(CREATED_AT))
+            .unwrap(),
+        Account::Password | Account::PasswordRemoved => store
+            .create_user_with_password(NewUser::email(email), "password1", at(CREATED_AT))
+            .unwrap(),
+        Account::Imported => store
+            .import_user(ImportedUser {
+                local_id: "imported-1".to_owned(),
+                email: Some(email.to_owned()),
+                email_verified: false,
+                display_name: None,
+                photo_url: None,
+                phone_number: None,
+                disabled: false,
+                provider: Provider::Password,
+                custom_claims: CustomClaims::default(),
+                created_at: at(CREATED_AT),
+                last_sign_in_at: None,
+                last_refresh_at: None,
+                tokens_valid_after: at(CREATED_AT),
+                federated: Vec::new(),
+                password: None,
+                imported_password: None,
+                allow_shared_email: false,
+                totp_factors: Vec::new(),
+                phone_factors: Vec::new(),
+            })
             .unwrap(),
     };
-    if user == UserKind::Revoked {
-        store.revoke_tokens(&uid, at(REVOKED_AT)).unwrap();
+    match account {
+        Account::AdminCreatedPasswordless => store.user_mut(&uid).unwrap().admin_created = true,
+        Account::PasswordRemoved => assert!(store.clear_password(&uid).unwrap()),
+        Account::Revoked => store.revoke_tokens(&uid, at(REVOKED_AT)).unwrap(),
+        _ => {}
     }
     if profile == Profile::Emulator {
         store.set_future_id_token_claims(FutureClaims::Accept);
@@ -138,6 +254,35 @@ fn claims_of(store: &AuthStore, uid: &LocalId) -> IdTokenClaims {
     store.id_token_claims(uid, None, at(NOW)).unwrap()
 }
 
+/// The claims of a well-formed token with `members` replaced by the raw JSON given, or removed
+/// for `None`. The text is spliced in, so a number no JSON library keeps (`1e400`) is written
+/// as given.
+fn token(claims: &IdTokenClaims, members: &[(&str, Option<&str>)]) -> String {
+    let JsonValue::Object(mut object) = parse(&claims.canonical_json()).unwrap() else {
+        panic!("claims must encode an object");
+    };
+    for (key, _) in members {
+        object.remove(*key);
+    }
+    let mut payload = String::new();
+    ClaimValue::from_json(&JsonValue::Object(object)).write_canonical_json(&mut payload);
+    payload.pop();
+    for (key, raw) in members {
+        if let Some(raw) = raw {
+            payload.push_str(&format!(",\"{key}\":{raw}"));
+        }
+    }
+    payload.push('}');
+    encode_payload_with(&payload, None)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Surface {
+    Toolkit,
+    Firestore,
+    Rules,
+}
+
 fn verify(
     surface: Surface,
     profile: Profile,
@@ -145,7 +290,9 @@ fn verify(
     token: &str,
 ) -> Result<(), JwtError> {
     match surface {
-        Surface::Toolkit => verify_id_token(token, store, at(NOW)).map(|_| ()),
+        Surface::Toolkit => {
+            fireemu_core_auth::jwt::verify_id_token(token, store, at(NOW)).map(|_| ())
+        }
         Surface::Firestore => verify_firestore_token(token, store, at(NOW)).map(|_| ()),
         Surface::Rules => {
             let acceptance = match profile {
@@ -164,96 +311,332 @@ fn verify(
     }
 }
 
-/// The reference model. `valid_after` and `has_valid_since` describe the user.
-fn expected(
-    profile: Profile,
+fn leeway(surface: Surface) -> i64 {
+    match surface {
+        Surface::Firestore => fireemu_core_auth::jwt::FIRESTORE_EXPIRY_LEEWAY_SECONDS,
+        _ => 0,
+    }
+}
+
+/// What the emulator profile answers, from the model alone.
+fn model_emulator(
     surface: Surface,
-    (iat, auth_time, exp): (Shape, Shape, Shape),
-    user: UserKind,
+    account: Account,
+    iat: Option<f64>,
+    exp: Option<f64>,
 ) -> Result<(), JwtError> {
-    let account = matches!(surface, Surface::Toolkit | Surface::Rules);
-    let integer = |shape| matches!(shape, Shape::Int | Shape::Expired);
-    let exp_second = written(exp, EXP).1;
-    match profile {
-        Profile::Strict => {
-            // exp, then iat, then (with an account) auth_time, then revocation.
-            if !integer(exp) {
-                return Err(JwtError::Malformed);
+    if expired(exp, leeway(surface)) {
+        return Err(JwtError::Expired);
+    }
+    // Firestore does not read the account.
+    if surface != Surface::Firestore && !official_accepts(account.valid_since(), iat) {
+        return Err(JwtError::Revoked);
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------------------
+
+/// `iat` through every value of the table, on every kind of account, with and without a perfectly
+/// good `auth_time`: a usable `auth_time` never rescues an `iat` that does not compare (Sol M1).
+#[test]
+fn iat_decides_revocation_alone_for_every_account_and_every_value() {
+    for account in ACCOUNTS {
+        let (store, uid) = store_for(Profile::Emulator, account);
+        let claims = claims_of(&store, &uid);
+        for auth_time in [None, Some("1788004860"), Some("\"1788004860\"")] {
+            for (raw, number) in NUMBERS {
+                for surface in [Surface::Toolkit, Surface::Rules, Surface::Firestore] {
+                    let token = token(
+                        &claims,
+                        &[
+                            ("iat", Some(raw)),
+                            ("auth_time", auth_time),
+                            ("exp", Some("1788008460")),
+                        ],
+                    );
+                    assert_eq!(
+                        verify(surface, Profile::Emulator, &store, &token),
+                        model_emulator(surface, account, *number, Some(1_788_008_460.0)),
+                        "{account:?} {surface:?} iat={raw} auth_time={auth_time:?}"
+                    );
+                }
             }
-            // The Firestore allowance is 30 s and the Toolkit's is none; EXPIRED is far past both.
-            if exp_second.is_some_and(|e| e <= NOW - 30) {
-                return Err(JwtError::Expired);
-            }
-            if !integer(iat) {
-                return Err(JwtError::Malformed);
-            }
-            if !integer(auth_time) {
-                return Err(JwtError::Malformed);
-            }
-            if account && AUTH_TIME < valid_after(user) {
-                return Err(JwtError::Revoked);
-            }
-            Ok(())
         }
-        Profile::Emulator => {
-            if exp_second.is_some_and(|e| e <= NOW - 30) {
-                return Err(JwtError::Expired);
-            }
-            if !account {
-                return Ok(());
-            }
-            // The official emulator reads `iat` only; this store's revocation instant is
-            // compared with `auth_time`, and `iat` stands in when `auth_time` is no number.
-            let basis = written(auth_time, AUTH_TIME)
-                .1
-                .or_else(|| written(iat, IAT).1);
-            let revoked = match basis {
-                Some(second) => second < valid_after(user),
-                None => has_valid_since(user),
-            };
-            if revoked {
+    }
+}
+
+/// A token with no `iat` at all, `auth_time` or not.
+#[test]
+fn a_missing_iat_is_refused_exactly_for_accounts_with_a_valid_since() {
+    for account in ACCOUNTS {
+        let (store, uid) = store_for(Profile::Emulator, account);
+        for auth_time in [None, Some("1788004860")] {
+            let token = token(
+                &claims_of(&store, &uid),
+                &[
+                    ("iat", None),
+                    ("auth_time", auth_time),
+                    ("exp", Some("1788008460")),
+                ],
+            );
+            let expected = if account.valid_since().is_some() {
                 Err(JwtError::Revoked)
             } else {
                 Ok(())
-            }
+            };
+            assert_eq!(
+                verify(Surface::Toolkit, Profile::Emulator, &store, &token),
+                expected,
+                "{account:?} auth_time={auth_time:?}"
+            );
         }
     }
 }
 
-fn valid_after(user: UserKind) -> i64 {
-    match user {
-        UserKind::Plain | UserKind::Password => CREATED_AT,
-        UserKind::Revoked => REVOKED_AT,
+/// `exp` through every value of the table: `Number(exp)`, whatever the type, ends the token's
+/// life when it is a number, and `NaN` alone counts as no `exp` (Sol M2).
+#[test]
+fn exp_is_coerced_as_javascript_coerces_it_and_only_nan_is_no_exp() {
+    let (store, uid) = store_for(Profile::Emulator, Account::Anonymous);
+    let claims = claims_of(&store, &uid);
+    for (raw, number) in NUMBERS {
+        for surface in [Surface::Toolkit, Surface::Rules, Surface::Firestore] {
+            let token = token(&claims, &[("exp", Some(raw))]);
+            let got = verify(surface, Profile::Emulator, &store, &token);
+            assert_eq!(
+                got,
+                model_emulator(surface, Account::Anonymous, Some(NOW as f64), *number),
+                "{surface:?} exp={raw}"
+            );
+        }
+    }
+    // The shapes the review named, spelled out.
+    for raw in [
+        "false",
+        "null",
+        "[1]",
+        "\"0x1\"",
+        "\"-Infinity\"",
+        "\"-1e309\"",
+        "0",
+    ] {
+        let token = token(&claims, &[("exp", Some(raw))]);
+        assert_eq!(
+            verify(Surface::Toolkit, Profile::Emulator, &store, &token),
+            Err(JwtError::Expired),
+            "exp={raw}"
+        );
+    }
+    for raw in ["\"Infinity\"", "\"1e400\"", "{}", "\"soon\"", "[1,2]"] {
+        let token = token(&claims, &[("exp", Some(raw))]);
+        assert!(
+            verify(Surface::Toolkit, Profile::Emulator, &store, &token).is_ok(),
+            "exp={raw}"
+        );
+    }
+    let missing = token(&claims, &[("exp", None)]);
+    assert!(verify(Surface::Toolkit, Profile::Emulator, &store, &missing).is_ok());
+}
+
+/// A passwordless account created through the Admin API holds no `validSince` in firebase-tools
+/// (`operations.js:164-169`), an imported one always does (`:341`) (Opus M1).
+#[test]
+fn only_an_import_gives_a_passwordless_account_a_valid_since() {
+    let bare = |store: &AuthStore, uid: &LocalId| {
+        token(
+            &claims_of(store, uid),
+            &[
+                ("iat", None),
+                ("auth_time", None),
+                ("exp", Some("1788008460")),
+            ],
+        )
+    };
+    let (store, uid) = store_for(Profile::Emulator, Account::AdminCreatedPasswordless);
+    assert!(store.user_by_id(uid.as_str()).unwrap().admin_created);
+    assert!(verify_id_token(&bare(&store, &uid), &store, at(NOW)).is_ok());
+    let (store, uid) = store_for(Profile::Emulator, Account::Imported);
+    assert_eq!(
+        verify_id_token(&bare(&store, &uid), &store, at(NOW)).map(|_| ()),
+        Err(JwtError::Revoked)
+    );
+}
+
+/// The reported shapes, one by one, so a regression names what broke. The emulator profile
+/// answers like firebase-tools 15.28.2; the strict profile refuses the same token.
+#[test]
+fn the_reported_shapes_are_accepted_by_the_emulator_profile_and_refused_by_strict() {
+    let shapes: [(&str, [(&str, Option<&str>); 3]); 6] = [
+        (
+            "iat missing",
+            [
+                ("iat", None),
+                ("auth_time", Some("1788004560")),
+                ("exp", Some("1788008460")),
+            ],
+        ),
+        (
+            "iat numeric string",
+            [
+                ("iat", Some("\"1788004860\"")),
+                ("auth_time", Some("1788004560")),
+                ("exp", Some("1788008460")),
+            ],
+        ),
+        (
+            "iat float",
+            [
+                ("iat", Some("1788004860.5")),
+                ("auth_time", Some("1788004560")),
+                ("exp", Some("1788008460")),
+            ],
+        ),
+        (
+            "auth_time missing",
+            [
+                ("iat", Some("1788004860")),
+                ("auth_time", None),
+                ("exp", Some("1788008460")),
+            ],
+        ),
+        (
+            "exp missing",
+            [
+                ("iat", Some("1788004860")),
+                ("auth_time", Some("1788004560")),
+                ("exp", None),
+            ],
+        ),
+        (
+            "all three missing",
+            [("iat", None), ("auth_time", None), ("exp", None)],
+        ),
+    ];
+    for (label, members) in shapes {
+        for surface in [Surface::Toolkit, Surface::Firestore, Surface::Rules] {
+            let (store, uid) = store_for(Profile::Emulator, Account::Anonymous);
+            let emulator = token(&claims_of(&store, &uid), &members);
+            assert!(
+                verify(surface, Profile::Emulator, &store, &emulator).is_ok(),
+                "{label} {surface:?}"
+            );
+            let (strict, uid) = store_for(Profile::Strict, Account::Anonymous);
+            let token = token(&claims_of(&strict, &uid), &members);
+            let strict_answer = verify(surface, Profile::Strict, &strict, &token);
+            assert_eq!(
+                strict_answer,
+                Err(JwtError::Malformed),
+                "{label} {surface:?}"
+            );
+        }
     }
 }
 
-fn has_valid_since(user: UserKind) -> bool {
-    matches!(user, UserKind::Password | UserKind::Revoked)
+// ---------------------------------------------------------------------------------------
+// The pairwise table
+// ---------------------------------------------------------------------------------------
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Shape {
+    Int,
+    Missing,
+    NumString,
+    Float,
+    TextString,
+    Null,
+    Bool,
+    Expired,
+}
+
+const IAT: i64 = NOW;
+const AUTH_TIME: i64 = NOW - 300;
+const EXP: i64 = NOW + 3600;
+
+/// The JSON of a claim in `shape` around `base`, and `Number()` of it.
+fn written(shape: Shape, base: i64) -> (Option<String>, Option<f64>) {
+    match shape {
+        Shape::Int => (Some(base.to_string()), Some(base as f64)),
+        Shape::Missing => (None, None),
+        Shape::NumString => (Some(format!("\"{base}\"")), Some(base as f64)),
+        Shape::Float => (Some(format!("{base}.5")), Some(base as f64 + 0.5)),
+        Shape::TextString => (Some("\"soon\"".to_owned()), None),
+        Shape::Null => (Some("null".to_owned()), Some(0.0)),
+        Shape::Bool => (Some("true".to_owned()), Some(1.0)),
+        Shape::Expired => (Some(EXPIRED.to_string()), Some(EXPIRED as f64)),
+    }
+}
+
+fn shaped_token(claims: &IdTokenClaims, iat: Shape, auth_time: Shape, exp: Shape) -> String {
+    let (iat, auth_time, exp) = (
+        written(iat, IAT).0,
+        written(auth_time, AUTH_TIME).0,
+        written(exp, EXP).0,
+    );
+    token(
+        claims,
+        &[
+            ("iat", iat.as_deref()),
+            ("auth_time", auth_time.as_deref()),
+            ("exp", exp.as_deref()),
+        ],
+    )
+}
+
+/// The strict contract: all three claims present integers, then expiry, then (with an account)
+/// revocation by `auth_time`. This is what the profile did before ledger 787 and still does.
+fn model_strict(
+    surface: Surface,
+    account: Account,
+    (iat, auth_time, exp): (Shape, Shape, Shape),
+) -> Result<(), JwtError> {
+    let integer = |shape| matches!(shape, Shape::Int | Shape::Expired);
+    if !integer(exp) {
+        return Err(JwtError::Malformed);
+    }
+    if written(exp, EXP).1.is_some_and(|e| e <= (NOW - 30) as f64) {
+        return Err(JwtError::Expired);
+    }
+    if !integer(iat) || !integer(auth_time) {
+        return Err(JwtError::Malformed);
+    }
+    let valid_after = match account {
+        Account::Revoked => REVOKED_AT,
+        _ => CREATED_AT,
+    };
+    if surface != Surface::Firestore && AUTH_TIME < valid_after {
+        return Err(JwtError::Revoked);
+    }
+    Ok(())
 }
 
 /// The pairwise table of `work+emulator-overrefusals.pict` (49 rows, with the required
-/// combinations of the seed file).
+/// combinations of the seed file). The account kinds are one of each `validSince` source.
 #[allow(clippy::type_complexity)]
-const ROWS: &[(Profile, Shape, Shape, Shape, UserKind, Surface)] = {
+const ROWS: &[(Profile, Shape, Shape, Shape, Account, Surface)] = {
+    use Account::{
+        Anonymous as An, Imported as Im, Password as P, PasswordRemoved as Pr, Revoked as Rv,
+    };
     use Profile::{Emulator as E, Strict as S};
     use Shape::{Bool as B, Expired as X, Float as F, Int as I, Missing as M, NumString as N};
     use Shape::{Null as Nu, TextString as T};
     use Surface::{Firestore as Fs, Rules as R, Toolkit as Tk};
-    use UserKind::{Password as P, Plain as Pl, Revoked as Rv};
     &[
-        (E, I, I, I, Pl, Tk),
-        (S, I, I, I, Pl, Tk),
-        (E, M, M, M, Pl, Tk),
+        (E, I, I, I, An, Tk),
+        (S, I, I, I, An, Tk),
+        (E, M, M, M, An, Tk),
         (E, M, I, I, P, Tk),
         (E, M, M, I, P, Tk),
         (E, N, M, I, Rv, Tk),
-        (E, F, F, N, Pl, Tk),
-        (E, M, M, M, Pl, Fs),
-        (E, M, M, M, Pl, R),
-        (S, M, I, I, Pl, Tk),
-        (S, N, I, I, Pl, Fs),
-        (S, I, M, I, Pl, Tk),
-        (S, I, I, M, Pl, Tk),
+        (E, F, F, N, Im, Tk),
+        (E, M, M, M, An, Fs),
+        (E, M, M, M, Pr, R),
+        (S, M, I, I, An, Tk),
+        (S, N, I, I, Im, Fs),
+        (S, I, M, I, An, Tk),
+        (S, I, I, M, An, Tk),
         (S, T, I, X, Rv, R),
         (S, Nu, F, I, P, R),
         (S, F, B, X, P, Fs),
@@ -261,377 +644,121 @@ const ROWS: &[(Profile, Shape, Shape, Shape, UserKind, Surface)] = {
         (S, T, N, I, P, R),
         (E, T, F, M, Rv, Fs),
         (S, I, T, F, Rv, R),
-        (E, Nu, I, F, Pl, Tk),
+        (E, Nu, I, F, An, Tk),
         (E, N, N, M, P, Tk),
-        (E, F, T, I, P, Fs),
-        (E, T, F, X, Pl, Tk),
+        (E, F, T, I, Pr, Fs),
+        (E, T, F, X, Im, Tk),
         (E, T, B, F, P, Fs),
         (E, F, N, F, Rv, R),
         (S, N, M, F, P, R),
         (S, M, T, N, Rv, Tk),
         (S, I, N, X, P, Fs),
-        (S, M, B, F, Pl, Tk),
+        (S, M, B, F, An, Tk),
         (E, T, M, N, P, Fs),
-        (S, Nu, T, M, Pl, Tk),
+        (S, Nu, T, M, An, Tk),
         (E, I, B, M, Rv, R),
-        (E, N, B, N, Pl, R),
-        (S, F, I, T, Pl, Tk),
+        (E, N, B, N, Pr, R),
+        (S, F, I, T, Im, Tk),
         (S, I, M, T, P, R),
-        (E, M, N, N, Pl, Fs),
-        (S, N, T, X, Pl, Fs),
-        (S, T, T, T, Pl, R),
+        (E, M, N, N, Im, Fs),
+        (S, N, T, X, An, Fs),
+        (S, T, T, T, An, R),
         (E, F, M, M, Rv, Fs),
-        (E, N, F, T, Pl, Tk),
-        (E, Nu, B, T, Pl, Fs),
+        (E, N, F, T, Pr, Tk),
+        (E, Nu, B, T, Im, Fs),
         (S, M, F, X, P, Fs),
         (S, M, F, T, Rv, Tk),
         (S, I, F, F, P, Tk),
         (S, Nu, I, N, P, R),
-        (E, I, M, N, Pl, R),
+        (E, I, M, N, Im, R),
         (E, N, B, I, P, Fs),
-        (S, Nu, M, X, Pl, Tk),
+        (S, Nu, M, X, An, Tk),
     ]
 };
 
 #[test]
 fn every_row_of_the_table_answers_as_the_reference_model() {
-    for (n, &(profile, iat, auth_time, exp, user, surface)) in ROWS.iter().enumerate() {
-        let (store, uid) = store_for(profile, user);
-        let token = token(&claims_of(&store, &uid), iat, auth_time, exp);
+    for (n, &(profile, iat, auth_time, exp, account, surface)) in ROWS.iter().enumerate() {
+        let (store, uid) = store_for(profile, account);
+        let token = shaped_token(&claims_of(&store, &uid), iat, auth_time, exp);
+        let expected = match profile {
+            Profile::Strict => model_strict(surface, account, (iat, auth_time, exp)),
+            Profile::Emulator => {
+                model_emulator(surface, account, written(iat, IAT).1, written(exp, EXP).1)
+            }
+        };
         assert_eq!(
             verify(surface, profile, &store, &token),
-            expected(profile, surface, (iat, auth_time, exp), user),
-            "row {n}: {profile:?} iat={iat:?} auth_time={auth_time:?} exp={exp:?} {user:?} {surface:?}"
+            expected,
+            "row {n}: {profile:?} iat={iat:?} auth_time={auth_time:?} exp={exp:?} {account:?} {surface:?}"
         );
     }
-}
-
-/// The reported shapes, one by one, so a regression names what broke. The emulator profile
-/// answers like firebase-tools 15.28.2; the strict profile refuses the same token.
-#[test]
-fn the_reported_shapes_are_accepted_by_the_emulator_profile_and_refused_by_strict() {
-    let shapes = [
-        (
-            "iat missing, no validSince",
-            Shape::Missing,
-            Shape::Int,
-            Shape::Int,
-        ),
-        (
-            "iat as a numeric string",
-            Shape::NumString,
-            Shape::Int,
-            Shape::Int,
-        ),
-        ("iat as a float", Shape::Float, Shape::Int, Shape::Int),
-        ("auth_time missing", Shape::Int, Shape::Missing, Shape::Int),
-        ("exp missing", Shape::Int, Shape::Int, Shape::Missing),
-        (
-            "all three missing",
-            Shape::Missing,
-            Shape::Missing,
-            Shape::Missing,
-        ),
-    ];
-    for (label, iat, auth_time, exp) in shapes {
-        for surface in [Surface::Toolkit, Surface::Firestore, Surface::Rules] {
-            for (profile, accepted) in [(Profile::Emulator, true), (Profile::Strict, false)] {
-                let (store, uid) = store_for(profile, UserKind::Plain);
-                let token = token(&claims_of(&store, &uid), iat, auth_time, exp);
-                let got = verify(surface, profile, &store, &token);
-                assert_eq!(
-                    got.is_ok(),
-                    accepted,
-                    "{label} {profile:?} {surface:?}: {got:?}"
-                );
-                if !accepted {
-                    assert_eq!(got, Err(JwtError::Malformed), "{label} {surface:?}");
-                }
-            }
-        }
-    }
-}
-
-/// firebase-tools answers `TOKEN_EXPIRED` for a token with no usable `iat` when the user has a
-/// `validSince` (a password user always has one), and accepts it for a user without one.
-#[test]
-fn a_missing_issued_at_follows_the_users_valid_since() {
-    for (user, auth_time, expect) in [
-        (UserKind::Plain, Shape::Missing, Ok(())),
-        (UserKind::Password, Shape::Missing, Err(JwtError::Revoked)),
-        (UserKind::Revoked, Shape::Missing, Err(JwtError::Revoked)),
-        // A usable auth_time carries the comparison instead.
-        (UserKind::Password, Shape::Int, Ok(())),
-        (UserKind::Revoked, Shape::Int, Err(JwtError::Revoked)),
-    ] {
-        let (store, uid) = store_for(Profile::Emulator, user);
-        let token = token(
-            &claims_of(&store, &uid),
-            Shape::Missing,
-            auth_time,
-            Shape::Int,
-        );
-        assert_eq!(
-            verify(Surface::Toolkit, Profile::Emulator, &store, &token),
-            expect,
-            "{user:?} auth_time={auth_time:?}"
-        );
-    }
-}
-
-/// Each way the official emulator comes to hold a `validSince` makes a token without any usable
-/// time claim `TOKEN_EXPIRED`: a password set (above), a password since removed, an Admin
-/// creation and a revocation (above). An account with none of them accepts it.
-#[test]
-fn every_source_of_a_valid_since_counts_and_an_account_without_one_accepts() {
-    let bare = |store: &AuthStore, uid: &LocalId| {
-        token(
-            &claims_of(store, uid),
-            Shape::Missing,
-            Shape::Missing,
-            Shape::Int,
-        )
-    };
-    let (mut store, uid) = store_for(Profile::Emulator, UserKind::Plain);
-    assert!(verify_id_token(&bare(&store, &uid), &store, at(NOW)).is_ok());
-
-    store.user_mut(&uid).unwrap().admin_created = true;
-    assert_eq!(
-        verify_id_token(&bare(&store, &uid), &store, at(NOW)).map(|_| ()),
-        Err(JwtError::Revoked),
-        "admin created"
-    );
-
-    let (mut store, uid) = store_for(Profile::Emulator, UserKind::Password);
-    assert!(store.has_password(&uid));
-    assert!(store.clear_password(&uid).unwrap());
-    assert!(!store.has_password(&uid));
-    assert_eq!(
-        verify_id_token(&bare(&store, &uid), &store, at(NOW)).map(|_| ()),
-        Err(JwtError::Revoked),
-        "password removed"
-    );
-}
-
-/// An `iat` that is no number is the same as a missing one (JavaScript compares `NaN`), and a
-/// string or float that is one compares as its value: a fractional second floors.
-#[test]
-fn issued_at_is_compared_as_the_number_it_coerces_to() {
-    // validSince = NOW - 100 (revoked); the token has no auth_time, so iat decides.
-    for (iat, expect) in [
-        (r#""1788004860""#, Ok(())),
-        ("1788004860.5", Ok(())),
-        (r#"" 1788004860 ""#, Ok(())),
-        ("1788004759.9", Err(JwtError::Revoked)),
-        // A string is read like a number is, with its fraction and its exponent.
-        (r#""1788004860.5""#, Ok(())),
-        (r#""+1788004860""#, Ok(())),
-        (r#""1.78800486e9""#, Ok(())),
-        (r#""1788004759.9""#, Err(JwtError::Revoked)),
-        // Not read as numbers here and so no `iat` (JavaScript reads `Infinity` and hex, which no
-        // hand-made token is expected to carry; `NaN` and `inf` are not numbers there either).
-        (r#""inf""#, Err(JwtError::Revoked)),
-        (r#""NaN""#, Err(JwtError::Revoked)),
-        (r#""Infinity""#, Err(JwtError::Revoked)),
-        (r#""1788004759""#, Err(JwtError::Revoked)),
-        (r#""not a number""#, Err(JwtError::Revoked)),
-        ("null", Err(JwtError::Revoked)),
-        ("true", Err(JwtError::Revoked)),
-        ("[]", Err(JwtError::Revoked)),
-        ("{}", Err(JwtError::Revoked)),
-    ] {
-        let (store, uid) = store_for(Profile::Emulator, UserKind::Revoked);
-        let base = token(
-            &claims_of(&store, &uid),
-            Shape::Int,
-            Shape::Missing,
-            Shape::Int,
-        );
-        let revised = revise(&base, "iat", iat);
-        assert_eq!(
-            verify_id_token(&revised, &store, at(NOW)).map(|_| ()),
-            expect,
-            "iat={iat}"
-        );
-        let (strict, _) = store_for(Profile::Strict, UserKind::Revoked);
-        assert_eq!(
-            verify_id_token(&revised, &strict, at(NOW)).map(|_| ()),
-            Err(JwtError::Malformed),
-            "strict iat={iat}"
-        );
-    }
-}
-
-/// An empty or blank string is the number 0 in JavaScript, which is before every `validSince`:
-/// unlike a text that is no number, it makes the comparison false for a user with none too.
-#[test]
-fn a_blank_issued_at_is_the_second_zero() {
-    let (store, uid) = store_for(Profile::Emulator, UserKind::Plain);
-    let base = token(
-        &claims_of(&store, &uid),
-        Shape::Int,
-        Shape::Missing,
-        Shape::Int,
-    );
-    for blank in [r#""""#, r#""   ""#] {
-        let revised = revise(&base, "iat", blank);
-        assert_eq!(
-            verify_id_token(&revised, &store, at(NOW)).map(|_| ()),
-            Err(JwtError::Revoked),
-            "iat={blank}"
-        );
-    }
-    let text = revise(&base, "iat", r#""soon""#);
-    assert!(verify_id_token(&text, &store, at(NOW)).is_ok());
-}
-
-/// `exp` present is still checked, whatever form it takes (ledger 22); one that is no number
-/// is never read, as in the official emulator.
-#[test]
-fn a_present_expiry_is_still_checked_and_one_that_is_no_number_is_ignored() {
-    for (exp, expect) in [
-        (r#""1788008460""#, Ok(())),
-        ("1788008460.5", Ok(())),
-        (r#""1788003860""#, Err(JwtError::Expired)),
-        ("1788003860.5", Err(JwtError::Expired)),
-        ("1788003860", Err(JwtError::Expired)),
-        (r#""never""#, Ok(())),
-        ("null", Ok(())),
-        ("false", Ok(())),
-        ("[1]", Ok(())),
-    ] {
-        let (store, uid) = store_for(Profile::Emulator, UserKind::Plain);
-        let base = token(&claims_of(&store, &uid), Shape::Int, Shape::Int, Shape::Int);
-        let revised = revise(&base, "exp", exp);
-        for surface in [Surface::Toolkit, Surface::Firestore, Surface::Rules] {
-            assert_eq!(
-                verify(surface, Profile::Emulator, &store, &revised),
-                expect,
-                "{surface:?} exp={exp}"
-            );
-        }
-    }
-}
-
-/// The relaxations do not reach what the shape of a token never decided: the subject, the
-/// audience and the account.
-#[test]
-fn the_relaxed_shapes_still_need_a_subject_an_audience_and_an_enabled_account() {
-    let (mut store, uid) = store_for(Profile::Emulator, UserKind::Plain);
-    let bare = token(
-        &claims_of(&store, &uid),
-        Shape::Missing,
-        Shape::Missing,
-        Shape::Missing,
-    );
-    assert!(verify_id_token(&bare, &store, at(NOW)).is_ok());
-    for (key, value) in [
-        ("sub", None),
-        ("aud", Some("\"another-project\"")),
-        ("iss", None),
-    ] {
-        let revised = match value {
-            Some(raw) => revise(&bare, key, raw),
-            None => remove(&bare, key),
-        };
-        for surface in [Surface::Toolkit, Surface::Firestore] {
-            assert!(
-                verify(surface, Profile::Emulator, &store, &revised).is_err(),
-                "{key} {surface:?}"
-            );
-        }
-    }
-    store.user_mut(&uid).unwrap().disabled = true;
-    assert_eq!(
-        verify_id_token(&bare, &store, at(NOW)).map(|_| ()),
-        Err(JwtError::UserDisabled)
-    );
-}
-
-fn revise(token: &str, key: &str, raw: &str) -> String {
-    rewrite(token, |members| {
-        members.insert(key.to_owned(), parse(raw).unwrap());
-    })
-}
-
-fn remove(token: &str, key: &str) -> String {
-    rewrite(token, |members| {
-        members.remove(key);
-    })
-}
-
-fn rewrite(
-    token: &str,
-    change: impl FnOnce(&mut std::collections::BTreeMap<String, JsonValue>),
-) -> String {
-    let decoded = fireemu_core_auth::jwt::decode_unsigned(token).unwrap();
-    let JsonValue::Object(mut members) = parse(&decoded.payload_json).unwrap() else {
-        panic!("payload must be an object");
-    };
-    change(&mut members);
-    let mut payload = String::new();
-    ClaimValue::from_json(&JsonValue::Object(members)).write_canonical_json(&mut payload);
-    encode_payload_with(&payload, None)
 }
 
 proptest::proptest! {
     #![proptest_config(proptest::test_runner::Config {
-        cases: 512,
+        cases: 768,
         ..proptest::test_runner::Config::default()
     })]
 
-    /// For any mix of present, string, float and missing time claims around the user's
-    /// `validSince`, the emulator profile's Identity Toolkit answer is the reference model's:
-    /// a number (or a numeric string) compares by its whole second, `auth_time` first and
-    /// `iat` when it is no number, and with neither the user's `validSince` decides.
+    /// For any account, any `iat` and `exp` from the table or written around now, any
+    /// `auth_time` at all, the emulator profile answers as the model, and the strict profile
+    /// refuses whatever is not three plain integers with the existing `Malformed`.
     #[test]
-    fn the_emulator_profile_compares_whatever_time_claim_it_can_read(
-        iat_kind in 0u8..4,
-        iat_offset in -600i64..=600,
-        auth_kind in 0u8..4,
-        auth_offset in -600i64..=600,
-        exp_kind in 0u8..4,
-        revoked_ago in 1i64..=500,
-        revoked in proptest::bool::ANY,
+    fn the_emulator_profile_answers_as_firebase_tools_for_any_claims(
+        account in 0usize..7,
+        iat_pick in 0usize..(NUMBERS.len() + 3),
+        iat_offset in -700i64..=700,
+        auth_time_pick in 0usize..(NUMBERS.len() + 1),
+        exp_pick in 0usize..(NUMBERS.len() + 2),
+        surface in 0usize..3,
     ) {
-        let (mut store, uid) = store_for(Profile::Emulator, UserKind::Plain);
-        if revoked {
-            store.revoke_tokens(&uid, at(NOW - revoked_ago)).unwrap();
-        }
-        // A revocation never moves the bound before the account's creation.
-        let valid_after = if revoked { (NOW - revoked_ago).max(CREATED_AT) } else { CREATED_AT };
-        let claim = |kind: u8, second: i64| -> (Option<String>, Option<i64>) {
-            match kind {
-                0 => (None, None),
-                1 => (Some(second.to_string()), Some(second)),
-                2 => (Some(format!("\"{second}\"")), Some(second)),
-                _ => (Some(format!("{second}.75")), Some(second)),
-            }
+        let account = ACCOUNTS[account];
+        let surface = [Surface::Toolkit, Surface::Rules, Surface::Firestore][surface];
+        let around = |offset: i64| (format!("{}", NOW + offset), Some((NOW + offset) as f64));
+        let (iat_raw, iat_number) = match NUMBERS.get(iat_pick) {
+            Some((raw, number)) => ((*raw).to_owned(), *number),
+            None => around(iat_offset),
         };
-        let (iat_raw, iat_second) = claim(iat_kind, NOW + iat_offset);
-        let (auth_raw, auth_second) = claim(auth_kind, NOW + auth_offset);
-        let (exp_raw, _) = claim(exp_kind, NOW + 3600);
-        let mut token = token(&claims_of(&store, &uid), Shape::Missing, Shape::Missing, Shape::Missing);
-        for (key, raw) in [("iat", iat_raw), ("auth_time", auth_raw), ("exp", exp_raw)] {
-            if let Some(raw) = raw {
-                token = revise(&token, key, &raw);
-            }
-        }
-        let expect = match auth_second.or(iat_second) {
-            Some(second) if second < valid_after => Err(JwtError::Revoked),
-            None if revoked => Err(JwtError::Revoked),
-            Some(_) | None => Ok(()),
+        let auth_raw = NUMBERS.get(auth_time_pick).map(|(raw, _)| *raw);
+        let (exp_raw, exp_number) = match NUMBERS.get(exp_pick) {
+            Some((raw, number)) => ((*raw).to_owned(), *number),
+            None => ("1788008460".to_owned(), Some(1_788_008_460.0)),
         };
-        proptest::prop_assert_eq!(verify_id_token(&token, &store, at(NOW)).map(|_| ()), expect);
-        // The same token on a strict store is refused unless every claim is a plain integer.
-        let (mut strict, strict_uid) = store_for(Profile::Strict, UserKind::Plain);
-        if revoked {
-            strict.revoke_tokens(&strict_uid, at(NOW - revoked_ago)).unwrap();
-        }
-        let plain = iat_kind == 1 && auth_kind == 1 && exp_kind == 1;
-        let strict_answer = verify_id_token(&token, &strict, at(NOW)).map(|_| ());
-        if !plain {
-            proptest::prop_assert_eq!(strict_answer, Err(JwtError::Malformed));
+        let (store, uid) = store_for(Profile::Emulator, account);
+        let token = token(&claims_of(&store, &uid), &[
+            ("iat", Some(&iat_raw)),
+            ("auth_time", auth_raw),
+            ("exp", Some(&exp_raw)),
+        ]);
+        proptest::prop_assert_eq!(
+            verify(surface, Profile::Emulator, &store, &token),
+            model_emulator(surface, account, iat_number, exp_number)
+        );
+        // Strict: refused unless all three are plain integers (and then by the old rules).
+        let (strict, strict_uid) = store_for(Profile::Strict, account);
+        let strict_token = token_for_strict(&claims_of(&strict, &strict_uid), &iat_raw, auth_raw, &exp_raw);
+        let plain = |raw: &str| raw.parse::<i64>().is_ok();
+        if !(plain(&iat_raw) && auth_raw.is_some_and(plain) && plain(&exp_raw)) {
+            proptest::prop_assert!(
+                verify(surface, Profile::Strict, &strict, &strict_token).is_err()
+            );
         }
     }
+}
+
+fn token_for_strict(
+    claims: &IdTokenClaims,
+    iat: &str,
+    auth_time: Option<&str>,
+    exp: &str,
+) -> String {
+    token(
+        claims,
+        &[
+            ("iat", Some(iat)),
+            ("auth_time", auth_time),
+            ("exp", Some(exp)),
+        ],
+    )
 }

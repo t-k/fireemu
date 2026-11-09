@@ -77,11 +77,13 @@ function setup(t, target, max = 2, grpcImplementation = grpc) {
   t.after(transport.close);
   return { transport, lines, budget, rawFrame: (line) => readFileSync(join(dir, line.blob)) };
 }
+// Calls that are meant to complete get a deadline far above a loaded CI runner's round trip (a 300 ms
+// deadline fired on run 42599679485 after 398 ms); the deadline cases pass their own value.
 const call = (transport, extra = {}) =>
   transport.stream({
     label: { case: "native/grpc", step: "01" },
     frames: [frame],
-    timeoutMs: 300,
+    timeoutMs: 5000,
     ...extra,
   });
 

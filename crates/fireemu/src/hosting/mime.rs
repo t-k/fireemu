@@ -76,10 +76,17 @@ mod tests {
     #[test]
     fn extname_and_content_type_replay_the_node_lookup() {
         let rows = samples();
-        assert!(rows.len() > 300, "a sample of the whole table, not a handful");
+        assert!(
+            rows.len() > 300,
+            "a sample of the whole table, not a handful"
+        );
         for row in rows {
             let file = row["file"].as_str().unwrap();
-            assert_eq!(extname(file), row["extname"].as_str().unwrap(), "extname of {file:?}");
+            assert_eq!(
+                extname(file),
+                row["extname"].as_str().unwrap(),
+                "extname of {file:?}"
+            );
             let expected = row["contentType"]
                 .as_str()
                 .map(|value| (value, row["compressible"].as_bool().unwrap()));
@@ -121,7 +128,15 @@ mod tests {
 
     #[test]
     fn no_extension_and_unknown_extensions_have_no_type() {
-        for file in ["a", ".hidden", "a.", "a.nosuchext", "dir.v1/file", "a. html", "a.html "] {
+        for file in [
+            "a",
+            ".hidden",
+            "a.",
+            "a.nosuchext",
+            "dir.v1/file",
+            "a. html",
+            "a.html ",
+        ] {
             assert_eq!(content_type(file), None, "{file:?}");
         }
     }
@@ -134,7 +149,8 @@ mod tests {
             return String::new();
         }
         let rest = base.strip_prefix('.').unwrap_or(base);
-        rest.rfind('.').map_or(String::new(), |i| rest[i..].to_owned())
+        rest.rfind('.')
+            .map_or(String::new(), |i| rest[i..].to_owned())
     }
 
     proptest! {

@@ -2,6 +2,7 @@
 
 mod scratch;
 use scratch::Scratch;
+use std::fmt::Write as _;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::process::{Child, Command, Stdio};
@@ -473,10 +474,12 @@ fn raw_request(address: &str, method: &str, target: &str, headers: &[(&str, &str
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
         .unwrap();
-    let extra: String = headers
+    let extra = headers
         .iter()
-        .map(|(name, value)| format!("{name}: {value}\r\n"))
-        .collect();
+        .fold(String::new(), |mut lines, (name, value)| {
+            let _ = write!(lines, "{name}: {value}\r\n");
+            lines
+        });
     write!(
         stream,
         "{method} {target} HTTP/1.1\r\nHost: {address}\r\n{extra}Connection: close\r\n\r\n"
@@ -528,12 +531,16 @@ fn served_files_carry_the_oracle_content_type_and_vary() {
     for (name, _, _) in cases {
         std::fs::write(dir.join("public").join(name), "x\n").unwrap();
     }
-    let firebase = serde_json::json!({"hosting":{"public":dir.join("public")},"emulators":emulators()});
+    let firebase =
+        serde_json::json!({"hosting":{"public":dir.join("public")},"emulators":emulators()});
     let (_child, address) = start(&dir, &firebase, "hosting");
     for (name, content_type, vary) in cases {
         for method in ["GET", "HEAD"] {
             let reply = raw_request(&address, method, &format!("/{name}"), &[]);
-            assert!(reply.starts_with("HTTP/1.1 200"), "{method} {name}: {reply}");
+            assert!(
+                reply.starts_with("HTTP/1.1 200"),
+                "{method} {name}: {reply}"
+            );
             assert_eq!(
                 header(&reply, "content-type").as_deref(),
                 Some(content_type),
@@ -580,13 +587,20 @@ fn every_slash_spelling_of_the_i18n_root_serves_the_same_files() {
         for (headers, expected) in [
             (vec![("Accept-Language", "fr")], "fr"),
             (vec![("Accept-Language", "ja")], "ja"),
-            (vec![("Accept-Language", "fr"), ("X-Country-Code", "CA")], "fr-CA"),
+            (
+                vec![("Accept-Language", "fr"), ("X-Country-Code", "CA")],
+                "fr-CA",
+            ),
             (vec![("X-Country-Code", "US")], "us"),
             (vec![("Accept-Language", "de")], "plain"),
             (vec![], "plain"),
         ] {
             let reply = raw_request(&address, "GET", "/page.html", &headers);
-            assert_eq!(body(&reply), expected, "root {root:?} headers {headers:?}: {reply}");
+            assert_eq!(
+                body(&reply),
+                expected,
+                "root {root:?} headers {headers:?}: {reply}"
+            );
         }
     }
 }

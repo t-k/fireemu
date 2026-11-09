@@ -934,7 +934,14 @@ mod i18n_path_tests {
     // Measured against the pinned superstatic 10.0.0 `i18nContentOptions` (2026-11-09).
     #[test]
     fn the_candidates_keep_the_oracle_order_for_every_spelling_of_the_root() {
-        for root in ["locales", "/locales", "locales/", "/locales/", "//locales", "/locales//"] {
+        for root in [
+            "locales",
+            "/locales",
+            "locales/",
+            "/locales/",
+            "//locales",
+            "/locales//",
+        ] {
             let paths = site(root).candidates(
                 "/page.html",
                 &headers(&[("accept-language", "fr-CA,ja"), ("x-country-code", "US")]),

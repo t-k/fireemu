@@ -222,3 +222,59 @@ test("the v2 entry records the v2 scenario and no other", () => {
   assert.match(source, /recordBreadth\(KINDS_V2_SCENARIO\)/u);
   assert.doesNotMatch(source, /KINDS_SCENARIO/u);
 });
+
+test("only a definite 400 to a rung lets the run go on; any other 4xx stops it", async () => {
+  for (const status of [401, 403, 404, 413, 429]) {
+    const world = makeWorld({ scenario: KINDS_V2_SCENARIO });
+    const write = world.deps.rtdb.write;
+    world.deps.rtdb.write = async (step) =>
+      step.id === "k24" ? (await write(step), { outcome: "refused", status }) : write(step);
+    const result = await runBreadth(world.deps);
+    assert.deepEqual(
+      writes(world),
+      [...KINDS_V2_STEP_IDS, "k22", "k23", "k24"],
+      `status ${status}`,
+    );
+    assert.ok(result.reasons.includes("write k24 refused"), `status ${status}`);
+  }
+  // and a refused rung without a status is not a 400
+  const world = makeWorld({ scenario: KINDS_V2_SCENARIO });
+  const write = world.deps.rtdb.write;
+  world.deps.rtdb.write = async (step) =>
+    step.id === "k22" ? (await write(step), { outcome: "refused" }) : write(step);
+  await runBreadth(world.deps);
+  assert.deepEqual(writes(world), [...KINDS_V2_STEP_IDS, "k22"]);
+});
+
+test("after a stop, the tail still waits and collects the deliveries of the writes that were answered", async () => {
+  const world = makeWorld({
+    scenario: KINDS_V2_SCENARIO,
+    frames: "sent",
+    lagUntil: 300000 + 60000,
+    sdkFailure: "k19",
+    sdkError: "permission_denied",
+  });
+  const result = await runBreadth(world.deps);
+  assert.deepEqual(writes(world), ["k15", "k16", "k17", "k18", "k19"]);
+  assert.deepEqual(result.reasons, ["write rejected: permission_denied"]);
+  assert.equal(result.outcome, "stopped-needs-review");
+  // k15 to k18 were answered: all their deliveries are in the report, none is "missing"
+  // 4 deliveries for each of k15-k18, and 4 more for k19, whose write was attempted (the fake delivers it)
+  assert.equal(result.report.totals.frames, 20);
+  assert.equal(result.report.totals.unattributed, 0);
+  assert.ok(result.logs.reads > 1, `reads ${result.logs.reads}`);
+  assert.ok(result.report.steps.filter((s) => s.write?.outcome === "ok").length === 4);
+  // the tail waited at least the quiet window after the last frame, then cleaned up
+  assert.ok(world.deps.clock.now() >= 300000 + 60000 + 30000, `clock ${world.deps.clock.now()}`);
+  assert.ok(world.events.indexOf("close sdk") > world.events.indexOf("write k19"));
+});
+
+test("a signal or a stop before any answered write does not wait for a tail", async () => {
+  const world = makeWorld({ scenario: KINDS_V2_SCENARIO, frames: "sent", sdkFailure: "k18" });
+  world.deps.rtdb.write = async () => ({ outcome: "refused", status: 400 });
+  const before = world.deps.clock.now();
+  const result = await runBreadth(world.deps);
+  assert.ok(result.reasons.includes("write k15 refused"));
+  assert.equal(result.logs.reads, 0, "no tail read: nothing was answered ok");
+  assert.ok(world.deps.clock.now() - before < 300000 + 10000);
+});

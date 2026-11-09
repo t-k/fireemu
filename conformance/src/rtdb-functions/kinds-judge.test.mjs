@@ -341,3 +341,22 @@ test("a definite refusal of an observation-only write is the observation, not a 
     ),
   );
 });
+
+test("only a 400 refusal of an observation-only write is the observation", () => {
+  const withStatus = (status) => ({ ...okWrites, k13: { outcome: "refused", status } });
+  const frames = frameSet().filter((f) => {
+    const params = f.generation === 1 ? f.event.context.params : f.event.params;
+    return !(params.group === "gl" && params.id === "l3") && !f.event.data?.after?.value?.items?.l3;
+  });
+  const run = (writes) =>
+    judgeRun({
+      report: observe({ writes, frames, steps }),
+      frames,
+      writes,
+      ignored: {},
+      deployed: all,
+    });
+  assert.deepEqual(run(withStatus(400)), []);
+  for (const status of [401, 403, 413, undefined])
+    assert.ok(run(withStatus(status)).includes("write k13 was not answered ok"), `${status}`);
+});

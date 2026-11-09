@@ -81,6 +81,27 @@ export async function runBreadth(deps) {
     result.frames.push(...reply.frames.map((frame) => frame.frame ?? frame));
     if (deps.budget?.exhausted) throw Error("total request ceiling reached");
   };
+  let nextRead = null;
+  // Waits for the deliveries of the answered writes: reads the log every poll interval and ends once
+  // everything judged has arrived and the log has been quiet, or when the tail window ends.
+  const tail = async (steps) => {
+    const deadline = clock.now() + windows.tailMs;
+    let quietSince = null;
+    while (clock.now() < deadline && !abort.stopped) {
+      await clock.sleep(Math.min(deadline, nextRead) - clock.now());
+      if (clock.now() >= nextRead) {
+        const previous = result.frames.length;
+        await readLogs();
+        nextRead += windows.pollMs;
+        const report = observe({ writes, frames: result.frames, steps });
+        const deployed = targets.filter((target) => result.records[target.key] !== undefined);
+        const finished = complete({ report, deployed, result });
+        if (!finished) quietSince = null;
+        else if (quietSince === null || result.frames.length !== previous) quietSince = clock.now();
+        if (quietSince !== null && clock.now() - quietSince >= windows.quietMs) break;
+      }
+    }
+  };
   try {
     if (deps.runDir)
       await writeFile(
@@ -150,15 +171,18 @@ export async function runBreadth(deps) {
       await clock.sleep(Math.min(windows.pollMs, deadline - clock.now()));
     if (abort.stopped) throw Error("signal during propagation");
     await phase("observe");
-    let nextRead = clock.now() + windows.pollMs;
+    nextRead = clock.now() + windows.pollMs;
     for (const step of deps.steps) {
       if (abort.stopped) throw Error("signal during observation");
       const answer =
         step.context === "user-sdk" ? await deps.sdk.write(step.id) : await deps.rtdb.write(step);
       writes[step.id] = answer;
-      // A definite refusal of an observation-only write is the answer being observed: recorded, and the run
-      // goes on. Anything else (and any refusal of a judged write) stops it.
-      if (answer.outcome !== "ok" && !(step.observeOnly === true && answer.outcome === "refused"))
+      // A definite 400 to an observation-only write is the answer being observed: recorded, and the run goes
+      // on. Anything else (any other status, an unknown answer, any refusal of a judged write) stops it.
+      if (
+        answer.outcome !== "ok" &&
+        !(step.observeOnly === true && answer.outcome === "refused" && answer.status === 400)
+      )
         throw Error(`write ${step.id} ${answer.outcome}`);
       const deadline = clock.now() + windows.writeMs;
       while (clock.now() < deadline) {
@@ -170,25 +194,22 @@ export async function runBreadth(deps) {
       }
     }
     await phase("tail");
-    const deadline = clock.now() + windows.tailMs;
-    let quietSince = null;
-    while (clock.now() < deadline && !abort.stopped) {
-      await clock.sleep(Math.min(deadline, nextRead) - clock.now());
-      if (clock.now() >= nextRead) {
-        const previous = result.frames.length;
-        await readLogs();
-        nextRead += windows.pollMs;
-        const report = observe({ writes, frames: result.frames, steps: deps.steps });
-        const deployed = targets.filter((target) => result.records[target.key] !== undefined);
-        const finished = complete({ report, deployed, result });
-        if (!finished) quietSince = null;
-        else if (quietSince === null || result.frames.length !== previous) quietSince = clock.now();
-        if (quietSince !== null && clock.now() - quietSince >= windows.quietMs) break;
-      }
-    }
+    await tail(deps.steps);
     if (abort.stopped) throw Error("signal during tail");
   } catch (error) {
     reasons.push(error.message);
+    // A stop after answered writes still waits the normal tail before the final read, so the deliveries of
+    // those writes are collected (v4 stopped at a failed SDK write and read the log once, 12 s after k15, and
+    // reported deliveries that were only late). A signal, an exhausted request budget or no answered write skips it.
+    const answered = deps.steps.filter((step) => writes[step.id]?.outcome === "ok");
+    if (nextRead !== null && answered.length && !abort.stopped && !deps.budget?.exhausted) {
+      try {
+        await phase("tail");
+        await tail(deps.steps.filter((step) => writes[step.id]));
+      } catch (tailError) {
+        reasons.push(`tail after the stop: ${tailError.message}`);
+      }
+    }
   }
   try {
     if (Object.keys(writes).length || result.frames.length) {

@@ -175,6 +175,8 @@ test("the kinds rules open only the user groups, write-guarded by auth and the r
   };
   assert.deepEqual(Object.keys(rules["k9-rtdb"]).toSorted(), ["gc", "gs"]);
   assert.deepEqual(rules["k9-rtdb"].gc, { items: { $id: guard } });
-  assert.deepEqual(rules["k9-rtdb"].gs, { items: { $id: guard } });
+  // the SDK group is also readable by the signed-in user: a transaction listens to its node and compares its
+  // hash, which production answers with permission_denied (or a stale loop) when the user may not read it
+  assert.deepEqual(rules["k9-rtdb"].gs, { items: { $id: { ".read": "auth != null", ...guard } } });
   assert.throws(() => rulesFor("k9-rtdb", "bad nonce"), /invalid nonce/);
 });

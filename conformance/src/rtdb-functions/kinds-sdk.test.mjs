@@ -253,3 +253,63 @@ test("the runner hands the scenario's ids to the SDK client", async () => {
     await assert.rejects(write("k18"), /write unavailable/);
   });
 });
+
+test("a rejected write keeps the page's error text, masked and bounded, and never a secret", async () => {
+  const email = "breadth-abc@example.com";
+  const uid = "uid1234567890";
+  const nonce = "0123456789abcdef";
+  const make = (evaluate) => {
+    const sdk = createSdk({
+      page: { evaluate },
+      config: {},
+      email,
+      password: "pw-secret",
+      uid,
+      nonce,
+      ids: KINDS_SCENARIO.sdk.ids,
+    });
+    return sdk;
+  };
+  const failing = (message) => async (_fn, arg) => {
+    if (arg.action === "signIn") return { outcome: "ok" };
+    throw Error(message);
+  };
+  const reject = async (message) => {
+    const sdk = make(failing(message));
+    await sdk.signIn();
+    return sdk.write("k19").then(
+      () => assert.fail("resolved"),
+      (error) => error.message,
+    );
+  };
+  assert.equal(
+    await reject("page.evaluate: Error: permission_denied\n    at transaction (page.js:1)"),
+    "write rejected: Error: permission_denied",
+  );
+  assert.equal(await reject("maxretry"), "write rejected: maxretry");
+  const masked = await reject(
+    `page.evaluate: Error: ${email} ${uid} ${nonce} pw-secret eyJhbGciOiJSUzI1NiIsImtpZCI6IjEifQ.${"A".repeat(300)}`,
+  );
+  for (const secret of [email, uid, nonce, "pw-secret", "eyJhbGci", "AAAAAAAA"])
+    assert.ok(!masked.includes(secret), `${secret} in ${masked}`);
+  assert.match(masked, /^write rejected: Error: <email> <uid> <nonce> <password> <masked>/);
+  assert.ok((await reject("x".repeat(5000))).length <= "write rejected: ".length + 160);
+  assert.equal(await reject("bad\u0000\u001b[31m text​"), "write rejected: bad??[31m text?");
+  // a page that returns a non-ok outcome instead of throwing is described the same way
+  const returning = make(async (_fn, arg) =>
+    arg.action === "signIn" ? { outcome: "ok" } : { outcome: "error", error: "permission_denied" },
+  );
+  await returning.signIn();
+  await assert.rejects(returning.write("k19"), /^Error: write rejected: error permission_denied$/);
+  const silent = make(async (_fn, arg) => (arg.action === "signIn" ? { outcome: "ok" } : {}));
+  await silent.signIn();
+  await assert.rejects(silent.write("k19"), /^Error: write rejected$/);
+});
+
+test("the page throws when a transaction is not committed", async () => {
+  const { context } = await loadPage();
+  await context.window.__breadth({ action: "signIn", config: {}, uid: "owned" });
+  context.runTransaction = async () => ({ committed: false });
+  await assert.rejects(context.window.__breadth({ action: "k19", nonce: "n" }), /not committed/);
+  await assert.rejects(context.window.__breadth({ action: "k20", nonce: "n" }), /not committed/);
+});

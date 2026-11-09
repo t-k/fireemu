@@ -125,18 +125,28 @@ export function makeWorld(options = {}) {
       close: async () => events.push("close sdk"),
       write: async (id) => {
         events.push(`write ${id}`);
+        if (options.sdkFailure === id)
+          throw Error(`write rejected: ${options.sdkError ?? "failed"}`);
         return { outcome: "ok", status: 200 };
       },
     },
     logs: {
       read: async () => {
-        const ready = options.frames === "all" && !delivered && events.includes("write k21");
+        // `frames: "all"` delivers once the last step is written; `frames: "sent"` delivers, once, the
+        // frames of the steps written so far, one read after the run stopped (the delivery lag of a real
+        // log: nothing is readable until the tail has waited)
+        const sent = new Set(events.filter((e) => e.startsWith("write ")).map((e) => e.slice(6)));
+        const last = steps.at(-1).id;
+        const ready =
+          !delivered &&
+          ((options.frames === "all" && events.includes(`write ${last}`)) ||
+            (options.frames === "sent" && now >= (options.lagUntil ?? 0) && sent.size > 0));
         const deployed = new Set(
           events.filter((e) => e.startsWith("deploy ")).map((e) => e.slice(7)),
         );
         const frames = ready
           ? perfectFrames(
-              steps,
+              options.frames === "sent" ? steps.filter((s) => sent.has(s.id)) : steps,
               TARGETS.map((t) => t.functionName).filter(
                 (name) => deployed.has(name) && name !== options.failure,
               ),

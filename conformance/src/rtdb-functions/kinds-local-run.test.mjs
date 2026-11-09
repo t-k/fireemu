@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseFrames, runLocal, scenarioFor } from "./kinds-local-run.mjs";
+import { firebaseJsonFor, parseFrames, runLocal, scenarioFor } from "./kinds-local-run.mjs";
 import { KINDS_SCENARIO, KINDS_V2_SCENARIO } from "./kinds-scenario.mjs";
 
 test("frames are read from the daemon output, a cut line is not a frame", () => {
@@ -32,4 +32,13 @@ test("the local run sends all 21 steps unless packet v2 (k15-k26) is asked for",
   assert.equal(scenarioFor("v2"), KINDS_V2_SCENARIO);
   assert.equal(scenarioFor("v2").buildSteps("n").length, 12);
   assert.equal(scenarioFor("all").buildSteps("n").length, 21);
+});
+
+test("the local run installs the run's Rules on the recorded instance, not on the default one", () => {
+  const config = firebaseJsonFor("/functions/source", "rtdb-kinds-oracle");
+  assert.deepEqual(config.database, [{ instance: "fireemu-q-rtdb2", rules: "rules.json" }]);
+  assert.deepEqual(config.functions, {
+    source: "/functions/source",
+    codebase: "rtdb-kinds-oracle",
+  });
 });

@@ -45,17 +45,22 @@ export const KINDS_CLAIMS = Object.freeze({ k9role: "claims", k9n: 3 });
 
 /**
  * Rules for the run: only the claims group (REST user writes) and the SDK group (long-polling user
- * writes) are writable, by a signed-in user, on a leaf that carries the run's nonce.
+ * writes) are writable, by a signed-in user, on a leaf that carries the run's nonce; the SDK group is
+ * also readable by that user.
  */
 export function rulesFor(prefix, nonce) {
   if (!/^[A-Za-z0-9_-]+$/.test(nonce)) throw new Error("invalid nonce");
   const validate = `newData.child('run').val() === '${nonce}'`;
   const guarded = { items: { $id: { ".write": "auth != null", ".validate": validate } } };
+  // The SDK group is readable by the signed-in user too: a transaction listens to its node and sends a
+  // compare-and-set with the hash of what it saw, and production refused the first recorded transaction
+  // (RTDB-TRIGGERS-KINDS-20261109-01, k19) where the Rules gave the user no read of that node.
+  const readable = { items: { $id: { ".read": "auth != null", ...guarded.items.$id } } };
   return {
     rules: {
       ".read": false,
       ".write": false,
-      [prefix]: { gc: guarded, gs: guarded },
+      [prefix]: { gc: guarded, gs: readable },
     },
   };
 }

@@ -60,6 +60,16 @@ async function write(db, step, stepNumber, token) {
 /** The scenario whose steps a local run sends: all 21 of the first packet, or the user writes of packet v2. */
 export const scenarioFor = (stepSet) => (stepSet === "v2" ? KINDS_V2_SCENARIO : KINDS_SCENARIO);
 
+/**
+ * The `firebase.json` of a local run. The Rules go on the instance the recorder writes to (the array form
+ * names it); the object form would attach them to the project's default instance only, and the run's own
+ * instance would stay open, so no Rules were ever enforced locally (found with RTDB-TRIGGERS-KINDS-20261109-01).
+ */
+export const firebaseJsonFor = (source, codebase) => ({
+  functions: { source, codebase },
+  database: [{ instance: INSTANCE, rules: "rules.json" }],
+});
+
 export async function runLocal({ fireemu, profile, out, steps: stepSet }) {
   const scenario = scenarioFor(stepSet);
   if (!["strict", "emulator"].includes(profile)) throw new Error("--profile is strict or emulator");
@@ -89,10 +99,7 @@ export async function runLocal({ fireemu, profile, out, steps: stepSet }) {
   writeFileSync(path.join(out, "rules.json"), JSON.stringify(rulesFor(PREFIX, MASKED_NONCE)));
   writeFileSync(
     firebaseJson,
-    JSON.stringify({
-      functions: { source: path.join(here, "fixtures-kinds"), codebase: "rtdb-kinds-oracle" },
-      database: { rules: "rules.json" },
-    }),
+    JSON.stringify(firebaseJsonFor(path.join(here, "fixtures-kinds"), "rtdb-kinds-oracle")),
   );
   let output = "";
   const child = spawn(

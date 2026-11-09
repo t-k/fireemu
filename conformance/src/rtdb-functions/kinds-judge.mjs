@@ -25,7 +25,8 @@ export function judgeRun({ report, frames, writes, ignored, userUid, deployed })
   };
   for (const step of report.steps) {
     // a definite refusal of an observation-only write is what the step observes, not a fault
-    const refusedObservation = step.observeOnly && step.write?.outcome === "refused";
+    const refusedObservation =
+      step.observeOnly && step.write?.outcome === "refused" && step.write?.status === 400;
     if (!writeOk(step.write) && !refusedObservation)
       reasons.push(`write ${step.id} was not answered ok`);
     for (const leaf of step.leaves ?? [])

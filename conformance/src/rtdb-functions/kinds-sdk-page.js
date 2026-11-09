@@ -20,6 +20,10 @@ import {
 // returns the whole target value whatever it was shown, so the first attempt (which sees no cached data)
 // and its retry write the same node and only one write reaches the server.
 let auth, db, expectedUid;
+// A transaction that did not commit is a failed write, not a quiet success.
+const committed = async (transaction) => {
+  if (!(await transaction).committed) throw Error("transaction not committed");
+};
 window.__breadth = async ({ action, config, email, password, uid, nonce }) => {
   if (action === "signIn") {
     if (auth) throw Error("already initialized");
@@ -38,8 +42,10 @@ window.__breadth = async ({ action, config, email, password, uid, nonce }) => {
     throw Error("owned user changed or signed out");
   const item = (id) => ref(db, `k9-rtdb/gs/items/${id}`);
   if (action === "k18") await set(item("s1"), { value: 1, run: nonce });
-  else if (action === "k19") await runTransaction(item("s1"), () => ({ value: 2, run: nonce }));
-  else if (action === "k20") await runTransaction(item("s2"), () => ({ value: 1, run: nonce }));
+  else if (action === "k19")
+    await committed(runTransaction(item("s1"), () => ({ value: 2, run: nonce })));
+  else if (action === "k20")
+    await committed(runTransaction(item("s2"), () => ({ value: 1, run: nonce })));
   else if (action === "k21") {
     await onDisconnect(item("s1")).remove();
     await onDisconnect(item("s3")).set({ value: 3, run: nonce });

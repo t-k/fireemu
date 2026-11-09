@@ -5,6 +5,30 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { LAUNCH } from "../../../tools/sdk-smoke-database/cv11-genuine-auth.mjs";
 
+/**
+ * What the page said went wrong, safe to keep in the run's reasons: the first line, without Playwright's
+ * `page.evaluate:` prefix, the owned user's email, uid and password, the run's nonce and anything that looks
+ * like a token (24 or more characters of the base64url alphabet) masked, non-printable characters replaced,
+ * at most 160 characters.
+ */
+export function describeFailure(error, { email, uid, password, nonce } = {}) {
+  let text = String(error?.message ?? error ?? "")
+    .split("\n")[0]
+    .replace(/^page\.evaluate:\s*/u, "");
+  for (const [secret, label] of [
+    [email, "<email>"],
+    [uid, "<uid>"],
+    [password, "<password>"],
+    [nonce, "<nonce>"],
+  ])
+    if (secret) text = text.replaceAll(secret, label);
+  return text
+    .replace(/[A-Za-z0-9_-]{24,}/gu, "<masked>")
+    .replace(/[^\x20-\x7e]/gu, "?")
+    .slice(0, 160)
+    .trim();
+}
+
 export function createSdk({
   page,
   config,
@@ -40,14 +64,22 @@ export function createSdk({
       if (state !== "ready" || !ids.includes(id) || done.has(id)) throw Error("write unavailable");
       done.add(id);
       state = "stopped";
+      let result;
       try {
-        const result = await page.evaluate((arg) => window.__breadth(arg), { action: id, nonce });
-        if (result?.outcome !== "ok") throw Error("write rejected");
-        state = "ready";
-        return result;
-      } catch {
-        throw Error("write rejected");
+        result = await page.evaluate((arg) => window.__breadth(arg), { action: id, nonce });
+      } catch (error) {
+        const detail = describeFailure(error, { email, uid, password, nonce });
+        throw Error(detail ? `write rejected: ${detail}` : "write rejected");
       }
+      if (result?.outcome !== "ok") {
+        const detail = describeFailure(
+          [result?.outcome, result?.error].filter((part) => typeof part === "string").join(" "),
+          { email, uid, password, nonce },
+        );
+        throw Error(detail ? `write rejected: ${detail}` : "write rejected");
+      }
+      state = "ready";
+      return result;
     },
   };
 }

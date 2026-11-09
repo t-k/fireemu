@@ -51,8 +51,7 @@ function events(frames) {
     .toSorted((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
 }
 
-export function compareRecordings({ production, local }) {
-  const steps = buildSteps(MASKED_NONCE);
+export function compareRecordings({ production, local, steps = buildSteps(MASKED_NONCE) }) {
   const p = group(production, steps);
   const l = group(local, steps);
   const rows = [...new Set([...p.rows.keys(), ...l.rows.keys()])].toSorted().map((key) => {

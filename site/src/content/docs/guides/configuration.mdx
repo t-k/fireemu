@@ -5,11 +5,9 @@ description: How Fireemu finds fireemu.toml and firebase.json, and what each one
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-Fireemu reads both TOML (`fireemu.toml`) and JSON (`fireemu.json`); discovery loads the file in the current directory and refuses to start if both exist, unless you select one with `--config`.
-
 Fireemu reads two kinds of files:
 
-- **`fireemu.toml`** holds Fireemu's own settings, such as the [profile](../profiles/), Authentication project configuration and the clock. It contains `schemaVersion = 1`. See the [configuration schema](../../reference/configuration/).
+- **`fireemu.toml`** holds Fireemu's own settings, such as the [profile](../profiles/), Authentication project configuration and the clock. It contains `schemaVersion = 1`. The same settings can be written as JSON in `fireemu.json`; a directory that has both is refused (see [Which files are loaded](#which-files-are-loaded)). See the [configuration schema](../../reference/configuration/).
 - **`firebase.json`** is the file the Firebase CLI uses. Fireemu reads ports, Security Rules, indexes and Functions codebases from it, every time it starts.
 
 Keep Fireemu-specific settings in `fireemu.toml` rather than in `firebase.json`. To use both, name the `firebase.json` in `fireemu.toml`:
@@ -39,12 +37,6 @@ firebaseJson = "firebase.json"
 </Tabs>
 
 `npx fireemu init --firebase-json firebase.json` writes this for you.
-
-## Generate a reference file
-
-`fireemu init --reference` also writes `fireemu.reference.toml`, a commented reference generated from the schema. With an existing `fireemu.json`, it writes `fireemu.reference.jsonc` instead, so reference keys match the configuration format. Fireemu never loads this file. The normal `fireemu.toml` stays minimal: copying a reference key into it makes that key explicit, which stops `productionExact` from switching it. Keys without defaults, keys whose presence selects behavior, keys governed by `productionExact`, and keys accepted for forward compatibility that currently have no effect (marked as such in their comment) stay commented out. Combine `--reference` with `--profile` or `--firebase-json` when initializing; with an existing `fireemu.toml` or `fireemu.json` and neither of those options, only the reference is written. Existing output files require `--force` to replace.
-
-Generated schema annotations refer to the schema hosted in the GitHub repository. Older configurations containing `https://fireemu.dev/spec/config/fireemu.schema.json` still load, but replace that annotation with `https://raw.githubusercontent.com/t-k/fireemu/main/spec/config/fireemu.schema.json` for editor validation. Fireemu validates against its bundled schema and does not fetch the annotation URL.
 
 ## Which files are loaded
 
@@ -82,6 +74,17 @@ Two common setups run into this rule:
 `fireemu.toml` is validated at startup, and a value Fireemu does not accept stops it with an error. A key the schema does not list and a value of the wrong type are refused in both formats by `up`, `exec` and `config show`, naming the file, the key and the type it should have had, for example `fireemu.toml: daemon.firestorePort must be an integer, found a string`. Integer settings refuse floats even when their value is integral: write `8080` rather than `8080.0`, as the error message suggests. The [configuration schema](../../reference/configuration/) is a JSON Schema you can also use in your editor.
 
 `fireemu capabilities` prints the capability manifest for the profile your configuration resolves to.
+
+## Generate a reference file
+
+`fireemu init --reference` also writes `fireemu.reference.toml`, a commented reference generated from the schema. With an existing `fireemu.json`, it writes `fireemu.reference.jsonc` instead, so the reference keys match your configuration format. Fireemu never loads this file.
+
+- The normal `fireemu.toml` stays minimal. Copying a reference key into it makes that key explicit, which stops `productionExact` from switching it.
+- These keys stay commented out in the reference: keys without defaults, keys whose presence selects behavior, keys governed by `productionExact`, and keys accepted for forward compatibility that currently have no effect (marked as such in their comment).
+- Combine `--reference` with `--profile` or `--firebase-json` when initializing. With an existing `fireemu.toml` or `fireemu.json` and neither of those options, only the reference is written.
+- Existing output files require `--force` to replace.
+
+Generated schema annotations refer to the schema hosted in the GitHub repository. Older configurations containing `https://fireemu.dev/spec/config/fireemu.schema.json` still load, but replace that annotation with `https://raw.githubusercontent.com/t-k/fireemu/main/spec/config/fireemu.schema.json` for editor validation. Fireemu validates against its bundled schema and does not fetch the annotation URL.
 
 ## TOML values and JSON null
 

@@ -12,9 +12,19 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 - Realtime Database: in the strict profile, a write that would send a trigger event larger than 1,000,000 bytes (the node before the write plus the delta, as compact JSON) to a function is refused with `400` and `This request would cause a function payload exceeding the maximum size allowed.`, and applies nothing. Production refused a 2 MiB value with that answer on 2026-11-08 and accepted 100 KiB and 600 KiB values, and its documentation names 1 MB per event; 1,000,000 bytes is the documented figure and the record does not contradict it, but the exact threshold (1,000,000 or 1,048,576) and how the size is counted are not recorded yet. Only a write that reaches a registered trigger reference is measured. The emulator profile has no limit (it never refuses more than the official emulator, whose own limit was not measured), and a refused write over the SDK connection is answered `invalid_parameters` with the same text (the SDK's form was not recorded). A write of 600 KiB reached no handler within about 30 seconds in production while fireemu delivers it; the cause is not recorded and fireemu is unchanged there.
 - Functions: in the strict profile, a Realtime Database trigger event no longer carries priorities, as production delivered it when it was recorded on 2026-11-08 (writes with a priority, a leaf with a priority, a priority-only write and a delete, 2nd gen and 1st gen, a nested pattern, an any-instance handler and an ancestor handler): the node before the write is sent without any `.priority` (a leaf with a priority is its plain value), a created node's delta is its plain value, a priority-only write sends the delta `{".priority": <new>}` (so `change.after` shows the new priority as a member), and a deleted node's delta is null. The emulator profile keeps the events it always sent. A priority change beside a value change on a leaf, and a priority added to or removed from an existing object, were not recorded and follow the same rule.
+
+## [0.46.0] - 2026-11-09
+
+### Changed
+
+- Python Cloud Functions (FUNCTIONS-PYTHON) is verified against production for the six recorded event families: Firestore, Pub/Sub, Cloud Storage, Eventarc custom events, Cloud Scheduler and Cloud Tasks, each from two independent production recordings in the strict profile. Auth blocking functions (still open) and deployment (not compared) are outside the claim; the emulator profile's declared differences are listed as known differences.
+
+### Fixed
+
 - Cloud Storage answers every Firebase v0 route that takes an object name (upload in all forms, `PATCH`, `DELETE`, token management) with the same `400` for a path with an empty segment, so no rule sees one through that API; production was recorded for the reads, and the writes follow from that and are not recorded.
 - Cloud Storage answers a Firebase v0 metadata read, media read or list whose path has an empty segment (an interior `//`, a leading `/`, a trailing `/` on an object name) with `400` and `The path may not end with '/' or contain two consecutive '/'s`, before any rule is evaluated, as production did on 2026-11-08 (two recordings, also under an allow-all rule), in both profiles. The strict profile keeps `/x`, `x` and `x/` as three objects, as Cloud Storage does; the emulator profile still drops one leading `/` of an uploaded name, as the official emulator does. The Firebase list leaves out the prefix an object like `a//x` produces, and a name it leaves out never takes a place in a page or becomes a `nextPageToken`; a list prefix is checked as it was sent, so `public//` and `/` are refused like `/public/`.
 - Storage Rules: a listing with the delimiter `/` is allowed in the emulator profile when every entry one level below the prefix is allowed (`match /p/{f} { allow list: if true; }` with `prefix=p/&delimiter=/`), as production and the strict profile already did; before, it answered 403. In the strict profile, `allow list: if [file] != null` and `request.path == /b/$(bucket)/o/<prefix>` under `match /p/{file=**}` are allowed for a listing without a delimiter, as production did on 2026-11-08; before, they answered 403. A single-segment capture, a bare capture and the path of another prefix are still refused, and `request.path` of a delimited listing stays refused until it is recorded.
+- Authentication: the Secure Token refresh no longer reads a nested `{"$serde_json::private::RawValue": ...}` object as the JSON text it wraps. A value such as `{"grant_type":{"$serde_json::private::RawValue":"\"refresh_token\""}}` was honoured as the string `refresh_token`, in both profiles, so a refresh token or grant type hidden behind that marker refreshed a session; it is now the object it is, as production reads it, and the request answers `400 MISSING_GRANT_TYPE` or `400 MISSING_REFRESH_TOKEN`. Which bodies are refused as invalid JSON is unchanged.
 
 ## [0.45.0] - 2026-11-09
 
@@ -1217,7 +1227,8 @@ Security Rules (FS-RULES): behavior below was measured against a real Firestore 
 - The `strict` and `firebase` compatibility profiles, the Capability Manifest, and the Compatibility Contract pinned to firebase-tools 15.28.2.
 - `fireemu init`, `up`, `exec`, `emulators:export`, `doctor`, and `capabilities` commands, with the official `emulators:start` and `emulators:exec` spellings as aliases.
 
-[Unreleased]: https://github.com/t-k/fireemu/compare/v0.45.0...HEAD
+[Unreleased]: https://github.com/t-k/fireemu/compare/v0.46.0...HEAD
+[0.46.0]: https://github.com/t-k/fireemu/compare/v0.45.0...v0.46.0
 [0.45.0]: https://github.com/t-k/fireemu/compare/v0.44.0...v0.45.0
 [0.44.0]: https://github.com/t-k/fireemu/compare/v0.43.0...v0.44.0
 [0.43.0]: https://github.com/t-k/fireemu/compare/v0.42.0...v0.43.0

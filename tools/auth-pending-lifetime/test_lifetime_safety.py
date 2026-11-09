@@ -51,6 +51,35 @@ SECRET_MARKERS = (
 LOCAL_ORIGIN = "http://127.0.0.1:12345"
 
 
+class FixtureSecrets:
+    """A deterministic stand-in for `secrets` that cannot produce a secret marker.
+
+    The recorder draws its account nonces from `secrets.token_hex`. A random hexadecimal
+    string can contain a digit-only marker such as the six digit TEST_CODE (PR112
+    job127797478178), and the substring scan below must stay strict. The fixture therefore
+    emits only the letters a to f, written from a counter: unique, reproducible, and unable
+    to contain a marker, because every marker holds a digit, an uppercase letter, a dash,
+    a plus sign or the letters of "secret".
+    """
+
+    def __init__(self):
+        self.counter = 0
+
+    def _next(self, length):
+        self.counter += 1
+        digits, n = [], self.counter
+        while n:
+            n, rest = divmod(n, 6)
+            digits.append("abcdef"[rest])
+        return ("".join(reversed(digits))).rjust(length, "a")
+
+    def token_hex(self, nbytes):
+        return self._next(2 * nbytes)
+
+    def token_urlsafe(self, nbytes):
+        return self._next(4 * ((nbytes + 2) // 3))
+
+
 def jwt(payload, marker):
     body = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
     return f"eyJhbGciOiJSUzI1NiJ9.{body}.signature-{marker}-" + "x" * 60
@@ -286,7 +315,8 @@ def git(dirty):
     return command
 
 
-def wire(world, monkeypatch, dirty=False, budget=None):
+def wire(world, monkeypatch, dirty=False, budget=None, secrets_source=None):
+    monkeypatch.setattr(recorder, "secrets", secrets_source or FixtureSecrets())
     if budget is not None:
         monkeypatch.setattr(recorder, "BUDGET", budget)
     monkeypatch.setattr(recorder.core, "production_preflight", world.preflight)
@@ -308,9 +338,9 @@ def wire(world, monkeypatch, dirty=False, budget=None):
     )
 
 
-def run(tmp_path, monkeypatch, dirty=False, budget=None, **options):
+def run(tmp_path, monkeypatch, dirty=False, budget=None, secrets_source=None, **options):
     world = World(tmp_path / "run", Clock(), Clock(), **options)
-    wire(world, monkeypatch, dirty=dirty, budget=budget)
+    wire(world, monkeypatch, dirty=dirty, budget=budget, secrets_source=secrets_source)
     origin = None if world.production else LOCAL_ORIGIN
     control = None if world.production else (LOCAL_ORIGIN, "control-token")
     report = recorder.observe(world.output, origin=origin, clock_control=control)
@@ -863,6 +893,42 @@ def test_no_expected_secret_marker_would_be_a_false_negative():
     emitted = ("pending-secret-0", "session-secret-0", "Aa9!x", TEST_CODE)
     for value in emitted:
         assert any(marker in value for marker in SECRET_MARKERS), value
+
+
+def test_fixture_nonces_never_contain_a_secret_marker():
+    source = FixtureSecrets()
+    seen = set()
+    for _ in range(3_000):
+        for value in (
+            source.token_hex(16),
+            source.token_hex(24),
+            source.token_urlsafe(32),
+        ):
+            assert not any(marker in value for marker in SECRET_MARKERS), value
+            seen.add(value)
+    assert len(seen) == 9_000, "nonces must stay unique"
+
+
+def test_a_random_hex_nonce_cannot_collide_with_a_secret_marker(tmp_path, monkeypatch):
+    """PR112 job127797478178: a random hexadecimal email suffix held the six digit code."""
+    monkeypatch.setattr(
+        recorder.secrets, "token_hex", lambda n: "0a" + TEST_CODE + "b" * (2 * n - 8)
+    )
+    world, report, _saved = run(tmp_path, monkeypatch, ttl=10_000)
+    assert report["status"] == "observed"
+    assert all(TEST_CODE not in u["email"] for u in world.users.values())
+
+
+def test_the_scan_still_flags_a_marker_inside_a_generated_nonce(tmp_path, monkeypatch):
+    """The secret scan keeps its substring semantics: it is the fixture that stays clear."""
+
+    class Colliding(FixtureSecrets):
+        def token_hex(self, nbytes):
+            return "0a" + TEST_CODE + "b" * (2 * nbytes - 8)
+
+    with pytest.raises(AssertionError) as raised:
+        run(tmp_path, monkeypatch, ttl=10_000, secrets_source=Colliding())
+    assert TEST_CODE in str(raised.value)
 
 
 if __name__ == "__main__":

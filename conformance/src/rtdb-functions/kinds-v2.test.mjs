@@ -266,6 +266,11 @@ test("after a stop, the tail still waits and collects the deliveries of the writ
   assert.ok(result.report.steps.filter((s) => s.write?.outcome === "ok").length === 4);
   // the tail waited at least the quiet window after the last frame, then cleaned up
   assert.ok(world.deps.clock.now() >= 300000 + 60000 + 30000, `clock ${world.deps.clock.now()}`);
+  // only the answered writes are waited for: the tail ends after the quiet window, not at the 210 s end
+  assert.ok(
+    world.deps.clock.now() < 300000 + 60000 + 30000 + 30000,
+    `clock ${world.deps.clock.now()}`,
+  );
   assert.ok(world.events.indexOf("close sdk") > world.events.indexOf("write k19"));
 });
 
@@ -316,6 +321,9 @@ test("a stop does not wait for a tail after a signal or an exhausted request bud
     };
   });
   assert.ok(waited.reads > signalled.reads, `${waited.reads} > ${signalled.reads}`);
-  assert.ok(waited.reads > broke.reads, `${waited.reads} > ${broke.reads}`);
+  // with the budget gone not even one more read is made (a read counts before the budget is checked)
+  assert.equal(broke.reads, signalled.reads);
+  assert.equal(broke.result.reasons[0], "write rejected: permission_denied");
+  assert.ok(!broke.result.reasons.some((r) => /tail after the stop|ceiling/u.test(r)));
   assert.equal(signalled.world.events.includes("cleanup user"), true, "cleanup still runs");
 });

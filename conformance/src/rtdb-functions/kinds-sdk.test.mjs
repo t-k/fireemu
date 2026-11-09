@@ -293,7 +293,10 @@ test("a rejected write keeps the page's error text, masked and bounded, and neve
   for (const secret of [email, uid, nonce, "pw-secret", "eyJhbGci", "AAAAAAAA"])
     assert.ok(!masked.includes(secret), `${secret} in ${masked}`);
   assert.match(masked, /^write rejected: Error: <email> <uid> <nonce> <password> <masked>/);
-  assert.ok((await reject("x".repeat(5000))).length <= "write rejected: ".length + 160);
+  // bounded: a long text of short words (long runs of letters would be masked as tokens instead)
+  const bounded = await reject("word ".repeat(2000));
+  assert.equal(bounded.length, "write rejected: ".length + 159); // 160 characters, the last a space that is trimmed
+  assert.ok(bounded.startsWith("write rejected: word word word"));
   assert.equal(await reject("bad\u0000\u001b[31m text​"), "write rejected: bad??[31m text?");
   // a page that returns a non-ok outcome instead of throwing is described the same way
   const returning = make(async (_fn, arg) =>

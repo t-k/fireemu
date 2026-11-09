@@ -1780,6 +1780,15 @@ async fn a_rebound_host_is_refused_on_rest_long_polling_and_websocket() {
         let served = exchange_as(&address, host, "GET /a.json HTTP/1.1\r\n").await;
         assert!(served.starts_with("HTTP/1.1 200"), "{host}: {served}");
     }
+    // An admitted name still upgrades: the guard refuses names, not WebSockets.
+    let mut stream = TcpStream::connect(&address).await.unwrap();
+    stream
+        .write_all(format!("{websocket}Host: t1.localhost:9000\r\n\r\n").as_bytes())
+        .await
+        .unwrap();
+    let upgraded = read_until(&mut stream, "\r\n\r\n").await;
+    assert!(upgraded.starts_with("HTTP/1.1 101"), "{upgraded}");
+    drop(stream);
     let namespaced = exchange_as(&address, "t1.localhost:9000", "GET /a.json HTTP/1.1\r\n").await;
     assert!(namespaced.ends_with(r#"{"x":1}"#), "{namespaced}");
 }

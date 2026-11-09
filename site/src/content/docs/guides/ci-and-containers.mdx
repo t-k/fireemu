@@ -94,8 +94,9 @@ A web page can re-point a name it controls at `127.0.0.1` after it has loaded (D
 
 - `localhost` and names under `.localhost`;
 - any IP address, so `10.0.2.2` from the Android emulator, a LAN address or a bridge address works;
-- `host.docker.internal` and `host.containers.internal`, the names Docker and Podman give a container for its host;
+- names under `.internal`, the reserved suffix of the names container runtimes give a container for its host: `host.docker.internal` and `gateway.docker.internal` (Docker), `host.containers.internal` (Podman), `host.lima.internal` (Lima and Colima), `host.orb.internal` (OrbStack);
 - names under `.firebaseio.com` and `.firebasedatabase.app`, by which the Realtime Database selects a namespace;
+- names under `.cloudworkstations.dev`, the preview and port URLs of Firebase Studio and Cloud Workstations;
 - with `network.allowNonLoopbackHosts`, single-label names such as a Compose service name;
 - the names in `network.allowedHosts`.
 
@@ -127,4 +128,19 @@ allowedHosts = ["emulator.ci.example", ".svc.cluster.local"]
 </TabItem>
 </Tabs>
 
-An entry has no scheme, port or path. Listing a name only lets requests naming it through; the browser-origin checks are unchanged, so a page must still come from a loopback origin to use the privileged routes.
+An entry has no scheme, port or path. Listing a name only lets requests naming it through; the browser-origin checks are unchanged, so a page must still come from a loopback origin to use the privileged routes. Fireemu prints a `warning:` line at start for `"*"` and for an entry that covers a whole top-level domain such as `".com"`, because any web page can register a name there.
+
+A refused request gets a `403` whose message names the setting, and the daemon logs one `warning: refused Host "<name>"` line per refused name (at most 32 names), so a client whose SDK hides the response body still leaves a trace.
+
+The entries for common environments:
+
+| Environment | Entry |
+|---|---|
+| GitHub Codespaces forwarded ports (`https://<codespace>-<port>.app.github.dev`) | `".app.github.dev"` |
+| A Kubernetes service reached by its FQDN | `".svc.cluster.local"` (or the exact service name) |
+| ngrok | the exact tunnel name, for example `"abc123.ngrok-free.app"` |
+| Cloudflare Tunnel | the exact public hostname of the tunnel |
+| An mDNS name on the LAN | `"my-mac.local"` |
+| A name in `/etc/hosts` | that name |
+
+List exact tunnel names rather than the tunnel provider's whole domain: anyone can open a tunnel under it. Firebase Studio's `.cloudworkstations.dev` names need no entry. The policy is read when the daemon starts; restart it after changing `network.allowedHosts`.

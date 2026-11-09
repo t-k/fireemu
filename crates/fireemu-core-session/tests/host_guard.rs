@@ -5,7 +5,7 @@
 //! no `Origin`. The only thing that still gives such a request away is its `Host`, which names
 //! the attacker's domain. The guard admits only names an attacker cannot serve a page from.
 
-use fireemu_core_session::host_guard::{admits, AllowedHost, HostPolicy};
+use fireemu_core_session::host_guard::{admits, AllowedHost, HostPolicy, RefusalLog, DOCS_URL};
 use proptest::prelude::*;
 
 fn policy(entries: &[&str], single_label: bool) -> HostPolicy {
@@ -40,6 +40,10 @@ fn loopback_names_and_ip_literals_are_admitted_by_default() {
         "[::ffff:127.0.0.1]:8080",
         "host.docker.internal:9199",
         "HOST.CONTAINERS.INTERNAL:8080",
+        "gateway.docker.internal",
+        "host.lima.internal:9199",
+        "host.orb.internal",
+        "8080-firebase-demo-1234.cluster-abc.cloudworkstations.dev",
         "demo-proj-default-rtdb.firebaseio.com",
         "demo-proj-default-rtdb.europe-west1.firebasedatabase.app:9000",
     ] {
@@ -60,8 +64,14 @@ fn a_public_name_and_malformed_authorities_are_refused_by_default() {
         "localhostx",
         "firebaseio.com.evil.example",
         "evilfirebaseio.com",
-        "docker.internal",
-        "evil.internal",
+        "internal",
+        "evil.internal.example",
+        "internal.evil.example",
+        "evilinternal",
+        "cloudworkstations.dev",
+        "evilcloudworkstations.dev",
+        "cloudworkstations.dev.evil.example",
+        "x.app.github.dev",
         "fireemu",
         "fireemu:8080",
         "",
@@ -409,4 +419,77 @@ fn the_refusal_body_is_the_google_rpc_error_shape() {
         message.matches("\\\"").count(),
         "{message}"
     );
+}
+
+fn refusal(host: &str) -> fireemu_core_session::host_guard::HostRefusal {
+    admits(&HostPolicy::default(), false, [host.as_bytes()]).expect_err("refused")
+}
+
+#[test]
+fn the_refusal_says_where_the_setting_lives_and_links_the_docs() {
+    let message = refusal("evil.example").message();
+    assert!(
+        message.contains("[network] section of fireemu.toml"),
+        "{message}"
+    );
+    assert!(message.contains("fireemu.json"), "{message}");
+    assert!(message.contains(DOCS_URL), "{message}");
+    assert!(DOCS_URL.ends_with("/guides/ci-and-containers/#host-names-the-emulators-answer"));
+    let warning = refusal("evil.example").warning();
+    assert!(
+        warning.starts_with("warning: refused Host \"evil.example\""),
+        "{warning}"
+    );
+    assert!(
+        warning.contains("[network] section of fireemu.toml"),
+        "{warning}"
+    );
+    assert!(warning.contains(DOCS_URL), "{warning}");
+    let malformed = refusal("user@evil").warning();
+    assert!(malformed.contains("a malformed Host header"), "{malformed}");
+    assert!(!malformed.contains("user@evil"), "{malformed}");
+}
+
+#[test]
+fn each_refused_name_is_logged_once_up_to_a_bound() {
+    let log = RefusalLog::new(2);
+    let first = log.first_warning(&refusal("a.example:1")).expect("logged");
+    assert!(first.contains("\"a.example\""), "{first}");
+    // The same name, whatever its case or port, is not logged again.
+    assert_eq!(log.first_warning(&refusal("A.EXAMPLE:2")), None);
+    let malformed = log.first_warning(&refusal("x@y")).expect("logged");
+    assert!(malformed.contains("malformed"), "{malformed}");
+    assert_eq!(log.first_warning(&refusal("z@w")), None);
+    // The bound is reached: one closing line, then silence.
+    let closing = log
+        .first_warning(&refusal("b.example"))
+        .expect("closing line");
+    assert!(closing.contains("2 Host names were refused"), "{closing}");
+    assert!(closing.contains("not logged"), "{closing}");
+    assert_eq!(log.first_warning(&refusal("c.example")), None);
+    assert_eq!(log.first_warning(&refusal("a.example")), None);
+}
+
+#[test]
+fn entries_that_turn_the_defence_off_are_warned_about() {
+    assert!(HostPolicy::default().warnings().is_empty());
+    assert!(policy(
+        &["emulator.ci.example", ".svc.cluster.local", ".ci.example"],
+        true
+    )
+    .warnings()
+    .is_empty());
+    let all = policy(&["*"], false).warnings();
+    assert_eq!(all.len(), 1, "{all:?}");
+    assert!(
+        all[0].starts_with("warning: network.allowedHosts contains \"*\""),
+        "{all:?}"
+    );
+    let tld = policy(&[".com", "x.example", ".Dev."], false).warnings();
+    assert_eq!(tld.len(), 2, "{tld:?}");
+    assert!(
+        tld[0].contains("\".com\"") && tld[0].contains("top-level domain"),
+        "{tld:?}"
+    );
+    assert!(tld[1].contains("\".dev\""), "{tld:?}");
 }

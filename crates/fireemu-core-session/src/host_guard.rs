@@ -12,10 +12,14 @@
 //!   a rebinding, and this keeps `10.0.2.2` (the Android emulator), LAN addresses and bridge
 //!   addresses working;
 //! - `localhost` and names under `.localhost` (RFC 6761, never delegated);
-//! - `host.docker.internal` and `host.containers.internal`, the names Docker and Podman give
-//!   a container for its host (`.internal` is reserved for private use and never delegated);
+//! - names under `.internal`, reserved by ICANN for private use and never delegated: the
+//!   names Docker, Podman, Lima, Colima and `OrbStack` give a container for its host
+//!   (`host.docker.internal`, `gateway.docker.internal`, `host.containers.internal`,
+//!   `host.lima.internal`, `host.orb.internal`);
 //! - names under `.firebaseio.com` and `.firebasedatabase.app`, which the Realtime Database
 //!   routes namespaces by, as the official emulator does (Google owns both);
+//! - names under `.cloudworkstations.dev`, the preview and port URLs of Firebase Studio and
+//!   Cloud Workstations, whose proxy passes the public `Host` through (Google owns the DNS);
 //! - with `network.allowNonLoopbackHosts`, single-label names such as a Compose service name
 //!   (public DNS answers no single-label name);
 //! - the names listed in `network.allowedHosts` (exact, `.suffix` for a domain and its
@@ -29,21 +33,31 @@
 //! The official emulator (firebase-tools) checks no `Host`; this guard is a local-only
 //! defence with no production counterpart and applies to both profiles alike.
 
+use std::collections::BTreeSet;
 use std::net::{IpAddr, Ipv6Addr};
-use std::sync::{Arc, PoisonError, RwLock};
+use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
 /// The longest host name DNS can carry, and so the longest one the guard parses.
 const MAX_NAME_BYTES: usize = 253;
 
 /// Names admitted under every policy.
-const DEFAULT_NAMES: &[&str] = &[
-    "localhost",
-    "host.docker.internal",
-    "host.containers.internal",
-];
+const DEFAULT_NAMES: &[&str] = &["localhost"];
 
 /// Domains whose subdomains are admitted under every policy (the domain itself is not).
-const DEFAULT_SUFFIXES: &[&str] = &[".localhost", ".firebaseio.com", ".firebasedatabase.app"];
+const DEFAULT_SUFFIXES: &[&str] = &[
+    ".localhost",
+    ".internal",
+    ".firebaseio.com",
+    ".firebasedatabase.app",
+    ".cloudworkstations.dev",
+];
+
+/// Where the refusal and the warnings send a user: the site page that documents the setting.
+pub const DOCS_URL: &str =
+    "https://t-k.github.io/fireemu/guides/ci-and-containers/#host-names-the-emulators-answer";
+
+/// How the refusal names the setting: its file, section and key in both formats.
+const SETTING: &str = "network.allowedHosts (allowedHosts in the [network] section of fireemu.toml, or \"network\": {\"allowedHosts\": [...]} in fireemu.json)";
 
 /// One `network.allowedHosts` entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -116,6 +130,24 @@ impl HostPolicy {
         }
     }
 
+    /// The start-up warnings this policy earns: `*`, and a suffix entry that spans a whole
+    /// top-level domain (`.com`), each turn the defence off for every name they cover.
+    #[must_use]
+    pub fn warnings(&self) -> Vec<String> {
+        self.allowed
+            .iter()
+            .filter_map(|entry| match entry {
+                AllowedHost::Any => Some(
+                    "warning: network.allowedHosts contains \"*\": every Host is answered, so the DNS-rebinding defence is off".to_owned(),
+                ),
+                AllowedHost::Suffix(suffix) if !suffix[1..].contains('.') => Some(format!(
+                    "warning: network.allowedHosts entry {suffix:?} admits every name under a top-level domain, which any web page can register and rebind; list the exact names instead"
+                )),
+                AllowedHost::Exact(_) | AllowedHost::Suffix(_) => None,
+            })
+            .collect()
+    }
+
     fn admits_name(&self, name: &str) -> bool {
         DEFAULT_NAMES.contains(&name)
             || DEFAULT_SUFFIXES.iter().any(|suffix| name.ends_with(suffix))
@@ -147,7 +179,19 @@ impl HostRefusal {
             |name| format!("Host {name:?}"),
         );
         format!(
-            "fireemu does not answer {named}: as a defence against DNS rebinding it answers localhost, IP addresses, host.docker.internal, host.containers.internal and the names listed in network.allowedHosts (single-label names too with network.allowNonLoopbackHosts)"
+            "fireemu does not answer {named}: as a defence against DNS rebinding it answers localhost, IP addresses, names under .internal and the names listed in {SETTING} (single-label names too with network.allowNonLoopbackHosts); see {DOCS_URL}"
+        )
+    }
+
+    /// The `warning:` line the daemon logs for this refusal.
+    #[must_use]
+    pub fn warning(&self) -> String {
+        let named = self.name.as_ref().map_or_else(
+            || "a malformed Host header".to_owned(),
+            |name| format!("Host {name:?}"),
+        );
+        format!(
+            "warning: refused {named} as a defence against DNS rebinding; if a client of yours uses it, add it to {SETTING} ({DOCS_URL})"
         )
     }
 
@@ -260,6 +304,50 @@ pub fn current() -> Arc<HostPolicy> {
         .unwrap_or_default()
 }
 
+/// Remembers which refusals were already logged, so each refused name is logged once and a
+/// flood of names cannot fill the log or memory.
+#[derive(Debug)]
+pub struct RefusalLog {
+    /// The refused names already logged (`None` for a malformed `Host`), and whether the
+    /// closing line was logged.
+    state: Mutex<(BTreeSet<Option<String>>, bool)>,
+    capacity: usize,
+}
+
+impl RefusalLog {
+    /// A log that names at most `capacity` distinct refusals.
+    #[must_use]
+    pub const fn new(capacity: usize) -> Self {
+        Self {
+            state: Mutex::new((BTreeSet::new(), false)),
+            capacity,
+        }
+    }
+
+    /// The line to log for `refusal`: its warning the first time its name is refused, one
+    /// closing line when a new name arrives after `capacity` were logged, and nothing
+    /// otherwise.
+    pub fn first_warning(&self, refusal: &HostRefusal) -> Option<String> {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let (seen, closed) = &mut *state;
+        if seen.contains(&refusal.name) || *closed {
+            return None;
+        }
+        if seen.len() >= self.capacity {
+            *closed = true;
+            return Some(format!(
+                "warning: {} Host names were refused; further refused names are not logged",
+                self.capacity
+            ));
+        }
+        seen.insert(refusal.name.clone());
+        Some(refusal.warning())
+    }
+}
+
+/// The process's refusal log, read by [`admits_request`].
+static REFUSALS: RefusalLog = RefusalLog::new(32);
+
 /// The `Content-Type` of [`HostRefusal::body`].
 pub const REFUSAL_CONTENT_TYPE: &str = "application/json; charset=utf-8";
 
@@ -271,5 +359,11 @@ pub fn admits_request<'a>(
     http2: bool,
     hosts: impl IntoIterator<Item = &'a [u8]>,
 ) -> Result<(), HostRefusal> {
-    admits(&current(), http2, hosts)
+    let verdict = admits(&current(), http2, hosts);
+    if let Err(refusal) = &verdict {
+        if let Some(line) = REFUSALS.first_warning(refusal) {
+            eprintln!("{line}");
+        }
+    }
+    verdict
 }

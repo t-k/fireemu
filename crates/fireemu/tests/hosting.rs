@@ -509,7 +509,7 @@ fn the_daemon_applies_the_configured_host_policy() {
     let firebase =
         serde_json::json!({"hosting":{"public":dir.join("public")},"emulators":emulators()});
 
-    let (child, address) = start(&dir, &firebase, "hosting");
+    let (mut child, address) = start(&dir, &firebase, "hosting");
     let refused = request_as(&address, "evil.example", "/");
     assert!(refused.starts_with("HTTP/1.1 403"), "{refused}");
     assert!(refused.contains("network.allowedHosts"), "{refused}");
@@ -517,12 +517,54 @@ fn the_daemon_applies_the_configured_host_policy() {
     assert!(request_as(&address, "site.example", "/").starts_with("HTTP/1.1 403"));
     assert!(request_as(&address, "localhost", "/").ends_with("site"));
     assert!(request_as(&address, "10.0.2.2:5000", "/").ends_with("site"));
+    // Each refused name is logged once, with where to allow it.
+    let stderr = stderr_after_stop(&mut child);
     drop(child);
+    assert_eq!(
+        stderr
+            .matches("warning: refused Host \"evil.example\"")
+            .count(),
+        1,
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("warning: refused Host \"site.example\""),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("[network] section of fireemu.toml"),
+        "{stderr}"
+    );
 
     let config =
         serde_json::json!({"schemaVersion": 1, "network": {"allowedHosts": ["site.example"]}});
-    let (_child, address) = start_with_config(&dir, &firebase, "hosting", Some(&config));
+    let (listed, address) = start_with_config(&dir, &firebase, "hosting", Some(&config));
     assert!(request_as(&address, "SITE.example:5000", "/").ends_with("site"));
     assert!(request_as(&address, "evil.example", "/").starts_with("HTTP/1.1 403"));
     assert!(request_as(&address, "x.site.example", "/").starts_with("HTTP/1.1 403"));
+    drop(listed);
+
+    // "*" and a whole top-level domain are warned about at start.
+    let config =
+        serde_json::json!({"schemaVersion": 1, "network": {"allowedHosts": ["*", ".com"]}});
+    let (mut child, address) = start_with_config(&dir, &firebase, "hosting", Some(&config));
+    assert!(request_as(&address, "evil.example", "/").ends_with("site"));
+    let stderr = stderr_after_stop(&mut child);
+    assert!(
+        stderr.contains("warning: network.allowedHosts contains \"*\""),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("warning: network.allowedHosts entry \".com\""),
+        "{stderr}"
+    );
+}
+
+/// Stops the daemon (its owner stdin closes) and returns everything it wrote to stderr.
+fn stderr_after_stop(child: &mut OwnedChild) -> String {
+    let mut stderr = child.0.stderr.take().unwrap();
+    child.0.stdin.take();
+    let mut text = String::new();
+    stderr.read_to_string(&mut text).unwrap();
+    text
 }

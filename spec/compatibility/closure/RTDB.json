@@ -229,6 +229,16 @@
       "decidedBy": "coordinator",
       "decidedOn": "2026-11-08",
       "decisionRef": "The project coordinator's direction of 2026-11-08 to register the recording as a release comparison and its own condition, under the owner's delegation (owner ledger 2350)."
+    },
+    {
+      "id": "R14",
+      "decision": "R13 is extended by one pair of recordings: the RTDB trigger kinds of 2026-11-08 and 2026-11-09 (RTDB/functions-trigger-kinds-user-ladder-and-event-limit, runs RTDB-TRIGGERS-KINDS-20261108-01 and RTDB-TRIGGERS-KINDS-20261109-02): per-kind handlers on a nested pattern, an any-instance handler and an ancestor group handler, a real user's REST and SDK writes, transactions and onDisconnect writes, priorities, and the event size ladder with the strict profile's 1,048,576-byte event limit, for the 25 recorded writes and 115 production deliveries only. The strict profile, replayed on the kinds closure build (an unpublished release-profile build of source commit d44b0407f, binary c67959af..., --locked, RUSTC_WRAPPER empty, a fresh worktree-local target directory), matches production in all 43 rows of the second recording and in 72 of 76 rows of the first; the four rows of k12 (a 600 KiB create production did not deliver once, and delivered for the same shape in the second recording) are listed in /knownGaps/triggerEventSizeThresholdAndCounting. The exact size threshold, how production counts the size and the form of the refusal over the SDK connection are not verified and are not claimed. The parent status and the scope R12 and R13 state are otherwise unchanged; the other conditions stay bound to the closure builds they name.",
+      "rationale": "The recordings close the per-kind, ancestor, user-write, transaction, onDisconnect and priority gaps that /knownGaps/triggerDeliveryBeyondBreadth named, and give the strict profile an event size limit that production was shown to enforce; what the ladder cannot show stays a named gap.",
+      "amends": "R13",
+      "status": "FROZEN",
+      "decidedBy": "coordinator",
+      "decidedOn": "2026-11-10",
+      "decisionRef": "The project coordinator's direction of 2026-11-10 to register the trigger-kinds recordings as a release comparison and its own condition, under the owner's delegation (sandbox-ledger lines 1289 and 1297 close the two runs)."
     }
   ],
   "conditions": [
@@ -1844,6 +1854,94 @@
           "emulator": "conformance/src/rtdb-functions/recorded/local-emulator-rtdb-breadth.json"
         }
       }
+    },
+    {
+      "conditionId": "RTDB/functions-trigger-kinds-user-ladder-and-event-limit",
+      "coverageLedgerRows": [
+        "RTDB-CV-04",
+        "RTDB-CV-14"
+      ],
+      "source": "spec/compatibility/contract.json#database",
+      "cases": [
+        "1st gen onCreate, onUpdate and onDelete and 2nd gen onValueCreated, onValueUpdated and onValueDeleted handlers on the nested pattern /k9-rtdb/{group}/items/{id}, a 2nd gen onValueWritten handler on any instance (`*`) and an ancestor group handler on /k9-rtdb/{group}: single-leaf, ancestor, items-level, root multi-path and ancestor-remove writes (k1 to k12), where each handler receives one event per changed leaf of the kind it declares and none for an unchanged leaf",
+        "priorities and .value nodes: a priority-only write and a write of a value with a priority deliver events without priorities (a priority-only write delivers the delta {\".priority\": n}); strict events carry none",
+        "a real email/password user with custom claims: REST create, update and delete (2nd gen authType app_user with authId the uid, 1st gen authType USER with context.auth.token), and through the web SDK over long polling a set, two transactions and an onDisconnect remove and set, delivered as ordinary writes (k15 to k21)",
+        "the payload ladder: events of 614,4xx, 949,9xx and 1,023,9xx bytes are accepted (200) and delivered to the three item handlers and the group handler; events of 1,049,9xx and 1,499,9xx bytes (and 2 MiB in the first recording) are refused with 400 and a 98-byte body (the whole JSON body, `{\"error\" : \"This request would cause a function payload exceeding the maximum size allowed.\"}` with its line breaks, not the message alone), deliver nothing and write nothing; the strict profile refuses above 1,048,576 bytes (fireemu counts the node before plus the delta as compact JSON), and the emulator profile has no limit",
+        "not claimed by these rows: the exact threshold between 1,023,950 and 1,049,850 bytes, how production counts the size (node before plus delta, the delta alone, or the whole event) and the form of the refusal over the SDK connection; the 600 KiB create k12 of the first recording, which production did not deliver once and delivered in the second (RTDB-TRIGGERS-KINDS-20261109-02, k22)"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recording": "RTDB-TRIGGERS-KINDS-20261108-01",
+            "project": "fireemu-oracle-query",
+            "recordedOn": "2026-11-08",
+            "observations": 76,
+            "writes": 13,
+            "frames": 72
+          },
+          {
+            "recording": "RTDB-TRIGGERS-KINDS-20261109-02",
+            "project": "fireemu-oracle-query",
+            "recordedOn": "2026-11-09",
+            "observations": 43,
+            "writes": 12,
+            "frames": 43
+          }
+        ],
+        "fixturePath": "conformance/src/rtdb-functions/recorded/production-rtdb-kinds.json",
+        "fixtureSha256": "bfe1458f6189058814afeb335406a35b5f31ca0a0dec57b7f8cd6309d0298764",
+        "secondFixturePath": "conformance/src/rtdb-functions/recorded/production-rtdb-kinds-user-ladder.json",
+        "secondFixtureSha256": "ab6de0f1ed95b4ed17863865835c4425839b04deff7124faaa6f7cdab9920947",
+        "comparisonTool": "conformance/src/rtdb-functions/kinds-compare.mjs",
+        "comparisonPath": "spec/compatibility/closure/evidence/RTDB-kinds-comparison.json",
+        "comparisonSha256": "b74644aa6e2fb7f8046f1d92507c498337f34553ab92fe5bc1c19651f8b791cb",
+        "release": "kinds-closure-build",
+        "sourceCommit": "d44b0407f56dc0359bd1d7b0123b145eb5cc61a4",
+        "binarySha256": "c67959af1be939fd489acf50914ef475fc70924ede0390cd73408d1247c04825",
+        "toolCommit": "d44b0407f56dc0359bd1d7b0123b145eb5cc61a4",
+        "rows": {
+          "strict": {
+            "MATCH": 115,
+            "DIFFERENCE": 4
+          },
+          "emulator": {
+            "DECLARED_DIFFERENCE": 131
+          }
+        },
+        "productionRequests": 0,
+        "ownerDecisions": "docs.local/instructions/owner-decisions.md (2350: the RTDB remaining items and the trigger-kinds caps; the approval and V lines of runs RTDB-TRIGGERS-KINDS-20261108-01 and RTDB-TRIGGERS-KINDS-20261109-02); sandbox-ledger lines 1283 and 1289 (first run), 1296 and 1297 (second run); the stopped run 1294 and 1295 is not compared",
+        "tests": [
+          "conformance/src/rtdb-functions/kinds-recorded.test.mjs",
+          "conformance/src/rtdb-functions/kinds-replay.test.mjs",
+          "conformance/src/rtdb-functions/kinds-compare.test.mjs",
+          "conformance/src/rtdb-functions/kinds-mask.test.mjs",
+          "conformance/src/rtdb-functions/kinds-judge.test.mjs",
+          "crates/fireemu-adapter-functions/tests/database_events.rs",
+          "crates/fireemu-adapter-functions/tests/database_event_priority.rs",
+          "crates/fireemu-adapter-functions/tests/database_event_shape.rs",
+          "crates/fireemu-adapter-database/tests/functions_bridge.rs",
+          "crates/fireemu/src/functions.rs",
+          "conformance/src/rtdb-finite-families-closure.test.mjs",
+          "conformance/src/release-strict-regression.test.mjs",
+          "conformance/src/rtdb-release-replay.test.mjs"
+        ],
+        "scope": "The 25 recorded writes only, over 8 handlers, one instance and one region. The strict profile matches production in all 43 rows of the second recording and in 72 of 76 rows of the first; the four rows of k12 are the unexplained one-off listed in /knownGaps/triggerEventSizeThresholdAndCounting. The emulator profile differs in every row by the declared event shape and priorities, and delivers the refused rungs (/knownDifferences/triggerPrioritiesAndSizeEmulatorProfile). Delivery latency, retry timing, the order across handlers and the other cases in /knownGaps/triggerDeliveryBeyondBreadth are not claimed.",
+        "knownDifferences": [
+          "/knownDifferences/triggerEventShapeEmulatorProfile",
+          "/knownDifferences/triggerPrioritiesAndSizeEmulatorProfile"
+        ],
+        "localRecordings": {
+          "strict": [
+            "conformance/src/rtdb-functions/recorded/local-strict-rtdb-kinds.json",
+            "conformance/src/rtdb-functions/recorded/local-strict-rtdb-kinds-user-ladder.json"
+          ],
+          "emulator": [
+            "conformance/src/rtdb-functions/recorded/local-emulator-rtdb-kinds.json",
+            "conformance/src/rtdb-functions/recorded/local-emulator-rtdb-kinds-user-ladder.json"
+          ]
+        }
+      }
     }
   ],
   "integratedRegression": {
@@ -2078,6 +2176,38 @@
           }
         },
         "binding": "the syntax closure build, an unpublished release-profile build of source commit f1f494922 (binary 73572d13...), --locked, RUSTC_WRAPPER empty"
+      },
+      {
+        "path": "spec/compatibility/closure/evidence/RTDB-kinds-comparison.json",
+        "sha256": "b74644aa6e2fb7f8046f1d92507c498337f34553ab92fe5bc1c19651f8b791cb",
+        "rows": 119,
+        "summary": {
+          "strict": {
+            "first": {
+              "rows": 76,
+              "match": 72,
+              "difference": 4
+            },
+            "second": {
+              "rows": 43,
+              "match": 43,
+              "difference": 0
+            }
+          },
+          "emulator": {
+            "first": {
+              "rows": 80,
+              "match": 0,
+              "difference": 80
+            },
+            "second": {
+              "rows": 51,
+              "match": 0,
+              "difference": 51
+            }
+          }
+        },
+        "binding": "the kinds closure build, an unpublished release-profile build of source commit d44b0407f (binary c67959af...), --locked, RUSTC_WRAPPER empty"
       }
     ],
     "productionRequests": 0,
@@ -2311,6 +2441,10 @@
       "statement": "Declared difference with an official-emulator answer and no production answer: a token whose claims hold a lone surrogate, and the `authvar` of a `gauth` frame that holds one, are not read (the code of before 2286), where the official emulator keeps the surrogate as a Java string and echoes the authvar object. The strict profile answers 401 to the token; the emulator profile judges the request as an anonymous one; the frame is the connection error. The owner removed the support after three rounds of review found authentication defects in it. The jar's answers are the rows of the claims fixture and of the authvar fixture.",
       "decisionRef": "docs.local/instructions/owner-decisions.md (2291, \"RTDB closure claims and regex declarations\", 2026-11-06)",
       "evidence": "crates/fireemu-adapter-database/tests/fixtures/rules-lone-claims-official-emulator-4.11.2.json"
+    },
+    "triggerPrioritiesAndSizeEmulatorProfile": {
+      "statement": "The emulator profile keeps the priorities in an RTDB trigger event (strict, like production, sends none: a priority-only write delivers the delta {\".priority\": n}) and has no event size limit, so it applies and delivers the writes production refused above about 1 MiB (the 1,049,9xx-byte, 1,499,9xx-byte and 2 MiB events). The official emulator was measured for neither; the emulator profile never refuses more than firebase-tools.",
+      "evidence": "spec/compatibility/closure/evidence/RTDB-kinds-comparison.json"
     }
   },
   "knownGaps": {
@@ -2324,10 +2458,14 @@
       "statement": "Beyond the earlier recorded S5 shape and the three named v0.35 recorded priority shapes (heal-reregister, nested-priority and string-priority), onDisconnect priority behavior remains unverified in production."
     },
     "triggerDeliveryBeyondBreadth": {
-      "statement": "RTDB-triggered Functions beyond the 12 recorded writes (RTDB-TRIGGERS-BREADTH-20261105-02): per-kind handlers (create, update, delete) on a nested pattern or under an ancestor write; a wildcard instance glob and a second instance; auth providers other than email/password; writes by a service account, by onDisconnect, by a transaction or by the Node Admin SDK; SDK writes over long polling; delivery latency, retry timing, the 24-hour and 7-day retry limits and the order of deliveries across handlers. The single-path kinds are recorded by RTDB/functions-trigger-delivery."
+      "statement": "RTDB-triggered Functions beyond the recorded writes (RTDB-TRIGGERS-BREADTH-20261105-02: 12 writes; RTDB-TRIGGERS-KINDS-20261108-01 and RTDB-TRIGGERS-KINDS-20261109-02: 25 writes; 8 handlers on one instance in one region): a wildcard instance glob other than `*` and a second instance, other regions; auth providers other than email/password (anonymous, custom token, Google, tenants); writes by a service account or by the Node Admin SDK; delivery latency, retry timing, the 24-hour and 7-day retry limits and the order of deliveries across handlers; exactly-once delivery; the official emulator's behaviour for priorities and for large events. The single-path kinds are recorded by RTDB/functions-trigger-delivery, the per-kind, ancestor, user, transaction, onDisconnect and priority cases by RTDB/functions-trigger-kinds-user-ladder-and-event-limit."
     },
     "credentialsBeyondInvalidRest": {
       "statement": "Not recorded: the WebSocket auth and gauth message texts for a rejected credential (strict refuses a non-owner gauth with production's permission_denied; the texts are the official emulator's), a genuine ID token that is expired, revoked, tampered, for another project or for a deleted user (the tokens recorded here are generated), an unsigned token without aud, and the strict profile's answer to an invalid auth= on a write, an event stream or the settings path (only the data read is recorded)."
+    },
+    "triggerEventSizeThresholdAndCounting": {
+      "statement": "The strict profile refuses a write whose RTDB trigger event exceeds 1,048,576 bytes (the node before plus the delta, as compact JSON), between the recorded accepted events (614,4xx, 949,9xx and 1,023,9xx bytes) and the recorded refused ones (1,049,9xx, 1,499,9xx bytes and 2 MiB). Not verified: the exact threshold inside 1,023,950 to 1,049,850 bytes; whether production counts the node before plus the delta, the delta alone or the whole event; the form of the refusal over the SDK connection (fireemu answers invalid_parameters with the same text); and a write that produces no event for any registered trigger (fireemu applies it; production was not asked). One observation is unexplained and was not reproduced: the 600 KiB create k12 of RTDB-TRIGGERS-KINDS-20261108-01 reached none of its four handlers within about 30 seconds, while the same shape was delivered in RTDB-TRIGGERS-KINDS-20261109-02 (k22); fireemu delivers it.",
+      "evidence": "spec/compatibility/closure/evidence/RTDB-kinds-comparison.json"
     }
   },
   "outOfScope": [
@@ -2413,10 +2551,10 @@
         "detail": "only the data read was recorded; strict keeps its 401 for every other shape."
       },
       {
-        "item": "RTDB-triggered Functions beyond the 12 recorded writes: per-kind handlers under an ancestor write, a wildcard instance glob and a second instance, auth providers other than email/password, service-account, onDisconnect and transaction writes, SDK writes over long polling",
+        "item": "RTDB-triggered Functions beyond the 37 recorded writes: a wildcard instance glob other than `*` and a second instance, auth providers other than email/password, service-account and Node Admin SDK writes",
         "key": "notClaimed_trigger_delivery_beyond_breadth",
         "localBehaviour": "own-implementation",
-        "detail": "the sandbox deploy budget allowed three functions on one instance (owner 2251, tier T1); strict follows the recorded shapes."
+        "detail": "the sandbox deploy budget allowed 8 functions on one instance (owner 2251 and 2350, tier T1); strict follows the recorded shapes."
       },
       {
         "item": "delivery latency, retry timing, the 24-hour and 7-day retry limits and the order of deliveries across handlers",
@@ -2477,6 +2615,12 @@
         "key": "notClaimed_over_refusal_probed_corpora_only",
         "localBehaviour": "own-implementation",
         "detail": "that the emulator profile refuses less than the official emulator is checked on the probed corpora only (the 22k-row Rules corpora, the lone-surrogate, query.orderBy and regular-expression rows, the REST and token cases); each round of review found shapes the corpora lacked, so other refusals may exist. The known exceptions are declared: the 71 regular-expression rows with the `i` flag and non-ASCII text (owner ledger line 2288, knownDifferences.regexIFlagNonAsciiEmulatorProfile) and a lone surrogate in token claims or in the authvar of a gauth frame (owner ledger line 2291, knownDifferences.loneSurrogateClaimsAndAuthvarNotRead)."
+      },
+      {
+        "item": "the exact RTDB trigger event size threshold, how production counts the size, and the SDK connection's form of the refusal",
+        "key": "notClaimed_trigger_event_size_threshold",
+        "localBehaviour": "own-implementation",
+        "detail": "strict refuses above 1,048,576 bytes of the node before plus the delta, between the recorded accepted 1,023,9xx and refused 1,049,9xx bytes; production was not asked for a finer threshold or another counting, and a refused write over the SDK connection is answered invalid_parameters with the recorded text."
       }
     ]
   }

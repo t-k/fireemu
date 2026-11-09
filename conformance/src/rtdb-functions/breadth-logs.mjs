@@ -27,28 +27,30 @@ export function origin({ name, generation }) {
 }
 
 /** The filter of one poll: the handler origins, the frame marker, and the window (RFC 3339 UTC strings). */
-export function logFilter({ start, end }) {
-  const origins = FIXTURE_HANDLERS.map((handler) => {
-    const o = origin(handler);
-    const terms = [
-      `logName="${o.logName}"`,
-      `resource.type="${o.resourceType}"`,
-      ...Object.entries(o.labels).map(([key, value]) => `resource.labels.${key}="${value}"`),
-    ];
-    return `(${terms.join(" AND ")})`;
-  }).join(" OR ");
+export function logFilter({ start, end }, handlers = FIXTURE_HANDLERS) {
+  const origins = handlers
+    .map((handler) => {
+      const o = origin(handler);
+      const terms = [
+        `logName="${o.logName}"`,
+        `resource.type="${o.resourceType}"`,
+        ...Object.entries(o.labels).map(([key, value]) => `resource.labels.${key}="${value}"`),
+      ];
+      return `(${terms.join(" AND ")})`;
+    })
+    .join(" OR ");
   const marker = FRAME_MARKER.trim();
   return `(${origins}) AND timestamp>="${start}" AND timestamp<="${end}" AND (textPayload:"${marker}" OR jsonPayload.message:"${marker}")`;
 }
 
 /** One bounded entries:list request (a POST the recorder sends through its control client). */
-export function listRequest({ start, end, pageToken }) {
+export function listRequest({ start, end, pageToken }, handlers = FIXTURE_HANDLERS) {
   return {
     method: "POST",
     url: `${LOGGING_HOST}/v2/entries:list`,
     body: {
       resourceNames: [`projects/${PROJECT}`],
-      filter: logFilter({ start, end }),
+      filter: logFilter({ start, end }, handlers),
       orderBy: "timestamp asc",
       pageSize: PAGE_SIZE,
       ...(pageToken ? { pageToken } : {}),
@@ -56,10 +58,9 @@ export function listRequest({ start, end, pageToken }) {
   };
 }
 
-const known = new Map(FIXTURE_HANDLERS.map((handler) => [handler.name, handler]));
-
 /** The frames in one entries:list answer, read once per insert id against `seen` (a Set, updated). */
-export function parseEntries(body, { readAt, seen = new Set() }) {
+export function parseEntries(body, { readAt, seen = new Set(), handlers = FIXTURE_HANDLERS }) {
+  const known = new Map(handlers.map((handler) => [handler.name, handler]));
   const result = {
     entries: 0,
     frames: [],

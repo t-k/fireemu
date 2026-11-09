@@ -1,7 +1,9 @@
 //! Local Hosting: pinned-oracle routing with capability-confined static assets.
 
+mod content_types;
 mod files;
 mod matcher;
+mod mime;
 
 use bytes::Bytes;
 use http_body_util::{combinators::BoxBody, BodyExt, Full};
@@ -110,6 +112,24 @@ struct Site {
     emulators: Value,
 }
 
+/// Every run of slashes as one, as superstatic's `normalizeMultiSlashes` does.
+fn collapse_slashes(path: &str) -> String {
+    let mut collapsed = String::with_capacity(path.len());
+    for ch in path.chars() {
+        if ch != '/' || !collapsed.ends_with('/') {
+            collapsed.push(ch);
+        }
+    }
+    collapsed
+}
+
+/// One localized candidate, `join(root, directory, path)` of superstatic's i18n lookup: the parts
+/// are joined with slashes under a leading one and every run of slashes collapses, so a root
+/// written `/locales`, `locales/` or `//locales` finds the same files as `locales`.
+fn i18n_path(root: &str, directory: &str, path: &str) -> String {
+    collapse_slashes(&format!("//{root}/{directory}/{path}"))
+}
+
 /// Files firebase-tools never uploads whatever the configuration says (`listFiles` in
 /// firebase-tools 15.28.2), so production serves them as absent.
 const DEPLOY_ALWAYS_IGNORED: [&str; 3] = [
@@ -157,6 +177,8 @@ impl Site {
             .get("i18n")
             .and_then(|v| v.get("root"))
             .and_then(Value::as_str)
+            // An empty root is no root: superstatic tests `i18n?.root` for truthiness.
+            .filter(|root| !root.is_empty())
         {
             let header = |key: &str| headers.get(key).and_then(|v| v.to_str().ok()).unwrap_or("");
             let cookie = |key: &str| {
@@ -184,13 +206,13 @@ impl Site {
             };
             if !country.is_empty() {
                 for language in &languages {
-                    paths.push(format!("/{root}/{language}_{country}{path}"));
+                    paths.push(i18n_path(root, &format!("{language}_{country}"), path));
                 }
-                paths.push(format!("/{root}/ALL_{country}{path}"));
+                paths.push(i18n_path(root, &format!("ALL_{country}"), path));
             }
             for language in languages {
-                paths.push(format!("/{root}/{language}_ALL{path}"));
-                paths.push(format!("/{root}/{language}{path}"));
+                paths.push(i18n_path(root, &format!("{language}_ALL"), path));
+                paths.push(i18n_path(root, language, path));
             }
         }
         paths.push(path.to_owned());
@@ -219,18 +241,10 @@ impl Site {
         .await
     }
     fn file_response(path: &str, asset: files::Asset, status: u16, head: bool) -> Response<Body> {
-        let mime = match path.rsplit('.').next().unwrap_or("") {
-            "html" | "htm" => "text/html; charset=utf-8",
-            "json" => "application/json; charset=utf-8",
-            "js" | "mjs" => "text/javascript; charset=utf-8",
-            "css" => "text/css; charset=utf-8",
-            "txt" => "text/plain; charset=utf-8",
-            "svg" => "image/svg+xml",
-            "png" => "image/png",
-            "jpg" | "jpeg" => "image/jpeg",
-            "wasm" => "application/wasm",
-            _ => "application/octet-stream",
-        };
+        // The pinned oracle sends the literal `false` for a file whose extension mime-types does
+        // not know; a generic binary type is sent instead, and it is not compressible.
+        let (mime, compressible) =
+            mime::content_type(path).unwrap_or(("application/octet-stream", false));
         let mut response = Response::builder()
             .status(status)
             .header("content-type", mime)
@@ -239,10 +253,8 @@ impl Site {
         if let Some(modified) = asset.modified {
             response = response.header("last-modified", httpdate::fmt_http_date(modified));
         }
-        if mime.starts_with("text/")
-            || mime.starts_with("application/json")
-            || mime == "image/svg+xml"
-        {
+        // The compression middleware varies on the encoding of every compressible type.
+        if compressible {
             response = response.header("vary", "Accept-Encoding");
         }
         response
@@ -315,10 +327,7 @@ impl Site {
         head: bool,
         headers: &hyper::HeaderMap,
     ) -> Option<Response<Body>> {
-        let mut normalized = path.to_owned();
-        while normalized.contains("//") {
-            normalized = normalized.replace("//", "/");
-        }
+        let normalized = collapse_slashes(path);
         let path = normalized.as_str();
         let clean = self.data["cleanUrls"].as_bool().unwrap_or(false);
         let slash = self.data["trailingSlash"].as_bool();
@@ -890,6 +899,126 @@ mod redirect_tests {
                 );
                 prop_assert!(hyper::header::HeaderValue::try_from(location.as_str()).is_ok());
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod i18n_path_tests {
+    use super::*;
+    use proptest::prelude::*;
+    use serde_json::json;
+
+    fn site(root: &str) -> Site {
+        Site {
+            data: json!({"i18n": {"root": root}}),
+            root: None,
+            public_root: "/public".to_owned(),
+            project: "demo".to_owned(),
+            upstream: None,
+            emulators: Value::Null,
+        }
+    }
+
+    fn headers(pairs: &[(&str, &str)]) -> hyper::HeaderMap {
+        let mut map = hyper::HeaderMap::new();
+        for (name, value) in pairs {
+            map.insert(
+                hyper::header::HeaderName::try_from(*name).unwrap(),
+                hyper::header::HeaderValue::try_from(*value).unwrap(),
+            );
+        }
+        map
+    }
+
+    // Measured against the pinned superstatic 10.0.0 `i18nContentOptions` (2026-11-09).
+    #[test]
+    fn the_candidates_keep_the_oracle_order_for_every_spelling_of_the_root() {
+        for root in ["locales", "/locales", "locales/", "/locales/", "//locales", "/locales//"] {
+            let paths = site(root).candidates(
+                "/page.html",
+                &headers(&[("accept-language", "fr-CA,ja"), ("x-country-code", "US")]),
+            );
+            assert_eq!(
+                paths,
+                [
+                    "/locales/fr_US/page.html",
+                    "/locales/ja_US/page.html",
+                    "/locales/ALL_US/page.html",
+                    "/locales/fr_ALL/page.html",
+                    "/locales/fr/page.html",
+                    "/locales/ja_ALL/page.html",
+                    "/locales/ja/page.html",
+                    "/page.html",
+                ],
+                "root {root:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn no_i18n_root_means_only_the_plain_path() {
+        let plain = Site {
+            data: json!({}),
+            ..site("")
+        };
+        assert_eq!(
+            plain.candidates("/page.html", &headers(&[("accept-language", "fr")])),
+            ["/page.html"]
+        );
+        assert_eq!(
+            site("").candidates("/page.html", &headers(&[("accept-language", "fr")])),
+            ["/page.html"],
+            "an empty root is no root, as in superstatic"
+        );
+    }
+
+    #[test]
+    fn a_run_of_slashes_collapses_to_one() {
+        for (input, expected) in [
+            ("", ""),
+            ("/", "/"),
+            ("//", "/"),
+            ("a//b///c", "a/b/c"),
+            ("///a/", "/a/"),
+            ("/a//", "/a/"),
+            ("a/b", "a/b"),
+            ("\u{e9}//\u{e9}", "\u{e9}/\u{e9}"),
+        ] {
+            assert_eq!(collapse_slashes(input), expected, "{input:?}");
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn collapsing_matches_a_split_and_join_model(input in "[a-c/]{0,16}") {
+            let mut model = String::new();
+            let mut previous_slash = false;
+            for part in input.split_inclusive('/') {
+                for ch in part.chars() {
+                    if ch == '/' && previous_slash { continue; }
+                    previous_slash = ch == '/';
+                    model.push(ch);
+                }
+            }
+            prop_assert_eq!(collapse_slashes(&input), model);
+            prop_assert!(!collapse_slashes(&input).contains("//"));
+            prop_assert_eq!(collapse_slashes(&collapse_slashes(&input)), collapse_slashes(&input));
+        }
+
+        // Slashes around the parts never change the candidate.
+        #[test]
+        fn extra_slashes_around_the_root_and_path_change_nothing(
+            root in "[a-z]{1,5}(/[a-z]{1,5}){0,2}",
+            lead in "/{0,3}",
+            trail in "/{0,3}",
+            gap in "/{1,3}",
+            file in "[a-z]{1,5}\\.html",
+        ) {
+            let canonical = i18n_path(&root, "fr_ALL", &format!("/{file}"));
+            prop_assert_eq!(&canonical, &format!("/{root}/fr_ALL/{file}"));
+            let spelled = i18n_path(&format!("{lead}{root}{trail}"), "fr_ALL", &format!("{gap}{file}"));
+            prop_assert_eq!(spelled, canonical);
         }
     }
 }

@@ -467,3 +467,126 @@ fn a_negated_class_ignore_hides_sharp_s_and_keeps_the_excluded_letter() {
         "{kept}"
     );
 }
+
+fn raw_request(address: &str, method: &str, target: &str, headers: &[(&str, &str)]) -> String {
+    let mut stream = TcpStream::connect(address).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    let extra: String = headers
+        .iter()
+        .map(|(name, value)| format!("{name}: {value}\r\n"))
+        .collect();
+    write!(
+        stream,
+        "{method} {target} HTTP/1.1\r\nHost: {address}\r\n{extra}Connection: close\r\n\r\n"
+    )
+    .unwrap();
+    let mut reply = String::new();
+    stream.read_to_string(&mut reply).unwrap();
+    reply
+}
+
+fn body(reply: &str) -> &str {
+    reply.split_once("\r\n\r\n").map_or("", |(_, body)| body)
+}
+
+// The Content-Type of a served file is the pinned oracle's `mime.contentType(path.extname(file))`
+// (mime-types 2.1.35 over mime-db 1.52.0), and `Vary: Accept-Encoding` follows whether the
+// compression middleware treats that type as compressible. Expected values were measured by serving
+// the same files from the pinned superstatic with `compression: true` (2026-11-09).
+#[test]
+fn served_files_carry_the_oracle_content_type_and_vary() {
+    let dir = Scratch::new("hosting", "content-types");
+    std::fs::create_dir_all(dir.join("public/dir.v1")).unwrap();
+    // (path, content type, Vary: Accept-Encoding present)
+    let cases = [
+        ("a.js", "application/javascript; charset=utf-8", true),
+        ("b.JS", "application/javascript; charset=utf-8", true),
+        ("k.mjs", "application/javascript; charset=utf-8", true),
+        ("c.json", "application/json; charset=utf-8", true),
+        ("q.map", "application/json; charset=utf-8", true),
+        ("d.woff2", "font/woff2", false),
+        ("g.tar.gz", "application/gzip", false),
+        ("h.svg", "image/svg+xml", true),
+        ("i.md", "text/markdown; charset=utf-8", true),
+        ("j.ico", "image/vnd.microsoft.icon", true),
+        ("l.txt", "text/plain; charset=utf-8", true),
+        ("m.css", "text/css; charset=utf-8", true),
+        ("n.wasm", "application/wasm", true),
+        ("o.xml", "application/xml", true),
+        ("p.csv", "text/csv; charset=utf-8", true),
+        ("r.ts", "video/mp2t", false),
+        ("s.webp", "image/webp", false),
+        ("t.htm", "text/html; charset=utf-8", true),
+        // No type for the extension: the pinned emulator sends the literal `false`; Fireemu sends
+        // a generic binary type, with no Vary.
+        ("e", "application/octet-stream", false),
+        ("noext.x", "application/octet-stream", false),
+        ("dir.v1/file", "application/octet-stream", false),
+    ];
+    for (name, _, _) in cases {
+        std::fs::write(dir.join("public").join(name), "x\n").unwrap();
+    }
+    let firebase = serde_json::json!({"hosting":{"public":dir.join("public")},"emulators":emulators()});
+    let (_child, address) = start(&dir, &firebase, "hosting");
+    for (name, content_type, vary) in cases {
+        for method in ["GET", "HEAD"] {
+            let reply = raw_request(&address, method, &format!("/{name}"), &[]);
+            assert!(reply.starts_with("HTTP/1.1 200"), "{method} {name}: {reply}");
+            assert_eq!(
+                header(&reply, "content-type").as_deref(),
+                Some(content_type),
+                "{method} {name}"
+            );
+            assert_eq!(
+                header(&reply, "vary").as_deref() == Some("Accept-Encoding"),
+                vary,
+                "{method} {name}: {reply}"
+            );
+        }
+    }
+}
+
+// Superstatic joins the i18n root with the language directory and the path and collapses every run
+// of slashes, so a root written `/locales`, `locales/` or `//locales` finds the same files as
+// `locales` (measured against the pinned superstatic 10.0.0, 2026-11-09).
+#[test]
+fn every_slash_spelling_of_the_i18n_root_serves_the_same_files() {
+    for root in [
+        "locales",
+        "/locales",
+        "locales/",
+        "/locales/",
+        "//locales",
+        "/locales//",
+    ] {
+        let dir = Scratch::new("hosting", "i18n-root");
+        for (path, text) in [
+            ("public/locales/fr/page.html", "fr"),
+            ("public/locales/ja_ALL/page.html", "ja"),
+            ("public/locales/fr_CA/page.html", "fr-CA"),
+            ("public/locales/ALL_US/page.html", "us"),
+            ("public/page.html", "plain"),
+        ] {
+            std::fs::create_dir_all(dir.join(path).parent().unwrap()).unwrap();
+            std::fs::write(dir.join(path), text).unwrap();
+        }
+        let firebase = serde_json::json!({
+            "hosting":{"public":dir.join("public"),"i18n":{"root":root}},
+            "emulators":emulators()
+        });
+        let (_child, address) = start(&dir, &firebase, "hosting");
+        for (headers, expected) in [
+            (vec![("Accept-Language", "fr")], "fr"),
+            (vec![("Accept-Language", "ja")], "ja"),
+            (vec![("Accept-Language", "fr"), ("X-Country-Code", "CA")], "fr-CA"),
+            (vec![("X-Country-Code", "US")], "us"),
+            (vec![("Accept-Language", "de")], "plain"),
+            (vec![], "plain"),
+        ] {
+            let reply = raw_request(&address, "GET", "/page.html", &headers);
+            assert_eq!(body(&reply), expected, "root {root:?} headers {headers:?}: {reply}");
+        }
+    }
+}

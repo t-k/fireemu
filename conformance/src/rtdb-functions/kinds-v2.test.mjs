@@ -55,7 +55,7 @@ test("the ladder steps around the documented 1 MB, each in its own group so no e
   // the k12 value of the first recording again: the same 600 KiB blob
   assert.equal(rungs[0].body.blob.length, BLOB_SIZES.medium);
   assert.ok(repeat > 614_400 && repeat < 614_400 + 100, `the k12 shape again: ${repeat}`);
-  assert.ok(below < 1_000_000 && below > 949_000 && below < 951_000, `about 0.95 MB: ${below}`);
+  assert.ok(below > 949_000 && below < 951_000, `about 0.95 MB: ${below}`);
   // above both readings of "1 MB" (1,000,000 and 1,048,576 bytes), for the leaf's own event as well
   const leaf = (s) => JSON.stringify(s.body).length;
   assert.ok(leaf(rungs[2]) > 1_048_576 && above < 1_100_000, `about 1.05 MB: ${above}`);

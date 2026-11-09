@@ -236,6 +236,25 @@ fn query_order_by_loads_and_decides_as_the_official_emulator() {
     );
 }
 
+/// The constructs production loaded and evaluated in RTDB-RULES-SYNTAX-20261108-01 exactly as the
+/// official emulator does: `query.endBefore`, `query.isOrderByChild()`, `OrderByKey`,
+/// `OrderByValue` and `OrderByPriority`, `http.encodeURL()`, a method read without a call and a
+/// call through a non-member callee, here at more paths, queries and refusals than production
+/// was asked (recorded with `tools/rtdb-regex-fuzz/record_query_syntax.mjs`). Both profiles
+/// decide them alike.
+#[test]
+fn query_syntax_loads_and_decides_as_the_official_emulator_in_both_profiles() {
+    let fixture = include_str!("fixtures/rules-query-syntax-official-emulator-4.11.2.json");
+    for jar_dialect in [false, true] {
+        let failures = differences_with(fixture, jar_dialect);
+        assert!(
+            failures.is_empty(),
+            "{} rows differ: {failures:#?}",
+            failures.len()
+        );
+    }
+}
+
 /// The emulator profile reads `\W` and `\D` as the complement of a language of strings, and an escaped
 /// letter or digit as that character, as the official emulator does (owner 2276): 500 jar rows over
 /// bare, anchored, quantified, grouped and class forms, with and without `i`, and the `[\uD800-\uDFFF]` class,
@@ -1659,6 +1678,77 @@ proptest::proptest! {
             // Anonymously both sides are 'a'.
             let holds = if signed_in { holds == Some(true) } else { op == "==" };
             proptest::prop_assert_eq!(allowed, holds, "{}", text);
+        }
+    }
+}
+
+#[test]
+fn query_path_arguments_reject_invalid_paths_even_when_negated() {
+    let tree = seed();
+    let auth = auth();
+    let requester = Requester {
+        auth: &auth,
+        now: 0,
+    };
+    let paths = [
+        (".info".to_owned(), false),
+        (".info/child".to_owned(), false),
+        (vec!["a"; 32].join("/"), true),
+        (vec!["a"; 33].join("/"), false),
+        ("normal".to_owned(), true),
+    ];
+    for (path, valid) in paths {
+        for negated in [false, true] {
+            let text = format!(
+                "{}query.isOrderByChild('{path}')",
+                if negated { "!" } else { "" }
+            );
+            let mut spec = read_rule_at_t(&text);
+            let t = spec.children.get_mut("t").unwrap();
+            t.write = t.read.clone();
+            for jar_dialect in [false, true] {
+                let rules = Rules::compile(&spec).unwrap().with_jar_dialect(jar_dialect);
+                let expected = valid && negated;
+                assert_eq!(
+                    rules.can_read(tree.root(), &p("/t"), None, &requester),
+                    expected,
+                    "read {text}, profile {jar_dialect}"
+                );
+                assert_eq!(
+                    rules.can_write(tree.root(), tree.root(), &[p("/t")], &requester),
+                    expected,
+                    "write {text}, profile {jar_dialect}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn http_identity_through_ternaries_applies_to_reads_and_writes() {
+    let tree = seed();
+    let auth = auth();
+    let requester = Requester {
+        auth: &auth,
+        now: 0,
+    };
+    for (op, expected) in [("==", true), ("!=", false)] {
+        let text = format!("(true ? http : null) {op} (true ? http : null)");
+        let mut spec = read_rule_at_t(&text);
+        let t = spec.children.get_mut("t").unwrap();
+        t.write = t.read.clone();
+        for jar_dialect in [false, true] {
+            let rules = Rules::compile(&spec).unwrap().with_jar_dialect(jar_dialect);
+            assert_eq!(
+                rules.can_read(tree.root(), &p("/t"), None, &requester),
+                expected,
+                "read {text}, profile {jar_dialect}"
+            );
+            assert_eq!(
+                rules.can_write(tree.root(), tree.root(), &[p("/t")], &requester),
+                expected,
+                "write {text}, profile {jar_dialect}"
+            );
         }
     }
 }

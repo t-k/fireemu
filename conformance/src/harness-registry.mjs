@@ -211,6 +211,26 @@ export const HARNESS_LANES = {
     noExtraTail: true,
     guarded: [],
   },
+  // SECURETOKEN-BODY: the digest is the recorder's HARNESS_FILES (securetoken-body/judge.mjs)
+  // joined by a newline, with no extra inputs.
+  "securetoken-body": {
+    fixture: "securetoken-body-production.json",
+    files: [
+      "securetoken-body/corpus.mjs",
+      "securetoken-body/harness.mjs",
+      "securetoken-body/judge.mjs",
+      "securetoken-body/session.mjs",
+      "securetoken-body/record.mjs",
+      "securetoken-body/recording.mjs",
+      "securetoken-body/preflight.mjs",
+      "auth-account/harness.mjs",
+      "auth-credential/tokens.mjs",
+      "shared/ownership.mjs",
+    ],
+    extra: "",
+    noExtraTail: true,
+    guarded: [],
+  },
 };
 
 /** The versions of the SDKs the AUTH-CONFIG-SDK harness drives, as installed. */
@@ -409,12 +429,14 @@ export function checkFixtureDigest(name, lane, saved, { read = treeReader, linea
   return { state: hop ? "lineage" : "stale", saved, current };
 }
 
+/** Lanes whose fixture records one harness digest for the whole file instead of one per program. */
+const WHOLE_FILE_DIGEST_LANES = new Set(["auth-fs-cross-stage2", "securetoken-body"]);
+
 /** The harness digests a lane's fixture records (every row's, or the one of the whole file). */
 export function recordedDigests(name, fixture) {
-  const found =
-    name === "auth-fs-cross-stage2"
-      ? [fixture.harnessDigest]
-      : Object.values(fixture.programs ?? {}).map((program) => program.harnessDigest);
+  const found = WHOLE_FILE_DIGEST_LANES.has(name)
+    ? [fixture.harnessDigest]
+    : Object.values(fixture.programs ?? {}).map((program) => program.harnessDigest);
   if (found.length === 0 || found.some((digest) => !/^[0-9a-f]{64}$/.test(digest ?? "")))
     throw new Error(`${name}: the fixture has a row without a harnessDigest`);
   return [...new Set(found)];

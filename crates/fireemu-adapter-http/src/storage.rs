@@ -30,10 +30,10 @@ use std::sync::{Arc, Mutex};
 use fireemu_core_app_check::admission::{AdmissionRequest, PrivilegedBypass, ServiceAdmission};
 use fireemu_core_app_check::header::classify_app_check_header;
 use fireemu_core_app_check::verify::BaselineMode;
-use fireemu_core_auth::jwt::{verify_rules_token_for_project, RulesTokenPolicy, TokenAcceptance};
+use fireemu_core_auth::jwt::{RulesTokenPolicy, SignatureCheckedToken, TokenAcceptance};
 use fireemu_core_rules::eval::{
     evaluate_request_with, Decision, DocumentAccess, Method, RequestContext, RulesService,
-    ABSTRACT_PREFIX, ABSTRACT_SEGMENT,
+    ABSTRACT_LIST_PREFIX, ABSTRACT_PREFIX, ABSTRACT_SEGMENT,
 };
 use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
 use fireemu_core_rules::value::{AuthContext, RulesValue};
@@ -455,8 +455,15 @@ impl StorageRulesRegistry {
             .map_err(|_| "storage rules registry is poisoned".to_owned())?;
         match &*mode {
             StorageRulesMode::Global(slot) => return slot.replace_loaded(loaded).map(|_| ()),
-            StorageRulesMode::PerBucket(_) => {
-                *mode = StorageRulesMode::Global(Arc::new(RulesetSlot::new(loaded)));
+            StorageRulesMode::PerBucket(slots) => {
+                // The new global slot keeps the profile's meaning of a lone surrogate escape.
+                let literals = slots.values().find_map(|slot| slot.lone_surrogates());
+                let slot = RulesetSlot::new(loaded);
+                let slot = match literals {
+                    Some(literals) => slot.with_lone_surrogates(literals),
+                    None => slot,
+                };
+                *mode = StorageRulesMode::Global(Arc::new(slot));
             }
         }
         Ok(())
@@ -1263,6 +1270,24 @@ fn production_invalid_credentials() -> StorageResponse {
 /// `Not Found`.
 fn fb_object_not_found() -> StorageResponse {
     production_error(404, "Not Found.")
+}
+
+/// Whether the Firebase v0 API refuses `path` as a path: it starts or ends with `/` or holds two
+/// consecutive `/`. Objects with such names can exist (the Cloud Storage JSON API accepts them);
+/// only this API refuses them, before any rule is evaluated.
+fn has_empty_path_segment(path: &str) -> bool {
+    path.starts_with('/') || path.ends_with('/') || path.contains("//")
+}
+
+/// Production's answer to a Firebase v0 read or list whose path has an empty segment (recorded,
+/// STORAGE-RULES-S9, two recordings: the metadata read, the media read and the list, 400,
+/// `application/json; charset=UTF-8`, 116 bytes, under an allow-all rule too). Both profiles
+/// answer it: the official emulator's rules process fails on such a path instead of answering.
+fn fb_empty_path_segment() -> StorageResponse {
+    production_error(
+        400,
+        "The path may not end with '/' or contain two consecutive '/'s",
+    )
 }
 
 /// Production's answer to a request on a cancelled JSON API resumable session (recorded,
@@ -2214,6 +2239,8 @@ impl<'a> RulesPath<'a> {
                 prefix,
                 strict.then_some(if delimiter == "/" {
                     ABSTRACT_SEGMENT
+                } else if delimiter.is_empty() {
+                    ABSTRACT_LIST_PREFIX
                 } else {
                     // Only slash bounds entry depth. Other delimiters can leave slashes
                     // inside an entry, so they cannot justify a single-segment proof.
@@ -2444,8 +2471,9 @@ impl StorageState {
         &self,
         authorization: Option<&str>,
         bucket: &str,
+        signature: &mut Option<SignatureCheckedToken>,
     ) -> Result<Principal, (u16, String)> {
-        self.principal_or_message(authorization, bucket)
+        self.principal_or_message(authorization, bucket, signature)
             .map_err(|refusal| match refusal {
                 PrincipalRefusal::Unauthenticated(message) => (401, message),
                 PrincipalRefusal::ForeignAudience => (403, "Permission denied.".to_owned()),
@@ -2456,6 +2484,7 @@ impl StorageState {
         &self,
         authorization: Option<&str>,
         bucket: &str,
+        signature: &mut Option<SignatureCheckedToken>,
     ) -> Result<Principal, PrincipalRefusal> {
         let Some(value) = authorization else {
             return Ok(Principal::Anonymous);
@@ -2478,9 +2507,7 @@ impl StorageState {
         let parent = store_arc
             .lock()
             .map_err(|_| "auth store poisoned".to_owned())?;
-        // The audience is checked before the signature so a token of another session
-        // says so, instead of failing as an unknown user of this one.
-        let decoded = fireemu_core_auth::jwt::decode_token(token, parent.signer());
+        // Check the signature before routing; audience and tenant routing still precede the selected store's claim and account checks.
         // Under strict only the recorded shape is an anonymous caller: `Firebase ` followed by a
         // non-empty value without a dot (stage 3 v9, `token-malformed`: the recorded value is 32
         // base64url characters, answered exactly as no credential is, 403 from the rules and the
@@ -2492,16 +2519,27 @@ impl StorageState {
         // without a dot, with two or with four segments as unauthenticated, but admits a
         // decodable three-segment value as its user, which this profile has never done; a
         // published divergence of the compatibility contract).
-        let decoded_token = match decoded {
-            Ok(decoded_token) => decoded_token,
-            Err(error) => {
-                let recorded_shape = firebase_scheme && !token.is_empty() && !token.contains('.');
-                if !recorded_shape && self.token_acceptance != TokenAcceptance::EmulatorMock {
-                    return Err(format!("invalid ID token: {error}").into());
+        if !signature
+            .as_ref()
+            .is_some_and(|checked| checked.can_reuse_signature_for(token, &parent))
+        {
+            let decoded = SignatureCheckedToken::decode(token, &parent);
+            *signature = Some(match decoded {
+                Ok(decoded_token) => decoded_token,
+                Err(error) => {
+                    let recorded_shape =
+                        firebase_scheme && !token.is_empty() && !token.contains('.');
+                    if !recorded_shape && self.token_acceptance != TokenAcceptance::EmulatorMock {
+                        return Err(format!("invalid ID token: {error}").into());
+                    }
+                    return Ok(Principal::Anonymous);
                 }
-                return Ok(Principal::Anonymous);
-            }
-        };
+            });
+        }
+        let checked_token = signature
+            .as_ref()
+            .expect("a decoded signature is available");
+        let decoded_token = checked_token.decoded();
         let aud = decoded_token
             .payload
             .get("aud")
@@ -2541,8 +2579,7 @@ impl StorageState {
         let store = store_arc
             .lock()
             .map_err(|_| "auth store poisoned".to_owned())?;
-        let decoded = match verify_rules_token_for_project(
-            token,
+        let decoded = match checked_token.verify_for_project(
             &store,
             self.now(),
             RulesTokenPolicy::new(self.token_acceptance, self.allow_unsigned_id_tokens),
@@ -2552,7 +2589,7 @@ impl StorageState {
             // Storage honours an ID token whose refresh tokens were revoked (production, stage 3
             // v9, `token-revoked`: the read is allowed). Revocation is the last check of the
             // verification, so the signature, expiry, audience and account have all passed.
-            Err(fireemu_core_auth::jwt::JwtError::Revoked) => decoded_token,
+            Err(fireemu_core_auth::jwt::JwtError::Revoked) => decoded_token.clone(),
             Err(e) => return Err(format!("invalid ID token: {e}").into()),
         };
         drop(store);
@@ -2609,33 +2646,55 @@ impl StorageState {
             });
         }
         let (object_path, abstract_tail) = target.proof(self.is_strict());
-        let mut path = if object_path.is_empty() {
-            format!("/b/{}/o", bucket.as_str())
-        } else {
-            format!("/b/{}/o/{object_path}", bucket.as_str())
+        let resource_value = resource.unwrap_or(RulesValue::Null);
+        let request_value = request_resource;
+        let context = |tail: Option<&'static str>| {
+            let mut path = if object_path.is_empty() {
+                format!("/b/{}/o", bucket.as_str())
+            } else {
+                format!("/b/{}/o/{object_path}", bucket.as_str())
+            };
+            if let Some(tail) = tail {
+                path.push('/');
+                path.push_str(tail);
+            }
+            RequestContext {
+                service: RulesService::Storage,
+                method,
+                path,
+                auth: match principal {
+                    Principal::User(a) => Some(a.clone()),
+                    _ => None,
+                },
+                resource: Some(resource_value.clone()),
+                request_resource: Some(request_value.clone()),
+                time_unix_nanos: self.now().as_nanos(),
+                abstract_path: tail.is_some(),
+                request_query: None,
+            }
         };
-        if let Some(tail) = abstract_tail {
-            path.push('/');
-            path.push_str(tail);
-        }
-        let ctx = RequestContext {
-            service: RulesService::Storage,
-            method,
-            path,
-            auth: match principal {
-                Principal::User(a) => Some(a.clone()),
-                _ => None,
-            },
-            resource: Some(resource.unwrap_or(RulesValue::Null)),
-            request_resource: Some(request_resource),
-            time_unix_nanos: self.now().as_nanos(),
-            abstract_path: abstract_tail.is_some(),
-            request_query: None,
-        };
+        let ctx = context(abstract_tail);
         let access = self.firestore.as_deref().map(|a| a as &dyn DocumentAccess);
+        // A listing with the delimiter `/` stands for the entries one level below the prefix, and
+        // production lets `match /p/{f}` grant it when every such entry is granted (recorded,
+        // STORAGE-RULES-S9: `list-pub-delim` 200, the same rule refusing the same prefix without
+        // a delimiter). The strict profile proves that for every entry; the emulator profile
+        // evaluates the prefix itself, which `{f}` never matches, so it also accepts that proof
+        // instead of refusing what production and the official emulator answer.
+        let one_level_listing =
+            !self.is_strict() && matches!(target, RulesPath::List { delimiter: "/", .. });
+        let proven_one_level = || {
+            one_level_listing
+                && matches!(
+                    evaluate_request_with(ruleset, &context(Some(ABSTRACT_SEGMENT)), access)
+                        .decision,
+                    Decision::Allow
+                )
+        };
         let Some(log) = self.rules.denial_log() else {
             return match evaluate_request_with(ruleset, &ctx, access).decision {
                 Decision::Allow => Ok(()),
+                Decision::Deny(_) if proven_one_level() => Ok(()),
                 Decision::Deny(_) => Err(fb_denied(self.is_strict(), method)),
             };
         };
@@ -2643,6 +2702,7 @@ impl StorageState {
             fireemu_core_rules::eval::evaluate_request_traced(ruleset, &ctx, access);
         match report.decision {
             Decision::Allow => Ok(()),
+            Decision::Deny(_) if proven_one_level() => Ok(()),
             Decision::Deny(reason) => {
                 use fireemu_core_rules::denial::{
                     deny_reason_summary, DeniedCondition, RulesDenial,
@@ -3701,10 +3761,13 @@ fn handle_request(state: &StorageState, req: StorageRequest) -> StorageResponse 
         }
         undeclared = unknown_bucket_written(state, &route, &req.method, &params);
     }
+    // This proof lives only for this request, including a resumable finalization's repeated authentication.
+    let mut signature = None;
     let principal = match dialect {
         // The whole JSON API side is the privileged dialect: rules never run there.
         Dialect::Gcs => Principal::Owner,
-        Dialect::Firebase => match state.principal(authorization, &bucket_of_route) {
+        Dialect::Firebase => match state.principal(authorization, &bucket_of_route, &mut signature)
+        {
             Ok(p) => p,
             Err((status, message)) => {
                 return principal_refusal_response(dialect, status, &message);
@@ -3732,10 +3795,35 @@ fn handle_request(state: &StorageState, req: StorageRequest) -> StorageResponse 
     let outcome = match route {
         Route::SetRules => unreachable!("setRules returns before Storage data dispatch"),
         Route::FbRoot => Ok(StorageResponse::json(200, &json!({"emulator": "storage"}))),
+        // The same validator for every other Firebase v0 route that takes an object name, so no
+        // rule sees an empty segment through this API. Recorded for the reads (STORAGE-RULES-S9);
+        // for the writes it is inferred from the reads, not recorded.
+        Route::FbObject { name, .. }
+            if matches!(method.as_str(), "POST" | "PUT" | "PATCH" | "DELETE")
+                && has_empty_path_segment(&name) =>
+        {
+            Err(fb_empty_path_segment())
+        }
+        Route::FbBucket { .. }
+            if matches!(method.as_str(), "POST" | "PUT")
+                && params
+                    .get("name")
+                    .is_some_and(|name| has_empty_path_segment(name)) =>
+        {
+            Err(fb_empty_path_segment())
+        }
         Route::FbBucket { bucket } => match method.as_str() {
             "GET" => fb_list(state, &principal, &bucket, &params),
             "POST" | "PUT" => fb_object_post(
-                state, &principal, &bucket, None, req, &params, &host, &admitted,
+                state,
+                &principal,
+                &bucket,
+                None,
+                req,
+                &params,
+                &host,
+                &admitted,
+                &mut signature,
             ),
             _ => Ok(plain_status(501)),
         },
@@ -3752,6 +3840,7 @@ fn handle_request(state: &StorageState, req: StorageRequest) -> StorageResponse 
                 &params,
                 &host,
                 &admitted,
+                &mut signature,
             ),
             "PUT" => {
                 if req
@@ -3769,6 +3858,7 @@ fn handle_request(state: &StorageState, req: StorageRequest) -> StorageResponse 
                         &params,
                         &host,
                         &admitted,
+                        &mut signature,
                     )
                 }
             }
@@ -4047,6 +4137,24 @@ fn google_error_layout(body: &[u8]) -> Option<String> {
 // Firebase dialect
 // ------------------------------------------------------------------------------------------
 
+/// Whether the Firebase list shows a name: no empty segment. The official Firebase list filters
+/// malformed names out of the answer, and production does too: the prefix `P/pub//` an object
+/// `P/pub//x` leaves is not listed (recorded, S9).
+fn is_listed_name(name: &str) -> bool {
+    !name.is_empty() && name.split('/').all(|segment| !segment.is_empty())
+}
+
+/// [`is_listed_name`] for a list entry; a common prefix is judged without its terminal `/`. A name
+/// the answer hides is hidden from the paging as well: it takes no place in a page and never
+/// becomes the continuation point.
+fn is_listed_entry(entry: &str, is_prefix: bool) -> bool {
+    is_listed_name(if is_prefix {
+        entry.strip_suffix('/').unwrap_or(entry)
+    } else {
+        entry
+    })
+}
+
 fn fb_list(
     state: &StorageState,
     principal: &Principal,
@@ -4060,6 +4168,13 @@ fn fb_list(
             400,
             "The prefix parameter is required to be empty or ends with a single / character.",
         ));
+    }
+    // The refusal covers a leading slash (recorded) and two consecutive slashes anywhere in the
+    // prefix as it was sent, so `public//` and `/` are refused too; the one terminal slash every
+    // prefix ends with is the only slash that may end it. Authorization and the store both see
+    // only a prefix that passed this.
+    if prefix.starts_with('/') || prefix.contains("//") {
+        return Err(fb_empty_path_segment());
     }
     let delimiter = params.get("delimiter").cloned().unwrap_or_default();
     let page_token = params.get("pageToken").cloned();
@@ -4109,13 +4224,14 @@ fn fb_list(
     let store = state.store()?;
     let page = if max_results == Some(0) {
         // Only the emulator profile reaches here (strict refused above): the official emulator's
-        // empty page.
-        store.list(
+        // empty page. A hidden name is treated exactly as an absent one, in the choice of the
+        // token's starting point as in the continuation it names.
+        store.empty_list_page_where(
             &b,
             &prefix,
             Some(delimiter.as_str()),
             page_token.as_deref(),
-            max_results,
+            &is_listed_entry,
         )
     } else {
         // Paging as production answers it (recorded, lean-v5): `maxResults` counts items and
@@ -4128,25 +4244,24 @@ fn fb_list(
             .as_deref()
             .and_then(|token| base64_decode(token).ok())
             .and_then(|bytes| String::from_utf8(bytes).ok());
-        let mut page =
-            store.list_after(&b, &prefix, Some(delimiter.as_str()), after.as_deref(), max);
+        let mut page = store.list_after_where(
+            &b,
+            &prefix,
+            Some(delimiter.as_str()),
+            after.as_deref(),
+            max,
+            &is_listed_entry,
+        );
         page.next_page_token = page
             .next_page_token
             .map(|last| fireemu_core_storage::hash::base64(last.as_bytes()));
         page
     };
-    // The official Firebase list filters malformed names out of the answer.
-    let is_valid = |name: &str| !name.is_empty() && name.split('/').all(|s| !s.is_empty());
     let mut body = json!({
-        "prefixes": page
-            .prefixes
-            .iter()
-            .filter(|p| is_valid(p.trim_end_matches('/')))
-            .collect::<Vec<_>>(),
+        "prefixes": page.prefixes,
         "items": page
             .items
             .iter()
-            .filter(|m| is_valid(m.name.as_str()))
             .map(|m| json!({"name": m.name.as_str(), "bucket": m.bucket.as_str()}))
             .collect::<Vec<_>>(),
     });
@@ -4173,6 +4288,9 @@ fn fb_get(
     // emulator answers 404 too (measured, firebase-tools 15.28.2, 1,100 characters).
     if is_unreadable_name(name) {
         return Ok(fb_object_not_found());
+    }
+    if has_empty_path_segment(name) {
+        return Err(fb_empty_path_segment());
     }
     let n = object_name(name)?;
     let now = state.now();
@@ -4615,6 +4733,7 @@ fn fb_object_post(
     params: &BTreeMap<String, String>,
     host: &str,
     admitted: &AdmittedApp,
+    signature: &mut Option<SignatureCheckedToken>,
 ) -> Outcome {
     let b = bucket_name(bucket)?;
     let now = state.now();
@@ -4729,7 +4848,9 @@ fn fb_object_post(
         let Some(upload_id) = params.get("upload_id") else {
             return Ok(plain_status(400));
         };
-        return fb_resumable_command(state, &b, upload_id, &command, req, host, admitted);
+        return fb_resumable_command(
+            state, &b, upload_id, &command, req, host, admitted, signature,
+        );
     }
     let Some(name) = name else {
         return Ok(plain_status(400));
@@ -4887,7 +5008,7 @@ fn fb_commit(
 }
 
 /// A Firebase resumable command on an existing session: query, cancel, upload, finalize.
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 fn fb_resumable_command(
     state: &StorageState,
     bucket: &BucketName,
@@ -4896,6 +5017,7 @@ fn fb_resumable_command(
     mut req: StorageRequest,
     host: &str,
     admitted: &AdmittedApp,
+    signature: &mut Option<SignatureCheckedToken>,
 ) -> Outcome {
     let _ = host;
     let id = UploadId::from_str_unchecked(upload_id);
@@ -5005,7 +5127,7 @@ fn fb_resumable_command(
             Ok(UploadPhase::Active(_)) => {}
             Err(e) => return Ok(fb_core_err(e)),
         }
-        let finalized = finalize_resumable(state, &mut store, &id, &req, now);
+        let finalized = finalize_resumable(state, &mut store, &id, &req, now, signature);
         if let (Err(FinalizeError::Store(StorageError::StoredBytesLimit)), Some(checkpoint)) =
             (&finalized, checkpoint)
         {
@@ -5045,6 +5167,7 @@ fn finalize_resumable(
     id: &UploadId,
     req: &StorageRequest,
     now: LogicalInstant,
+    signature: &mut Option<SignatureCheckedToken>,
 ) -> Result<ObjectMetadata, FinalizeError> {
     // Checksums declared on the finalizing request are verified by the store when it
     // commits (a mismatch ends the session).
@@ -5071,7 +5194,7 @@ fn finalize_resumable(
     // The caller is the one that started the session (its credentials are verified again
     // now, as the official emulator does).
     let principal = state
-        .principal(authorization.as_deref(), b.as_str())
+        .principal(authorization.as_deref(), b.as_str(), signature)
         .map_err(FinalizeError::Auth)?;
     let existing = store.get(&b, &n).cloned();
     // Also a `create` over an existing object (see `fb_commit`).
@@ -6393,7 +6516,17 @@ fn gcs_upload(
         .get("uploadType")
         .cloned()
         .or_else(|| req.header("x-goog-upload-protocol").map(str::to_owned));
-    let strip_leading = |name: String| name.strip_prefix('/').map(str::to_owned).unwrap_or(name);
+    // The official emulator drops one leading `/` of an uploaded name, so `/x` and `x` are one
+    // object there. Cloud Storage keeps them apart (recorded, STORAGE-RULES-S9: the objects
+    // `/P/pub/x` and `P/pub/x` were created and listed separately), and the strict profile does
+    // too.
+    let strict = state.is_strict();
+    let strip_leading = |name: String| {
+        if strict {
+            return name;
+        }
+        name.strip_prefix('/').map(str::to_owned).unwrap_or(name)
+    };
     match upload_type.as_deref() {
         Some("resumable") => {
             let meta_json: Value = if req.body.is_empty() {
@@ -6658,7 +6791,7 @@ fn gcs_resumable_put(
         .append_upload_owned(&id, start, chunk, now)
         .map_err(gcs_core_err)?;
     if finalize {
-        let finalized = finalize_resumable(state, &mut store, &id, &req, now);
+        let finalized = finalize_resumable(state, &mut store, &id, &req, now, &mut None);
         if let (Err(FinalizeError::Store(StorageError::StoredBytesLimit)), Some(checkpoint)) =
             (&finalized, checkpoint)
         {
@@ -7278,6 +7411,46 @@ mod storage_rules_registry_tests {
             .slot_for_bucket("unknown.example.test")
             .unwrap()
             .is_none());
+    }
+
+    /// The global slot a control update makes out of a target configuration keeps the profile's
+    /// meaning of a lone surrogate escape (`string-escape#esc-high`).
+    #[test]
+    fn a_control_update_over_targets_keeps_the_lone_surrogate_meaning() {
+        use fireemu_core_rules::ast::LoneSurrogates;
+        for literals in [
+            Some(LoneSurrogates::Official),
+            Some(LoneSurrogates::Production),
+            None,
+        ] {
+            let target = slot(ALLOW);
+            let target = match literals {
+                Some(literals) => Arc::new(
+                    Arc::try_unwrap(target)
+                        .unwrap()
+                        .with_lone_surrogates(literals),
+                ),
+                None => target,
+            };
+            let registry = StorageRulesRegistry::per_bucket(BTreeMap::from([(
+                "one.example.test".to_owned(),
+                target,
+            )]));
+            registry.replace_source(DENY).unwrap();
+            let global = registry
+                .slot_for_bucket("any.example.test")
+                .unwrap()
+                .unwrap();
+            assert_eq!(global.lone_surrogates(), literals);
+            let held = global
+                .snapshot()
+                .unwrap()
+                .ruleset
+                .as_ref()
+                .unwrap()
+                .lone_surrogates();
+            assert_eq!(held, literals.unwrap_or_default());
+        }
     }
 
     #[test]

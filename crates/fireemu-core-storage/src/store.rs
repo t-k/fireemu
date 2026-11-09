@@ -2425,6 +2425,36 @@ impl StorageState {
             .collect()
     }
 
+    /// The page [`Self::list`] answers for `max_results == 0` (the official emulator's empty page:
+    /// every folded prefix and a token naming the first object at or after the supplied token),
+    /// over the entries `accept(entry, is_prefix)` takes. An entry it refuses is treated exactly as
+    /// absent: it is not listed, not a continuation point, and a token naming it is an unknown
+    /// token, so the answer is the same with and without it.
+    #[must_use]
+    pub fn empty_list_page_where(
+        &self,
+        bucket: &BucketName,
+        prefix: &str,
+        delimiter: Option<&str>,
+        page_token: Option<&str>,
+        accept: &dyn Fn(&str, bool) -> bool,
+    ) -> ListPage {
+        let delimiter = delimiter.filter(|delimiter| !delimiter.is_empty());
+        let fold = |name: &str| {
+            let rest = &name[prefix.len()..];
+            delimiter.and_then(|d| rest.find(d).map(|i| format!("{prefix}{}{d}", &rest[..i])))
+        };
+        self.empty_list_page(
+            bucket,
+            prefix,
+            delimiter,
+            page_token,
+            &|_| true,
+            &fold,
+            accept,
+        )
+    }
+
     /// [`Self::list`] over the objects whose names `matches` accepts (the JSON API's
     /// `startOffset`, `endOffset` and `matchGlob` filters): the filter applies to object names
     /// before they are folded at the delimiter, so a prefix appears exactly when a matching
@@ -2448,7 +2478,15 @@ impl StorageState {
             delimiter.and_then(|d| rest.find(d).map(|i| format!("{prefix}{}{d}", &rest[..i])))
         };
         if max == 0 {
-            return self.empty_list_page(bucket, prefix, delimiter, page_token, matches, &fold);
+            return self.empty_list_page(
+                bucket,
+                prefix,
+                delimiter,
+                page_token,
+                matches,
+                &fold,
+                &|_, _| true,
+            );
         }
         let token_is_entry = page_token.is_some_and(|token| {
             if !token.starts_with(prefix) {
@@ -2513,6 +2551,7 @@ impl StorageState {
     /// The page for `max_results == 0`: the official emulator's empty page, with every folded
     /// prefix and a token naming the first accepted object at or after a token that names an
     /// object (else the first accepted object).
+    #[allow(clippy::too_many_arguments)]
     fn empty_list_page(
         &self,
         bucket: &BucketName,
@@ -2521,13 +2560,17 @@ impl StorageState {
         page_token: Option<&str>,
         matches: &dyn Fn(&str) -> bool,
         fold: &dyn Fn(&str) -> Option<String>,
+        accept: &dyn Fn(&str, bool) -> bool,
     ) -> ListPage {
         let token_is_item = page_token.is_some_and(|token| {
             self.objects
                 .get(&(bucket.clone(), ObjectName::range_start(token)))
                 .is_some_and(|metadata| {
                     let name = metadata.name.as_str();
-                    name.starts_with(prefix) && matches(name) && fold(name).is_none()
+                    name.starts_with(prefix)
+                        && matches(name)
+                        && fold(name).is_none()
+                        && accept(name, false)
                 })
         });
         let item_start = page_token.filter(|_| token_is_item).unwrap_or(prefix);
@@ -2549,10 +2592,13 @@ impl StorageState {
                 continue;
             }
             if let Some(folded) = fold(name.as_str()) {
-                if prefixes.last() != Some(&folded) {
+                if prefixes.last() != Some(&folded) && accept(&folded, true) {
                     prefixes.push(folded);
                 }
-            } else if name.as_str() >= item_start && next_page_token.is_none() {
+            } else if name.as_str() >= item_start
+                && next_page_token.is_none()
+                && accept(name.as_str(), false)
+            {
                 next_page_token = Some(name.as_str().to_owned());
                 if delimiter.is_none() {
                     break;
@@ -3269,6 +3315,24 @@ impl StorageState {
         after: Option<&str>,
         max: usize,
     ) -> ListPage {
+        self.list_after_where(bucket, prefix, delimiter, after, max, &|_, _| true)
+    }
+
+    /// [`Self::list_after`] over the entries `accept` takes (`accept(entry, is_prefix)`): an entry
+    /// it refuses is skipped as if it were not there, so it takes no place in a page, never
+    /// becomes the continuation point and is never the reason a page is reported to have more.
+    /// A caller that hides entries from the answer uses this instead of dropping them from a
+    /// finished page, where the continuation point could still name one.
+    #[must_use]
+    pub fn list_after_where(
+        &self,
+        bucket: &BucketName,
+        prefix: &str,
+        delimiter: Option<&str>,
+        after: Option<&str>,
+        max: usize,
+        accept: &dyn Fn(&str, bool) -> bool,
+    ) -> ListPage {
         let delimiter = delimiter.filter(|delimiter| !delimiter.is_empty());
         // A name below `after` can only fold to an entry that is also at most `after`, so the scan
         // starts at the later of the prefix and `after` instead of walking the prefix from its
@@ -3290,6 +3354,9 @@ impl StorageState {
             if after.is_some_and(|after| entry.as_str() <= after)
                 || last.as_deref() == Some(entry.as_str())
             {
+                continue;
+            }
+            if !accept(&entry, folded.is_some()) {
                 continue;
             }
             if items.len() + prefixes.len() == max {

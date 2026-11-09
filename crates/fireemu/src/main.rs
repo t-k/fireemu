@@ -51,6 +51,7 @@ mod database_rules;
 mod doctor;
 mod functions;
 mod help;
+mod hosting;
 mod hub;
 mod import_export;
 mod init;
@@ -77,7 +78,7 @@ use process_wrap::tokio::{JobObject, KillOnDrop, TokioChildWrapper, TokioCommand
 
 use crate::config::{RuntimeConfig, Selection};
 
-const OPTIONS_USAGE: &str = "[--config <file>] [--firebase-json <file>] [--no-config-discovery] [--project <id|alias>] [--only auth,firestore,storage,functions,eventarc,tasks,pubsub,database,appcheck] [--firestore-port <n>] [--http-port <n>] [--storage-port <n>] [--functions-port <n>] [--eventarc-port <n>] [--tasks-port <n>] [--pubsub-port <n>] [--database-port <n>] [--functions <dir>] [--ui-port <n|auto>] [--hub-port <n|auto>] [--logging-port <n>] [--inspect-functions [port]] [--log-verbosity quiet|silent|info|debug] [--import <dir>] [--export-on-exit [dir]] [--ready-file <file>]";
+const OPTIONS_USAGE: &str = "[--config <file>] [--firebase-json <file>] [--no-config-discovery] [--project <id|alias>] [--only auth,firestore,storage,functions,eventarc,tasks,pubsub,database,hosting,appcheck] [--firestore-port <n>] [--http-port <n>] [--storage-port <n>] [--functions-port <n>] [--hosting-port <n>] [--eventarc-port <n>] [--tasks-port <n>] [--pubsub-port <n>] [--database-port <n>] [--functions <dir>] [--ui-port <n|auto>] [--hub-port <n|auto>] [--logging-port <n>] [--inspect-functions [port]] [--log-verbosity quiet|silent|info|debug] [--import <dir>] [--export-on-exit [dir]] [--ready-file <file>]";
 
 fn usage() -> ExitCode {
     eprintln!("usage: fireemu init [--profile strict|emulator] [--firebase-json <file>] [--interactive|--yes|--no-interactive] [--force]\n       fireemu up|emulators:start {OPTIONS_USAGE}\n       fireemu exec|emulators:exec {OPTIONS_USAGE} [--ui] \"shell script\"\n       fireemu exec|emulators:exec {OPTIONS_USAGE} [--ui] -- <command...>\n       fireemu emulators:export <dir> [--project <id>] [--force]\n       fireemu doctor\n       fireemu capabilities\n       fireemu --version\n       fireemu --help | fireemu help <command>\n\nrun `fireemu --help` for the commands, or `fireemu <command> --help` for the options of one");
@@ -869,6 +870,7 @@ struct RawOptions {
     http_port: Option<u16>,
     storage_port: Option<u16>,
     functions_port: Option<u16>,
+    hosting_port: Option<u16>,
     eventarc_port: Option<u16>,
     tasks_port: Option<u16>,
     pubsub_port: Option<u16>,
@@ -1002,6 +1004,10 @@ fn parse_raw_options(args: &[String], context: OptionContext) -> Result<RawOptio
             }
             "--functions-port" => {
                 raw.functions_port = Some(port_arg(args, i, "--functions-port")?);
+                i += 2;
+            }
+            "--hosting-port" => {
+                raw.hosting_port = Some(port_arg(args, i, "--hosting-port")?);
                 i += 2;
             }
             "--eventarc-port" => {
@@ -1349,6 +1355,10 @@ fn apply_port_overrides(cfg: &mut RuntimeConfig, raw: &RawOptions) {
     }
     if let Some(p) = raw.storage_port {
         cfg.storage_addr = with_port(&cfg.storage_addr, p);
+    }
+    if let Some(p) = raw.hosting_port {
+        cfg.hosting_addr = with_port(&cfg.hosting_addr, p);
+        cfg.hosting_addr_explicit = true;
     }
     if let Some(p) = raw.functions_port {
         cfg.functions_addr = with_port(&cfg.functions_addr, p);
@@ -1737,6 +1747,7 @@ fn parse_options(
         || only.auth
         || only.storage
         || only.functions
+        || only.hosting
         || only.pubsub
         || only.database
         || only.appcheck;
@@ -1904,6 +1915,8 @@ struct BoundAddrs {
     storage: Option<std::net::SocketAddr>,
     /// Functions HTTP.
     functions: Option<std::net::SocketAddr>,
+    /// Hosting HTTP.
+    hosting: Option<std::net::SocketAddr>,
     /// Eventarc HTTP, present only as a dependency of a loaded Functions runtime.
     eventarc: Option<std::net::SocketAddr>,
     /// Cloud Tasks HTTP, present only as a dependency of a loaded Functions runtime.
@@ -2413,7 +2426,8 @@ fn load_storage_rules_registry(
             Some(path) => read_storage_rules(path, compilations)?,
             None => LoadedRules::default(),
         };
-        let slot = Arc::new(RulesetSlot::new(loaded));
+        let slot =
+            Arc::new(RulesetSlot::new(loaded).with_lone_surrogates(cfg.profile.lone_surrogates()));
         let watched = cfg
             .storage_rules_file
             .iter()
@@ -2432,7 +2446,10 @@ fn load_storage_rules_registry(
     let mut by_bucket = std::collections::BTreeMap::new();
     let mut watched = Vec::new();
     for (target, path) in &cfg.storage_rules_by_target {
-        let slot = Arc::new(RulesetSlot::new(read_storage_rules(path, compilations)?));
+        let slot = Arc::new(
+            RulesetSlot::new(read_storage_rules(path, compilations)?)
+                .with_lone_surrogates(cfg.profile.lone_surrogates()),
+        );
         let buckets = cfg.storage_buckets_by_target.get(target).ok_or_else(|| {
             format!("Storage rules target {target:?} has no resolved bucket mapping")
         })?;
@@ -2879,6 +2896,7 @@ struct Listeners {
     auth_selected: bool,
     storage: Option<tokio::net::TcpListener>,
     functions: Option<tokio::net::TcpListener>,
+    hosting: Option<tokio::net::TcpListener>,
     eventarc: Option<tokio::net::TcpListener>,
     tasks: Option<tokio::net::TcpListener>,
     pubsub: Option<tokio::net::TcpListener>,
@@ -2899,6 +2917,7 @@ async fn bind_relocatable_listener(
     addr: &str,
     explicit: bool,
     service: &'static str,
+    avoid: &[u16],
 ) -> Result<tokio::net::TcpListener, String> {
     if explicit || addr.ends_with(":0") {
         return bind_listener(addr).await;
@@ -2907,7 +2926,7 @@ async fn bind_relocatable_listener(
         .rsplit_once(':')
         .and_then(|(host, port)| port.parse::<u16>().ok().map(|port| (host, port)))
         .ok_or_else(|| format!("bind {addr}: invalid address"))?;
-    for candidate in port..=u16::MAX {
+    for candidate in (port..=u16::MAX).filter(|candidate| !avoid.contains(candidate)) {
         let candidate_addr = format!("{host}:{candidate}");
         match tokio::net::TcpListener::bind(&candidate_addr).await {
             Ok(listener) => {
@@ -2925,6 +2944,27 @@ async fn bind_relocatable_listener(
     Err(format!(
         "could not find an open {service} port in {port}-65535"
     ))
+}
+
+/// firebase-tools 15.28.2 moves a default Hosting port up and never onto 5001.
+async fn bind_hosting(
+    cfg: &RuntimeConfig,
+    only: &Selection,
+) -> Result<Option<tokio::net::TcpListener>, String> {
+    if only.explicit && only.hosting && cfg.hosting.is_none() {
+        return Err("--only hosting requires hosting.public in firebase.json".to_owned());
+    }
+    if !only.hosting || cfg.hosting.is_none() {
+        return Ok(None);
+    }
+    bind_relocatable_listener(
+        &cfg.hosting_addr,
+        cfg.hosting_addr_explicit,
+        "Hosting emulator",
+        &[5001],
+    )
+    .await
+    .map(Some)
 }
 
 async fn bind_listeners(cfg: &RuntimeConfig, only: &Selection) -> Result<Listeners, String> {
@@ -2955,6 +2995,7 @@ async fn bind_listeners(cfg: &RuntimeConfig, only: &Selection) -> Result<Listene
     } else {
         None
     };
+    let hosting = bind_hosting(cfg, only).await?;
     let functions = if only.functions && cfg.functions_source.is_some() {
         Some(bind_listener(&cfg.functions_addr).await?)
     } else {
@@ -2969,6 +3010,7 @@ async fn bind_listeners(cfg: &RuntimeConfig, only: &Selection) -> Result<Listene
                 &cfg.eventarc_addr,
                 cfg.eventarc_addr_explicit,
                 "Eventarc emulator",
+                &[],
             )
             .await?,
         )
@@ -2981,6 +3023,7 @@ async fn bind_listeners(cfg: &RuntimeConfig, only: &Selection) -> Result<Listene
                 &cfg.tasks_addr,
                 cfg.tasks_addr_explicit,
                 "Cloud Tasks emulator",
+                &[],
             )
             .await?,
         )
@@ -3019,6 +3062,7 @@ async fn bind_listeners(cfg: &RuntimeConfig, only: &Selection) -> Result<Listene
         auth_selected: only.auth,
         storage,
         functions,
+        hosting,
         eventarc,
         tasks,
         pubsub,
@@ -3057,6 +3101,7 @@ fn hub_emulators(addrs: &BoundAddrs) -> Vec<hub::EmulatorInfo> {
         ("auth", addrs.auth),
         ("storage", addrs.storage),
         ("functions", addrs.functions),
+        ("hosting", addrs.hosting),
         ("eventarc", addrs.eventarc),
         ("tasks", addrs.tasks),
         ("pubsub", addrs.pubsub),
@@ -3831,6 +3876,59 @@ mod config_reload_tests {
     const INDEXES_ONE: &str = r#"{"indexes":[{"collectionGroup":"items","queryScope":"COLLECTION","fields":[{"fieldPath":"a","order":"ASCENDING"},{"fieldPath":"b","order":"DESCENDING"}]}],"fieldOverrides":[]}"#;
     const INDEXES_TWO: &str = r#"{"indexes":[{"collectionGroup":"other","queryScope":"COLLECTION","fields":[{"fieldPath":"c","order":"ASCENDING"},{"fieldPath":"d","order":"DESCENDING"}]}],"fieldOverrides":[]}"#;
 
+    /// Every ruleset slot the daemon creates at start carries the profile's meaning of a lone
+    /// surrogate escape (`string-escape#esc-high`), also after a reload.
+    #[test]
+    fn storage_slots_carry_the_profile_s_lone_surrogate_meaning() {
+        use fireemu_core_rules::ast::LoneSurrogates;
+        let dir = scratch("storage-lone-surrogate");
+        let path = dir.join("storage.rules").display().to_string();
+        std::fs::write(&path, STORAGE_DENY).unwrap();
+        for (profile, literals) in [
+            (
+                config::CompatibilityProfile::Emulator,
+                LoneSurrogates::Official,
+            ),
+            (
+                config::CompatibilityProfile::Strict,
+                LoneSurrogates::Production,
+            ),
+        ] {
+            for per_target in [false, true] {
+                let cfg = RuntimeConfig {
+                    profile,
+                    storage_rules_file: (!per_target).then(|| path.clone()),
+                    storage_rules_by_target: if per_target {
+                        std::collections::BTreeMap::from([("t".to_owned(), path.clone())])
+                    } else {
+                        std::collections::BTreeMap::new()
+                    },
+                    storage_buckets_by_target: std::collections::BTreeMap::from([(
+                        "t".to_owned(),
+                        vec!["t.test".to_owned()],
+                    )]),
+                    ..RuntimeConfig::default()
+                };
+                let loaded =
+                    load_storage_rules_registry(&cfg, &mut RulesCompilationCache::default())
+                        .unwrap();
+                let slot = &loaded.watched[0].1;
+                assert_eq!(slot.lone_surrogates(), Some(literals));
+                let held = |slot: &RulesetSlot| {
+                    slot.snapshot()
+                        .unwrap()
+                        .ruleset
+                        .as_ref()
+                        .unwrap()
+                        .lone_surrogates()
+                };
+                assert_eq!(held(slot), literals);
+                slot.replace_source(STORAGE_ALLOW).unwrap();
+                assert_eq!(held(slot), literals);
+            }
+        }
+    }
+
     #[test]
     fn storage_startup_keeps_identical_targets_independent_and_reports_the_failing_path() {
         let dir = scratch("identical-storage-startup");
@@ -4255,6 +4353,19 @@ mod config_reload_tests {
         }
     }
 
+    proptest::proptest! {
+        #[test]
+        fn hosting_port_override_preserves_configured_host(port in proptest::prelude::any::<u16>()) {
+            for host in ["[::1]", "127.0.0.2", "192.168.1.10"] {
+                let mut cfg = RuntimeConfig { hosting_addr: format!("{host}:5000"), ..RuntimeConfig::default() };
+                let raw = parse_raw_options(&["--hosting-port".to_owned(), port.to_string()], OptionContext::Start).unwrap_or_else(|error| panic!("{}",error.message));
+                apply_port_overrides(&mut cfg, &raw);
+                proptest::prop_assert_eq!(cfg.hosting_addr, format!("{host}:{port}"));
+                proptest::prop_assert!(cfg.hosting_addr_explicit);
+            }
+        }
+    }
+
     #[test]
     fn support_service_cli_ports_override_configured_addresses() {
         let mut cfg = RuntimeConfig {
@@ -4284,6 +4395,7 @@ mod config_reload_tests {
             firestore: true,
             auth: false,
             storage: false,
+            hosting: false,
             functions: false,
             eventarc: false,
             tasks: false,
@@ -5422,6 +5534,7 @@ mod storage_endpoint_tests {
             auth: loopback(9099),
             storage: loopback(9199),
             functions: None,
+            hosting: None,
             eventarc: None,
             tasks: None,
             pubsub: None,
@@ -5575,5 +5688,79 @@ mod storage_endpoint_tests {
             storage_endpoint(&firestore_only, &all).as_deref(),
             Some("http://127.0.0.1:9199")
         );
+    }
+}
+
+#[cfg(test)]
+mod hosting_bind_tests {
+    use super::*;
+
+    fn hosting_only(addr: String, explicit: bool) -> RuntimeConfig {
+        RuntimeConfig {
+            hosting_addr: addr,
+            hosting_addr_explicit: explicit,
+            hosting: Some(
+                crate::hosting::Config::parse(
+                    &serde_json::json!({"public": "public"}),
+                    std::path::Path::new("/project"),
+                )
+                .unwrap(),
+            ),
+            hub_addr: "127.0.0.1:0".to_owned(),
+            hub_addr_explicit: true,
+            logging_enabled: false,
+            ..RuntimeConfig::default()
+        }
+    }
+
+    // firebase-tools 15.28.2 searches upward from the default Hosting port (5000 is often
+    // taken on macOS) and never lands on 5001, the Functions default.
+    #[tokio::test]
+    async fn a_busy_default_hosting_port_moves_up_and_skips_the_functions_port() {
+        let busy = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = busy.local_addr().unwrap().port();
+        let cfg = hosting_only(format!("127.0.0.1:{port}"), false);
+        let only = Selection::parse("hosting").unwrap();
+        let listeners = bind_listeners(&cfg, &only).await.unwrap();
+        let bound = listeners.hosting.unwrap().local_addr().unwrap().port();
+        assert_ne!(bound, port);
+        assert!(bound > port);
+        let avoided = bind_relocatable_listener(
+            &format!("127.0.0.1:{}", 5000),
+            false,
+            "Hosting emulator",
+            &[5000, 5001],
+        )
+        .await
+        .unwrap();
+        assert!(avoided.local_addr().unwrap().port() > 5001);
+    }
+
+    // Holding 5000 (or finding it already held, as macOS AirPlay does) forces the search.
+    #[tokio::test]
+    async fn the_default_hosting_search_never_takes_5001() {
+        let _held = std::net::TcpListener::bind("127.0.0.1:5000");
+        let cfg = hosting_only("127.0.0.1:5000".to_owned(), false);
+        let only = Selection::parse("hosting").unwrap();
+        let listener = bind_hosting(&cfg, &only).await.unwrap().unwrap();
+        assert_ne!(listener.local_addr().unwrap().port(), 5000);
+        assert_ne!(listener.local_addr().unwrap().port(), 5001);
+    }
+
+    #[tokio::test]
+    async fn hosting_left_out_of_only_binds_nothing_even_when_configured() {
+        let cfg = hosting_only("127.0.0.1:0".to_owned(), false);
+        let only = Selection::parse("auth").unwrap();
+        assert!(bind_hosting(&cfg, &only).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn a_configured_hosting_port_is_never_moved() {
+        let busy = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = busy.local_addr().unwrap().port();
+        let cfg = hosting_only(format!("127.0.0.1:{port}"), true);
+        let only = Selection::parse("hosting").unwrap();
+        let error = bind_listeners(&cfg, &only).await.err().unwrap();
+        assert!(error.contains("bind"), "{error}");
     }
 }

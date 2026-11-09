@@ -6451,6 +6451,389 @@ impl fireemu_core_auth::jwt::IdTokenSigner for ReversingSigner {
     }
 }
 
+/// Counts cryptographic verification independently of claim and Rules evaluation.
+struct CountingStorageSigner(Arc<AtomicUsize>);
+
+impl fireemu_core_auth::jwt::IdTokenSigner for CountingStorageSigner {
+    fn alg(&self) -> &'static str {
+        "RS256"
+    }
+    fn kid(&self) -> &'static str {
+        "test"
+    }
+    fn sign(&self, input: &[u8]) -> Vec<u8> {
+        input.iter().rev().copied().collect()
+    }
+    fn verify(&self, input: &[u8], signature: &[u8]) -> bool {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        self.sign(input) == signature
+    }
+    fn signature_verification_is_immutable(&self) -> bool {
+        true
+    }
+    fn public_jwk_json(&self) -> String {
+        "{}".to_owned()
+    }
+}
+
+#[test]
+fn storage_verifies_a_signed_token_once_per_request() {
+    for acceptance in [TokenAcceptance::Verified, TokenAcceptance::EmulatorMock] {
+        for (tenant, fault) in [false, true].into_iter().flat_map(|tenant| {
+            ["valid", "expired", "revoked", "signature"].map(|fault| (tenant, fault))
+        }) {
+            let s = state_with(Some(ALLOW_ALL_RULES), acceptance);
+            let calls = Arc::new(AtomicUsize::new(0));
+            s.auth
+                .default_store()
+                .lock()
+                .unwrap()
+                .set_signer(Arc::new(CountingStorageSigner(calls.clone())));
+            let selected = if tenant {
+                s.auth.ensure_tenant("demo-app", "customer").unwrap()
+            } else {
+                s.auth.default_store()
+            };
+            let token = {
+                let mut store = selected.lock().unwrap();
+                let uid = store
+                    .create_user(NewUser::email("count@example.test"), START)
+                    .unwrap();
+                let mut claims = store.id_token_claims(&uid, None, START).unwrap();
+                if fault == "expired" {
+                    claims.exp = claims.iat - 1;
+                }
+                if fault == "revoked" {
+                    store
+                        .revoke_tokens(
+                            &uid,
+                            LogicalInstant::from_unix_seconds(claims.auth_time + 1),
+                        )
+                        .unwrap();
+                }
+                let token = fireemu_core_auth::jwt::encode_with(&claims, store.signer());
+                if fault == "signature" {
+                    format!("{}.AA", token.rsplit_once('.').unwrap().0)
+                } else {
+                    token
+                }
+            };
+            let authorization = format!("Firebase {token}");
+            let response = handle(
+                &s,
+                req(
+                    "POST",
+                    &format!("/v0/b/{BUCKET}/o?name=count.txt"),
+                    &[
+                        ("authorization", &authorization),
+                        ("content-type", "text/plain"),
+                    ],
+                    b"count",
+                ),
+            );
+            let expected = if fault == "expired"
+                || (fault == "signature" && acceptance == TokenAcceptance::Verified)
+            {
+                401
+            } else {
+                200
+            };
+            assert_eq!(
+                response.status, expected,
+                "{acceptance:?}/{fault}: {:?}",
+                response.body
+            );
+            assert_eq!(
+                calls.load(Ordering::SeqCst),
+                1,
+                "{acceptance:?}, tenant={tenant}, fault={fault}"
+            );
+        }
+    }
+}
+
+#[test]
+fn storage_signed_token_refusal_order_and_bodies_are_stable() {
+    for acceptance in BOTH_PROFILES {
+        for fault in [
+            "expired",
+            "foreign-expired",
+            "tenant-expired",
+            "revoked",
+            "revoked-expired",
+        ] {
+            let s = state_with(Some(ALLOW_ALL_RULES), acceptance);
+            let token = {
+                let shared = s.auth.default_store();
+                let mut store = shared.lock().unwrap();
+                store.set_signer(Arc::new(ReversingSigner));
+                let uid = store
+                    .create_user(NewUser::email("order@example.test"), START)
+                    .unwrap();
+                let mut claims = store.id_token_claims(&uid, None, START).unwrap();
+                if fault.contains("expired") {
+                    claims.exp = claims.iat - 1;
+                }
+                if fault.starts_with("foreign") {
+                    claims.aud = "demo-other".to_owned();
+                }
+                if fault.starts_with("tenant") {
+                    claims.firebase.tenant = Some("absent".to_owned());
+                }
+                if fault.starts_with("revoked") {
+                    store
+                        .revoke_tokens(
+                            &uid,
+                            LogicalInstant::from_nanos(START.as_nanos() + 1_000_000_000),
+                        )
+                        .unwrap();
+                }
+                fireemu_core_auth::jwt::encode_with(&claims, store.signer())
+            };
+            let authorization = format!("Firebase {token}");
+            let response = handle(
+                &s,
+                req(
+                    "POST",
+                    &format!("/v0/b/{BUCKET}/o?name=order.txt"),
+                    &[
+                        ("authorization", &authorization),
+                        ("content-type", "text/plain"),
+                    ],
+                    b"order",
+                ),
+            );
+            if fault == "revoked" {
+                assert_eq!(response.status, 200);
+                continue;
+            }
+            let (status, message) = match fault {
+                "foreign-expired" if acceptance == TokenAcceptance::Verified => {
+                    (403, "Permission denied.")
+                }
+                "foreign-expired" => (401, "invalid ID token: audience demo-other != demo-app"),
+                "tenant-expired" => (401, "invalid ID token: unknown tenant \"absent\""),
+                _ => (401, "invalid ID token: token expired"),
+            };
+            assert_eq!(response.status, status, "{acceptance:?}/{fault}");
+            let expected = if status == 403 {
+                format!(
+                    "{{\n  \"error\": {{\n    \"code\": 403,\n    \"message\": {}\n  }}\n}}",
+                    serde_json::to_string(message).unwrap()
+                )
+            } else {
+                format!(
+                    "{{\n  \"error\": {{\n    \"code\": 401,\n    \"message\": {},\n    \"status\": \"UNAUTHENTICATED\"\n  }}\n}}",
+                    serde_json::to_string(message).unwrap()
+                )
+            };
+            let expected = if acceptance == TokenAcceptance::EmulatorMock {
+                serde_json::to_string(&serde_json::from_str::<Value>(&expected).unwrap()).unwrap()
+            } else {
+                expected
+            };
+            assert_eq!(
+                response.body.as_ref(),
+                expected.as_bytes(),
+                "{acceptance:?}/{fault}"
+            );
+        }
+    }
+}
+
+struct CountingRsaStorageSigner {
+    inner: Arc<dyn fireemu_core_auth::jwt::IdTokenSigner>,
+    calls: Arc<AtomicUsize>,
+}
+
+impl fireemu_core_auth::jwt::IdTokenSigner for CountingRsaStorageSigner {
+    fn alg(&self) -> &'static str {
+        self.inner.alg()
+    }
+    fn kid(&self) -> &str {
+        self.inner.kid()
+    }
+    fn sign(&self, input: &[u8]) -> Vec<u8> {
+        self.inner.sign(input)
+    }
+    fn verify(&self, input: &[u8], signature: &[u8]) -> bool {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.inner.verify(input, signature)
+    }
+    fn signature_verification_is_immutable(&self) -> bool {
+        self.inner.signature_verification_is_immutable()
+    }
+    fn public_jwk_json(&self) -> String {
+        self.inner.public_jwk_json()
+    }
+}
+
+#[test]
+fn storage_reuses_the_real_session_rsa_signature() {
+    let signer = fireemu_adapter_http::signing::RsaSigner::from_seed(19).unwrap();
+    for acceptance in BOTH_PROFILES {
+        let s = state_with(Some(ALLOW_ALL_RULES), acceptance);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let token = {
+            let shared = s.auth.default_store();
+            let mut store = shared.lock().unwrap();
+            store.set_signer(Arc::new(CountingRsaStorageSigner {
+                inner: signer.clone(),
+                calls: calls.clone(),
+            }));
+            let uid = store
+                .create_user(NewUser::email("rsa-count@example.test"), START)
+                .unwrap();
+            fireemu_core_auth::jwt::encode_with(
+                &store.id_token_claims(&uid, None, START).unwrap(),
+                store.signer(),
+            )
+        };
+        assert_eq!(
+            upload_as(&s, "rsa-count.txt", &format!("Firebase {token}")),
+            200
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "{acceptance:?}");
+    }
+}
+
+struct DefaultStorageSigner(CountingStorageSigner);
+
+impl fireemu_core_auth::jwt::IdTokenSigner for DefaultStorageSigner {
+    fn alg(&self) -> &'static str {
+        self.0.alg()
+    }
+    fn kid(&self) -> &str {
+        self.0.kid()
+    }
+    fn sign(&self, input: &[u8]) -> Vec<u8> {
+        self.0.sign(input)
+    }
+    fn verify(&self, input: &[u8], signature: &[u8]) -> bool {
+        self.0.verify(input, signature)
+    }
+    fn public_jwk_json(&self) -> String {
+        self.0.public_jwk_json()
+    }
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn resumable_finalization_verifies_each_distinct_immutable_token_once() {
+    for acceptance in BOTH_PROFILES {
+        for fallback in [false, true] {
+            for case in ["same", "distinct", "revoked", "expired-session"] {
+                let s = state_with(Some(OWNED_STORAGE_RULES), acceptance);
+                let calls = Arc::new(AtomicUsize::new(0));
+                let (starter, other, starter_token, other_token) = {
+                    let shared = s.auth.default_store();
+                    let mut store = shared.lock().unwrap();
+                    let signer: Arc<dyn fireemu_core_auth::jwt::IdTokenSigner> = if fallback {
+                        Arc::new(DefaultStorageSigner(CountingStorageSigner(calls.clone())))
+                    } else {
+                        Arc::new(CountingStorageSigner(calls.clone()))
+                    };
+                    store.set_signer(signer);
+                    let starter = store
+                        .create_user(NewUser::email("starter@example.test"), START)
+                        .unwrap();
+                    let other = store
+                        .create_user(NewUser::email("other@example.test"), START)
+                        .unwrap();
+                    let token = |uid| {
+                        fireemu_core_auth::jwt::encode_with(
+                            &store.id_token_claims(uid, None, START).unwrap(),
+                            store.signer(),
+                        )
+                    };
+                    let a = token(&starter);
+                    let b = token(&other);
+                    (starter, other, a, b)
+                };
+                let authorization = format!("Firebase {starter_token}");
+                let initiation_response = handle(
+                    &s,
+                    req(
+                        "POST",
+                        &format!(
+                            "/v0/b/{BUCKET}/o?name=owned%2F{}%2Fresumable.txt",
+                            starter.as_str()
+                        ),
+                        &[
+                            ("authorization", &authorization),
+                            ("x-goog-upload-protocol", "resumable"),
+                            ("x-goog-upload-command", "start"),
+                        ],
+                        b"{}",
+                    ),
+                );
+                assert_eq!(initiation_response.status, 200, "{acceptance:?}/{case}");
+                let session = header(&initiation_response, "x-goog-upload-url")
+                    .unwrap()
+                    .strip_prefix("http://127.0.0.1:9199")
+                    .unwrap()
+                    .to_owned();
+                let incoming = if case == "expired-session" {
+                    let now = LogicalInstant::from_nanos(START.as_nanos() + 3_601_000_000_000);
+                    s.clock.lock().unwrap().set(now).unwrap();
+                    let shared = s.auth.default_store();
+                    let store = shared.lock().unwrap();
+                    fireemu_core_auth::jwt::encode_with(
+                        &store.id_token_claims(&other, None, now).unwrap(),
+                        store.signer(),
+                    )
+                } else if case == "distinct" {
+                    other_token
+                } else {
+                    starter_token
+                };
+                if case == "revoked" {
+                    let now = LogicalInstant::from_nanos(START.as_nanos() + 1_000_000_000);
+                    s.clock.lock().unwrap().set(now).unwrap();
+                    s.auth
+                        .default_store()
+                        .lock()
+                        .unwrap()
+                        .revoke_tokens(&starter, now)
+                        .unwrap();
+                }
+                calls.store(0, Ordering::SeqCst);
+                let finalized = handle(
+                    &s,
+                    req(
+                        "POST",
+                        &session,
+                        &[
+                            ("authorization", &format!("Firebase {incoming}")),
+                            ("x-goog-upload-command", "upload, finalize"),
+                            ("x-goog-upload-offset", "0"),
+                        ],
+                        b"resumable",
+                    ),
+                );
+                assert_eq!(
+                    finalized.status,
+                    if case == "expired-session" { 401 } else { 200 },
+                    "{acceptance:?}/{case}: {:?}",
+                    finalized.body
+                );
+                let expected = if fallback {
+                    4
+                } else if matches!(case, "distinct" | "expired-session") {
+                    2
+                } else {
+                    1
+                };
+                assert_eq!(
+                    calls.load(Ordering::SeqCst),
+                    expected,
+                    "{acceptance:?}/{case}/fallback={fallback}"
+                );
+            }
+        }
+    }
+}
+
 /// Ledger 781 on Storage: a signed (session-RSA) ID token whose `iat` and `auth_time` are in
 /// the future is refused in strict (`Verified`) with 401, as an expired token is, and
 /// is evaluated as its user in the emulator profile (`EmulatorMock`), as the official emulator
@@ -9447,16 +9830,19 @@ service firebase.storage {
                     403,
                 );
             }
-            // The strict outcomes are observed production results; emulator preserves its old target.
+            // The strict outcomes are observed production results. A listing with the delimiter `/`
+            // is answered the same way in the emulator profile (STORAGE-RULES-S9: the official
+            // emulator and production allow it too); without a delimiter the emulator profile
+            // preserves its old target.
             for delimiter in ["/", ""] {
-                let own_status = if (strict && delimiter == "/")
+                let own_status = if delimiter == "/"
                     || variant != "single" && (!strict || variant == "recursive")
                 {
                     200
                 } else {
                     403
                 };
-                let ancestor_status = if strict && delimiter == "/" && variant != "single" {
+                let ancestor_status = if delimiter == "/" && variant != "single" {
                     200
                 } else {
                     403

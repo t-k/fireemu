@@ -27,7 +27,7 @@ use fireemu_core_database::{
 
 use crate::access::{Access, LoadedRules, WriteOp};
 pub use crate::access::{Credentials, IdTokenVerifier};
-use crate::json_parse::{parse_replacing, parse_with_keys_replacing};
+use crate::json_parse::{parse_node, parse_replacing, parse_with_keys_replacing, Read};
 use crate::json_text::{
     output_json, parse, priority_at, render, render_ordered, value_at, written_priority_at,
     Ordered, ParseError, Style,
@@ -1926,6 +1926,22 @@ pub fn prepare_import_as(
         .map_err(|_| "Invalid Firebase database name".to_owned())?;
     if text.is_empty() {
         return Err("No data supplied.".to_owned());
+    }
+    // The file is read straight into its tree, so the parsed value is never held next to it. A file that
+    // reading declines (server values, a refusal to report) is read again the long way below, where the
+    // text is still held.
+    match parse_node(&text, limits, lone_surrogate_values.then_some('?')) {
+        Ok(Read::Tree(root)) => {
+            return Ok(PreparedImport {
+                namespace,
+                content: ImportContent::Built {
+                    root,
+                    limits: *limits,
+                },
+            });
+        }
+        Ok(Read::Declined) => {}
+        Err(_) => return Err(PARSE_ERROR.to_owned()),
     }
     let json = if lone_surrogate_values {
         parse_replacing(&text, '?').map(|(json, _)| json)

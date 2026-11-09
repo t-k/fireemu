@@ -158,6 +158,7 @@ These declarations remain visible even when outside the seed scope. Their source
 | FN-HTTP-1 | implemented |
 | FN-SCH-1 | implemented |
 | FS-FIELD-CONFIG-1 | implemented |
+| HOSTING-LOCAL-1 | partial |
 | LOG-01 | implemented |
 | PUBSUB-WIRE-1 | implemented |
 | RULES-DIAG-1 | implemented |

@@ -189,7 +189,9 @@ async function readyTimeoutFixture(t, s, check, setupMs = 5000, observations = {
     rejectReady = reject;
   });
   t.mock.method(cp, "spawn", (...args) => {
+    args[2] = { ...args[2], stdio: ["pipe", "pipe", "pipe"] };
     owned = actualSpawn(...args);
+    owned.stdin.on("error", () => {});
     owned.once("spawn", () => identities.set(owned.pid, identity(owned.pid)));
     owned.once("close", () => {
       completed = true;
@@ -281,10 +283,16 @@ async function readyTimeoutFixture(t, s, check, setupMs = 5000, observations = {
       return true;
     };
     if (owned && !completed) {
-      // The supervisor owns its child even when final readiness was never published.
-      const sent = signalOriginal(owned.pid, "SIGTERM");
-      if (sent && released === 0) observations.setupAbortRequested = true;
-      if (!(await awaitClose(1500))) {
+      if (released === 0) {
+        observations.setupAbortRequested = true;
+        owned.stdin.end();
+        await awaitClose(1500);
+      }
+      if (!completed) {
+        // The supervisor owns its child even when final readiness was never published.
+        signalOriginal(owned.pid, "SIGTERM");
+      }
+      if (!completed && !(await awaitClose(1500))) {
         // Force only individually verified original children while their parent can still reap.
         for (const pid of identities.keys()) {
           if (pid === owned.pid) continue;
@@ -321,13 +329,16 @@ const {spawn}=require('node:child_process');
 const hold=setInterval(()=>{},1000);
 let child, childClosed=false, abortTimer;
 const emit=row=>process.stdout.write(JSON.stringify(row)+'\\n');
-process.on('SIGTERM',()=>{
+const abort=()=>{
   if(childClosed){clearInterval(hold);return;}
   if(child&&child.exitCode===null&&child.signalCode===null){
     child.kill('SIGTERM');
     abortTimer=setTimeout(()=>{if(!childClosed)child.kill('SIGKILL');},500);
   }
-});
+};
+process.on('SIGTERM',abort);
+process.stdin.resume();
+process.stdin.on('end',abort);
 child=spawn(process.execPath,['--eval',${JSON.stringify(childCode)}],{stdio:['ignore','pipe','ignore']});
 child.once('spawn',()=>emit({started:true,childPid:child.pid}));
 child.once('close',()=>{childClosed=true;clearTimeout(abortTimer);emit({reaped:true,childPid:child.pid});setTimeout(()=>clearInterval(hold),200);});
@@ -363,7 +374,19 @@ process.stdout.write(JSON.stringify({ready:true})+'\\n');
 });
 
 test("missing fixture readiness is bounded and cleans the original owned process", async (t) => {
-  const s = setup({ script: `#!${process.execPath}\nsetInterval(()=>{},1000);\n` });
+  const s = setup();
+  const eofMarker = join(s.root, "fixture-eof");
+  writeFileSync(
+    s.binary,
+    `#!${process.execPath}
+const {writeFileSync}=require('node:fs');
+const hold=setInterval(()=>{},1000);
+setTimeout(()=>{
+  process.stdin.resume();
+  process.stdin.on('end',()=>{writeFileSync(${JSON.stringify(eofMarker)},'eof');clearInterval(hold);});
+},500);
+`,
+  );
   await assert.rejects(
     readyTimeoutFixture(
       t,
@@ -375,6 +398,7 @@ test("missing fixture readiness is bounded and cleans the original owned process
     ),
     /fixture ready deadline/,
   );
+  assert.equal(readFileSync(eofMarker, "utf8"), "eof", "setup cleanup must request EOF");
 });
 
 test("setup expiry after child-started aborts and reaps before supervisor termination", async (t) => {
@@ -402,6 +426,93 @@ test("setup expiry after child-started aborts and reaps before supervisor termin
   assert.throws(() => process.kill(observed.childPid, 0), { code: "ESRCH" });
   assert.throws(() => process.kill(observed.pid, 0), { code: "ESRCH" });
 });
+
+// These rows are the seeded PICT output for setup phase, EOF response and identity.
+for (const [phase, eofResponse, changed] of [
+  ["before_child", "cooperative", true],
+  ["after_child", "cooperative", false],
+  ["before_child", "ignored", false],
+  ["after_child", "ignored", true],
+])
+  test(`setup cleanup: ${phase}, ${eofResponse}, identity ${changed ? "changed" : "stable"}`, async (t) => {
+    const cp = (await import("node:child_process")).default;
+    const actualSpawnSync = cp.spawnSync;
+    let leader;
+    const simulatedFallback = eofResponse === "ignored" && !changed;
+    const signals = [];
+    const actualKill = process.kill;
+    t.mock.method(cp, "spawnSync", (command, args, options) => {
+      const result = actualSpawnSync(command, args, options);
+      if (command === "ps" && args[0] === "-ww") {
+        if (leader === undefined) {
+          leader = Number(args[2]);
+          if (changed && result.status === 0)
+            result.stdout = `${result.stdout.trimEnd()} simulated\n`;
+        }
+        // Simulated stable identity must never authorize a real signal.
+        if (simulatedFallback && result.status === 0) result.stdout = "simulated stable identity\n";
+      }
+      return result;
+    });
+    if (simulatedFallback || changed)
+      process.kill = (pid, signal) => {
+        assert.equal(pid, leader);
+        signals.push(signal);
+        return true;
+      };
+    t.after(() => {
+      process.kill = actualKill;
+    });
+    const s = setup();
+    const termMarker = join(s.root, "term-marker");
+    const finishedMarker = join(s.root, "finished-marker");
+    writeFileSync(
+      s.binary,
+      `#!${process.execPath}
+const {spawn}=require('node:child_process');
+const {writeFileSync}=require('node:fs');
+const hold=setInterval(()=>{},1000);
+let child;
+const finish=()=>{writeFileSync(${JSON.stringify(finishedMarker)},'done');clearInterval(hold);};
+const abort=()=>{if(child&&child.exitCode===null&&child.signalCode===null)child.kill('SIGTERM');else finish();};
+process.on('SIGTERM',()=>{writeFileSync(${JSON.stringify(termMarker)},'term');abort();});
+process.stdin.resume();
+process.stdin.on('end',()=>{if(${JSON.stringify(eofResponse)}==='cooperative')abort();});
+if(${JSON.stringify(phase)}==='after_child'){
+  child=spawn(process.execPath,['--eval','setInterval(()=>{},1000)'],{stdio:'ignore'});
+  child.once('spawn',()=>process.stdout.write(JSON.stringify({started:true,childPid:child.pid})+'\\n'));
+  child.once('close',()=>{process.stdout.write(JSON.stringify({reaped:true})+'\\n');finish();});
+}
+setTimeout(abort,2200).unref();
+`,
+    );
+    const observed = { expireOnChildStarted: phase === "after_child" };
+    try {
+      await assert.rejects(
+        readyTimeoutFixture(t, s, () => assert.fail("timeout must not start"), 200, observed),
+        changed && eofResponse === "ignored"
+          ? /original identity changed/
+          : /fixture ready deadline/,
+      );
+    } finally {
+      process.kill = actualKill;
+      const deadline = Date.now() + 5000;
+      let exited = leader === undefined;
+      while (!exited && Date.now() < deadline) {
+        const result = actualSpawnSync("ps", ["-p", String(leader), "-o", "pid="], {
+          encoding: "utf8",
+        });
+        exited = result.status === 1 && result.stdout.trim() === "";
+        if (!exited) await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      assert.equal(exited, true, "fixture must exit without a simulated signal");
+    }
+    assert.equal(readFileSync(finishedMarker, "utf8"), "done");
+    assert.equal(existsSync(termMarker), false);
+    if (simulatedFallback) assert.deepEqual(signals, ["SIGTERM"]);
+    if (changed) assert.deepEqual(signals, []);
+    if (phase === "after_child") assert.equal(observed.childReaped, true);
+  });
 
 for (const exited of [true, false])
   test(`a ${exited ? "reaped" : "replacement"} leader cannot adopt a reused group`, async (t) => {

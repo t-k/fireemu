@@ -16,11 +16,17 @@ const PRODUCT_ORDER = [
 	'Cloud Pub/Sub',
 	'Eventarc',
 	'App Check',
+	'Firebase Hosting',
 	'Tooling',
 ];
 
 /** Production verification areas, as named by spec/compatibility/closure/<parent>.json. */
 export const AREAS = {
+	'HOSTING': {
+		product: 'Firebase Hosting',
+		title: 'Hosting',
+		covers: 'Static files, routing, headers, URL canonicalization, localization and local rewrites. Production observations are pending.',
+	},
 	'FS-DATA-WRITE': {
 		product: 'Cloud Firestore',
 		title: 'Writes, batches and limits',
@@ -173,7 +179,7 @@ export function productSurfaceRows(contract) {
 }
 
 const AREA_STATUS = { COMPAT_VERIFIED: 'Verified against production', IN_PROGRESS: 'In progress', IMPLEMENTING: 'In progress' };
-const CONDITION_STATUSES = new Set(['VERIFIED', 'KNOWN_DIFFERENCE_APPROVED', 'PRODUCTION_RECORDED', 'OPEN', 'NOT_COMPARED']);
+const CONDITION_STATUSES = new Set(['VERIFIED', 'KNOWN_DIFFERENCE_APPROVED', 'UNVERIFIED', 'PRODUCTION_RECORDED', 'OPEN', 'NOT_COMPARED']);
 
 function differenceTexts(record) {
 	const texts = [];
@@ -237,6 +243,7 @@ const CAPABILITY_PRODUCTS = [
 	['STORAGE-', 'Cloud Storage'],
 	['FN-', 'Cloud Functions'],
 	['PUBSUB-', 'Cloud Pub/Sub'],
+	['HOSTING-', 'Firebase Hosting'],
 	['CTL-', 'Tooling'],
 	['CLI-', 'Tooling'],
 	['LOG-', 'Tooling'],

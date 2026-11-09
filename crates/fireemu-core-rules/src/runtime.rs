@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::ops::Deref;
 use std::sync::{Arc, Mutex, RwLock};
 
-use crate::ast::{Item, PathSegment, Ruleset, Span};
+use crate::ast::{Item, LoneSurrogates, PathSegment, Ruleset, Span};
 use crate::coverage::RulesDiagnostics;
 use crate::lint::{lint_parsed, DiagnosticLevel, LintOptions};
 use crate::parse::{parse_ruleset, ParseError};
@@ -99,6 +99,19 @@ impl LoadedRules {
             ruleset: Some(Arc::new(ruleset)),
             diagnostics: Arc::new(Mutex::new(RulesDiagnostics::default())),
         })
+    }
+
+    /// These rules with `mode` as the meaning of a lone surrogate escape in a rule string;
+    /// the compatibility profile decides it when the rules are loaded. Rules that are not
+    /// configured are returned as they are.
+    #[must_use]
+    pub fn with_lone_surrogates(mut self, mode: LoneSurrogates) -> Self {
+        if let Some(ruleset) = self.ruleset.as_mut() {
+            if ruleset.lone_surrogates() != mode {
+                *Arc::make_mut(ruleset) = (**ruleset).clone().with_lone_surrogates(mode);
+            }
+        }
+        self
     }
 
     /// Whether rules are configured.
@@ -326,6 +339,9 @@ impl std::error::Error for RulesDiagnosticsError {}
 #[derive(Debug)]
 pub struct RulesetSlot {
     active: RwLock<Arc<ActiveRules>>,
+    /// The meaning of a lone surrogate escape for every ruleset this slot publishes (the
+    /// compatibility profile's); `None` keeps what each loaded ruleset carries.
+    lone_surrogates: Option<LoneSurrogates>,
 }
 
 impl RulesetSlot {
@@ -337,6 +353,40 @@ impl RulesetSlot {
                 generation: 0,
                 loaded: Arc::new(loaded),
             })),
+            lone_surrogates: None,
+        }
+    }
+
+    /// This slot with `mode` as the meaning of a lone surrogate escape in every ruleset it
+    /// holds now and publishes later.
+    #[must_use]
+    pub fn with_lone_surrogates(mut self, mode: LoneSurrogates) -> Self {
+        self.lone_surrogates = Some(mode);
+        let active = self
+            .active
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let loaded = (*active.loaded).clone().with_lone_surrogates(mode);
+        *active = Arc::new(ActiveRules {
+            generation: active.generation,
+            loaded: Arc::new(loaded),
+        });
+        self
+    }
+
+    /// The meaning of a lone surrogate escape this slot imposes, if it imposes one.
+    #[must_use]
+    pub const fn lone_surrogates(&self) -> Option<LoneSurrogates> {
+        self.lone_surrogates
+    }
+
+    /// A slot with no rules that imposes the same meaning of a lone surrogate escape.
+    #[must_use]
+    pub fn empty_like(&self) -> Self {
+        let slot = Self::default();
+        match self.lone_surrogates {
+            Some(mode) => slot.with_lone_surrogates(mode),
+            None => slot,
         }
     }
 
@@ -412,6 +462,10 @@ impl RulesetSlot {
             .generation
             .checked_add(1)
             .ok_or_else(|| "ruleset generation is exhausted".to_owned())?;
+        let loaded = match self.lone_surrogates {
+            Some(mode) => loaded.with_lone_surrogates(mode),
+            None => loaded,
+        };
         *active = Arc::new(ActiveRules {
             generation,
             loaded: Arc::new(loaded),
@@ -445,6 +499,208 @@ mod tests {
 
     const V1: &str = "service cloud.firestore { match /databases/{database}/documents { match /{document=**} { allow read: if false; } } }";
     const V2: &str = "service cloud.firestore { match /databases/{database}/documents { match /{document=**} { allow read: if true; } } }";
+
+    #[test]
+    fn scope_build_observation_crosses_parser_thread_and_counts_services() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let builds = Arc::new(AtomicUsize::new(0));
+        let _observation = crate::scope::BuildObservation::enter(Some(Arc::clone(&builds)));
+        let _control = crate::scope::ServiceScopes::compile(&[]);
+        assert_eq!(
+            builds.load(Ordering::Relaxed),
+            1,
+            "same-thread observation control"
+        );
+        builds.store(0, Ordering::Relaxed);
+        let first = LoadedRules::from_source(V1).unwrap();
+        assert_eq!(
+            builds.load(Ordering::Relaxed),
+            1,
+            "one plan for one parsed service"
+        );
+        let two_services =
+            format!("{V1} service firebase.storage {{ match /{{id}} {{ allow read: if true; }} }}");
+        let _second = LoadedRules::from_source(&two_services).unwrap();
+        assert_eq!(
+            builds.load(Ordering::Relaxed),
+            3,
+            "one additional plan per parsed service"
+        );
+        let slot = RulesetSlot::new(first);
+        let retained = slot.snapshot().unwrap();
+        slot.replace_loaded((*retained.loaded()).clone()).unwrap();
+        slot.clear().unwrap();
+        assert_eq!(
+            builds.load(Ordering::Relaxed),
+            3,
+            "publication and clear reuse compiled input"
+        );
+    }
+
+    #[test]
+    fn scope_build_observers_are_scoped_and_isolated() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let outer = Arc::new(AtomicUsize::new(0));
+        let inner = Arc::new(AtomicUsize::new(0));
+        let _observation = crate::scope::BuildObservation::enter(Some(Arc::clone(&outer)));
+        crate::scope::ServiceScopes::compile(&[]);
+        let unwind = catch_unwind(AssertUnwindSafe(|| {
+            let _nested = crate::scope::BuildObservation::enter(Some(Arc::clone(&inner)));
+            crate::scope::ServiceScopes::compile(&[]);
+            panic!("exercise observation restoration");
+        }));
+        assert!(unwind.is_err());
+        crate::scope::ServiceScopes::compile(&[]);
+        assert_eq!(outer.load(Ordering::Relaxed), 2);
+        assert_eq!(inner.load(Ordering::Relaxed), 1);
+        std::thread::scope(|threads| {
+            for count in [2, 3] {
+                threads.spawn(move || {
+                    let independent = Arc::new(AtomicUsize::new(0));
+                    let _guard =
+                        crate::scope::BuildObservation::enter(Some(Arc::clone(&independent)));
+                    for _ in 0..count {
+                        LoadedRules::from_source(V1).unwrap();
+                    }
+                    assert_eq!(independent.load(Ordering::Relaxed), count);
+                });
+            }
+        });
+        assert_eq!(outer.load(Ordering::Relaxed), 2);
+    }
+
+    fn assert_generation_report(
+        tree: &crate::ast::Ruleset,
+        request: &crate::eval::RequestContext,
+        allowed: bool,
+    ) {
+        use crate::eval::{evaluate_request_traced, Decision};
+        let report = evaluate_request_traced(tree, request, None);
+        assert_eq!(
+            report.0.decision,
+            if allowed {
+                Decision::Allow
+            } else {
+                Decision::Deny(crate::eval::DenyReason::NoMatchingAllow)
+            }
+        );
+        crate::scope::EAGER_SCOPE_SETUP.with(|enabled| enabled.set(true));
+        let eager = evaluate_request_traced(tree, request, None);
+        crate::scope::EAGER_SCOPE_SETUP.with(|enabled| enabled.set(false));
+        crate::scope::LEGACY_EVALUATION.with(|enabled| enabled.set(true));
+        let legacy = evaluate_request_traced(tree, request, None);
+        crate::scope::LEGACY_EVALUATION.with(|enabled| enabled.set(false));
+        assert_eq!(format!("{report:?}"), format!("{eager:?}"));
+        assert_eq!(format!("{report:?}"), format!("{legacy:?}"));
+        for _ in 0..3 {
+            assert_eq!(
+                format!("{:?}", evaluate_request_traced(tree, request, None)),
+                format!("{report:?}")
+            );
+        }
+    }
+
+    #[test]
+    fn function_captures_and_scope_plans_stay_with_retained_generations() {
+        use crate::eval::{Method, RequestContext, RulesService};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        // Pairwise rows cover service, publication, captured value and execution mode.
+        // The first six rows are mandatory reload/restore/concurrent regressions.
+        let cases = [
+            (RulesService::Firestore, "replace", "yes", false),
+            (RulesService::Firestore, "replace", "no", true),
+            (RulesService::Storage, "replace", "yes", true),
+            (RulesService::Firestore, "restore", "yes", true),
+            (RulesService::Storage, "restore", "no", false),
+            (RulesService::Firestore, "clear", "no", true),
+            (RulesService::Storage, "clear", "yes", false),
+        ];
+        for (service, operation, value, parallel) in cases {
+            let service_name = match service {
+                RulesService::Firestore => "cloud.firestore",
+                RulesService::Storage => "firebase.storage",
+            };
+            let source = format!("rules_version = '2'; service {service_name} {{ match /databases/{{db}}/documents/{{id}} {{ function selected() {{ return id == 'yes'; }} function permitted() {{ return selected(); }} match /{{child}} {{ function selected() {{ return false; }} allow get: if permitted(); }} }} }}");
+            let builds = Arc::new(AtomicUsize::new(0));
+            let _guard = crate::scope::BuildObservation::enter(Some(Arc::clone(&builds)));
+            let slot = RulesetSlot::new(LoadedRules::from_source(&source).unwrap());
+            let retained = slot.snapshot().unwrap();
+            assert_eq!(builds.load(Ordering::Relaxed), 1);
+            slot.replace_source(&source.replace("'yes'", "'no'"))
+                .unwrap();
+            let replaced = slot.snapshot().unwrap();
+            assert_eq!(builds.load(Ordering::Relaxed), 2);
+            let retained_tree = retained.ruleset.as_ref().unwrap();
+            let replaced_tree = replaced.ruleset.as_ref().unwrap();
+            assert!(!Arc::ptr_eq(
+                &retained_tree.function_scopes[0],
+                &replaced_tree.function_scopes[0]
+            ));
+            match operation {
+                "restore" => {
+                    slot.replace_loaded((*retained.loaded()).clone()).unwrap();
+                }
+                "clear" => {
+                    slot.clear().unwrap();
+                }
+                _ => {}
+            }
+            let current = slot.snapshot().unwrap();
+            assert_eq!(retained.generation(), 0);
+            assert_eq!(replaced.generation(), 1);
+            assert_eq!(
+                current.generation(),
+                if operation == "replace" { 1 } else { 2 }
+            );
+            if operation == "clear" {
+                assert!(current.ruleset.is_none());
+            } else {
+                let expected_tree = if operation == "restore" {
+                    retained_tree
+                } else {
+                    replaced_tree
+                };
+                assert!(Arc::ptr_eq(
+                    current.ruleset.as_ref().unwrap(),
+                    expected_tree
+                ));
+            }
+            let check = |id: &str| {
+                let _child_guard = crate::scope::BuildObservation::enter(Some(Arc::clone(&builds)));
+                let request = RequestContext {
+                    service,
+                    method: Method::Get,
+                    path: format!("/databases/(default)/documents/{id}/item"),
+                    auth: None,
+                    resource: None,
+                    request_resource: None,
+                    time_unix_nanos: 0,
+                    abstract_path: false,
+                    request_query: None,
+                };
+                for (tree, allowed) in [(retained_tree, id == "yes"), (replaced_tree, id == "no")] {
+                    assert_generation_report(tree, &request, allowed);
+                }
+            };
+            if parallel {
+                std::thread::scope(|threads| {
+                    threads.spawn(|| check("yes"));
+                    threads.spawn(|| check("no"));
+                });
+            } else {
+                check(value);
+                check(if value == "yes" { "no" } else { "yes" });
+            }
+            assert_eq!(
+                builds.load(Ordering::Relaxed),
+                2,
+                "evaluations and publication reuse plans"
+            );
+        }
+    }
 
     #[test]
     fn cloned_rules_keep_diagnostics_and_publications_independent() {

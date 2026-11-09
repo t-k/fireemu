@@ -206,6 +206,7 @@ export const RUNS = [
   rtdbRun("R32", "sdk-tokens", ["RTDB-sdk-tokens-comparison.json"]),
   rtdbRun("R33", "sdk-rules-load", ["RTDB-sdk-rules-load-comparison.json"]),
   rtdbRun("R34", "breadth", ["RTDB-breadth-comparison.json"]),
+  rtdbRun("R35", "sdk-rules-syntax", ["RTDB-sdk-rules-syntax-comparison.json"]),
   laneRun(
     "R1",
     "fs-query-index-comparison-v1",
@@ -1142,21 +1143,67 @@ function parseUniqueJson(text) {
 const isPlainObject = (value) =>
   value !== null && typeof value === "object" && !Array.isArray(value);
 
+/** The slash-led words the strict `fireemu exec` banner of the historical replay prints. */
+const DAEMON_LOG_ROUTES = new Set(["/", "/health/live", "/v1/rules"]);
+const LOOPBACK_URL = /^http:\/\/127\.0\.0\.1:\d{1,5}(?:\/[\w-][\w.-]*)*\/?$/;
+
+const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 /**
  * The historical judge requires absolute paths at these root binding fields, so only they leave
- * the public evidence check. Everything else in the binding is still checked.
+ * the public evidence check. Everything else in the binding is still checked. The judge also
+ * requires the daemon's banner (`daemonLog`), which names the config file and `<cwd>/firebase.json`;
+ * only those exempt paths, matched whole (longest first), preceded by a line start or whitespace
+ * and followed by the end of the log, whitespace or a colon that ends a word, are masked there; any
+ * other word left in the banner that holds a slash, a backslash or a leading tilde must be one of
+ * its routes or a loopback URL.
  */
 function withoutHistoricalBindingPaths(comparison) {
   if (!isPlainObject(comparison) || !isPlainObject(comparison.profileBinding)) return comparison;
-  const { cwd, argv, binary, config, indexes, ...binding } = comparison.profileBinding;
+  const { cwd, argv, binary, config, indexes, daemonLog, ...binding } = comparison.profileBinding;
   const withoutPaths = (value, ...names) =>
     isPlainObject(value)
       ? Object.fromEntries(Object.entries(value).filter(([name]) => !names.includes(name)))
       : value;
+  const exemptPaths = [
+    cwd,
+    typeof cwd === "string" ? `${cwd}/firebase.json` : undefined,
+    ...(Array.isArray(argv) ? argv : []),
+    binary?.path,
+    config?.path,
+    config?.sourcePath,
+    indexes?.path,
+    indexes?.sourcePath,
+  ]
+    .filter((path) => typeof path === "string" && path.startsWith("/") && path.length > 1)
+    .sort((left, right) => right.length - left.length);
+  const maskedLog =
+    typeof daemonLog === "string" && exemptPaths.length > 0
+      ? daemonLog.replace(
+          new RegExp(
+            `(?<=^|\\s)(?:${exemptPaths.map(escapeRegExp).join("|")})(?=$|\\s|:(?:\\s|$))`,
+            "gm",
+          ),
+          "<binding-path>",
+        )
+      : daemonLog;
+  if (typeof maskedLog === "string") {
+    // The generic guard recognises only some path forms inside prose, so the banner fails closed:
+    // after masking, every word holding a slash, a backslash or a leading tilde must be one of the
+    // banner's routes or a loopback URL.
+    for (const word of maskedLog.split(/\s+/)) {
+      // Only punctuation at the edges of a word is prose; inside a word it may be part of a name.
+      const trimmed = word.replace(/^[([]+/, "").replace(/[)\];,.:]+$/, "");
+      if (!/[\\/]|^~/.test(trimmed)) continue;
+      if (DAEMON_LOG_ROUTES.has(trimmed) || LOOPBACK_URL.test(trimmed)) continue;
+      throw new Error("public evidence contains a disallowed filesystem path in daemonLog");
+    }
+  }
   return {
     ...comparison,
     profileBinding: {
       ...binding,
+      ...(daemonLog === undefined ? {} : { daemonLog: maskedLog }),
       cwd: typeof cwd === "string" ? undefined : cwd,
       argv: Array.isArray(argv) ? argv.filter((item) => typeof item !== "string") : argv,
       binary: withoutPaths(binary, "path"),
@@ -1574,6 +1621,7 @@ export function judge(comparison, observations, context) {
       R32: "sdk-tokens",
       R33: "sdk-rules-load",
       R34: "breadth",
+      R35: "sdk-rules-syntax",
     };
     return judgeRtdbExport(
       comparison.runIds[0] === "R22" &&

@@ -13,6 +13,23 @@ pub struct Span {
     pub offset: usize,
 }
 
+/// How the evaluator treats a half of a surrogate pair, which the compatibility profile decides.
+///
+/// A string is read by UTF-16 unit, so `"é🔥x"[1]` and `"é🔥x"[1:2]` are half of an emoji. The
+/// official emulator keeps that half as the lone unit `"\ud83d"` writes, so the two are equal.
+/// Production recorded `false` for `"é🔥x"[1] == "\ud83d"` (`string-escape#esc-high`), and
+/// `"\ud83d" == "\ufffd"` is false there too, so it holds the half as U+FFFD. Regular
+/// expression patterns and replacements that hold a lone surrogate are an error in production
+/// (`regex#rep-hi`, `split-hi`, `m-hi-lit`), where the official emulator matches them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LoneSurrogates {
+    /// Production: a half cut from a pair is U+FFFD; a lone surrogate in a pattern is an error.
+    #[default]
+    Production,
+    /// The official emulator: a half cut from a pair is the lone unit an escape writes.
+    Official,
+}
+
 /// A parsed ruleset.
 #[derive(Debug, Clone)]
 pub struct Ruleset {
@@ -21,6 +38,7 @@ pub struct Ruleset {
     /// Services.
     pub services: Vec<Service>,
     pub(crate) value_dependencies: ValueDependencies,
+    pub(crate) lone_surrogates: LoneSurrogates,
     pub(crate) function_scopes: Vec<Arc<crate::scope::ServiceScopes>>,
 }
 
@@ -29,6 +47,7 @@ impl PartialEq for Ruleset {
         self.version == other.version
             && self.services == other.services
             && self.value_dependencies == other.value_dependencies
+            && self.lone_surrogates == other.lone_surrogates
     }
 }
 
@@ -54,6 +73,19 @@ impl ValueDependencies {
 }
 
 impl Ruleset {
+    /// What a lone surrogate escape in a rule string is.
+    #[must_use]
+    pub const fn lone_surrogates(&self) -> LoneSurrogates {
+        self.lone_surrogates
+    }
+
+    /// This ruleset with `mode` as the meaning of a lone surrogate escape.
+    #[must_use]
+    pub fn with_lone_surrogates(mut self, mode: LoneSurrogates) -> Self {
+        self.lone_surrogates = mode;
+        self
+    }
+
     /// Returns the document-shaped values any expression in this ruleset may read.
     #[must_use]
     pub const fn value_dependencies(&self) -> ValueDependencies {
@@ -203,6 +235,9 @@ pub enum Literal {
     Float(f64),
     /// String.
     Str(String),
+    /// A string that holds a lone surrogate written as an escape (`"\ud83d"`): its UTF-16
+    /// units, never well-formed.
+    IllFormedStr(Vec<u16>),
 }
 
 /// Unary operators.

@@ -1,0 +1,1004 @@
+{
+  "kind": "rtdb-production-comparison-v1",
+  "parent": "RTDB",
+  "comparison": "sdk-rules-syntax",
+  "conditions": [
+    "RTDB/rules-query-and-call-syntax"
+  ],
+  "production": {
+    "recording": "RTDB-RULES-SYNTAX-20261108-01",
+    "project": "fireemu-oracle-query",
+    "instance": "fireemu-q-rtdb2",
+    "recordedOn": "2026-11-08",
+    "suite": "rules-syntax",
+    "observations": 86,
+    "requests": {
+      "requests": 112,
+      "direct": 108,
+      "reserve": 4,
+      "adc": 1,
+      "overflow": 0
+    },
+    "scriptSha256": "da6c81d21ea82cafca72fc1c8f188ea466c7bcdad647086ef1cef4468805f036",
+    "sourceHead": "1015a3a5351bcbb3906833c0efbdb88c0b7e3cdc",
+    "packetSha256": "cda5e412a22b023de14764e7316153dd9d399aca338bf5515b3dd9e896647bb5",
+    "approvals": [
+      2352,
+      2353,
+      2354
+    ],
+    "sandboxLedger": {
+      "booking": 1280,
+      "close": 1281
+    }
+  },
+  "fixture": {
+    "path": "tools/sdk-smoke-database/fixtures/production-sdk-rules-syntax.json",
+    "sha256": "e146553efaa6c6888f8dee22ca7588d3e2e5c6a94014b1c56f69cee960ce10b3"
+  },
+  "tool": [
+    {
+      "path": "tools/sdk-smoke-database/rtdb-sdk-rules-syntax.mjs",
+      "sha256": "b87a0887a5a15fc6f65386bbf6a97dcb5ee2708b9cfc9c95a6cd3e9823015fc8"
+    },
+    {
+      "path": "tools/sdk-smoke-database/rtdb-sdk-rules-syntax-fixture.mjs",
+      "sha256": "661c086aa6118d3e6d96d42261120c576ef806264260c89c6074b319aa7f60df"
+    },
+    {
+      "path": "tools/sdk-smoke-database/rtdb-sdk-rules-syntax-judge.mjs",
+      "sha256": "173d1f3931f984f0b7c5e99733afc0632c17c7cba000dfd52287cd128a58fffd"
+    },
+    {
+      "path": "tools/sdk-smoke-database/sdk-observer/rules-syntax-suite.mjs",
+      "sha256": "29df5c9f18a7fbe132fbf20fa544605467382bea8ac3853bc791a69c555551cc"
+    },
+    {
+      "path": "tools/sdk-smoke-database/sdk-observer/lib.mjs",
+      "sha256": "b571298d32823530a06456a87489cd3090ac3b7a4111418316664fb86e7edcbf"
+    },
+    {
+      "path": "tools/sdk-smoke-database/sdk-observer/observer.mjs",
+      "sha256": "fd1fbacd829502e9aad657a928ce61d1d2b62752000a6d55823ea5b01af353ee"
+    }
+  ],
+  "observerManifestSha256": "da6c81d21ea82cafca72fc1c8f188ea466c7bcdad647086ef1cef4468805f036",
+  "command": "node tools/sdk-smoke-database/rtdb-sdk-rules-syntax.mjs local --fireemu <binary> --out <dir> --profile strict|emulator --against tools/sdk-smoke-database/fixtures/production-sdk-rules-syntax.json",
+  "binding": {
+    "release": "syntax-closure-build",
+    "releaseAsset": "unpublished release-profile build of source commit f1f4949224bb4e2993a3523be6c956470d21e54f (cargo build --release --locked -p fireemu, RUSTC_WRAPPER empty, fresh worktree-local target directory target/syntax-closure)",
+    "releaseAssetSha256": "73572d1346b4a5ad65b3c7350916fe9d5cfef7b3e1fabac246c14bbc58bcfaa8",
+    "sourceCommit": "f1f4949224bb4e2993a3523be6c956470d21e54f",
+    "tagObject": null,
+    "binarySha256": "73572d1346b4a5ad65b3c7350916fe9d5cfef7b3e1fabac246c14bbc58bcfaa8",
+    "version": "fireemu 0.44.0",
+    "toolCommit": "f1f4949224bb4e2993a3523be6c956470d21e54f",
+    "host": "Darwin arm64",
+    "productionRequests": 0
+  },
+  "profiles": {
+    "strict": {
+      "profile": "strict",
+      "binarySha256": "73572d1346b4a5ad65b3c7350916fe9d5cfef7b3e1fabac246c14bbc58bcfaa8",
+      "match": true,
+      "counts": {
+        "MATCH": 86,
+        "MISMATCH": 0,
+        "NEEDS_REVIEW": 0
+      },
+      "rows": [
+        {
+          "profile": "r1-rules-syntax",
+          "case": "seed",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "seed",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "load-eb",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "load-eb",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "eb-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "eb-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "eb-deny-value",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "eb-deny-value",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "eb-deny-endat",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "eb-deny-endat",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "eb-deny-plain",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "eb-deny-plain",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "eb-write-null",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "eb-write-null",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "eb-write-set",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "eb-write-set",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "load-ioc",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "load-ioc",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "ioc-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "ioc-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "ioc-deny-key",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "ioc-deny-key",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "ioc-deny-plain",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "ioc-deny-plain",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "ioc-write-not",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "ioc-write-not",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "ioc-write-is",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "ioc-write-is",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "load-obk",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "load-obk",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "obk-allow-key",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "obk-allow-key",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "obk-plain",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "obk-plain",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "obk-deny-priority",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "obk-deny-priority",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "obk-write",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "obk-write",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "load-obv",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "load-obv",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "obv-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "obv-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "obv-deny-key",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "obv-deny-key",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "obv-deny-plain",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "obv-deny-plain",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "load-obp",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "load-obp",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "obp-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "obp-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "obp-deny-key",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "obp-deny-key",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "obp-deny-plain",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "obp-deny-plain",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "load-enc",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "load-enc",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "enc-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "enc-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "enc-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "enc-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "enc-write",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "enc-write",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "load-mnc",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "load-mnc",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "mnc-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "mnc-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "mnc-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "mnc-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "mnc-anon-null",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "mnc-anon-null",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "mnc-write",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "mnc-write",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "load-mnt",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "load-mnt",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "mnt-string-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "mnt-string-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "mnt-snapshot-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "mnt-snapshot-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "load-tcl",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "load-tcl",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "tcl-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "tcl-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "tcl-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "tcl-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "tcl-write",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "tcl-write",
+          "verdict": "MATCH"
+        }
+      ],
+      "journalSha256": "27129da5acda28c7a54dd02294d4621fce775a338e7470babe78c6e9ff0c325f"
+    },
+    "emulator": {
+      "profile": "emulator",
+      "binarySha256": "73572d1346b4a5ad65b3c7350916fe9d5cfef7b3e1fabac246c14bbc58bcfaa8",
+      "match": true,
+      "counts": {
+        "MATCH": 86,
+        "MISMATCH": 0,
+        "NEEDS_REVIEW": 0
+      },
+      "rows": [
+        {
+          "profile": "r1-rules-syntax",
+          "case": "seed",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "seed",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "load-eb",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "load-eb",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "eb-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "eb-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "eb-deny-value",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "eb-deny-value",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "eb-deny-endat",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "eb-deny-endat",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "eb-deny-plain",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "eb-deny-plain",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "eb-write-null",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "eb-write-null",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "eb-write-set",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "eb-write-set",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "load-ioc",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "load-ioc",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "ioc-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "ioc-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "ioc-deny-key",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "ioc-deny-key",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "ioc-deny-plain",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "ioc-deny-plain",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "ioc-write-not",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "ioc-write-not",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "ioc-write-is",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "ioc-write-is",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "load-obk",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "load-obk",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "obk-allow-key",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "obk-allow-key",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "obk-plain",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "obk-plain",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "obk-deny-priority",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "obk-deny-priority",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "obk-write",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "obk-write",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "load-obv",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "load-obv",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "obv-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "obv-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "obv-deny-key",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "obv-deny-key",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "obv-deny-plain",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "obv-deny-plain",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "load-obp",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "load-obp",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "obp-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "obp-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "obp-deny-key",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "obp-deny-key",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "obp-deny-plain",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "obp-deny-plain",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "load-enc",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "load-enc",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "enc-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "enc-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "enc-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "enc-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "enc-write",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "enc-write",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "load-mnc",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "load-mnc",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "mnc-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "mnc-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "mnc-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "mnc-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "mnc-anon-null",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "mnc-anon-null",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "mnc-write",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "mnc-write",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "load-mnt",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "load-mnt",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "mnt-string-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "mnt-string-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "mnt-snapshot-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "mnt-snapshot-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "load-tcl",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "load-tcl",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "tcl-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "tcl-allow",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "tcl-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "tcl-deny",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r1-rules-syntax",
+          "case": "tcl-write",
+          "verdict": "MATCH"
+        },
+        {
+          "profile": "r2-rules-syntax",
+          "case": "tcl-write",
+          "verdict": "MATCH"
+        }
+      ],
+      "journalSha256": "27129da5acda28c7a54dd02294d4621fce775a338e7470babe78c6e9ff0c325f"
+    }
+  },
+  "official": {
+    "jar": {
+      "name": "firebase-database-emulator",
+      "version": "4.11.2",
+      "sha256": "b70d99344caf17c98b6f910fa8f6edf32a7c016cb1035e8915f70d38901eb97f"
+    },
+    "fixture": {
+      "path": "tools/sdk-smoke-database/fixtures/jar-sdk-rules-syntax.json",
+      "sha256": "27129da5acda28c7a54dd02294d4621fce775a338e7470babe78c6e9ff0c325f"
+    },
+    "tool": [
+      {
+        "path": "tools/sdk-smoke-database/rtdb-sdk-jar.mjs",
+        "sha256": "066127cfd0336aadbf7519da8d24969a84f086ef9920c9c1ef358e04608967a4"
+      },
+      {
+        "path": "tools/sdk-smoke-database/jar.mjs",
+        "sha256": "2648dbdb0fc0312bd92e61a5ac7f6edb6e36737be003b439884cb666a8885801"
+      }
+    ],
+    "officialVsProduction": {
+      "counts": {
+        "MATCH": 86,
+        "MISMATCH": 0,
+        "NEEDS_REVIEW": 0
+      }
+    },
+    "emulatorVsOfficial": {
+      "counts": {
+        "MATCH": 86,
+        "MISMATCH": 0,
+        "NEEDS_REVIEW": 0
+      },
+      "rows": "all MATCH"
+    },
+    "emulatorDifferencesFromProduction": []
+  }
+}

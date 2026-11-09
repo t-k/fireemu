@@ -18,6 +18,8 @@ use core::fmt;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::value::Piece;
+
 /// Compilation error.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegexError(pub String);
@@ -116,6 +118,9 @@ const PARSE_DEPTH_BUDGET: u64 = 8;
 #[derive(Debug, Clone, PartialEq)]
 enum Node {
     Char(char),
+    /// A lone surrogate unit written in the pattern (the official emulator's reading): it
+    /// matches that unit in the subject and nothing else.
+    LoneUnit(u16),
     Any,
     Class {
         negated: bool,
@@ -320,6 +325,7 @@ type Captures = Vec<Option<(usize, usize)>>;
 #[derive(Debug, Clone)]
 enum AtomicLeaf {
     Char(char),
+    LoneUnit(u16),
     Any,
     Class {
         negated: bool,
@@ -350,6 +356,9 @@ impl PartialEq for Regex {
 
 struct Parser<'a> {
     chars: Vec<char>,
+    /// For a pattern given as pieces: the lone unit each position stands for (the position
+    /// itself holds U+FFFD and is never read as a character).
+    lone_at: Vec<Option<u16>>,
     pos: usize,
     flags: Flags,
     groups: usize,
@@ -366,6 +375,14 @@ impl Parser<'_> {
         let c = self.peek();
         self.pos += 1;
         c
+    }
+
+    /// A lone surrogate cannot be a class member or a range end (no escape names one).
+    fn reject_lone_in_class(&self) -> Result<(), RegexError> {
+        if self.lone_at.get(self.pos - 1).copied().flatten().is_some() {
+            return Err(RegexError("a lone surrogate in a class".into()));
+        }
+        Ok(())
     }
 
     fn parse_alt(&mut self) -> Result<Node, RegexError> {
@@ -466,7 +483,10 @@ impl Parser<'_> {
             '[' => self.parse_class()?,
             '\\' => self.parse_escape(false)?,
             '*' | '+' | '?' => return Err(RegexError(format!("nothing to repeat before {c}"))),
-            other => Node::Char(other),
+            other => match self.lone_at.get(self.pos - 1).copied().flatten() {
+                Some(unit) => Node::LoneUnit(unit),
+                None => Node::Char(other),
+            },
         })
     }
 
@@ -684,6 +704,7 @@ impl Parser<'_> {
             let c = self
                 .bump()
                 .ok_or_else(|| RegexError("unterminated class".into()))?;
+            self.reject_lone_in_class()?;
             if c == ']' && !first {
                 break;
             }
@@ -705,6 +726,7 @@ impl Parser<'_> {
                 let hi = self
                     .bump()
                     .ok_or_else(|| RegexError("unterminated range".into()))?;
+                self.reject_lone_in_class()?;
                 let hi = if hi == '\\' {
                     match self.parse_escape(true)? {
                         Node::Char(ch) => ch,
@@ -734,6 +756,10 @@ fn analyze_node(node: &Node, analyses: &mut HashMap<usize, NodeAnalysis>) -> Nod
         Node::Char(character) => NodeAnalysis {
             deterministic: true,
             single_leaf: Some(AtomicLeaf::Char(*character)),
+        },
+        Node::LoneUnit(unit) => NodeAnalysis {
+            deterministic: true,
+            single_leaf: Some(AtomicLeaf::LoneUnit(*unit)),
         },
         Node::Any => NodeAnalysis {
             deterministic: true,
@@ -796,12 +822,41 @@ fn analyze_node(node: &Node, analyses: &mut HashMap<usize, NodeAnalysis>) -> Nod
 impl Regex {
     /// Compiles a pattern.
     pub fn new(pattern: &str) -> Result<Self, RegexError> {
+        Self::compile(pattern, pattern.chars().collect(), Vec::new())
+    }
+
+    /// Compiles a pattern given as pieces, where a lone surrogate unit is a literal that
+    /// matches that unit alone (the official emulator's reading; production fails the rule).
+    pub(crate) fn from_pieces(pattern: &[Piece]) -> Result<Self, RegexError> {
+        let text: String = pattern
+            .iter()
+            .map(|piece| match piece {
+                Piece::Char(c) => *c,
+                Piece::Lone(_) => char::REPLACEMENT_CHARACTER,
+            })
+            .collect();
+        let lone_at = pattern
+            .iter()
+            .map(|piece| match piece {
+                Piece::Char(_) => None,
+                Piece::Lone(unit) => Some(*unit),
+            })
+            .collect();
+        Self::compile(&text, text.chars().collect(), lone_at)
+    }
+
+    fn compile(
+        pattern: &str,
+        chars: Vec<char>,
+        lone_at: Vec<Option<u16>>,
+    ) -> Result<Self, RegexError> {
         if pattern.len() > 2048 {
             return Err(RegexError("pattern too long".into()));
         }
         check_pattern_nesting(pattern)?;
         let mut p = Parser {
-            chars: pattern.chars().collect(),
+            chars,
+            lone_at,
             pos: 0,
             flags: Flags::default(),
             groups: 0,
@@ -833,7 +888,21 @@ impl Regex {
     /// the one returned by [`Self::is_full_match`].
     #[must_use]
     pub fn full_match_diagnostics(&self, text: &str) -> RegexMatchDiagnostics {
-        let chars: Vec<char> = text.chars().collect();
+        let chars: Vec<u32> = text.chars().map(|c| c as u32).collect();
+        self.full_match_elements(&chars)
+    }
+
+    /// Whether the whole of a string of pieces matches: a lone unit is one element that `.`
+    /// and the complement classes match and no escape, class member or literal names.
+    pub(crate) fn is_full_match_pieces(
+        &self,
+        subject: &[Piece],
+    ) -> Result<bool, RegexRuntimeError> {
+        let elements: Vec<u32> = subject.iter().copied().map(element_of_piece).collect();
+        self.full_match_elements(&elements).result
+    }
+
+    fn full_match_elements(&self, chars: &[u32]) -> RegexMatchDiagnostics {
         let steps = Cell::new(0);
         let depth = Cell::new(0);
         let peak_depth = Cell::new(0);
@@ -847,7 +916,7 @@ impl Regex {
             vec![None; self.groups + 1]
         });
         let ctx = MatchContext {
-            chars: &chars,
+            chars,
             steps: &steps,
             depth: &depth,
             peak_depth: &peak_depth,
@@ -873,8 +942,27 @@ impl Regex {
     /// Replaces every non-overlapping match, expanding `$0` / `$1` ... and `$$` in
     /// `replacement`, as the official runtime's `replace()` does.
     pub fn replace_all(&self, text: &str, replacement: &str) -> Result<String, RegexRuntimeError> {
-        let chars: Vec<char> = text.chars().collect();
-        let mut out = String::new();
+        let subject: Vec<Piece> = text.chars().map(Piece::Char).collect();
+        let replacement: Vec<Piece> = replacement.chars().map(Piece::Char).collect();
+        let replaced = self.replace_all_pieces(&subject, &replacement)?;
+        Ok(replaced
+            .iter()
+            .map(|piece| match piece {
+                Piece::Char(c) => *c,
+                Piece::Lone(_) => char::REPLACEMENT_CHARACTER,
+            })
+            .collect())
+    }
+
+    /// [`Self::replace_all`] over pieces: a lone unit is one element of the subject and may be
+    /// part of the replacement.
+    pub(crate) fn replace_all_pieces(
+        &self,
+        subject: &[Piece],
+        replacement: &[Piece],
+    ) -> Result<Vec<Piece>, RegexRuntimeError> {
+        let chars: Vec<u32> = subject.iter().copied().map(element_of_piece).collect();
+        let mut out: Vec<Piece> = Vec::new();
         let mut i = 0;
         let steps = Cell::new(0);
         let depth = Cell::new(0);
@@ -907,26 +995,37 @@ impl Regex {
             })?;
             match (found, best) {
                 (true, Some((end, groups))) if end > i => {
-                    out.push_str(&expand(replacement, &chars, i, end, &groups));
+                    out.extend(expand(replacement, subject, i, end, &groups));
                     i = end;
                 }
                 (true, Some((end, groups))) => {
                     // Empty match: emit the replacement and advance one char.
-                    out.push_str(&expand(replacement, &chars, i, end, &groups));
-                    if i < chars.len() {
-                        out.push(chars[i]);
+                    out.extend(expand(replacement, subject, i, end, &groups));
+                    if i < subject.len() {
+                        out.push(subject[i]);
                     }
                     i += 1;
                 }
                 _ => {
-                    if i < chars.len() {
-                        out.push(chars[i]);
+                    if i < subject.len() {
+                        out.push(subject[i]);
                     }
                     i += 1;
                 }
             }
         }
         Ok(out)
+    }
+}
+
+/// A lone surrogate unit is an element above every scalar (U+10FFFF), so no escape, class
+/// range or literal in a pattern can name it.
+const LONE_ELEMENT_BASE: u32 = 0x11_0000;
+
+fn element_of_piece(piece: Piece) -> u32 {
+    match piece {
+        Piece::Char(c) => c as u32,
+        Piece::Lone(unit) => LONE_ELEMENT_BASE + u32::from(unit) - 0xD800,
     }
 }
 
@@ -1011,42 +1110,44 @@ fn posix_class_width(characters: &[char], start: usize) -> Option<std::num::NonZ
 
 /// Expands `$0` (the whole match), `$1` .. `$9` (groups) and `$$` (a literal `$`).
 fn expand(
-    replacement: &str,
-    chars: &[char],
+    replacement: &[Piece],
+    subject: &[Piece],
     start: usize,
     end: usize,
     groups: &[Option<(usize, usize)>],
-) -> String {
-    let slice = |lo: usize, hi: usize| chars[lo..hi].iter().collect::<String>();
-    let mut out = String::new();
-    let mut it = replacement.chars().peekable();
-    while let Some(c) = it.next() {
-        if c != '$' {
-            out.push(c);
+) -> Vec<Piece> {
+    let slice = |lo: usize, hi: usize| subject[lo..hi].to_vec();
+    let mut out = Vec::new();
+    let is = |piece: Option<&Piece>, c: char| piece == Some(&Piece::Char(c));
+    let digit = |piece: Option<&Piece>| match piece {
+        Some(Piece::Char(d)) if d.is_ascii_digit() => Some(*d as usize - '0' as usize),
+        _ => None,
+    };
+    let mut it = replacement.iter().peekable();
+    while let Some(piece) = it.next() {
+        if *piece != Piece::Char('$') {
+            out.push(*piece);
             continue;
         }
-        match it.peek().copied() {
-            Some('$') => {
+        if is(it.peek().copied(), '$') {
+            it.next();
+            out.push(Piece::Char('$'));
+        } else if digit(it.peek().copied()).is_some() {
+            let mut n = 0usize;
+            while let Some(d) = digit(it.peek().copied()) {
+                n = n
+                    .checked_mul(10)
+                    .and_then(|value| value.checked_add(d))
+                    .unwrap_or(usize::MAX);
                 it.next();
-                out.push('$');
             }
-            Some(d) if d.is_ascii_digit() => {
-                let mut n = 0usize;
-                while let Some(d) = it.peek().copied().filter(char::is_ascii_digit) {
-                    let digit = d as usize - '0' as usize;
-                    n = n
-                        .checked_mul(10)
-                        .and_then(|value| value.checked_add(digit))
-                        .unwrap_or(usize::MAX);
-                    it.next();
-                }
-                if n == 0 {
-                    out.push_str(&slice(start, end));
-                } else if let Some(Some((lo, hi))) = groups.get(n) {
-                    out.push_str(&slice(*lo, *hi));
-                }
+            if n == 0 {
+                out.extend(slice(start, end));
+            } else if let Some(Some((lo, hi))) = groups.get(n) {
+                out.extend(slice(*lo, *hi));
             }
-            _ => out.push('$'),
+        } else {
+            out.push(Piece::Char('$'));
         }
     }
     out
@@ -1055,7 +1156,7 @@ fn expand(
 /// Everything one match attempt needs: the subject, the step budget, the capture slots and
 /// the pattern-wide flags.
 struct MatchContext<'a> {
-    chars: &'a [char],
+    chars: &'a [u32],
     steps: &'a Cell<u64>,
     depth: &'a Cell<u64>,
     peak_depth: &'a Cell<u64>,
@@ -1161,41 +1262,70 @@ fn chars_equal(a: char, b: char, flags: Flags) -> bool {
             && a.to_lowercase().count() == b.to_lowercase().count())
 }
 
+/// `element` as a scalar, or `None` for a lone surrogate unit.
+fn scalar_of(element: u32) -> Option<char> {
+    char::from_u32(element)
+}
+
+/// A lone unit is in no class range, literal or property; only a complement item (`\D`,
+/// `[:^alpha:]`, `\P{L}`) and a negated class take it.
+fn lone_class_matches(negated: bool, items: &[ClassItem]) -> bool {
+    let found = items.iter().any(|item| {
+        matches!(
+            item,
+            ClassItem::Posix(_, false)
+                | ClassItem::Digit(false)
+                | ClassItem::Word(false)
+                | ClassItem::Space(false)
+                | ClassItem::Named(_, false)
+        )
+    });
+    found != negated
+}
+
+fn element_is_char(actual: u32, expected: char, flags: Flags) -> bool {
+    scalar_of(actual).is_some_and(|actual| chars_equal(actual, expected, flags))
+}
+
+fn element_is_lone_unit(actual: u32, expected: u16) -> bool {
+    actual == LONE_ELEMENT_BASE + u32::from(expected) - 0xD800
+}
+
+fn element_is_any(actual: u32, flags: Flags) -> bool {
+    flags.dot_all || actual != u32::from('\n')
+}
+
+fn element_in_class(actual: u32, negated: bool, items: &[ClassItem], flags: Flags) -> bool {
+    match scalar_of(actual) {
+        Some(c) => class_matches(negated, items, c, flags),
+        None => lone_class_matches(negated, items),
+    }
+}
+
 fn atomic_end(node: &Node, ctx: &MatchContext<'_>, pos: usize) -> Option<usize> {
+    let actual = *ctx.chars.get(pos)?;
     match node {
-        Node::Char(expected) => ctx
-            .chars
-            .get(pos)
-            .is_some_and(|actual| chars_equal(*actual, *expected, ctx.flags))
-            .then_some(pos + 1),
-        Node::Any => ctx
-            .chars
-            .get(pos)
-            .is_some_and(|character| ctx.flags.dot_all || *character != '\n')
-            .then_some(pos + 1),
-        Node::Class { negated, items } => ctx
-            .chars
-            .get(pos)
-            .is_some_and(|character| class_matches(*negated, items, *character, ctx.flags))
-            .then_some(pos + 1),
+        Node::Char(expected) => element_is_char(actual, *expected, ctx.flags).then_some(pos + 1),
+        Node::LoneUnit(expected) => element_is_lone_unit(actual, *expected).then_some(pos + 1),
+        Node::Any => element_is_any(actual, ctx.flags).then_some(pos + 1),
+        Node::Class { negated, items } => {
+            element_in_class(actual, *negated, items, ctx.flags).then_some(pos + 1)
+        }
         _ => None,
     }
 }
 
 fn atomic_leaf_matches(leaf: &AtomicLeaf, ctx: &MatchContext<'_>, pos: usize) -> bool {
+    let Some(actual) = ctx.chars.get(pos).copied() else {
+        return false;
+    };
     match leaf {
-        AtomicLeaf::Char(expected) => ctx
-            .chars
-            .get(pos)
-            .is_some_and(|actual| chars_equal(*actual, *expected, ctx.flags)),
-        AtomicLeaf::Any => ctx
-            .chars
-            .get(pos)
-            .is_some_and(|character| ctx.flags.dot_all || *character != '\n'),
-        AtomicLeaf::Class { negated, items } => ctx
-            .chars
-            .get(pos)
-            .is_some_and(|character| class_matches(*negated, items, *character, ctx.flags)),
+        AtomicLeaf::Char(expected) => element_is_char(actual, *expected, ctx.flags),
+        AtomicLeaf::LoneUnit(expected) => element_is_lone_unit(actual, *expected),
+        AtomicLeaf::Any => element_is_any(actual, ctx.flags),
+        AtomicLeaf::Class { negated, items } => {
+            element_in_class(actual, *negated, items, ctx.flags)
+        }
     }
 }
 
@@ -1223,7 +1353,7 @@ fn deterministic_end(
             DeterministicTask::Match(node) => {
                 charge_step(ctx)?;
                 match node {
-                    Node::Char(_) | Node::Any | Node::Class { .. } => {
+                    Node::Char(_) | Node::LoneUnit(_) | Node::Any | Node::Class { .. } => {
                         let Some(next) = atomic_end(node, ctx, end) else {
                             *ctx.caps.borrow_mut() = original_captures;
                             return Ok(None);
@@ -1317,7 +1447,12 @@ fn match_node(
     }
     charge_step(ctx)?;
     match node {
-        Node::Char(_) | Node::Any | Node::Class { .. } | Node::Start | Node::End => {
+        Node::Char(_)
+        | Node::LoneUnit(_)
+        | Node::Any
+        | Node::Class { .. }
+        | Node::Start
+        | Node::End => {
             unreachable!("deterministic nodes return before recursive matching")
         }
         Node::Group(None, inner) => match_node(inner, ctx, pos, k),

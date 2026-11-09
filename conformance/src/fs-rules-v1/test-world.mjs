@@ -30,6 +30,9 @@ export function createWorld(scenario = {}) {
     rulesets: new Map(),
     releases: new Map(),
     accounts: new Map(),
+    /** Every uid a sign-up handed out, and every document a commit wrote (as last written). */
+    signedUp: new Set(),
+    seeded: new Map(),
     documents: new Map(),
     counter: 0,
     /** The number of writes in each commit, in order. */
@@ -111,6 +114,17 @@ export function createWorld(scenario = {}) {
     return negated ? !value : value;
   }
 
+  /**
+   * FS-RULES differences: whether the `allow get`/`allow list` rule of an `fsr9-` collection lets
+   * the request through. The fake allows whatever has a rule; a test overrides it with
+   * `scenario.diffs({ collection, op })`. It evaluates no Rules expression.
+   */
+  function diffsAllowed(collection, op) {
+    const source = active();
+    if (!source?.includes(`match /${collection}/{id} {`)) return false;
+    return world.scenario.diffs?.({ collection, op }) ?? true;
+  }
+
   const shapeOfQuery = (query) => {
     const from = query?.from?.[0] ?? {};
     return {
@@ -152,9 +166,10 @@ export function createWorld(scenario = {}) {
       if (!Array.isArray(body?.writes)) return { code: 3, status: 400 };
       world.commits.push(body.writes.length);
       for (const write of body.writes) {
-        if (write.update)
+        if (write.update) {
           world.documents.set(relative(write.update.name), write.update.fields ?? {});
-        else if (write.delete) world.documents.delete(relative(write.delete));
+          world.seeded.set(relative(write.update.name), write.update.fields ?? {});
+        } else if (write.delete) world.documents.delete(relative(write.delete));
       }
       return { code: 0, status: 200, body: { writeResults: body.writes.map(() => ({})) } };
     }
@@ -169,6 +184,8 @@ export function createWorld(scenario = {}) {
     if (op === "get") {
       if (!owner && rel.startsWith("fsr8-")) {
         if (!badPathAllowed(rel)) return { code: 7, status: 403 };
+      } else if (!owner && rel.startsWith("fsr9-")) {
+        if (!diffsAllowed(rel.split("/")[0], "get")) return { code: 7, status: 403 };
       } else if (!owner && !readAllowed({})) return { code: 7, status: 403 };
       return world.documents.has(rel)
         ? { code: 0, status: 200, body: { name: names(rel) } }
@@ -179,7 +196,10 @@ export function createWorld(scenario = {}) {
     if (op === "runAggregationQuery" && !body.structuredAggregationQuery?.aggregations?.length)
       return { code: 3, status: 400 };
     const shape = shapeOfQuery(query);
-    if (!owner && !readAllowed(shape)) return { code: 7, status: 403 };
+    const diffs = shape.collectionId?.startsWith("fsr9-");
+    if (!owner && diffs && !diffsAllowed(shape.collectionId, "list"))
+      return { code: 7, status: 403 };
+    if (!owner && !diffs && !readAllowed(shape)) return { code: 7, status: 403 };
     const parent = rel.replace(/:.*$/, "");
     const matches = visible(shape, parent);
     if (op === "runAggregationQuery") {
@@ -343,6 +363,7 @@ export function createWorld(scenario = {}) {
         world.counter += 1;
         const localId = `uid${world.counter}`;
         world.accounts.set(localId, {});
+        world.signedUp.add(localId);
         return json(200, { localId, idToken: `eyJ.token-${localId}.sig`, refreshToken: "refresh" });
       }
       if (!owner) return json(401, {});

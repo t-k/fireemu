@@ -133,45 +133,91 @@ fn fields(seed: i64) -> BTreeMap<String, Value> {
             "tick`slash\\".into(),
             Value::Array(vec![Value::Integer(seed)]),
         ),
+        (
+            "chain".into(),
+            Value::Map(BTreeMap::from([(
+                "level".into(),
+                Value::Map(BTreeMap::from([(
+                    "deep".into(),
+                    Value::Map(BTreeMap::from([("leaf".into(), Value::Integer(seed))])),
+                )])),
+            )])),
+        ),
     ])
 }
 
-fn paths() -> [FieldPath; 6] {
-    [
-        field(&["map"]),
-        field(&["map", "child"]),
-        field(&["map", "sibling"]),
-        field(&["map.child"]),
-        field(&["*"]),
-        field(&["tick`slash\\"]),
-    ]
+/// Segment names that override paths are generated from. Each entry is one segment, so a
+/// dotted name such as `map.child` stays a single literal field.
+const SEGMENT_NAMES: [&str; 10] = [
+    "map",
+    "child",
+    "sibling",
+    "map.child",
+    "*",
+    "tick`slash\\",
+    "chain",
+    "level",
+    "deep",
+    "leaf",
+];
+
+/// Builds an override path from indexes into [`SEGMENT_NAMES`]; one to four segments.
+fn path_for(indexes: &[usize]) -> FieldPath {
+    FieldPath::from_segments(indexes.iter().map(|&index| SEGMENT_NAMES[index])).unwrap()
 }
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(192))]
     #[test]
     fn generated_catalog_changes_preserve_complete_usage(
-        operations in proptest::collection::vec((0u8..5, any::<bool>(), 0usize..6, 0u8..7), 1..40),
+        operations in proptest::collection::vec(
+            (
+                0u8..5,
+                any::<bool>(),
+                proptest::collection::vec(0usize..SEGMENT_NAMES.len(), 1..=4),
+                0u8..7,
+            ),
+            1..40,
+        ),
         seed in -100i64..100,
     ) {
         let mut indexes = IndexSet::default();
         let other = CollectionId::try_new("unrelated").unwrap();
-        let paths = paths();
         let fields = fields(seed);
-        for (operation, unrelated, path, mode) in operations {
+        for (operation, unrelated, segments, mode) in operations {
             let collection = if unrelated { &other } else { &group() };
+            let path = path_for(&segments);
             match operation {
                 0 => indexes.set_default_single_field_indexes(collection, modes(mode)),
-                1 | 2 => indexes.set_single_field_indexes(collection, &paths[path], modes(mode)),
-                3 => { indexes.clear_single_field_override(collection, &paths[path]); },
+                1 | 2 => indexes.set_single_field_indexes(collection, &path, modes(mode)),
+                3 => { indexes.clear_single_field_override(collection, &path); },
                 _ => {
                     indexes = IndexSet::default();
-                    indexes.set_single_field_indexes(collection, &paths[path], modes(mode));
+                    indexes.set_single_field_indexes(collection, &path, modes(mode));
                 }
             }
             assert_usage(&indexes, &fields);
         }
     }
+}
+
+/// An override on the top of a four-level chain must reach the leaf through every
+/// intermediate level, not only through the direct parent.
+#[test]
+fn grandparent_override_is_inherited_through_every_intermediate_level() {
+    let fields = fields(3);
+    let mut indexes = IndexSet::default();
+    indexes.set_single_field_indexes(&group(), &field(&["chain"]), modes(3));
+    for depth in [2usize, 3, 4] {
+        let segments = ["chain", "level", "deep", "leaf"];
+        let path = field(&segments[..depth]);
+        assert_eq!(indexes.single_field_modes(&group(), &path), modes(3));
+        assert_eq!(
+            indexes.single_field_modes(&group(), &path),
+            scan_modes(&indexes, &group(), &path)
+        );
+    }
+    assert_usage(&indexes, &fields);
 }
 
 #[test]
@@ -359,6 +405,46 @@ fn seeded_pairwise_override_cases_match_scan() {
     }
 }
 
+/// Every map container and leaf path in the document, in visit order.
+fn document_field_paths(fields: &BTreeMap<String, Value>) -> Vec<FieldPath> {
+    fn visit(
+        fields: &BTreeMap<String, Value>,
+        segments: &mut Vec<String>,
+        out: &mut Vec<FieldPath>,
+    ) {
+        for (name, value) in fields {
+            segments.push(name.clone());
+            out.push(FieldPath::from_segments(segments.iter().map(String::as_str)).unwrap());
+            if let Value::Map(children) = value {
+                visit(children, segments, out);
+            }
+            segments.pop();
+        }
+    }
+    let mut out = Vec::new();
+    visit(fields, &mut Vec::new(), &mut out);
+    out
+}
+
+const SAMPLES: usize = 7;
+const SELECTION_ITERATIONS: u32 = 20;
+
+/// The original full-scan selection for each path.
+fn scan_selection(indexes: &IndexSet, paths: &[FieldPath]) -> Vec<Modes> {
+    paths
+        .iter()
+        .map(|path| scan_modes(indexes, &group(), path))
+        .collect()
+}
+
+/// The current lookup, which walks up from the exact path to the first override.
+fn lookup_selection(indexes: &IndexSet, paths: &[FieldPath]) -> Vec<Modes> {
+    paths
+        .iter()
+        .map(|path| indexes.single_field_modes(&group(), path))
+        .collect()
+}
+
 fn scaling_catalog(count: usize, same_group: bool) -> IndexSet {
     let mut indexes = IndexSet::default();
     for n in 0..count {
@@ -372,11 +458,65 @@ fn scaling_catalog(count: usize, same_group: bool) -> IndexSet {
     indexes
 }
 
+/// Times the old full scan oracle and the current lookup over the same catalog and paths.
+fn report_selection_timing(
+    indexes: &IndexSet,
+    fields: &BTreeMap<String, Value>,
+    count: usize,
+    same_group: bool,
+) {
+    let selection_paths = document_field_paths(fields);
+    let expected_selection = scan_selection(indexes, &selection_paths);
+    assert_eq!(
+        lookup_selection(indexes, &selection_paths),
+        expected_selection
+    );
+    let mut scan_samples = Vec::new();
+    let mut lookup_samples = Vec::new();
+    let mut scan_checksum = 0usize;
+    let mut lookup_checksum = 0usize;
+    for sample in 0..=SAMPLES {
+        let start = Instant::now();
+        for _ in 0..SELECTION_ITERATIONS {
+            scan_checksum += black_box(scan_selection(
+                black_box(indexes),
+                black_box(&selection_paths),
+            ))
+            .len();
+        }
+        let scan_ns = start.elapsed().as_nanos() / u128::from(SELECTION_ITERATIONS);
+        let start = Instant::now();
+        for _ in 0..SELECTION_ITERATIONS {
+            lookup_checksum += black_box(lookup_selection(
+                black_box(indexes),
+                black_box(&selection_paths),
+            ))
+            .len();
+        }
+        let lookup_ns = start.elapsed().as_nanos() / u128::from(SELECTION_ITERATIONS);
+        if sample > 0 {
+            scan_samples.push(scan_ns);
+            lookup_samples.push(lookup_ns);
+        }
+    }
+    // The loop above runs one warm-up sample plus SAMPLES measured samples.
+    let expected_checksum = selection_paths.len() * SELECTION_ITERATIONS as usize * (SAMPLES + 1);
+    assert_eq!(scan_checksum, expected_checksum);
+    assert_eq!(lookup_checksum, expected_checksum);
+    scan_samples.sort_unstable();
+    lookup_samples.sort_unstable();
+    println!(
+        "selection catalog={count} same_group={same_group} paths={} scan_oracle_ns={} lookup_ns={} scan_samples={scan_samples:?} lookup_samples={lookup_samples:?}",
+        selection_paths.len(),
+        scan_samples[SAMPLES / 2],
+        lookup_samples[SAMPLES / 2]
+    );
+}
+
 /// Run explicitly in release mode. Fixture construction is outside timed sections.
 #[test]
 #[ignore = "release measurement; run alone with --release --ignored --nocapture"]
 fn release_catalog_scaling() {
-    const SAMPLES: usize = 7;
     const USAGE_ITERATIONS: u32 = 100;
     assert!(
         !black_box(cfg!(debug_assertions)),
@@ -390,6 +530,7 @@ fn release_catalog_scaling() {
     for same_group in [false, true] {
         for count in [0, 50, 100, 200, 1_024] {
             let indexes = scaling_catalog(count, same_group);
+            report_selection_timing(&indexes, &fields, count, same_group);
             for scope in [LimitScope::Production, LimitScope::OfficialEmulator] {
                 let expected = IndexSet::default()
                     .document_index_usage_in(&document, &fields, scope)
@@ -434,7 +575,11 @@ fn release_catalog_scaling() {
                 }
                 usage_samples.sort_unstable();
                 commit_samples.sort_unstable();
-                println!("catalog={count} same_group={same_group} scope={scope:?} usage_ns={} commit_500_ns={} usage_samples={usage_samples:?} commit_samples={commit_samples:?} usage={expected:?}", usage_samples[SAMPLES / 2], commit_samples[SAMPLES / 2]);
+                println!(
+                    "catalog={count} same_group={same_group} scope={scope:?} usage_ns={} commit_500_ns={} usage_samples={usage_samples:?} commit_samples={commit_samples:?} usage={expected:?}",
+                    usage_samples[SAMPLES / 2],
+                    commit_samples[SAMPLES / 2]
+                );
             }
         }
     }

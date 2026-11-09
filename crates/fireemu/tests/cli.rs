@@ -1870,7 +1870,7 @@ fn a_deferred_emulator_entry_is_a_notice_unless_only_asks_for_it() {
         r#"{
   "emulators": {
     "firestore": {"port": 8080},
-    "hosting": {"port": 5000},
+    "apphosting": {"port": 5000},
     "pubsub": {"port": 8085},
     "logging": {"port": 4500}
   }
@@ -1882,7 +1882,7 @@ fn a_deferred_emulator_entry_is_a_notice_unless_only_asks_for_it() {
     let out = exec_with(&["--firebase-json", firebase], &["true"]);
     assert!(out.status.success(), "{}", stderr(&out));
     let text = stderr(&out);
-    assert!(text.contains("emulators.hosting"), "{text}");
+    assert!(text.contains("emulators.apphosting"), "{text}");
     assert!(text.contains("deferred"), "{text}");
     // Pub/Sub is now a served service: its firebase.json entry is applied, not a notice.
     assert!(
@@ -1897,11 +1897,11 @@ fn a_deferred_emulator_entry_is_a_notice_unless_only_asks_for_it() {
 
     // Naming one in --only is refused before anything binds; the message names the product.
     let out = exec_with(
-        &["--firebase-json", firebase, "--only", "hosting"],
+        &["--firebase-json", firebase, "--only", "apphosting"],
         &["true"],
     );
     assert_eq!(out.status.code(), Some(2));
-    assert!(stderr(&out).contains("hosting"), "{}", stderr(&out));
+    assert!(stderr(&out).contains("apphosting"), "{}", stderr(&out));
 }
 
 #[test]

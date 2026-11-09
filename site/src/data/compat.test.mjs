@@ -209,3 +209,11 @@ for (const status of ['PRODUCTION_RECORDED', 'OPEN', 'NOT_COMPARED']) {
 		assert.equal(row.conditions[0].status, status);
 	});
 }
+test('Hosting implementation conditions remain unverified in production', () => {
+	const record = closure('HOSTING', ['UNVERIFIED'], { parentStatus: 'IMPLEMENTING' });
+	const [row] = productionAreaRows([record]);
+	assert.equal(row.product, 'Firebase Hosting');
+	assert.equal(row.status, 'In progress');
+	assert.equal(row.verified, 0);
+	assert.equal(verifiedAreaCount([record]), 0);
+});

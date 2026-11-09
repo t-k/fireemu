@@ -18,6 +18,14 @@ pub enum RulesValue {
     Float(f64),
     /// String.
     String(String),
+    /// A string that holds a lone surrogate (written as an escape, or cut out of a pair): its
+    /// UTF-16 units. A `String` cannot hold one, and no well-formed sequence is held here.
+    IllFormed(Vec<u16>),
+    /// One half of a surrogate pair cut out by an index or a range, as production holds it
+    /// (strict profile). Recorded only: it is not the lone unit `"\ud83d"` writes, and a range of
+    /// it has size one. It equals another fragment of the same unit and nothing else, and no
+    /// other operation takes it.
+    Fragment(u16),
     /// List.
     List(Vec<RulesValue>),
     /// `list.toSet()` and the key sets of `map.diff()`: members are unordered and distinct.
@@ -135,7 +143,7 @@ impl RulesValue {
             Self::Bool(_) => "bool",
             Self::Int(_) => "int",
             Self::Float(_) => "float",
-            Self::String(_) => "string",
+            Self::String(_) | Self::IllFormed(_) | Self::Fragment(_) => "string",
             Self::List(_) | Self::PartialList(_) | Self::PartialListAny(_) => "list",
             Self::Set(_) => "set",
             Self::Map(_) | Self::PartialMap(_) | Self::PartialMapExcluding { .. } => "map",
@@ -189,6 +197,8 @@ impl fmt::Display for RulesValue {
             Self::Int(i) => write!(f, "{i}"),
             Self::Float(x) => write!(f, "{x}"),
             Self::String(s) => write!(f, "{s:?}"),
+            Self::IllFormed(units) => write!(f, "{:?}", String::from_utf16_lossy(units)),
+            Self::Fragment(unit) => write!(f, "fragment({unit:#06x})"),
             Self::List(items) => {
                 f.write_str("[")?;
                 for (i, item) in items.iter().enumerate() {
@@ -302,5 +312,64 @@ impl AuthContext {
         m.insert("uid".to_owned(), RulesValue::String(self.uid.clone()));
         m.insert("token".to_owned(), RulesValue::Map(self.token.clone()));
         RulesValue::Map(m)
+    }
+}
+
+/// One position of a Rules string: a character, or a surrogate unit that no pair holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Piece {
+    Char(char),
+    Lone(u16),
+}
+
+impl Piece {
+    pub(crate) fn push_units(self, units: &mut Vec<u16>) {
+        match self {
+            Self::Char(c) => {
+                let mut buffer = [0u16; 2];
+                units.extend_from_slice(c.encode_utf16(&mut buffer));
+            }
+            Self::Lone(unit) => units.push(unit),
+        }
+    }
+}
+
+/// The pieces of a UTF-16 sequence: a pair is one character, an unpaired surrogate is `Lone`.
+pub(crate) fn pieces(units: &[u16]) -> Vec<Piece> {
+    char::decode_utf16(units.iter().copied())
+        .map(|decoded| match decoded {
+            Ok(c) => Piece::Char(c),
+            Err(error) => Piece::Lone(error.unpaired_surrogate()),
+        })
+        .collect()
+}
+
+/// The string those pieces make. A lone high surrogate next to a lone low one is a pair once
+/// they are joined, so the units are decoded again: the value is a `String` whenever the text
+/// is valid, and `IllFormed` (the only form a lone surrogate is held in) otherwise.
+pub(crate) fn string_from_pieces(pieces: &[Piece]) -> RulesValue {
+    let mut units = Vec::with_capacity(pieces.len());
+    for piece in pieces {
+        piece.push_units(&mut units);
+    }
+    match String::from_utf16(&units) {
+        Ok(text) => RulesValue::String(text),
+        Err(_) => RulesValue::IllFormed(units),
+    }
+}
+
+impl RulesValue {
+    /// The UTF-16 units of a string value of either form.
+    pub(crate) fn utf16_units(&self) -> Option<Vec<u16>> {
+        match self {
+            Self::String(text) => Some(text.encode_utf16().collect()),
+            Self::IllFormed(units) => Some(units.clone()),
+            _ => None,
+        }
+    }
+
+    /// A string value from UTF-16 units.
+    pub(crate) fn from_utf16_units(units: &[u16]) -> Self {
+        string_from_pieces(&pieces(units))
     }
 }

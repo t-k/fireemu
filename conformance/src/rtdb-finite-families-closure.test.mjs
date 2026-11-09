@@ -29,6 +29,12 @@ const V043 = {
   binarySha256: "28c8708cd9245eef82c4e4f315f7ddf63fade919800c31f5a873235e9e0a46f2",
 };
 const SDK_EVENTS = "spec/compatibility/closure/evidence/RTDB-sdk-events-comparison.json";
+// The syntax closure build: the same kind of build of the source commit that implements the Rules query and call
+// syntax production was recorded accepting on 2026-11-08 (R13); the other conditions stay on V043.
+const SYNTAX_BUILD = {
+  sourceCommit: "f1f4949224bb4e2993a3523be6c956470d21e54f",
+  binarySha256: "73572d1346b4a5ad65b3c7350916fe9d5cfef7b3e1fabac246c14bbc58bcfaa8",
+};
 const EVENTS_FIXTURE = "tools/sdk-smoke-database/fixtures/production-sdk-events.json";
 
 const closure = () => json(CLOSURE);
@@ -525,6 +531,82 @@ test("the trigger breadth recording binds the production fixture and the local r
   );
   assert.ok(regression);
   assert.equal(regression.rows, 69);
+});
+
+test("the Rules syntax recording of 2026-11-08 binds its fixture, tools, the jar reduction and its own closure build (R13)", () => {
+  const path = `${EV}RTDB-sdk-rules-syntax-comparison.json`;
+  const evidence = json(path);
+  assert.equal(evidence.kind, "rtdb-production-comparison-v1");
+  assert.equal(evidence.parent, "RTDB");
+  assert.equal(evidence.comparison, "sdk-rules-syntax");
+  assert.deepEqual(evidence.conditions, ["RTDB/rules-query-and-call-syntax"]);
+  assert.equal(evidence.production.recording, "RTDB-RULES-SYNTAX-20261108-01");
+  assert.equal(evidence.production.project, "fireemu-oracle-query");
+  assert.deepEqual(evidence.production.requests, {
+    requests: 112,
+    direct: 108,
+    reserve: 4,
+    adc: 1,
+    overflow: 0,
+  });
+  assert.deepEqual(evidence.production.sandboxLedger, { booking: 1280, close: 1281 });
+  assert.equal(evidence.production.observations, 86);
+  assert.equal(evidence.fixture.sha256, sha(evidence.fixture.path));
+  for (const { path: toolPath, sha256 } of evidence.tool)
+    assert.equal(sha(toolPath), sha256, toolPath);
+  for (const { path: toolPath, sha256 } of evidence.official.tool)
+    assert.equal(sha(toolPath), sha256, toolPath);
+  assert.equal(evidence.official.fixture.sha256, sha(evidence.official.fixture.path));
+  assert.equal(evidence.binding.sourceCommit, SYNTAX_BUILD.sourceCommit);
+  assert.equal(evidence.binding.binarySha256, SYNTAX_BUILD.binarySha256);
+  assert.equal(evidence.binding.productionRequests, 0);
+  for (const profile of ["strict", "emulator"]) {
+    const run = evidence.profiles[profile];
+    assert.equal(run.binarySha256, SYNTAX_BUILD.binarySha256, profile);
+    assert.deepEqual(run.counts, { MATCH: 86, MISMATCH: 0, NEEDS_REVIEW: 0 }, profile);
+    assert.equal(run.rows.length, 86);
+    assert.equal(run.match, true);
+    // The closure replay is committed, and the jar reduction is byte for byte the same journal.
+    const replay = `tools/sdk-smoke-database/fixtures/closure-sdk-rules-syntax-${profile}.json`;
+    assert.equal(sha(replay), run.journalSha256, replay);
+    assert.equal(sha(replay), evidence.official.fixture.sha256, replay);
+  }
+  assert.deepEqual(evidence.official.officialVsProduction.counts, {
+    MATCH: 86,
+    MISMATCH: 0,
+    NEEDS_REVIEW: 0,
+  });
+  assert.deepEqual(evidence.official.emulatorDifferencesFromProduction, []);
+  const entry = condition("RTDB/rules-query-and-call-syntax");
+  assert.ok(entry);
+  assert.equal(entry.status, "VERIFIED");
+  assert.equal(entry.source, "spec/compatibility/contract.json#database");
+  assert.equal(entry.evidence.comparisonPath, path);
+  assert.equal(entry.evidence.comparisonSha256, sha(path));
+  assert.equal(entry.evidence.fixturePath, evidence.fixture.path);
+  assert.equal(entry.evidence.fixtureSha256, sha(evidence.fixture.path));
+  assert.equal(entry.evidence.sourceCommit, SYNTAX_BUILD.sourceCommit);
+  assert.equal(entry.evidence.binarySha256, SYNTAX_BUILD.binarySha256);
+  assert.equal(entry.evidence.productionRequests, 0);
+  assert.deepEqual(entry.evidence.rows, { strict: { MATCH: 86 }, emulator: { MATCH: 86 } });
+  for (const profile of ["strict", "emulator"])
+    assert.equal(
+      entry.evidence.closureReplays[profile].sha256,
+      sha(entry.evidence.closureReplays[profile].path),
+    );
+  const jarOnly = entry.evidence.jarOnlyQuerySyntax;
+  assert.equal(jarOnly.fixtureSha256, sha(jarOnly.fixture));
+  assert.equal(jarOnly.productionObserved, false);
+  for (const file of [...entry.evidence.tests, ...jarOnly.tests]) assert.ok(exists(file), file);
+  const regression = closure().integratedRegression.comparisons.find((c) => c.path === path);
+  assert.ok(regression, path);
+  assert.equal(regression.sha256, sha(path));
+  assert.equal(regression.rows, 86);
+  const r13 = closure().scopeDecisions.find((s) => s.id === "R13");
+  assert.equal(r13.amends, "R12");
+  assert.ok(r13.decision.includes("RTDB/rules-query-and-call-syntax"));
+  assert.doesNotMatch(r13.decisionRef, /docs\.local/);
+  assert.equal(closure().parentStatus, "COMPAT_VERIFIED");
 });
 
 test("the trigger gaps the breadth recording closes are gone, and what it leaves is named", () => {

@@ -66,6 +66,8 @@ enum Token {
     Int(i128),
     Float(f64),
     Str(String),
+    /// A string literal that holds a lone surrogate escape.
+    IllFormedStr(Vec<u16>),
     Punct(&'static str),
     Eof,
 }
@@ -75,7 +77,7 @@ impl Token {
         match self {
             Self::Ident(s) => format!("identifier `{s}`"),
             Self::Int(_) | Self::Float(_) => "number".to_owned(),
-            Self::Str(_) => "string".to_owned(),
+            Self::Str(_) | Self::IllFormedStr(_) => "string".to_owned(),
             Self::Punct(p) => format!("`{p}`"),
             Self::Eof => "end of input".to_owned(),
         }
@@ -86,6 +88,13 @@ const PUNCTS: &[&str] = &[
     "==", "!=", "<=", ">=", "&&", "||", "$(", "{", "}", "(", ")", "[", "]", ",", ";", ":", ".",
     "?", "/", "=", "<", ">", "!", "+", "-", "*", "%",
 ];
+
+/// What an `\x`, `\u` or `\U` escape names.
+enum Escape {
+    Char(char),
+    /// A surrogate unit (U+D800 to U+DFFF), which pairs with a neighbour or stays alone.
+    Surrogate(u16),
+}
 
 struct Parser<'a> {
     src: &'a str,
@@ -232,6 +241,8 @@ std::thread_local! { pub(crate) static PARSE_CALLS: core::cell::Cell<usize> = co
 pub fn parse_ruleset(src: &str) -> Result<Ruleset, ParseError> {
     #[cfg(test)]
     PARSE_CALLS.with(|calls| calls.set(calls.get() + 1));
+    #[cfg(test)]
+    let build_observer = crate::scope::BUILD_OBSERVER.with(|active| active.borrow().clone());
     // Production compiles expressions 99 levels deep, which the recursive-descent parser
     // follows through about ten frames a level: more than a request thread's stack holds in a
     // debug build. Loading a ruleset is rare, so the parse gets a thread of its own.
@@ -239,7 +250,11 @@ pub fn parse_ruleset(src: &str) -> Result<Ruleset, ParseError> {
         std::thread::Builder::new()
             .name("rules-parse".to_owned())
             .stack_size(PARSE_STACK_BYTES)
-            .spawn_scoped(scope, || parse_ruleset_on_this_thread(src))
+            .spawn_scoped(scope, || {
+                #[cfg(test)]
+                let _observation = crate::scope::BuildObservation::enter(build_observer);
+                parse_ruleset_on_this_thread(src)
+            })
             .map_or_else(
                 |_| parse_ruleset_on_this_thread(src),
                 |handle| {
@@ -618,39 +633,69 @@ impl<'a> Parser<'a> {
         let start = self.pos;
         self.pos += 1;
         let mut out = String::new();
+        // Set from the first surrogate escape on: the rule reads strings as UTF-16, so
+        // `"\ud83d"` is one lone unit and `"\ud83d\ude00"` one character (recorded in
+        // production: `string-escape#publishes` compiles `"\ud83d"`).
+        let mut units: Option<Vec<u16>> = None;
         loop {
             let Some(c) = self.rest().chars().next() else {
                 self.pos = start;
                 return Err(self.error("unterminated string"));
             };
             self.pos += c.len_utf8();
-            match c {
+            let pushed = match c {
                 '\\' => {
                     let Some(e) = self.rest().chars().next() else {
                         return Err(self.error("unterminated escape"));
                     };
                     self.pos += e.len_utf8();
-                    out.push(match e {
+                    match e {
                         'n' => '\n',
                         't' => '\t',
                         'r' => '\r',
                         '0' => '\0',
-                        'u' | 'x' | 'U' => self.unicode_escape(e)?,
+                        'u' | 'x' | 'U' => match self.unicode_escape(e)? {
+                            Escape::Char(c) => c,
+                            Escape::Surrogate(unit) => {
+                                units
+                                    .get_or_insert_with(|| out.encode_utf16().collect())
+                                    .push(unit);
+                                continue;
+                            }
+                        },
                         '\\' | '\'' | '"' | '/' => e,
                         _ => return Err(self.error(format!("invalid escape `\\{e}`"))),
-                    });
+                    }
                 }
                 '\n' => {
                     return Err(self.error("newline in string"));
                 }
-                c if c == quote => return Ok(Token::Str(out)),
-                c => out.push(c),
+                c if c == quote => {
+                    return Ok(match units {
+                        None => Token::Str(out),
+                        Some(units) => match crate::value::RulesValue::from_utf16_units(&units) {
+                            crate::value::RulesValue::String(text) => Token::Str(text),
+                            crate::value::RulesValue::IllFormed(units) => {
+                                Token::IllFormedStr(units)
+                            }
+                            _ => unreachable!("a string value"),
+                        },
+                    });
+                }
+                c => c,
+            };
+            match units.as_mut() {
+                Some(units) => {
+                    let mut buffer = [0u16; 2];
+                    units.extend_from_slice(pushed.encode_utf16(&mut buffer));
+                }
+                None => out.push(pushed),
             }
         }
     }
 
     /// `\xHH`, `\uHHHH` and `\UHHHHHHHH` inside a string literal.
-    fn unicode_escape(&mut self, kind: char) -> Result<char, ParseError> {
+    fn unicode_escape(&mut self, kind: char) -> Result<Escape, ParseError> {
         let width = match kind {
             'x' => 2,
             'u' => 4,
@@ -666,10 +711,17 @@ impl<'a> Parser<'a> {
                 None => return Err(self.error(format!("`\\{kind}` needs {width} hex digits"))),
             }
         }
-        u32::from_str_radix(&digits, 16)
-            .ok()
-            .and_then(char::from_u32)
-            .ok_or_else(|| self.error(format!("`\\{kind}{digits}` names no character")))
+        let value = u32::from_str_radix(&digits, 16).ok();
+        match value {
+            // A surrogate cannot be a Rust `char`; it is a unit of the string.
+            Some(v) if (0xD800..0xE000).contains(&v) => {
+                Ok(Escape::Surrogate(u16::try_from(v).unwrap_or(0xFFFD)))
+            }
+            Some(v) => char::from_u32(v)
+                .map(Escape::Char)
+                .ok_or_else(|| self.error(format!("`\\{kind}{digits}` names no character"))),
+            None => Err(self.error(format!("`\\{kind}{digits}` names no character"))),
+        }
     }
 
     fn expect_punct(&mut self, p: &'static str) -> Result<(), ParseError> {
@@ -707,6 +759,10 @@ impl<'a> Parser<'a> {
         Ok(false)
     }
 
+    /// The ruleset. A function declared outside every `service` is in a scope of its own that
+    /// encloses each service: it becomes a `match` block with no path around the service's
+    /// items, so the lexical scope plan resolves a name inside such a function against the
+    /// top level only, and a function of the same name inside the service shadows it.
     fn ruleset(&mut self) -> Result<Ruleset, ParseError> {
         let mut version = None;
         if self.eat_ident("rules_version")? {
@@ -725,12 +781,20 @@ impl<'a> Parser<'a> {
             }
         }
         let mut services = Vec::new();
+        let mut top_level = Vec::new();
         loop {
             self.skip_trivia()?;
             if self.pos >= self.src.len() {
                 break;
             }
             let at = self.pos;
+            // Recorded in production: `function` declared after `rules_version` and before
+            // `service` compiles and is called from inside the service (fs-rules-v1 `fn-top`).
+            // After a service is not recorded; it is accepted the same way.
+            if self.eat_ident("function")? {
+                top_level.push(Item::Function(self.function(at)?));
+                continue;
+            }
             if !self.eat_ident("service")? {
                 return Err(self.error("expected `service`"));
             }
@@ -761,10 +825,30 @@ impl<'a> Parser<'a> {
         if services.is_empty() {
             return Err(self.error("expected at least one `service` block"));
         }
+        if !top_level.is_empty() {
+            for service in &mut services {
+                let span = service.span;
+                let inner = Item::Match(MatchBlock {
+                    path: Vec::new(),
+                    items: std::mem::take(&mut service.items),
+                    allows: Vec::new(),
+                    span,
+                });
+                let mut items = top_level.clone();
+                items.push(inner);
+                service.items = vec![Item::Match(MatchBlock {
+                    path: Vec::new(),
+                    items,
+                    allows: Vec::new(),
+                    span,
+                })];
+            }
+        }
         Ok(Ruleset {
             version,
             services,
             value_dependencies: crate::ast::ValueDependencies::default(),
+            lone_surrogates: crate::ast::LoneSurrogates::default(),
             function_scopes: Vec::new(),
         })
     }
@@ -1233,6 +1317,9 @@ impl<'a> Parser<'a> {
             }
             Token::Float(f) => Ok(node!(ExprKind::Literal(Literal::Float(f)))),
             Token::Str(s) => Ok(node!(ExprKind::Literal(Literal::Str(s)))),
+            Token::IllFormedStr(units) => {
+                Ok(node!(ExprKind::Literal(Literal::IllFormedStr(units))))
+            }
             Token::Ident(w) => Ok(match w.as_str() {
                 "true" => node!(ExprKind::Literal(Literal::Bool(true))),
                 "false" => node!(ExprKind::Literal(Literal::Bool(false))),

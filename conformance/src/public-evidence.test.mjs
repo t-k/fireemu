@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
+import { gunzipSync } from "node:zlib";
 
 import * as evidence from "./evidence.mjs";
 import { collectHistoricalReplay } from "./release-strict-regression.mjs";
@@ -196,6 +198,127 @@ test("only the historical comparison root profileBinding bypasses the guard", as
   writeFileSync(summaryPath, bytes);
   writeFileSync(rawPath, JSON.stringify({ profileBinding }));
   await assert.rejects(collectHistoricalReplay(directory, output));
+});
+
+test("the historical daemonLog may name only the binding's own paths", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "public-evidence-daemon-log-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const output = join(directory, "out");
+  mkdirSync(output);
+  const summaryPath = join(directory, "historical-production-comparison.json");
+  writeFileSync(join(directory, "fireemu-historical-production.json"), '{"rows":[]}');
+  const cwd = "/work/fireemu/fireemu/conformance";
+  const config = `${cwd}/.runs/firestore-probe/strict-config-1.json`;
+  // The banner fireemu exec prints, as the strict historical replay records it (v0.45.0 run).
+  const daemonLog = [
+    `note: ${config}: firestore.rules is accepted but never read`,
+    "fireemu exec",
+    `  config:           ${config} (--config); ${cwd}/firebase.json in a parent directory is not loaded`,
+    "  control API:      http://127.0.0.1:64251/v1/  (health: /health/live)",
+    "  profile: strict (behaves like production Firebase where the official emulators do not)",
+    // Every other exempt path, including one with spaces and regex metacharacters.
+    "  binary: /tmp/fireemu-verify.x/fireemu try ✓/bin/fireemu",
+    `  source: ${cwd}/firestore-probe.fireemu.json`,
+    `  indexes: ${cwd}/.runs/firestore-probe/strict-indexes-1.json`,
+    `  cwd: ${cwd}`,
+    "",
+  ].join("\n");
+  const profileBinding = {
+    requestedProfile: "strict",
+    effectiveProfile: "strict",
+    daemonLog,
+    cwd,
+    // A relative argument is not a path the binding publishes, so it masks nothing.
+    argv: ["exec", "--config", config, "--", "node", "Users"],
+    binary: { path: "/tmp/fireemu-verify.x/fireemu try ✓/bin/fireemu" },
+    config: { path: config, sourcePath: `${cwd}/firestore-probe.fireemu.json` },
+    indexes: { path: `${cwd}/.runs/firestore-probe/strict-indexes-1.json` },
+  };
+  const bytes = Buffer.from(JSON.stringify({ profileBinding, rows: [] }));
+  writeFileSync(summaryPath, bytes);
+  await collectHistoricalReplay(directory, output);
+  assert.deepEqual(readFileSync(join(output, "R11-historical-production-comparison.json")), bytes);
+
+  for (const extra of [
+    // Home prefixes are built from parts: published files may not spell them (publication hygiene).
+    `\n  logging: /${"home"}/runner/private.log\n`,
+    `\n  note: /${"Users"}/someone/secret.json\n`,
+    `\n  note: ${cwd}-other/secret.json\n`,
+    // A descendant, a traversal or punctuation after an exempt path is not that path.
+    `\n  note: ${cwd}/private-secret.json\n`,
+    `\n  note: ${cwd}/../secret.json\n`,
+    `\n  note: ${cwd}(other)/secret.json\n`,
+    `\n  note: ${cwd}:other/secret.json\n`,
+    `\n  note: ${config}/secret.json\n`,
+    `\n  note: ${cwd}/firebase.json.bak\n`,
+    // An exempt path inside a longer absolute path is not that path.
+    `\n  note: /tmp${cwd}\n`,
+    `\n  note: /work${cwd}/firebase.json\n`,
+    `\n  note: /tmp${config}: x\n`,
+    // A path the generic prose check does not know, before or after an exempt path.
+    `\n  note: ${cwd} /srv/private.json\n`,
+    `\n  note: ${cwd}\n/srv/private.json\n`,
+    `\n  note: ${cwd}: /srv/private.json\n`,
+    `\n  note: /srv/private.json ${cwd}\n`,
+    `\n  note: (/srv/private.json)\n`,
+    `\n  note: x=/srv/private.json\n`,
+    `\n  note: ${cwd}:/srv/private.json\n`,
+    // Forms the generic prose check misses, next to a colon or not slash-led.
+    "\n  note:/srv/private.json\n",
+    `\n  note: C:/${"Users"}/alice/secret.json\n`,
+    "\n  note: \\\\server\\share\\secret.json\n",
+    "\n  note: ~/secret.json\n",
+    "\n  note: file:///srv/secret.json\n",
+    "\n  note: http://127.0.0.1:1/../srv/secret.json\n",
+    "\n  note: http://example.com/srv\n",
+    // Punctuation inside a name does not split it.
+    "\n  note: /v1/rules,private.json\n",
+    "\n  note: /[secret.json]\n",
+    "\n  note: /health/live;/srv/x\n",
+    "\n  note: (/srv/x)\n",
+    "\n  note: C:\\Users\\someone\\secret.json\n",
+    // Only the exact exempt path is masked: a dot in it matches no other character.
+    "\n  binary: /tmp/fireemu-verifyXx/fireemu try ✓/bin/fireemu\n",
+  ]) {
+    const binding = { ...profileBinding, daemonLog: `${daemonLog}${extra}` };
+    writeFileSync(summaryPath, JSON.stringify({ profileBinding: binding, rows: [] }));
+    await assert.rejects(collectHistoricalReplay(directory, output), extra);
+  }
+  // A daemonLog outside the root profileBinding gets no allowance.
+  writeFileSync(summaryPath, JSON.stringify({ profileBinding, rows: [{ daemonLog }] }));
+  await assert.rejects(collectHistoricalReplay(directory, output));
+});
+
+test("the committed EVENTARC comparison, which R20's export copy reproduces, passes the guard", () => {
+  // R20 copies its export to EVENTARC-comparison.json; the v0.45.0 release job refused that copy.
+  const committed = join(
+    dirname(fileURLToPath(import.meta.url)),
+    "../../spec/compatibility/closure/evidence/EVENTARC-comparison.json.gz",
+  );
+  const bytes = gunzipSync(readFileSync(committed));
+  assert.doesNotThrow(() => evidence.publicEvidenceBytes(bytes));
+});
+
+test("only the EVENTARC recorder's event source and loopback SDK base are exempt", () => {
+  const safe = {
+    sdk: { base: "http://127.0.0.1:64260" },
+    events: [{ source: "//fireemu/recorder/43a83839852f" }],
+  };
+  assert.equal(publicEvidence(safe), safe);
+  for (const unsafe of [
+    { base: "http://127.0.0.1:64260/v1" },
+    { base: "http://localhost:64260" },
+    { base: "https://127.0.0.1:64260" },
+    { base: "http://127.0.0.1:642601" },
+    { endpoint: "http://127.0.0.1:64260" },
+    { source: "//fireemu/recorder/43a83839852" },
+    { source: "//fireemu/recorder/43A83839852F" },
+    { source: "//fireemu/recorder/43a83839852f/x" },
+    { source: "//fireemu/recorder/../../tmp" },
+    { source: `//${"Users"}/someone/secret.json` },
+    { path: "//fireemu/recorder/43a83839852f" },
+  ])
+    assert.throws(() => publicEvidence(unsafe), undefined, JSON.stringify(unsafe));
 });
 
 test("the API exception preserves finite EVENTARC channel query shapes and refuses unsafe queries", () => {

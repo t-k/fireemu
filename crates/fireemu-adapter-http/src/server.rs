@@ -195,17 +195,15 @@ async fn respond(
             let json: Option<serde_json::Value> = if bytes.is_empty() {
                 Some(serde_json::Value::Object(serde_json::Map::new()))
             } else if is_form {
-                // The Firebase SDKs post the token refresh as a form (RFC 6749 style).
-                let mut form = form_to_json(&String::from_utf8_lossy(&bytes));
-                // The Android SDK's camelCase refresh is a JSON shape; a form keeps the
-                // snake_case fields only.
-                if path.starts_with("/securetoken.googleapis.com/") {
-                    if let Some(fields) = form.as_object_mut() {
-                        fields.remove("grantType");
-                        fields.remove("refreshToken");
-                    }
-                }
-                Some(form)
+                Some(form_to_json(
+                    &String::from_utf8_lossy(&bytes),
+                    path.starts_with("/securetoken.googleapis.com/"),
+                ))
+            } else if path.starts_with("/securetoken.googleapis.com/") {
+                // Read fields in wire order so serde_json's RawValue marker remains an ordinary field.
+                serde_json::from_slice(&bytes)
+                    .ok()
+                    .map(|value| ordered_refresh_json(&bytes).unwrap_or(value))
             } else {
                 serde_json::from_slice(&bytes).ok()
             };
@@ -363,16 +361,57 @@ fn finish(
 }
 
 /// `k=v&k=v` (percent-encoded) → JSON object of strings.
-fn form_to_json(text: &str) -> serde_json::Value {
+fn form_to_json(text: &str, refresh: bool) -> serde_json::Value {
     fn decode(s: &str) -> String {
         fireemu_core_types::codec::percent_decode(s, fireemu_core_types::codec::PlusMode::Space)
     }
     let mut map = serde_json::Map::new();
     for kv in text.split('&').filter(|s| !s.is_empty()) {
         let (k, v) = kv.split_once('=').unwrap_or((kv, ""));
-        map.insert(decode(k), serde_json::Value::String(decode(v)));
+        let key = decode(k);
+        let key = if refresh {
+            match key.as_str() {
+                "grantType" => "grant_type",
+                "refreshToken" => "refresh_token",
+                _ => &key,
+            }
+        } else {
+            &key
+        };
+        map.insert(key.to_owned(), serde_json::Value::String(decode(v)));
     }
     serde_json::Value::Object(map)
+}
+
+fn ordered_refresh_json(bytes: &[u8]) -> Option<serde_json::Value> {
+    use serde::de::{Deserializer, MapAccess, Visitor};
+
+    struct RefreshVisitor;
+    impl<'de> Visitor<'de> for RefreshVisitor {
+        type Value = serde_json::Value;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("a JSON object")
+        }
+
+        fn visit_map<M: MapAccess<'de>>(self, mut entries: M) -> Result<Self::Value, M::Error> {
+            let mut fields = serde_json::Map::new();
+            while let Some((key, value)) = entries.next_entry::<String, serde_json::Value>()? {
+                let key = match key.as_str() {
+                    "grantType" => "grant_type",
+                    "refreshToken" => "refresh_token",
+                    _ => &key,
+                };
+                fields.insert(key.to_owned(), value);
+            }
+            Ok(serde_json::Value::Object(fields))
+        }
+    }
+
+    let mut deserializer = serde_json::Deserializer::from_slice(bytes);
+    let value = deserializer.deserialize_map(RefreshVisitor).ok()?;
+    deserializer.end().ok()?;
+    Some(value)
 }
 
 /// Permissive CORS for a loopback test runtime (browser SDKs call these endpoints directly;
@@ -473,6 +512,22 @@ async fn serve_inner(
 mod tests {
     use super::{is_remote_peer, refuses_remote_control};
     use std::net::IpAddr;
+
+    #[test]
+    fn refresh_fields_keep_the_last_wire_value() {
+        for body in [
+            r#"{"refresh_token":"first","refreshToken":"second","refresh_token":"last","grantType":"password","grant_type":"refresh_token"}"#,
+            r#"{"refreshToken":"first","refreshToken":"second","refresh_token":"last","grantType":"password","grant_type":"refresh_token"}"#,
+        ] {
+            let value = super::ordered_refresh_json(body.as_bytes()).unwrap();
+            assert_eq!(value["refresh_token"], "last");
+            assert_eq!(value["grant_type"], "refresh_token");
+        }
+        let value = super::form_to_json("refresh_token=first&refreshToken=second&refresh_token=last&grantType=password&grant_type=refresh_token", true);
+        assert_eq!(value["refresh_token"], "last");
+        assert_eq!(value["grant_type"], "refresh_token");
+        assert!(super::ordered_refresh_json(br"{} trailing").is_none());
+    }
 
     #[test]
     fn only_a_remote_peer_asking_the_control_listener_for_a_control_path_is_refused() {

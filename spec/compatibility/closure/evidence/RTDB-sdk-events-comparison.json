@@ -98,11 +98,11 @@
     },
     {
       "path": "tools/sdk-smoke-database/sdk-observer/lib.mjs",
-      "sha256": "6459e3ecae58a36f0b2037dab03c2490f96d93c707de681cb7e585822d89a7ab"
+      "sha256": "b571298d32823530a06456a87489cd3090ac3b7a4111418316664fb86e7edcbf"
     },
     {
       "path": "tools/sdk-smoke-database/sdk-observer/observer.mjs",
-      "sha256": "4a071f4e19c36e5f528a939cc9a19e7ea57ebdf38fbb89818029b8a89c2e2765"
+      "sha256": "fd1fbacd829502e9aad657a928ce61d1d2b62752000a6d55823ea5b01af353ee"
     },
     {
       "path": "tools/sdk-smoke-database/sdk-observer/actor.mjs",
@@ -126,7 +126,7 @@
     },
     {
       "path": "tools/sdk-smoke-database/sdk-observer/readback.mjs",
-      "sha256": "7e55c364326c690386ed0c7f5f974a8b141e3497ef33cffff1d9eccd75848d33"
+      "sha256": "48649fb2e16b937c9c9b16980d76df82f316359a112995cc4d4d7d33a2267fc3"
     },
     {
       "path": "conformance/src/rtdb-release-replay.mjs",

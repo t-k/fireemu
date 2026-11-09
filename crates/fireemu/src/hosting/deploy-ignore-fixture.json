@@ -15353,8 +15353,8 @@
   {
     "pattern": "PRIVATE.JSON",
     "path": "private.json",
-    "nocase": true,
-    "expected": true
+    "expected": true,
+    "caseSensitive": false
   },
   {
     "pattern": "\\{private\\,public\\}.json",
@@ -15409,8 +15409,8 @@
   {
     "pattern": "[A-Z]*.json",
     "path": "private.json",
-    "nocase": true,
-    "expected": true
+    "expected": true,
+    "caseSensitive": false
   },
   {
     "pattern": "\\{private\\,public\\}\\.json",
@@ -15426,5 +15426,720 @@
     "pattern": "{private,public}\\*.json",
     "path": "private.json",
     "expected": false
+  },
+  {
+    "pattern": "u000-sx.json",
+    "path": "u000-sx.json",
+    "expected": true
+  },
+  {
+    "pattern": "u001-sx.json",
+    "path": "u001-Sx.json",
+    "expected": true,
+    "caseSensitive": false
+  },
+  {
+    "pattern": "u002-sx.json",
+    "path": "u002-Sx.json",
+    "expected": true,
+    "caseSensitive": false
+  },
+  {
+    "pattern": "u003-[s]x.json",
+    "path": "u003-sx.json",
+    "expected": true
+  },
+  {
+    "pattern": "u004-[s]x.json",
+    "path": "u004-Sx.json",
+    "expected": true,
+    "caseSensitive": false
+  },
+  {
+    "pattern": "u005-[s]x.json",
+    "path": "u005-Sx.json",
+    "expected": true,
+    "caseSensitive": false
+  },
+  {
+    "pattern": "u006-[^s]x.json",
+    "path": "u006-sx.json",
+    "expected": false
+  },
+  {
+    "pattern": "u007-[^s]x.json",
+    "path": "u007-Sx.json",
+    "expected": false,
+    "caseSensitive": true
+  },
+  {
+    "pattern": "u008-[^s]x.json",
+    "path": "u008-Sx.json",
+    "expected": false,
+    "caseSensitive": true
+  },
+  {
+    "pattern": "u009-[s-s]x.json",
+    "path": "u009-sx.json",
+    "expected": true
+  },
+  {
+    "pattern": "u010-[s-s]x.json",
+    "path": "u010-Sx.json",
+    "expected": true,
+    "caseSensitive": false
+  },
+  {
+    "pattern": "u011-[s-s]x.json",
+    "path": "u011-Sx.json",
+    "expected": true,
+    "caseSensitive": false
+  },
+  {
+    "pattern": "u012-[^s-s]x.json",
+    "path": "u012-sx.json",
+    "expected": false
+  },
+  {
+    "pattern": "u013-[^s-s]x.json",
+    "path": "u013-Sx.json",
+    "expected": false,
+    "caseSensitive": true
+  },
+  {
+    "pattern": "u014-[^s-s]x.json",
+    "path": "u014-Sx.json",
+    "expected": false,
+    "caseSensitive": true
+  },
+  {
+    "pattern": "u015-ßx.json",
+    "path": "u015-ßx.json",
+    "expected": true
+  },
+  {
+    "pattern": "u016-ßx.json",
+    "path": "u016-SSx.json",
+    "expected": false
+  },
+  {
+    "pattern": "u017-ßx.json",
+    "path": "u017-ẞx.json",
+    "expected": false
+  },
+  {
+    "pattern": "u018-[ß]x.json",
+    "path": "u018-ßx.json",
+    "expected": true
+  },
+  {
+    "pattern": "u019-[ß]x.json",
+    "path": "u019-SSx.json",
+    "expected": false
+  },
+  {
+    "pattern": "u020-[ß]x.json",
+    "path": "u020-ẞx.json",
+    "expected": false
+  },
+  {
+    "pattern": "u021-[^ß]x.json",
+    "path": "u021-ßx.json",
+    "expected": false
+  },
+  {
+    "pattern": "u022-[^ß]x.json",
+    "path": "u022-SSx.json",
+    "expected": false
+  },
+  {
+    "pattern": "u023-[^ß]x.json",
+    "path": "u023-ẞx.json",
+    "expected": true
+  },
+  {
+    "pattern": "u024-[ß-ß]x.json",
+    "path": "u024-ßx.json",
+    "expected": true
+  },
+  {
+    "pattern": "u025-[ß-ß]x.json",
+    "path": "u025-SSx.json",
+    "expected": false
+  },
+  {
+    "pattern": "u026-[ß-ß]x.json",
+    "path": "u026-ẞx.json",
+    "expected": false
+  },
+  {
+    "pattern": "u027-[^ß-ß]x.json",
+    "path": "u027-ßx.json",
+    "expected": false
+  },
+  {
+    "pattern": "u028-[^ß-ß]x.json",
+    "path": "u028-SSx.json",
+    "expected": false
+  },
+  {
+    "pattern": "u029-[^ß-ß]x.json",
+    "path": "u029-ẞx.json",
+    "expected": true
+  },
+  {
+    "pattern": "u030-ſx.json",
+    "path": "u030-ſx.json",
+    "expected": true
+  },
+  {
+    "pattern": "u031-ſx.json",
+    "path": "u031-Sx.json",
+    "expected": false
+  },
+  {
+    "pattern": "u032-ſx.json",
+    "path": "u032-sx.json",
+    "expected": false
+  },
+  {
+    "pattern": "u033-[ſ]x.json",
+    "path": "u033-ſx.json",
+    "expected": true
+  },
+  {
+    "pattern": "u034-[ſ]x.json",
+    "path": "u034-Sx.json",
+    "expected": false
+  },
+  {
+    "pattern": "u035-[ſ]x.json",
+    "path": "u035-sx.json",
+    "expected": false
+  },
+  {
+    "pattern": "u036-[^ſ]x.json",
+    "path": "u036-ſx.json",
+    "expected": false
+  },
+  {
+    "pattern": "u037-[^ſ]x.json",
+    "path": "u037-Sx.json",
+    "expected": true
+  },
+  {
+    "pattern": "u038-[^ſ]x.json",
+    "path": "u038-sx.json",
+    "expected": true
+  },
+  {
+    "pattern": "u039-[ſ-ſ]x.json",
+    "path": "u039-ſx.json",
+    "expected": true
+  },
+  {
+    "pattern": "u040-[ſ-ſ]x.json",
+    "path": "u040-Sx.json",
+    "expected": false
+  },
+  {
+    "pattern": "u041-[ſ-ſ]x.json",
+    "path": "u041-sx.json",
+    "expected": false
+  },
+  {
+    "pattern": "u042-[^ſ-ſ]x.json",
+    "path": "u042-ſx.json",
+    "expected": false
+  },
+  {
+    "pattern": "u043-[^ſ-ſ]x.json",
+    "path": "u043-Sx.json",
+    "expected": true
+  },
+  {
+    "pattern": "u044-[^ſ-ſ]x.json",
+    "path": "u044-sx.json",
+    "expected": true
+  },
+  {
+    "pattern": "u045-Kx.json",
+    "path": "u045-Kx.json",
+    "expected": true
+  },
+  {
+    "pattern": "u046-Kx.json",
+    "path": "u046-kx.json",
+    "expected": false
+  },
+  {
+    "pattern": "u047-Kx.json",
+    "path": "u047-Kx.json",
+    "expected": false
+  },
+  {
+    "pattern": "u048-[K]x.json",
+    "path": "u048-Kx.json",
+    "expected": true
+  },
+  {
+    "pattern": "u049-[K]x.json",
+    "path": "u049-kx.json",
+    "expected": false
+  },
+  {
+    "pattern": "u050-[K]x.json",
+    "path": "u050-Kx.json",
+    "expected": false
+  },
+  {
+    "pattern": "u051-[^K]x.json",
+    "path": "u051-Kx.json",
+    "expected": false
+  },
+  {
+    "pattern": "u052-[^K]x.json",
+    "path": "u052-kx.json",
+    "expected": true
+  },
+  {
+    "pattern": "u053-[^K]x.json",
+    "path": "u053-Kx.json",
+    "expected": true
+  },
+  {
+    "pattern": "u054-[K-K]x.json",
+    "path": "u054-Kx.json",
+    "expected": true
+  },
+  {
+    "pattern": "u055-[K-K]x.json",
+    "path": "u055-kx.json",
+    "expected": false
+  },
+  {
+    "pattern": "u056-[K-K]x.json",
+    "path": "u056-Kx.json",
+    "expected": false
+  },
+  {
+    "pattern": "u057-[^K-K]x.json",
+    "path": "u057-Kx.json",
+    "expected": false
+  },
+  {
+    "pattern": "u058-[^K-K]x.json",
+    "path": "u058-kx.json",
+    "expected": true
+  },
+  {
+    "pattern": "u059-[^K-K]x.json",
+    "path": "u059-Kx.json",
+    "expected": true
+  },
+  {
+    "pattern": "u060-İx.json",
+    "path": "u060-İx.json",
+    "expected": true
+  },
+  {
+    "pattern": "u061-İx.json",
+    "path": "u061-ix.json",
+    "expected": false
+  },
+  {
+    "pattern": "u062-İx.json",
+    "path": "u062-ix.json",
+    "expected": false
+  },
+  {
+    "pattern": "u063-[İ]x.json",
+    "path": "u063-İx.json",
+    "expected": true
+  },
+  {
+    "pattern": "u064-[İ]x.json",
+    "path": "u064-ix.json",
+    "expected": false
+  },
+  {
+    "pattern": "u065-[İ]x.json",
+    "path": "u065-ix.json",
+    "expected": false
+  },
+  {
+    "pattern": "u066-[^İ]x.json",
+    "path": "u066-İx.json",
+    "expected": false
+  },
+  {
+    "pattern": "u067-[^İ]x.json",
+    "path": "u067-ix.json",
+    "expected": true
+  },
+  {
+    "pattern": "u068-[^İ]x.json",
+    "path": "u068-ix.json",
+    "expected": true
+  },
+  {
+    "pattern": "u069-[İ-İ]x.json",
+    "path": "u069-İx.json",
+    "expected": true
+  },
+  {
+    "pattern": "u070-[İ-İ]x.json",
+    "path": "u070-ix.json",
+    "expected": false
+  },
+  {
+    "pattern": "u071-[İ-İ]x.json",
+    "path": "u071-ix.json",
+    "expected": false
+  },
+  {
+    "pattern": "u072-[^İ-İ]x.json",
+    "path": "u072-İx.json",
+    "expected": false
+  },
+  {
+    "pattern": "u073-[^İ-İ]x.json",
+    "path": "u073-ix.json",
+    "expected": true
+  },
+  {
+    "pattern": "u074-[^İ-İ]x.json",
+    "path": "u074-ix.json",
+    "expected": true
+  },
+  {
+    "pattern": "u075-ıx.json",
+    "path": "u075-ıx.json",
+    "expected": true
+  },
+  {
+    "pattern": "u076-ıx.json",
+    "path": "u076-Ix.json",
+    "expected": false
+  },
+  {
+    "pattern": "u077-ıx.json",
+    "path": "u077-ix.json",
+    "expected": false
+  },
+  {
+    "pattern": "u078-[ı]x.json",
+    "path": "u078-ıx.json",
+    "expected": true
+  },
+  {
+    "pattern": "u079-[ı]x.json",
+    "path": "u079-Ix.json",
+    "expected": false
+  },
+  {
+    "pattern": "u080-[ı]x.json",
+    "path": "u080-ix.json",
+    "expected": false
+  },
+  {
+    "pattern": "u081-[^ı]x.json",
+    "path": "u081-ıx.json",
+    "expected": false
+  },
+  {
+    "pattern": "u082-[^ı]x.json",
+    "path": "u082-Ix.json",
+    "expected": true
+  },
+  {
+    "pattern": "u083-[^ı]x.json",
+    "path": "u083-ix.json",
+    "expected": true
+  },
+  {
+    "pattern": "u084-[ı-ı]x.json",
+    "path": "u084-ıx.json",
+    "expected": true
+  },
+  {
+    "pattern": "u085-[ı-ı]x.json",
+    "path": "u085-Ix.json",
+    "expected": false
+  },
+  {
+    "pattern": "u086-[ı-ı]x.json",
+    "path": "u086-ix.json",
+    "expected": false
+  },
+  {
+    "pattern": "u087-[^ı-ı]x.json",
+    "path": "u087-ıx.json",
+    "expected": false
+  },
+  {
+    "pattern": "u088-[^ı-ı]x.json",
+    "path": "u088-Ix.json",
+    "expected": true
+  },
+  {
+    "pattern": "u089-[^ı-ı]x.json",
+    "path": "u089-ix.json",
+    "expected": true
+  },
+  {
+    "pattern": "u090-ςx.json",
+    "path": "u090-ςx.json",
+    "expected": true
+  },
+  {
+    "pattern": "u091-ςx.json",
+    "path": "u091-Σx.json",
+    "expected": true,
+    "caseSensitive": false
+  },
+  {
+    "pattern": "u092-ςx.json",
+    "path": "u092-σx.json",
+    "expected": true,
+    "caseSensitive": false
+  },
+  {
+    "pattern": "u093-[ς]x.json",
+    "path": "u093-ςx.json",
+    "expected": true
+  },
+  {
+    "pattern": "u094-[ς]x.json",
+    "path": "u094-Σx.json",
+    "expected": true,
+    "caseSensitive": false
+  },
+  {
+    "pattern": "u095-[ς]x.json",
+    "path": "u095-σx.json",
+    "expected": true,
+    "caseSensitive": false
+  },
+  {
+    "pattern": "u096-[^ς]x.json",
+    "path": "u096-ςx.json",
+    "expected": false
+  },
+  {
+    "pattern": "u097-[^ς]x.json",
+    "path": "u097-Σx.json",
+    "expected": false,
+    "caseSensitive": true
+  },
+  {
+    "pattern": "u098-[^ς]x.json",
+    "path": "u098-σx.json",
+    "expected": false,
+    "caseSensitive": true
+  },
+  {
+    "pattern": "u099-[ς-ς]x.json",
+    "path": "u099-ςx.json",
+    "expected": true
+  },
+  {
+    "pattern": "u100-[ς-ς]x.json",
+    "path": "u100-Σx.json",
+    "expected": true,
+    "caseSensitive": false
+  },
+  {
+    "pattern": "u101-[ς-ς]x.json",
+    "path": "u101-σx.json",
+    "expected": true,
+    "caseSensitive": false
+  },
+  {
+    "pattern": "u102-[^ς-ς]x.json",
+    "path": "u102-ςx.json",
+    "expected": false
+  },
+  {
+    "pattern": "u103-[^ς-ς]x.json",
+    "path": "u103-Σx.json",
+    "expected": false,
+    "caseSensitive": true
+  },
+  {
+    "pattern": "u104-[^ς-ς]x.json",
+    "path": "u104-σx.json",
+    "expected": false,
+    "caseSensitive": true
+  },
+  {
+    "pattern": "u105-ǅx.json",
+    "path": "u105-ǅx.json",
+    "expected": true
+  },
+  {
+    "pattern": "u106-ǅx.json",
+    "path": "u106-ǆx.json",
+    "expected": true,
+    "caseSensitive": false
+  },
+  {
+    "pattern": "u107-ǅx.json",
+    "path": "u107-Ǆx.json",
+    "expected": true,
+    "caseSensitive": false
+  },
+  {
+    "pattern": "u108-[ǅ]x.json",
+    "path": "u108-ǅx.json",
+    "expected": true
+  },
+  {
+    "pattern": "u109-[ǅ]x.json",
+    "path": "u109-ǆx.json",
+    "expected": true,
+    "caseSensitive": false
+  },
+  {
+    "pattern": "u110-[ǅ]x.json",
+    "path": "u110-Ǆx.json",
+    "expected": true,
+    "caseSensitive": false
+  },
+  {
+    "pattern": "u111-[^ǅ]x.json",
+    "path": "u111-ǅx.json",
+    "expected": false
+  },
+  {
+    "pattern": "u112-[^ǅ]x.json",
+    "path": "u112-ǆx.json",
+    "expected": false,
+    "caseSensitive": true
+  },
+  {
+    "pattern": "u113-[^ǅ]x.json",
+    "path": "u113-Ǆx.json",
+    "expected": false,
+    "caseSensitive": true
+  },
+  {
+    "pattern": "u114-[ǅ-ǅ]x.json",
+    "path": "u114-ǅx.json",
+    "expected": true
+  },
+  {
+    "pattern": "u115-[ǅ-ǅ]x.json",
+    "path": "u115-ǆx.json",
+    "expected": true,
+    "caseSensitive": false
+  },
+  {
+    "pattern": "u116-[ǅ-ǅ]x.json",
+    "path": "u116-Ǆx.json",
+    "expected": true,
+    "caseSensitive": false
+  },
+  {
+    "pattern": "u117-[^ǅ-ǅ]x.json",
+    "path": "u117-ǅx.json",
+    "expected": false
+  },
+  {
+    "pattern": "u118-[^ǅ-ǅ]x.json",
+    "path": "u118-ǆx.json",
+    "expected": false,
+    "caseSensitive": true
+  },
+  {
+    "pattern": "u119-[^ǅ-ǅ]x.json",
+    "path": "u119-Ǆx.json",
+    "expected": false,
+    "caseSensitive": true
+  },
+  {
+    "pattern": "u120-éx.json",
+    "path": "u120-éx.json",
+    "expected": true
+  },
+  {
+    "pattern": "u121-éx.json",
+    "path": "u121-Éx.json",
+    "expected": true,
+    "caseSensitive": false
+  },
+  {
+    "pattern": "u122-éx.json",
+    "path": "u122-Éx.json",
+    "expected": true,
+    "caseSensitive": false
+  },
+  {
+    "pattern": "u123-[é]x.json",
+    "path": "u123-éx.json",
+    "expected": true
+  },
+  {
+    "pattern": "u124-[é]x.json",
+    "path": "u124-Éx.json",
+    "expected": true,
+    "caseSensitive": false
+  },
+  {
+    "pattern": "u125-[é]x.json",
+    "path": "u125-Éx.json",
+    "expected": true,
+    "caseSensitive": false
+  },
+  {
+    "pattern": "u126-[^é]x.json",
+    "path": "u126-éx.json",
+    "expected": false
+  },
+  {
+    "pattern": "u127-[^é]x.json",
+    "path": "u127-Éx.json",
+    "expected": false,
+    "caseSensitive": true
+  },
+  {
+    "pattern": "u128-[^é]x.json",
+    "path": "u128-Éx.json",
+    "expected": false,
+    "caseSensitive": true
+  },
+  {
+    "pattern": "u129-[é-é]x.json",
+    "path": "u129-éx.json",
+    "expected": true
+  },
+  {
+    "pattern": "u130-[é-é]x.json",
+    "path": "u130-Éx.json",
+    "expected": true,
+    "caseSensitive": false
+  },
+  {
+    "pattern": "u131-[é-é]x.json",
+    "path": "u131-Éx.json",
+    "expected": true,
+    "caseSensitive": false
+  },
+  {
+    "pattern": "u132-[^é-é]x.json",
+    "path": "u132-éx.json",
+    "expected": false
+  },
+  {
+    "pattern": "u133-[^é-é]x.json",
+    "path": "u133-Éx.json",
+    "expected": false,
+    "caseSensitive": true
+  },
+  {
+    "pattern": "u134-[^é-é]x.json",
+    "path": "u134-Éx.json",
+    "expected": false,
+    "caseSensitive": true
   }
 ]

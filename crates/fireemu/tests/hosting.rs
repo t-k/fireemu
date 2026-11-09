@@ -374,3 +374,96 @@ fn unselected_or_unsupported_hosting_never_blocks_startup() {
     let (_child, address) = start(&dir, &firebase, "auth");
     assert!(address.is_empty(), "Hosting must not start: {address}");
 }
+
+fn header(reply: &str, name: &str) -> Option<String> {
+    reply
+        .split("\r\n\r\n")
+        .next()
+        .unwrap()
+        .lines()
+        .skip(1)
+        .find_map(|line| {
+            let (key, value) = line.split_once(':')?;
+            key.eq_ignore_ascii_case(name)
+                .then(|| value.trim().to_owned())
+        })
+}
+
+// Review 2026-11-08 Should: a header rule for `/data.json` does not apply to the percent-encoded
+// spelling `/%64ata.json`. File lookup decodes the path while header rules see the raw one, exactly
+// as the pinned superstatic headers middleware does (recorded rows `static` and `encoded-static` of
+// official.json, firebase-tools 15.28.2). Production behaviour for this alias is not recorded.
+#[test]
+fn header_rules_match_the_raw_request_path_like_the_pinned_emulator() {
+    let fixture =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../conformance/hosting-fixtures");
+    let corpus: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(fixture.join("cases.json")).unwrap()).unwrap();
+    let official: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(fixture.join("official.json")).unwrap()).unwrap();
+    let recorded = |id: &str| {
+        official["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["id"] == id)
+            .unwrap()["headers"]
+            .clone()
+    };
+    let (dir, _) = site_fixture(&fixture);
+    let mut hosting = corpus["configs"]["default"].clone();
+    hosting["public"] = dir.join("public").to_string_lossy().to_string().into();
+    let firebase = serde_json::json!({"hosting":hosting,"emulators":emulators()});
+    let (_child, address) = start(&dir, &firebase, "hosting");
+    for (id, target) in [("static", "/data.json"), ("encoded-static", "/%64ata.json")] {
+        let reply = request(&address, target);
+        assert!(reply.starts_with("HTTP/1.1 200"), "{id}: {reply}");
+        let expected = recorded(id);
+        for name in ["x-fixture", "cache-control"] {
+            assert_eq!(
+                header(&reply, name).as_deref(),
+                expected[name].as_str(),
+                "{id} {name}: {reply}"
+            );
+        }
+    }
+    // Repeated slashes: minimatch splits on runs of slashes, so the pinned emulator applies the
+    // `/data.json` rule to `//data.json` (measured offline with superstatic 10.0.0's configMatcher;
+    // not a recorded row), and the file route collapses them as well.
+    let reply = request(&address, "//data.json");
+    assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+    let expected = recorded("static");
+    for name in ["x-fixture", "cache-control"] {
+        assert_eq!(
+            header(&reply, name).as_deref(),
+            expected[name].as_str(),
+            "{name}: {reply}"
+        );
+    }
+}
+
+// Review 2026-11-09 Should: `[^S]*.json` hides a file whose name starts with U+00DF (a JavaScript
+// case-insensitive regex does not fold it to `S`), while a name starting with `S` stays served.
+#[test]
+fn a_negated_class_ignore_hides_sharp_s_and_keeps_the_excluded_letter() {
+    let dir = Scratch::new("hosting", "sharp-s");
+    for (name, contents) in [("\u{df}secret.json", "hidden"), ("Ssecret.json", "served")] {
+        let file = dir.join("public").join(name);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(file, contents).unwrap();
+    }
+    let firebase = serde_json::json!({"hosting":{
+        "public":dir.join("public"), "ignore":["[^S]*.json"]
+    },"emulators":emulators()});
+    let (_child, address) = start(&dir, &firebase, "hosting");
+    let hidden = request(&address, "/%C3%9Fsecret.json");
+    assert!(
+        hidden.starts_with("HTTP/1.1 404") && !hidden.ends_with("hidden"),
+        "{hidden}"
+    );
+    let kept = request(&address, "/Ssecret.json");
+    assert!(
+        kept.starts_with("HTTP/1.1 200") && kept.ends_with("served"),
+        "{kept}"
+    );
+}

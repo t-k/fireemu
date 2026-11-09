@@ -3757,7 +3757,7 @@ fn capture_database_references<'a>(
     )
 }
 
-/// [`capture_database_references`] that, given `refuse_over`, refuses the write instead of leaving out a
+/// `capture_database_references` that, given `refuse_over`, refuses the write instead of leaving out a
 /// reference whose snapshot is provably larger than that many bytes (the strict profile's event limit).
 fn capture_database_references_limited<'a>(
     patterns: &[fireemu_core_functions::manifest::DatabasePattern],
@@ -7451,6 +7451,20 @@ while True:
         ));
         assert_eq!(capture(Some(at_bound)).unwrap().0.len(), 2);
         assert_eq!(capture(None).unwrap().0.len(), 2);
+        // a reference over the frame but not over the event limit is still only left out and counted
+        assert_eq!(
+            super::capture_database_references_limited(
+                &patterns,
+                &before,
+                &after,
+                &root,
+                8,
+                at_bound - 1,
+                Some(at_bound),
+            )
+            .unwrap(),
+            (vec![root.child("users").child("b")], 1)
+        );
         // the frame rule is unchanged when nothing is asked: left out and counted
         assert_eq!(
             super::capture_database_references(&patterns, &before, &after, &root, 8, at_bound - 1)
@@ -7982,8 +7996,8 @@ root	unchanged	small	firstGen";
     ) {
         use fireemu_adapter_database::rest::{Database, Handled, HttpRequest, RestOptions};
         use fireemu_adapter_functions::events::DatabaseEventShape;
-        let manifest = json!({"functions":[{"name":"leafCreated","generation":2,"region":"us-central1","trigger":{
-            "type":"database","eventType":"google.firebase.database.ref.v1.created","instance":"*",
+        let manifest = json!({"functions":[{"name":"leafWritten","generation":2,"region":"us-central1","trigger":{
+            "type":"database","eventType":"google.firebase.database.ref.v1.written","instance":"*",
             "ref":"/gl/items/{id}"
         }}]});
         for (shape, strict) in [
@@ -8025,6 +8039,17 @@ root	unchanged	small	firstGen";
             } else {
                 assert_eq!(status, 200, "{body}");
             }
+            // an update of an existing object whose delta is large: the capture bound counts only the
+            // node before when both sides are objects, so it is the runtime's measure of the event that
+            // refuses it
+            assert_eq!(put("l4", 10).0, 200);
+            let (status, body) = put("l4", 2 * 1024 * 1024);
+            if strict {
+                assert_eq!(status, 400);
+                assert!(body.contains("function payload exceeding the maximum size allowed"));
+            } else {
+                assert_eq!(status, 200, "{body}");
+            }
             let tree = database.tree("demo-app-default-rtdb").unwrap();
             assert_eq!(
                 tree.root()
@@ -8050,6 +8075,75 @@ root	unchanged	small	firstGen";
             assert_eq!(response.status, 200);
             runtime.shutdown().await;
         }
+    }
+
+    /// The strict profile refuses, rather than drops, an event larger than a frame, and does it from the
+    /// capture, before any snapshot is exported: a node of about 18 MB that was there before the trigger.
+    #[tokio::test]
+    async fn database_bridge_strict_refuses_a_frame_sized_snapshot_before_exporting_it() {
+        use fireemu_adapter_database::rest::{Database, Handled, HttpRequest, RestOptions};
+        let runtime = database_bridge_runtime_with(
+            &json!({"functions":[{"name":"topChanged","generation":2,"region":"us-central1","trigger":{
+                "type":"database","eventType":"google.firebase.database.ref.v1.written","instance":"*","ref":"/{top}"
+            }}]}),
+        )
+        .await;
+        let mut database = Database::new(RestOptions::default(), 1);
+        let big: serde_json::Map<_, _> = (0..200_000)
+            .map(|n| (format!("k{n:06}"), json!({"v": "x".repeat(70)})))
+            .collect();
+        assert_eq!(
+            database_bridge_write(&mut database, &json!({"big": big})),
+            200
+        );
+        database.set_change_sink(super::database_sink(
+            &runtime,
+            "demo-app",
+            "us-central1",
+            "firebaseio.com",
+        ));
+        let started = std::time::Instant::now();
+        let Handled::Response { response, .. } = database.handle(
+            &HttpRequest {
+                method: "PUT".to_owned(),
+                target: "/big/new.json?ns=demo-app-default-rtdb".to_owned(),
+                headers: Vec::new(),
+                body: b"1".to_vec(),
+            },
+            100_000,
+        ) else {
+            panic!("a PUT must not create a stream")
+        };
+        assert_eq!(response.status, 400);
+        assert!(String::from_utf8(response.body)
+            .unwrap()
+            .contains("function payload exceeding the maximum size allowed"));
+        assert!(
+            started.elapsed() < Duration::from_secs(60),
+            "{:?}",
+            started.elapsed()
+        );
+        let Handled::Response { response, .. } = database.handle(
+            &HttpRequest {
+                method: "GET".to_owned(),
+                target: "/big/new.json?ns=demo-app-default-rtdb".to_owned(),
+                headers: Vec::new(),
+                body: Vec::new(),
+            },
+            100_001,
+        ) else {
+            panic!("a GET without a stream header must not create a stream")
+        };
+        assert_eq!(
+            String::from_utf8(response.body).unwrap().trim(),
+            "null",
+            "the refused write is not applied"
+        );
+        assert_eq!(
+            runtime.source_event_accounting().unwrap().reserved_records,
+            0
+        );
+        runtime.shutdown().await;
     }
 
     #[tokio::test]

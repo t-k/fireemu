@@ -64,6 +64,7 @@ const GROUP: &str = "/gp";
 const PRODUCTION: DatabaseEventShape = DatabaseEventShape::Production;
 const OFFICIAL: DatabaseEventShape = DatabaseEventShape::Official;
 
+#[allow(clippy::needless_pass_by_value)]
 fn tree(item: Value) -> Value {
     json!({"gp": {"items": {"p1": item}}})
 }

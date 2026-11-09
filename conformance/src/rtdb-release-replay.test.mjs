@@ -19,6 +19,7 @@ const paths = [
   "sdk-rules-load",
   "sdk-rules-syntax",
   "breadth",
+  "kinds",
   "functions",
   "rest-v033",
 ];
@@ -28,7 +29,10 @@ test("each comparison resolves to its actual local producer and installed binary
     assert.ok(plan, name);
     assert.ok(plan.argv.includes("/installed/fireemu"), name);
     assert.ok(plan.argv[1].startsWith(fileURLToPath(new URL("../../", import.meta.url))), name);
-    assert.ok(plan.argv.includes("local") || ["functions", "breadth"].includes(name), name);
+    assert.ok(
+      plan.argv.includes("local") || ["functions", "breadth", "kinds"].includes(name),
+      name,
+    );
   }
   assert.equal(campaignPlan("unknown", "/installed/fireemu", "/output"), undefined);
   for (const name of ["toString", "__proto__", "constructor"])
@@ -168,6 +172,7 @@ test("campaign selection pins the actual distinct producer scripts", () => {
     "sdk-rules-load": "rtdb-sdk-rules-load.mjs",
     "sdk-rules-syntax": "rtdb-sdk-rules-syntax.mjs",
     breadth: "breadth-local-run.mjs",
+    kinds: "kinds-replay-run.mjs",
     functions: "local-run.mjs",
   };
   for (const [name, script] of Object.entries(expected))
@@ -316,6 +321,7 @@ test("every RTDB campaign binds its recorded fixture and local producer sources"
     "sdk-rules-load",
     "sdk-rules-syntax",
     "breadth",
+    "kinds",
     "functions",
     "smoke",
   ]) {
@@ -771,12 +777,13 @@ test("the closure campaigns replay strict, judge the committed production reduct
     "sdk-rules-load",
     "sdk-rules-syntax",
     "breadth",
+    "kinds",
   ]) {
     const argv = plan(name, "/installed/fireemu", "/output").argv;
     assert.equal(
       argv.includes("local"),
-      name !== "breadth",
-      `${name}: only the breadth producer has no local mode`,
+      !["breadth", "kinds"].includes(name),
+      `${name}: only the Functions producers have no local mode`,
     );
     assert.deepEqual(argv.slice(argv.indexOf("--fireemu")), [
       "--fireemu",
@@ -803,6 +810,19 @@ test("the closure campaigns replay strict, judge the committed production reduct
   } catch (error) {
     assert.match(String(error.message), /fixtures-breadth/);
   }
+  // The kinds fixture is its own directory too (fixtures-kinds).
+  try {
+    const resources = runtimeResources("kinds");
+    assert.ok(Object.hasOwn(resources, "node_modules/firebase-functions/package.json"));
+    assert.equal(
+      resources["index.js"],
+      createHash("sha256")
+        .update(readFileSync(new URL("./rtdb-functions/fixtures-kinds/index.js", import.meta.url)))
+        .digest("hex"),
+    );
+  } catch (error) {
+    assert.match(String(error.message), /fixtures-kinds/);
+  }
   const { sourceResources } = await import("./rtdb-release-replay.mjs");
   for (const [name, suiteFile] of [
     ["sdk-rest", "rest-suite.mjs"],
@@ -826,6 +846,33 @@ test("the closure campaigns replay strict, judge the committed production reduct
       "conformance/src/rtdb-functions/recorded/production-rtdb-breadth.json",
     ),
   );
+  for (const source of [
+    "kinds-replay-run.mjs",
+    "kinds-replay.mjs",
+    "kinds-local-run.mjs",
+    "kinds-compare.mjs",
+    "kinds-mask.mjs",
+  ])
+    assert.ok(
+      Object.keys(sourceResources("kinds")).includes(`conformance/src/rtdb-functions/${source}`),
+      source,
+    );
+  for (const recorded of ["production-rtdb-kinds.json", "production-rtdb-kinds-user-ladder.json"])
+    assert.ok(
+      Object.keys(sourceResources("kinds")).includes(
+        `conformance/src/rtdb-functions/recorded/${recorded}`,
+      ),
+      recorded,
+    );
+  {
+    // The kinds judge is wired in: a directory without the producer's runs is no match.
+    const empty = mkdtempSync(join(tmpdir(), "rtdb-closure-kinds-"));
+    try {
+      assert.equal(adjudicate("kinds", empty).match, false);
+    } finally {
+      rmSync(empty, { recursive: true, force: true });
+    }
+  }
   for (const name of ["rest", "rules", "tokens", "rules-load", "rules-syntax"]) {
     const dir = mkdtempSync(join(tmpdir(), `rtdb-closure-${name}-`));
     try {

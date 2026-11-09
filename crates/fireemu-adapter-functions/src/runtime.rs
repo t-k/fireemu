@@ -2645,6 +2645,24 @@ impl FunctionsRuntime {
         instance: &str,
         location: &str,
     ) -> Vec<fireemu_core_functions::manifest::DatabasePattern> {
+        self.database_capture_triggers(project, instance, location)
+            .into_iter()
+            .map(|(pattern, _)| pattern)
+            .collect()
+    }
+
+    /// The capture patterns with the event kind each deployed trigger accepts, so a capture can tell
+    /// a change that no trigger would receive from one that some trigger would.
+    #[must_use]
+    pub fn database_capture_triggers(
+        &self,
+        project: &str,
+        instance: &str,
+        location: &str,
+    ) -> Vec<(
+        fireemu_core_functions::manifest::DatabasePattern,
+        fireemu_core_functions::manifest::DocumentEvent,
+    )> {
         if project != self.config.project || !self.background_triggers_enabled() {
             return Vec::new();
         }
@@ -2653,9 +2671,9 @@ impl FunctionsRuntime {
             .iter()
             .filter_map(|function| {
                 let Trigger::Database {
+                    event,
                     instance: pattern,
                     reference,
-                    ..
                 } = &function.trigger
                 else {
                     return None;
@@ -2664,7 +2682,7 @@ impl FunctionsRuntime {
                     && (function.generation
                         == fireemu_core_functions::manifest::FunctionGeneration::First
                         || function.region == location))
-                    .then(|| reference.clone())
+                    .then(|| (reference.clone(), *event))
             })
             .collect()
     }

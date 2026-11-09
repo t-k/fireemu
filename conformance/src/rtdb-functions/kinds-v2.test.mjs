@@ -278,3 +278,44 @@ test("a signal or a stop before any answered write does not wait for a tail", as
   assert.equal(result.logs.reads, 0, "no tail read: nothing was answered ok");
   assert.ok(world.deps.clock.now() - before < 300000 + 10000);
 });
+
+test("a stop does not wait for a tail after a signal or an exhausted request budget", async () => {
+  const stopAt = async (arrange) => {
+    const world = makeWorld({
+      scenario: KINDS_V2_SCENARIO,
+      frames: "sent",
+      lagUntil: 300000 + 60000,
+      sdkFailure: "k19",
+      sdkError: "permission_denied",
+    });
+    arrange?.(world);
+    const result = await runBreadth(world.deps);
+    return { reads: result.logs.reads, world, result };
+  };
+  const waited = await stopAt();
+  const signalled = await stopAt((world) => {
+    const write = world.deps.sdk.write;
+    world.deps.sdk.write = async (id) => {
+      if (id === "k19") world.deps.abort.stopped = true;
+      return write(id);
+    };
+  });
+  const broke = await stopAt((world) => {
+    let exhausted = false;
+    world.deps.budget = {
+      get exhausted() {
+        return exhausted;
+      },
+      take() {},
+      startCleanup() {},
+    };
+    const write = world.deps.sdk.write;
+    world.deps.sdk.write = async (id) => {
+      if (id === "k19") exhausted = true;
+      return write(id);
+    };
+  });
+  assert.ok(waited.reads > signalled.reads, `${waited.reads} > ${signalled.reads}`);
+  assert.ok(waited.reads > broke.reads, `${waited.reads} > ${broke.reads}`);
+  assert.equal(signalled.world.events.includes("cleanup user"), true, "cleanup still runs");
+});

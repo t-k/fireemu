@@ -84,7 +84,7 @@ fn tokens(chars: &[char], at: &mut usize, nested: bool) -> Vec<Token> {
 /// stays itself and never meets `S`, U+212A never meets `k`, and U+03C2 meets U+03C3 through U+03A3.
 /// Astral characters are two surrogate units there and never fold.
 fn canonical(ch: char) -> char {
-    if u32::from(ch) > 0xFFFF {
+    if ch.len_utf16() > 1 {
         return ch;
     }
     let mut upper = ch.to_uppercase();
@@ -605,6 +605,38 @@ mod tests {
                 assert!(form.is_ascii(), "{ch:?} folds out of ASCII");
             }
         }
+    }
+    // Every character of a case class matches every other through a one-character class and range,
+    // in both directions (the class holds either the folded form or one of its variants).
+    #[test]
+    fn every_pair_in_a_case_class_matches_through_a_class_in_both_directions() {
+        let mut classes = 0;
+        for (form, members) in canonical_classes() {
+            let class: Vec<char> = std::iter::once(*form)
+                .chain(members.iter().copied())
+                .collect();
+            for first in &class {
+                for second in &class {
+                    for pattern in [format!("[{first}]"), format!("[{first}-{first}]")] {
+                        assert!(
+                            segment(&pattern, &second.to_string(), true, true),
+                            "{pattern} {second:?}"
+                        );
+                        assert!(
+                            !segment(
+                                &pattern.replacen('[', "[^", 1),
+                                &second.to_string(),
+                                true,
+                                true
+                            ),
+                            "{pattern} {second:?}"
+                        );
+                    }
+                }
+            }
+            classes += 1;
+        }
+        assert!(classes > 1000, "only {classes} case classes");
     }
     proptest::proptest! {
         // Reference model: a class matches when some member of its range has the input's canonical form.

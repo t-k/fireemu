@@ -8,6 +8,10 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Changed
+
+- Firestore Listen keeps the documents a target has delivered as one compact key per document instead of a full path, and a full refresh updates that set in place instead of building a second copy of it. With 100,000 documents of 1 KiB, each further target on the same collection costs about 14 MiB instead of 31 MiB, the peak memory of repeated full refreshes of four such targets falls from about 493 MiB to about 415 MiB, and the refreshes take about a third of the time. The frames, their order, resume tokens and target changes are unchanged.
+
 ### Fixed
 
 - Cloud Storage answers every Firebase v0 route that takes an object name (upload in all forms, `PATCH`, `DELETE`, token management) with the same `400` for a path with an empty segment, so no rule sees one through that API; production was recorded for the reads, and the writes follow from that and are not recorded.

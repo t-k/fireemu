@@ -51,12 +51,22 @@ pub fn runtime_message_id(counter: u64) -> String {
     pubsub_message_id(BROKER_SPAN + own)
 }
 
+/// The position, in `0..BROKER_SPAN`, after `count` more runtime-published messages. A caller
+/// keeps one position per session and advances it with this on every path that takes ids, so
+/// the `n`th message after position `p` has the counter `p + n` and the positions repeat only
+/// after `BROKER_SPAN` messages, never earlier at the end of a `u64`.
+#[must_use]
+pub fn next_runtime_position(position: u64, count: u64) -> u64 {
+    let moved = (u128::from(position) + u128::from(count)) % u128::from(BROKER_SPAN);
+    u64::try_from(moved).unwrap_or_default()
+}
+
 /// The multiplier and offset of `session`'s sequence: an affine permutation of the runtime half,
 /// `position -> multiplier * position + offset (mod BROKER_SPAN)`. The multiplier is coprime to
 /// `BROKER_SPAN` (`2^12 * 5^13`), so the map is a bijection and one session never repeats an id
-/// inside `BROKER_SPAN` consecutive counters. Both numbers come from the whole session through
-/// `SplitMix64`, so neighbouring sessions get unrelated multipliers: their sequences are not
-/// shifted copies of each other.
+/// inside `BROKER_SPAN` consecutive counters. Both numbers come from the session folded into a 64-bit key
+/// through `SplitMix64`, so neighbouring sessions get unrelated multipliers: their sequences are
+/// not shifted copies of each other (two sessions can share a key, but only by chance).
 fn session_permutation(session: u128) -> (u128, u128) {
     // The session is below 2^64 in practice; the high half is folded in so that no session is
     // ignored.
@@ -80,11 +90,14 @@ fn session_permutation(session: u128) -> (u128, u128) {
 /// Collision policy. The runtime half holds `BROKER_SPAN` (5 * 10^12) ids, far fewer than the
 /// sessions a daemon can draw, so two different sessions cannot be made disjoint for ever; what
 /// is guaranteed is the following.
-/// - Within one session, `BROKER_SPAN` consecutive counters (counter values are positions
-///   modulo `BROKER_SPAN`, so `0` and `u64::MAX` are valid) give `BROKER_SPAN` different ids; after
-///   that the ids repeat, since the runtime cannot refuse a publish.
-/// - Different sessions get different, unrelated permutations of the half (not rotations of one
-///   sequence), so the chance that two sessions give the same id to their first messages is about
+/// - Within one session, `BROKER_SPAN` consecutive counters (as integers, without wrapping a
+///   `u64`) give `BROKER_SPAN` different ids; after that the ids repeat, since the runtime
+///   cannot refuse a publish. A caller therefore keeps a position below `BROKER_SPAN`, takes
+///   the counters `position + 1..=position + n` and stores [`next_runtime_position`], on every
+///   path that takes ids.
+/// - Different sessions get unrelated permutations of the half (not rotations of one sequence;
+///   the session is folded into a 64-bit key, so two sessions can share one, but only by chance),
+///   so the chance that two sessions give the same id to their first messages is about
 ///   `1 / BROKER_SPAN`, and a collision between the first `n` ids of two sessions is about
 ///   `n^2 / BROKER_SPAN`; it is not impossible.
 /// - A pinned session (`daemon.seed`) is a fixed function of the counter, so a replay repeats its
@@ -354,6 +367,19 @@ mod tests {
         assert_eq!(ids, PINNED_FIRST_IDS.map(str::to_owned));
     }
 
+    /// The position of the runtime's messages advances by the count modulo the span and never
+    /// leaves `0..BROKER_SPAN`, whatever the count.
+    #[test]
+    fn the_position_advances_modulo_the_span() {
+        use super::next_runtime_position as next;
+        assert_eq!(next(0, 0), 0);
+        assert_eq!(next(0, 1), 1);
+        assert_eq!(next(BROKER_SPAN - 1, 1), 0);
+        assert_eq!(next(BROKER_SPAN - 1, 2), 1);
+        assert_eq!(next(7, BROKER_SPAN), 7);
+        assert!(next(BROKER_SPAN - 1, u64::MAX) < BROKER_SPAN);
+    }
+
     proptest! {
         /// Within one session no two of up to a span's counters share an id.
         #[test]
@@ -363,6 +389,27 @@ mod tests {
             gap in 1_u64..BROKER_SPAN,
         ) {
             prop_assert_ne!(in_session(session, first), in_session(session, first + gap));
+        }
+
+        /// Messages taken in calls of any sizes, from any position, including windows that cross
+        /// the end of the span, never repeat an id: the generation (`position + n`) and the
+        /// storage (`next_runtime_position`) agree.
+        #[test]
+        fn calls_of_any_sizes_across_the_end_of_the_span_never_repeat_an_id(
+            session in any::<u128>(),
+            start in prop_oneof![0_u64..1000, BROKER_SPAN - 1000..BROKER_SPAN],
+            sizes in proptest::collection::vec(1_u64..40, 1..30),
+        ) {
+            let mut position = start;
+            let mut seen = HashSet::new();
+            for size in sizes {
+                for n in 1..=size {
+                    let id = in_session(session, position + n);
+                    prop_assert!(seen.insert(id.clone()), "{id} repeated");
+                }
+                position = super::next_runtime_position(position, size);
+                prop_assert!(position < BROKER_SPAN);
+            }
         }
 
         /// Whatever the session and counter, a runtime id is never a broker id.

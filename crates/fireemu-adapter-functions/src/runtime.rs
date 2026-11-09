@@ -729,6 +729,10 @@ struct Inner {
     #[cfg(test)]
     dispatch_candidate_visits: usize,
     next_event: u64,
+    /// Position, in `0..BROKER_SPAN`, of the control publish's message ids (see
+    /// `fireemu_core_types::pubsub_message_id::next_runtime_position`). It is separate from
+    /// `next_event`, which counts every event of the session and must not wrap.
+    message_position: u64,
     epoch: Epoch,
     jobs: Vec<ScheduledJob>,
     /// The retained window of invocation records.
@@ -1596,6 +1600,7 @@ impl FunctionsRuntime {
                 #[cfg(test)]
                 dispatch_candidate_visits: 0,
                 next_event: 0,
+                message_position: 0,
                 epoch: Epoch::initial(),
                 jobs,
                 history: RecordLog::new(MAX_RETAINED_INVOCATIONS),
@@ -3391,23 +3396,26 @@ impl FunctionsRuntime {
             ));
         }
         // The broker draws its ids from the other half of the id space, so this message's id
-        // cannot equal one the broker gives. The session shifts the runtime's own half, so a
-        // restart into another session does not repeat the previous run's ids (the CloudEvent id
-        // is the message id). The ids are counted from the runtime counter without taking
-        // them, so a refusal consumes none.
-        let first = inner.next_event;
-        let ids: Vec<String> = (1..=messages.len() as u64)
+        // cannot equal one the broker gives. The ids follow the session's keyed sequence
+        // (`session_runtime_message_id`), so a restart into another session does not repeat the
+        // previous run's ids (the CloudEvent id is the message id). They are counted from the
+        // message position, which only a publish that takes ids advances: a refusal consumes
+        // none, and every path that takes ids advances the same position.
+        let first = inner.message_position;
+        let message_count = u64::try_from(messages.len()).unwrap_or(u64::MAX);
+        let after =
+            fireemu_core_types::pubsub_message_id::next_runtime_position(first, message_count);
+        let ids: Vec<String> = (1..=message_count)
             .map(|n| {
                 fireemu_core_types::pubsub_message_id::session_runtime_message_id(
                     self.config.session.value(),
-                    first.wrapping_add(n),
+                    first + n,
                 )
             })
             .collect();
-        let message_count = u64::try_from(messages.len()).unwrap_or(u64::MAX);
         if !self.background_triggers_enabled() {
             // The message is accepted and dropped, as Pub/Sub does without a subscriber.
-            inner.next_event = first.saturating_add(message_count);
+            inner.message_position = after;
             return Ok(ids);
         }
         let subject = format!("topics/{topic}");
@@ -3451,14 +3459,12 @@ impl FunctionsRuntime {
             }
         }
         if drafts.is_empty() {
-            inner.next_event = first.saturating_add(message_count);
+            inner.message_position = after;
             return Ok(ids);
         }
         match self.reserve_drafts(EventSource::PubSub, drafts, &mut inner) {
             Ok(reservation) => {
-                // Event ids were drawn after `first`; message ids reuse that range in another
-                // id space, so the counter moves past both.
-                inner.next_event = inner.next_event.max(first.saturating_add(message_count));
+                inner.message_position = after;
                 drop(inner);
                 reservation.publish();
                 self.wake.notify_one();
@@ -7615,34 +7621,73 @@ mod task_completion_tests {
                 vec![expected(session, 1), expected(session, 2)],
                 "session {session}"
             );
-            // The next publish continues after both message ids and the delivery.
+            // The next publish continues after both message ids.
             let next = runtime.publish("jobs", &[json!({"data": "Yw=="})]).unwrap();
             assert!(!ids.contains(&next[0]));
             runtime.shutdown().await;
         }
-        // A counter at the end of u64 wraps instead of overflowing, and still gives distinct ids.
+        // The position wraps at the end of the span, and every id on the way is different.
+        let span = fireemu_core_types::pubsub_message_id::BROKER_SPAN;
         let runtime = runtime_with(&base, &[("a", pubsub_on("jobs"))]);
-        runtime.inner.lock().unwrap().next_event = u64::MAX - 1;
-        let ids = runtime
-            .publish(
-                "nobody",
-                &[
-                    json!({"data": "YQ=="}),
-                    json!({"data": "Yg=="}),
-                    json!({"data": "Yw=="}),
-                ],
-            )
-            .unwrap();
+        runtime.inner.lock().unwrap().message_position = span - 2;
         let session = runtime.config.session.value();
+        let three = [
+            json!({"data": "YQ=="}),
+            json!({"data": "Yg=="}),
+            json!({"data": "Yw=="}),
+        ];
+        let ids = runtime.publish("nobody", &three).unwrap();
         assert_eq!(
             ids,
             vec![
-                expected(session, u64::MAX),
-                expected(session, 0),
-                expected(session, 1)
+                expected(session, span - 1),
+                expected(session, span),
+                expected(session, span + 1)
             ]
         );
+        assert_eq!(runtime.inner.lock().unwrap().message_position, 1);
+        let next = runtime.publish("nobody", &three[..1]).unwrap();
+        assert_eq!(next, vec![expected(session, 2)]);
         runtime.shutdown().await;
+        base.shutdown().await;
+    }
+
+    /// The ids of messages published without a delivery (no subscriber, or triggers off) and
+    /// across the end of the `u64` event counter are all different: the position of a message
+    /// has one definition for generating and for storing.
+    #[tokio::test]
+    async fn control_publish_ids_stay_distinct_across_the_counter_boundary_on_every_path() {
+        let base = runtime().await;
+        for triggers_on in [true, false] {
+            let runtime =
+                runtime_with_session(&base, &[("a", pubsub_on("jobs"))], SessionId::new(42));
+            runtime.set_background_triggers(triggers_on);
+            runtime.inner.lock().unwrap().next_event = u64::MAX - 1;
+            let mut ids = runtime
+                .publish(
+                    "nobody",
+                    &[
+                        json!({"data": "YQ=="}),
+                        json!({"data": "Yg=="}),
+                        json!({"data": "Yw=="}),
+                    ],
+                )
+                .unwrap();
+            for _ in 0..3 {
+                ids.extend(
+                    runtime
+                        .publish("nobody", &[json!({"data": "ZA=="})])
+                        .unwrap(),
+                );
+            }
+            let distinct: std::collections::BTreeSet<&String> = ids.iter().collect();
+            assert_eq!(
+                distinct.len(),
+                ids.len(),
+                "triggers on: {triggers_on}: {ids:?}"
+            );
+            runtime.shutdown().await;
+        }
         base.shutdown().await;
     }
 

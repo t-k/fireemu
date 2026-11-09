@@ -11,7 +11,7 @@ npx fireemu capabilities
 
 ## Unsupported products
 
-Firebase Hosting, App Hosting and Data Connect are not currently supported. Firebase Extensions support is not planned.
+App Hosting and Data Connect are not currently supported. Firebase Extensions support is not planned. Firebase Hosting is served for one site, without a production parity claim; see [Firebase Hosting](../../products/hosting/#not-supported) for what it does not support.
 
 ## Unsupported features
 

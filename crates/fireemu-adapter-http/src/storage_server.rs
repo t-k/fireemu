@@ -372,6 +372,22 @@ async fn respond(
     remote_peer: bool,
     req: Request<Incoming>,
 ) -> Result<Response<StorageBody>, std::io::Error> {
+    if let Err(refusal) = fireemu_core_session::host_guard::admits_request(
+        req.version() == hyper::Version::HTTP_2,
+        req.headers()
+            .get_all(hyper::header::HOST)
+            .iter()
+            .map(hyper::header::HeaderValue::as_bytes),
+    ) {
+        return Ok(Response::builder()
+            .status(StatusCode::FORBIDDEN)
+            .header(
+                "content-type",
+                fireemu_core_session::host_guard::REFUSAL_CONTENT_TYPE,
+            )
+            .body(plain(Bytes::from(refusal.body())))
+            .unwrap_or_else(|_| Response::new(plain(Bytes::new()))));
+    }
     let origin = req
         .headers()
         .get("origin")

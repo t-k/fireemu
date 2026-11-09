@@ -271,6 +271,22 @@ impl Site {
         result
     }
     async fn route(self: Arc<Self>, request: Request<Incoming>) -> Response<Body> {
+        if let Err(refusal) = fireemu_core_session::host_guard::admits_request(
+            request.version() == hyper::Version::HTTP_2,
+            request
+                .headers()
+                .get_all(hyper::header::HOST)
+                .iter()
+                .map(hyper::header::HeaderValue::as_bytes),
+        ) {
+            // DNS rebinding: a page whose name was re-pointed at this listener would read the
+            // site and reach the rewrites' Functions as same-origin.
+            return response(
+                403,
+                refusal.body(),
+                Some(fireemu_core_session::host_guard::REFUSAL_CONTENT_TYPE),
+            );
+        }
         let path = request.uri().path().to_owned();
         let query = request
             .uri()

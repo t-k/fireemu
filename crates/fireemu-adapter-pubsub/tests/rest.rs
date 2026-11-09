@@ -5897,3 +5897,53 @@ async fn the_strict_route_not_found_page_keeps_its_html_content_type() {
     assert_eq!(status, 404);
     assert_eq!(content_types, ["text/html; charset=UTF-8"]);
 }
+
+async fn get_with_host(address: std::net::SocketAddr, path: &str, host: &str) -> String {
+    let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
+    let request = format!("GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
+    stream.write_all(request.as_bytes()).await.unwrap();
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response).await.unwrap();
+    String::from_utf8_lossy(&response).into_owned()
+}
+
+/// DNS rebinding: the REST surface refuses a `Host` that names a public domain in both
+/// profiles; gRPC (HTTP/2) is not checked even when its `:authority` names another host.
+#[tokio::test]
+async fn a_rebound_host_is_refused_over_rest_and_grpc_is_not_checked() {
+    for policy in [
+        fireemu_adapter_pubsub::PagingPolicy::Emulator,
+        fireemu_adapter_pubsub::PagingPolicy::Strict,
+    ] {
+        let address = start_policy(policy).await;
+        let path = "/v1/projects/demo-app/topics";
+        for host in ["evil.example:8085", "pubsub.evil.example."] {
+            let refused = get_with_host(address, path, host).await;
+            assert!(
+                refused.starts_with("HTTP/1.1 403"),
+                "{policy:?} {host}: {refused}"
+            );
+            assert!(refused.contains("network.allowedHosts"), "{refused}");
+        }
+        for host in ["127.0.0.1:8085", "localhost", "10.0.2.2:8085"] {
+            let served = get_with_host(address, path, host).await;
+            assert!(
+                served.starts_with("HTTP/1.1 200"),
+                "{policy:?} {host}: {served}"
+            );
+        }
+        let channel = tonic::transport::Endpoint::from_shared(format!("http://{address}"))
+            .unwrap()
+            .origin("http://pubsub.evil.example:8085".parse().unwrap())
+            .connect()
+            .await
+            .unwrap();
+        let topics = PublisherClient::new(channel)
+            .list_topics(pb::ListTopicsRequest {
+                project: "projects/demo-app".to_owned(),
+                ..Default::default()
+            })
+            .await;
+        assert!(topics.is_ok(), "{policy:?}: {topics:?}");
+    }
+}

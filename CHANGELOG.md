@@ -8,6 +8,10 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Added
+
+- `network.allowedHosts` in `fireemu.toml`: further `Host` names the emulators answer, each a name, a name with a leading dot for a domain and its subdomains, or `"*"` for every name. Add the names your clients use that the defaults do not cover, such as a Kubernetes service, a name in `/etc/hosts` or a tunnel.
+
 ### Changed
 
 - Firestore Listen keeps the documents a target has delivered as one compact key per document instead of a full path, and a full refresh updates that set in place instead of building a second copy of it. With 100,000 documents of 1 KiB, each further target on the same collection costs about 14 MiB instead of 31 MiB, the peak memory of repeated full refreshes of four such targets falls from about 493 MiB to about 415 MiB, and the refreshes take about a third of the time. The frames, their order, resume tokens and target changes are unchanged.
@@ -17,6 +21,10 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 - Hosting `ignore` patterns ignore case the way firebase-tools does on macOS and Windows (a JavaScript regular expression with the `i` flag, as glob 10.5.0 compiles them), not by Rust lower- and uppercase: `[^S]*.json` now hides `ßsecret.json` and `[S]*.json` does not; `ſ`, the Kelvin sign and the dotless and dotted I no longer meet `s`, `k` or `i`; `ς`, `σ` and `Σ` meet each other; classes and ranges compare the character set, not only the input's two case variants. Linux, which is case-sensitive, is unchanged. Checked against 135 new generated rows of the real `listFiles` (3,220 in all).
 - Hosting `headers`, `rewrites` and glob `redirects` sources treat a run of slashes as one, and a pattern also matches a path with one trailing slash, as the pinned superstatic (minimatch) does: `//data.json` now gets the `/data.json` header rule and `/data.json/` matches `/data.json`. A percent-encoded alias such as `/%64ata.json` still does not get the rule, because header and rewrite sources match the raw request path in the pinned emulator (recorded row `encoded-static`); what production does for either alias was not recorded.
+
+### Security
+
+- The product emulators refuse DNS rebinding: an HTTP/1 request whose `Host` names a domain a web page could control is answered `403` on Firestore, Authentication and the control API, Storage, Functions, Eventarc, Cloud Tasks, Pub/Sub, the Realtime Database and Hosting, in both profiles. Before, a page on a rebound name could read Cloud Storage objects through the JSON API as the owner while App Check was `off` or `unenforced` (the defaults), and send credential-less requests to the other emulators. `localhost`, names under `.localhost`, every IP address (including `10.0.2.2` from the Android emulator), `host.docker.internal`, `host.containers.internal` and the Realtime Database's `.firebaseio.com` and `.firebasedatabase.app` names are still answered, and with `network.allowNonLoopbackHosts` single-label names such as a Compose service name too. Requests without `Host` and HTTP/2 (gRPC) are not checked. The official emulator does not check `Host`.
 
 ## [0.46.0] - 2026-11-09
 

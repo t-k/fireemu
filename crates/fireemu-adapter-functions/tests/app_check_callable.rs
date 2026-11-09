@@ -602,6 +602,28 @@ impl Harness {
             .expect("a well-formed support response")
     }
 
+    /// A POST naming `host` in its `Host` header.
+    async fn post_with_host(
+        &self,
+        addr: std::net::SocketAddr,
+        path: &str,
+        body: &[u8],
+        host: &str,
+    ) -> fireemu_adapter_functions::http::ProxiedResponse {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+        let head = format!("POST {path} HTTP/1.1\r\nhost: {host}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n", body.len());
+        let mut stream = tokio::net::TcpStream::connect(addr)
+            .await
+            .expect("the listener accepts");
+        stream.write_all(head.as_bytes()).await.expect("head");
+        stream.write_all(body).await.expect("body");
+        stream.flush().await.expect("flush");
+        let mut raw = Vec::new();
+        let read = stream.read_to_end(&mut raw).await;
+        response_after_read(&raw, read, "POST").expect("a well-formed response")
+    }
+
     async fn raw_to_from(
         &self,
         addr: std::net::SocketAddr,
@@ -2554,4 +2576,70 @@ async fn an_on_request_route_that_fronts_a_consuming_callable_loses_the_token() 
             h.stop().await;
         }
     }
+}
+
+/// DNS rebinding: the Functions, Eventarc and Cloud Tasks listeners refuse a request whose
+/// `Host` names a public domain before any route or function runs, and serve loopback and IP
+/// literal names.
+#[tokio::test]
+async fn the_functions_and_support_listeners_refuse_a_rebound_host() {
+    let h = start(true).await;
+    let eventarc_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind Eventarc");
+    let eventarc_addr = eventarc_listener.local_addr().expect("Eventarc address");
+    let eventarc_server = tokio::spawn(fireemu_adapter_functions::http::serve_eventarc(
+        eventarc_listener,
+        h.runtime.clone(),
+        fireemu_adapter_functions::http::HttpAdmission::new(),
+    ));
+    let tasks_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind Tasks");
+    let tasks_addr = tasks_listener.local_addr().expect("Tasks address");
+    let tasks_server = tokio::spawn(fireemu_adapter_functions::http::serve_tasks(
+        tasks_listener,
+        h.runtime.clone(),
+        fireemu_adapter_functions::http::HttpAdmission::new(),
+    ));
+    for (surface, addr, path, body, served) in [
+        (
+            "functions",
+            h.addr,
+            "/demo-app/us-central1/echo",
+            b"{}".as_slice(),
+            200,
+        ),
+        (
+            "eventarc",
+            eventarc_addr,
+            "/google/publishEvents",
+            br#"{"events":[]}"#.as_slice(),
+            200,
+        ),
+        (
+            "tasks",
+            tasks_addr,
+            "/projects/demo-app/locations/us-central1/queues/taskA",
+            b"{}".as_slice(),
+            404,
+        ),
+    ] {
+        for host in ["evil.example:5001", "functions.evil.example."] {
+            let refused = h.post_with_host(addr, path, body, host).await;
+            assert_eq!(refused.status, 403, "{surface} {host}");
+            assert!(
+                String::from_utf8_lossy(&refused.body).contains("network.allowedHosts"),
+                "{surface}: {}",
+                String::from_utf8_lossy(&refused.body)
+            );
+        }
+        for host in ["127.0.0.1:5001", "localhost", "10.0.2.2:5001"] {
+            let answer = h.post_with_host(addr, path, body, host).await;
+            assert_eq!(answer.status, served, "{surface} {host}");
+        }
+    }
+    eventarc_server.abort();
+    tasks_server.abort();
+    h.stop().await;
 }

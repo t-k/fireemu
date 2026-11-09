@@ -203,12 +203,27 @@ fn failed_hosting_startup_never_publishes_readiness() {
 }
 
 fn start(dir: &std::path::Path, firebase: &serde_json::Value, only: &str) -> (OwnedChild, String) {
+    start_with_config(dir, firebase, only, None)
+}
+
+/// [`start`] with a canonical fireemu configuration document.
+fn start_with_config(
+    dir: &std::path::Path,
+    firebase: &serde_json::Value,
+    only: &str,
+    config: Option<&serde_json::Value>,
+) -> (OwnedChild, String) {
     std::fs::write(dir.join("firebase.json"), firebase.to_string()).unwrap();
     let ready = dir.join("ready.json");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_fireemu"));
+    command.arg("up");
+    if let Some(config) = config {
+        std::fs::write(dir.join("fireemu.json"), config.to_string()).unwrap();
+        command.arg("--config").arg(dir.join("fireemu.json"));
+    }
     let mut child = OwnedChild(
-        Command::new(env!("CARGO_BIN_EXE_fireemu"))
+        command
             .args([
-                "up",
                 "--only",
                 only,
                 "--project",
@@ -466,4 +481,48 @@ fn a_negated_class_ignore_hides_sharp_s_and_keeps_the_excluded_letter() {
         kept.starts_with("HTTP/1.1 200") && kept.ends_with("served"),
         "{kept}"
     );
+}
+
+fn request_as(address: &str, host: &str, target: &str) -> String {
+    let mut stream = TcpStream::connect(address).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    write!(
+        stream,
+        "GET {target} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"
+    )
+    .unwrap();
+    let mut reply = String::new();
+    stream.read_to_string(&mut reply).unwrap();
+    reply
+}
+
+/// DNS rebinding through the shipped CLI: the daemon installs the `Host` policy of its
+/// configuration before it serves. By default a public name is refused and loopback served;
+/// `network.allowedHosts` admits exactly the listed names.
+#[test]
+fn the_daemon_applies_the_configured_host_policy() {
+    let dir = Scratch::new("hosting", "host-policy");
+    std::fs::create_dir_all(dir.join("public")).unwrap();
+    std::fs::write(dir.join("public/index.html"), "site").unwrap();
+    let firebase =
+        serde_json::json!({"hosting":{"public":dir.join("public")},"emulators":emulators()});
+
+    let (child, address) = start(&dir, &firebase, "hosting");
+    let refused = request_as(&address, "evil.example", "/");
+    assert!(refused.starts_with("HTTP/1.1 403"), "{refused}");
+    assert!(refused.contains("network.allowedHosts"), "{refused}");
+    assert!(!refused.contains("site"), "{refused}");
+    assert!(request_as(&address, "site.example", "/").starts_with("HTTP/1.1 403"));
+    assert!(request_as(&address, "localhost", "/").ends_with("site"));
+    assert!(request_as(&address, "10.0.2.2:5000", "/").ends_with("site"));
+    drop(child);
+
+    let config =
+        serde_json::json!({"schemaVersion": 1, "network": {"allowedHosts": ["site.example"]}});
+    let (_child, address) = start_with_config(&dir, &firebase, "hosting", Some(&config));
+    assert!(request_as(&address, "SITE.example:5000", "/").ends_with("site"));
+    assert!(request_as(&address, "evil.example", "/").starts_with("HTTP/1.1 403"));
+    assert!(request_as(&address, "x.site.example", "/").starts_with("HTTP/1.1 403"));
 }

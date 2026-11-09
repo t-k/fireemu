@@ -86,3 +86,45 @@ allowNonLoopbackHosts = true
 - Because a forwarder inside that namespace (`kubectl port-forward`, a sidecar proxy) connects from loopback, every control API request also needs `Authorization: Bearer <control token>` once the option is on, from a process as from a page; only `/health/` is exempt. The routes that load Security Rules or clear Firestore data are not held to the token, so `@firebase/rules-unit-testing` keeps working; a client that reaches the emulator through such a forwarder can call them, as it could on the official emulator. `fireemu exec` gives its command the token in `FIREEMU_CONTROL_TOKEN`, and `fireemu/testing` and the UI send it.
 - Browser pages must still come from a loopback origin (`http://localhost:...`), so a page served from another host cannot use the exposed ports.
 - A listener on `0.0.0.0` or `::` is advertised as `127.0.0.1` or `::1` in the environment and the Hub, as the official CLI does.
+- With the option on, the emulators also answer a single-label `Host` such as a Compose service name (`fireemu:8080`). Other names must be listed in `network.allowedHosts`; see below.
+
+## Host names the emulators answer
+
+A web page can re-point a name it controls at `127.0.0.1` after it has loaded (DNS rebinding). The browser then treats requests to the emulators as same-origin and sends no `Origin`, so the page could read local data that the emulators serve without a credential. To prevent that, the product emulators (Firestore, Authentication and the control API, Storage, Functions, Eventarc, Cloud Tasks, Pub/Sub, the Realtime Database and Hosting) answer `403` to an HTTP/1 request whose `Host` header names any other host than:
+
+- `localhost` and names under `.localhost`;
+- any IP address, so `10.0.2.2` from the Android emulator, a LAN address or a bridge address works;
+- `host.docker.internal` and `host.containers.internal`, the names Docker and Podman give a container for its host;
+- names under `.firebaseio.com` and `.firebasedatabase.app`, by which the Realtime Database selects a namespace;
+- with `network.allowNonLoopbackHosts`, single-label names such as a Compose service name;
+- the names in `network.allowedHosts`.
+
+A request without `Host` (HTTP/1.0) and HTTP/2 requests (gRPC clients) are not checked, because no browser sends them. The comparison ignores case, the port and one trailing dot. The Hub, the UI and the Logging emulator answer loopback names only. The official emulator does not check `Host`; production has no counterpart, so the check is the same in both profiles.
+
+Add the other names your clients use, for example a Kubernetes service, a name in `/etc/hosts`, an mDNS `.local` name or a tunnel. An entry is a name, a name with a leading dot for that domain and all its subdomains, or `"*"` to answer every `Host` (which turns the defence off):
+
+<Tabs syncKey="config-format">
+<TabItem label="TOML">
+
+```toml
+[network]
+allowNonLoopbackHosts = true
+allowedHosts = ["emulator.ci.example", ".svc.cluster.local"]
+```
+
+</TabItem>
+<TabItem label="JSON">
+
+```json
+{
+  "network": {
+    "allowNonLoopbackHosts": true,
+    "allowedHosts": ["emulator.ci.example", ".svc.cluster.local"]
+  }
+}
+```
+
+</TabItem>
+</Tabs>
+
+An entry has no scheme, port or path. Listing a name only lets requests naming it through; the browser-origin checks are unchanged, so a page must still come from a loopback origin to use the privileged routes.

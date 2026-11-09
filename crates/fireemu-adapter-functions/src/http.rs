@@ -1708,6 +1708,25 @@ async fn respond_support_request(
     .await
 }
 
+/// The 403 a request whose `Host` the DNS-rebinding policy refuses gets, before any route runs.
+fn rebound_host_refusal(req: &Request<Incoming>) -> Option<Response<OutBody>> {
+    fireemu_core_session::host_guard::admits_request(
+        req.version() == hyper::Version::HTTP_2,
+        req.headers()
+            .get_all(hyper::header::HOST)
+            .iter()
+            .map(hyper::header::HeaderValue::as_bytes),
+    )
+    .err()
+    .map(|refusal| {
+        typed(
+            StatusCode::FORBIDDEN,
+            fireemu_core_session::host_guard::REFUSAL_CONTENT_TYPE,
+            &refusal.body(),
+        )
+    })
+}
+
 async fn respond(
     runtime: Arc<FunctionsRuntime>,
     channels: Arc<crate::eventarc_channels::ChannelStore>,
@@ -1878,6 +1897,11 @@ async fn serve_surface(
                 let channels = channels.clone();
                 let request_admission = request_admission.clone();
                 async move {
+                    if let Some(refusal) = rebound_host_refusal(&req) {
+                        // DNS rebinding: a page whose name was re-pointed at this listener.
+                        drain_refused_body(req.into_body()).await;
+                        return Ok(refusal);
+                    }
                     let body_limit = request_body_limit(&surface, req.uri().path());
                     let reservation = request_body_reservation(&req, body_limit);
                     let _request = request_admission.acquire(reservation).await;

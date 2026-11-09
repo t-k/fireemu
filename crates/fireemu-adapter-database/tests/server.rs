@@ -507,7 +507,7 @@ async fn stalled_headers_and_bodies_are_cut_off() {
 
     let mut stalled_body = TcpStream::connect(&address).await.unwrap();
     stalled_body
-        .write_all(b"PUT /a.json?ns=t1 HTTP/1.1\r\nHost: x\r\nContent-Length: 10\r\n\r\n12")
+        .write_all(b"PUT /a.json?ns=t1 HTTP/1.1\r\nHost: localhost\r\nContent-Length: 10\r\n\r\n12")
         .await
         .unwrap();
     let answer = read_until_closed(&mut stalled_body, Duration::from_secs(5)).await;
@@ -560,7 +560,7 @@ async fn a_conditional_header_that_is_not_ascii_never_matches() {
     let (address, database) = start(Duration::from_secs(30)).await;
     exchange(&address, "PUT", "/a.json?ns=t1", "1").await;
     let mut stream = TcpStream::connect(&address).await.unwrap();
-    let mut request = b"PUT /a.json?ns=t1 HTTP/1.1\r\nHost: x\r\nIf-Match: \xe9\r\nContent-Length: 1\r\nConnection: close\r\n\r\n2".to_vec();
+    let mut request = b"PUT /a.json?ns=t1 HTTP/1.1\r\nHost: localhost\r\nIf-Match: \xe9\r\nContent-Length: 1\r\nConnection: close\r\n\r\n2".to_vec();
     stream.write_all(&request).await.unwrap();
     request.clear();
     let answer = read_until_closed(&mut stream, Duration::from_secs(5)).await;
@@ -1738,4 +1738,48 @@ async fn sse_framing_matches_profile_without_ending_live_streams() {
             }
         }
     }
+}
+
+async fn exchange_as(address: &str, host: &str, request_tail: &str) -> String {
+    let mut stream = TcpStream::connect(address).await.unwrap();
+    let request = format!("{request_tail}Host: {host}\r\nConnection: close\r\n\r\n");
+    stream.write_all(request.as_bytes()).await.unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).await.unwrap();
+    response
+}
+
+/// DNS rebinding: a page on a public name re-pointed at the listener is refused on REST, long
+/// polling and the WebSocket upgrade alike, while the namespace host names the official
+/// emulator routes (`<ns>.localhost`, `<ns>.firebaseio.com`) and IP literals are served.
+#[tokio::test]
+async fn a_rebound_host_is_refused_on_rest_long_polling_and_websocket() {
+    let (address, _) = start(Duration::from_secs(30)).await;
+    let put = exchange(&address, "PUT", "/a.json?ns=t1", r#"{"x":1}"#).await;
+    assert!(put.starts_with("HTTP/1.1 200"), "{put}");
+    let rest = "GET /a.json?ns=t1 HTTP/1.1\r\n";
+    let long_poll = "GET /.lp?start=t&ser=1&cb=1&v=5&ns=t1 HTTP/1.1\r\n";
+    let websocket = "GET /.ws?v=5&ns=t1 HTTP/1.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n";
+    for tail in [rest, long_poll, websocket] {
+        for host in ["evil.example:9000", "t1.evil.example"] {
+            let refused = exchange_as(&address, host, tail).await;
+            assert!(
+                refused.starts_with("HTTP/1.1 403"),
+                "{tail} {host}: {refused}"
+            );
+            assert!(refused.contains("network.allowedHosts"), "{refused}");
+        }
+    }
+    for host in [
+        "127.0.0.1:9000",
+        "localhost:9000",
+        "t1.localhost:9000",
+        "t1.firebaseio.com",
+        "10.0.2.2:9000",
+    ] {
+        let served = exchange_as(&address, host, "GET /a.json HTTP/1.1\r\n").await;
+        assert!(served.starts_with("HTTP/1.1 200"), "{host}: {served}");
+    }
+    let namespaced = exchange_as(&address, "t1.localhost:9000", "GET /a.json HTTP/1.1\r\n").await;
+    assert!(namespaced.ends_with(r#"{"x":1}"#), "{namespaced}");
 }

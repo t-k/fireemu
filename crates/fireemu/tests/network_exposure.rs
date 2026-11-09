@@ -367,3 +367,43 @@ fn the_emulators_answer_other_hosts_and_the_control_api_answers_loopback_only() 
     let (status, _) = http(remote, firestore_port, "GET", &document, "");
     assert_eq!(status, 200, "the data was not cleared");
 }
+
+/// A GET to loopback that names `host` in its `Host` header; the status code.
+fn status_for_host(port: u16, host: &str, path: &str) -> u16 {
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(20)))
+        .unwrap();
+    write!(
+        stream,
+        "GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"
+    )
+    .unwrap();
+    let mut raw = String::new();
+    stream.read_to_string(&mut raw).unwrap();
+    raw.split_whitespace()
+        .nth(1)
+        .and_then(|code| code.parse().ok())
+        .unwrap_or(0)
+}
+
+/// With `network.allowNonLoopbackHosts` a container reaches the emulators by its Compose
+/// service name, a single-label `Host`, while a public name is still refused (DNS rebinding);
+/// without the opt-in the service name is refused too.
+#[test]
+fn the_opt_in_admits_single_label_hosts_and_still_refuses_public_names() {
+    let daemon = Daemon::start(true).unwrap_or_else(|transcript| panic!("{transcript}"));
+    let (_, firestore_port) = daemon.emulator("firestore");
+    let (_, auth_port) = daemon.emulator("auth");
+    for (port, path, served) in [(firestore_port, "/", 200), (auth_port, "/health/live", 200)] {
+        assert_eq!(
+            status_for_host(port, &format!("fireemu:{port}"), path),
+            served
+        );
+        assert_eq!(
+            status_for_host(port, &format!("127.0.0.1:{port}"), path),
+            served
+        );
+        assert_eq!(status_for_host(port, "evil.example", path), 403);
+    }
+}

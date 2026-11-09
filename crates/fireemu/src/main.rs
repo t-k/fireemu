@@ -2968,6 +2968,9 @@ async fn bind_hosting(
 }
 
 async fn bind_listeners(cfg: &RuntimeConfig, only: &Selection) -> Result<Listeners, String> {
+    // Every product listener reads the DNS-rebinding `Host` policy per request; it is in place
+    // before the first listener exists.
+    fireemu_core_session::host_guard::install(cfg.host_policy());
     // An explicit Hub address wins over every port-zero listener. The default remains late
     // and best effort: a selected product configured on 4400 must win and disable discovery.
     let prebound_hub = if cfg.hub_addr_explicit {

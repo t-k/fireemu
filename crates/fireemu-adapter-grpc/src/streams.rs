@@ -3526,8 +3526,8 @@ mod refresh_tests {
         /// the compact known map reports departures in the same order and with the same paths.
         #[test]
         fn known_keys_order_as_paths_do(
-            left in proptest::collection::vec(("[ab\\-.é]{1,3}", "[ab\\-.é]{1,3}"), 1..4),
-            right in proptest::collection::vec(("[ab\\-.é]{1,3}", "[ab\\-.é]{1,3}"), 1..4),
+            left in proptest::collection::vec(("[ab \\-.~!é中🔥]{1,3}", "[ab \\-.~!é中🔥]{1,3}"), 1..4),
+            right in proptest::collection::vec(("[ab \\-.~!é中🔥]{1,3}", "[ab \\-.~!é中🔥]{1,3}"), 1..4),
         ) {
             let scope = database_parent("projects/demo-app/databases/(default)").unwrap();
             let relative = |pairs: &[(String, String)]| {

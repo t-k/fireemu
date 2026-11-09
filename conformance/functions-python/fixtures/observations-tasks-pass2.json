@@ -1,0 +1,90 @@
+{
+  "schemaVersion": 1,
+  "recording": {
+    "alias": "tasks-pass-2",
+    "profile": "tasks",
+    "accounting": {
+      "recorderRequests": 81,
+      "cliWriteRows": 10,
+      "cliWriteAttempts": 12,
+      "accountedRequests": 93
+    },
+    "eventFrames": 2,
+    "functionFrameCategories": 2
+  },
+  "versions": {
+    "firebase-functions": "0.6.0",
+    "firebase-tools": "15.28.2",
+    "runtime": "python312"
+  },
+  "observations": [
+    {
+      "condition": "tasks-events",
+      "origin": "masked-production-projection",
+      "observedPasses": 1,
+      "coverage": "RECORDED",
+      "frames": [
+        {
+          "kind": "sdk-event",
+          "hasApp": false,
+          "hasAuth": false
+        },
+        {
+          "kind": "raw-request",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headerNames": [
+              "accept-encoding",
+              "authorization",
+              "content-length",
+              "content-type",
+              "forwarded",
+              "function-execution-id",
+              "host",
+              "traceparent",
+              "user-agent",
+              "x-cloud-trace-context",
+              "x-cloudtasks-queuename",
+              "x-cloudtasks-tasketa",
+              "x-cloudtasks-taskexecutioncount",
+              "x-cloudtasks-taskname",
+              "x-cloudtasks-taskretrycount",
+              "x-forwarded-for",
+              "x-forwarded-proto"
+            ],
+            "headers": {
+              "content-type": "application/json",
+              "user-agent": "Google-Cloud-Tasks",
+              "accept-encoding": "gzip, deflate, br",
+              "x-forwarded-proto": "https"
+            }
+          },
+          "bodyText": "{\"data\":{\"run\":\"fixture-run\",\"label\":\"fixture-label\"}}",
+          "originalBodyBytes": 62,
+          "originalValueBytes": {
+            "run": 22,
+            "label": 10
+          },
+          "layoutVerifiedAgainstRecordedLength": true
+        }
+      ],
+      "sdkCases": [
+        {
+          "origin": "observed-sdk-projection",
+          "inputIdentity": "synthetic",
+          "expected": {
+            "data": {
+              "label": "fixture-label",
+              "run": "fixture-run"
+            },
+            "has_app": false,
+            "has_auth": false
+          },
+          "trigger": "tasks",
+          "body": "{\"data\":{\"label\":\"fixture-label\",\"run\":\"fixture-run\"}}"
+        }
+      ]
+    }
+  ]
+}

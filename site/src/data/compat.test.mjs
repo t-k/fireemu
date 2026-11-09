@@ -185,6 +185,31 @@ test('the home page counts the areas whose parent is verified against production
 	);
 });
 
+test('the Python parent is verified for the six recorded event families and lists its declared differences', async () => {
+	const data = await loadRepositoryData();
+	const python = data.closures.find((record) => record.parent === 'FUNCTIONS-PYTHON');
+	assert.ok(python);
+	const [row] = productionAreaRows([python]);
+	assert.equal(row.product, 'Cloud Functions');
+	assert.equal(row.title, 'Python functions');
+	assert.equal(row.status, 'Verified against production');
+	assert.equal(row.verified, 6);
+	assert.equal(row.total, 6, 'Auth blocking and deployment are excluded from the parent');
+	assert.equal(verifiedAreaCount([python]), 1);
+	assert.deepEqual(new Set(row.conditions.map((condition) => condition.status)), new Set(['VERIFIED']));
+	assert.deepEqual(row.knownDifferences, python.declaredDifferences.map((entry) => entry.reason));
+	assert.equal(row.knownDifferences.length, 4);
+});
+
+for (const status of ['PRODUCTION_RECORDED', 'OPEN', 'NOT_COMPARED']) {
+	test(`${status} is retained without increasing the verified count`, () => {
+		const [row] = productionAreaRows([closure('FUNCTIONS-HTTP', [status, 'VERIFIED'], { parentStatus: 'IMPLEMENTING' })]);
+		assert.equal(row.status, 'In progress');
+		assert.equal(row.verified, 1);
+		assert.equal(row.total, 2);
+		assert.equal(row.conditions[0].status, status);
+	});
+}
 test('Hosting implementation conditions remain unverified in production', () => {
 	const record = closure('HOSTING', ['UNVERIFIED'], { parentStatus: 'IMPLEMENTING' });
 	const [row] = productionAreaRows([record]);

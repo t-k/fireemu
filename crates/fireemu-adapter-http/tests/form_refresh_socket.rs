@@ -393,6 +393,260 @@ async fn refresh_treats_raw_value_marker_as_an_unknown_field() {
     assert_eq!(body["error"]["message"], "MISSING_GRANT_TYPE");
 }
 
+/// PICT table (work+auth-markers.securetoken-nested): `serde_json`'s `RawValue` marker key is an
+/// ordinary object key to a JSON reader. Where it sits as a *nested* value it is an object, so
+/// a string field it wraps is not a string: the refresh answers as if the field were absent.
+/// A payload the marker cannot decode keeps being refused as invalid JSON (the first parse
+/// stays authoritative for acceptance). Columns: carrier, depth, payload, stateless, position.
+const NESTED_MARKER_ROWS: &[(&str, &str, &str, bool, &str)] = &[
+    (
+        "grant_type",
+        "direct",
+        "wraps_real_value",
+        false,
+        "marker_first",
+    ),
+    (
+        "refresh_token",
+        "direct",
+        "wraps_real_value",
+        false,
+        "marker_first",
+    ),
+    (
+        "refresh_token",
+        "direct",
+        "wraps_real_value",
+        true,
+        "marker_last",
+    ),
+    (
+        "unrelated",
+        "direct",
+        "wraps_other_json_string",
+        true,
+        "marker_first",
+    ),
+    (
+        "grant_type",
+        "in_nested_object",
+        "wraps_object",
+        false,
+        "marker_last",
+    ),
+    (
+        "refresh_token",
+        "in_array",
+        "invalid_non_json_text",
+        true,
+        "marker_first",
+    ),
+    (
+        "refreshToken",
+        "in_array",
+        "wraps_real_value",
+        false,
+        "marker_first",
+    ),
+    (
+        "refreshToken",
+        "in_nested_object",
+        "invalid_non_json_text",
+        true,
+        "marker_first",
+    ),
+    (
+        "grant_type",
+        "in_array",
+        "invalid_null",
+        true,
+        "marker_first",
+    ),
+    (
+        "unrelated",
+        "in_nested_object",
+        "invalid_null",
+        false,
+        "marker_first",
+    ),
+    (
+        "unrelated",
+        "in_array",
+        "invalid_non_json_text",
+        false,
+        "marker_first",
+    ),
+    ("grantType", "direct", "wraps_object", true, "marker_first"),
+    (
+        "unrelated",
+        "in_array",
+        "wraps_object",
+        false,
+        "marker_last",
+    ),
+    (
+        "grantType",
+        "in_nested_object",
+        "wraps_real_value",
+        false,
+        "marker_last",
+    ),
+    (
+        "grant_type",
+        "direct",
+        "invalid_non_json_text",
+        false,
+        "marker_first",
+    ),
+    (
+        "refreshToken",
+        "direct",
+        "invalid_null",
+        true,
+        "marker_first",
+    ),
+    (
+        "grantType",
+        "in_array",
+        "invalid_null",
+        false,
+        "marker_first",
+    ),
+    (
+        "grantType",
+        "direct",
+        "invalid_non_json_text",
+        true,
+        "marker_first",
+    ),
+    (
+        "grant_type",
+        "in_array",
+        "wraps_other_json_string",
+        false,
+        "marker_last",
+    ),
+    (
+        "refreshToken",
+        "in_nested_object",
+        "wraps_object",
+        true,
+        "marker_last",
+    ),
+    (
+        "refresh_token",
+        "in_nested_object",
+        "wraps_object",
+        true,
+        "marker_first",
+    ),
+    (
+        "grantType",
+        "in_nested_object",
+        "wraps_other_json_string",
+        false,
+        "marker_first",
+    ),
+    (
+        "refreshToken",
+        "in_array",
+        "wraps_other_json_string",
+        true,
+        "marker_first",
+    ),
+    (
+        "refresh_token",
+        "in_array",
+        "invalid_null",
+        true,
+        "marker_first",
+    ),
+    (
+        "unrelated",
+        "in_nested_object",
+        "wraps_real_value",
+        true,
+        "marker_last",
+    ),
+    (
+        "refresh_token",
+        "direct",
+        "wraps_other_json_string",
+        false,
+        "marker_last",
+    ),
+];
+
+#[tokio::test]
+async fn refresh_nested_raw_value_marker_table() {
+    const MARKER: &str = "$serde_json::private::RawValue";
+    let mut servers = Vec::new();
+    for stateless in [true, false] {
+        let server = Server::start_with(stateless).await;
+        let token = server.sign_up("marker@example.com", "password1").await;
+        servers.push((stateless, server, token));
+    }
+    for &(carrier, depth, payload, stateless, position) in NESTED_MARKER_ROWS {
+        let (_, server, token) = servers.iter().find(|s| s.0 == stateless).unwrap();
+        let grant = matches!(carrier, "grant_type" | "grantType");
+        let real = if grant {
+            "refresh_token"
+        } else if carrier == "unrelated" {
+            "x"
+        } else {
+            token.as_str()
+        };
+        let literal = |text: &str| serde_json::to_string(text).unwrap();
+        let marker_value = match payload {
+            "wraps_real_value" => literal(&literal(real)),
+            "wraps_other_json_string" => literal(&literal("other")),
+            "wraps_object" => literal(r#"{"a":1}"#),
+            "invalid_null" => "null".to_owned(),
+            "invalid_non_json_text" => literal("not json"),
+            other => panic!("{other}"),
+        };
+        let marker = format!("{{{}:{marker_value}}}", literal(MARKER));
+        let nested = match depth {
+            "direct" => marker,
+            "in_array" => format!("[{marker}]"),
+            "in_nested_object" => format!("{{\"inner\":{marker}}}"),
+            other => panic!("{other}"),
+        };
+        let carried = format!("{}:{nested}", literal(carrier));
+        let companion = match carrier {
+            "grant_type" | "grantType" => format!("\"refresh_token\":{}", literal(token)),
+            "unrelated" => format!(
+                "\"grant_type\":\"refresh_token\",\"refresh_token\":{}",
+                literal(token)
+            ),
+            _ => "\"grant_type\":\"refresh_token\"".to_owned(),
+        };
+        let body = match position {
+            "marker_first" => format!("{{{carried},{companion}}}"),
+            "marker_last" => format!("{{{companion},{carried}}}"),
+            other => panic!("{other}"),
+        };
+        let (status, answer) = server
+            .post(REFRESH, "application/json", body.as_bytes())
+            .await;
+        let row = format!("{carrier}/{depth}/{payload}/stateless={stateless}/{position}");
+        if payload.starts_with("invalid") {
+            assert_eq!(status, 400, "{row}: {answer}");
+            assert_eq!(answer["error"]["message"], "INVALID_JSON_PAYLOAD", "{row}");
+        } else if carrier == "unrelated" {
+            assert_id_token(status, &answer);
+        } else {
+            let expected = if grant {
+                "MISSING_GRANT_TYPE"
+            } else {
+                "MISSING_REFRESH_TOKEN"
+            };
+            assert_eq!(status, 400, "{row}: {answer}");
+            assert_eq!(answer["error"]["message"], expected, "{row}");
+        }
+    }
+}
+
 /// SECURETOKEN-BODY production rows, preserving the recorded wire order.
 #[allow(clippy::too_many_lines)]
 #[tokio::test]

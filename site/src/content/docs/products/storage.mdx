@@ -33,6 +33,8 @@ Under `strict` the Storage emulator also refuses what production refuses and the
 
 The `emulator` profile retains its existing behavior except for the signed-upload responses described above; those responses follow production, and official-emulator parity for them is not claimed.
 
+In both profiles, a Firebase Storage request (`/v0/b/{bucket}/o/...`) whose object name or list prefix has an empty path segment, such as an interior `//`, a leading `/` or a trailing `/` on an object name, answers `400` with `The path may not end with '/' or contain two consecutive '/'s` before any Security Rule is evaluated. Production answered reads, metadata reads and lists this way on 2026-11-08, also under an allow-all rule; uploads, `PATCH`, `DELETE` and token management follow from that and were not recorded. The `strict` profile keeps `/x`, `x` and `x/` as three objects, as Cloud Storage does; the `emulator` profile still drops one leading `/` of an uploaded name, as the official emulator does. A Firebase list leaves out a prefix that an object like `a//x` would produce, and a name it leaves out never takes a place in a page or becomes a `nextPageToken`.
+
 ### Listing a prefix with single-segment attachment rules
 
 In the `strict` profile, list authorization proves access to the possible entries under the requested prefix. With `delimiter=/`, each entry is one immediate child; without a delimiter, entries can have arbitrary depth. Authorization does not depend on whether the prefix is empty or on which objects happen to exist.
@@ -51,7 +53,9 @@ A targeted production comparison on 2026-10-16 used authenticated UID-to-team me
 | Same rules plus recursive `list` match | Request | `/` or omitted | 200 | 200 |
 | Same rules plus recursive `list` match | Ancestor | `/` | 200 | 403 |
 
-Empty request prefixes have the same authorization decisions as populated ones. Non-member, anonymous and other-team request listings remain denied. The `emulator` profile retains its existing concrete-prefix authorization. Non-slash delimiters use a conservative arbitrary-depth proof; the production comparison covered `/` and an omitted delimiter, not every custom delimiter or resource-dependent condition. The [Firebase granular operations documentation](https://firebase.google.com/docs/storage/security/core-syntax#granular_operations) provides further background.
+Empty request prefixes have the same authorization decisions as populated ones. Non-member, anonymous and other-team request listings remain denied. The `emulator` profile retains its existing concrete-prefix authorization, except that a listing with `delimiter=/` is allowed when every entry one level below the prefix is allowed (`match /p/{f} { allow list: if true; }` with `prefix=p/&delimiter=/`), as production and `strict` allow it; the emulator profile used to answer 403. Non-slash delimiters use a conservative arbitrary-depth proof; the production comparison covered `/` and an omitted delimiter, not every custom delimiter or resource-dependent condition. The [Firebase granular operations documentation](https://firebase.google.com/docs/storage/security/core-syntax#granular_operations) provides further background.
+
+In the `strict` profile, a listing without a delimiter is also allowed for `allow list: if [file] != null` and for `request.path == /b/$(bucket)/o/<prefix>` under `match /p/{file=**}`, as production answered on 2026-11-08. A single-segment capture, a bare capture and the path of another prefix are still refused, and `request.path` of a delimited listing stays refused until production is recorded for it.
 
 An explicit parent rule is no longer needed as a workaround for the single-capture SDK request above. Adding one can change production permissions:
 

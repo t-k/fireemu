@@ -7989,7 +7989,7 @@ root	unchanged	small	firstGen";
     /// lower bound of the snapshot's JSON size now proves the event can never fit, so the
     /// write stays fast; the event is counted as dropped.
     /// RTDB-TRIGGERS-KINDS-20261108-01 (k11 to k13), through the real sink and the REST handler: a 100 KiB and a
-    /// 600 KiB value are accepted, a 2 MiB one is refused with 400 and the text production sent, and the
+    /// 600 KiB value are accepted, a 2 MiB one (and, by the documented 1 MB, 1.05 MB) is refused with 400 and the text production sent, and the
     /// data is not written; the emulator profile applies all three.
     #[tokio::test]
     async fn database_bridge_strict_refuses_a_write_with_an_event_over_the_limit_and_the_emulator_applies_it(
@@ -8029,6 +8029,9 @@ root	unchanged	small	firstGen";
             };
             assert_eq!(put("l1", 100 * 1024).0, 200);
             assert_eq!(put("l2", 600 * 1024).0, 200);
+            // the packet v2 ladder around the documented 1 MB
+            assert_eq!(put("l6", 949_900).0, 200);
+            assert_eq!(put("l7", 1_049_900).0, if strict { 400 } else { 200 });
             let (status, body) = put("l3", 2 * 1024 * 1024);
             if strict {
                 assert_eq!(status, 400);

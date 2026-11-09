@@ -64,10 +64,12 @@ pub const DATABASE_FANOUT_DROPPED: &str = "database_fanout_dropped";
 /// The largest Realtime Database trigger event, in bytes of its `data` plus its `delta` as compact JSON,
 /// that the strict profile accepts; a write with a larger event is refused with 400. Production refused a
 /// write whose events held a 2 MiB value and accepted one whose largest event held about 720 KB
-/// (RTDB-TRIGGERS-KINDS-20261108-01, writes k13 and k12), and its documentation names 1 MB per event
-/// without saying how the size is counted; the record fixes the limit only inside that range, so this is
-/// its upper end: no write the record accepted is refused. The emulator profile has no such limit.
-pub const DATABASE_EVENT_LIMIT_BYTES: usize = 2 * 1024 * 1024;
+/// (RTDB-TRIGGERS-KINDS-20261108-01, writes k13 and k12), and its documentation names "1 MB" per event
+/// without saying whether that is 1,000,000 or 1,048,576 bytes or how the size is counted. The record fixes
+/// the limit only between those two events; this is the documented figure read as 1,000,000 bytes, which
+/// the record does not contradict (coordinator ruling 2026-11-09). The exact threshold and the counting
+/// stay unverified until the payload ladder of packet v2 is recorded. The emulator profile has no limit.
+pub const DATABASE_EVENT_LIMIT_BYTES: usize = 1_000_000;
 /// Logical events whose causal phases the runtime keeps for `await-idle` diagnostics
 /// (spec 10.5). Older entries are evicted and counted; eviction is never a completion.
 pub const MAX_CAUSALITY_ENTRIES: usize = 512;

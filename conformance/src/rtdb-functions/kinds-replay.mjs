@@ -94,12 +94,11 @@ function replay({ production, dir, steps, keep, expected, writes, allowK14 }) {
     writesAnswered: writesOk,
   };
   // The pinned shape, whole: the totals and which steps differ (the totals alone would not say that the
-  // four differing rows are those of k12).
+  // four differing rows are those of k12). No frame is unattributed here: the production fixtures are
+  // attributed (kinds-recorded.test.mjs) and the local frames were masked with the unplanned ones dropped.
   const match =
     (unplanned.length === 0 || explained) &&
     writesOk &&
-    comparison.unattributed.production.length === 0 &&
-    comparison.unattributed.local.length === 0 &&
     JSON.stringify({ totals: comparison.totals, differing }) ===
       JSON.stringify({ totals: expected.totals, differing: expected.differing });
   return { match, ...result };

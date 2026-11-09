@@ -974,16 +974,45 @@ async fn strict_still_creates_topics_without_a_policy_and_reports_none() {
     assert!(h.grpc_get("omitted").await.message_storage_policy.is_none());
 }
 
+/// Each REST mask is paired with the gRPC paths that mean the same thing.
+const STRICT_MASKS: [(&str, &[&str]); 7] = [
+    ("messageStoragePolicy", &["message_storage_policy"]),
+    ("message_storage_policy", &["message_storage_policy"]),
+    (
+        "messageStoragePolicy.allowedPersistenceRegions",
+        &["message_storage_policy.allowed_persistence_regions"],
+    ),
+    (
+        "message_storage_policy.enforce_in_transit",
+        &["message_storage_policy.enforce_in_transit"],
+    ),
+    (
+        "labels,messageStoragePolicy",
+        &["labels", "message_storage_policy"],
+    ),
+    (
+        "messageStoragePolicy,labels",
+        &["message_storage_policy", "labels"],
+    ),
+    (
+        "labels,messageStoragePolicy.enforceInTransit",
+        &["labels", "message_storage_policy.enforce_in_transit"],
+    ),
+];
+
 #[tokio::test]
 async fn strict_refuses_a_policy_in_an_update_mask_and_changes_nothing() {
     let h = Harness::new(PagingPolicy::Strict).await;
-    h.rest_create("strict-patch", json!({})).await;
-    for mask in [
-        "messageStoragePolicy",
-        "message_storage_policy",
-        "messageStoragePolicy.allowedPersistenceRegions",
-        "labels,messageStoragePolicy",
-    ] {
+    let (status, created) = h
+        .rest_create("strict-patch", json!({"labels": {"keep": "me"}}))
+        .await;
+    assert_eq!(status, 200, "{created}");
+    let before_rest = h.rest_get("strict-patch").await;
+    let before_grpc = h.grpc_get("strict-patch").await;
+    assert_eq!(before_rest.1["labels"], json!({"keep": "me"}));
+    assert!(before_grpc.message_storage_policy.is_none());
+
+    for (mask, paths) in STRICT_MASKS {
         let (status, error) = h
             .rest_patch(
                 "strict-patch",
@@ -992,25 +1021,28 @@ async fn strict_refuses_a_policy_in_an_update_mask_and_changes_nothing() {
             )
             .await;
         assert_eq!(status, 501, "{mask}: {error}");
+        assert_eq!(error["error"]["status"], "UNIMPLEMENTED", "{mask}");
         assert_strict_explanation(error["error"]["message"].as_str().unwrap());
+
         let error = h
             .grpc_update(
                 "strict-patch",
-                pb::Topic::default(),
-                &[mask
-                    .replace("messageStoragePolicy", "message_storage_policy")
-                    .as_str()],
+                pb::Topic {
+                    labels: [("k".to_owned(), "v".to_owned())].into(),
+                    message_storage_policy: Some(policy(&["us-central1"], true)),
+                    ..Default::default()
+                },
+                paths,
             )
-            .await;
-        // The REST spelling of a path is not a gRPC path, so only the snake_case rows must match.
-        if mask.contains("message_storage_policy") {
-            let error = error.unwrap_err();
-            assert_eq!(error.code(), tonic::Code::Unimplemented, "{mask}");
-            assert_strict_explanation(error.message());
-        }
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), tonic::Code::Unimplemented, "{paths:?}");
+        assert_strict_explanation(error.message());
+
+        // Neither the labels nor the policy moved, as either transport reads them.
+        assert_eq!(h.rest_get("strict-patch").await, before_rest, "{mask}");
+        assert_eq!(h.grpc_get("strict-patch").await, before_grpc, "{paths:?}");
     }
-    let (_, got) = h.rest_get("strict-patch").await;
-    assert_eq!(got, json!({"name": topic_name("strict-patch")}));
 
     // A labels-only update is unaffected and keeps working.
     let (status, updated) = h
@@ -1021,6 +1053,12 @@ async fn strict_refuses_a_policy_in_an_update_mask_and_changes_nothing() {
         )
         .await;
     assert_eq!(status, 200, "{updated}");
+    assert_eq!(updated["labels"], json!({"owner": "test"}));
+    assert!(h
+        .grpc_get("strict-patch")
+        .await
+        .message_storage_policy
+        .is_none());
 }
 
 #[tokio::test]
@@ -1051,4 +1089,323 @@ async fn an_unknown_policy_member_is_named_with_its_parent() {
         error["error"]["details"][0]["fieldViolations"][0]["field"],
         "message_storage_policy"
     );
+}
+
+// --- Spellings, duplicate masks and refused mixed updates ----------------------------------
+
+#[tokio::test]
+async fn hybrid_json_spellings_are_unknown_names_and_never_silently_dropped() {
+    // Proto3 JSON accepts the lowerCamelCase name or the original snake_case name of a field, not a
+    // mixture of the two inside one name. The official emulator has no REST surface to compare with.
+    for profile in [PagingPolicy::Emulator, PagingPolicy::Strict] {
+        let h = Harness::new(profile).await;
+        let cases = [
+            (
+                "hybrid-top",
+                json!({"message_storagePolicy": {"allowedPersistenceRegions": ["us-central1"]}}),
+            ),
+            (
+                "hybrid-top-b",
+                json!({"messageStorage_policy": {"allowedPersistenceRegions": ["us-central1"]}}),
+            ),
+            (
+                "hybrid-regions",
+                json!({"messageStoragePolicy": {"allowed_persistenceRegions": ["us-central1"]}}),
+            ),
+            (
+                "hybrid-regions-b",
+                json!({"messageStoragePolicy": {"allowedPersistence_regions": ["us-central1"]}}),
+            ),
+            (
+                "hybrid-enforce",
+                json!({"message_storage_policy": {"enforce_inTransit": true}}),
+            ),
+            (
+                "hybrid-retention",
+                json!({"message_retentionDuration": "600s"}),
+            ),
+            ("hybrid-state", json!({"satisfies_Pzs": true})),
+            (
+                "capitalised",
+                json!({"MessageStoragePolicy": {"enforceInTransit": true}}),
+            ),
+        ];
+        for (id, body) in cases {
+            let (status, error) = h.rest_create(id, body).await;
+            assert_eq!(status, 400, "{profile:?} {id}: {error}");
+            assert_eq!(error["error"]["status"], "INVALID_ARGUMENT", "{id}");
+            assert_eq!(h.rest_get(id).await.0, 404, "{profile:?} {id} was created");
+        }
+        // The two accepted spellings still work in a profile that stores the field.
+        if profile == PagingPolicy::Emulator {
+            for (id, body) in [
+                (
+                    "camel",
+                    json!({"messageStoragePolicy": {"allowedPersistenceRegions": ["a"], "enforceInTransit": true}}),
+                ),
+                (
+                    "snake",
+                    json!({"message_storage_policy": {"allowed_persistence_regions": ["a"], "enforce_in_transit": true}}),
+                ),
+            ] {
+                let (status, created) = h.rest_create(id, body).await;
+                assert_eq!(status, 200, "{id}: {created}");
+                assert_eq!(
+                    created["messageStoragePolicy"],
+                    json!({"allowedPersistenceRegions": ["a"], "enforceInTransit": true}),
+                    "{id}"
+                );
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn hybrid_update_mask_spellings_are_unknown_paths_and_change_nothing() {
+    let h = Harness::new(PagingPolicy::Emulator).await;
+    h.rest_create(
+        "hybrid-mask",
+        json!({"labels": {"keep": "me"}, "messageStoragePolicy": {"allowedPersistenceRegions": ["us-central1"]}}),
+    )
+    .await;
+    let before = h.rest_get("hybrid-mask").await;
+    for mask in [
+        "messageStoragePolicy.allowed_persistenceRegions",
+        "message_storagePolicy",
+        "message_storagePolicy.enforce_in_transit",
+        "labels,message_storagePolicy",
+        "messageStoragePolicy.enforce_inTransit",
+    ] {
+        let (status, error) = h
+            .rest_patch(
+                "hybrid-mask",
+                json!({"labels": {"k": "v"}, "messageStoragePolicy": {"allowedPersistenceRegions": ["asia-east1"]}}),
+                mask,
+            )
+            .await;
+        assert_eq!(status, 400, "{mask}: {error}");
+        assert_eq!(error["error"]["status"], "INVALID_ARGUMENT", "{mask}");
+        assert_eq!(h.rest_get("hybrid-mask").await, before, "{mask}");
+    }
+}
+
+#[tokio::test]
+async fn duplicate_and_overlapping_masks_apply_once_in_every_spelling() {
+    let h = Harness::new(PagingPolicy::Emulator).await;
+    let start = json!({
+        "labels": {"keep": "me"},
+        "messageStoragePolicy": {"allowedPersistenceRegions": ["us-central1"], "enforceInTransit": true},
+    });
+    // (REST mask, the body's policy, expected policy, expected labels)
+    let cases = [
+        (
+            "messageStoragePolicy,messageStoragePolicy",
+            json!({"allowedPersistenceRegions": ["asia-east1"]}),
+            json!({"allowedPersistenceRegions": ["asia-east1"]}),
+            json!({"keep": "me"}),
+        ),
+        (
+            "messageStoragePolicy,message_storage_policy",
+            json!({"allowedPersistenceRegions": ["asia-east1"]}),
+            json!({"allowedPersistenceRegions": ["asia-east1"]}),
+            json!({"keep": "me"}),
+        ),
+        // The whole path wins over a member path, whatever the order or the spelling.
+        (
+            "messageStoragePolicy.enforceInTransit,message_storage_policy",
+            json!({"allowedPersistenceRegions": ["asia-east1"]}),
+            json!({"allowedPersistenceRegions": ["asia-east1"]}),
+            json!({"keep": "me"}),
+        ),
+        (
+            "message_storage_policy,messageStoragePolicy.allowedPersistenceRegions",
+            json!({"enforceInTransit": false}),
+            json!({}),
+            json!({"keep": "me"}),
+        ),
+        // The same member twice, in both spellings.
+        (
+            "message_storage_policy.allowed_persistence_regions,messageStoragePolicy.allowedPersistenceRegions",
+            json!({"allowedPersistenceRegions": ["europe-west1"]}),
+            json!({"allowedPersistenceRegions": ["europe-west1"], "enforceInTransit": true}),
+            json!({"keep": "me"}),
+        ),
+        // Both members, in mixed spellings: the topic's own body supplies both values.
+        (
+            "messageStoragePolicy.allowedPersistenceRegions,message_storage_policy.enforce_in_transit",
+            json!({"allowedPersistenceRegions": ["europe-west1"]}),
+            json!({"allowedPersistenceRegions": ["europe-west1"]}),
+            json!({"keep": "me"}),
+        ),
+        // The same labels twice, beside a duplicate member path.
+        (
+            "labels,labels,messageStoragePolicy.enforceInTransit,messageStoragePolicy.enforceInTransit",
+            json!({"enforceInTransit": false}),
+            json!({"allowedPersistenceRegions": ["us-central1"]}),
+            json!({"owner": "test"}),
+        ),
+    ];
+    for (index, (mask, body_policy, expected_policy, expected_labels)) in
+        cases.into_iter().enumerate()
+    {
+        let id = format!("overlap-{index}");
+        h.rest_create(&id, start.clone()).await;
+        let (status, updated) = h
+            .rest_patch(
+                &id,
+                json!({"labels": {"owner": "test"}, "messageStoragePolicy": body_policy}),
+                mask,
+            )
+            .await;
+        assert_eq!(status, 200, "{mask}: {updated}");
+        assert_eq!(updated["messageStoragePolicy"], expected_policy, "{mask}");
+        let labels = if mask.contains("labels") {
+            expected_labels
+        } else {
+            json!({"keep": "me"})
+        };
+        assert_eq!(updated["labels"], labels, "{mask}");
+        // The read after the update agrees with the answer to it.
+        assert_eq!(h.rest_get(&id).await.1, updated, "{mask}");
+    }
+}
+
+#[tokio::test]
+async fn duplicate_and_overlapping_grpc_paths_apply_once() {
+    let h = Harness::new(PagingPolicy::Emulator).await;
+    let cases: [(&[&str], pb::MessageStoragePolicy, pb::MessageStoragePolicy); 5] = [
+        (
+            &["message_storage_policy", "message_storage_policy"],
+            policy(&["asia-east1"], false),
+            policy(&["asia-east1"], false),
+        ),
+        (
+            &[
+                "message_storage_policy.enforce_in_transit",
+                "message_storage_policy",
+            ],
+            policy(&["asia-east1"], false),
+            policy(&["asia-east1"], false),
+        ),
+        (
+            &[
+                "message_storage_policy.allowed_persistence_regions",
+                "message_storage_policy.allowed_persistence_regions",
+            ],
+            policy(&["europe-west1"], false),
+            policy(&["europe-west1"], true),
+        ),
+        (
+            &[
+                "message_storage_policy.enforce_in_transit",
+                "message_storage_policy.allowed_persistence_regions",
+            ],
+            policy(&["europe-west1"], false),
+            policy(&["europe-west1"], false),
+        ),
+        (
+            &[
+                "labels",
+                "message_storage_policy.enforce_in_transit",
+                "labels",
+            ],
+            policy(&["ignored"], false),
+            policy(&["us-central1"], false),
+        ),
+    ];
+    for (index, (paths, requested, expected)) in cases.into_iter().enumerate() {
+        let id = format!("grpc-overlap-{index}");
+        h.grpc_create(&id, Some(policy(&["us-central1"], true)))
+            .await;
+        let updated = h
+            .grpc_update(
+                &id,
+                pb::Topic {
+                    labels: [("owner".to_owned(), "test".to_owned())].into(),
+                    message_storage_policy: Some(requested),
+                    ..Default::default()
+                },
+                paths,
+            )
+            .await
+            .unwrap();
+        assert_eq!(updated.message_storage_policy, Some(expected), "{paths:?}");
+        assert_eq!(
+            updated.labels.contains_key("owner"),
+            paths.contains(&"labels"),
+            "{paths:?}"
+        );
+        assert_eq!(h.grpc_get(&id).await, updated, "{paths:?}");
+    }
+}
+
+#[tokio::test]
+async fn a_refused_mixed_update_changes_neither_labels_nor_policy() {
+    let h = Harness::new(PagingPolicy::Emulator).await;
+    h.rest_create(
+        "mixed",
+        json!({"labels": {"keep": "me"}, "messageStoragePolicy": {"allowedPersistenceRegions": ["us-central1"]}}),
+    )
+    .await;
+    let before_rest = h.rest_get("mixed").await;
+    let before_grpc = h.grpc_get("mixed").await;
+    let body = json!({"labels": {"k": "v"}, "messageStoragePolicy": {"allowedPersistenceRegions": ["asia-east1"]}});
+    for (mask, expected) in [
+        ("labels,messageStoragePolicy,kmsKeyName", 501),
+        ("labels,messageStoragePolicy,messageRetentionDuration", 501),
+        ("labels,messageStoragePolicy,state", 501),
+        ("labels,messageStoragePolicy,notAField", 400),
+        ("labels,messageStoragePolicy.noSuch", 400),
+        ("messageStoragePolicy,labels.owner", 501),
+    ] {
+        let (status, error) = h.rest_patch("mixed", body.clone(), mask).await;
+        assert_eq!(status, expected, "{mask}: {error}");
+        assert_eq!(h.rest_get("mixed").await, before_rest, "{mask}");
+        assert_eq!(h.grpc_get("mixed").await, before_grpc, "{mask}");
+    }
+    // A malformed policy in an otherwise valid mixed mask is refused before anything applies.
+    let (status, error) = h
+        .rest_patch(
+            "mixed",
+            json!({"labels": {"k": "v"}, "messageStoragePolicy": {"enforceInTransit": "yes"}}),
+            "labels,messageStoragePolicy",
+        )
+        .await;
+    assert_eq!(status, 400, "{error}");
+    assert_eq!(h.rest_get("mixed").await, before_rest);
+
+    for (paths, code) in [
+        (
+            vec!["labels", "message_storage_policy", "kms_key_name"],
+            tonic::Code::Unimplemented,
+        ),
+        (
+            vec!["labels", "message_storage_policy", "state"],
+            tonic::Code::Unimplemented,
+        ),
+        (
+            vec!["labels", "message_storage_policy.nope"],
+            tonic::Code::InvalidArgument,
+        ),
+        (
+            vec!["labels", "message_storage_policy", "not_a_field"],
+            tonic::Code::InvalidArgument,
+        ),
+    ] {
+        let error = h
+            .grpc_update(
+                "mixed",
+                pb::Topic {
+                    labels: [("k".to_owned(), "v".to_owned())].into(),
+                    message_storage_policy: Some(policy(&["asia-east1"], true)),
+                    ..Default::default()
+                },
+                &paths,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), code, "{paths:?}: {error}");
+        assert_eq!(h.rest_get("mixed").await, before_rest, "{paths:?}");
+        assert_eq!(h.grpc_get("mixed").await, before_grpc, "{paths:?}");
+    }
 }

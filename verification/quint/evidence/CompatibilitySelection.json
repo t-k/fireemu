@@ -576,7 +576,7 @@
     "crates/fireemu-adapter-pubsub/src/lib.rs": "76181d8d66d5ef5aa2b77f80a65c018c793c906f91322c8ccde7d3e90874cc4e",
     "crates/fireemu-adapter-pubsub/src/publisher.rs": "11456c691ee624d383660667f2cfca16c7e2f4ddad6cd34ded97a480cf163fd1",
     "crates/fireemu-adapter-pubsub/src/push.rs": "c10164cb73ea99a5bd18f8c2f1785753658a47a8fe83850db018e174b95ba65f",
-    "crates/fireemu-adapter-pubsub/src/rest.rs": "cb7aa220e7355c6d030bc1efc1ab04f8adbd35ba3e19093d9b66d8093c3eb41e",
+    "crates/fireemu-adapter-pubsub/src/rest.rs": "ee0b8dfc034935bc0af3f94a8b973e7c83a82bfe96f45462c3d9cde3792b3686",
     "crates/fireemu-adapter-pubsub/src/rest_json.rs": "0bfb698fc2ed536e52a2ad9f8cd3bcbd41c78c0956a4ef9d4f74a40b6b4a79c6",
     "crates/fireemu-adapter-pubsub/src/route_not_found.html": "ff9c048f49e06b638b8b33365c06cec8d26b1018a2a8b4ba7dca5be64252a0e2",
     "crates/fireemu-adapter-pubsub/src/subscriber.rs": "7eae88f8e348586d72c2b4f49d91455db6227304fff0e242eaaa1ff3646a588a",

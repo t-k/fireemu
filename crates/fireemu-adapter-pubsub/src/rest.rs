@@ -708,6 +708,14 @@ fn update_topic(
     if update_mask.is_empty() {
         validate_subscription_update_paths(&[""]).map_err(RestError::from_core)?;
     }
+    if let Some(path) = update_mask
+        .split(',')
+        .find(|path| !is_proto_json_name(path))
+    {
+        return Err(RestError::invalid(format!(
+            "unknown update_mask path {path}"
+        )));
+    }
     let paths = update_mask.split(',').map(snake_case_field).collect();
     let request = pb::UpdateTopicRequest {
         topic: Some(topic_options),
@@ -1746,7 +1754,7 @@ fn storage_policy_from_json(
     let mut parsed = pb::MessageStoragePolicy::default();
     for key in policy.keys() {
         match snake_case_field(key).as_str() {
-            "allowed_persistence_regions" | "enforce_in_transit" => {}
+            "allowed_persistence_regions" | "enforce_in_transit" if is_proto_json_name(key) => {}
             _ => {
                 return Err(RestError::unknown_nested_json_field(
                     key,
@@ -1794,7 +1802,7 @@ fn topic_from_json(
     reject_duplicate_spellings("topic", object)?;
     for key in object.keys() {
         let field = snake_case_field(key);
-        if is_declared_topic_field(&field) {
+        if is_declared_topic_field(&field) && is_proto_json_name(key) {
             continue;
         }
         return Err(RestError::unknown_json_field(key));
@@ -1911,6 +1919,35 @@ fn snake_case_field(field: &str) -> String {
         }
     }
     normalized
+}
+
+/// The `lowerCamelCase` JSON name of a `snake_case` protobuf field.
+fn lower_camel_field(snake: &str) -> String {
+    let mut camel = String::with_capacity(snake.len());
+    let mut upper_next = false;
+    for ch in snake.chars() {
+        if ch == '_' {
+            upper_next = true;
+        } else if upper_next {
+            camel.push(ch.to_ascii_uppercase());
+            upper_next = false;
+        } else {
+            camel.push(ch);
+        }
+    }
+    camel
+}
+
+/// Whether `name` is spelled the way proto3 JSON reads a field name: wholly `lowerCamelCase` or
+/// wholly the original `snake_case`. A mixture such as `allowed_persistenceRegions` normalizes to
+/// a declared field but is neither spelling, and the value readers look up only the two, so it is
+/// an unknown name rather than a field whose value is silently dropped. Every segment of a
+/// dotted field-mask path is checked on its own.
+fn is_proto_json_name(name: &str) -> bool {
+    name.split('.').all(|segment| {
+        let snake = snake_case_field(segment);
+        segment == snake || segment == lower_camel_field(&snake)
+    })
 }
 
 fn subscription_json(
@@ -2332,6 +2369,37 @@ mod production_shape_tests {
             };
             let parsed = storage_policy_from_json(body.as_object().unwrap()).unwrap();
             prop_assert_eq!(parsed.as_ref().map(crate::convert::storage_policy_from_proto), stored);
+        }
+        /// A name is a JSON spelling only when every word boundary is written the same way.
+        #[test]
+        fn only_wholly_camel_or_wholly_snake_names_are_json_spellings(
+            words in prop::collection::vec("[a-z]{1,5}", 3..6),
+            camelised in prop::collection::vec(any::<bool>(), 5),
+        ) {
+            let snake = words.join("_");
+            let camel = lower_camel_field(&snake);
+            prop_assert!(is_proto_json_name(&snake));
+            prop_assert!(is_proto_json_name(&camel));
+            let dotted = format!("{snake}.{camel}");
+            prop_assert!(is_proto_json_name(&dotted));
+            let boundaries = &camelised[..words.len() - 1];
+            let mut mixed = words[0].clone();
+            for (word, camel_here) in words[1..].iter().zip(boundaries) {
+                if *camel_here {
+                    let mut chars = word.chars();
+                    mixed.extend(chars.next().map(|first| first.to_ascii_uppercase()));
+                    mixed.push_str(chars.as_str());
+                } else {
+                    mixed.push('_');
+                    mixed.push_str(word);
+                }
+            }
+            let all_camel = boundaries.iter().all(|flag| *flag);
+            let none_camel = boundaries.iter().all(|flag| !*flag);
+            prop_assert_eq!(is_proto_json_name(&mixed), all_camel || none_camel, "{}", mixed);
+            // The first spelling that is wrong in one segment makes a dotted path wrong.
+            let dotted_mixed = format!("{snake}.{mixed}");
+            prop_assert_eq!(is_proto_json_name(&dotted_mixed), all_camel || none_camel);
         }
         #[test]
         fn rest_snapshot_and_topic_labels_are_present_exactly_when_nonempty(labels in prop::collection::btree_map("[a-z]{1,8}","[a-z0-9]{0,8}",0..4)) {

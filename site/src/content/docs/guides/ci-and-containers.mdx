@@ -125,9 +125,11 @@ A web page can re-point a name it controls at `127.0.0.1` after it has loaded (D
 - names under `.firebaseio.com` and `.firebasedatabase.app`, by which the Realtime Database selects a namespace;
 - names under `.cloudworkstations.dev`, the preview and port URLs of Firebase Studio and Cloud Workstations;
 - names under `.app.github.dev`, the forwarded-port URLs of GitHub Codespaces;
-- names under the special-use suffixes `.test`, `.local` and `.home.arpa`, which public DNS never answers: `/etc/hosts` aliases such as `myapp.test`, mDNS names such as `my-mac.local`, Kubernetes service names under the default `svc.cluster.local`, and home-network names;
+- names under the special-use suffixes `.test`, `.local` and `.home.arpa`, which public DNS does not answer: `/etc/hosts` aliases such as `myapp.test`, mDNS names such as `my-mac.local`, Kubernetes service names under the default `svc.cluster.local`, and home-network names;
 - with `network.allowNonLoopbackHosts`, single-label names such as a Compose service name;
 - the names in `network.allowedHosts`.
+
+The special-use and `.internal` names are safe only while local name resolution can be trusted. On an untrusted network a malicious resolver (for example one handed out by DHCP on a public Wi-Fi, a risk RFC 8375 section 6.1 notes for `.home.arpa`) or an mDNS peer on the LAN (for `.local`) can answer them and rebind a page to the emulators. `network.allowedHosts` only adds names; no setting removes these defaults.
 
 A request without `Host` (HTTP/1.0) and HTTP/2 requests (gRPC clients) are not checked, because no browser sends them. The comparison ignores case, the port and one trailing dot. The Hub, the UI and the Logging emulator answer loopback names only. The official emulator does not check `Host`; production has no counterpart, so the check is the same in both profiles.
 

@@ -592,3 +592,43 @@ fn the_default_suffix_table_matches_the_oracle() {
     }
     assert!(rows >= 30, "{rows}");
 }
+
+/// Spellings of the new default suffixes that are not the suffix: percent-encoding, a Unicode
+/// look-alike and its punycode form, repeated dots and invalid ports are all refused.
+#[test]
+fn look_alikes_of_the_special_use_suffixes_are_refused() {
+    let default = HostPolicy::default();
+    for host in [
+        "x%2Etest",
+        "x.%74est",
+        "x.app.github%2Edev",
+        "x.te\u{17f}t",
+        "x.\u{442}est",
+        "x.xn--est-j2c",
+        "x.app.githu\u{0432}.dev",
+        "x.app.xn--githu-mvf.dev",
+        "x..test",
+        "x.test..",
+        "x.local..:9199",
+        ".test",
+        "..local",
+        "x.home..arpa",
+        "x.test:",
+        "x.test:65536",
+        "x.local:9x",
+        "x.app.github.dev:-1",
+        "x.home.arpa:+80",
+    ] {
+        assert!(!one(&default, host), "{host:?}");
+    }
+    // The genuine spellings next to them are admitted.
+    for host in [
+        "x.test",
+        "x.test.",
+        "x.local:9199",
+        "x.home.arpa:80",
+        "x.app.github.dev:65535",
+    ] {
+        assert!(one(&default, host), "{host:?}");
+    }
+}

@@ -21,8 +21,13 @@
 //! - names under `.cloudworkstations.dev`, the preview and port URLs of Firebase Studio and
 //!   Cloud Workstations, whose proxy passes the public `Host` through (Google owns the DNS);
 //! - names under the special-use suffixes `.test` (RFC 6761), `.local` (mDNS, RFC 6762) and
-//!   `.home.arpa` (RFC 8375), which public DNS never answers, and under `.app.github.dev`, the
-//!   forwarded-port URLs of GitHub Codespaces (GitHub owns the DNS; owner decision 2401);
+//!   `.home.arpa` (RFC 8375), which public DNS does not answer, and under `.app.github.dev`, the
+//!   forwarded-port URLs of GitHub Codespaces (GitHub owns the DNS; owner decision 2401).
+//!   Like `.internal`, the special-use names assume the local name resolution can be trusted:
+//!   a malicious local resolver (for example one handed out by DHCP on a public Wi-Fi, which
+//!   RFC 8375 section 6.1 notes for `.home.arpa`) or an mDNS peer on the LAN (for `.local`)
+//!   can still answer them. `network.allowedHosts` only adds names; no setting removes these
+//!   defaults;
 //! - with `network.allowNonLoopbackHosts`, single-label names such as a Compose service name
 //!   (public DNS answers no single-label name);
 //! - the names listed in `network.allowedHosts` (exact, `.suffix` for a domain and its

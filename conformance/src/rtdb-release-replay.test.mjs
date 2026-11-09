@@ -846,6 +846,17 @@ test("the closure campaigns replay strict, judge the committed production reduct
       "conformance/src/rtdb-functions/recorded/production-rtdb-breadth.json",
     ),
   );
+  for (const source of [
+    "kinds-replay-run.mjs",
+    "kinds-replay.mjs",
+    "kinds-local-run.mjs",
+    "kinds-compare.mjs",
+    "kinds-mask.mjs",
+  ])
+    assert.ok(
+      Object.keys(sourceResources("kinds")).includes(`conformance/src/rtdb-functions/${source}`),
+      source,
+    );
   for (const recorded of ["production-rtdb-kinds.json", "production-rtdb-kinds-user-ladder.json"])
     assert.ok(
       Object.keys(sourceResources("kinds")).includes(

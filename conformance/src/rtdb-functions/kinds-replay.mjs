@@ -93,18 +93,15 @@ function replay({ production, dir, steps, keep, expected, writes, allowK14 }) {
     unattributed: comparison.unattributed,
     writesAnswered: writesOk,
   };
+  // The pinned shape, whole: the totals and which steps differ (the totals alone would not say that the
+  // four differing rows are those of k12).
   const match =
     (unplanned.length === 0 || explained) &&
     writesOk &&
     comparison.unattributed.production.length === 0 &&
     comparison.unattributed.local.length === 0 &&
-    comparison.totals.rows === expected.totals.rows &&
-    comparison.totals.match === expected.totals.match &&
-    comparison.totals.difference === expected.totals.difference &&
-    JSON.stringify(differing) === JSON.stringify(expected.differing) &&
-    comparison.rows
-      .filter((row) => row.verdict !== "MATCH")
-      .every((row) => row.production === 0 && row.local > 0);
+    JSON.stringify({ totals: comparison.totals, differing }) ===
+      JSON.stringify({ totals: expected.totals, differing: expected.differing });
   return { match, ...result };
 }
 

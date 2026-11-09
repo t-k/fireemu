@@ -174,6 +174,67 @@ test("the producers' answers are checked: a changed status or a missing write is
   assert.equal(run(stage("strict", sdk)).match, false, "a transaction that did not commit");
 });
 
+test("a write answered in another form, or under another name, is not the planned write", () => {
+  const edit = (name, change) => (d) => {
+    const copy = structuredClone(d);
+    change(copy[name].writes);
+    return copy;
+  };
+  // a REST write carries a status and no outcome; a status step that also reports an outcome is another answer
+  assert.equal(
+    run(
+      stage(
+        "strict",
+        edit("v2", (w) => (w.find((x) => x.step === "k24").outcome = "refused")),
+      ),
+    ).match,
+    false,
+  );
+  // the writes are checked in order, by name
+  assert.equal(
+    run(
+      stage(
+        "strict",
+        edit("v2", (w) => {
+          [w[0].step, w[1].step] = [w[1].step, w[0].step];
+        }),
+      ),
+    ).match,
+    false,
+  );
+});
+
+test("the k14 drop is a feature of the first run only, and only for the group delete that loses its data", () => {
+  assert.equal(
+    run(stage("strict", (d) => ({ ...d, v2: { ...d.v2, frames: [...d.v2.frames, k14Group] } })))
+      .match,
+    false,
+    "the second recording has no k14",
+  );
+  const kept = structuredClone(k14Group);
+  kept.event.data.after = { exists: true, key: "gl", value: { items: {} } };
+  assert.equal(
+    run(stage("strict", (d) => ({ ...d, all: { ...d.all, frames: [...d.all.frames, kept] } })))
+      .match,
+    false,
+    "a group that still exists is not the k14 delete",
+  );
+});
+
+test("a delivery of the refused k13 is compared, not left out", () => {
+  const delivered = fixture("local-emulator-rtdb-kinds").frames.filter((f) => f.step === "k13");
+  assert.ok(delivered.length > 0);
+  assert.equal(
+    run(
+      stage("strict", (d) => ({
+        ...d,
+        all: { ...d.all, frames: [...d.all.frames, ...raw(delivered)] },
+      })),
+    ).match,
+    false,
+  );
+});
+
 test("a replay with a missing directory or file is a failure, not an exception", () => {
   const dir = mkdtempSync(join(tmpdir(), "kinds-replay-empty-"));
   try {

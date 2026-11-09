@@ -134,8 +134,8 @@ test("admission checks the kinds fixture directory for files git does not track"
     assert.match((await run(line)).outcome, /fixture directory holds files git does not track/);
 });
 
-for (const scenario of [KINDS_SCENARIO, KINDS_V2_SCENARIO])
-  test(`the ${scenario.id} entry plugs the scenario into the budget, CLI, user, SDK and run directory`, async () => {
+for (const planned of [KINDS_SCENARIO, KINDS_V2_SCENARIO])
+  test(`the ${planned.id} entry plugs the scenario into the budget, CLI, user, SDK and run directory`, async () => {
     const listeners = new Map();
     const seen = {};
     const fakeProcess = {
@@ -198,15 +198,15 @@ for (const scenario of [KINDS_SCENARIO, KINDS_V2_SCENARIO])
       .toString()
       .replaceAll("import.meta.url", JSON.stringify(import.meta.url));
     const entry = new Function(...Object.keys(deps), "scenario", `return (${source})(scenario);`);
-    await entry(...Object.values(deps), scenario);
-    assert.equal(seen.budgetScenario, scenario);
-    assert.equal(seen.cliScenario, scenario);
-    assert.equal(seen.environmentScenario, scenario);
+    await entry(...Object.values(deps), planned);
+    assert.equal(seen.budgetScenario, planned);
+    assert.equal(seen.cliScenario, planned);
+    assert.equal(seen.environmentScenario, planned);
     assert.equal(seen.fixtureDir, "fixtures-kinds");
     assert.deepEqual(seen.sources, { pins: KINDS_PINS, fixtureDir: "fixtures-kinds" });
-    assert.match(seen.runDir, new RegExp(`^/fake/private/runs/${scenario.runDirPrefix}-`, "u"));
+    assert.match(seen.runDir, new RegExp(`^/fake/private/runs/${planned.runDirPrefix}-`, "u"));
     assert.deepEqual(seen.claims, { k9role: "claims", k9n: 3 });
-    assert.equal(seen.browser.pageFile, scenario.sdk.pageFile);
+    assert.equal(seen.browser.pageFile, planned.sdk.pageFile);
     assert.deepEqual(seen.browser.ids, ["k18", "k19", "k20", "k21"]);
     assert.deepEqual(seen.browser.caps, { http: 80, ws: 4 });
     assert.equal(listeners.size, 0);

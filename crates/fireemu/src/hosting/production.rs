@@ -278,6 +278,79 @@ mod tests {
         assert_eq!(content_type(Some("image/png")), "image/png");
     }
 
+    use proptest::prelude::*;
+
+    proptest! {
+        // Whatever the header says, a partial range lies inside the file and is never empty.
+        #[test]
+        fn a_partial_range_lies_inside_the_file(
+            header in "(bytes=)?[-0-9, a-z]{0,12}",
+            length in 0u64..1000,
+        ) {
+            if let RangeOutcome::Partial { start, end } = range(Some(&header), length) {
+                prop_assert!(start <= end);
+                prop_assert!(end < length);
+            }
+        }
+
+        // A well-formed single range is exactly the bytes it names, clamped to the file.
+        #[test]
+        fn a_closed_range_is_clamped_to_the_file(
+            first in 0u64..200,
+            last in 0u64..400,
+            length in 1u64..300,
+        ) {
+            let outcome = range(Some(&format!("bytes={first}-{last}")), length);
+            if last < first {
+                prop_assert_eq!(outcome, RangeOutcome::Whole);
+            } else if first >= length {
+                prop_assert_eq!(outcome, RangeOutcome::Unsatisfiable);
+            } else {
+                prop_assert_eq!(outcome, RangeOutcome::Partial { start: first, end: last.min(length - 1) });
+            }
+        }
+
+        // A suffix range names the last bytes, never more than the file has.
+        #[test]
+        fn a_suffix_range_is_the_tail(suffix in 1u64..400, length in 1u64..300) {
+            prop_assert_eq!(
+                range(Some(&format!("bytes=-{suffix}")), length),
+                RangeOutcome::Partial { start: length.saturating_sub(suffix), end: length - 1 }
+            );
+        }
+
+        // The languages come out by descending quality, ties in header order, only the ones kept.
+        #[test]
+        fn languages_are_ordered_by_quality(
+            entries in proptest::collection::vec(("[a-z]{2}", 0u8..=10), 0..6),
+        ) {
+            let header = entries
+                .iter()
+                .map(|(tag, q)| format!("{tag};q={}", f32::from(*q) / 10.0))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let mut expected: Vec<(usize, &(String, u8))> = entries.iter().enumerate().filter(|(_, (_, q))| *q > 0).collect();
+            expected.sort_by(|a, b| b.1 .1.cmp(&a.1 .1).then(a.0.cmp(&b.0)));
+            let expected: Vec<String> = expected.into_iter().map(|(_, (tag, _))| tag.clone()).collect();
+            prop_assert_eq!(accept_languages(&header), expected);
+        }
+
+        // Any list that holds the tag (weak or strong, among others) matches it; one that does not, does not.
+        #[test]
+        fn an_etag_list_matches_exactly_when_it_holds_the_tag(
+            others in proptest::collection::vec("\"[a-f0-9]{4}\"", 0..4),
+            weak in any::<bool>(),
+            position in 0usize..4,
+        ) {
+            let tag = "\"ffff\"";
+            let mut members: Vec<String> = others.into_iter().filter(|member| member != tag).collect();
+            prop_assert!(!if_none_match(&members.join(", "), tag));
+            let held = if weak { format!("W/{tag}") } else { tag.to_owned() };
+            members.insert(position.min(members.len()), held);
+            prop_assert!(if_none_match(&members.join(", "), tag));
+        }
+    }
+
     #[test]
     fn the_association_documents() {
         assert_eq!(app_association("/.well-known/assetlinks.json"), Some("[]"));

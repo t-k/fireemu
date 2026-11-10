@@ -1447,6 +1447,38 @@ mod redirect_tests {
         // A capture or query can never change the origin, add a scheme, or inject a
         // header byte, whatever text it carries (the review's backslash, `//`, CR/LF,
         // `javascript:` and encoded-slash shapes are all in this space).
+        // The same under production's reading, which decodes every escape of a capture and folds
+        // the slashes that leaves: `%2f%2fevil.example` stays one path part of this origin.
+        #[test]
+        fn strict_captures_and_queries_never_change_the_redirect_origin(
+            segment in "\\PC{1,12}|[\\\\/:%?#@ \\t\\r\\na.]{1,12}",
+            query in "\\PC{0,8}|[\\\\/:%?#@\\r\\n]{0,8}",
+        ) {
+            let raw_path = format!("/go/{}", encode_component(&segment));
+            let raw_query = if query.is_empty() { String::new() } else { format!("?{}", encode_component(&query)) };
+            for (destination, prefix) in [
+                ("/:name", "/"),
+                ("/next/:name", "/next/"),
+                ("folder/:name", "folder/"),
+                ("https://example.test/:name", "https://example.test/"),
+                ("//example.test:1234/:name", "//example.test:1234/"),
+            ] {
+                let Some(location) = strict_location("/go/:name", destination, &raw_path, &raw_query) else {
+                    prop_assert!(false, "{destination} {raw_path}{raw_query} must redirect");
+                    unreachable!();
+                };
+                prop_assert!(location.starts_with(prefix), "{location}");
+                let rest = &location[prefix.len()..];
+                prop_assert!(!rest.starts_with('/'), "{location}");
+                prop_assert!(!location[prefix.len()..].contains("//") || rest.contains('?'), "{location}");
+                prop_assert!(
+                    location.bytes().all(|b| b.is_ascii_graphic() && b != b'\\'),
+                    "{location:?}"
+                );
+                prop_assert!(hyper::header::HeaderValue::try_from(location.as_str()).is_ok());
+            }
+        }
+
         #[test]
         fn captures_and_queries_never_change_the_redirect_origin(
             segment in "\\PC{1,12}|[\\\\/:%?#@ \\t\\r\\na.]{1,12}",

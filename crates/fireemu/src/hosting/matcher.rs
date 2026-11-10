@@ -835,6 +835,29 @@ mod tests {
         }
     }
 
+    proptest::proptest! {
+        // Production's matching only widens minimatch's where a part starts with a dot or is the
+        // empty one after a trailing slash: on every other path the two agree.
+        #[test]
+        fn production_glob_agrees_with_minimatch_on_ordinary_paths(
+            pattern in "(/([a-c*?]{1,3}|\\*\\*)){1,3}",
+            path in "(/[a-c]{1,3}){1,3}",
+        ) {
+            proptest::prop_assert_eq!(glob_production(&pattern, &path), glob(&pattern, &path));
+        }
+
+        // And it never matches less: whatever minimatch matches, production matches.
+        #[test]
+        fn production_glob_matches_whatever_minimatch_matches(
+            pattern in "(/([a-c.*?]{1,3}|\\*\\*)){1,3}/?",
+            path in "(/[.a-c]{0,3}){1,3}/?",
+        ) {
+            if glob(&pattern, &path) && !pattern.starts_with('!') {
+                proptest::prop_assert!(glob_production(&pattern, &path), "{pattern} {path}");
+            }
+        }
+    }
+
     #[test]
     fn production_glob_differs_from_minimatch_only_for_dot_parts_and_the_empty_last_part() {
         // minimatch (the pinned oracle) keeps both, production does not

@@ -529,6 +529,6 @@
   "retrospectiveAdjudication": {
     "mode": "reviewed-retrospective-composition",
     "path": "spec/compatibility/closure/evidence/EVENTARC-adjudication.json",
-    "sha256": "1f27a73cdfa72d4260b6b1e3b42c786734aaa999e9c24e16ed36c91e4f699bae"
+    "sha256": "4efc0f661fd6d61c2802293f113bd049687c9df4fce99fc4dc9a318830898635"
   }
 }

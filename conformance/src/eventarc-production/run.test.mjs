@@ -22,6 +22,7 @@ import {
   sessionConfiguration,
   runExecSession,
   reservePorts,
+  concurrencyFromEnvironment,
   comparisonFromEvidence,
   loadInputs,
   check,
@@ -2005,6 +2006,36 @@ const bindPort = (port) =>
     server.listen(port, "127.0.0.1", () => resolve(server));
   });
 
+test("concurrencyFromEnvironment accepts defaults and positive decimal integers", () => {
+  assert.equal(concurrencyFromEnvironment({}), 8);
+  assert.equal(concurrencyFromEnvironment({ FIREEMU_EVENTARC_CHECK_CONCURRENCY: "" }), 8);
+  for (const value of ["1", "3", "8", "12"]) {
+    assert.equal(
+      concurrencyFromEnvironment({ FIREEMU_EVENTARC_CHECK_CONCURRENCY: value }),
+      Number(value),
+    );
+  }
+  for (const value of ["0", "-1", "1.5", "abc", "08", " 3", "3 ", "1e1"]) {
+    assert.throws(
+      () => concurrencyFromEnvironment({ FIREEMU_EVENTARC_CHECK_CONCURRENCY: value }),
+      undefined,
+      value,
+    );
+  }
+});
+test("concurrencyFromEnvironment controls check when concurrency is omitted", async (t) => {
+  const previous = process.env.FIREEMU_EVENTARC_CHECK_CONCURRENCY;
+  process.env.FIREEMU_EVENTARC_CHECK_CONCURRENCY = "1";
+  try {
+    const stub = checkStub();
+    await check({ ...checkFixture(t), runSession: stub.runSession });
+    assert.equal(stub.calls, 8);
+    assert.equal(stub.max, 1);
+  } finally {
+    if (previous === undefined) delete process.env.FIREEMU_EVENTARC_CHECK_CONCURRENCY;
+    else process.env.FIREEMU_EVENTARC_CHECK_CONCURRENCY = previous;
+  }
+});
 test("reservePorts holds distinct ports until release across concurrent callers", async () => {
   const reservations = await Promise.all(Array.from({ length: 16 }, () => reservePorts()));
   const ports = reservations.flatMap((r) => r.ports);

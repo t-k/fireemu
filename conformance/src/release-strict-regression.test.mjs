@@ -98,6 +98,107 @@ test("a lane export equal to the committed comparison passes", () => {
   }
 });
 
+test("compareLaneExport applies the EVENTARC source rebind to current and historical exports", () => {
+  const expected = readJson("spec/compatibility/closure/evidence/EVENTARC-comparison.json.gz");
+  const { sourceRebinds } = readJson(
+    "spec/compatibility/closure/evidence/EVENTARC-adjudication.json",
+  );
+  const [rebind] = sourceRebinds;
+  const actual = {
+    ...expected,
+    artifactSha256: BINARY,
+    sourcePins: { ...expected.sourcePins, [rebind.path]: rebind.sha256 },
+  };
+  assert.deepEqual(compareLaneExport(expected, actual, BINARY, { sourceRebinds }), []);
+  assert.ok(compareLaneExport(expected, actual, BINARY).some((d) => d.startsWith("sourcePins:")));
+  assert.deepEqual(
+    compareLaneExport(expected, { ...expected, artifactSha256: BINARY }, BINARY, { sourceRebinds }),
+    [],
+  );
+});
+
+test("EVENTARC source rebind refuses unrelated or unverified pin changes", () => {
+  const expected = readJson("spec/compatibility/closure/evidence/EVENTARC-comparison.json.gz");
+  const { sourceRebinds } = readJson(
+    "spec/compatibility/closure/evidence/EVENTARC-adjudication.json",
+  );
+  const [rebind] = sourceRebinds;
+  const other = "conformance/src/eventarc-production/compare.mjs";
+  const actual = {
+    ...expected,
+    artifactSha256: BINARY,
+    sourcePins: { ...expected.sourcePins, [rebind.path]: rebind.sha256 },
+  };
+  const wrong = "f".repeat(64);
+  const cases = [
+    [actual, [{ ...rebind, previousSha256: wrong }]],
+    [{ ...actual, sourcePins: { ...actual.sourcePins, [rebind.path]: wrong } }, sourceRebinds],
+    [actual, [{ ...rebind, sha256: wrong }]],
+    [{ ...actual, sourcePins: { ...actual.sourcePins, [other]: wrong } }, sourceRebinds],
+    [
+      {
+        ...expected,
+        artifactSha256: BINARY,
+        sourcePins: { ...expected.sourcePins, [other]: wrong },
+      },
+      [],
+    ],
+    [actual, [{ ...rebind, path: other }]],
+  ];
+  for (const [exported, rebinds] of cases) {
+    assert.ok(
+      compareLaneExport(expected, exported, BINARY, { sourceRebinds: rebinds }).some((d) =>
+        d.startsWith("sourcePins:"),
+      ),
+    );
+  }
+  const unrelated = readJson(`${EVIDENCE}/AUTH-CONFIG-SDK-comparison.json`);
+  const exported = { ...unrelated, artifactSha256: BINARY };
+  assert.deepEqual(compareLaneExport(unrelated, exported, BINARY, { sourceRebinds }), []);
+  assert.ok(
+    compareLaneExport(unrelated, { ...exported, fixtureSha256: wrong }, BINARY, {
+      sourceRebinds,
+    }).some((d) => d.startsWith("fixtureSha256:")),
+  );
+});
+
+test("judge reads EVENTARC adjudication only for the EVENTARC comparison", () => {
+  const adjudication = "spec/compatibility/closure/evidence/EVENTARC-adjudication.json";
+  const eventarc = "spec/compatibility/closure/evidence/EVENTARC-comparison.json.gz";
+  const other = `${EVIDENCE}/AUTH-CONFIG-SDK-comparison.json`;
+  const reads = [];
+  const context = {
+    binarySha256: BINARY,
+    readJson: (path) => {
+      reads.push(path);
+      return readJson(path);
+    },
+  };
+  const expected = readJson(eventarc);
+  const [rebind] = readJson(adjudication).sourceRebinds;
+  const actual = {
+    ...expected,
+    artifactSha256: BINARY,
+    sourcePins: { ...expected.sourcePins, [rebind.path]: rebind.sha256 },
+  };
+  assert.deepEqual(
+    judge({ path: eventarc, kind: expected.kind, runIds: ["test"] }, { test: actual }, context),
+    [],
+  );
+  assert.ok(reads.includes(adjudication));
+  reads.length = 0;
+  const unrelated = readJson(other);
+  assert.deepEqual(
+    judge(
+      { path: other, kind: unrelated.kind, runIds: ["test"] },
+      { test: { ...unrelated, artifactSha256: BINARY } },
+      context,
+    ),
+    [],
+  );
+  assert.ok(!reads.includes(adjudication));
+});
+
 test("a row order change alone is not a difference", () => {
   const path = `${EVIDENCE}/AUTH-ACCOUNT-comparison.json`;
   const actual = exportOf(path);

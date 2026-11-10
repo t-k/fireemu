@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -343,7 +344,7 @@ const historicalPublicHashes = new Map([
 const reboundPublicHashes = new Map([
   [
     "conformance/src/eventarc-production/run.mjs",
-    "6b5ff7a3ea452b2dd39c7780eb019ee1fda1ee552d382b05c800f06b04112bff",
+    "05005290175df9415d033842b8ca1761a05e5695d21e23b4c1084959c463b98d",
   ],
 ]);
 const pinnedPublicSha = (path) => {
@@ -352,15 +353,18 @@ const pinnedPublicSha = (path) => {
   return digest;
 };
 /** The driver without the functions its rebind names, as the rebind's residualSha256 is taken. */
-function driverResidual(text) {
+function driverResidual(text, rebind, { allowMissing = false } = {}) {
   let result = text;
-  for (const name of ["reservePorts", "check"]) {
+  for (const name of rebind.changedFunctions) {
     const start = result.search(new RegExp(`^(?:export )?(?:async )?function ${name}\\(`, "m"));
+    if (start < 0 && allowMissing) continue;
     assert.ok(start >= 0, `${name} is a top-level function`);
     result = result.slice(0, start) + result.slice(result.indexOf("\n}\n", start) + 3);
   }
-  return result.replace("const claimedPorts = new Set();\n", "");
+  for (const line of rebind.strippedLines) result = result.replace(`${line}\n`, "");
+  return result;
 }
+const driverResidualSha = "339ee826b4761fa7e8350bce7e3e8f742f0951403ee3866da07bc167c146c715";
 const decodedAcquisitionSha = "76c47b99496a616e8c2faab841e8267901f985e95221b43cd38dbf82d973f907";
 const sortedValue = (value) =>
   Array.isArray(value)
@@ -496,7 +500,7 @@ function assertRetrospectiveClosure(
     assert.equal(rebind.sha256, source.sha256, "rebind names the pinned bytes");
     assert.equal(rebind.comparisonLogicChanged, false, "comparison logic is unchanged");
     assert.ok(rebind.reason?.length > 40 && rebind.previousRole?.length > 40, "rebind says why");
-    assert.match(rebind.residualSha256, hash);
+    assert.equal(rebind.residualSha256, driverResidualSha);
     assert.equal(rebind.residualEqualsPrevious, true, "residual equals previous");
     assert.ok(rebind.changedFunctions?.length > 0, "changed functions are named");
   }
@@ -812,13 +816,34 @@ test("EVENTARC driver rebind keeps every byte outside the functions it names", (
   const [rebind] = adjudication.sourceRebinds;
   const current = readFileSync(new URL(rebind.path, root), "utf8");
   assert.equal(
-    createHash("sha256").update(driverResidual(current)).digest("hex"),
+    createHash("sha256").update(driverResidual(current, rebind)).digest("hex"),
     rebind.residualSha256,
   );
-  assert.ok(driverResidual(current).length < current.length);
+  assert.ok(driverResidual(current, rebind).length < current.length);
   const changed = current.replace("function replayWithWire(", "function replayWithWire2(");
   assert.notEqual(
-    createHash("sha256").update(driverResidual(changed)).digest("hex"),
+    createHash("sha256").update(driverResidual(changed, rebind)).digest("hex"),
+    rebind.residualSha256,
+  );
+});
+test("EVENTARC previous driver residual equals the recorded one", (t) => {
+  const { adjudication } = eventarcFixture();
+  const [rebind] = adjudication.sourceRebinds;
+  let bytes;
+  try {
+    bytes = execFileSync("git", ["show", `${adjudication.sourceCommit}:${rebind.path}`], {
+      cwd: fileURLToPath(root),
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+  } catch {
+    t.skip("reviewed git object is unavailable");
+    return;
+  }
+  assert.equal(createHash("sha256").update(bytes).digest("hex"), rebind.previousSha256);
+  assert.equal(
+    createHash("sha256")
+      .update(driverResidual(bytes.toString("utf8"), rebind, { allowMissing: true }))
+      .digest("hex"),
     rebind.residualSha256,
   );
 });

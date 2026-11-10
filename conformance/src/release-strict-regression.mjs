@@ -895,7 +895,7 @@ export function localSetupDifferences(actual) {
 }
 
 /** Differences between a lane export and the committed comparison file. */
-export function compareLaneExport(expected, actual, binarySha256) {
+export function compareLaneExport(expected, actual, binarySha256, { sourceRebinds = [] } = {}) {
   if (!actual || typeof actual !== "object" || !Array.isArray(actual.rows)) {
     return ["no comparison was exported"];
   }
@@ -916,9 +916,21 @@ export function compareLaneExport(expected, actual, binarySha256) {
       differences.push(`EVENTARC semantic evidence: ${error.message}`);
     }
   }
+  const sourcePins = { ...expected.sourcePins };
+  if (expected.kind === "eventarc-production-comparison-v1") {
+    for (const rebind of sourceRebinds) {
+      if (expected.sourcePins[rebind.path] === rebind.previousSha256) {
+        sourcePins[rebind.path] = rebind.sha256;
+      }
+    }
+  }
   for (const field of fields) {
-    if (!isDeepStrictEqual(expected[field], actual[field])) {
-      differences.push(`${field}: expected ${brief(expected[field])} got ${brief(actual[field])}`);
+    const value = field === "sourcePins" ? sourcePins : expected[field];
+    if (
+      !isDeepStrictEqual(value, actual[field]) &&
+      !(field === "sourcePins" && isDeepStrictEqual(expected.sourcePins, actual.sourcePins))
+    ) {
+      differences.push(`${field}: expected ${brief(value)} got ${brief(actual[field])}`);
     }
   }
   if ("rangeTotals" in expected && !isDeepStrictEqual(expected.rangeTotals, actual.rangeTotals)) {
@@ -1656,7 +1668,13 @@ export function judge(comparison, observations, context) {
   const observed = observations[comparison.runIds[0]];
   const run = RUNS.find((r) => r.id === comparison.runIds[0]);
   return [
-    ...compareLaneExport(expected, observed, context.binarySha256),
+    ...compareLaneExport(expected, observed, context.binarySha256, {
+      sourceRebinds:
+        expected.kind === "eventarc-production-comparison-v1"
+          ? (context.readJson("spec/compatibility/closure/evidence/EVENTARC-adjudication.json")
+              .sourceRebinds ?? [])
+          : [],
+    }),
     ...(run?.localSetup ? localSetupDifferences(observed) : []),
   ];
 }

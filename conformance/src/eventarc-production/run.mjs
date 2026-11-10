@@ -1276,12 +1276,21 @@ export function deriveLocalBudget(inputs, overallMs = localOverallMs) {
     sessions,
   };
 }
+export function concurrencyFromEnvironment(env = process.env) {
+  const value = env.FIREEMU_EVENTARC_CHECK_CONCURRENCY;
+  if (value === undefined || value === "") return 8;
+  assert.ok(
+    /^[1-9][0-9]*$/.test(value) && Number.isInteger(Number(value)),
+    "positive decimal concurrency required",
+  );
+  return Number(value);
+}
 export async function check({
   binary,
   out,
   inputDirectory = join(here, "fixtures/ad"),
   budgetMs = localOverallMs,
-  concurrency = 8,
+  concurrency = concurrencyFromEnvironment(),
   runSession = runExecSession,
 }) {
   assert.ok(Number.isSafeInteger(concurrency) && concurrency > 0, "positive concurrency required");

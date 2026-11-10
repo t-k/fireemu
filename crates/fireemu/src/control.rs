@@ -2081,6 +2081,16 @@ mod tests {
                 );
             }
         }
+        for index in [
+            json!({"order": "ASCENDING", "arrayConfig": false, "searchConfig": {}}),
+            json!({"order": 0, "arrayConfig": "CONTAINS", "searchConfig": {}}),
+        ] {
+            let file = json!({"indexes": [], "fieldOverrides": [{"collectionGroup": "posts", "fieldPath": "body", "indexes": [index]}]});
+            assert!(
+                parse_indexes("f", &file.to_string(), IndexFileChecks::Emulator).is_ok(),
+                "{file}"
+            );
+        }
     }
 
     #[test]

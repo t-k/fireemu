@@ -66,6 +66,7 @@
           "counts": {
             "MATCH": 5,
             "MATCH_LAYOUT": 18,
+            "KNOWN_DIFFERENCE": 0,
             "MISMATCH": 0,
             "UNKNOWN": 0
           },
@@ -76,6 +77,7 @@
           "counts": {
             "MATCH": 2,
             "MATCH_LAYOUT": 21,
+            "KNOWN_DIFFERENCE": 0,
             "MISMATCH": 0,
             "UNKNOWN": 0
           },
@@ -86,6 +88,7 @@
           "counts": {
             "MATCH": 2,
             "MATCH_LAYOUT": 21,
+            "KNOWN_DIFFERENCE": 0,
             "MISMATCH": 0,
             "UNKNOWN": 0
           },
@@ -94,7 +97,7 @@
       },
       "knownDifferences": [],
       "profiles": {
-        "strict": "MATCHES_RECORDED_CASES",
+        "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
         "emulator": "NO_PRODUCTION_CLAIM"
       }
     },
@@ -141,6 +144,7 @@
           "counts": {
             "MATCH": 41,
             "MATCH_LAYOUT": 5,
+            "KNOWN_DIFFERENCE": 0,
             "MISMATCH": 0,
             "UNKNOWN": 0
           },
@@ -151,6 +155,7 @@
           "counts": {
             "MATCH": 41,
             "MATCH_LAYOUT": 5,
+            "KNOWN_DIFFERENCE": 0,
             "MISMATCH": 0,
             "UNKNOWN": 0
           },
@@ -161,6 +166,7 @@
           "counts": {
             "MATCH": 41,
             "MATCH_LAYOUT": 5,
+            "KNOWN_DIFFERENCE": 0,
             "MISMATCH": 0,
             "UNKNOWN": 0
           },
@@ -169,7 +175,7 @@
       },
       "knownDifferences": [],
       "profiles": {
-        "strict": "MATCHES_RECORDED_CASES",
+        "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
         "emulator": "NO_PRODUCTION_CLAIM"
       }
     },
@@ -213,6 +219,7 @@
           "counts": {
             "MATCH": 0,
             "MATCH_LAYOUT": 3,
+            "KNOWN_DIFFERENCE": 0,
             "MISMATCH": 0,
             "UNKNOWN": 0
           },
@@ -223,6 +230,7 @@
           "counts": {
             "MATCH": 0,
             "MATCH_LAYOUT": 3,
+            "KNOWN_DIFFERENCE": 0,
             "MISMATCH": 0,
             "UNKNOWN": 0
           },
@@ -233,6 +241,7 @@
           "counts": {
             "MATCH": 0,
             "MATCH_LAYOUT": 3,
+            "KNOWN_DIFFERENCE": 0,
             "MISMATCH": 0,
             "UNKNOWN": 0
           },
@@ -241,7 +250,7 @@
       },
       "knownDifferences": [],
       "profiles": {
-        "strict": "MATCHES_RECORDED_CASES",
+        "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
         "emulator": "NO_PRODUCTION_CLAIM"
       }
     },
@@ -281,6 +290,7 @@
           "counts": {
             "MATCH": 0,
             "MATCH_LAYOUT": 11,
+            "KNOWN_DIFFERENCE": 0,
             "MISMATCH": 0,
             "UNKNOWN": 0
           },
@@ -291,6 +301,7 @@
           "counts": {
             "MATCH": 0,
             "MATCH_LAYOUT": 11,
+            "KNOWN_DIFFERENCE": 0,
             "MISMATCH": 0,
             "UNKNOWN": 0
           },
@@ -301,6 +312,7 @@
           "counts": {
             "MATCH": 0,
             "MATCH_LAYOUT": 11,
+            "KNOWN_DIFFERENCE": 0,
             "MISMATCH": 0,
             "UNKNOWN": 0
           },
@@ -309,7 +321,7 @@
       },
       "knownDifferences": [],
       "profiles": {
-        "strict": "MATCHES_RECORDED_CASES",
+        "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
         "emulator": "NO_PRODUCTION_CLAIM"
       }
     },
@@ -355,6 +367,7 @@
           "counts": {
             "MATCH": 1,
             "MATCH_LAYOUT": 5,
+            "KNOWN_DIFFERENCE": 0,
             "MISMATCH": 0,
             "UNKNOWN": 0
           },
@@ -365,6 +378,7 @@
           "counts": {
             "MATCH": 1,
             "MATCH_LAYOUT": 5,
+            "KNOWN_DIFFERENCE": 0,
             "MISMATCH": 0,
             "UNKNOWN": 0
           },
@@ -375,6 +389,7 @@
           "counts": {
             "MATCH": 1,
             "MATCH_LAYOUT": 5,
+            "KNOWN_DIFFERENCE": 0,
             "MISMATCH": 0,
             "UNKNOWN": 0
           },
@@ -383,7 +398,7 @@
       },
       "knownDifferences": [],
       "profiles": {
-        "strict": "MATCHES_RECORDED_CASES",
+        "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
         "emulator": "NO_PRODUCTION_CLAIM"
       }
     },
@@ -442,6 +457,7 @@
           "counts": {
             "MATCH": 3,
             "MATCH_LAYOUT": 4,
+            "KNOWN_DIFFERENCE": 0,
             "MISMATCH": 0,
             "UNKNOWN": 0
           },
@@ -450,8 +466,9 @@
         "strictVsPass1": {
           "rows": 7,
           "counts": {
-            "MATCH": 3,
+            "MATCH": 2,
             "MATCH_LAYOUT": 4,
+            "KNOWN_DIFFERENCE": 1,
             "MISMATCH": 0,
             "UNKNOWN": 0
           },
@@ -460,8 +477,9 @@
         "strictVsPass2": {
           "rows": 7,
           "counts": {
-            "MATCH": 3,
+            "MATCH": 2,
             "MATCH_LAYOUT": 4,
+            "KNOWN_DIFFERENCE": 1,
             "MISMATCH": 0,
             "UNKNOWN": 0
           },
@@ -472,7 +490,7 @@
         "KD-DEFAULT-404-BODY"
       ],
       "profiles": {
-        "strict": "MATCHES_RECORDED_CASES",
+        "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
         "emulator": "NO_PRODUCTION_CLAIM"
       }
     },
@@ -542,6 +560,7 @@
           "counts": {
             "MATCH": 15,
             "MATCH_LAYOUT": 15,
+            "KNOWN_DIFFERENCE": 0,
             "MISMATCH": 0,
             "UNKNOWN": 0
           },
@@ -550,8 +569,9 @@
         "strictVsPass1": {
           "rows": 30,
           "counts": {
-            "MATCH": 15,
+            "MATCH": 11,
             "MATCH_LAYOUT": 15,
+            "KNOWN_DIFFERENCE": 4,
             "MISMATCH": 0,
             "UNKNOWN": 0
           },
@@ -560,8 +580,9 @@
         "strictVsPass2": {
           "rows": 30,
           "counts": {
-            "MATCH": 15,
+            "MATCH": 11,
             "MATCH_LAYOUT": 15,
+            "KNOWN_DIFFERENCE": 4,
             "MISMATCH": 0,
             "UNKNOWN": 0
           },
@@ -572,7 +593,7 @@
         "KD-DEFAULT-404-BODY"
       ],
       "profiles": {
-        "strict": "MATCHES_RECORDED_CASES",
+        "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
         "emulator": "NO_PRODUCTION_CLAIM"
       }
     },
@@ -619,6 +640,7 @@
           "counts": {
             "MATCH": 2,
             "MATCH_LAYOUT": 15,
+            "KNOWN_DIFFERENCE": 0,
             "MISMATCH": 0,
             "UNKNOWN": 0
           },
@@ -629,6 +651,7 @@
           "counts": {
             "MATCH": 2,
             "MATCH_LAYOUT": 15,
+            "KNOWN_DIFFERENCE": 0,
             "MISMATCH": 0,
             "UNKNOWN": 0
           },
@@ -639,6 +662,7 @@
           "counts": {
             "MATCH": 2,
             "MATCH_LAYOUT": 15,
+            "KNOWN_DIFFERENCE": 0,
             "MISMATCH": 0,
             "UNKNOWN": 0
           },
@@ -647,7 +671,7 @@
       },
       "knownDifferences": [],
       "profiles": {
-        "strict": "MATCHES_RECORDED_CASES",
+        "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
         "emulator": "NO_PRODUCTION_CLAIM"
       }
     },
@@ -693,6 +717,7 @@
           "counts": {
             "MATCH": 7,
             "MATCH_LAYOUT": 4,
+            "KNOWN_DIFFERENCE": 0,
             "MISMATCH": 0,
             "UNKNOWN": 0
           },
@@ -701,8 +726,9 @@
         "strictVsPass1": {
           "rows": 11,
           "counts": {
-            "MATCH": 7,
-            "MATCH_LAYOUT": 4,
+            "MATCH": 3,
+            "MATCH_LAYOUT": 1,
+            "KNOWN_DIFFERENCE": 7,
             "MISMATCH": 0,
             "UNKNOWN": 0
           },
@@ -711,8 +737,9 @@
         "strictVsPass2": {
           "rows": 11,
           "counts": {
-            "MATCH": 7,
-            "MATCH_LAYOUT": 4,
+            "MATCH": 3,
+            "MATCH_LAYOUT": 1,
+            "KNOWN_DIFFERENCE": 7,
             "MISMATCH": 0,
             "UNKNOWN": 0
           },
@@ -725,7 +752,7 @@
         "KD-SDK-FILES"
       ],
       "profiles": {
-        "strict": "MATCHES_RECORDED_CASES",
+        "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
         "emulator": "NO_PRODUCTION_CLAIM"
       }
     },
@@ -769,6 +796,7 @@
           "counts": {
             "MATCH": 0,
             "MATCH_LAYOUT": 4,
+            "KNOWN_DIFFERENCE": 0,
             "MISMATCH": 0,
             "UNKNOWN": 0
           },
@@ -779,6 +807,7 @@
           "counts": {
             "MATCH": 0,
             "MATCH_LAYOUT": 4,
+            "KNOWN_DIFFERENCE": 0,
             "MISMATCH": 0,
             "UNKNOWN": 0
           },
@@ -789,6 +818,7 @@
           "counts": {
             "MATCH": 0,
             "MATCH_LAYOUT": 4,
+            "KNOWN_DIFFERENCE": 0,
             "MISMATCH": 0,
             "UNKNOWN": 0
           },
@@ -797,7 +827,7 @@
       },
       "knownDifferences": [],
       "profiles": {
-        "strict": "MATCHES_RECORDED_CASES",
+        "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
         "emulator": "NO_PRODUCTION_CLAIM"
       }
     },
@@ -835,6 +865,7 @@
           "counts": {
             "MATCH": 0,
             "MATCH_LAYOUT": 32,
+            "KNOWN_DIFFERENCE": 0,
             "MISMATCH": 0,
             "UNKNOWN": 0
           },
@@ -845,6 +876,7 @@
           "counts": {
             "MATCH": 0,
             "MATCH_LAYOUT": 32,
+            "KNOWN_DIFFERENCE": 0,
             "MISMATCH": 0,
             "UNKNOWN": 0
           },
@@ -855,6 +887,7 @@
           "counts": {
             "MATCH": 0,
             "MATCH_LAYOUT": 32,
+            "KNOWN_DIFFERENCE": 0,
             "MISMATCH": 0,
             "UNKNOWN": 0
           },
@@ -863,13 +896,13 @@
       },
       "knownDifferences": [],
       "profiles": {
-        "strict": "MATCHES_RECORDED_CASES",
+        "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
         "emulator": "NO_PRODUCTION_CLAIM"
       }
     },
     {
       "conditionId": "HOSTING/compression-vary",
-      "description": "Content-Encoding and Vary for compressible and incompressible types",
+      "description": "Vary and negotiation headers of compressible and incompressible types; Content-Encoding itself is not reproduced (KD-COMPRESSION: gzip and br)",
       "status": "VERIFIED",
       "recipeIds": [
         "hosting/compression-vary"
@@ -901,6 +934,7 @@
           "counts": {
             "MATCH": 0,
             "MATCH_LAYOUT": 10,
+            "KNOWN_DIFFERENCE": 0,
             "MISMATCH": 0,
             "UNKNOWN": 0
           },
@@ -910,7 +944,8 @@
           "rows": 10,
           "counts": {
             "MATCH": 0,
-            "MATCH_LAYOUT": 10,
+            "MATCH_LAYOUT": 3,
+            "KNOWN_DIFFERENCE": 7,
             "MISMATCH": 0,
             "UNKNOWN": 0
           },
@@ -920,7 +955,8 @@
           "rows": 10,
           "counts": {
             "MATCH": 0,
-            "MATCH_LAYOUT": 10,
+            "MATCH_LAYOUT": 3,
+            "KNOWN_DIFFERENCE": 7,
             "MISMATCH": 0,
             "UNKNOWN": 0
           },
@@ -931,7 +967,7 @@
         "KD-COMPRESSION"
       ],
       "profiles": {
-        "strict": "MATCHES_RECORDED_CASES",
+        "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
         "emulator": "NO_PRODUCTION_CLAIM"
       }
     },
@@ -969,6 +1005,7 @@
           "counts": {
             "MATCH": 2,
             "MATCH_LAYOUT": 0,
+            "KNOWN_DIFFERENCE": 0,
             "MISMATCH": 0,
             "UNKNOWN": 0
           },
@@ -979,6 +1016,7 @@
           "counts": {
             "MATCH": 2,
             "MATCH_LAYOUT": 0,
+            "KNOWN_DIFFERENCE": 0,
             "MISMATCH": 0,
             "UNKNOWN": 0
           },
@@ -989,6 +1027,7 @@
           "counts": {
             "MATCH": 2,
             "MATCH_LAYOUT": 0,
+            "KNOWN_DIFFERENCE": 0,
             "MISMATCH": 0,
             "UNKNOWN": 0
           },
@@ -997,7 +1036,7 @@
       },
       "knownDifferences": [],
       "profiles": {
-        "strict": "MATCHES_RECORDED_CASES",
+        "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
         "emulator": "NO_PRODUCTION_CLAIM"
       }
     }
@@ -1006,12 +1045,53 @@
     "status": "OFFLINE_PASS",
     "suite": "conformance/src/hosting/run.mjs",
     "matrix": "conformance/HOSTING-MATRIX.md",
-    "scope": "82 HTTP cases and 138 glob pairs against the official emulator (emulator profile)",
+    "scope": "82 HTTP cases and 138 glob pairs against the official emulator (emulator profile); the strict profile against the two production recordings (comparisons)",
+    "comparisons": [
+      {
+        "path": "conformance/hosting-production-run-comparison.json",
+        "sha256": "1e38ea12d38c84f22ef381016e7408de4e0a1f032c452024cecda860128c2c7b",
+        "rows": 201,
+        "summary": {
+          "MATCH": 76,
+          "MATCH_LAYOUT": 123,
+          "KNOWN_DIFFERENCE": 2,
+          "MISMATCH": 0,
+          "UNKNOWN": 0
+        }
+      },
+      {
+        "path": "conformance/hosting-production-strict-vs-pass-1.json",
+        "sha256": "61c9b4356b478c82dd1e9b67ec4bb2d188b7e229a758d496e4f47b4ee0ed5253",
+        "rows": 201,
+        "summary": {
+          "MATCH": 64,
+          "MATCH_LAYOUT": 116,
+          "KNOWN_DIFFERENCE": 21,
+          "MISMATCH": 0,
+          "UNKNOWN": 0
+        }
+      },
+      {
+        "path": "conformance/hosting-production-strict-vs-pass-2.json",
+        "sha256": "daee009ee231b2c96e275a3cab86d0732bc3bae16ef864647d1677805d5f53d4",
+        "rows": 201,
+        "summary": {
+          "MATCH": 64,
+          "MATCH_LAYOUT": 116,
+          "KNOWN_DIFFERENCE": 21,
+          "MISMATCH": 0,
+          "UNKNOWN": 0
+        }
+      }
+    ],
+    "productionRequests": 0,
+    "result": "COMPARED_ON_RECORDED_CORPUS_WITH_KNOWN_DIFFERENCES",
     "strictReplay": {
       "test": "conformance/src/hosting-production/strict-replay.test.mjs",
       "command": "FIREEMU_BIN=<fireemu> node --test conformance/src/hosting-production/strict-replay.test.mjs",
-      "requires": "the committed comparisons equal the ones recomputed on the binary"
-    }
+      "requires": "the committed comparisons equal the ones recomputed on the binary, with productionExact set (local.mjs does)"
+    },
+    "releaseBindingNote": "Run R37 of conformance/src/release-strict-regression.mjs reproduces the three comparisons on the packed binary (strict profile, productionExact, loopback only) and requires each to equal its committed file; the conformance workflow runs the same replay on a fresh build (conformance.yml, step \"strict replay of the Hosting recordings\"). The kinds of the production recordings are not rerun: the release job cannot reach production."
   },
   "productionProposal": "spec/compatibility/hosting-production-packet.md",
   "recordingPolicy": {
@@ -1090,8 +1170,11 @@
     "The reserved initialization bodies keep byte count, line count and, for JSON, key order with value types and byte lengths; no value is retained.",
     "ETag and Last-Modified are compared by form, not by value.",
     "The redirect `type` default of the CLI is not observable through the REST API, which requires a status code.",
-    "The strict profile matches the recorded cases; a request outside the corpus is answered by the same rules, not by an observation.",
-    "Compression (gzip, br), the 21,376-byte default 404 page body, the hosted SDK files, the init.json key set beyond apiKey and projectId and the parent-directory 302 are known differences (known-differences.json)."
+    "The strict profile matches the recorded cases under productionExact. Under the default profile two development defaults differ from production on purpose (hosting.cacheControl \"none\": no default Cache-Control; hosting.clientCountry \"honoured\": X-Country-Code and the country cookie select i18n content); productionExact restores production for both (owner policy 1396/1403, coordinator ruling 23). A request outside the corpus is answered by the same rules, not by an observation.",
+    "Known differences (known-differences.json): gzip and br encoding (KD-COMPRESSION), the 21,376-byte default 404 page body (KD-DEFAULT-404-BODY), the hosted SDK files (KD-SDK-FILES), the init.json layout beyond apiKey and projectId and the init.json and init.js lengths (KD-INIT-KEYS), the length of the hosted /__/auth/handler page (KD-AUTH-HANDLER-PAGE, ruling 20) and the Location host of a parent-directory 302 (KD-SAFETY-ORIGIN-REDIRECT: production answers a 302 to an internal origin host, strict answers the same 302 to the normalized path of this origin; rulings 17 and 21). Strict-transport-security, x-robots-tag and the SDK-row headers are excluded as edge-set. 21 of the 201 rows of each strict comparison carry a known difference and are counted as KNOWN_DIFFERENCE, not MATCH.",
+    "Not compared: the body of init.js in the production-vs-local comparison (only init.json has a layout compared), and the stand-in /__/auth/handler page body (HEAD only was recorded).",
+    "Inferred, not recorded: the redirect parameter name rule. Strict reads a name as letters and underscore only, so `:id2` is the parameter `id` followed by a literal `2`. The recording shows only that GET /capture/one/two and GET /capture/:id2/two do not match the source /capture/:id/:id2; other readings fit both rows (`:id2` a literal segment; production rejecting or dropping the rule; digit names allowed but repeated parameters refused). The rule applies to every user redirect with a digit in a parameter name (ruling 24); probing digit-bearing names is a To-Do for the next idp packet.",
+    "Strict answers that no recording covers: 416 with Content-Range: bytes */N for an unsatisfiable range; a multi-range request answered whole; Range on HEAD answering 206 with the part's length and no body; If-Modified-Since on HEAD; OPTIONS on a path that is not a file (answered as any request); the normalized-path 302 for dot segments other than a leading parent (`/a/../b` answers 302 to `/b`); the stand-in /__/auth/handler page; and the redirect rule for digit-bearing parameter names above."
   ],
   "outOfScope": [
     "Production deployment of functions and live upstream routing are not executed (owner ledger 2435).",
@@ -1100,30 +1183,33 @@
   "comparisons": {
     "runVsRun": {
       "path": "conformance/hosting-production-run-comparison.json",
-      "sha256": "ecc0caaa2bd2fc32e833eedf014233c355ac2784dbb9f8b03094cdc2ef52c062",
+      "sha256": "1e38ea12d38c84f22ef381016e7408de4e0a1f032c452024cecda860128c2c7b",
       "summary": {
-        "MATCH": 78,
+        "MATCH": 76,
         "MATCH_LAYOUT": 123,
+        "KNOWN_DIFFERENCE": 2,
         "MISMATCH": 0,
         "UNKNOWN": 0
       }
     },
     "strictVsPass1": {
       "path": "conformance/hosting-production-strict-vs-pass-1.json",
-      "sha256": "410621b6122a45b0a40ffa11f9baedc2062a1063bdaeef0466c07db538408da1",
+      "sha256": "61c9b4356b478c82dd1e9b67ec4bb2d188b7e229a758d496e4f47b4ee0ed5253",
       "summary": {
-        "MATCH": 75,
-        "MATCH_LAYOUT": 126,
+        "MATCH": 64,
+        "MATCH_LAYOUT": 116,
+        "KNOWN_DIFFERENCE": 21,
         "MISMATCH": 0,
         "UNKNOWN": 0
       }
     },
     "strictVsPass2": {
       "path": "conformance/hosting-production-strict-vs-pass-2.json",
-      "sha256": "5575fc7a212c88c18a3e681c7c739b5799c98c9f04c143a01490f00c172365c2",
+      "sha256": "daee009ee231b2c96e275a3cab86d0732bc3bae16ef864647d1677805d5f53d4",
       "summary": {
-        "MATCH": 75,
-        "MATCH_LAYOUT": 126,
+        "MATCH": 64,
+        "MATCH_LAYOUT": 116,
+        "KNOWN_DIFFERENCE": 21,
         "MISMATCH": 0,
         "UNKNOWN": 0
       }
@@ -1131,7 +1217,7 @@
   },
   "knownDifferences": {
     "path": "conformance/src/hosting-production/known-differences.json",
-    "sha256": "1d06de482d2ff8fb6568410484505873362dbf138cc43143af88c52d342626dc",
+    "sha256": "ac2cc772ec9a176d01e7c03a0cf7d07befb59885e6387082db2380bc3e48e8c6",
     "entries": [
       "KD-COMPRESSION",
       "KD-DEFAULT-404-BODY",
@@ -1168,5 +1254,10 @@
       "reason": "Carried only by the two production-served SDK file rows, which are a known difference (KD-SDK-FILES). Recorded, never compared.",
       "authority": "coordinator ruling 17 (2026-11-11)"
     }
+  ],
+  "followUps": [
+    "Owner question: add flate2 (gzip) for the strict profile (ruling 15); Brotli stays out unless a crate is approved.",
+    "Next idp packet: record the body of the default 404 page (ruling 16) and the hosted /__/auth/handler page with a GET (ruling 20), and the Location of dot-segment redirects other than a leading parent.",
+    "Next idp packet: probe redirect sources with digit-bearing parameter names so the `:id2` rule (ruling 24) is observed: /capture/one/two2 against /capture/:id/:id2, /capture/x/:id2, a single-parameter source such as /p/:a1 with /p/x, and a repeated name `/q/:id/:id`. Alternative readings to separate: (1) letters-and-underscore names with a literal suffix (strict today), (2) `:id2` a literal segment, (3) the rule rejected or dropped by production, (4) digit names allowed but a second parameter refused."
   ]
 }

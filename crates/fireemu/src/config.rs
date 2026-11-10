@@ -1324,6 +1324,11 @@ pub struct RuntimeConfig {
     pub database_default_access: DatabaseDefaultAccess,
     /// `functions.authBlockingToken`: the Auth blocking function token mode.
     pub functions_auth_blocking_token: AuthBlockingToken,
+    /// `hosting.cacheControl`: whether strict adds Hosting production's default
+    /// `Cache-Control: max-age=3600` to deployed files.
+    pub hosting_cache_control: HostingCacheControl,
+    /// `hosting.clientCountry`: whether the country a client sends decides localized content.
+    pub hosting_client_country: HostingClientCountry,
     /// The rules files the `database` section of `firebase.json` names, and where each
     /// applies.
     pub database_rules: Vec<DatabaseRulesEntry>,
@@ -1446,6 +1451,79 @@ pub enum DatabaseDefaultAccess {
     Open,
     /// Only the `owner` credential is allowed.
     Locked,
+}
+
+/// `hosting.cacheControl`: the default `Cache-Control` of a deployed file under strict.
+///
+/// Hosting production adds `max-age=3600` to a file whose rules set no `Cache-Control`, so a
+/// browser keeps an edited file for an hour. That is a poor default for local development, so
+/// both profiles default to `none`: the answer the official emulator gives, no header, and an edit
+/// shows at once. `productionExact` asks for `production` (strict only). A `headers` rule that
+/// sets `Cache-Control` wins in every mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HostingCacheControl {
+    /// No default `Cache-Control` (the official emulator's answer).
+    #[default]
+    None,
+    /// `Cache-Control: max-age=3600`, as Hosting production answers.
+    Production,
+}
+
+impl HostingCacheControl {
+    /// Parses the configuration spelling.
+    #[must_use]
+    pub fn parse_config(text: &str) -> Option<Self> {
+        match text {
+            "none" => Some(Self::None),
+            "production" => Some(Self::Production),
+            _ => None,
+        }
+    }
+
+    /// The configuration spelling.
+    #[must_use]
+    pub const fn as_config_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Production => "production",
+        }
+    }
+}
+
+/// `hosting.clientCountry`: whether localized content follows the country a client sends.
+///
+/// Hosting production decides the country at its edge: the `X-Country-Code` header and the
+/// `firebase-country-override` cookie a client sends decide nothing. A local server has no edge, and
+/// those two inputs are the only way to test country content, so both profiles default to
+/// `honoured`, as the official emulator does. `productionExact` asks for `ignored` (strict only).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HostingClientCountry {
+    /// The header and the cookie select country content.
+    #[default]
+    Honoured,
+    /// Neither selects anything, as in production.
+    Ignored,
+}
+
+impl HostingClientCountry {
+    /// Parses the configuration spelling.
+    #[must_use]
+    pub fn parse_config(text: &str) -> Option<Self> {
+        match text {
+            "honoured" => Some(Self::Honoured),
+            "ignored" => Some(Self::Ignored),
+            _ => None,
+        }
+    }
+
+    /// The configuration spelling.
+    #[must_use]
+    pub const fn as_config_str(self) -> &'static str {
+        match self {
+            Self::Honoured => "honoured",
+            Self::Ignored => "ignored",
+        }
+    }
 }
 
 /// `functions.authBlockingToken`: the Auth blocking function token mode.
@@ -1818,6 +1896,8 @@ impl Default for RuntimeConfig {
             pubsub_local_bearer_token: None,
             pubsub_dead_letter_authorization: DeadLetterAuthorization::Implicit,
             database_default_access: DatabaseDefaultAccess::Open,
+            hosting_cache_control: HostingCacheControl::None,
+            hosting_client_country: HostingClientCountry::Honoured,
             functions_auth_blocking_token: AuthBlockingToken::Emulated,
             database_rules: Vec::new(),
             database_rules_resolved: Vec::new(),
@@ -2221,6 +2301,9 @@ pub(crate) const PUBSUB_KEYS: [&str; 4] = [
 
 /// The keys of the `database` section.
 pub(crate) const DATABASE_KEYS: [&str; 1] = ["defaultAccess"];
+
+/// The keys of the `hosting` section.
+pub(crate) const HOSTING_KEYS: [&str; 2] = ["cacheControl", "clientCountry"];
 
 /// The keys of the `scheduler` section.
 pub(crate) const SCHEDULER_KEYS: [&str; 5] = [
@@ -4118,6 +4201,7 @@ pub(crate) const KNOWN_TOP_LEVEL: &[&str] = &[
     "events",
     "pubsub",
     "database",
+    "hosting",
     "eventarc",
     "scheduler",
     "functions",
@@ -4284,6 +4368,16 @@ impl RuntimeConfig {
         } else {
             AuthBlockingToken::Emulated
         };
+        self.hosting_cache_control = if exact {
+            HostingCacheControl::Production
+        } else {
+            HostingCacheControl::None
+        };
+        self.hosting_client_country = if exact {
+            HostingClientCountry::Ignored
+        } else {
+            HostingClientCountry::Honoured
+        };
         self.app_check.debug_tokens = if !exact && self.profile == CompatibilityProfile::Strict {
             AppCheckDebugTokens::Any
         } else {
@@ -4377,6 +4471,14 @@ impl RuntimeConfig {
             (
                 "functions.authBlockingToken",
                 self.functions_auth_blocking_token.as_config_str(),
+            ),
+            (
+                "hosting.cacheControl",
+                self.hosting_cache_control.as_config_str(),
+            ),
+            (
+                "hosting.clientCountry",
+                self.hosting_client_country.as_config_str(),
             ),
         ];
         self.development_defaults = values
@@ -4751,6 +4853,55 @@ impl RuntimeConfig {
             catalog.insert(key, grants);
         }
         cfg.eventarc_oauth_credentials = Some(catalog);
+        Ok(())
+    }
+
+    /// Reads the `hosting` section. The production values change what the strict profile answers,
+    /// so they require the strict profile.
+    fn parse_hosting(
+        h: &serde_json::Map<String, Value>,
+        cfg: &mut Self,
+    ) -> Result<(), ConfigError> {
+        for key in h.keys() {
+            if !HOSTING_KEYS.contains(&key.as_str()) {
+                return Err(ConfigError(format!("hosting: unknown key {key:?}")));
+            }
+        }
+        if let Some(value) = h.get("cacheControl") {
+            let mode = value
+                .as_str()
+                .and_then(HostingCacheControl::parse_config)
+                .ok_or_else(|| {
+                    ConfigError(
+                        "hosting.cacheControl must be \"none\" or \"production\"".to_owned(),
+                    )
+                })?;
+            if mode == HostingCacheControl::Production
+                && cfg.profile != CompatibilityProfile::Strict
+            {
+                return Err(ConfigError(
+                    "hosting.cacheControl \"production\" requires the strict profile".to_owned(),
+                ));
+            }
+            cfg.hosting_cache_control = mode;
+        }
+        if let Some(value) = h.get("clientCountry") {
+            let mode = value
+                .as_str()
+                .and_then(HostingClientCountry::parse_config)
+                .ok_or_else(|| {
+                    ConfigError(
+                        "hosting.clientCountry must be \"honoured\" or \"ignored\"".to_owned(),
+                    )
+                })?;
+            if mode == HostingClientCountry::Ignored && cfg.profile != CompatibilityProfile::Strict
+            {
+                return Err(ConfigError(
+                    "hosting.clientCountry \"ignored\" requires the strict profile".to_owned(),
+                ));
+            }
+            cfg.hosting_client_country = mode;
+        }
         Ok(())
     }
 
@@ -5602,6 +5753,12 @@ impl RuntimeConfig {
                 .as_object()
                 .ok_or_else(|| ConfigError("database must be an object".to_owned()))?;
             Self::parse_database(database, &mut cfg)?;
+        }
+        if let Some(hosting) = obj.get("hosting") {
+            let hosting = hosting
+                .as_object()
+                .ok_or_else(|| ConfigError("hosting must be an object".to_owned()))?;
+            Self::parse_hosting(hosting, &mut cfg)?;
         }
         if let Some(scheduler) = obj.get("scheduler") {
             let scheduler = scheduler
@@ -6718,6 +6875,14 @@ mod tests {
                     json!(cfg.database_default_access.as_config_str()),
                 ),
                 (
+                    "hosting.cacheControl",
+                    json!(cfg.hosting_cache_control.as_config_str()),
+                ),
+                (
+                    "hosting.clientCountry",
+                    json!(cfg.hosting_client_country.as_config_str()),
+                ),
+                (
                     "functions.authBlockingToken",
                     json!(cfg.functions_auth_blocking_token.as_config_str()),
                 ),
@@ -6771,6 +6936,8 @@ mod tests {
                     }
                     ("pubsub.deadLetterAuthorization", true) => json!("iam"),
                     ("database.defaultAccess", true) => json!("locked"),
+                    ("hosting.cacheControl", true) => json!("production"),
+                    ("hosting.clientCountry", true) => json!("ignored"),
                     ("functions.authBlockingToken" | "eventarc.authentication", true) => {
                         json!("production")
                     }
@@ -10215,6 +10382,110 @@ mod tests {
     /// Naming a Pub/Sub project number is how a configuration asks for production's dead-letter
     /// grants, and the report says so; an empty map, the emulator profile and an explicit key
     /// say something else.
+    #[test]
+    fn the_hosting_development_defaults_are_off_unless_production_exact_or_declared() {
+        let modes = |input: Value| {
+            let cfg = RuntimeConfig::from_json(&input).unwrap();
+            let source = |key: &str| {
+                cfg.development_defaults
+                    .iter()
+                    .find(|entry| entry["key"] == key)
+                    .unwrap()["source"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned()
+            };
+            (
+                cfg.hosting_cache_control,
+                cfg.hosting_client_country,
+                source("hosting.cacheControl"),
+                source("hosting.clientCountry"),
+            )
+        };
+        let defaults = (
+            HostingCacheControl::None,
+            HostingClientCountry::Honoured,
+            "default".to_owned(),
+            "default".to_owned(),
+        );
+        assert_eq!(
+            modes(json!({"schemaVersion": 1, "profile": "emulator"})),
+            defaults
+        );
+        assert_eq!(
+            modes(json!({"schemaVersion": 1, "profile": "strict"})),
+            defaults
+        );
+        assert_eq!(
+            modes(json!({"schemaVersion": 1, "profile": "strict", "productionExact": true})),
+            (
+                HostingCacheControl::Production,
+                HostingClientCountry::Ignored,
+                "productionExact".to_owned(),
+                "productionExact".to_owned()
+            )
+        );
+        // an explicit key wins over productionExact, each on its own
+        assert_eq!(
+            modes(
+                json!({"schemaVersion": 1, "profile": "strict", "productionExact": true,
+                "hosting": {"cacheControl": "none"}})
+            ),
+            (
+                HostingCacheControl::None,
+                HostingClientCountry::Ignored,
+                "explicit".to_owned(),
+                "productionExact".to_owned()
+            )
+        );
+        assert_eq!(
+            modes(json!({"schemaVersion": 1, "profile": "strict",
+                "hosting": {"clientCountry": "ignored"}})),
+            (
+                HostingCacheControl::None,
+                HostingClientCountry::Ignored,
+                "default".to_owned(),
+                "explicit".to_owned()
+            )
+        );
+        // the emulator profile may name the values it already has
+        assert_eq!(
+            modes(json!({"schemaVersion": 1, "profile": "emulator",
+                "hosting": {"cacheControl": "none", "clientCountry": "honoured"}}))
+            .0,
+            HostingCacheControl::None
+        );
+        for (bad, message) in [
+            (
+                json!({"schemaVersion": 1, "profile": "emulator", "hosting": {"cacheControl": "production"}}),
+                "hosting.cacheControl \"production\" requires the strict profile",
+            ),
+            (
+                json!({"schemaVersion": 1, "profile": "emulator", "hosting": {"clientCountry": "ignored"}}),
+                "hosting.clientCountry \"ignored\" requires the strict profile",
+            ),
+            (
+                json!({"schemaVersion": 1, "hosting": {"cacheControl": "always"}}),
+                "hosting.cacheControl must be \"none\" or \"production\"",
+            ),
+            (
+                json!({"schemaVersion": 1, "hosting": {"clientCountry": 1}}),
+                "hosting.clientCountry must be \"honoured\" or \"ignored\"",
+            ),
+            (
+                json!({"schemaVersion": 1, "hosting": {"other": 1}}),
+                "unknown key",
+            ),
+            (
+                json!({"schemaVersion": 1, "hosting": 1}),
+                "hosting must be an object",
+            ),
+        ] {
+            let error = RuntimeConfig::from_json(&bad).unwrap_err();
+            assert!(error.0.contains(message), "{bad}: {}", error.0);
+        }
+    }
+
     #[test]
     fn the_database_default_access_is_open_unless_production_exact_or_declared() {
         let access = |input: Value| {

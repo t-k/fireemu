@@ -144,6 +144,36 @@ pub(super) fn accept_languages(header: &str) -> Vec<String> {
     entries.into_iter().map(|(_, _, tag)| tag).collect()
 }
 
+/// The normalized path of a request target that climbs with dot segments, or `None` when it has
+/// none (`v01.safety-parent`: `/../outside.txt` and `/%2e%2e/outside.txt` both give
+/// `/outside.txt`). A `..` that has nothing to remove stays at the root, `.` and empty parts
+/// vanish, and a trailing slash stays. The parts keep their escapes, so the result is as safe as
+/// the request path was.
+pub(super) fn dot_segment_target(path: &str) -> Option<String> {
+    let parts: Vec<&str> = path.split('/').collect();
+    let dots =
+        |part: &str| super::files::decode_uri_full(part).filter(|text| text == ".." || text == ".");
+    if !parts.iter().any(|part| dots(part).is_some()) {
+        return None;
+    }
+    let mut kept: Vec<&str> = Vec::new();
+    for part in &parts {
+        match dots(part).as_deref() {
+            Some("..") => {
+                kept.pop();
+            }
+            Some(_) => {}
+            None if part.is_empty() => {}
+            None => kept.push(part),
+        }
+    }
+    let mut target = format!("/{}", kept.join("/"));
+    if path.ends_with('/') && !kept.is_empty() {
+        target.push('/');
+    }
+    Some(target)
+}
+
 /// `appAssociation: "AUTO"` serves these two documents when the site has no file of the name
 /// (`v02.assetlinks`, `v02.apple-app-site-association`).
 pub(super) fn app_association(path: &str) -> Option<&'static str> {
@@ -350,6 +380,28 @@ mod tests {
             let held = if weak { format!("W/{tag}") } else { tag.to_owned() };
             members.insert(position.min(members.len()), held);
             prop_assert!(if_none_match(&members.join(", "), tag));
+        }
+    }
+
+    #[test]
+    fn dot_segments_are_normalized_the_way_the_recorded_rows_were() {
+        for (path, expected) in [
+            ("/../outside.txt", Some("/outside.txt")),
+            ("/%2e%2e/outside.txt", Some("/outside.txt")),
+            ("/%2E%2e/outside.txt", Some("/outside.txt")),
+            ("/a/../b", Some("/b")),
+            ("/a/b/../../../c/", Some("/c/")),
+            ("/a/./b", Some("/a/b")),
+            ("/..", Some("/")),
+            ("/a/%2e%2e/", Some("/")),
+            ("/a/b%2fc/../d", Some("/a/d")),
+            ("/a/..b/c", None),
+            ("/a/b.c/d", None),
+            ("/a%2e%2eb", None),
+            ("/", None),
+            ("/%2e%2e%2foutside.txt", None),
+        ] {
+            assert_eq!(dot_segment_target(path).as_deref(), expected, "{path}");
         }
     }
 

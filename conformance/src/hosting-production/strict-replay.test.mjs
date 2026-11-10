@@ -21,6 +21,16 @@ test(
     try {
       const local = await runLocal({ binary: resolve(binary), profile: "strict" });
       assert.equal(local.rows.filter((row) => row.outcome !== "answered").length, 0);
+      // The two parent-directory rows are a known difference in their Location only: strict answers
+      // the same 302 to the normalized path of its own origin and reads nothing outside public.
+      for (const id of ["v01.safety-parent", "v01.safety-encoded-parent"]) {
+        const row = local.rows.find((candidate) => candidate.id === id);
+        assert.equal(row.status, 302, id);
+        assert.deepEqual(row.headers.location, ["/outside.txt"], id);
+        assert.deepEqual(row.headers["cache-control"], ["private"], id);
+        assert.deepEqual(row.headers["content-type"], ["text/html; charset=UTF-8"], id);
+        assert.equal(row.bodyBytes, 0, id);
+      }
       const path = join(directory, "local.json");
       await writeFile(path, JSON.stringify(local));
       const documents = await comparisons(path);

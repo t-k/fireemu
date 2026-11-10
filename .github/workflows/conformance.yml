@@ -85,6 +85,14 @@ jobs:
           FIREEMU_BIN: ${{ github.workspace }}/target/release/fireemu
         run: pnpm -C conformance run check
 
+      # The strict profile (productionExact) serves the HOSTING production corpus on loopback and must
+      # reproduce the three committed comparisons with the two production recordings. The selftest
+      # runs this test too, but skips it without a binary.
+      - name: strict replay of the Hosting recordings
+        env:
+          FIREEMU_BIN: ${{ github.workspace }}/target/release/fireemu
+        run: node --test conformance/src/hosting-production/strict-replay.test.mjs
+
       # `record` re-derives the fixtures from the official emulators. It never commits: a
       # difference is reported as a diff so that an upstream change becomes an explicit review
       # rather than a silently updated baseline.

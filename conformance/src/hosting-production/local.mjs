@@ -57,14 +57,17 @@ export async function materialize(version, root) {
 
 async function startFireemu(binary, profile, root, firebaseJson) {
   const ready = join(root, "ready.json");
-  const config =
-    profile === "emulator" ? ["--config", join(root, "profile.json")] : ["--no-config-discovery"];
-  if (profile === "emulator") {
-    await writeFile(
-      join(root, "profile.json"),
-      JSON.stringify({ schemaVersion: 1, profile: "emulator" }),
-    );
-  }
+  // The strict replay answers as production: `productionExact` turns the development defaults of the
+  // default profile off (`hosting.cacheControl` and `hosting.clientCountry`).
+  const config = ["--config", join(root, "profile.json")];
+  await writeFile(
+    join(root, "profile.json"),
+    JSON.stringify(
+      profile === "emulator"
+        ? { schemaVersion: 1, profile: "emulator" }
+        : { schemaVersion: 1, profile: "strict", productionExact: true },
+    ),
+  );
   await mkdir(join(root, "home"), { recursive: true });
   const child = spawn(
     binary,

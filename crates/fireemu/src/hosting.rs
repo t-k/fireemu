@@ -121,6 +121,24 @@ struct Site {
     /// The strict profile answers as Hosting production does (see `production`); the emulator
     /// profile answers as the pinned local oracle does.
     strict: bool,
+    /// Strict adds production's default `Cache-Control: max-age=3600` to a deployed file. Off by
+    /// default (a development default): an edited file shows at once. `productionExact` turns it on.
+    default_cache_control: bool,
+    /// Strict reads the country from the `X-Country-Code` header and the country cookie, as the
+    /// official emulator does (a development default). `productionExact` turns it off: production
+    /// decides the country at its edge.
+    client_country: bool,
+}
+
+/// How a site answers: the profile and the two development defaults of the strict profile.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Mode {
+    /// The strict profile (production's answers) rather than the emulator profile (the oracle's).
+    pub strict: bool,
+    /// See `Site::default_cache_control`.
+    pub default_cache_control: bool,
+    /// See `Site::client_country`.
+    pub client_country: bool,
 }
 
 /// When the process first served a generated file: its `Last-Modified`.
@@ -278,8 +296,9 @@ impl Site {
             };
             let country_override = cookie("firebase-country-override");
             // Production decides the country at its edge: a header or cookie the client sends
-            // does not (`v07.country-header`, `v07.country-cookie`, runs 658bb2 and 9a8d57).
-            let country = if self.strict {
+            // does not (`v07.country-header`, `v07.country-cookie`, runs 658bb2 and 9a8d57). Under
+            // the development default (`hosting.clientCountry: honoured`) they still do.
+            let country = if self.strict && !self.client_country {
                 ""
             } else if country_override.is_empty() {
                 header("x-country-code")
@@ -350,7 +369,7 @@ impl Site {
     /// A deployed file as the profile answers it. The emulator profile answers as the pinned oracle
     /// does (`file_response`); strict adds what production adds: a quoted SHA-256 `ETag`, `304`
     /// for a matching `If-None-Match` or a not older `If-Modified-Since`, and single `Range`s.
-    async fn serve_asset(
+    fn serve_asset(
         &self,
         path: &str,
         asset: files::Asset,
@@ -412,28 +431,23 @@ impl Site {
             }
             production::RangeOutcome::Partial { start, end } => {
                 let size = end - start + 1;
-                let data = if head {
-                    Ok(Vec::new())
-                } else {
-                    let mut file = asset.file;
-                    tokio::task::spawn_blocking(move || {
-                        use std::io::{Read, Seek};
-                        file.seek(std::io::SeekFrom::Start(start))?;
-                        let mut data = vec![0u8; usize::try_from(size).unwrap_or(0)];
-                        file.read_exact(&mut data)?;
-                        Ok::<_, std::io::Error>(data)
-                    })
-                    .await
-                    .unwrap_or_else(|error| Err(std::io::Error::other(error)))
-                };
-                let Ok(data) = data else {
-                    return response(500, "Could not read the file", None);
-                };
+                let mut file = asset.file;
+                // The range is streamed from the open file, never read whole into memory.
+                if !head {
+                    use std::io::Seek as _;
+                    if file.seek(std::io::SeekFrom::Start(start)).is_err() {
+                        return response(500, "Could not read the file", None);
+                    }
+                }
                 builder
                     .status(206)
                     .header("content-range", format!("bytes {start}-{end}/{length}"))
                     .header("content-length", size)
-                    .body(full(data))
+                    .body(if head {
+                        full(Bytes::new())
+                    } else {
+                        files::FileBody::new(file, size).boxed()
+                    })
             }
         };
         marked(result.expect("asset headers"), Kind::File)
@@ -465,6 +479,28 @@ impl Site {
             return response(400, "Invalid redirect", None);
         }
         result
+    }
+    /// A request that climbs out of the site with dot segments (`v01.safety-parent`,
+    /// `v01.safety-encoded-parent`): production answers `302` to the normalized path on its content
+    /// origin, with a host that changes from request to request, and never serves it as it came.
+    /// Strict answers the same `302` to the normalized path on this origin, so nothing outside
+    /// `public` is read and the redirect cannot leave the origin.
+    fn dot_segment_redirect(target: &str, query: &str) -> Response<Body> {
+        let mut answer = response(302, Bytes::new(), Some("text/html; charset=UTF-8"));
+        let headers = answer.headers_mut();
+        headers.insert(
+            "cache-control",
+            hyper::header::HeaderValue::from_static("private"),
+        );
+        headers.insert(
+            "accept-ranges",
+            hyper::header::HeaderValue::from_static("bytes"),
+        );
+        // the target is the escaped path of the request, so it is a valid header value
+        if let Ok(location) = hyper::header::HeaderValue::try_from(format!("{target}{query}")) {
+            headers.insert("location", location);
+        }
+        marked(answer, Kind::Passthrough)
     }
     /// `400` for a malformed target. Production answers `400 Bad Request` as plain text of unknown
     /// length (`v01.safety-bad-percent`).
@@ -519,7 +555,10 @@ impl Site {
                 }),
             );
         }
-        if kind == Kind::File && !headers.contains_key("cache-control") {
+        if kind == Kind::File
+            && self.default_cache_control
+            && !headers.contains_key("cache-control")
+        {
             headers.insert(
                 "cache-control",
                 hyper::header::HeaderValue::from_static("max-age=3600"),
@@ -552,6 +591,11 @@ impl Site {
         let Some(decoded) = files::decode_uri(&path) else {
             return self.bad_request();
         };
+        if self.strict {
+            if let Some(target) = production::dot_segment_target(&path) {
+                return Self::dot_segment_redirect(&target, &query);
+            }
+        }
         // Production matches the parts of a path one by one and decodes every escape of a
         // captured part (`%2f`, `%3A`, `%3F`) before it builds the `Location` (`v01.edge-1-03`,
         // `-08`, `-10`); header rules see the ordinarily decoded path (`v01.encoded-static`).
@@ -641,21 +685,18 @@ impl Site {
                 target.push_str(query);
                 return Some(self.redirect(&target, 301, head));
             }
-            return Some(
-                self.serve_asset(
-                    &file,
-                    asset,
-                    // Production serves `/404.html` as the file it is (`v01.not-found-direct`).
-                    if path == "/404.html" && !self.strict {
-                        404
-                    } else {
-                        200
-                    },
-                    head,
-                    headers,
-                )
-                .await,
-            );
+            return Some(self.serve_asset(
+                &file,
+                asset,
+                // Production serves `/404.html` as the file it is (`v01.not-found-direct`).
+                if path == "/404.html" && !self.strict {
+                    404
+                } else {
+                    200
+                },
+                head,
+                headers,
+            ));
         }
         let has_slash = path.ends_with('/');
         let index = format!("{}/index.html", path.trim_end_matches('/'));
@@ -670,7 +711,7 @@ impl Site {
                     head,
                 ));
             }
-            return Some(self.serve_asset(&file, asset, 200, head, headers).await);
+            return Some(self.serve_asset(&file, asset, 200, head, headers));
         }
         if clean {
             let appended = if has_slash && slash.is_some() {
@@ -699,7 +740,7 @@ impl Site {
                         head,
                     ));
                 }
-                return Some(self.serve_asset(&file, asset, 200, head, headers).await);
+                return Some(self.serve_asset(&file, asset, 200, head, headers));
             }
         }
         None
@@ -860,15 +901,13 @@ impl Site {
                 if let Some((file, asset)) = self.asset(destination, &hyper::HeaderMap::new()).await
                 {
                     if self.strict {
-                        return self
-                            .serve_asset(
-                                &file,
-                                asset,
-                                if destination == "/404.html" { 404 } else { 200 },
-                                head,
-                                request.headers(),
-                            )
-                            .await;
+                        return self.serve_asset(
+                            &file,
+                            asset,
+                            if destination == "/404.html" { 404 } else { 200 },
+                            head,
+                            request.headers(),
+                        );
                     }
                     let etag_match = request
                         .headers()
@@ -895,9 +934,7 @@ impl Site {
             }
         }
         if let Some((file, asset)) = self.asset("/404.html", request.headers()).await {
-            let mut result = self
-                .serve_asset(&file, asset, 404, head, request.headers())
-                .await;
+            let mut result = self.serve_asset(&file, asset, 404, head, request.headers());
             self.custom_headers("/404.html", &mut result);
             return result;
         }
@@ -1273,7 +1310,7 @@ pub fn prepare(
     project: String,
     upstream: Option<std::net::SocketAddr>,
     emulators: Value,
-    strict: bool,
+    mode: Mode,
 ) -> Result<PreparedSite, String> {
     // firebase-tools 15.28.2 only logs a missing public directory at debug level and serves.
     let root =
@@ -1299,7 +1336,9 @@ pub fn prepare(
         project,
         upstream,
         emulators,
-        strict,
+        strict: mode.strict,
+        default_cache_control: mode.default_cache_control,
+        client_country: mode.client_country,
     })))
 }
 
@@ -1547,6 +1586,8 @@ mod i18n_path_tests {
             upstream: None,
             emulators: Value::Null,
             strict: false,
+            default_cache_control: false,
+            client_country: true,
         }
     }
 

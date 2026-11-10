@@ -33,8 +33,9 @@
     }
   ],
   "summary": {
-    "MATCH": 75,
-    "MATCH_LAYOUT": 126,
+    "MATCH": 64,
+    "MATCH_LAYOUT": 116,
+    "KNOWN_DIFFERENCE": 21,
     "MISMATCH": 0,
     "UNKNOWN": 0
   },
@@ -48,6 +49,7 @@
       "counts": {
         "MATCH": 2,
         "MATCH_LAYOUT": 21,
+        "KNOWN_DIFFERENCE": 0,
         "MISMATCH": 0,
         "UNKNOWN": 0
       },
@@ -60,6 +62,7 @@
       "counts": {
         "MATCH": 1,
         "MATCH_LAYOUT": 5,
+        "KNOWN_DIFFERENCE": 0,
         "MISMATCH": 0,
         "UNKNOWN": 0
       },
@@ -70,8 +73,9 @@
     "trailing-slash": {
       "rows": 30,
       "counts": {
-        "MATCH": 15,
+        "MATCH": 11,
         "MATCH_LAYOUT": 15,
+        "KNOWN_DIFFERENCE": 4,
         "MISMATCH": 0,
         "UNKNOWN": 0
       },
@@ -84,6 +88,7 @@
       "counts": {
         "MATCH": 0,
         "MATCH_LAYOUT": 4,
+        "KNOWN_DIFFERENCE": 0,
         "MISMATCH": 0,
         "UNKNOWN": 0
       },
@@ -96,6 +101,7 @@
       "counts": {
         "MATCH": 0,
         "MATCH_LAYOUT": 3,
+        "KNOWN_DIFFERENCE": 0,
         "MISMATCH": 0,
         "UNKNOWN": 0
       },
@@ -108,6 +114,7 @@
       "counts": {
         "MATCH": 41,
         "MATCH_LAYOUT": 5,
+        "KNOWN_DIFFERENCE": 0,
         "MISMATCH": 0,
         "UNKNOWN": 0
       },
@@ -118,8 +125,9 @@
     "reserved-paths": {
       "rows": 11,
       "counts": {
-        "MATCH": 7,
-        "MATCH_LAYOUT": 4,
+        "MATCH": 3,
+        "MATCH_LAYOUT": 1,
+        "KNOWN_DIFFERENCE": 7,
         "MISMATCH": 0,
         "UNKNOWN": 0
       },
@@ -131,7 +139,8 @@
       "rows": 10,
       "counts": {
         "MATCH": 0,
-        "MATCH_LAYOUT": 10,
+        "MATCH_LAYOUT": 3,
+        "KNOWN_DIFFERENCE": 7,
         "MISMATCH": 0,
         "UNKNOWN": 0
       },
@@ -144,6 +153,7 @@
       "counts": {
         "MATCH": 0,
         "MATCH_LAYOUT": 32,
+        "KNOWN_DIFFERENCE": 0,
         "MISMATCH": 0,
         "UNKNOWN": 0
       },
@@ -154,8 +164,9 @@
     "clean-urls": {
       "rows": 7,
       "counts": {
-        "MATCH": 3,
+        "MATCH": 2,
         "MATCH_LAYOUT": 4,
+        "KNOWN_DIFFERENCE": 1,
         "MISMATCH": 0,
         "UNKNOWN": 0
       },
@@ -168,6 +179,7 @@
       "counts": {
         "MATCH": 2,
         "MATCH_LAYOUT": 0,
+        "KNOWN_DIFFERENCE": 0,
         "MISMATCH": 0,
         "UNKNOWN": 0
       },
@@ -180,6 +192,7 @@
       "counts": {
         "MATCH": 2,
         "MATCH_LAYOUT": 15,
+        "KNOWN_DIFFERENCE": 0,
         "MISMATCH": 0,
         "UNKNOWN": 0
       },
@@ -192,6 +205,7 @@
       "counts": {
         "MATCH": 0,
         "MATCH_LAYOUT": 11,
+        "KNOWN_DIFFERENCE": 0,
         "MISMATCH": 0,
         "UNKNOWN": 0
       },
@@ -388,7 +402,7 @@
     },
     {
       "id": "v01.reserved-json",
-      "status": "MATCH_LAYOUT",
+      "status": "KNOWN_DIFFERENCE",
       "differences": [],
       "known": [
         {
@@ -403,7 +417,7 @@
     },
     {
       "id": "v01.reserved-js",
-      "status": "MATCH_LAYOUT",
+      "status": "KNOWN_DIFFERENCE",
       "differences": [],
       "known": [
         {
@@ -414,7 +428,7 @@
     },
     {
       "id": "v01.reserved-emulator-js",
-      "status": "MATCH_LAYOUT",
+      "status": "KNOWN_DIFFERENCE",
       "differences": [],
       "known": [
         {
@@ -430,7 +444,7 @@
     },
     {
       "id": "v01.reserved-sdk-10",
-      "status": "MATCH",
+      "status": "KNOWN_DIFFERENCE",
       "differences": [],
       "known": [
         {
@@ -473,7 +487,7 @@
     },
     {
       "id": "v01.reserved-sdk-12",
-      "status": "MATCH",
+      "status": "KNOWN_DIFFERENCE",
       "differences": [],
       "known": [
         {
@@ -516,7 +530,7 @@
     },
     {
       "id": "v01.reserved-auth-handler",
-      "status": "MATCH",
+      "status": "KNOWN_DIFFERENCE",
       "differences": [],
       "known": [
         {
@@ -537,7 +551,7 @@
     },
     {
       "id": "v01.gz-gzip",
-      "status": "MATCH_LAYOUT",
+      "status": "KNOWN_DIFFERENCE",
       "differences": [],
       "known": [
         {
@@ -560,7 +574,7 @@
     },
     {
       "id": "v01.gz-br",
-      "status": "MATCH_LAYOUT",
+      "status": "KNOWN_DIFFERENCE",
       "differences": [],
       "known": [
         {
@@ -572,22 +586,22 @@
           "entry": "KD-COMPRESSION"
         },
         {
-          "field": "header:etag",
-          "entry": "KD-COMPRESSION"
-        },
-        {
           "field": "decodedBytes",
           "entry": "KD-COMPRESSION"
         },
         {
           "field": "decodedSha256",
+          "entry": "KD-COMPRESSION"
+        },
+        {
+          "field": "header:etag",
           "entry": "KD-COMPRESSION"
         }
       ]
     },
     {
       "id": "v01.gz-gzip-br",
-      "status": "MATCH_LAYOUT",
+      "status": "KNOWN_DIFFERENCE",
       "differences": [],
       "known": [
         {
@@ -599,22 +613,22 @@
           "entry": "KD-COMPRESSION"
         },
         {
-          "field": "header:etag",
-          "entry": "KD-COMPRESSION"
-        },
-        {
           "field": "decodedBytes",
           "entry": "KD-COMPRESSION"
         },
         {
           "field": "decodedSha256",
+          "entry": "KD-COMPRESSION"
+        },
+        {
+          "field": "header:etag",
           "entry": "KD-COMPRESSION"
         }
       ]
     },
     {
       "id": "v01.gz-br-refused",
-      "status": "MATCH_LAYOUT",
+      "status": "KNOWN_DIFFERENCE",
       "differences": [],
       "known": [
         {
@@ -626,22 +640,22 @@
           "entry": "KD-COMPRESSION"
         },
         {
-          "field": "header:etag",
-          "entry": "KD-COMPRESSION"
-        },
-        {
           "field": "decodedBytes",
           "entry": "KD-COMPRESSION"
         },
         {
           "field": "decodedSha256",
           "entry": "KD-COMPRESSION"
+        },
+        {
+          "field": "header:etag",
+          "entry": "KD-COMPRESSION"
         }
       ]
     },
     {
       "id": "v01.gz-head-gzip",
-      "status": "MATCH_LAYOUT",
+      "status": "KNOWN_DIFFERENCE",
       "differences": [],
       "known": [
         {
@@ -656,7 +670,7 @@
     },
     {
       "id": "v01.gz-json-gzip",
-      "status": "MATCH_LAYOUT",
+      "status": "KNOWN_DIFFERENCE",
       "differences": [],
       "known": [
         {
@@ -679,7 +693,7 @@
     },
     {
       "id": "v01.gz-json-br",
-      "status": "MATCH_LAYOUT",
+      "status": "KNOWN_DIFFERENCE",
       "differences": [],
       "known": [
         {
@@ -691,15 +705,15 @@
           "entry": "KD-COMPRESSION"
         },
         {
-          "field": "header:etag",
-          "entry": "KD-COMPRESSION"
-        },
-        {
           "field": "decodedBytes",
           "entry": "KD-COMPRESSION"
         },
         {
           "field": "decodedSha256",
+          "entry": "KD-COMPRESSION"
+        },
+        {
+          "field": "header:etag",
           "entry": "KD-COMPRESSION"
         }
       ]
@@ -711,94 +725,22 @@
     },
     {
       "id": "v01.safety-parent",
-      "status": "MATCH",
+      "status": "KNOWN_DIFFERENCE",
       "differences": [],
       "known": [
         {
-          "field": "status",
-          "entry": "KD-SAFETY-ORIGIN-REDIRECT"
-        },
-        {
-          "field": "header:cache-control",
-          "entry": "KD-SAFETY-ORIGIN-REDIRECT"
-        },
-        {
-          "field": "header:content-length",
-          "entry": "KD-SAFETY-ORIGIN-REDIRECT"
-        },
-        {
-          "field": "header:content-type",
-          "entry": "KD-SAFETY-ORIGIN-REDIRECT"
-        },
-        {
-          "field": "header:etag",
-          "entry": "KD-SAFETY-ORIGIN-REDIRECT"
-        },
-        {
-          "field": "header:last-modified",
-          "entry": "KD-SAFETY-ORIGIN-REDIRECT"
-        },
-        {
           "field": "header:location",
-          "entry": "KD-SAFETY-ORIGIN-REDIRECT"
-        },
-        {
-          "field": "header:vary",
-          "entry": "KD-SAFETY-ORIGIN-REDIRECT"
-        },
-        {
-          "field": "header:x-fixture",
-          "entry": "KD-SAFETY-ORIGIN-REDIRECT"
-        },
-        {
-          "field": "bodyBytes",
           "entry": "KD-SAFETY-ORIGIN-REDIRECT"
         }
       ]
     },
     {
       "id": "v01.safety-encoded-parent",
-      "status": "MATCH",
+      "status": "KNOWN_DIFFERENCE",
       "differences": [],
       "known": [
         {
-          "field": "status",
-          "entry": "KD-SAFETY-ORIGIN-REDIRECT"
-        },
-        {
-          "field": "header:cache-control",
-          "entry": "KD-SAFETY-ORIGIN-REDIRECT"
-        },
-        {
-          "field": "header:content-length",
-          "entry": "KD-SAFETY-ORIGIN-REDIRECT"
-        },
-        {
-          "field": "header:content-type",
-          "entry": "KD-SAFETY-ORIGIN-REDIRECT"
-        },
-        {
-          "field": "header:etag",
-          "entry": "KD-SAFETY-ORIGIN-REDIRECT"
-        },
-        {
-          "field": "header:last-modified",
-          "entry": "KD-SAFETY-ORIGIN-REDIRECT"
-        },
-        {
           "field": "header:location",
-          "entry": "KD-SAFETY-ORIGIN-REDIRECT"
-        },
-        {
-          "field": "header:vary",
-          "entry": "KD-SAFETY-ORIGIN-REDIRECT"
-        },
-        {
-          "field": "header:x-fixture",
-          "entry": "KD-SAFETY-ORIGIN-REDIRECT"
-        },
-        {
-          "field": "bodyBytes",
           "entry": "KD-SAFETY-ORIGIN-REDIRECT"
         }
       ]
@@ -1170,7 +1112,7 @@
     },
     {
       "id": "v02.page-slash",
-      "status": "MATCH",
+      "status": "KNOWN_DIFFERENCE",
       "differences": [],
       "known": [
         {
@@ -1220,7 +1162,7 @@
     },
     {
       "id": "v03.page",
-      "status": "MATCH",
+      "status": "KNOWN_DIFFERENCE",
       "differences": [],
       "known": [
         {
@@ -1235,7 +1177,7 @@
     },
     {
       "id": "v03.page-slash",
-      "status": "MATCH",
+      "status": "KNOWN_DIFFERENCE",
       "differences": [],
       "known": [
         {
@@ -1275,7 +1217,7 @@
     },
     {
       "id": "v04.page",
-      "status": "MATCH",
+      "status": "KNOWN_DIFFERENCE",
       "differences": [],
       "known": [
         {
@@ -1290,7 +1232,7 @@
     },
     {
       "id": "v04.page-slash",
-      "status": "MATCH",
+      "status": "KNOWN_DIFFERENCE",
       "differences": [],
       "known": [
         {
@@ -1505,7 +1447,7 @@
     },
     {
       "id": "v09.reserved-auth-handler",
-      "status": "MATCH",
+      "status": "KNOWN_DIFFERENCE",
       "differences": [],
       "known": [
         {

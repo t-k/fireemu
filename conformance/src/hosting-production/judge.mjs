@@ -12,6 +12,13 @@
 //  - Volatile edge headers (date, age, via, x-cache, ...) are never compared. Any other header that
 //    is present is listed as unclassified; the review has to name each one before closure.
 //  - A mask hides a value, never a format: nothing here normalizes a length, a precision or an order.
+//  - Known differences (`known-differences.json`, one entry per ruling) take named fields of named rows
+//    out of the comparison. A row whose only differences are known is KNOWN_DIFFERENCE, never MATCH:
+//    its known fields were not compared. An entry may also name a suffix to strip from an ETag
+//    (`etagSuffix`, the `-br` of a Brotli answer) so the rest of the tag is still compared by form.
+//  - What the production-vs-local comparison does not compare: the body of `init.js` (only `init.json`
+//    has a layout compared; `compareInitJs` is set for run-vs-run only), and the Content-Encoding
+//    bodies by bytes (their decoded digest is compared). KD-INIT-KEYS says so.
 import {
   COMPARED_HEADERS,
   SDK_ROW_HEADERS,
@@ -20,7 +27,7 @@ import {
   isComparedHeader,
 } from "./rows.mjs";
 
-export const STATUSES = ["MATCH", "MATCH_LAYOUT", "MISMATCH", "UNKNOWN"];
+export const STATUSES = ["MATCH", "MATCH_LAYOUT", "KNOWN_DIFFERENCE", "MISMATCH", "UNKNOWN"];
 
 /** The form of an ETag value: weak flag, quotes, length of the opaque tag and its character class. */
 export function etagShape(value) {
@@ -125,6 +132,34 @@ export function applyKnownDifferences(id, differences, entries = [], kind) {
 }
 
 /**
+ * The rows with the suffix of an ETag removed where an entry names one for the row (`etagSuffix`),
+ * and the entries that did it. Only a tag that ends in the suffix inside the quotes is changed.
+ */
+export function stripEtagSuffixes(id, a, b, entries = [], kind) {
+  const applied = [];
+  const strip = (row, suffix) => {
+    const etag = row.headers?.etag;
+    if (!etag) return row;
+    const stripped = etag.map((value) =>
+      value.endsWith(`${suffix}"`) ? `${value.slice(0, -suffix.length - 1)}"` : value,
+    );
+    return same(stripped, etag) ? row : { ...row, headers: { ...row.headers, etag: stripped } };
+  };
+  let left = a;
+  let right = b;
+  for (const entry of entries) {
+    if (!entry.etagSuffix || !entry.appliesTo.includes(kind) || !entry.rows.includes(id)) continue;
+    const before = [left, right];
+    left = strip(left, entry.etagSuffix);
+    right = strip(right, entry.etagSuffix);
+    if (left !== before[0] || right !== before[1]) {
+      applied.push({ field: "header:etag", entry: entry.id });
+    }
+  }
+  return { a: left, b: right, applied };
+}
+
+/**
  * Compares two shaped rows of the same request.
  * @returns {{ status: string, differences: object[], reason?: string }}
  */
@@ -140,6 +175,10 @@ export function compareRows(a, b, options = {}) {
       reason: a.outcome !== "answered" ? `a:${a.reason}` : `b:${b.reason}`,
     };
   }
+  const stripped = options.known
+    ? stripEtagSuffixes(a.id, a, b, options.known.entries, options.known.kind)
+    : { a, b, applied: [] };
+  ({ a, b } = stripped);
   const differences = [];
   if (a.status !== b.status) differences.push({ field: "status", a: a.status, b: b.status });
   const headers = headerDifferences(a, b);
@@ -147,8 +186,10 @@ export function compareRows(a, b, options = {}) {
   const { remaining, known } = options.known
     ? applyKnownDifferences(a.id, differences, options.known.entries, options.known.kind)
     : { remaining: differences, known: [] };
+  known.push(...stripped.applied);
   const extra = known.length ? { known } : {};
   if (remaining.length) return { status: "MISMATCH", differences: remaining, ...extra };
+  if (known.length) return { status: "KNOWN_DIFFERENCE", differences: remaining, ...extra };
   return {
     status: headers.layoutOnly ? "MATCH_LAYOUT" : "MATCH",
     differences: remaining,

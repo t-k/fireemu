@@ -752,7 +752,9 @@ fn the_manifest_publishes_effective_development_defaults() {
             {"key":"pubsub.deadLetterAuthorization","value":"implicit","source":"default"},
             {"key":"appCheck.debugTokens","value":"any","source":"default"},
             {"key":"database.defaultAccess","value":"open","source":"default"},
-            {"key":"functions.authBlockingToken","value":"emulated","source":"default"}
+            {"key":"functions.authBlockingToken","value":"emulated","source":"default"},
+            {"key":"hosting.cacheControl","value":"none","source":"default"},
+            {"key":"hosting.clientCountry","value":"honoured","source":"default"}
         ])
     );
 }

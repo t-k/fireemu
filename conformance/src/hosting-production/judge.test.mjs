@@ -317,7 +317,13 @@ test("compareRuns reports by corpus order, counts statuses and lists unclassifie
       ["v01.z", "UNKNOWN"],
     ],
   );
-  assert.deepEqual(result.summary, { MATCH: 0, MATCH_LAYOUT: 0, MISMATCH: 1, UNKNOWN: 2 });
+  assert.deepEqual(result.summary, {
+    MATCH: 0,
+    MATCH_LAYOUT: 0,
+    KNOWN_DIFFERENCE: 0,
+    MISMATCH: 1,
+    UNKNOWN: 2,
+  });
 });
 
 test("a condition is closable only when every non-informational row matches", () => {
@@ -551,12 +557,12 @@ test("a known difference is taken out of the mismatch only for its row, field an
   assert.equal(all.known.length, 2);
 });
 
-test("a row whose only differences are known matches and names them; any other difference still mismatches", () => {
+test("a row whose only differences are known is KNOWN_DIFFERENCE, not MATCH, and names them; any other difference still mismatches", () => {
   const a = row({}, { headers: [...answer().headers, ["Cache-Control", "max-age=60"]] });
   const b = row();
   const options = { known: { entries: [ENTRY], kind: "production-vs-local" } };
   const covered = compareRows(a, b, options);
-  assert.equal(covered.status, "MATCH");
+  assert.equal(covered.status, "KNOWN_DIFFERENCE");
   assert.deepEqual(covered.known, [{ field: "header:cache-control", entry: "KD-X" }]);
   // the same rows without the entry
   assert.equal(compareRows(a, b).status, "MISMATCH");
@@ -601,4 +607,39 @@ test("headers set by the https edge or the preview channel are volatile, SDK-row
     compareRows(row(), sdk).differences.some((d) => d.field === "header:pragma"),
     true,
   );
+});
+
+test("an entry's etagSuffix is removed from the tag, the rest is still compared by form", () => {
+  const entry = {
+    id: "KD-SUFFIX",
+    rows: ["v01.x"],
+    fields: [],
+    etagSuffix: "-br",
+    appliesTo: ["production-vs-local"],
+  };
+  const tagged = (value) =>
+    row({}, { headers: [...answer().headers.filter(([n]) => n !== "ETag"), ["ETag", value]] });
+  const hex = "a".repeat(64);
+  const options = { known: { entries: [entry], kind: "production-vs-local" } };
+  // the suffix of a Brotli answer: the form (quoted 64 hex) is what is compared
+  const brotli = compareRows(tagged(`"${hex}-br"`), tagged(`"${hex}"`), options);
+  assert.equal(brotli.status, "KNOWN_DIFFERENCE");
+  assert.deepEqual(brotli.known, [{ field: "header:etag", entry: "KD-SUFFIX" }]);
+  // without the entry, for another row, or for another comparison it is a mismatch
+  assert.equal(compareRows(tagged(`"${hex}-br"`), tagged(`"${hex}"`)).status, "MISMATCH");
+  const other = {
+    known: { entries: [{ ...entry, rows: ["v01.z"] }], kind: "production-vs-local" },
+  };
+  assert.equal(compareRows(tagged(`"${hex}-br"`), tagged(`"${hex}"`), other).status, "MISMATCH");
+  const runs = { known: { entries: [entry], kind: "run-vs-run" } };
+  assert.equal(compareRows(tagged(`"${hex}-br"`), tagged(`"${hex}"`), runs).status, "MISMATCH");
+  // only a tag that ends in the suffix inside the quotes is changed, and the form still counts
+  assert.equal(compareRows(tagged(`"${hex}-gz"`), tagged(`"${hex}"`), options).status, "MISMATCH");
+  assert.equal(
+    compareRows(tagged(`"${hex}-br"`), tagged(`"${"b".repeat(64)}"`), options).status,
+    "KNOWN_DIFFERENCE",
+  );
+  assert.equal(compareRows(tagged(`"${hex}"`), tagged(`"${hex}"`), options).status, "MATCH");
+  // a short tag is a different form once the suffix is gone
+  assert.equal(compareRows(tagged('"abc-br"'), tagged(`"${hex}"`), options).status, "MISMATCH");
 });

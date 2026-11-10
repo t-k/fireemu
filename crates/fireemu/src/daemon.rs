@@ -1557,7 +1557,13 @@ async fn serve_suite(
             cfg.auth_project.clone(),
             addrs.functions,
             emulators,
-            matches!(cfg.profile, crate::config::CompatibilityProfile::Strict),
+            crate::hosting::Mode {
+                strict: matches!(cfg.profile, crate::config::CompatibilityProfile::Strict),
+                default_cache_control: cfg.hosting_cache_control
+                    == crate::config::HostingCacheControl::Production,
+                client_country: cfg.hosting_client_country
+                    == crate::config::HostingClientCountry::Honoured,
+            },
         )?;
         hosting_info = addrs.hosting.map(|addr| fireemu_adapter_ui::HostingInfo {
             addr: addr.to_string(),

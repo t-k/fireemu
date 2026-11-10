@@ -24,8 +24,8 @@ impl Drop for OwnedChild {
     }
 }
 
-fn site_fixture(fixture: &std::path::Path) -> (Scratch, serde_json::Value) {
-    let dir = Scratch::new("hosting", "cli");
+fn site_fixture(fixture: &std::path::Path, name: &str) -> (Scratch, serde_json::Value) {
+    let dir = Scratch::new("hosting", name);
     let manifest: serde_json::Value =
         serde_json::from_slice(&std::fs::read(fixture.join("manifest.json")).unwrap()).unwrap();
     for name in manifest["files"]
@@ -73,7 +73,7 @@ fn hosting_cli_serves_shared_fixture_and_withdraws_readiness_on_shutdown() {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../conformance/hosting-fixtures");
     let corpus: serde_json::Value =
         serde_json::from_slice(&std::fs::read(fixture.join("cases.json")).unwrap()).unwrap();
-    let (dir, security) = site_fixture(&fixture);
+    let (dir, security) = site_fixture(&fixture, "cli");
     let sentinel = security["outsideSentinel"].as_str().unwrap();
     let mut hosting = corpus["configs"]["default"].clone();
     hosting["public"] = dir.join("public").to_string_lossy().to_string().into();
@@ -216,6 +216,28 @@ fn start(dir: &std::path::Path, firebase: &serde_json::Value, only: &str) -> (Ow
     start_with_config(dir, firebase, only, Some(&emulator_profile()))
 }
 
+/// The profiles the path-confinement tests run under: the default (strict) one, which a user gets
+/// without any configuration, and the emulator profile.
+const PROFILES: [Option<&str>; 2] = [None, Some("emulator")];
+
+/// [`start`] under `profile`: `None` is the default profile (no configuration at all).
+fn start_under(
+    profile: Option<&str>,
+    dir: &std::path::Path,
+    firebase: &serde_json::Value,
+    only: &str,
+) -> (OwnedChild, String) {
+    match profile {
+        None => start_with_config(dir, firebase, only, None),
+        Some(name) => start_with_config(
+            dir,
+            firebase,
+            only,
+            Some(&serde_json::json!({"schemaVersion": 1, "profile": name})),
+        ),
+    }
+}
+
 /// [`start`] with a canonical fireemu configuration document.
 fn start_with_config(
     dir: &std::path::Path,
@@ -299,6 +321,12 @@ fn emulators() -> serde_json::Value {
 
 #[test]
 fn hosting_ignored_assets_are_absent_from_every_route() {
+    for profile in PROFILES {
+        ignored_assets_are_absent_from_every_route(profile);
+    }
+}
+
+fn ignored_assets_are_absent_from_every_route(profile: Option<&str>) {
     let dir = Scratch::new("hosting", "ignored-assets");
     for (path, contents) in [
         ("public/private.json", "private"),
@@ -324,7 +352,7 @@ fn hosting_ignored_assets_are_absent_from_every_route() {
         "ignore":["private.json", "clean.html", "folder/index.html", "locales/en/page.html", "rewrite.html", "404.html"],
         "rewrites":[{"source":"/rewritten", "destination":"/rewrite.html"}]
     },"emulators":emulators()});
-    let (_child, address) = start(&dir, &firebase, "hosting");
+    let (_child, address) = start_under(profile, &dir, &firebase, "hosting");
     let mut failures = Vec::new();
     for path in [
         "/private.json",
@@ -448,7 +476,7 @@ fn header_rules_match_the_raw_request_path_like_the_pinned_emulator() {
             .unwrap()["headers"]
             .clone()
     };
-    let (dir, _) = site_fixture(&fixture);
+    let (dir, _) = site_fixture(&fixture, "header-rules");
     let mut hosting = corpus["configs"]["default"].clone();
     hosting["public"] = dir.join("public").to_string_lossy().to_string().into();
     let firebase = serde_json::json!({"hosting":hosting,"emulators":emulators()});
@@ -484,6 +512,12 @@ fn header_rules_match_the_raw_request_path_like_the_pinned_emulator() {
 // case-insensitive regex does not fold it to `S`), while a name starting with `S` stays served.
 #[test]
 fn a_negated_class_ignore_hides_sharp_s_and_keeps_the_excluded_letter() {
+    for profile in PROFILES {
+        a_negated_class_ignore_hides_sharp_s(profile);
+    }
+}
+
+fn a_negated_class_ignore_hides_sharp_s(profile: Option<&str>) {
     let dir = Scratch::new("hosting", "sharp-s");
     for (name, contents) in [("\u{df}secret.json", "hidden"), ("Ssecret.json", "served")] {
         let file = dir.join("public").join(name);
@@ -493,7 +527,7 @@ fn a_negated_class_ignore_hides_sharp_s_and_keeps_the_excluded_letter() {
     let firebase = serde_json::json!({"hosting":{
         "public":dir.join("public"), "ignore":["[^S]*.json"]
     },"emulators":emulators()});
-    let (_child, address) = start(&dir, &firebase, "hosting");
+    let (_child, address) = start_under(profile, &dir, &firebase, "hosting");
     let hidden = request(&address, "/%C3%9Fsecret.json");
     assert!(
         hidden.starts_with("HTTP/1.1 404") && !hidden.ends_with("hidden"),
@@ -532,32 +566,34 @@ fn the_daemon_applies_the_configured_host_policy() {
     let firebase =
         serde_json::json!({"hosting":{"public":dir.join("public")},"emulators":emulators()});
 
-    let (mut child, address) = start(&dir, &firebase, "hosting");
-    let refused = request_as(&address, "evil.example", "/");
-    assert!(refused.starts_with("HTTP/1.1 403"), "{refused}");
-    assert!(refused.contains("network.allowedHosts"), "{refused}");
-    assert!(!refused.contains("site"), "{refused}");
-    assert!(request_as(&address, "site.example", "/").starts_with("HTTP/1.1 403"));
-    assert!(request_as(&address, "localhost", "/").ends_with("site"));
-    assert!(request_as(&address, "10.0.2.2:5000", "/").ends_with("site"));
-    // Each refused name is logged once, with where to allow it.
-    let stderr = stderr_after_stop(&mut child);
-    drop(child);
-    assert_eq!(
-        stderr
-            .matches("warning: refused Host \"evil.example\"")
-            .count(),
-        1,
-        "{stderr}"
-    );
-    assert!(
-        stderr.contains("warning: refused Host \"site.example\""),
-        "{stderr}"
-    );
-    assert!(
-        stderr.contains("[network] section of fireemu.toml"),
-        "{stderr}"
-    );
+    for profile in PROFILES {
+        let (mut child, address) = start_under(profile, &dir, &firebase, "hosting");
+        let refused = request_as(&address, "evil.example", "/");
+        assert!(refused.starts_with("HTTP/1.1 403"), "{refused}");
+        assert!(refused.contains("network.allowedHosts"), "{refused}");
+        assert!(!refused.contains("site"), "{refused}");
+        assert!(request_as(&address, "site.example", "/").starts_with("HTTP/1.1 403"));
+        assert!(request_as(&address, "localhost", "/").ends_with("site"));
+        assert!(request_as(&address, "10.0.2.2:5000", "/").ends_with("site"));
+        // Each refused name is logged once, with where to allow it.
+        let stderr = stderr_after_stop(&mut child);
+        drop(child);
+        assert_eq!(
+            stderr
+                .matches("warning: refused Host \"evil.example\"")
+                .count(),
+            1,
+            "{stderr}"
+        );
+        assert!(
+            stderr.contains("warning: refused Host \"site.example\""),
+            "{stderr}"
+        );
+        assert!(
+            stderr.contains("[network] section of fireemu.toml"),
+            "{stderr}"
+        );
+    }
 
     let config =
         serde_json::json!({"schemaVersion": 1, "network": {"allowedHosts": ["site.example"]}});

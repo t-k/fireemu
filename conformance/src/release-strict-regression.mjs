@@ -168,6 +168,40 @@ const rtdbRun = (id, campaign, files) => ({
   ],
 });
 
+/**
+ * The Hosting comparisons (HOSTING closure): the production corpus served by the strict profile
+ * under productionExact on the binary under test and compared with the two committed recordings.
+ * One run exports the three comparison documents; each committed file must equal its own.
+ */
+const HOSTING_COMPARISONS = [
+  "conformance/hosting-production-run-comparison.json",
+  "conformance/hosting-production-strict-vs-pass-1.json",
+  "conformance/hosting-production-strict-vs-pass-2.json",
+];
+const hostingRun = (id) => ({
+  id,
+  kind: "hosting-comparison-v1",
+  comparisonPaths: HOSTING_COMPARISONS,
+  clear: [],
+  commands: [
+    {
+      mode: "local",
+      argv: [
+        "node",
+        "conformance/src/hosting-production/release-replay.mjs",
+        "local",
+        "--fireemu",
+        "{bin}",
+        "--export",
+        "{export}",
+      ],
+      env: {},
+      expectedExitCodes: [0],
+      timeoutMs: 10 * 60 * 1000,
+    },
+  ],
+});
+
 export const RUNS = [
   (() => {
     const run = rtdbRun("R22", "rest-old", [
@@ -208,6 +242,7 @@ export const RUNS = [
   rtdbRun("R34", "breadth", ["RTDB-breadth-comparison.json"]),
   rtdbRun("R35", "sdk-rules-syntax", ["RTDB-sdk-rules-syntax-comparison.json"]),
   rtdbRun("R36", "kinds", ["RTDB-kinds-comparison.json"]),
+  hostingRun("R37"),
   laneRun(
     "R1",
     "fs-query-index-comparison-v1",
@@ -1639,6 +1674,27 @@ async function observe(run, entry, context) {
   return existsSync(path) ? await readJsonFile(path) : undefined;
 }
 
+/**
+ * The Hosting comparison the binary produced against the committed one: the whole document, row for
+ * row, with no status relabelled, and the binary the export names is the one under test.
+ */
+export function judgeHosting(path, expected, observed, context) {
+  if (observed === undefined) return [`${path}: R37 produced no export`];
+  const differences = [];
+  if (observed.kind !== "hosting-comparison-v1-export") differences.push("the export kind differs");
+  if (observed.binarySha256 !== context.binarySha256) {
+    differences.push("the export names another binary than the one under test");
+  }
+  const actual = observed.documents?.[path];
+  if (actual === undefined) return [...differences, `${path}: not in the export`];
+  if (actual.summary?.MISMATCH !== 0 || actual.summary?.UNKNOWN !== 0) {
+    differences.push(`${path}: the replay has a mismatch or an unknown row`);
+  }
+  if (!isDeepStrictEqual(actual, expected))
+    differences.push(`${path}: differs from the committed comparison`);
+  return differences;
+}
+
 export function judge(comparison, observations, context) {
   // The historical closure retains its v0.35 custody and claims. R21 uses the separately
   // recorded v0.41 release expectation without rewriting that provenance.
@@ -1693,6 +1749,9 @@ export function judge(comparison, observations, context) {
   if (comparison.kind === "functions-http-integrated-regression") {
     return judgeFunctionsHttp(expected, observations.R12);
   }
+  if (comparison.kind === "hosting-comparison-v1") {
+    return judgeHosting(comparison.path, expected, observations[comparison.runIds[0]], context);
+  }
   const observed = observations[comparison.runIds[0]];
   const run = RUNS.find((r) => r.id === comparison.runIds[0]);
   let sourceRebinds = [];
@@ -1723,7 +1782,8 @@ export function exportCopies(comparisons, runs) {
         run.commands.some(
           (command) =>
             command.mode === "export-comparison" ||
-            (run.kind === "rtdb-production-comparison-v1" && command.mode === "local"),
+            (run.kind === "rtdb-production-comparison-v1" && command.mode === "local") ||
+            (run.kind === "hosting-comparison-v1" && command.mode === "local"),
         ),
       )
       .map((run) => run.id),

@@ -92,7 +92,7 @@ test("the known differences name corpus rows, a reason, an authority and the com
       entry.id,
     );
     assert.ok(entry.reason.length > 60, `${entry.id} has a reason`);
-    assert.match(entry.authority, /coordinator ruling 1[5-7]/, entry.id);
+    assert.match(entry.authority, /coordinator rulings? (1[5-7]|2[01])/, entry.id);
     assert.ok(
       entry.appliesTo.length > 0 &&
         entry.appliesTo.every((kind) => ["production-vs-local", "run-vs-run"].includes(kind)),

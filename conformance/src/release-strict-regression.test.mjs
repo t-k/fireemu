@@ -2546,7 +2546,7 @@ test("R20 declares the real check and evidence-reusing export CLI with scoped de
     assert.deepEqual(command.expectedExitCodes, [0]);
     assert.deepEqual(command.env, {});
   }
-  for (const other of RUNS.filter(({ id }) => id !== "R20" && !/^R(2[2-9]|3[0-6])$/.test(id)))
+  for (const other of RUNS.filter(({ id }) => id !== "R20" && !/^R(2[2-9]|3[0-7])$/.test(id)))
     for (const command of other.commands) assert.equal(command.timeoutMs, undefined, other.id);
   assert.match(strictProductionJob(), /timeout-minutes: 180\n/);
 });

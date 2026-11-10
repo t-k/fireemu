@@ -77,10 +77,13 @@ test("the committed comparisons are those of the recordings, with no mismatch an
       name,
     );
   }
-  assert.equal(
-    record.comparisons.runVsRun.summary.MATCH + record.comparisons.runVsRun.summary.MATCH_LAYOUT,
-    201,
-  );
+  const total = (summary) => Object.values(summary).reduce((sum, count) => sum + count, 0);
+  for (const comparison of Object.values(record.comparisons))
+    assert.equal(total(comparison.summary), 201);
+  // a row with a known difference is KNOWN_DIFFERENCE, never MATCH: 21 rows of each strict comparison
+  assert.equal(record.comparisons.strictVsPass1.summary.KNOWN_DIFFERENCE, 21);
+  assert.equal(record.comparisons.strictVsPass2.summary.KNOWN_DIFFERENCE, 21);
+  assert.equal(record.comparisons.runVsRun.summary.KNOWN_DIFFERENCE, 2);
   const knownFile = await bytesOf(record.knownDifferences.path);
   assert.equal(record.knownDifferences.sha256, sha(knownFile));
   assert.deepEqual(
@@ -137,7 +140,7 @@ test("every observed condition cites the recordings and comparisons its rows com
     });
     assert.deepEqual(condition.recipeIds, [`hosting/${key}`]);
     assert.deepEqual(condition.profiles, {
-      strict: "MATCHES_RECORDED_CASES",
+      strict: "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
       emulator: "NO_PRODUCTION_CLAIM",
     });
     for (const [name, document] of Object.entries(comparisons)) {
@@ -182,4 +185,67 @@ test("scope decisions keep the preview-channel and no-live-release rules", () =>
   assert.match(oracle, /preview channels/);
   assert.match(oracle, /never released to/);
   assert.match(oracle, /authorized domains/);
+});
+
+test("the release comparisons are the committed ones, and the limitations name what no recording settles", async () => {
+  const regression = record.integratedRegression;
+  assert.deepEqual(
+    regression.comparisons.map((entry) => entry.path),
+    Object.values(record.comparisons).map((entry) => entry.path),
+  );
+  for (const entry of regression.comparisons) {
+    const bytes = await bytesOf(entry.path);
+    assert.equal(entry.sha256, sha(bytes), entry.path);
+    assert.equal(entry.rows, 201);
+    assert.deepEqual(entry.summary, JSON.parse(bytes).summary);
+  }
+  assert.match(regression.releaseBindingNote, /R37/);
+  const limits = record.limitations.join("\n");
+  for (const text of [
+    "KNOWN_DIFFERENCE",
+    "KD-AUTH-HANDLER-PAGE",
+    "ruling 20",
+    "`:id2`",
+    "Inferred, not recorded",
+    "416",
+    "multi-range",
+    "Range on HEAD",
+    "productionExact",
+    "init.js",
+  ]) {
+    assert.ok(limits.includes(text), text);
+  }
+  assert.match(record.followUps.join("\n"), /flate2/);
+  assert.match(record.followUps.join("\n"), /404 page/);
+  assert.match(record.followUps.join("\n"), /digit-bearing/);
+  const compression = record.conditions.find((c) => c.conditionId === "HOSTING/compression-vary");
+  assert.match(compression.description, /Content-Encoding itself is not reproduced/);
+});
+
+test("every known-difference field is used by a committed comparison, and a wildcard says why", async () => {
+  const entries = JSON.parse(await bytesOf(record.knownDifferences.path)).entries;
+  const used = new Map();
+  for (const comparison of Object.values(record.comparisons)) {
+    for (const row of JSON.parse(await bytesOf(comparison.path)).rows) {
+      for (const { field, entry } of row.known ?? []) {
+        if (!used.has(entry)) used.set(entry, new Set());
+        used.get(entry).add(field);
+      }
+    }
+  }
+  for (const entry of entries) {
+    assert.ok(used.has(entry.id), `${entry.id} is used by no committed comparison`);
+    if (entry.fields === "*") {
+      assert.ok(isText(entry.wildcardReason), `${entry.id}: "*" needs a wildcardReason`);
+      continue;
+    }
+    const listed = new Set(entry.fields);
+    if (entry.etagSuffix) listed.add("header:etag");
+    for (const field of listed) {
+      assert.ok(used.get(entry.id).has(field), `${entry.id} lists ${field}, which no row uses`);
+    }
+    for (const field of used.get(entry.id)) {
+      assert.ok(listed.has(field), `${entry.id} covers ${field} without listing it`);
+    }
+  }
 });

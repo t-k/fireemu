@@ -29,13 +29,31 @@ impl Drop for OwnedChild {
 }
 
 struct Site {
-    _dir: Scratch,
+    dir: Scratch,
     _child: OwnedChild,
     address: String,
 }
 
-/// A site of `files` under `config`, served by the profile named (`strict` or `emulator`).
+/// A site of `files` under `config`, served by the profile named: `strict` (the default profile:
+/// the development defaults on), `exact` (strict with `productionExact`: production's answers) or
+/// `emulator`.
 fn site(name: &str, profile: &str, config: &serde_json::Value, files: &[(&str, &str)]) -> Site {
+    let document = match profile {
+        "exact" => {
+            serde_json::json!({"schemaVersion": 1, "profile": "strict", "productionExact": true})
+        }
+        other => serde_json::json!({"schemaVersion": 1, "profile": other}),
+    };
+    site_with(name, &document, config, files)
+}
+
+/// [`site`] under a complete configuration document.
+fn site_with(
+    name: &str,
+    document: &serde_json::Value,
+    config: &serde_json::Value,
+    files: &[(&str, &str)],
+) -> Site {
     let dir = Scratch::new("hosting-strict", name);
     for (path, contents) in files {
         let target = dir.join("public").join(path);
@@ -46,11 +64,7 @@ fn site(name: &str, profile: &str, config: &serde_json::Value, files: &[(&str, &
     hosting["public"] = dir.join("public").to_string_lossy().to_string().into();
     let firebase = serde_json::json!({"hosting": hosting, "emulators": {"hosting": {"port": 0}, "ui": {"enabled": false}, "hub": {"port": 0}, "logging": {"port": 0}}});
     std::fs::write(dir.join("firebase.json"), firebase.to_string()).unwrap();
-    std::fs::write(
-        dir.join("fireemu.json"),
-        serde_json::json!({"schemaVersion": 1, "profile": profile}).to_string(),
-    )
-    .unwrap();
+    std::fs::write(dir.join("fireemu.json"), document.to_string()).unwrap();
     let ready = dir.join("ready.json");
     let mut child = OwnedChild(
         Command::new(env!("CARGO_BIN_EXE_fireemu"))
@@ -99,7 +113,7 @@ fn site(name: &str, profile: &str, config: &serde_json::Value, files: &[(&str, &
         .trim_end_matches('/')
         .to_owned();
     Site {
-        _dir: dir,
+        dir,
         _child: child,
         address,
     }
@@ -210,7 +224,7 @@ fn config() -> serde_json::Value {
 
 #[test]
 fn hosting_strict_a_file_answers_with_the_headers_production_adds() {
-    let strict = site("static", "strict", &config(), FILES);
+    let strict = site("static", "exact", &config(), FILES);
     // v01.root, v01.static
     let root = get(&strict, "/");
     assert_eq!(root.status, 200);
@@ -263,7 +277,7 @@ fn hosting_strict_a_file_answers_with_the_headers_production_adds() {
 
 #[test]
 fn hosting_strict_content_types_follow_production() {
-    let strict = site("types", "strict", &config(), FILES);
+    let strict = site("types", "exact", &config(), FILES);
     for (target, expected) in [
         ("/ct/file.js", "text/javascript; charset=utf-8"),
         ("/ct/file.ico", "image/x-icon"),
@@ -281,7 +295,7 @@ fn hosting_strict_content_types_follow_production() {
 
 #[test]
 fn hosting_strict_ranges_and_conditional_requests() {
-    let strict = site("ranges", "strict", &config(), FILES);
+    let strict = site("ranges", "exact", &config(), FILES);
     // v01.range, v01.range-suffix
     let head = send(&strict, "GET", "/data.json", &[("Range", "bytes=0-3")]);
     assert_eq!(head.status, 206);
@@ -351,7 +365,7 @@ fn hosting_strict_ranges_and_conditional_requests() {
 
 #[test]
 fn hosting_strict_options_on_a_file_and_the_other_methods() {
-    let strict = site("options", "strict", &config(), FILES);
+    let strict = site("options", "exact", &config(), FILES);
     // v01.options-static
     let options = send(&strict, "OPTIONS", "/data.json", &[]);
     assert_eq!(options.status, 200);
@@ -376,7 +390,7 @@ fn hosting_strict_options_on_a_file_and_the_other_methods() {
 
 #[test]
 fn hosting_strict_not_found_pages() {
-    let strict = site("notfound", "strict", &config(), FILES);
+    let strict = site("notfound", "exact", &config(), FILES);
     // v01.not-found-direct: the file is a file
     let direct = get(&strict, "/404.html");
     assert_eq!(
@@ -394,7 +408,7 @@ fn hosting_strict_not_found_pages() {
     // answers with its own, 404, text/html and the same cache headers (v02.page-slash)
     let bare = site(
         "notfound-bare",
-        "strict",
+        "exact",
         &serde_json::json!({}),
         &[("index.html", "x")],
     );
@@ -416,7 +430,7 @@ fn hosting_strict_not_found_pages() {
 
 #[test]
 fn hosting_strict_redirects_decode_each_capture_and_say_so_as_plain_text() {
-    let strict = site("redirects", "strict", &config(), FILES);
+    let strict = site("redirects", "exact", &config(), FILES);
     // v01.head-redirect and v01.redirect-first
     let first = get(&strict, "/old/a?q=1");
     assert_eq!(first.status, 302);
@@ -485,7 +499,7 @@ fn hosting_strict_redirects_decode_each_capture_and_say_so_as_plain_text() {
 fn hosting_strict_reserved_routes() {
     let catch_all =
         json(r#"{"redirects": [{"source": "**", "destination": "/page.html", "type": 302}]}"#);
-    let strict = site("reserved", "strict", &catch_all, FILES);
+    let strict = site("reserved", "exact", &catch_all, FILES);
     // v09.reserved-auth-handler: outside the redirects; v09.reserved-json, -js: inside them
     let handler = send(&strict, "HEAD", "/__/auth/handler", &[]);
     assert_eq!(handler.status, 200);
@@ -498,7 +512,7 @@ fn hosting_strict_reserved_routes() {
     assert_eq!(get(&strict, "/__/firebase/init.js").status, 302);
     assert_eq!(get(&strict, "/__/missing").status, 302);
     // v01: without the redirect, init.json is a cacheable file with an ETag
-    let plain = site("reserved-plain", "strict", &config(), FILES);
+    let plain = site("reserved-plain", "exact", &config(), FILES);
     let init = get(&plain, "/__/firebase/init.json");
     assert_eq!(init.status, 200);
     assert_eq!(init.header("content-type"), Some("application/json"));
@@ -553,7 +567,7 @@ fn hosting_strict_reserved_routes() {
 
 #[test]
 fn hosting_strict_a_malformed_target_is_a_chunked_400() {
-    let strict = site("malformed", "strict", &config(), FILES);
+    let strict = site("malformed", "exact", &config(), FILES);
     // v01.safety-bad-percent
     let reply = get(&strict, "/%GG");
     assert_eq!(reply.status, 400);
@@ -572,7 +586,7 @@ fn hosting_strict_a_malformed_target_is_a_chunked_400() {
 #[test]
 fn hosting_strict_app_association_documents() {
     let auto = json(r#"{"appAssociation": "AUTO"}"#);
-    let strict = site("association", "strict", &auto, FILES);
+    let strict = site("association", "exact", &auto, FILES);
     // v02.assetlinks, v02.apple-app-site-association
     let links = get(&strict, "/.well-known/assetlinks.json");
     assert_eq!((links.status, links.body.as_str()), (200, "[]"));
@@ -585,7 +599,7 @@ fn hosting_strict_app_association_documents() {
     let apple = get(&strict, "/.well-known/apple-app-site-association");
     assert_eq!(apple.body, "{\"applinks\":{\"apps\":[],\"details\":[]}}");
     // not generated without AUTO, and not by the emulator profile
-    let none = site("association-none", "strict", &serde_json::json!({}), FILES);
+    let none = site("association-none", "exact", &serde_json::json!({}), FILES);
     assert_eq!(get(&none, "/.well-known/assetlinks.json").status, 404);
     let emulator = site("association-emulator", "emulator", &auto, FILES);
     assert_eq!(get(&emulator, "/.well-known/assetlinks.json").status, 404);
@@ -602,7 +616,7 @@ const LOCALES: &[(&str, &str)] = &[
 #[test]
 fn hosting_strict_localized_content_follows_production() {
     let config = json(r#"{"i18n": {"root": "locales"}}"#);
-    let strict = site("i18n", "strict", &config, LOCALES);
+    let strict = site("i18n", "exact", &config, LOCALES);
     let page = |headers: &[(&str, &str)]| send(&strict, "GET", "/page.html", headers).body;
     // v07.language, v07.region-tag, v07.fallback
     assert_eq!(page(&[("Accept-Language", "fr")]), "fr\n");
@@ -671,7 +685,7 @@ fn hosting_strict_header_and_rewrite_globs_match_what_production_matched() {
         .map(|(index, source)| serde_json::json!({"source": source, "headers": [{"key": format!("X-G{index:02}"), "value": "1"}]}))
         .collect();
     let config = serde_json::json!({"headers": headers, "rewrites": [{"source": "**", "destination": "/index.html"}]});
-    let strict = site("globs", "strict", &config, &[("index.html", "home\n")]);
+    let strict = site("globs", "exact", &config, &[("index.html", "home\n")]);
     let matched = |target: &str| -> String {
         let reply = get(&strict, target);
         (0..7)
@@ -808,7 +822,7 @@ fn hosting_strict_function_and_run_rewrites_are_unchanged() {
             {"source": "/run/**", "run": {"serviceId": "api"}}
         ]}"#,
     );
-    for profile in ["strict", "emulator"] {
+    for profile in ["strict", "exact", "emulator"] {
         let site = site(&format!("rewrites-{profile}"), profile, &config, FILES);
         for target in ["/fn/x", "/run/x"] {
             let reply = get(&site, target);
@@ -819,4 +833,230 @@ fn hosting_strict_function_and_run_rewrites_are_unchanged() {
             );
         }
     }
+}
+
+// ---- the development defaults of the default profile (`hosting.cacheControl`, `hosting.clientCountry`)
+
+#[test]
+fn hosting_strict_the_default_profile_keeps_edits_visible_and_the_country_testable() {
+    let config = json(r#"{"i18n": {"root": "locales"}}"#);
+    let default = site("defaults", "strict", &config, LOCALES);
+    // no default Cache-Control: an edited file shows at once (the official emulator's answer)
+    let reply = send(&default, "GET", "/page.html", &[("Accept-Language", "fr")]);
+    assert_eq!(reply.header("cache-control"), None);
+    // the rest is production's: Vary, Accept-Ranges, a quoted ETag, quality values
+    assert_eq!(
+        reply.header("vary"),
+        Some("accept-language, x-country-code, x-fh-requested-host, accept-encoding")
+    );
+    assert_eq!(reply.header("accept-ranges"), Some("bytes"));
+    assert!(reply.header("etag").is_some_and(|tag| tag.starts_with('"')));
+    let page = |headers: &[(&str, &str)]| send(&default, "GET", "/page.html", headers).body;
+    assert_eq!(page(&[("Accept-Language", "de;q=0.9, fr;q=0.8")]), "fr\n");
+    // the country a client sends selects content, as in the official emulator
+    assert_eq!(
+        page(&[("Accept-Language", "fr"), ("X-Country-Code", "CA")]),
+        "fr_ca\n"
+    );
+    assert_eq!(page(&[("X-Country-Code", "CA")]), "all_ca\n");
+    assert_eq!(
+        page(&[("Cookie", "firebase-country-override=CA")]),
+        "all_ca\n"
+    );
+    // a rule's Cache-Control still applies
+    let ruled = site(
+        "defaults-rule",
+        "strict",
+        &json(
+            r#"{"headers": [{"source": "/**", "headers": [{"key": "Cache-Control", "value": "no-store"}]}]}"#,
+        ),
+        FILES,
+    );
+    assert_eq!(get(&ruled, "/").header("cache-control"), Some("no-store"));
+}
+
+#[test]
+fn hosting_strict_production_exact_restores_production_and_each_key_can_be_set_alone() {
+    let config = json(r#"{"i18n": {"root": "locales"}}"#);
+    let exact = site("exact-defaults", "exact", &config, LOCALES);
+    assert_eq!(
+        get(&exact, "/page.html").header("cache-control"),
+        Some("max-age=3600")
+    );
+    assert_eq!(
+        send(&exact, "GET", "/page.html", &[("X-Country-Code", "CA")]).body,
+        "default\n"
+    );
+    // an explicit key wins over productionExact, in both directions
+    let document = json(
+        r#"{"schemaVersion": 1, "profile": "strict", "productionExact": true,
+            "hosting": {"cacheControl": "none", "clientCountry": "honoured"}}"#,
+    );
+    let explicit = site_with("explicit-open", &document, &config, LOCALES);
+    assert_eq!(get(&explicit, "/page.html").header("cache-control"), None);
+    assert_eq!(
+        send(&explicit, "GET", "/page.html", &[("X-Country-Code", "CA")]).body,
+        "all_ca\n"
+    );
+    let document = json(
+        r#"{"schemaVersion": 1, "profile": "strict",
+            "hosting": {"cacheControl": "production", "clientCountry": "ignored"}}"#,
+    );
+    let explicit = site_with("explicit-closed", &document, &config, LOCALES);
+    assert_eq!(
+        get(&explicit, "/page.html").header("cache-control"),
+        Some("max-age=3600")
+    );
+    assert_eq!(
+        send(&explicit, "GET", "/page.html", &[("X-Country-Code", "CA")]).body,
+        "default\n"
+    );
+    // the emulator profile never adds the header and always honours the country
+    let emulator = site("emulator-defaults", "emulator", &config, LOCALES);
+    assert_eq!(get(&emulator, "/page.html").header("cache-control"), None);
+    assert_eq!(
+        send(&emulator, "GET", "/page.html", &[("X-Country-Code", "CA")]).body,
+        "all_ca\n"
+    );
+}
+
+// ---- path confinement under every profile (the fixture of conformance/hosting-fixtures)
+
+const SENTINEL: &str = "HOSTING_PRIVATE_OUTSIDE_SENTINEL";
+
+fn outside_site(name: &str, profile: &str, config: &serde_json::Value) -> Site {
+    let hosting = site(
+        name,
+        profile,
+        config,
+        &[
+            ("index.html", "home\n"),
+            ("data.json", "{}\n"),
+            ("firebase-debug.log", "debug-log-bytes"),
+            ("private.json", "private-bytes"),
+        ],
+    );
+    std::fs::write(hosting.dir.join("outside.txt"), SENTINEL).unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(
+        "../outside.txt",
+        hosting.dir.join("public/outside-link.txt"),
+    )
+    .unwrap();
+    hosting
+}
+
+#[test]
+fn hosting_strict_nothing_outside_public_or_ignored_is_served_by_any_profile() {
+    let config = json(
+        r#"{"ignore": ["private.json"], "rewrites": [{"source": "/rewritten", "destination": "/private.json"}]}"#,
+    );
+    // the request list is the probe of the closure review plus the fixture's security cases
+    let targets = [
+        "/../outside.txt",
+        "/%2e%2e/outside.txt",
+        "/..%2foutside.txt",
+        "/%252e%252e/outside.txt",
+        "/..%5coutside.txt",
+        "/%2e%2e%2foutside.txt",
+        "/sub/..%2f..%2foutside.txt",
+        "/data.json%00",
+        "/%GG",
+        "/outside-link.txt",
+        "/private.json",
+        "/firebase-debug.log",
+        "/rewritten",
+    ];
+    for profile in ["strict", "exact", "emulator"] {
+        let hosting = outside_site(&format!("outside-{profile}"), profile, &config);
+        for target in targets {
+            for (method, headers) in [
+                ("GET", vec![]),
+                ("HEAD", vec![]),
+                ("OPTIONS", vec![]),
+                ("GET", vec![("Range", "bytes=0-")]),
+                ("GET", vec![("Range", "bytes=-10")]),
+                ("GET", vec![("If-None-Match", "*")]),
+            ] {
+                let reply = send(&hosting, method, target, &headers);
+                let all = format!("{}\r\n\r\n{}", reply.head, reply.body);
+                for secret in [SENTINEL, "debug-log-bytes", "private-bytes"] {
+                    assert!(
+                        !all.contains(secret),
+                        "{profile} {method} {target} {headers:?} leaked {secret}: {all}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn hosting_strict_a_request_that_climbs_is_a_same_origin_redirect_to_the_normalized_path() {
+    let hosting = outside_site("climb", "exact", &json("{}"));
+    // v01.safety-parent, v01.safety-encoded-parent: production answers 302 to its content origin
+    // (the host differs per request); strict answers 302 to the normalized path of this origin
+    for target in [
+        "/../outside.txt",
+        "/%2e%2e/outside.txt",
+        "/%2E%2e/outside.txt",
+        "/a/../../outside.txt",
+    ] {
+        let reply = get(&hosting, target);
+        assert_eq!(reply.status, 302, "{target}");
+        assert_eq!(reply.header("location"), Some("/outside.txt"), "{target}");
+        assert_eq!(reply.header("cache-control"), Some("private"));
+        assert_eq!(
+            reply.header("content-type"),
+            Some("text/html; charset=UTF-8")
+        );
+        assert_eq!(reply.header("content-length"), Some("0"));
+        assert_eq!(reply.header("accept-ranges"), Some("bytes"));
+        assert_eq!(reply.header("vary"), None);
+        assert_eq!(reply.body, "");
+        // and what the redirect points at is not a file of the site
+        let followed = get(&hosting, "/outside.txt");
+        assert_eq!(followed.status, 404, "{target}");
+        assert!(!followed.body.contains(SENTINEL));
+    }
+    // the query stays, a trailing slash stays
+    assert_eq!(
+        get(&hosting, "/../index.html?x=1").header("location"),
+        Some("/index.html?x=1")
+    );
+    assert_eq!(get(&hosting, "/a/../b/").header("location"), Some("/b/"));
+    // a name that merely contains dots is not a dot segment
+    assert_eq!(get(&hosting, "/..data.json").status, 404);
+    // the emulator profile keeps refusing with 404
+    let emulator = outside_site("climb-emulator", "emulator", &json("{}"));
+    assert_eq!(get(&emulator, "/../outside.txt").status, 404);
+}
+
+#[test]
+fn hosting_strict_a_range_is_streamed_whatever_the_size_of_the_file() {
+    let hosting = site("big-range", "exact", &json("{}"), &[("index.html", "x")]);
+    // a 16 MiB sparse file, `bytes=0-`: the reply is the whole file as 206 and the server never
+    // holds it (the frames are bounded: files::tests::a_range_of_an_asset_is_streamed_...)
+    let big = hosting.dir.join("public/big.bin");
+    std::fs::File::create(&big)
+        .unwrap()
+        .set_len(16 * 1024 * 1024)
+        .unwrap();
+    let reply = send(&hosting, "GET", "/big.bin", &[("Range", "bytes=0-")]);
+    assert_eq!(reply.status, 206);
+    assert_eq!(
+        reply.header("content-range"),
+        Some("bytes 0-16777215/16777216")
+    );
+    assert_eq!(reply.header("content-length"), Some("16777216"));
+    let tail = send(&hosting, "GET", "/big.bin", &[("Range", "bytes=-5")]);
+    assert_eq!((tail.status, tail.body.len()), (206, 5));
+    assert_eq!(
+        tail.header("content-range"),
+        Some("bytes 16777211-16777215/16777216")
+    );
+    // HEAD with a range names the part and sends nothing
+    let head = send(&hosting, "HEAD", "/big.bin", &[("Range", "bytes=10-19")]);
+    assert_eq!((head.status, head.body.as_str()), (206, ""));
+    assert_eq!(head.header("content-length"), Some("10"));
 }

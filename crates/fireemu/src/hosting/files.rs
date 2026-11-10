@@ -432,6 +432,45 @@ mod streaming_tests {
     use super::*;
     use http_body_util::BodyExt;
     #[tokio::test]
+    async fn a_range_of_an_asset_is_streamed_from_its_start_in_bounded_frames() {
+        use std::io::{Seek, Write};
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path =
+            std::env::temp_dir().join(format!("hosting-range-{}-{stamp}", std::process::id()));
+        std::fs::create_dir(&path).unwrap();
+        let content: Vec<u8> = (0..300_000u32)
+            .map(|n| u8::try_from(n % 251).unwrap())
+            .collect();
+        std::fs::File::create(path.join("ranged.bin"))
+            .unwrap()
+            .write_all(&content)
+            .unwrap();
+        let root = cap_std::fs::Dir::open_ambient_dir(&path, cap_std::ambient_authority()).unwrap();
+        let mut file = open(&root, "", "/ranged.bin", &[]).unwrap().file;
+        let (start, size) = (70_000u64, 150_000u64);
+        file.seek(std::io::SeekFrom::Start(start)).unwrap();
+        let mut body = FileBody::new(file, size);
+        let mut received = Vec::new();
+        let mut frames = 0;
+        while let Some(frame) = body.frame().await {
+            let data = frame.unwrap().into_data().unwrap();
+            assert!(
+                !data.is_empty() && data.len() <= 65536,
+                "a frame is bounded"
+            );
+            received.extend_from_slice(&data);
+            frames += 1;
+        }
+        assert!(frames >= 3, "{frames}");
+        assert_eq!(received, content[70_000..220_000]);
+        drop(root);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[tokio::test]
     async fn a_large_asset_is_streamed_in_bounded_frames() {
         let stamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

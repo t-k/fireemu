@@ -13,8 +13,9 @@
     }
   ],
   "summary": {
-    "MATCH": 78,
+    "MATCH": 76,
     "MATCH_LAYOUT": 123,
+    "KNOWN_DIFFERENCE": 2,
     "MISMATCH": 0,
     "UNKNOWN": 0
   },
@@ -28,6 +29,7 @@
       "counts": {
         "MATCH": 5,
         "MATCH_LAYOUT": 18,
+        "KNOWN_DIFFERENCE": 0,
         "MISMATCH": 0,
         "UNKNOWN": 0
       },
@@ -40,6 +42,7 @@
       "counts": {
         "MATCH": 1,
         "MATCH_LAYOUT": 5,
+        "KNOWN_DIFFERENCE": 0,
         "MISMATCH": 0,
         "UNKNOWN": 0
       },
@@ -52,6 +55,7 @@
       "counts": {
         "MATCH": 15,
         "MATCH_LAYOUT": 15,
+        "KNOWN_DIFFERENCE": 0,
         "MISMATCH": 0,
         "UNKNOWN": 0
       },
@@ -64,6 +68,7 @@
       "counts": {
         "MATCH": 0,
         "MATCH_LAYOUT": 4,
+        "KNOWN_DIFFERENCE": 0,
         "MISMATCH": 0,
         "UNKNOWN": 0
       },
@@ -76,6 +81,7 @@
       "counts": {
         "MATCH": 0,
         "MATCH_LAYOUT": 3,
+        "KNOWN_DIFFERENCE": 0,
         "MISMATCH": 0,
         "UNKNOWN": 0
       },
@@ -88,6 +94,7 @@
       "counts": {
         "MATCH": 41,
         "MATCH_LAYOUT": 5,
+        "KNOWN_DIFFERENCE": 0,
         "MISMATCH": 0,
         "UNKNOWN": 0
       },
@@ -100,6 +107,7 @@
       "counts": {
         "MATCH": 7,
         "MATCH_LAYOUT": 4,
+        "KNOWN_DIFFERENCE": 0,
         "MISMATCH": 0,
         "UNKNOWN": 0
       },
@@ -112,6 +120,7 @@
       "counts": {
         "MATCH": 0,
         "MATCH_LAYOUT": 10,
+        "KNOWN_DIFFERENCE": 0,
         "MISMATCH": 0,
         "UNKNOWN": 0
       },
@@ -124,6 +133,7 @@
       "counts": {
         "MATCH": 0,
         "MATCH_LAYOUT": 32,
+        "KNOWN_DIFFERENCE": 0,
         "MISMATCH": 0,
         "UNKNOWN": 0
       },
@@ -136,6 +146,7 @@
       "counts": {
         "MATCH": 3,
         "MATCH_LAYOUT": 4,
+        "KNOWN_DIFFERENCE": 0,
         "MISMATCH": 0,
         "UNKNOWN": 0
       },
@@ -148,6 +159,7 @@
       "counts": {
         "MATCH": 2,
         "MATCH_LAYOUT": 0,
+        "KNOWN_DIFFERENCE": 0,
         "MISMATCH": 0,
         "UNKNOWN": 0
       },
@@ -160,6 +172,7 @@
       "counts": {
         "MATCH": 2,
         "MATCH_LAYOUT": 15,
+        "KNOWN_DIFFERENCE": 0,
         "MISMATCH": 0,
         "UNKNOWN": 0
       },
@@ -172,6 +185,7 @@
       "counts": {
         "MATCH": 0,
         "MATCH_LAYOUT": 11,
+        "KNOWN_DIFFERENCE": 0,
         "MISMATCH": 0,
         "UNKNOWN": 0
       },
@@ -453,7 +467,7 @@
     },
     {
       "id": "v01.safety-parent",
-      "status": "MATCH",
+      "status": "KNOWN_DIFFERENCE",
       "differences": [],
       "known": [
         {
@@ -464,7 +478,7 @@
     },
     {
       "id": "v01.safety-encoded-parent",
-      "status": "MATCH",
+      "status": "KNOWN_DIFFERENCE",
       "differences": [],
       "known": [
         {

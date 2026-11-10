@@ -877,6 +877,23 @@
         }
       }
     },
+    "hosting": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Firebase Hosting behaviour that firebase.json has no counterpart for. Both keys are development defaults of the strict profile; the emulator profile always answers as the official emulator.",
+      "properties": {
+        "cacheControl": {
+          "enum": ["none", "production"],
+          "default": "none",
+          "description": "The Cache-Control of a deployed file whose headers rules set none. \"none\" (development default, as the official emulator): no header, so an edited file shows at once. \"production\" (productionExact; strict profile only): max-age=3600, as Hosting production answers."
+        },
+        "clientCountry": {
+          "enum": ["honoured", "ignored"],
+          "default": "honoured",
+          "description": "Whether the X-Country-Code header and the firebase-country-override cookie of a request select localized (i18n) content. \"honoured\" (development default, as the official emulator): they do, which is the only way to test country content locally. \"ignored\" (productionExact; strict profile only): they do not, because Hosting production decides the country at its edge."
+        }
+      }
+    },
     "pubsub": {
       "type": "object",
       "description": "Pub/Sub emulator behaviour that the service configuration has no counterpart for.",

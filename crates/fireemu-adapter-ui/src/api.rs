@@ -448,6 +448,17 @@ fn hosting(state: &UiState, req: &UiRequest) -> UiResponse {
 /// The most waiting tasks the overview lists per queue; the count is always exact.
 const MAX_LISTED_PENDING_TASKS: usize = 50;
 
+/// The runtime of every loaded codebase, also one that registered no function (it may hold
+/// only exports the runner could not serve).
+fn codebases_json(state: &UiState) -> Vec<Value> {
+    state
+        .info
+        .codebases
+        .iter()
+        .map(|c| json!({"codebase": c.name, "language": c.language, "declared": c.declared}))
+        .collect()
+}
+
 /// `GET functions`: the manifest with trigger details, the runtime status, the invocation
 /// history and dead letters.
 fn functions(state: &UiState) -> UiResponse {
@@ -555,13 +566,7 @@ fn functions(state: &UiState) -> UiResponse {
             // to the Functions port, which is only bound when a codebase is loaded.
             "functionsAddr": state.info.functions_addr,
             "functions": functions,
-            // The runtime of every loaded codebase, also one that registered no function (it
-            // may hold only exports the runner could not serve).
-            "codebases": state.info.codebases.iter().map(|c| json!({
-                "codebase": c.name,
-                "language": c.language,
-                "declared": c.declared,
-            })).collect::<Vec<_>>(),
+            "codebases": codebases_json(state),
             "status": runtime.status(),
             "history": runtime.history().iter().map(record_json).collect::<Vec<_>>(),
             "deadLetters": runtime.dead_letters().iter().map(record_json).collect::<Vec<_>>(),

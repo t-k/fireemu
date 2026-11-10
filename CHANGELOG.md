@@ -31,6 +31,7 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 ### Documentation
 
 - Site: the home page quick start has tabs for automated tests and for local development with the Emulator UI, with a screenshot; the products table uses status badges, with the long Partial cells moved to Limitations; the next steps split new projects from migration from the Local Emulator Suite. Why Fireemu opens with a comparison table whose figures come from the measured Performance page; the Install page lists the prerequisites first and the real output of `fireemu init`; the Cloud Firestore page gains a Connect section, grouped control API notes and refused/accepted `firestore.indexes.json` examples; a new Environment variables reference and error-message answers on the Troubleshooting page are added.
+- Site: the Authentication page opens with what Fireemu adds and a Connect section, groups the settings by purpose, and has a TOTP enrollment and sign-in walkthrough and the real console output for action links and SMS codes; the App Check page opens with a scope summary, splits quick testing from registered apps and compares the Storage admission modes; the Cloud Storage page gains Connect and Configure sections and a production-behavior summary; the Cloud Functions page gains a Connect snippet, trigger caveats, parameter and secret file tables and a Run now table.
 
 ## [0.48.0] - 2026-11-10
 

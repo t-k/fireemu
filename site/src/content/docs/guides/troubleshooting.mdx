@@ -3,6 +3,8 @@ title: Troubleshooting
 description: Diagnose installation and startup problems, and report issues.
 ---
 
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
 ## Check the installation
 
 ```sh
@@ -78,12 +80,29 @@ fireemu does not answer Host "evil.example": as a defence against DNS rebinding 
 
 If a client of yours uses that name (a tunnel, a name in `/etc/hosts`, a Compose service name), list it:
 
+<Tabs syncKey="config-format">
+<TabItem label="TOML">
+
 ```toml
 [network]
 allowedHosts = ["emulator.ci.example"]
-# a single-label name such as a Compose service also needs:
-# allowNonLoopbackHosts = true
 ```
+
+</TabItem>
+<TabItem label="JSON">
+
+```json
+{
+  "network": {
+    "allowedHosts": ["emulator.ci.example"]
+  }
+}
+```
+
+</TabItem>
+</Tabs>
+
+A single-label name such as a Compose service also needs `network.allowNonLoopbackHosts = true`.
 
 Fireemu also writes a `refused Host` warning on standard error, once per name. See [Host names the emulators answer](../ci-and-containers/#host-names-the-emulators-answer).
 

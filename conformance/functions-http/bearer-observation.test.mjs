@@ -648,6 +648,7 @@ async function fakeRun({
   failFetch = false,
   ledgerText = `${closed}\n`,
   deleteFails = false,
+  tweak = () => {},
 } = {}) {
   const world = await deployWorld({ deployScript, caps: CAPS });
   const ledger = [];
@@ -726,6 +727,7 @@ async function fakeRun({
     log: () => {},
     warn: () => {},
   };
+  tweak(world, deps);
   const result = await recordBearer({}, deps);
   return { world, result, ledger, files, requests, deleteSent: () => deleteSent };
 }
@@ -950,4 +952,181 @@ test("source pins: the corpus, fixture, firebase.json and fixture package files 
     "fixtures/package-lock.json",
     "fixtures/package.json",
   ]);
+});
+
+// ---- near misses added after mutation pass 2 ------------------------------------------------------
+
+test("a capture relabelled to the other case, or a body digest or byte count missing alone, is unknown", () => {
+  const relabelled = captures(control, provisional);
+  relabelled[0] = { ...relabelled[0], caseId: "malformed-bearer" };
+  assert.equal(judgeObservation(relabelled, BASELINE).verdict, "unknown");
+  const noBytes = { ...provisional, bodyBytes: null };
+  assert.equal(judgeObservation(captures(control, noBytes), BASELINE).verdict, "unknown");
+  const noDigest = { ...provisional, bodySha256: null };
+  assert.equal(judgeObservation(captures(control, noDigest), BASELINE).verdict, "unknown");
+  const shortDigest = { ...provisional, bodySha256: "ab" };
+  assert.equal(judgeObservation(captures(control, shortDigest), BASELINE).verdict, "unknown");
+});
+
+test("six captures with a well-labelled third pass are still unknown", () => {
+  const list = captures(control, provisional);
+  const extra = [
+    { ...list[0], seq: 5, pass: 3 },
+    { ...list[1], seq: 6, pass: 3 },
+  ];
+  assert.equal(judgeObservation([...list, ...extra], BASELINE).verdict, "unknown");
+});
+
+test("a control body that is not JSON or not an object says so", () => {
+  const notJson = judgeObservation(
+    captures({ ...control, bodyText: "not json" }, provisional),
+    BASELINE,
+  );
+  assert.match(notJson.reasons[0], /body is not JSON/);
+  const array = judgeObservation(captures({ ...control, bodyText: "[1]" }, provisional), BASELINE);
+  assert.match(array.reasons[0], /body is not an object/);
+});
+
+test("a 200 answer with another body is not taken for the function's own echo", () => {
+  const other = {
+    ...control,
+    bodyText: ECHO.replace('"forwardedForHopCount":1', '"forwardedForHopCount":3'),
+  };
+  const result = judgeObservation(captures(control, other), BASELINE);
+  assert.equal(result.verdict, "different");
+  assert.equal(result.servedByFunction, false);
+});
+
+test("content-type and content-length are compared, so they are not listed as unrecorded headers", () => {
+  const list = captures(control, {
+    ...provisional,
+    headers: { "content-length": "294", server: "x" },
+  });
+  assert.deepEqual(judgeObservation(list, BASELINE).headersNotInBaseline, ["server"]);
+});
+
+test("a corpus request with an extra field is refused", () => {
+  const copy = structuredClone(CORPUS);
+  copy.programs[0].cases[0].request.query = { a: "1" };
+  assert.throws(() => validateBearerCorpus(copy), /request/);
+});
+
+test("the capture strips a local route prefix so local and production paths read alike", async () => {
+  const records = [];
+  const wrapped = captureFetch({
+    fetchImpl: async () => new Response("x", { status: 200 }),
+    onCapture: (c) => records.push(c),
+  });
+  await wrapped("http://127.0.0.1:9/demo-functions-http/us-central1/fireemuHttpProbe/", {
+    method: "POST",
+    headers: {},
+  });
+  assert.equal(records[0].path, "/");
+});
+
+test("admission: a needs-recovery event is open even when it carries a closing outcome", () => {
+  const odd = row({ event: "needs-recovery", outcome: "recorded", ts: "2026-11-10T10:00:00Z" });
+  assert.throws(() => admit({ ledgerText: odd, now: T0, env: {} }), /last row/);
+});
+
+test("the caps of one attempt are the counted bounds of one deploy", () => {
+  assert.deepEqual(CAPS, {
+    invocation: 4,
+    control: 19,
+    cleanup: 37,
+    auth: 0,
+    cliDeploy: 1,
+    cliDelete: 1,
+    token: 3,
+    upload: 15,
+  });
+});
+
+test("fake world: a dirty tree refuses before the ledger is read", async () => {
+  let read = false;
+  await assert.rejects(
+    recordBearer(
+      {},
+      {
+        assertCleanTree: async () => {
+          throw new Error("the worktree is not clean");
+        },
+        readSources: async () => {
+          read = true;
+          return {};
+        },
+      },
+    ),
+    /not clean/,
+  );
+  assert.equal(read, false);
+});
+
+test("fake world: an open source upload ledger keeps the run open even when observation ended cleanly", async () => {
+  const { world, result, ledger } = await fakeRun({
+    tweak: (w, deps) => {
+      const report = w.uploads.report.bind(w.uploads);
+      let calls = 0;
+      deps.openUploads = () => ({
+        ...w.uploads,
+        beginDeploy: (...args) => w.uploads.beginDeploy(...args),
+        report: () => {
+          calls += 1;
+          return calls === 1 ? { closureReady: false, reasons: ["deploy:x"] } : report();
+        },
+        close: () => w.uploads.close?.(),
+      });
+    },
+  });
+  try {
+    assert.equal(result.outcome, "needs-recovery");
+    assert.equal(ledger[1].closureReady, false);
+    assert.equal(ledger[1].reason, "source upload ledger is not closed");
+  } finally {
+    await rm(world.dir, { recursive: true, force: true });
+  }
+});
+
+test("fake world: an image version delete that fails after our own function delete needs recovery", async () => {
+  const { world, result, ledger } = await fakeRun({
+    tweak: (w) => {
+      w.deployed.versionDeleteStatus = 500;
+    },
+  });
+  try {
+    assert.equal(result.outcome, "needs-recovery");
+    assert.equal(ledger[1].closureReady, false);
+    assert.match(ledger[1].reason, /cleanup requires review/);
+  } finally {
+    await rm(world.dir, { recursive: true, force: true });
+  }
+});
+
+test("fake world: an answer carrying the project number is not written and the run needs review", async () => {
+  const leaking = { ...provisional, bodyText: `${PROVISIONAL}123456789012` };
+  const { world, result, ledger, files } = await fakeRun({ answer: leaking });
+  try {
+    assert.equal(files["captures.json"], undefined);
+    assert.equal(result.exitCode, 1);
+    assert.equal(ledger[1].needsReview, true);
+    assert.equal(ledger[1].lockKept, true);
+    assert.match(ledger[1].reason, /private value/);
+  } finally {
+    await rm(world.dir, { recursive: true, force: true });
+  }
+});
+
+test("fake world: more builds than deploys since the start keeps the run open", async () => {
+  const { world, result, ledger } = await fakeRun({
+    builds: [
+      { id: "b1", status: "SUCCESS", createTime: "2026-11-10T12:00:30Z" },
+      { id: "b2", status: "SUCCESS", createTime: "2026-11-10T12:00:40Z" },
+    ],
+  });
+  try {
+    assert.equal(result.outcome, "needs-recovery");
+    assert.match(ledger[1].reason, /more builds/);
+  } finally {
+    await rm(world.dir, { recursive: true, force: true });
+  }
 });

@@ -351,8 +351,9 @@ export async function recordBearer(env, deps) {
       "the deploy was not followed by the run's own delete: A2 read-back >= 10 min needed",
     );
   }
-  ({ residual } = withUploadClosure(uploads.report(), { outcome: "", reason: "", residual }));
-  if (!uploads.report().closureReady) reasons.push("source upload ledger is not closed");
+  const uploadReport = uploads.report();
+  ({ residual } = withUploadClosure(uploadReport, { outcome: "", reason: "", residual }));
+  if (!uploadReport.closureReady) reasons.push("source upload ledger is not closed");
   uploads.close?.();
   if (used().cliDeploy > 0) {
     try {

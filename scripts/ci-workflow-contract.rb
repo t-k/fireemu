@@ -69,6 +69,8 @@ end
 
 platform_steps = jobs.fetch("platforms").fetch("steps")
 platform_runs = platform_steps.map { |step| step["run"] }.compact.join("\n")
+platform_matrix = jobs.dig("platforms", "strategy", "matrix")
+assert(platform_matrix == { "include" => [{ "os" => "macos-latest", "shard" => "1/2" }, { "os" => "macos-latest", "shard" => "2/2" }, { "os" => "windows-latest", "shard" => "" }] }, "platform tests must run both macOS partitions and one unpartitioned Windows job")
 # The Functions runner tests start a real Node and a real Python child, four at once, as the first
 # executions of those interpreters on a freshly provisioned runner. Their first start pages the image in from
 # disk (2026-11-09: 4 to 22 s on 24 fresh VMs, 60 s or more on two runs of 2026-11-06). Pay that before the tests,
@@ -84,6 +86,8 @@ windows_runs = platform_runs.split('= "Windows" ]; then', 2).last.to_s.split("el
 assert(windows_runs.include?("--exclude fireemu-verification-quint"), "Windows must exclude the Unix-only Quint supervisor")
 assert(windows_runs.include?("--exclude traceability-check"), "Windows must exclude the Unix-only traceability supervisor")
 assert(windows_runs.include?("cargo nextest run -p fireemu --bin fireemu --test exec_windows --profile pr"), "Windows must execute fireemu binary unit tests and native lifecycle tests")
+assert(!windows_runs.include?("--partition"), "Windows platform tests must not be partitioned")
+assert(platform_steps[platform_tests_index]["run"].include?('cargo nextest run --workspace --profile pr --partition count:${{ matrix.shard }}'), "macOS platform tests must use the matrix partition")
 
 sdk = load_workflow("functions-sdk-discovery.yml")
 sdk_trigger = sdk["on"] || sdk[true]
@@ -133,7 +137,7 @@ end
 release_build = release.dig("jobs", "build")
 release_build_runs = release_build.fetch("steps").map { |step| step["run"] }.compact.join("\n")
 assert(!release_build_runs.include?("cargo nextest"), "release platform builds must not duplicate the workspace test suite")
-assert(release_build.fetch("needs").include?("test"), "release platform builds must depend on the dedicated test job")
+assert(release.dig("jobs", "publish", "needs").include?("test"), "release publish must depend on the dedicated test job")
 release_test_runs = release.dig("jobs", "test", "steps").map { |step| step["run"] }.compact.join("\n")
 assert(
   release_test_runs.include?("cargo nextest run --workspace --profile pr -E 'not binary(leak_fixture)'"),

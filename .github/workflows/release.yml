@@ -160,7 +160,7 @@ jobs:
       - run: cargo nextest run -p fireemu --test leak_fixture --profile pr
 
   build:
-    needs: [plan, ui, test]
+    needs: [plan, ui]
     strategy:
       fail-fast: true
       matrix:
@@ -449,7 +449,7 @@ jobs:
           if-no-files-found: warn
 
   publish:
-    needs: [plan, build, verify-artifact, reproducible, strict-production]
+    needs: [plan, build, test, verify-artifact, reproducible, strict-production]
     runs-on: ubuntu-latest
     environment: npm-release
     permissions:

@@ -18,6 +18,76 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("Overview", () => {
+  it("lists the Host names the emulators answer: the built-in names, the configured ones and the flag", async () => {
+    appState.setConfig({
+      ...appState.config(),
+      clockMode: "realtime",
+      hosts: {
+        allowed: ["ci.example", ".svc.cluster.local"],
+        allowNonLoopbackHosts: true,
+        defaultNames: ["localhost"],
+        defaultSuffixes: [".localhost", ".internal"],
+      },
+    });
+    const view = render(() => <Overview />);
+    await waitFor(() => expect(view.getAllByText("Loaded").length).toBeGreaterThan(0));
+    const hosts = view.getByTestId("host-names").textContent ?? "";
+    for (const name of [
+      "ci.example",
+      ".svc.cluster.local",
+      "localhost",
+      ".localhost",
+      ".internal",
+    ]) {
+      expect(hosts, name).toContain(name);
+    }
+    expect(hosts).toContain("IP address");
+    expect(view.getByTestId("host-names-single-label").textContent).toBe("yes");
+    expect(view.queryByTestId("host-names-open")).toBeNull();
+  });
+
+  it("warns when every Host is answered and says so when nothing was added", async () => {
+    appState.setConfig({
+      ...appState.config(),
+      hosts: {
+        allowed: ["*"],
+        allowNonLoopbackHosts: false,
+        defaultNames: ["localhost"],
+        defaultSuffixes: [],
+      },
+    });
+    const open = render(() => <Overview />);
+    await waitFor(() => expect(open.getAllByText("Loaded").length).toBeGreaterThan(0));
+    expect(open.getByTestId("host-names-open")).toBeTruthy();
+    expect(open.getByTestId("host-names-single-label").textContent).toBe("no");
+    cleanup();
+    appState.setConfig({
+      ...appState.config(),
+      hosts: {
+        allowed: [],
+        allowNonLoopbackHosts: false,
+        defaultNames: ["localhost"],
+        defaultSuffixes: [],
+      },
+    });
+    const none = render(() => <Overview />);
+    await waitFor(() => expect(none.getAllByText("Loaded").length).toBeGreaterThan(0));
+    expect(none.queryByTestId("host-names-open")).toBeNull();
+    expect(none.getByTestId("host-names-none").textContent).toContain("none");
+  });
+
+  it("says whether the virtual clock stands still or follows real time", async () => {
+    appState.setConfig({ ...appState.config(), clockMode: "frozen" });
+    const frozen = render(() => <Overview />);
+    await waitFor(() => expect(frozen.getAllByText("Loaded").length).toBeGreaterThan(0));
+    expect(frozen.getByTestId("overview-clock-mode").textContent).toContain("frozen");
+    cleanup();
+    appState.setConfig({ ...appState.config(), clockMode: "realtime" });
+    const live = render(() => <Overview />);
+    await waitFor(() => expect(live.getAllByText("Loaded").length).toBeGreaterThan(0));
+    expect(live.getByTestId("overview-clock-mode").textContent).toContain("real time");
+  });
+
   it("shows the project, the services, the rules, the sessions and the SDK environment", async () => {
     const view = render(() => <Overview />);
     await waitFor(() => expect(view.getAllByText("Loaded").length).toBeGreaterThan(0));

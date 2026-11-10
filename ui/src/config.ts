@@ -2,6 +2,14 @@
 // `vite` development nothing is injected; the token then comes from `?token=` in the page
 // URL and is kept in memory only (never in storage another script could read later).
 
+/** The `Host` names the product listeners answer; IP addresses are always admitted. */
+export type HostNames = {
+  allowed: string[];
+  allowNonLoopbackHosts: boolean;
+  defaultNames: string[];
+  defaultSuffixes: string[];
+};
+
 export type Session = { name: string; project: string };
 
 export type RuntimeConfig = {
@@ -16,6 +24,9 @@ export type RuntimeConfig = {
   uiAddr: string;
   rulesEnforced: boolean;
   clockPinned: boolean;
+  /** `frozen` stands still; `realtime` follows real time (plus any `clock:advance` offset). */
+  clockMode: "frozen" | "realtime";
+  hosts: HostNames;
   functionsConfigured: boolean;
   appCheckEnabled: boolean;
   uiBundled: boolean;
@@ -71,6 +82,13 @@ export const initialConfig = (): RuntimeConfig => {
     uiAddr: c.uiAddr ?? "",
     rulesEnforced: c.rulesEnforced ?? true,
     clockPinned: c.clockPinned ?? false,
+    clockMode: c.clockMode ?? "realtime",
+    hosts: c.hosts ?? {
+      allowed: [],
+      allowNonLoopbackHosts: false,
+      defaultNames: [],
+      defaultSuffixes: [],
+    },
     functionsConfigured: c.functionsConfigured ?? false,
     appCheckEnabled: c.appCheckEnabled ?? false,
     uiBundled: c.uiBundled ?? true,

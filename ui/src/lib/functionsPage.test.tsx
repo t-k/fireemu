@@ -298,3 +298,82 @@ it("does not show a late idle result from a previous Functions owner", async () 
   );
   expect(ui.queryByText(t("functions.idle"), { exact: true })).toBeNull();
 });
+
+it("shows the held Auth events, the queue and schedule counters, each codebase's runtime and the ignored exports", async () => {
+  mocks.overview.mockReturnValue(
+    okAsync({
+      ...owner,
+      functions: [
+        {
+          name: "py",
+          region: "us-central1",
+          entryPoint: "py",
+          trigger: { kind: "http", callable: false },
+          timeoutSeconds: 60,
+          retry: false,
+          concurrency: 1,
+          codebase: "py-app",
+          runtime: { language: "python", declared: "python312" },
+        },
+        {
+          name: "js",
+          region: "us-central1",
+          entryPoint: "js",
+          trigger: { kind: "http", callable: false },
+          timeoutSeconds: 60,
+          retry: false,
+          concurrency: 1,
+          codebase: "default",
+          runtime: { language: "node", declared: null },
+        },
+      ],
+      status: {
+        ...owner.status!,
+        authEventsPending: 3,
+        tasksInFlight: 2,
+        catchUpPending: true,
+        overlapRejected: 4,
+        codebases: [
+          { codebase: "py-app", functions: ["py"], runnerAlive: true },
+          { codebase: "default", functions: ["js"], runnerAlive: false },
+        ],
+        ignored: [
+          {
+            name: "legacy",
+            region: "us-central1",
+            triggerType: "scheduled",
+            scope: "gcfv1",
+            reason: "unsupported trigger",
+          },
+        ],
+      },
+    }),
+  );
+  const ui = render(() => <Functions />);
+  await waitFor(() => expect(ui.getByTestId("function-status")).toBeTruthy());
+  const status = ui.getByTestId("function-status").textContent ?? "";
+  expect(ui.getByTestId("status-auth-events-pending").textContent).toBe("3");
+  expect(ui.getByTestId("status-tasks-in-flight").textContent).toBe("2");
+  expect(ui.getByTestId("status-catch-up-pending").textContent).toBe("yes");
+  expect(ui.getByTestId("status-overlap-rejected").textContent).toBe("4");
+  expect(status).toContain("Auth events held");
+  const py = ui.getByTestId("codebase-status-py-app").textContent ?? "";
+  expect(py).toContain("Python (python312)");
+  expect(py).toContain("running");
+  const js = ui.getByTestId("codebase-status-default").textContent ?? "";
+  expect(js).toContain("Node.js");
+  expect(js).toContain("stopped");
+  const ignored = ui.getByTestId("ignored-exports").textContent ?? "";
+  expect(ignored).toContain("legacy");
+  expect(ignored).toContain("unsupported trigger");
+});
+
+it("shows zero for counters an older daemon does not send and hides the empty sections", async () => {
+  const ui = render(() => <Functions />);
+  await waitFor(() => expect(ui.getByTestId("function-status")).toBeTruthy());
+  expect(ui.getByTestId("status-auth-events-pending").textContent).toBe("0");
+  expect(ui.getByTestId("status-tasks-in-flight").textContent).toBe("0");
+  expect(ui.getByTestId("status-catch-up-pending").textContent).toBe("no");
+  expect(ui.queryByTestId("ignored-exports")).toBeNull();
+  expect(ui.container.querySelector("[data-testid^='codebase-status-']")).toBeNull();
+});

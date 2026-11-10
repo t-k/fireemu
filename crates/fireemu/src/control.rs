@@ -101,6 +101,13 @@ pub fn add_file_text_indexes(
             .and_then(Value::as_array)
             .into_iter()
             .flatten()
+            .filter(|field| {
+                production_exact
+                    || matches!(
+                        parse_index_field(field, IndexFileChecks::Emulator),
+                        Ok(None)
+                    )
+            })
             .filter_map(|field| text_field_entry(field, production_exact))
             .collect::<Vec<_>>();
         if fields.is_empty() {
@@ -277,8 +284,7 @@ impl fireemu_adapter_http::control::MissingIndexHook for MissingIndexReports {
 /// Which refusals of `firebase deploy` an index file is checked against when it loads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IndexFileChecks {
-    /// What the official emulator needs: the caps and the entry grammar. The official emulator
-    /// never reads the index file, so the `emulator` profile adds nothing to them.
+    /// The caps and entry grammar, with firebase-tools deploy mode precedence.
     Emulator,
     /// Also what `firebase deploy` refuses before or while it creates the indexes (the `strict`
     /// profile): a composite index with a single field, an entry without `fields`, a field
@@ -360,6 +366,39 @@ fn check_search_config(path: &str, config: &Value, checks: IndexFileChecks) -> R
 /// field (`searchConfig`) is checked and answers `None` to the ordinary planner.
 /// Supported text definitions are loaded separately by `load_text_indexes`; geo search is not executed.
 fn parse_index_field(f: &Value, checks: IndexFileChecks) -> Result<Option<IndexField>, String> {
+    let normalized;
+    let f = if checks == IndexFileChecks::Emulator {
+        normalized = {
+            let mut field = f.clone();
+            if let Some(object) = field.as_object_mut() {
+                let mut selected = false;
+                for key in [
+                    "order",
+                    "arrayConfig",
+                    "vectorConfig",
+                    "searchConfig",
+                    "mode",
+                ] {
+                    let truthy = object.get(key).is_some_and(|value| match value {
+                        Value::Null => false,
+                        Value::Bool(value) => *value,
+                        Value::Number(value) => value.as_f64().is_some_and(|value| value != 0.0),
+                        Value::String(value) => !value.is_empty(),
+                        Value::Array(_) | Value::Object(_) => true,
+                    });
+                    if selected || !truthy {
+                        object.remove(key);
+                    } else {
+                        selected = true;
+                    }
+                }
+            }
+            field
+        };
+        &normalized
+    } else {
+        f
+    };
     let path = f
         .get("fieldPath")
         .and_then(Value::as_str)
@@ -653,12 +692,13 @@ fn parse_field_overrides(
                     "COLLECTION_GROUP" => IndexQueryScope::CollectionGroup,
                     scope => return Err(format!("unsupported queryScope {scope}")),
                 };
-                // A search index is a composite index. `firebase deploy` drops a `searchConfig`
-                // here when `order` or `arrayConfig` is present and refuses the override
-                // otherwise; fireemu refuses it in both cases.
+                // Deploy drops searchConfig when the override has an order or array mode.
                 if index
                     .get("searchConfig")
                     .is_some_and(|config| !config.is_null())
+                    && (checks == IndexFileChecks::Deploy
+                        || (index.get("order").and_then(Value::as_str).is_none()
+                            && index.get("arrayConfig").and_then(Value::as_str).is_none()))
                 {
                     return Err(format!(
                         "field override {path}: searchConfig is only accepted in a composite index (indexes[].fields), not in a field override"
@@ -1520,12 +1560,8 @@ mod tests {
         }
     }
 
-    /// `IndexField` is a oneof: a field with `searchConfig` and another mode is refused under both
-    /// profiles. `firebase deploy` does not refuse it: `upgradeOldSpec` keeps one mode per field
-    /// (`order`, then `arrayConfig`, `vectorConfig`, `searchConfig`) before `validateIndex` runs,
-    /// so deploy drops the others. fireemu keeps the oneof refusal, as it does for `order` with
-    /// `arrayConfig` (issue `index-field-mode-precedence-differs-from-deploy.md`). The v1beta1
-    /// `mode` comes last in that order, so `searchConfig` wins over it.
+    /// Strict refuses multiple modes; the emulator profile follows deploy precedence.
+    /// The v1beta1 `mode` comes last, so `searchConfig` wins over it.
     #[test]
     fn search_config_beside_another_mode_is_refused() {
         for other in [
@@ -1538,15 +1574,9 @@ mod tests {
                 field[key] = value.clone();
             }
             let file = json!({"indexes": [entry(&json!([asc("a"), field]))]});
-            for checks in both_checks() {
-                let error = parse_indexes("f", &file.to_string(), checks).unwrap_err();
-                assert!(
-                    error.contains(
-                        "index field body: exactly one order, arrayConfig, searchConfig, or vectorConfig is required"
-                    ),
-                    "{other} {checks:?}: {error}"
-                );
-            }
+            assert!(parse_indexes("f", &file.to_string(), IndexFileChecks::Emulator).is_ok());
+            let error = parse_indexes("f", &file.to_string(), IndexFileChecks::Deploy).unwrap_err();
+            assert!(error.contains("index field body: exactly one order, arrayConfig, searchConfig, or vectorConfig is required"), "{other}: {error}");
         }
         let mut legacy = search("body");
         legacy["mode"] = json!("ASCENDING");
@@ -1559,8 +1589,7 @@ mod tests {
     /// A search index is a composite index, so `searchConfig` in a field override is refused
     /// under both profiles, with a message that says where it belongs. Without `order` or
     /// `arrayConfig` deploy refuses the override too (`validateField`); with one of them deploy
-    /// accepts it and drops `searchConfig` (`patchField` sends neither), which fireemu does not
-    /// follow (issue `index-field-mode-precedence-differs-from-deploy.md`).
+    /// accepts it and drops `searchConfig` (`patchField` sends neither).
     #[test]
     fn a_search_config_field_override_is_refused_under_both_profiles() {
         let file = json!({"indexes": [], "fieldOverrides": [{
@@ -1975,13 +2004,28 @@ mod tests {
         for mask in 1u32..16 {
             let mut field = json!({"fieldPath": "b"});
             for (i, key) in keys.iter().enumerate() {
-                if mask & (1 << i) != 0 { field[*key] = mode_value(key); }
+                if mask & (1 << i) != 0 {
+                    field[*key] = mode_value(key);
+                }
             }
-            let selected = keys.iter().enumerate().find(|(i, _)| mask & (1 << i) != 0).unwrap().1;
+            let selected = keys
+                .iter()
+                .enumerate()
+                .find(|(i, _)| mask & (1 << i) != 0)
+                .unwrap()
+                .1;
             let actual = parse_index_field(&field, IndexFileChecks::Emulator).unwrap();
-            let expected = parse_index_field(&json!({"fieldPath": "b", *selected: mode_value(selected)}), IndexFileChecks::Deploy).unwrap();
+            let expected = parse_index_field(
+                &json!({"fieldPath": "b", *selected: mode_value(selected)}),
+                IndexFileChecks::Deploy,
+            )
+            .unwrap();
             assert_eq!(actual, expected, "{field}");
-            assert_eq!(parse_index_field(&field, IndexFileChecks::Deploy).is_ok(), mask.count_ones() == 1, "{field}");
+            assert_eq!(
+                parse_index_field(&field, IndexFileChecks::Deploy).is_ok(),
+                mask.is_power_of_two(),
+                "{field}"
+            );
         }
         for value in [json!(false), json!(0), json!("")] {
             let field = json!({"fieldPath": "b", "order": "ASCENDING", "searchConfig": value});
@@ -1992,13 +2036,60 @@ mod tests {
             assert!(parse_index_field(&absent, IndexFileChecks::Deploy).is_err());
         }
         let field = json!({"fieldPath": "b", "order": "", "arrayConfig": "CONTAINS"});
-        assert_eq!(parse_index_field(&field, IndexFileChecks::Emulator).unwrap().unwrap().mode, IndexFieldMode::Contains);
+        assert_eq!(
+            parse_index_field(&field, IndexFileChecks::Emulator)
+                .unwrap()
+                .unwrap()
+                .mode,
+            IndexFieldMode::Contains
+        );
         assert!(parse_index_field(&field, IndexFileChecks::Deploy).is_err());
     }
 
+    #[test]
+    fn emulator_drops_override_search_config_and_rejects_missing_mode() {
+        for (key, value) in [
+            ("order", json!("ASCENDING")),
+            ("arrayConfig", json!("CONTAINS")),
+        ] {
+            let mut index = json!({"searchConfig": {}});
+            index[key] = value;
+            let mut expected_index = json!({});
+            expected_index[key] = index[key].clone();
+            let file = json!({"fieldOverrides": [{"collectionGroup": "posts", "fieldPath": "body", "indexes": [index]}]});
+            let actual = parse_indexes("f", &file.to_string(), IndexFileChecks::Emulator).unwrap();
+            let expected_file = json!({"fieldOverrides": [{"collectionGroup": "posts", "fieldPath": "body", "indexes": [expected_index]}]});
+            let expected =
+                parse_indexes("f", &expected_file.to_string(), IndexFileChecks::Emulator).unwrap();
+            let collection = CollectionId::try_new("posts").unwrap();
+            let path = FieldPath::parse("body").unwrap();
+            assert_eq!(
+                actual.single_field_modes(&collection, &path),
+                expected.single_field_modes(&collection, &path)
+            );
+            assert!(parse_indexes("f", &file.to_string(), IndexFileChecks::Deploy).is_err());
+        }
+        let file =
+            json!({"indexes": [entry(&json!([asc("a"), {"fieldPath": "b", "order": "INVALID"}]))]});
+        for checks in both_checks() {
+            assert!(parse_indexes("f", &file.to_string(), checks).is_err());
+        }
+    }
+
+    #[test]
+    fn dropped_search_mode_does_not_create_a_text_index() {
+        let mut field = search("body");
+        field["order"] = json!("ASCENDING");
+        let file = json!({"indexes": [entry(&json!([asc("a"), field]))]});
+        let (catalog, notes) = file_text(&file, false).unwrap();
+        assert!(notes.is_empty());
+        assert!(catalog
+            .get("demo-app", "(default)", "file-text-0")
+            .is_none());
+    }
+
     proptest::proptest! {
-        /// Any combination of the four `IndexField` modes other than exactly one is refused, in
-        /// a composite index and under both profiles; exactly one loads.
+        /// Strict requires exactly one mode; the emulator selects the first present mode.
         #[test]
         fn index_field_modes_are_a_oneof(present in proptest::collection::vec(proptest::bool::ANY, 4)) {
             let mut field = json!({"fieldPath": "b"});
@@ -2011,7 +2102,8 @@ mod tests {
             let exactly_one = present.iter().filter(|on| **on).count() == 1;
             for checks in both_checks() {
                 let parsed = parse_indexes("f", &file.to_string(), checks);
-                proptest::prop_assert_eq!(parsed.is_ok(), exactly_one, "{} {:?}: {:?}", field, checks, parsed);
+                let expected = if checks == IndexFileChecks::Emulator { present.iter().any(|on| *on) } else { exactly_one };
+                proptest::prop_assert_eq!(parsed.is_ok(), expected, "{} {:?}: {:?}", field, checks, parsed);
             }
         }
 

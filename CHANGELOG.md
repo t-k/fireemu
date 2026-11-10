@@ -8,6 +8,10 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Added
+
+- `functions.authBlockingToken` selects `"emulated"` by default for development and `"production"` under `productionExact` (strict profile only). In `"production"`, the Identity Platform token is delivered as an RS256 token with a `kid`, signed with the session key, with the function's registered `cloudfunctions.net` address as `aud`, a 300-second lifetime, `locale` `und`, and no `disabled` for an enabled account; the request uses `Content-Type: application/json; charset=utf-8` and `User-Agent: Google-Firebase` (recorded 2026-11-04). The Python runner verifies it with the SDK's own rules: a Python Gen2 Auth blocking function using firebase-functions (Python) 0.6.0 accepts only a `run.app` audience and fails as in production (function 500, sign-up 503 `Error code: 47`). Node functions are unchanged. The default still runs the function as the official emulator does, and the Python runner prints a one-line diagnostic about the production failure. In `"production"`, `exp` and `iat` are checked against the machine clock, so do not combine it with a virtual `functions.clock.date` far from real time. The signing key is the session key already used by `auth.idTokenSigning: "session-rsa"` for ID tokens (cached owner-only); only its public key reaches the runner, and no existing check was weakened.
+
 ## [0.47.0] - 2026-11-10
 
 ### Added

@@ -370,3 +370,88 @@ fn a_virtual_clock_for_the_functions_runner_is_refused_for_a_python_codebase() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+#[ignore = "requires the fixture virtual environment; CI creates it"]
+fn production_exact_reproduces_the_python_sdks_audience_refusal_of_an_auth_blocking_token() {
+    let script = r#"import os, urllib.request, urllib.error
+url = 'http://' + os.environ['FIREBASE_AUTH_EMULATOR_HOST'] + '/identitytoolkit.googleapis.com/v1/accounts:signUp?key=fake'
+request = urllib.request.Request(url, data=b'{"email":"plain@example.com","password":"secret1","returnSecureToken":true}', headers={'Content-Type': 'application/json'})
+try:
+    response = urllib.request.urlopen(request, timeout=20)
+except urllib.error.HTTPError as error:
+    response = error
+print('STATUS', response.code)
+print(response.read().decode())
+if response.code == 200:
+    seen = urllib.request.urlopen('http://' + os.environ['FIREEMU_FUNCTIONS_HOST'] + '/demo-py/us-central1/seen', timeout=20).read().decode()
+    assert '"function":"bc_user"' in seen.replace(' ', ''), seen
+"#;
+    for (name, config, status, note) in [
+        ("default", None, 200, 1),
+        (
+            "production",
+            Some(r#"{"schemaVersion":1,"productionExact":true}"#),
+            503,
+            0,
+        ),
+        (
+            "override",
+            Some(
+                r#"{"schemaVersion":1,"productionExact":true,"functions":{"authBlockingToken":"emulated"}}"#,
+            ),
+            200,
+            1,
+        ),
+    ] {
+        let dir = scratch(name);
+        let firebase = firebase_json(&dir, &fixture(), None);
+        let config_path = dir.join("fireemu.json");
+        let config_string = config_path.display().to_string();
+        let extra = if let Some(config) = config {
+            std::fs::write(&config_path, config).unwrap();
+            vec!["--config", config_string.as_str()]
+        } else {
+            vec![]
+        };
+        let python = interpreter().display().to_string();
+        let out = exec(&firebase, &extra, &[&python, "-c", script]);
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(out.status.success(), "{name}: {stdout}\n{stderr}");
+        assert!(
+            stdout.contains(&format!("STATUS {status}")),
+            "{name}: {stdout}\n{stderr}"
+        );
+        if status == 503 {
+            assert!(
+                stdout.contains("Error code: 47") && stdout.contains("backendError"),
+                "{stdout}"
+            );
+            assert!(stderr.contains("incorrect \"aud\""), "{stderr}");
+        }
+        assert_eq!(
+            stderr.matches("functions.authBlockingToken").count(),
+            note,
+            "{name}: {stderr}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[test]
+fn the_emulator_profile_refuses_the_production_blocking_token() {
+    let dir = scratch("blocking-profile");
+    let firebase = firebase_json(&dir, &fixture(), None);
+    let config = dir.join("fireemu.json");
+    std::fs::write(&config, r#"{"schemaVersion":1,"profile":"emulator","functions":{"authBlockingToken":"production"}}"#).unwrap();
+    let config = config.display().to_string();
+    let out = exec(&firebase, &["--config", &config], &["true"]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("functions.authBlockingToken \"production\" requires the strict profile"),
+        "{stderr}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

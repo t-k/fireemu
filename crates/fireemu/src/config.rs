@@ -1448,7 +1448,7 @@ pub enum DatabaseDefaultAccess {
 /// local runner address as its audience and expires 70 seconds after issue, and Admin SDKs skip
 /// verification. `productionExact` selects `production` under strict: an RS256 token with a kid,
 /// the registered cloudfunctions.net audience and a 300-second lifetime, verified by Python.
-/// The selected mode is recorded but does not yet change runtime behavior.
+/// Production mode requires the strict profile.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AuthBlockingToken {
     /// The official emulator's unsigned token.

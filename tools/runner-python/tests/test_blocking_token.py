@@ -195,3 +195,42 @@ def test_emulation_view_restored_after_verification_and_refusal(hooked):
     with pytest.raises(Exception):
         token_verifier.verify_auth_blocking_token(token(aud=PRODUCTION_AUD))
     assert token_verifier._auth_utils.is_emulated()
+
+
+def test_empty_jwks_leaves_sdk_unpatched_and_is_silent(capsys):
+    old = token_verifier._JWTVerifier, token_verifier._auth_utils
+    assert not blocking.install_from_environment({blocking.ENVIRONMENT_VARIABLE: ""})
+    assert (token_verifier._JWTVerifier, token_verifier._auth_utils) == old
+    assert capsys.readouterr().err == ""
+
+
+def test_runner_rejects_production_audience_with_jwks():
+    from harness import Runner
+
+    process = Runner(extra_env={blocking.ENVIRONMENT_VARIABLE: json.dumps({"keys": [jwk()]})})
+    try:
+        value = token(aud="https://us-central1-demo-proj.cloudfunctions.net/bc_user", claims={"event_id": "event-1", "event_type": "beforeCreate", "ip_address": "127.0.0.1", "user_agent": "test", "locale": "und", "user_record": {"uid": "user-1", "email": "plain@example.com", "metadata": {"creation_time": 0}, "provider_data": []}})
+        status, _, _ = process.request("/demo-proj/us-central1/bc_user", method="POST", body={"data": {"jwt": value}})
+        assert status == 500
+        assert process.close() == 0
+        assert 'incorrect "aud"' in process.stderr
+        assert "functions.authBlockingToken" not in process.stderr
+    finally:
+        process.kill()
+
+
+def test_runner_accepts_emulated_token_and_announces_default():
+    from harness import Runner
+
+    process = Runner()
+    try:
+        value = token(aud="http://127.0.0.1:1/demo-proj/us-central1/bc_user", key=None, algorithm="none", claims={"event_id": "event-1", "event_type": "beforeCreate", "ip_address": "127.0.0.1", "user_agent": "test", "user_record": {"uid": "user-1", "email": "plain@example.com", "metadata": {"creation_time": 0}, "provider_data": []}})
+        status, _, _ = process.request("/demo-proj/us-central1/bc_user", method="POST", body={"data": {"jwt": value}})
+        assert status == 200
+        assert any(entry["function"] == "bc_user" for entry in process.seen())
+        assert process.close() == 0
+        note = blocking.default_note(importlib.metadata.version("firebase-functions"))
+        assert note is not None
+        assert process.stderr.count(note) == 1
+    finally:
+        process.kill()

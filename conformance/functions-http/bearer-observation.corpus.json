@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "project": "fireemu-oracle-query",
+  "region": "us-central1",
+  "fixtureSource": "conformance/functions-http/fixtures",
+  "functions": {
+    "http": "fireemuHttpProbe",
+    "callable": "fireemuCallableProbe"
+  },
+  "programs": [
+    {
+      "id": "functions-http/http/malformed-bearer",
+      "cases": [
+        {
+          "id": "no-authorization",
+          "target": "http",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headers": {
+              "content-type": "application/json"
+            },
+            "body": {
+              "data": {
+                "op": "auth"
+              }
+            }
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "malformed-bearer",
+          "target": "http",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headers": {
+              "content-type": "application/json",
+              "authorization": "Bearer malformed"
+            },
+            "body": {
+              "data": {
+                "op": "auth"
+              }
+            }
+          },
+          "capture": "complete"
+        }
+      ]
+    }
+  ]
+}

@@ -72,8 +72,9 @@
       "previousRole": "The driver bytes that the independent reviews inspected (sourceCommit) and that produced the installed-binary sessions of the acquisition comparison and of the final R20 evidence under finalArtifact.",
       "reason": "The release strict-production row R20 ran the eight installed sessions one after another and took 35 minutes, almost all of it real-time pacing. check now runs them concurrently, with ports held until spawn and recorded in a process-wide registry, one process receipt per session and the same check-evidence.json shape and session order.",
       "comparisonLogicChanged": false,
-      "changedFunctions": ["reservePorts", "check"],
-      "residualRule": "SHA-256 of the file after removing the top-level functions reservePorts and check and the line `const claimedPorts = new Set();`.",
+      "changedFunctions": ["reservePorts", "check", "concurrencyFromEnvironment"],
+      "strippedLines": ["const claimedPorts = new Set();"],
+      "residualRule": "SHA-256 of the file after removing each top-level function named in changedFunctions (from its declaration to the first line that is a lone closing brace) and each line named in strippedLines.",
       "residualSha256": "339ee826b4761fa7e8350bce7e3e8f742f0951403ee3866da07bc167c146c715",
       "residualEqualsPrevious": true,
       "otherSources": "compare.mjs, lifecycle-evidence.mjs, sdk.mjs and probe-sdk.mjs keep the reviewed hashes."

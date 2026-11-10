@@ -14,6 +14,10 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 - Functions: a request that sends the `Origin` header twice (or more) is passed to the function in both profiles, as the SDK and production do, instead of being refused with a 403 `forbidden origin`; every field is forwarded in wire order and Node joins them with `, ` as for any repeated header. A browser never sends two, the function's own CORS settings decide what it answers, and the `Host` check against DNS rebinding is unchanged and still runs first. The Eventarc and Cloud Tasks listeners keep refusing a repeated `Origin`.
 - Strict profile: the client project configuration (`GET /v1/projects`) of a request that names a tenant now reports the parent project's live `authorizedDomains`, the list tenant action links are checked against, instead of the tenant store's own default list. The Firebase JS SDK sends no tenant on this call and production's request has no tenant field, so the answer is the project's. A tenant cannot change what the configuration reports. The emulator profile is unchanged; the official emulator reads no tenant there. Production's answer to a `tenantId` query on this route was not recorded.
 
+### Changed
+
+- Pub/Sub: the emulator profile accepts topic `kmsKeyName` and `tags`, stores them as sent, and returns them over REST and gRPC (measured on the official emulator, pubsub-emulator 0.8.35, 2026-11-10: it stores any key name and any tags, including empty keys and values, unvalidated, and refuses every `UpdateTopic` mask). `UpdateTopic` applies the `kms_key_name` mask (a mask that names it while the topic carries none clears it); a mask that names `tags` is answered `INVALID_ARGUMENT` because tags are immutable. Nothing is enforced or validated. Before, both profiles refused both fields with `UNIMPLEMENTED`. The strict profile still refuses them, now with a message that says why (production's answer is not recorded and Fireemu has no Cloud KMS or tag inventory to check against) and how to proceed (leave the field out, or use `profile = "emulator"`).
+
 ## [0.47.0] - 2026-11-10
 
 ### Added

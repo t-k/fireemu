@@ -10,7 +10,7 @@
 // fireemu-oracle-query project lock. It composes the stage 3 helpers of production.mjs (deploy, public
 // invoker read-back, the two passes, cleanup with read-back, source upload ownership) and adds: its own
 // admission, a capture of the raw answers, a regional Cloud Build read after cleanup, the judge, and two
-// ledger lines (`started` and one terminal line). It never writes docs.local/sandbox-oracles.md: the
+// ledger lines (`started` and one terminal line). It never writes the private sandbox change log: the
 // changes it makes are listed in the run directory's changes.jsonl for the coordinator's change-log row.
 
 import { execFile, spawn } from "node:child_process";

@@ -52,8 +52,9 @@ See [Realtime Database](../../products/realtime-database/#differences-from-the-o
 ### Cloud Pub/Sub
 
 - Schemas, BigQuery and Cloud Storage subscription delivery, exactly-once delivery and message transforms.
-- `UpdateTopic` supports only the `labels` and, in the emulator profile, `message_storage_policy` update masks; `DetachSubscription` is not implemented.
+- `UpdateTopic` supports only the `labels` and, in the emulator profile, `message_storage_policy` and `kms_key_name` update masks; `DetachSubscription` is not implemented.
 - `messageStoragePolicy` is stored as sent and never checked against Google Cloud's regions; the `strict` profile refuses it.
+- Topic key names and tags are stored as sent and never validated in the emulator profile; the strict profile refuses them.
 
 ### App Check
 
@@ -75,4 +76,4 @@ Some limits exist only in Fireemu, to bound memory use: the [Firestore history l
 
 ## Changes between versions
 
-Configuration and behavior may change between releases. See the [CHANGELOG](https://github.com/t-k/fireemu/blob/main/CHANGELOG.md).
+Configuration and behavior may change between releases. See the [CHANGELOG](https://github.com/fireemu/fireemu/blob/main/CHANGELOG.md).

@@ -91,7 +91,7 @@ Hosting behaves the same under `strict` and `emulator`, and `productionExact` ch
 
 ## Changes in v0.47.0
 
-These changes are in v0.47.0 and later; v0.45.0 and v0.46.0 behaved differently (see the [changelog](https://github.com/t-k/fireemu/blob/main/CHANGELOG.md)):
+These changes are in v0.47.0 and later; v0.45.0 and v0.46.0 behaved differently (see the [changelog](https://github.com/fireemu/fireemu/blob/main/CHANGELOG.md)):
 
 - An `i18n.root` written with a leading or trailing slash (`/locales`, the form Firebase's documentation shows) finds the same files as `locales`, and an empty root is no root, as in `superstatic`. Before, only a root without a leading slash worked.
 - Content types come from the `mime-types`/`mime-db` table of the `firebase-tools` emulator (generated from it), with its `Vary: Accept-Encoding` rule. Before, a short built-in table served every other extension, such as `.woff2`, `.gif` or `.ico`, as `application/octet-stream` and `.js` as `text/javascript`.

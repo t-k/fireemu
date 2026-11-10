@@ -242,27 +242,20 @@ fn string_to_number(text: &str) -> Option<f64> {
             return radix_digits(prefixes, radix);
         }
     }
-    // The decimal literal grammar, checked before Rust parses it so that `inf`, `nan` and `_`
-    // (which Rust would read) stay `NaN`.
+    // The decimal literal grammar. Rust's parser checks the exponent itself; the mantissa is
+    // checked first so that `inf`, `nan` and `_`, which Rust would read, stay `NaN`.
     let unsigned = text.strip_prefix(['+', '-']).unwrap_or(text);
-    let (mantissa, exponent) = match unsigned.find(['e', 'E']) {
-        Some(at) => (&unsigned[..at], Some(&unsigned[at + 1..])),
-        None => (unsigned, None),
-    };
+    let mantissa = unsigned.split(['e', 'E']).next().unwrap_or(unsigned);
     let (whole, fraction) = mantissa
         .split_once('.')
-        .map_or((mantissa, None), |(w, f)| (w, Some(f)));
+        .map_or((mantissa, None), |(whole, fraction)| {
+            (whole, Some(fraction))
+        });
     let digits = |part: &str| part.bytes().all(|b| b.is_ascii_digit());
     let mantissa_ok = digits(whole)
         && fraction.is_none_or(digits)
         && !(whole.is_empty() && fraction.is_none_or(str::is_empty));
-    let exponent_ok = exponent.is_none_or(|part| {
-        let part = part.strip_prefix(['+', '-']).unwrap_or(part);
-        !part.is_empty() && digits(part)
-    });
-    (mantissa_ok && exponent_ok)
-        .then(|| text.parse::<f64>().ok())
-        .flatten()
+    mantissa_ok.then(|| text.parse::<f64>().ok()).flatten()
 }
 
 /// A `validSince` instant as the whole-second number firebase-tools compares with.

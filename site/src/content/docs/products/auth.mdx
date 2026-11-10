@@ -41,7 +41,7 @@ This example enables email/password and phone sign-in, disables anonymous sign-i
 <TabItem label="TOML">
 
 ```toml
-#:schema https://raw.githubusercontent.com/t-k/fireemu/main/spec/config/fireemu.schema.json
+#:schema https://raw.githubusercontent.com/fireemu/fireemu/main/spec/config/fireemu.schema.json
 schemaVersion = 1
 profile = "strict"
 
@@ -135,7 +135,7 @@ Declare `auth.authorizedDomains`, for example `["localhost", "app.test"]`, to se
 
 - The list replaces the defaults, so include `localhost` if your tests use it. An empty list authorizes no host under `strict`; an absent or `null` setting keeps the existing defaults (`localhost` and the project's `firebaseapp.com` and `web.app` domains).
 - Validation uses the Admin API's rules for the selected profile, including its conversion of numeric and boolean entries to strings and omission of `null` entries; use strings when writing the list.
-- Fireemu intentionally keeps `localhost` in its defaults for development. The [recorded production sandbox baseline](https://github.com/t-k/fireemu/blob/main/conformance/auth-action-production.json) does not include it; new production projects may also omit it. This default is a Fireemu-only convenience, and declaring the list replaces it.
+- Fireemu intentionally keeps `localhost` in its defaults for development. The [recorded production sandbox baseline](https://github.com/fireemu/fireemu/blob/main/conformance/auth-action-production.json) does not include it; new production projects may also omit it. This default is a Fireemu-only convenience, and declaring the list replaces it.
 - In the `strict` profile an action link requested for a tenant checks its `continueUrl` host against this same project list as it is live (authorized domains belong to the project; a tenant has none of its own), and again when the request commits if a `beforeSendEmail` function ran. The emulator profile checks no domain. The tenant scope follows the resource model; production recorded this check for the project scope only.
 - In the `strict` profile `GET /v1/projects` for a request that names a tenant through the `tenantId` query reports the same live project list. The Firebase JS SDK checks its origin against this list and sends no tenant on that call. The `emulator` profile ignores the tenant there, as the official emulator does.
 - An Admin update changes the live list. A session reset restores the declared list, when present, and preserves an Admin-written list when no initial list was declared.
@@ -214,7 +214,7 @@ adjacentIntervals = 1
 - An export does not carry the project's `mfa` configuration, so an imported project keeps its own `auth.mfa` or Admin-set configuration.
 - The `emulator` profile keeps `auth.totp` working. Under `strict`, `auth.totp` is enough by default; under `productionExact`, or with an `auth.mfa` that leaves TOTP off, it prints a startup warning naming `auth.mfa`.
 
-A TOTP code accepted to complete enrollment must not be immediately reused for sign-in. In a test with virtual time, complete enrollment, advance the world clock by the secret's actual period, and generate the sign-in code for that new instant. Use matching algorithm and digit settings. See the [TOTP test recipe](https://github.com/t-k/fireemu/blob/main/docs/test-worlds.md#totp-enrollment-consumes-a-code).
+A TOTP code accepted to complete enrollment must not be immediately reused for sign-in. In a test with virtual time, complete enrollment, advance the world clock by the secret's actual period, and generate the sign-in code for that new instant. Use matching algorithm and digit settings. See the [TOTP test recipe](https://github.com/fireemu/fireemu/blob/main/docs/test-worlds.md#totp-enrollment-consumes-a-code).
 
 ## Multi-tenancy
 
@@ -281,7 +281,7 @@ By default a tenant ID can be any readable name that starts with a letter and ho
 
 Under the `emulator` profile, a request that names a tenant the project does not have creates that tenant, and the number of tenants is not limited, as in the official emulator. `strict` refuses such a request, as production does. A request that Fireemu refuses (a wrong credential, a browser page without the control token on the emulator routes, App Check, an unknown API key) creates nothing. As in the official emulator, a plain `GET` without an `Origin` header to a tenant route of `127.0.0.1` creates the tenant, so any web page you visit while the emulator runs can add tenants to it (not read them); use the `strict` profile where that matters.
 
-See the [compatibility documentation](https://github.com/t-k/fireemu/blob/main/docs/compatibility-contract.md) for the supported Admin API scope.
+See the [compatibility documentation](https://github.com/fireemu/fireemu/blob/main/docs/compatibility-contract.md) for the supported Admin API scope.
 
 ## Tokens
 

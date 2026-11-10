@@ -68,7 +68,11 @@ assert(pr_steps.none? { |step| step["uses"].to_s.match?(%r{\Apnpm/action-setup@}
 end
 
 platform_steps = jobs.fetch("platforms").fetch("steps")
+assert(jobs.dig("platforms", "name").to_s.start_with?("tests ("), "platform tests must retain the tests ( name prefix")
+assert(jobs.dig("platforms", "strategy", "fail-fast") == false, "platform tests must run every partition without fail-fast")
 platform_runs = platform_steps.map { |step| step["run"] }.compact.join("\n")
+platform_matrix = jobs.dig("platforms", "strategy", "matrix")
+assert(platform_matrix == { "include" => [{ "os" => "macos-latest", "shard" => "1/2" }, { "os" => "macos-latest", "shard" => "2/2" }, { "os" => "windows-latest", "shard" => "" }] }, "platform tests must run both macOS partitions and one unpartitioned Windows job")
 # The Functions runner tests start a real Node and a real Python child, four at once, as the first
 # executions of those interpreters on a freshly provisioned runner. Their first start pages the image in from
 # disk (2026-11-09: 4 to 22 s on 24 fresh VMs, 60 s or more on two runs of 2026-11-06). Pay that before the tests,
@@ -84,6 +88,8 @@ windows_runs = platform_runs.split('= "Windows" ]; then', 2).last.to_s.split("el
 assert(windows_runs.include?("--exclude fireemu-verification-quint"), "Windows must exclude the Unix-only Quint supervisor")
 assert(windows_runs.include?("--exclude traceability-check"), "Windows must exclude the Unix-only traceability supervisor")
 assert(windows_runs.include?("cargo nextest run -p fireemu --bin fireemu --test exec_windows --profile pr"), "Windows must execute fireemu binary unit tests and native lifecycle tests")
+assert(!windows_runs.include?("--partition"), "Windows platform tests must not be partitioned")
+assert(platform_steps[platform_tests_index]["run"].include?('cargo nextest run --workspace --profile pr --partition count:${{ matrix.shard }}'), "macOS platform tests must use the matrix partition")
 
 sdk = load_workflow("functions-sdk-discovery.yml")
 sdk_trigger = sdk["on"] || sdk[true]
@@ -133,7 +139,7 @@ end
 release_build = release.dig("jobs", "build")
 release_build_runs = release_build.fetch("steps").map { |step| step["run"] }.compact.join("\n")
 assert(!release_build_runs.include?("cargo nextest"), "release platform builds must not duplicate the workspace test suite")
-assert(release_build.fetch("needs").include?("test"), "release platform builds must depend on the dedicated test job")
+assert(release.dig("jobs", "publish", "needs").include?("test"), "release publish must depend on the dedicated test job")
 release_test_runs = release.dig("jobs", "test", "steps").map { |step| step["run"] }.compact.join("\n")
 assert(
   release_test_runs.include?("cargo nextest run --workspace --profile pr -E 'not binary(leak_fixture)'"),
@@ -153,8 +159,10 @@ assert(
 )
 strict = release.dig("jobs", "strict-production")
 assert(strict, "release must compare the strict profile of the installed artifact with the committed production recordings")
+assert(strict["name"].to_s.start_with?("strict-production"), "strict-production must retain the strict-production name prefix")
 assert(strict.fetch("needs").include?("build"), "strict-production must test the built platform package")
 assert(strict["continue-on-error"].nil?, "strict-production must block publication")
+assert(strict.dig("strategy", "fail-fast") == false && strict.dig("strategy", "matrix", "group") == %w[eventarc transaction rtdb-a rtdb-b rest], "strict-production must run every group without fail-fast")
 assert(release.dig("jobs", "publish", "needs").include?("strict-production"), "release publish must depend on the strict production comparison")
 assert(release.dig("jobs", "publish", "needs").include?("verify-artifact"), "release publish must depend on verify-artifact")
 strict_timeout = strict["timeout-minutes"]
@@ -176,6 +184,9 @@ assert(strict_runs.include?("conformance/src/rtdb-release-replay.test.mjs"), "st
 assert(strict_runs.include?("unshare --net --pid --fork --mount-proc --kill-child"), "strict-production must isolate the network and all descendant processes")
 assert(strict_runs.include?("node conformance/src/rtdb-namespace-probe.mjs --out strict-namespace-probe"), "strict-production must prove detached timeout cleanup in a real PID namespace")
 assert(strict_runs.include?("node conformance/src/release-strict-regression.mjs"), "strict-production must run the committed comparison script")
+strict_replay = strict.fetch("steps").find { |step| step["run"]&.include?("node conformance/src/release-strict-regression.mjs --out") }
+assert(strict_replay&.dig("env", "GROUP") == '${{ matrix.group }}' && strict_replay["run"].include?('GROUP="$GROUP"') && strict_replay["run"].include?('--group "$GROUP"'), "strict-production must pass the matrix group to the replay")
+assert(strict.fetch("steps").any? { |step| step["uses"]&.start_with?("actions/upload-artifact@") && step.dig("with", "name") == 'strict-regression-${{ matrix.group }}' }, "strict-production must upload one artifact per group")
 assert(!strict_runs.match?(/record-production|record-|preflight/), "strict-production must never record against production")
 assert(release.dig("jobs", "reproducible", "continue-on-error").nil?, "release reproducible job must block publication")
 assert(release.dig("jobs", "publish", "needs").include?("reproducible"), "release publish must depend on the reproducible job")
@@ -198,7 +209,9 @@ assert(release["env"].keys.sort == %w[CARGO_TERM_COLOR RUSTFLAGS SOURCE_DATE_EPO
 every_use = release.fetch("jobs").values.flat_map { |definition| definition.fetch("steps", []).map { |step| step["uses"] }.compact }
 assert(every_use.group_by { |use| use.split("@").first }.values.all? { |uses| uses.uniq.length == 1 }, "an action is pinned to one commit across the release workflow")
 release.fetch("jobs").each do |job, definition|
-  extra = definition.keys - %w[needs if runs-on outputs steps strategy timeout-minutes permissions environment]
+  allowed = %w[needs if runs-on outputs steps strategy timeout-minutes permissions environment]
+  allowed << "name" if job == "strict-production" && definition["name"] == 'strict-production (${{ matrix.group }})'
+  extra = definition.keys - allowed
   assert(extra.empty?, "release #{job} sets #{extra.join(', ')}: no job-level env, defaults, container, services or continue-on-error")
 end
 assert(every_use.all? { |use| use.match?(/\A[\w.-]+\/[\w.-]+(\/[\w.\/-]+)?@[0-9a-f]{40}\z/) }, "every action in the release workflow is pinned to a 40-hex commit, never a branch or a tag")
@@ -242,6 +255,9 @@ assert(extraction.dig("env", "VERSION") == "${{ steps.version.outputs.version }}
 assert(plan_steps.index(notes_upload) > plan_steps.index(extraction), "the notes are uploaded after they are extracted")
 
 publish_steps = release.dig("jobs", "publish", "steps")
+assert(!release.dig("jobs", "publish").key?("if"), "release publish must not bypass required jobs")
+assert(publish_steps.none? { |step| step.key?("continue-on-error") }, "release publish steps must not hide failures")
+assert(publish_steps.none? { |step| step["if"].to_s.match?(/\b(?:always|failure|cancelled)\s*\(\s*\)/i) }, "release publish steps must not bypass failures or cancellations")
 release_assets_upload = uploads.call("publish", "release-assets").first
 assert(release_assets_upload.dig("with", "path") == "dist/*", "the release assets are the attested dist directory")
 assert(release_assets_upload["if"] == "needs.plan.outputs.publish == 'true'", "a dry run must not upload release assets")

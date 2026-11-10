@@ -1072,6 +1072,24 @@ fn credentials_decide_who_the_rules_see() {
         ),
         // Without `iat` the token is no user.
         ("auth != null", r#"{"sub":"s1"}"#, 401),
+        // `iat` is a number as the official emulator reads one (docs.local/runs/rtdb-token-iat):
+        // an integer literal in the i64 range, or a literal with a fraction or an exponent,
+        // `1e400` and `-1e400` included. A string, `null`, a boolean, and an integer literal
+        // beyond the i64 range make the token no user.
+        ("auth.token.iat == 1.5", r#"{"sub":"s1","iat":1.5}"#, 200),
+        ("auth.token.iat == 1000", r#"{"sub":"s1","iat":1e3}"#, 200),
+        ("auth != null", r#"{"sub":"s1","iat":-1}"#, 200),
+        ("auth != null", r#"{"sub":"s1","iat":9223372036854775807}"#, 200),
+        ("auth != null", r#"{"sub":"s1","iat":1e30}"#, 200),
+        ("auth != null", r#"{"sub":"s1","iat":1e400}"#, 200),
+        ("auth != null", r#"{"sub":"s1","iat":-1e400}"#, 200),
+        ("auth != null", r#"{"sub":"s1","iat":"1"}"#, 401),
+        ("auth != null", r#"{"sub":"s1","iat":null}"#, 401),
+        ("auth != null", r#"{"sub":"s1","iat":true}"#, 401),
+        ("auth != null", r#"{"sub":"s1","iat":9223372036854775808}"#, 401),
+        ("auth != null", r#"{"sub":"s1","iat":-9223372036854775809}"#, 401),
+        ("auth != null", r#"{"sub":"s1","iat":12345678901234567890}"#, 401),
+        ("auth == null", r#"{"sub":"s1","iat":12345678901234567890}"#, 200),
         // Custom claims are members of `auth`, and replace `provider` and `token`; the
         // reserved ones are not, and `uid` stays `sub`.
         ("auth.admin == true", r#"{"sub":"s1","iat":1,"admin":true}"#, 200),

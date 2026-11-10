@@ -1,4 +1,4 @@
-module github.com/t-k/fireemu/tools/sdk-smoke-go
+module github.com/fireemu/fireemu/tools/sdk-smoke-go
 
 go 1.26.0
 

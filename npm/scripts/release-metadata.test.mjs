@@ -10,8 +10,8 @@ import { buildPlatformPackage, platformManifest, PYTHON_RUNNER_FILES, RUNNER_FIL
 import { PLATFORMS } from "../platforms/platforms.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const repositoryUrl = "https://github.com/t-k/fireemu";
-const homepageUrl = "https://t-k.github.io/fireemu/";
+const repositoryUrl = "https://github.com/fireemu/fireemu";
+const homepageUrl = "https://fireemu.github.io/fireemu/";
 const retiredRepositoryPath = ["github.com", "reckona", "fireemu"].join("/");
 
 test("every public distribution reference names the canonical repository", () => {

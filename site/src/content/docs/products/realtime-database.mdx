@@ -198,7 +198,7 @@ emulator-data/
 
 `--import` writes each file as the `owner` credential with `disableTriggers=true`, as firebase-tools does, before the command starts. The file name, lowercased, is the instance. A file named after an invalid instance, or one the database would refuse (invalid JSON, an invalid key, data nested too deep), stops the start before any other product's data is installed. An export's database section is skipped, with a note, when the database is not selected.
 
-Session snapshots and resets include the instances of the session's project. A restore or reset is seen by open listeners and event streams, cancels those the rules no longer allow on the restored data, and drops the `onDisconnect` writes registered for those instances. In [test worlds](https://github.com/t-k/fireemu/blob/main/docs/test-worlds.md), select `database` in `services`; `world.endpoints.database` and `FIREBASE_DATABASE_EMULATOR_HOST` route to it, and its data survives export, import and reset.
+Session snapshots and resets include the instances of the session's project. A restore or reset is seen by open listeners and event streams, cancels those the rules no longer allow on the restored data, and drops the `onDisconnect` writes registered for those instances. In [test worlds](https://github.com/fireemu/fireemu/blob/main/docs/test-worlds.md), select `database` in `services`; `world.endpoints.database` and `FIREBASE_DATABASE_EMULATOR_HOST` route to it, and its data survives export, import and reset.
 
 ## Rules coverage
 

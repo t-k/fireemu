@@ -9,15 +9,20 @@ import {
   chmodSync,
   realpathSync,
   cpSync,
+  readdirSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
+import { createServer } from "node:net";
+import { setTimeout as delay } from "node:timers/promises";
 import {
   validateProjectedRows,
   replayWithWire,
   sessionConfiguration,
   runExecSession,
+  reservePorts,
+  concurrencyFromEnvironment,
   comparisonFromEvidence,
   loadInputs,
   check,
@@ -1919,4 +1924,442 @@ test("missing public SDK sidecar refuses before binary or session access", async
     }),
     /missing genuine original SDK outcome comparand/,
   );
+});
+
+const checkOrder = [
+  "raw-A1",
+  "raw-A2",
+  "raw-B",
+  "raw-C",
+  "raw-D",
+  "facets-B",
+  "facets-C",
+  "facets-D",
+];
+function checkFixture(t) {
+  const directory = mkdtempSync(join(tmpdir(), "eventarc-check-pool-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const bin = join(directory, "bin"),
+    binary = join(bin, "fireemu");
+  mkdirSync(join(bin, "runner-node"), { recursive: true });
+  writeFileSync(binary, "fake");
+  writeFileSync(join(bin, "runner-node", "index.mjs"), "fake");
+  return { binary, out: join(directory, "out") };
+}
+function checkStub({
+  wait = () => 5,
+  incomplete = () => false,
+  exit = () => 0,
+  onStart = () => {},
+  barrier = 0,
+} = {}) {
+  let calls = 0,
+    active = 0,
+    max = 0;
+  const pids = new Map(),
+    finished = [];
+  const runSession = async ({ args }) => {
+    const path = args[args.indexOf("--session") + 1];
+    const session = JSON.parse(readFileSync(path, "utf8"));
+    const name = `${session.phase}-${session.label}`,
+      pid = ++calls;
+    pids.set(name, pid);
+    active++;
+    max = Math.max(max, active);
+    try {
+      await onStart(session, args);
+      // The first `barrier` sessions wait until `barrier` sessions are in flight at once.
+      const limit = performance.now() + 5000;
+      if (pid <= barrier) while (active < barrier && performance.now() < limit) await delay(1);
+      await delay(wait(session));
+      writeFileSync(session.reportPath, JSON.stringify({ complete: !incomplete(session) }));
+      return {
+        pid,
+        identity: { status: "VERIFIED", pid, value: "stub" },
+        descendants: [],
+        timedOut: false,
+        exitCode: exit(session),
+        processGroupAbsent: true,
+      };
+    } finally {
+      active--;
+      finished.push(name);
+    }
+  };
+  return {
+    runSession,
+    pids,
+    finished,
+    get calls() {
+      return calls;
+    },
+    get max() {
+      return max;
+    },
+  };
+}
+const sessionNames = (e) => e.sessions.map(({ phase, label }) => `${phase}-${label}`);
+const bindPort = (port) =>
+  new Promise((resolve, reject) => {
+    const server = createServer();
+    server.once("error", reject);
+    server.listen(port, "127.0.0.1", () => resolve(server));
+  });
+
+test("concurrencyFromEnvironment accepts defaults and positive decimal integers", () => {
+  assert.equal(concurrencyFromEnvironment({}), 8);
+  assert.equal(concurrencyFromEnvironment({ FIREEMU_EVENTARC_CHECK_CONCURRENCY: "" }), 8);
+  for (const value of ["1", "3", "8", "12"]) {
+    assert.equal(
+      concurrencyFromEnvironment({ FIREEMU_EVENTARC_CHECK_CONCURRENCY: value }),
+      Number(value),
+    );
+  }
+  for (const value of ["0", "-1", "1.5", "abc", "08", " 3", "3 ", "1e1"]) {
+    assert.throws(
+      () => concurrencyFromEnvironment({ FIREEMU_EVENTARC_CHECK_CONCURRENCY: value }),
+      undefined,
+      value,
+    );
+  }
+});
+test("concurrencyFromEnvironment controls check when concurrency is omitted", async (t) => {
+  const previous = process.env.FIREEMU_EVENTARC_CHECK_CONCURRENCY;
+  process.env.FIREEMU_EVENTARC_CHECK_CONCURRENCY = "1";
+  try {
+    const stub = checkStub();
+    await check({ ...checkFixture(t), runSession: stub.runSession });
+    assert.equal(stub.calls, 8);
+    assert.equal(stub.max, 1);
+  } finally {
+    if (previous === undefined) delete process.env.FIREEMU_EVENTARC_CHECK_CONCURRENCY;
+    else process.env.FIREEMU_EVENTARC_CHECK_CONCURRENCY = previous;
+  }
+});
+test("reservePorts holds distinct ports until release across concurrent callers", async () => {
+  const reservations = await Promise.all(Array.from({ length: 16 }, () => reservePorts()));
+  const ports = reservations.flatMap((r) => r.ports);
+  try {
+    assert.equal(new Set(ports).size, 112);
+    for (const port of ports) await assert.rejects(bindPort(port), { code: "EADDRINUSE" });
+  } finally {
+    await Promise.all(reservations.map((r) => r.release()));
+  }
+  for (const port of ports) {
+    const server = await bindPort(port);
+    await new Promise((done) => server.close(done));
+  }
+});
+test("reservePorts never reissues a claimed port after release", async () => {
+  const ports = new Set();
+  for (let i = 0; i < 20; i++) {
+    const reservation = await reservePorts();
+    for (const port of reservation.ports) {
+      assert.ok(!ports.has(port));
+      ports.add(port);
+    }
+    await reservation.release();
+    await reservation.release();
+  }
+});
+test("check runs the eight sessions concurrently and bounds in-flight sessions by concurrency", async (t) => {
+  const fixture = checkFixture(t);
+  for (const concurrency of [undefined, 3, 1]) {
+    const stub = checkStub({ barrier: concurrency ?? 8 });
+    await check({ ...fixture, concurrency, runSession: stub.runSession });
+    assert.equal(stub.calls, 8);
+    assert.equal(stub.max, concurrency ?? 8);
+  }
+});
+test("check keeps session order, pins and shape identical to a sequential run", async (t) => {
+  const fixture = checkFixture(t);
+  const stub = () =>
+    checkStub({ wait: (s) => (8 - checkOrder.indexOf(`${s.phase}-${s.label}`)) * 5 });
+  const sequential = await check({ ...fixture, concurrency: 1, runSession: stub().runSession });
+  const concurrent = await check({ ...fixture, runSession: stub().runSession });
+  assert.deepEqual(sessionNames(concurrent), checkOrder);
+  assert.equal(concurrent.complete, true);
+  const names = (e) =>
+    Object.keys(e.sessionPins).map((p) =>
+      p
+        .split("/")
+        .slice(-2)
+        .join("/")
+        .replace(/(raw-(?:A1|A2|B|C|D)|facets-[BCD])-[^/]+\//, "$1/"),
+    );
+  assert.deepEqual(
+    names(concurrent),
+    checkOrder.flatMap((name) =>
+      [
+        "report.json",
+        "process-receipt.json",
+        "offline.cjs",
+        "session.json",
+        "fireemu.json",
+        "firebase.json",
+      ].map((file) => `${name}/${file}`),
+    ),
+  );
+  assert.deepEqual(names(sequential), names(concurrent));
+  assert.deepEqual(Object.keys(sequential), Object.keys(concurrent));
+  assert.deepEqual(sequential.budget, concurrent.budget);
+  assert.deepEqual(sequential.sessions.map(Object.keys), concurrent.sessions.map(Object.keys));
+});
+test("check keeps one process receipt per session", async (t) => {
+  const fixture = checkFixture(t),
+    stub = checkStub();
+  const evidence = await check({ ...fixture, runSession: stub.runSession });
+  assert.equal(new Set(evidence.sessions.map((s) => s.id)).size, 8);
+  assert.equal(new Set(stub.pids.values()).size, 8);
+  for (const entry of evidence.sessions) {
+    const bytes = readFileSync(join(fixture.out, entry.id, "process-receipt.json"));
+    assert.equal(JSON.parse(bytes).pid, stub.pids.get(`${entry.phase}-${entry.label}`));
+    assert.equal(entry.processReceiptSha256, hash(bytes));
+  }
+});
+test("check keeps the other sessions running when one session fails", async (t) => {
+  const fixture = checkFixture(t);
+  const stub = checkStub({
+    incomplete: (s) => s.phase === "raw" && s.label === "C",
+    exit: (s) => (s.phase === "facets" && s.label === "B" ? 1 : 0),
+  });
+  const evidence = await check({ ...fixture, runSession: stub.runSession });
+  assert.equal(evidence.complete, false);
+  assert.deepEqual(sessionNames(evidence), checkOrder);
+  assert.equal(stub.calls, 8);
+  assert.deepEqual(
+    evidence.sessions.filter((s) => !s.report.complete).map((s) => `${s.phase}-${s.label}`),
+    ["raw-C", "facets-B"],
+  );
+});
+test("check keeps cleanup: an unexpected session error waits for the others and rethrows", async (t) => {
+  const fixture = checkFixture(t),
+    stub = checkStub({ wait: (s) => (s.phase === "facets" && s.label === "D" ? 1 : 25) });
+  await assert.rejects(
+    check({
+      ...fixture,
+      runSession: async (args) => {
+        const session = JSON.parse(
+          readFileSync(args.args[args.args.indexOf("--session") + 1], "utf8"),
+        );
+        if (session.phase === "facets" && session.label === "D") throw new Error("session error");
+        return stub.runSession(args);
+      },
+    }),
+    /session error/,
+  );
+  assert.equal(stub.finished.length, 7);
+});
+test("check keeps ports distinct for every concurrent session", async (t) => {
+  const fixture = checkFixture(t),
+    ports = [];
+  const stub = checkStub({
+    onStart: (_, args) => {
+      const fireemu = JSON.parse(readFileSync(args[args.indexOf("--config") + 1], "utf8"));
+      const firebase = JSON.parse(readFileSync(args[args.indexOf("--firebase-json") + 1], "utf8"));
+      const d = fireemu.daemon;
+      assert.equal(firebase.emulators.eventarc.port, d.eventarcPort);
+      ports.push(
+        d.httpPort,
+        d.firestorePort,
+        d.functionsPort,
+        d.eventarcPort,
+        d.loggingPort,
+        d.hubPort,
+        Number(args[args.indexOf("--tasks-port") + 1]),
+      );
+    },
+  });
+  await check({ ...fixture, runSession: stub.runSession });
+  assert.equal(ports.length, 56);
+  assert.equal(new Set(ports).size, 56);
+});
+test("check keeps invalid concurrency from starting any session", async (t) => {
+  const fixture = checkFixture(t),
+    stub = checkStub();
+  mkdirSync(fixture.out);
+  for (const concurrency of [0, -1, 1.5, "2", NaN])
+    await assert.rejects(check({ ...fixture, concurrency, runSession: stub.runSession }));
+  assert.equal(stub.calls, 0);
+  assert.deepEqual(readdirSync(fixture.out), []);
+});
+
+test("reservePorts scripted duplicates are skipped, held and closed on release", async () => {
+  const closed = [],
+    firstPorts = [41001, 41002, 41003, 41004, 41005, 41006, 41007];
+  const makeFactory = (script) => () => {
+    const port = script.shift();
+    return {
+      once() {},
+      listen(_port, _host, done) {
+        queueMicrotask(done);
+      },
+      address() {
+        return { port };
+      },
+      close(done) {
+        closed.push(port);
+        done();
+      },
+    };
+  };
+  const first = await reservePorts(7, { makeServer: makeFactory([...firstPorts]) });
+  assert.deepEqual(first.ports, firstPorts);
+  const second = await reservePorts(7, {
+    makeServer: makeFactory([41001, 41008, 41001, 41009, 41010, 41011, 41012, 41013, 41014]),
+  });
+  assert.deepEqual(second.ports, [41008, 41009, 41010, 41011, 41012, 41013, 41014]);
+  assert.deepEqual(closed, []);
+  await second.release();
+  assert.deepEqual(closed, [41001, 41008, 41001, 41009, 41010, 41011, 41012, 41013, 41014]);
+  await second.release();
+  assert.equal(closed.length, 9);
+  await first.release();
+});
+test("reservePorts scripted exhaustion rejects after the retry bound and closes everything", async () => {
+  let calls = 0;
+  const closed = [];
+  const makeServer = () => {
+    calls++;
+    return {
+      once() {},
+      listen(_port, _host, done) {
+        queueMicrotask(done);
+      },
+      address() {
+        return { port: 41200 };
+      },
+      close(done) {
+        closed.push(41200);
+        done();
+      },
+    };
+  };
+  const first = await reservePorts(1, { makeServer });
+  calls = 0;
+  await assert.rejects(reservePorts(1, { makeServer }), /retries exhausted/);
+  assert.equal(calls, 65);
+  assert.deepEqual(closed, Array(65).fill(41200));
+  await first.release();
+});
+test("reservePorts scripted listen failure closes the servers already opened", async () => {
+  let calls = 0;
+  const closed = [],
+    failure = new Error("listen failed");
+  const makeServer = () => {
+    const port = 41300 + ++calls;
+    let onError;
+    return {
+      once(_event, fn) {
+        onError = fn;
+      },
+      listen(_port, _host, done) {
+        queueMicrotask(() => (port === 41303 ? onError(failure) : done()));
+      },
+      address() {
+        return { port };
+      },
+      close(done) {
+        closed.push(port);
+        done();
+      },
+    };
+  };
+  await assert.rejects(reservePorts(3, { makeServer }), (error) => error === failure);
+  assert.deepEqual(closed, [41301, 41302]);
+});
+test("check keeps nothing new starting after an unexpected session error", async (t) => {
+  const fixture = checkFixture(t),
+    stub = checkStub({
+      onStart: (s) => {
+        if (s.phase === "raw" && s.label === "B") throw new Error("session error");
+      },
+    });
+  await assert.rejects(
+    check({ ...fixture, concurrency: 1, runSession: stub.runSession }),
+    /session error/,
+  );
+  assert.equal(stub.calls, 3);
+  assert.deepEqual([...stub.pids.keys()], checkOrder.slice(0, 3));
+});
+test("check keeps the progress file with the completed sessions after an unexpected error", async (t) => {
+  const fixture = checkFixture(t),
+    stub = checkStub({
+      onStart: (s) => {
+        if (s.phase === "raw" && s.label === "C") throw new Error("session error");
+      },
+    });
+  await assert.rejects(
+    check({ ...fixture, concurrency: 1, runSession: stub.runSession }),
+    /session error/,
+  );
+  const evidence = JSON.parse(readFileSync(join(fixture.out, "check-evidence.json"), "utf8"));
+  assert.equal(evidence.complete, false);
+  assert.deepEqual(sessionNames(evidence), checkOrder.slice(0, 3));
+});
+test("check keeps spawned ports free", async (t) => {
+  const fixture = checkFixture(t),
+    errors = [];
+  const stub = checkStub({
+    onStart: async (_, args) => {
+      const fireemu = JSON.parse(readFileSync(args[args.indexOf("--config") + 1], "utf8"));
+      const firebase = JSON.parse(readFileSync(args[args.indexOf("--firebase-json") + 1], "utf8"));
+      const d = fireemu.daemon;
+      assert.equal(firebase.emulators.eventarc.port, d.eventarcPort);
+      for (const port of [
+        d.httpPort,
+        d.firestorePort,
+        d.functionsPort,
+        d.eventarcPort,
+        d.loggingPort,
+        d.hubPort,
+        Number(args[args.indexOf("--tasks-port") + 1]),
+      ]) {
+        try {
+          const server = await bindPort(port);
+          await new Promise((done) => server.close(done));
+        } catch (error) {
+          errors.push(error);
+        }
+      }
+    },
+  });
+  await check({ ...fixture, runSession: stub.runSession });
+  assert.deepEqual(errors, []);
+});
+test("check keeps the first error when several sessions fail", async (t) => {
+  const fixture = checkFixture(t),
+    stub = checkStub({
+      onStart: async (s) => {
+        if (s.phase === "raw" && s.label === "B") {
+          await delay(5);
+          throw new Error("first error");
+        }
+        if (s.phase === "facets" && s.label === "D") {
+          await delay(80);
+          throw new Error("second error");
+        }
+      },
+    });
+  await assert.rejects(check({ ...fixture, runSession: stub.runSession }), /first error/);
+});
+test("check defaults to the real session runner and keeps a verified receipt per child", async (t) => {
+  const fixture = checkFixture(t);
+  writeFileSync(fixture.binary, "#!/bin/sh\nsleep 1\n");
+  chmodSync(fixture.binary, 0o755);
+  const evidence = await check(fixture);
+  assert.equal(evidence.complete, false);
+  assert.deepEqual(sessionNames(evidence), checkOrder);
+  const pids = new Set();
+  for (const entry of evidence.sessions) {
+    assert.equal(entry.report.failure.message, "missing session report");
+    const receipt = JSON.parse(
+      readFileSync(join(fixture.out, entry.id, "process-receipt.json"), "utf8"),
+    );
+    assert.equal(receipt.identity.status, "VERIFIED");
+    assert.equal(receipt.exitCode, 0);
+    assert.equal(receipt.processGroupAbsent, true);
+    pids.add(receipt.pid);
+  }
+  assert.equal(pids.size, 8);
 });

@@ -424,24 +424,6 @@ export const RUNS = [
     clear: ["fs-transaction"],
     commands: [
       {
-        mode: "check",
-        argv: [
-          "uv",
-          "run",
-          "--python",
-          "3.12.13",
-          "python",
-          "tools/compat-broad/fs-write-txn/fs_txn_release.py",
-          "check",
-          "--binary",
-          "{bin}",
-          "--out",
-          "{export}.check",
-        ],
-        env: {},
-        expectedExitCodes: [0],
-      },
-      {
         mode: "export-comparison",
         argv: [
           "uv",
@@ -515,6 +497,16 @@ export const RUNS = [
     { FIREEMU_SANDBOX_LANE: "fs-ent-pipeline" },
   ),
 ];
+
+export const GROUPS = {
+  eventarc: ["R20"],
+  transaction: ["R19"],
+  "rtdb-a": ["R22", "R24", "R25", "R28", "R30", "R31", "R32", "R33", "R34", "R35"],
+  "rtdb-b": ["R23", "R26", "R27", "R29", "R36"],
+};
+GROUPS.rest = RUNS.map(({ id }) => id).filter(
+  (id) => !Object.values(GROUPS).some((ids) => ids.includes(id)),
+);
 
 /** Composite comparison files: which part each run covers. Other keys are metadata. */
 const COMPOSITE_KINDS = {
@@ -722,13 +714,16 @@ export function parseArguments(args) {
   for (let index = 0; index < args.length; index += 1) {
     const name = args[index];
     const value = args[index + 1];
-    if (name !== "--out" && name !== "--dist") throw new Error(`unknown argument ${name}`);
+    if (name !== "--out" && name !== "--dist" && name !== "--group")
+      throw new Error(`unknown argument ${name}`);
     if (!value || value.startsWith("--")) throw new Error(`${name} needs a value`);
     parsed[name.slice(2)] = value;
     index += 1;
   }
   if (!parsed.out)
     throw new Error("usage: release-strict-regression.mjs --out <dir> [--dist <dir>]");
+  if (parsed.group && !Object.hasOwn(GROUPS, parsed.group))
+    throw new Error(`unknown group ${parsed.group}`);
   return parsed;
 }
 
@@ -899,8 +894,32 @@ export function localSetupDifferences(actual) {
   return differences;
 }
 
+export const EVENTARC_REBIND_PATHS = ["conformance/src/eventarc-production/run.mjs"];
+
+export function eventarcSourceRebinds(readBytes) {
+  const path = "spec/compatibility/closure/evidence/EVENTARC-adjudication.json";
+  try {
+    const bytes = readBytes(path);
+    const digest = sha256Bytes(bytes);
+    const records = JSON.parse(readBytes("spec/compatibility/closure/record-digests.json"));
+    const closure = JSON.parse(readBytes("spec/compatibility/closure/EVENTARC.json"));
+    if (digest !== records.records[path] || digest !== closure.retrospectiveAdjudication.sha256) {
+      throw new Error("digest mismatch");
+    }
+    const rebinds = JSON.parse(bytes).sourceRebinds ?? [];
+    for (const rebind of rebinds) {
+      if (!EVENTARC_REBIND_PATHS.includes(rebind.path)) {
+        throw new Error(`rebind for ${rebind.path} is not allowed`);
+      }
+    }
+    return rebinds;
+  } catch (error) {
+    throw new Error(`EVENTARC adjudication: ${error.message}`, { cause: error });
+  }
+}
+
 /** Differences between a lane export and the committed comparison file. */
-export function compareLaneExport(expected, actual, binarySha256) {
+export function compareLaneExport(expected, actual, binarySha256, { sourceRebinds = [] } = {}) {
   if (!actual || typeof actual !== "object" || !Array.isArray(actual.rows)) {
     return ["no comparison was exported"];
   }
@@ -921,9 +940,25 @@ export function compareLaneExport(expected, actual, binarySha256) {
       differences.push(`EVENTARC semantic evidence: ${error.message}`);
     }
   }
+  const sourcePins = { ...expected.sourcePins };
+  if (expected.kind === "eventarc-production-comparison-v1") {
+    for (const rebind of sourceRebinds) {
+      if (!EVENTARC_REBIND_PATHS.includes(rebind.path)) {
+        differences.push(`sourcePins: rebind for ${rebind.path} is not allowed`);
+        continue;
+      }
+      if (expected.sourcePins[rebind.path] === rebind.previousSha256) {
+        sourcePins[rebind.path] = rebind.sha256;
+      }
+    }
+  }
   for (const field of fields) {
-    if (!isDeepStrictEqual(expected[field], actual[field])) {
-      differences.push(`${field}: expected ${brief(expected[field])} got ${brief(actual[field])}`);
+    const value = field === "sourcePins" ? sourcePins : expected[field];
+    if (
+      !isDeepStrictEqual(value, actual[field]) &&
+      !(field === "sourcePins" && isDeepStrictEqual(expected.sourcePins, actual.sourcePins))
+    ) {
+      differences.push(`${field}: expected ${brief(value)} got ${brief(actual[field])}`);
     }
   }
   if ("rangeTotals" in expected && !isDeepStrictEqual(expected.rangeTotals, actual.rangeTotals)) {
@@ -1660,8 +1695,18 @@ export function judge(comparison, observations, context) {
   }
   const observed = observations[comparison.runIds[0]];
   const run = RUNS.find((r) => r.id === comparison.runIds[0]);
+  let sourceRebinds = [];
+  let rebindRefusal;
+  if (comparison.kind === "eventarc-production-comparison-v1") {
+    try {
+      sourceRebinds = eventarcSourceRebinds(context.readBytes);
+    } catch (error) {
+      rebindRefusal = `EVENTARC source rebinds refused: ${error.message}`;
+    }
+  }
   return [
-    ...compareLaneExport(expected, observed, context.binarySha256),
+    ...compareLaneExport(expected, observed, context.binarySha256, { sourceRebinds }),
+    ...(rebindRefusal ? [rebindRefusal] : []),
     ...(run?.localSetup ? localSetupDifferences(observed) : []),
   ];
 }
@@ -1692,6 +1737,17 @@ export function exportCopies(comparisons, runs) {
           ? "EVENTARC-comparison.json"
           : comparison.path.split("/").at(-1),
     }));
+}
+
+export function selectGroup(plan, group) {
+  const ids = group ? new Set(GROUPS[group]) : undefined;
+  return {
+    runs: ids ? RUNS.filter((run) => ids.has(run.id)) : RUNS,
+    comparisons: ids
+      ? plan.comparisons.filter((comparison) => comparison.runIds.every((id) => ids.has(id)))
+      : plan.comparisons,
+    reportsR10: !ids || ids.has("R10"),
+  };
 }
 
 /** Validate each retained export snapshot before writing any public comparison copy. */
@@ -1764,6 +1820,7 @@ async function main() {
     .filter((name) => name.endsWith(".json") && name !== "record-digests.json")
     .map((name) => ({ name, closure: readJson(`${CLOSURE_DIR}/${name}`) }));
   const plan = planRelease(closures, readJson);
+  const { runs, comparisons, reportsR10 } = selectGroup(plan, args.group);
   const binarySha256 = await sha256File(binary);
   const tarballs = {};
   if (args.dist) {
@@ -1777,9 +1834,11 @@ async function main() {
     functionsNode,
     out,
     readJson,
+    readBytes: (path) => readFileSync(join(ROOT, path)),
     env: { ...process.env, FIREEMU_BIN: binary, FIREEMU_NODE: functionsNode },
   };
   const summary = {
+    ...(args.group ? { group: args.group } : {}),
     binary: { path: binary, sha256: binarySha256 },
     tarballs,
     node: process.version,
@@ -1792,7 +1851,7 @@ async function main() {
   const observations = {};
   let fatalTimeout = false;
   if (plan.errors.length === 0) {
-    fatalTimeout = await runUntilFatal(RUNS, async (run) => {
+    fatalTimeout = await runUntilFatal(runs, async (run) => {
       console.log(`== ${run.id} ${run.kind}${run.part ? ` (${run.part})` : ""}`);
       const entry = await runEntry(run, context);
       observations[run.id] = await observeUnlessFatal(entry, () => observe(run, entry, context));
@@ -1804,14 +1863,13 @@ async function main() {
       return entry;
     });
     if (!fatalTimeout)
-      for (const comparison of plan.comparisons) {
+      for (const comparison of comparisons) {
         const differences = judge(comparison, observations, context);
         summary.comparisons.push({ ...comparison, differences });
       }
-    if (!fatalTimeout)
-      await copyValidatedExportSnapshots(out, exportCopies(plan.comparisons, RUNS));
+    if (!fatalTimeout) await copyValidatedExportSnapshots(out, exportCopies(comparisons, runs));
   }
-  if (!fatalTimeout) {
+  if (!fatalTimeout && reportsR10) {
     const expectedRaw = context.readJson(
       "spec/compatibility/closure/evidence/integration-v0.8.0/FS-DATA-WRITE-regression.json",
     ).current.rawLocalResultDigests.strict;

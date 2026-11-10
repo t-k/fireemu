@@ -600,19 +600,23 @@ fn create_topic(
     }
     let mut state = handle.state();
     state
-        .create_topic_with_storage_policy(
+        .create_topic_with_options(
             topic.clone(),
             labels,
-            topic_options
-                .message_retention_duration
-                .as_ref()
-                .map(crate::convert::duration_from_proto)
-                .transpose()
-                .map_err(RestError::from_core)?,
-            topic_options
-                .message_storage_policy
-                .as_ref()
-                .map(crate::convert::storage_policy_from_proto),
+            fireemu_core_pubsub::TopicOptions {
+                message_retention_duration: topic_options
+                    .message_retention_duration
+                    .as_ref()
+                    .map(crate::convert::duration_from_proto)
+                    .transpose()
+                    .map_err(RestError::from_core)?,
+                message_storage_policy: topic_options
+                    .message_storage_policy
+                    .as_ref()
+                    .map(crate::convert::storage_policy_from_proto),
+                kms_key_name: topic_options.kms_key_name,
+                tags: topic_options.tags.into_iter().collect(),
+            },
         )
         .map_err(RestError::from_core)?;
     let rendered = stored_topic_json(&state, topic).map_err(RestError::from_core)?;
@@ -1703,8 +1707,16 @@ fn topic_json(
     labels: &BTreeMap<String, String>,
     retention: Option<LogicalDuration>,
     storage_policy: Option<&MessageStoragePolicy>,
+    kms: &str,
+    tags: &BTreeMap<String, String>,
 ) -> Value {
     let mut value = json!({"name": name.to_full()});
+    if !kms.is_empty() {
+        value["kmsKeyName"] = json!(kms);
+    }
+    if !tags.is_empty() {
+        value["tags"] = json!(tags);
+    }
     if !labels.is_empty() {
         value["labels"] = json!(labels);
     }
@@ -1735,6 +1747,8 @@ fn stored_topic_json(state: &PubSubState, name: &TopicName) -> Result<Value, Pub
         state.topic_labels(name)?,
         state.topic_retention(name)?,
         state.topic_storage_policy(name)?,
+        state.topic_kms_key_name(name)?,
+        state.topic_tags(name)?,
     ))
 }
 
@@ -1858,8 +1872,11 @@ fn topic_from_json(
             let tags = value
                 .as_object()
                 .ok_or_else(|| RestError::invalid("topic.tags must be an object"))?;
-            if !tags.is_empty() {
-                options.tags.insert(String::new(), String::new());
+            for (key, value) in tags {
+                let value = value
+                    .as_str()
+                    .ok_or_else(|| RestError::invalid("topic.tags values must be strings"))?;
+                options.tags.insert(key.clone(), value.to_owned());
             }
         }
     }
@@ -2328,6 +2345,22 @@ mod production_shape_tests {
             let expected = format!("{}s", if explicit {600} else {ttl.min(604_800)});
             prop_assert_eq!(response["messageRetentionDuration"].as_str(), Some(expected.as_str()));
         }
+        #[test]
+        fn rendered_key_and_tags_parse_back(kms in ".{0,12}", tags in prop::collection::btree_map(".{0,6}", ".{0,6}", 0..5), camel in any::<bool>()) {
+            let topic = TopicName::new("demo-app", "key-property").unwrap();
+            let mut rendered = topic_json(&topic, &BTreeMap::new(), None, None, &kms, &tags);
+            prop_assert_eq!(rendered.get("kmsKeyName").is_some(), !kms.is_empty());
+            prop_assert_eq!(rendered.get("tags").is_some(), !tags.is_empty());
+            if !camel {
+                if let Some(value) = rendered.as_object_mut().unwrap().remove("kmsKeyName") {
+                    rendered["kms_key_name"] = value;
+                }
+            }
+            let parsed = topic_from_json(&topic, &rendered, false).unwrap();
+            prop_assert_eq!(parsed.kms_key_name, kms);
+            prop_assert_eq!(parsed.tags.into_iter().collect::<BTreeMap<_, _>>(), tags);
+        }
+
         /// What the resource renders is what a body can send back: a present policy stays present
         /// (an empty one renders as `{}`), an absent one stays absent, and no field is invented.
         #[test]
@@ -2342,7 +2375,7 @@ mod production_shape_tests {
                 allowed_persistence_regions: regions,
                 enforce_in_transit: enforce,
             });
-            let rendered = topic_json(&topic, &BTreeMap::new(), None, stored.as_ref());
+            let rendered = topic_json(&topic, &BTreeMap::new(), None, stored.as_ref(), "", &BTreeMap::new());
             prop_assert_eq!(rendered.get("messageStoragePolicy").is_some(), present);
             if let Some(policy) = &stored {
                 let object = rendered["messageStoragePolicy"].as_object().unwrap();
@@ -2409,7 +2442,7 @@ mod production_shape_tests {
             state.create_topic(topic.clone(), labels.clone()).unwrap();
             state.create_subscription(config.clone()).unwrap();
             let snapshot = state.create_snapshot("projects/demo-app/snapshots/label-property", &config.name, labels.clone(), LogicalInstant::from_unix_seconds(0)).unwrap();
-            for rendered in [topic_json(&topic, &labels, None, None), snapshot_json(&snapshot)] {
+            for rendered in [topic_json(&topic, &labels, None, None, "", &BTreeMap::new()), snapshot_json(&snapshot)] {
                 prop_assert_eq!(rendered.get("labels").is_some(), !labels.is_empty());
                 if !labels.is_empty() { prop_assert_eq!(&rendered["labels"], &json!(labels)); }
             }

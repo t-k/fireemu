@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -338,11 +339,32 @@ const historicalPublicHashes = new Map([
     "5db9d409a36daa1479a0ee8e704d59d4b0887ae8d905e5e6a4a20cccb90a886b",
   ],
 ]);
-const historicalPublicSha = (path) => {
-  const digest = historicalPublicHashes.get(path);
-  assert.ok(digest, "the historical public hash fixture names every public snapshot");
+// Reviewed bytes stay above as history. A source whose bytes changed after the review is listed in
+// the adjudication's sourceRebinds and pinned here at its rebound hash.
+const reboundPublicHashes = new Map([
+  [
+    "conformance/src/eventarc-production/run.mjs",
+    "05005290175df9415d033842b8ca1761a05e5695d21e23b4c1084959c463b98d",
+  ],
+]);
+const pinnedPublicSha = (path) => {
+  const digest = reboundPublicHashes.get(path) ?? historicalPublicHashes.get(path);
+  assert.ok(digest, "the public hash fixture names every public snapshot");
   return digest;
 };
+/** The driver without the functions its rebind names, as the rebind's residualSha256 is taken. */
+function driverResidual(text, rebind, { allowMissing = false } = {}) {
+  let result = text;
+  for (const name of rebind.changedFunctions) {
+    const start = result.search(new RegExp(`^(?:export )?(?:async )?function ${name}\\(`, "m"));
+    if (start < 0 && allowMissing) continue;
+    assert.ok(start >= 0, `${name} is a top-level function`);
+    result = result.slice(0, start) + result.slice(result.indexOf("\n}\n", start) + 3);
+  }
+  for (const line of rebind.strippedLines) result = result.replace(`${line}\n`, "");
+  return result;
+}
+const driverResidualSha = "339ee826b4761fa7e8350bce7e3e8f742f0951403ee3866da07bc167c146c715";
 const decodedAcquisitionSha = "76c47b99496a616e8c2faab841e8267901f985e95221b43cd38dbf82d973f907";
 const sortedValue = (value) =>
   Array.isArray(value)
@@ -457,6 +479,30 @@ function assertRetrospectiveClosure(
     assert.equal(source.custody, "public-repository");
     assert.equal(source.selector, "whole-file");
     assert.equal(publicSha(source.path), source.sha256, "public source bytes");
+  }
+  const rebinds = adjudication.sourceRebinds;
+  assert.ok(Array.isArray(rebinds), "source rebinds are recorded");
+  const rebound = adjudication.sources.filter(
+    ({ path, sha256 }) => sha256 !== historicalPublicHashes.get(path),
+  );
+  assert.deepEqual(
+    rebinds.map(({ path }) => path),
+    rebound.map(({ path }) => path),
+    "every changed source has exactly one rebind",
+  );
+  for (const rebind of rebinds) {
+    const source = rebound.find(({ path }) => path === rebind.path);
+    assert.equal(
+      rebind.previousSha256,
+      historicalPublicHashes.get(rebind.path),
+      "reviewed history",
+    );
+    assert.equal(rebind.sha256, source.sha256, "rebind names the pinned bytes");
+    assert.equal(rebind.comparisonLogicChanged, false, "comparison logic is unchanged");
+    assert.ok(rebind.reason?.length > 40 && rebind.previousRole?.length > 40, "rebind says why");
+    assert.equal(rebind.residualSha256, driverResidualSha);
+    assert.equal(rebind.residualEqualsPrevious, true, "residual equals previous");
+    assert.ok(rebind.changedFunctions?.length > 0, "changed functions are named");
   }
   for (const [index, entry] of adjudication.cases.entries()) {
     assert.equal(entry.originalProofSelector, `/cases/${index}`, "original proof selector");
@@ -686,6 +732,39 @@ const retrospectiveCounters = [
     /public acquisition selector/,
   ],
   ["wrong public source pin", (a) => (a.sources[0].sha256 = "0".repeat(64)), /public source bytes/],
+  ["unrecorded source rebind", (a) => (a.sourceRebinds = []), /exactly one rebind/],
+  ["missing source rebinds", (a) => delete a.sourceRebinds, /source rebinds are recorded/],
+  [
+    "rebind that forgets the reviewed bytes",
+    (a) => (a.sourceRebinds[0].previousSha256 = "0".repeat(64)),
+    /reviewed history/,
+  ],
+  [
+    "rebind that names other bytes",
+    (a) => (a.sourceRebinds[0].sha256 = "0".repeat(64)),
+    /pinned bytes/,
+  ],
+  [
+    "rebind that admits a comparison change",
+    (a) => (a.sourceRebinds[0].comparisonLogicChanged = true),
+    /unchanged/,
+  ],
+  ["rebind without a reason", (a) => (a.sourceRebinds[0].reason = ""), /says why/],
+  [
+    "rebind that does not equal the previous residual",
+    (a) => (a.sourceRebinds[0].residualEqualsPrevious = false),
+    /residual equals previous/,
+  ],
+  [
+    "rebind that names no changed function",
+    (a) => (a.sourceRebinds[0].changedFunctions = []),
+    /changed functions are named/,
+  ],
+  [
+    "rebind that cannot be recognised as a hash",
+    (a) => (a.sourceRebinds[0].residualSha256 = "residual"),
+    /residual/,
+  ],
   [
     "widened historical exception",
     (a) => a.limitations.historicalPublish404.cases.push("C124"),
@@ -727,18 +806,54 @@ for (const [name, mutate, message] of retrospectiveCounters) {
     const comparison = smallAcquisition(adjudication);
     mutate(adjudication);
     assert.throws(
-      () => assertRetrospectiveClosure(closure, adjudication, comparison, historicalPublicSha),
+      () => assertRetrospectiveClosure(closure, adjudication, comparison, pinnedPublicSha),
       message,
     );
   });
 }
+test("EVENTARC driver rebind keeps every byte outside the functions it names", () => {
+  const { adjudication } = eventarcFixture();
+  const [rebind] = adjudication.sourceRebinds;
+  const current = readFileSync(new URL(rebind.path, root), "utf8");
+  assert.equal(
+    createHash("sha256").update(driverResidual(current, rebind)).digest("hex"),
+    rebind.residualSha256,
+  );
+  assert.ok(driverResidual(current, rebind).length < current.length);
+  const changed = current.replace("function replayWithWire(", "function replayWithWire2(");
+  assert.notEqual(
+    createHash("sha256").update(driverResidual(changed, rebind)).digest("hex"),
+    rebind.residualSha256,
+  );
+});
+test("EVENTARC previous driver residual equals the recorded one", (t) => {
+  const { adjudication } = eventarcFixture();
+  const [rebind] = adjudication.sourceRebinds;
+  let bytes;
+  try {
+    bytes = execFileSync("git", ["show", `${adjudication.sourceCommit}:${rebind.path}`], {
+      cwd: fileURLToPath(root),
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+  } catch {
+    t.skip("reviewed git object is unavailable");
+    return;
+  }
+  assert.equal(createHash("sha256").update(bytes).digest("hex"), rebind.previousSha256);
+  assert.equal(
+    createHash("sha256")
+      .update(driverResidual(bytes.toString("utf8"), rebind, { allowMissing: true }))
+      .digest("hex"),
+    rebind.residualSha256,
+  );
+});
 test("EVENTARC retrospective rejects missing public bytes", () => {
   const { closure, adjudication } = eventarcFixture();
   assert.throws(
     () =>
       assertRetrospectiveClosure(closure, adjudication, smallAcquisition(adjudication), (path) => {
         if (path === acquisitionPath) throw new Error("missing public acquisition");
-        return historicalPublicSha(path);
+        return pinnedPublicSha(path);
       }),
     /missing public acquisition/,
   );
@@ -748,7 +863,7 @@ test("EVENTARC retrospective cannot turn generated PENDING into MATCH", () => {
   const comparison = smallAcquisition(adjudication);
   comparison.rows[0].status = "MATCH";
   assert.throws(
-    () => assertRetrospectiveClosure(closure, adjudication, comparison, historicalPublicSha),
+    () => assertRetrospectiveClosure(closure, adjudication, comparison, pinnedPublicSha),
     /remain PENDING/,
   );
 });
@@ -775,7 +890,7 @@ test("EVENTARC retrospective cannot promote without final approval and settled R
           closure,
           adjudication,
           smallAcquisition(adjudication),
-          historicalPublicSha,
+          pinnedPublicSha,
         ),
       expected,
     );
@@ -801,7 +916,7 @@ test("EVENTARC retrospective rejects a wrong condition proof pin", () => {
         closure,
         adjudication,
         smallAcquisition(adjudication),
-        historicalPublicSha,
+        pinnedPublicSha,
       ),
     /condition original proof pin/,
   );
@@ -815,7 +930,7 @@ test("EVENTARC retrospective retains original project and source qualifications"
         closure,
         adjudication,
         smallAcquisition(adjudication),
-        historicalPublicSha,
+        pinnedPublicSha,
       ),
     /strictly equal/,
   );
@@ -825,7 +940,7 @@ test("EVENTARC retrospective rejects corrupt public acquisition bytes", () => {
   assert.throws(
     () =>
       assertRetrospectiveClosure(closure, adjudication, smallAcquisition(adjudication), (path) =>
-        path === acquisitionPath ? "0".repeat(64) : historicalPublicSha(path),
+        path === acquisitionPath ? "0".repeat(64) : pinnedPublicSha(path),
       ),
     /public acquisition bytes/,
   );
@@ -840,7 +955,7 @@ test("EVENTARC retrospective cannot promote from flags without final evidence", 
           closure,
           adjudication,
           smallAcquisition(adjudication),
-          historicalPublicSha,
+          pinnedPublicSha,
         ),
       /genuine final evidence required/,
       key,

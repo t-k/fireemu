@@ -15,7 +15,7 @@ fn init_uses_repository_schema_and_capabilities_accepts_old_and_new_locations() 
         assert!(output.status.success(), "{output:?}");
         let generated = std::fs::read_to_string(dir.join("fireemu.toml")).unwrap();
         let canonical =
-            "https://raw.githubusercontent.com/t-k/fireemu/main/spec/config/fireemu.schema.json";
+            "https://raw.githubusercontent.com/fireemu/fireemu/main/spec/config/fireemu.schema.json";
         assert!(generated.starts_with(&format!("#:schema {canonical}\n")));
         for schema in [
             canonical,

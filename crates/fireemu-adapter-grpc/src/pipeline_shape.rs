@@ -20,7 +20,8 @@
 //! search-option checks never read; every option value is kept.
 //!
 //! The table of recorded shapes is derived from conformance/fs-ent-pipeline-requests.json and
-//! conformance/fs-ent-pipeline-production.json when first used. The separate TEXT table uses
+//! conformance/fs-ent-pipeline-production.json (and, for the Pipeline regex observation,
+//! conformance/fs-ent-pipeline-regex-requests.json and its production file) when first used. The separate TEXT table uses
 //! conformance/fs-ent-text-refusal-requests.json and conformance/fs-ent-text-production.json.
 
 use std::collections::{HashMap, HashSet};
@@ -35,6 +36,12 @@ use crate::rest::json_syntax::{self, KeyOrder};
 
 const REQUESTS: &str = include_str!("../../../conformance/fs-ent-pipeline-requests.json");
 const PRODUCTION: &str = include_str!("../../../conformance/fs-ent-pipeline-production.json");
+/// The Pipeline regex observation (FS-PIPELINE-REGEX-20261110-01), a lane of its own: its
+/// refusals are folded into the same table as the O-n rows.
+const REGEX_REQUESTS: &str =
+    include_str!("../../../conformance/fs-ent-pipeline-regex-requests.json");
+const REGEX_PRODUCTION: &str =
+    include_str!("../../../conformance/fs-ent-pipeline-regex-production.json");
 
 #[derive(Debug)]
 struct UnknownCandidate {
@@ -866,6 +873,9 @@ fn recorded_grpc_select_width() -> Option<&'static (pb::ExecutePipelineRequest, 
 fn recorded() -> &'static HashMap<String, HashSet<String>> {
     static RECORDED: LazyLock<HashMap<String, HashSet<String>>> = LazyLock::new(|| {
         let mut table = recorded_refusals(REQUESTS, PRODUCTION);
+        for (shape, texts) in recorded_refusals(REGEX_REQUESTS, REGEX_PRODUCTION) {
+            table.entry(shape).or_default().extend(texts);
+        }
         if let Some((_, message)) = recorded_grpc_select_width() {
             table
                 .entry(GRPC_SELECT_WIDTH_KEY.to_owned())

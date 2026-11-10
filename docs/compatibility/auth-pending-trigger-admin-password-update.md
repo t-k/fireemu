@@ -16,7 +16,7 @@ Seven sequential REST observations in production only for the admin-password-upd
 
 Transition (`trigger`): **accepted / none**. Held credential after the transition: start accepted / none, finalize accepted / none. Provider linked as a precondition: False.
 
-Review subject (unapproved): `1a36ed91dac879a888df07afd40547dc7fa962eb14abe942f37d618bb7d66c62`.
+Review subject (unapproved): `cc42b7b219b78e31907930e15031dfb0d4750bfe537b7563592a097a25524c08`.
 
 The held credential and SMS session were created before the transition and presented afterwards on the same session, so the held rows show the transition's effect on the pre-existing credential. The held rows are diagnostic: accepted and refused are both valid observations, and lookup and refresh run only when the held finalize was accepted. Elapsed milliseconds are cumulative from the recorder's measurement origin, sampled when each row is recorded; they are excluded from semantic equality.
 

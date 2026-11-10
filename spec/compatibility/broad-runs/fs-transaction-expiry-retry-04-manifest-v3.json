@@ -1101,7 +1101,7 @@
       ],
       "ownerId": "00000000000000000000000000000000",
       "projectId": "fireemu-35fe6",
-      "projectNumber": "592603257417",
+      "projectNumber": "<project-number>",
       "resources": [
         {
           "path": "compat/o3-txn-expiry/o3expiry-reference-000000001/control",
@@ -1166,7 +1166,7 @@
     ],
     "sourceDigest": "ac7cc08e966cb9c94e56dafc99b62478b152ac2d21a8e01ffa90a9a0b78ad959"
   },
-  "manifestDigest": "1e3c54e083aa646b576befbc60a2d779b55cd346358ffa302ede178d97d8b9e1",
+  "manifestDigest": "f77651c3292d97a7b313a750dc5e95576cd0a58065bf0b230ff5f1723f182f68",
   "note": "Preparation only. No credential, endpoint or production request is bound here. Execution needs a separate owner permission, a fresh nonce and admission review.",
   "ownerFieldsRequired": [
     "issuedAt",
@@ -1195,11 +1195,11 @@
     "costUpperMicrousd": 16688,
     "database": "(default)",
     "kind": "txn-expiry-required-permission-v1",
-    "manifestSha256": "1e3c54e083aa646b576befbc60a2d779b55cd346358ffa302ede178d97d8b9e1",
+    "manifestSha256": "f77651c3292d97a7b313a750dc5e95576cd0a58065bf0b230ff5f1723f182f68",
     "nonce": "o3expiry-reference-000000001",
     "ownerId": "00000000000000000000000000000000",
     "project": "fireemu-35fe6",
-    "projectNumber": "592603257417",
+    "projectNumber": "<project-number>",
     "requestUpperBound": 95,
     "resourceLocks": [
       {

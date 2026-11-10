@@ -208,7 +208,7 @@
     },
     "target": "production"
   },
-  "publicationContractSha256": "cd277e63540649cdae850cfec4cb5115402e832df99fe593ba8a7c193e616ad0",
+  "publicationContractSha256": "d365bd3f3616b4993f9803f71a5e3fa8d43464f6763ffbd3813a834de9a2579c",
   "schemaVersion": 1,
   "scope": "Eleven sequential REST observations in production only with the disabling beforeSignIn function (the one recorded in auth-blocking-disable) deployed for the run. Two claimed accounts X and Y are refused on sign-in; the disabled flag is read back through privileged lookup for X before, immediately after, five and thirty seconds after the refusal, and for Y only after thirty seconds with no earlier read; a control Z signs in first and last. Readback rows record the flag as seen with the seconds since the refusal. The function was removed and the trigger registration restored with a digest comparison; the three accounts were deleted with absence confirmation. No MFA, phone or SMS configuration was touched. No human approval, no local artifact comparison in this record, and no claim beyond these points on one run's time axis.",
   "sourceReviewSha256": "504f7a933f38b2acf74f87097ba743f34b26922b016e3c4524fdce94634f08d2"

@@ -171,3 +171,67 @@ def test_offline_environment_removes_live_optins_and_import_injection():
         "PYTHONNOUSERSITE": "1",
         "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
     }
+
+
+def sha(data):
+    import hashlib
+
+    return hashlib.sha256(data).hexdigest()
+
+
+def test_rebound_file_must_match_both_recorded_digests(repository):
+    h = module()
+    root, anchor = repository
+    receipt = root / "frozen/receipt.json"
+    before = sha(receipt.read_bytes())
+    receipt.write_text('{"sourceCommit":"masked"}')
+    after = sha(receipt.read_bytes())
+    h.verify_frozen(root, anchor, ("frozen",), {"frozen/receipt.json": (before, after)})
+    # An unrecorded change of the same file, or a record naming other anchor bytes, is refused.
+    with pytest.raises(ValueError):
+        h.verify_frozen(root, anchor, ("frozen",))
+    with pytest.raises(ValueError):
+        h.verify_frozen(root, anchor, ("frozen",), {"frozen/receipt.json": (before, "0" * 64)})
+    with pytest.raises(ValueError):
+        h.verify_frozen(root, anchor, ("frozen",), {"frozen/receipt.json": ("0" * 64, after)})
+    receipt.write_text('{"sourceCommit":"masked again"}')
+    with pytest.raises(ValueError):
+        h.verify_frozen(root, anchor, ("frozen",), {"frozen/receipt.json": (before, after)})
+
+
+def test_rebind_is_limited_to_the_files_the_record_names(repository):
+    h = module()
+    root, anchor = repository
+    receipt = root / "frozen/receipt.json"
+    other = root / "frozen/other.json"
+    other.write_text("{}")
+    git(root, "add", ".")
+    git(root, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "second")
+    anchor = git(root, "rev-parse", "HEAD")
+    before = sha(receipt.read_bytes())
+    receipt.write_text("masked")
+    other.write_text('{"edited":true}')
+    with pytest.raises(ValueError):
+        h.verify_frozen(
+            root, anchor, ("frozen",), {"frozen/receipt.json": (before, sha(b"masked"))}
+        )
+
+
+def test_snapshot_applies_the_rebind_record_to_the_working_tree_only(repository):
+    h = module()
+    root, anchor = repository
+    receipt = root / "frozen/receipt.json"
+    before = sha(receipt.read_bytes())
+    receipt.write_text("masked")
+    import json
+
+    record = root / h.REBIND_RECORD
+    record.parent.mkdir(parents=True)
+    record.write_text(
+        json.dumps({"files": {"frozen/receipt.json": {"preSha256": before, "postSha256": sha(b"masked")}}})
+    )
+    assert h.load_rebound(root) == {"frozen/receipt.json": (before, sha(b"masked"))}
+    with h.snapshot(root, anchor, ("frozen",)) as archived:
+        # The anchor's own copy stays byte-exact.
+        assert (archived / "frozen/receipt.json").read_text() == '{"sourceCommit":"untrusted"}'
+    assert h.load_rebound(root / "frozen") == {}

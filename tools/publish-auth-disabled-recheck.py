@@ -11,7 +11,7 @@ spec = importlib.util.spec_from_file_location(
 )
 old = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(old)
-PREVIOUS_SUBJECT = "ff502af7fc37542347394d0f28e8df1b9b1566b64a5acb496a41402f040cf3de"
+PREVIOUS_SUBJECT = "2cbaf584ef6568167ea496c998b6cc421488081ac1be190be2b81b5553fcee85"
 BUNDLE = ROOT / "spec/compatibility/evidence/auth-disabled-recheck/receipt.json"
 PAGE = ROOT / "docs/compatibility/auth-disabled-recheck.md"
 

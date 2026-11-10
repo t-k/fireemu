@@ -35,7 +35,7 @@
   ],
   "mappingSource": {
     "path": "spec/compatibility/denominators/ip-fs-standard-2026-09-14.v2.mapping.json",
-    "sha256": "badf38d58402bbfb9d0e75c1699d779466ae4b54f35cd6dd1904639443a21216"
+    "sha256": "421450b7b5be25839bc38c991b68b823c4680275ac5038ceed472688923d561a"
   },
   "generator": {
     "path": "tools/compat-inventory/production_denominator_v2.py",
@@ -32614,11 +32614,11 @@
       "production": {
         "receipt": {
           "path": "spec/compatibility/evidence/auth-pending-trigger-provider-unlink/receipt.json",
-          "sha256": "e1f5755e46f7900466f7cfdfc7480f0ab8cbf810ba415d3b662e7fb63411b7b3"
+          "sha256": "893e69466ab8f84161604c125bbdb55c61caf6c8e69a57273e971e8646612774"
         },
         "subjectDigest": {
           "algorithm": "sha256",
-          "sha256": "8628018a57979e03f35c49950dbd7114e50c8e0b97d0b2f9063f09aa100c2f24"
+          "sha256": "cb6853bcf078ea3632340c87c6f361ac4fee8353efad0c14b157d9e58fcb7b10"
         },
         "raw": {
           "sha256": "7e0fdfa3d543ae7906d31e1e5a99cf5ce913904942df5bad54bee6f434227535",
@@ -32634,7 +32634,7 @@
             },
             {
               "path": "tools/auth-password-maximum/maximum_recorder.py",
-              "sha256": "deacabae79e0ed6ef2084c58d761e25d20f77c6def6d1fe756c231824289c63b"
+              "sha256": "0926b4c1f39afd25162ed45dab902c175ad3297f7a906083afb4e80971517d1d"
             },
             {
               "path": "tools/auth-pending-revocation/revocation_contract.py",
@@ -32663,7 +32663,7 @@
       "local": {
         "receipt": {
           "path": "spec/compatibility/evidence/auth-pending-trigger-provider-unlink/local-comparison.json",
-          "sha256": "d741ad61fb6110f079fa51dd734a70f5cdee4198f222d488bb17ff336b2121d7"
+          "sha256": "b6ffbbbdedcecfebc4b54502c6c7905d6177400b823cf0e1f548de78574ebccd"
         },
         "runtimeArtifact": {
           "kind": "local-build",
@@ -32686,7 +32686,7 @@
             },
             {
               "path": "tools/auth-password-maximum/maximum_recorder.py",
-              "sha256": "deacabae79e0ed6ef2084c58d761e25d20f77c6def6d1fe756c231824289c63b"
+              "sha256": "0926b4c1f39afd25162ed45dab902c175ad3297f7a906083afb4e80971517d1d"
             },
             {
               "path": "tools/auth-pending-revocation/revocation_contract.py",
@@ -32762,9 +32762,9 @@
         },
         "comparison": {
           "path": "spec/compatibility/evidence/auth-pending-trigger-provider-unlink/local-comparison.json",
-          "sha256": "d741ad61fb6110f079fa51dd734a70f5cdee4198f222d488bb17ff336b2121d7"
+          "sha256": "b6ffbbbdedcecfebc4b54502c6c7905d6177400b823cf0e1f548de78574ebccd"
         },
-        "productionSubjectDigest": "8628018a57979e03f35c49950dbd7114e50c8e0b97d0b2f9063f09aa100c2f24",
+        "productionSubjectDigest": "cb6853bcf078ea3632340c87c6f361ac4fee8353efad0c14b157d9e58fcb7b10",
         "localSubjectDigest": "4394deea0fbc0af2e72ac1f931c4033474eeccba92d1d2ffb48c8b7440ad20ba",
         "projection": "semantic row projection excluding elapsedMs",
         "result": "match"
@@ -32776,8 +32776,8 @@
       ],
       "approval": {
         "path": "spec/compatibility/evidence/auth-pending-trigger-provider-unlink/comparison-approval.json",
-        "sha256": "65507b1a64717c6b520dd12242c41e97b230a9bf4a4113471d4d2281c12ffdc1",
-        "subjectDigest": "767e115915759a2969b22c82908130aa2a7bf26349cc6ea09dfbb18c7e0db253"
+        "sha256": "4d6ce317a27a16bc5f055f6b245206c80c86cd9e827aef44fff55c555dc21af1",
+        "subjectDigest": "3548d07a23f33305bdffbe6707a1f53938f29cc373006f5426390f68dc780301"
       }
     }
   ],

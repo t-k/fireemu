@@ -5,7 +5,7 @@
     "tools/compat-explain-reference-v3/evaluate.py": "a99735c06df1d5497dfc90e33b01b5318db613e8df3efe06657eee0e3174ab02",
     "tools/compat-explain-reference-v3/test_evaluate_v3.py": "e8518b62ab6b49f31a2522bae7e99fb6ead3b51ebaee39d779732c14647dff07",
     "docs/compatibility/query-explain-saved-reference-v3.md": "30619c6ae3ae29a291a006499eddf7d4b7619b65958581116b8613d96d61d382",
-    "spec/compatibility/broad-runs/query-explain-reference-inputs-v3.json": "31a4d48199a2ba35ab7e1ec1861fdbdeb7cda4ed4f9f6f170a9c03de8567b476",
+    "spec/compatibility/broad-runs/query-explain-reference-inputs-v3.json": "26e4772ee7cb5956b3b690ec3d6a5fc4486c445c514cea693555102a5ae9e520",
     "tools/compat-explain-reference/evaluate.py": "298f4084f3d1318c038c77cf24ef4de8b79c90f67535d2d2bfbb90212ae13742",
     "tools/compat-explain-reference/test_evaluate.py": "6f0b4345d45501af75335fa0dc94372a7adcd259387292f540fbd8d3880382b9",
     "docs/compatibility/query-explain-saved-reference-v2.md": "26fd87af54e289376099584d6d8a5076d03ee783bfb6caeab0850ec2eea0aa17",

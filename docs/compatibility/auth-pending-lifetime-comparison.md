@@ -19,7 +19,7 @@ Differing rows: none.
 
 Production lifetime: usable [2, 120, 300], refused none, lower bound 300 s. Local (owned artifact, virtual clock): usable [2, 120, 300], refused none, lower bound 300 s. The measured pending ages themselves are excluded from the semantic comparison; the compared projection is each row's outcome, error and non-age checks.
 
-Comparison subject (unapproved): `5bcc58aa9d383618e0422928d6ad121ff54d4f2394ea32e966e6e11be3c7e898`. Production subject compared: `5f2c4fa33a377302901d659cd5e9d9fd588fb893d140dc10eb6baf7a2d489698`.
+Comparison subject (unapproved): `7e8c90169c2262ee3eb93f0031182b8b78fa722a28b5641215b777f145f9117b`. Production subject compared: `14883bcf368b89e4bb7f39e3f5cdb9bb26495026d3d77bc988005d76e5124b9d`.
 
 Local artifact `0.7.0` built from the tree at `e5a52414c3c6307a9b6a670bfc3574411bb624b7` (repository HEAD `e5a52414c3c6307a9b6a670bfc3574411bb624b7` at run time) with recorder files at `e5a52414c3c6307a9b6a670bfc3574411bb624b7`; strict profile, pendings aged by the virtual clock. Owned process exit 0 with listeners closed; every account was deleted with absence confirmation.
 

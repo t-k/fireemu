@@ -21,7 +21,7 @@ def private_report():
             "schemaVersion": 1,
             "acceptance": "candidate",
             "project": "fireemu-35fe6",
-            "projectNumber": "592603257417",
+            "projectNumber": "<project-number>",
             "corpus": publisher.CORPUS,
             "recordedAt": "2026-09-12T00:00:00+00:00",
             "probeSourceCommit": "0" * 40,

@@ -14,7 +14,7 @@ publisher = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(publisher)
 APPROVAL = ROOT / "spec/compatibility/evidence/auth-pending-revocation/approval.json"
 PAGE = ROOT / "docs/compatibility/auth-pending-revocation-approval.md"
-SUBJECT = "c6ce38ac6a05b969cdbbf516e77a1fc386e73cb221301d53f98c2c45029a0eb7"
+SUBJECT = "6767cd3c7c50ded980559d5bcd7cc66ad6377976972d1a023f9faadb395e4e57"
 SOURCE_COMMIT = "3a68ff3d94ce0b2f185fafb32a25bc2ed3f02e36"
 SCOPE = "Eight production-only observations projected without secrets from the saved 2026-09-11 run of auth-pending-revocation revision 1. Explicit validSince update through privileged accounts:update with readback, phone MFA with test phone numbers, no tenant, no blocking hook, the recorded operation order and a single run. The held pending credential of target A, issued before the update and never completed, was presented after the update: start and finalize were accepted, the returned ID token's auth_time was at or after the set validSince, lookup and refresh succeeded. Baseline and fresh completions for A and control B, the recorded configuration restore with a matching digest, and Admin deletion with UID/email absence are included. The approval does not extend to a production/local comparison of this corpus, revocation propagation time, refusal of a pre-update refresh token, password changes, other MFA methods, tenants, blocking hooks, SDK checkRevoked, Rules or credential expiry."
 

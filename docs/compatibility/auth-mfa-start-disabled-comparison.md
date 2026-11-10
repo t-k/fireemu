@@ -15,7 +15,7 @@ Row-by-row comparison of the approved production record of auth-mfa-start-disabl
 
 Differing rows: none.
 
-Comparison subject (unapproved): `07636ce70c9c46289b4e49d64b4f09fcae997901e1bcc89771e4ead3e7968353`. Production subject compared: `e0fdb84012734f99533f84e7fab173d26e1f0f0a9112f4703d990f1a968df442`.
+Comparison subject (unapproved): `04c3b5e15414abb4831f80cb1f1825ce768e0842a01eef7bb724ccf98d153427`. Production subject compared: `c2ac827f2c56fd942e364166919009909070666852bb75f099dd5cf5c0731515`.
 
 Local artifact `0.7.0` built from the tree at `aef95ad3e6f623d6ce8263f52ce20791b67afe68` (repository HEAD `aef95ad3e6f623d6ce8263f52ce20791b67afe68` at run time) with recorder files at `aef95ad3e6f623d6ce8263f52ce20791b67afe68`; strict profile. Owned process exit 0 with listeners closed; the account was deleted with absence confirmation.
 

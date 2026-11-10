@@ -23,7 +23,7 @@ Start accepted at target ages: []. Nonmonotonic observations: False. Boundary ca
 
 Privileged HTTP requests: 61; refresh attempts by phase: `{"observation": 1, "recovery": 1}`. Each privileged project/configuration/account request has recorded verified expiry and remaining validity. Refresh, tokeninfo and preflight CLI operations are phase-budgeted; acquisition age alone is not expiry evidence.
 
-Review subject (unapproved): `fa7a8be261077f7f670965297772d43afae793dc131d010b1ce32efb87e28f0b`.
+Review subject (unapproved): `0ffdcd07fac2fad30bb3d6089b11c2078282c3675be9e4698335e758f244e394`.
 
 Each pending credential was obtained near a common origin and left untouched until its own diagnostic, so no intermediate access could extend it; the SMS session was opened fresh at the diagnostic, so its age at finalize is recorded as an interval near zero while only the pending age grows. A sampled age is counted usable only when its start returned a session and its finalize both succeeded and passed every identity check; an accepted finalize with a missing or unverifiable token is recorded but counts as indeterminate, not usable. A refused start records its error and skips its finalize. The pending age at start and the session age at finalize are kept in a separate timing region on each row, saved on refusal too, and excluded from semantic equality along with the elapsed milliseconds, since they vary across runs and clocks.
 

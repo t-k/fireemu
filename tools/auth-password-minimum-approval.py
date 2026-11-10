@@ -15,7 +15,7 @@ spec.loader.exec_module(publisher)
 
 APPROVAL = ROOT / "spec/compatibility/evidence/auth-password-minimum/approval.json"
 PAGE = ROOT / "docs/compatibility/auth-password-minimum-approval.md"
-SUBJECT = "b7ad987bdd466784b379a8281a3137e1d1dc259513df426cc9774a68efad7bb4"
+SUBJECT = "e65faa189f5322362f0c4af1df8f5ef8044ea233e95a9ba062937fe9473c0594"
 SCOPE = "The 12 auth-password-minimum revision 1 cases, limited to the recorded artifact, configuration and corpus; fresh end-user ID token REST routes, no tenant, local strict profile and recorded production authentication settings and schema 1 ENFORCE password policy with minimum 6, maximum 4096 and no additional character requirements. Approved as redacted observations of a generated six-character URL-safe ASCII password change, old-password rejection, new-password same-account signin, actual use of update-issued ID and refresh tokens, selected account-field preservation and recorded deletion/process termination."
 
 

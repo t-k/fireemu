@@ -46,7 +46,7 @@ B introduces `bounded-http-v1` in a current local-only session, leaving the hist
 | [Auth conditions](../../spec/compatibility/broad-runs/ea298952-auth-conditions.json) | isolated `ea298952`, integrated unchanged at `a12183a0` | same retained `8e433f…` artifact |
 | [Rules refusal state](../../spec/compatibility/broad-runs/185d7917-rules-refusal-state.json) | isolated `185d7917`, integrated unchanged at `a12183a0` | same retained `8e433f…` artifact |
 
-The retained executable originates from `ed90292a`. Its build-input map was checked against each current runtime input map before reuse and again afterward. It is not substituted for either newly built artifact. Auth runs explicitly map `fireemu-35fe6` to project number`592603257417`; the additional Auth run also declares `session-rsa`. Partition and Rules use isolated demo projects and an explicit empty project-number map. The historical Firestore session project remains `demo-firestore-probe`.
+The retained executable originates from `ed90292a`. Its build-input map was checked against each current runtime input map before reuse and again afterward. It is not substituted for either newly built artifact. Auth runs explicitly map `fireemu-35fe6` to project number`<project-number>`; the additional Auth run also declares `session-rsa`. Partition and Rules use isolated demo projects and an explicit empty project-number map. The historical Firestore session project remains `demo-firestore-probe`.
 
 ## Verification and reviews
 

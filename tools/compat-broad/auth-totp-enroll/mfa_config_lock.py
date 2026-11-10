@@ -29,7 +29,7 @@ from typing import Any
 from mfa_collector import digest
 
 PROJECT = "fireemu-35fe6"
-PROJECT_NUMBER = "592603257417"
+PROJECT_NUMBER = "<project-number>"
 CONFIG_PATH = f"/admin/v2/projects/{PROJECT}/config"
 # The fields the campaign changes, and therefore the only fields it may restore. A
 # restore that wrote back more than it changed would itself be an unreviewed write.

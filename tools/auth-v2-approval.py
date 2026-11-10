@@ -15,7 +15,7 @@ spec.loader.exec_module(publisher)
 
 APPROVAL = ROOT / "spec/compatibility/evidence/auth-basic-v2/approval.json"
 PAGE = ROOT / "docs/compatibility/auth-basic-v2-approval.md"
-SUBJECT = "0eb3689e1eb636f4166d3f296bba2fea2cf2ac70bf6ab6901d1077575a2a60cb"
+SUBJECT = "72744f1dfaf72d89423aa056f54479dc4d7aafca9df1d43f7cf4cef9edbaad63"
 SCOPE = "Email/password Auth REST using end-user tokens; no tenant; local strict profile and recorded production configuration; only the recorded artifact, configuration and corpus revision 2 twelve cases; approved as redacted semantic observations matching the published checks."
 
 

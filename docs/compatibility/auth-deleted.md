@@ -19,7 +19,7 @@ Twelve sequential REST route observations before and after end-user deletion of 
 | deleted-b-id | accepted / none | accepted / none | True | 14 / 1513 |
 | deleted-b-refresh | accepted / none | accepted / none | True | 16 / 1775 |
 
-Review subject (unapproved): `04f8ac7d63ee9e34eab54057a03c876dce2d75bc8e0e5eb0430b1f7cb5faedc1`.
+Review subject (unapproved): `292b07f395d7baa5037ee944c738ca437db466f48809e877588d8e96a3385816`.
 
 The deleted phase begins after successful end-user deletion, UID/email absence and control readback (baseline after setup). Elapsed milliseconds measure request start since phase start, not server-side propagation. Requests are sequential, not simultaneous or a long-term observation schedule. Timing is retained and bounded to 120 seconds but deliberately excluded from semantic equality.
 

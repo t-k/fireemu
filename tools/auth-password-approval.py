@@ -15,7 +15,7 @@ spec.loader.exec_module(publisher)
 
 APPROVAL = ROOT / "spec/compatibility/evidence/auth-password/approval.json"
 PAGE = ROOT / "docs/compatibility/auth-password-approval.md"
-SUBJECT = "aaa9cf7bd198aa7ca6c9215718323539c50ff339d02ab0392f8d26ba85eaa9fb"
+SUBJECT = "114d9a2634417dd6ca8ac130c90ea70cadd9a465e7dce7618048ff9f9775fb65"
 SCOPE = "Password change through REST using fresh end-user tokens; no tenant; local strict profile and recorded production authentication/password-policy configuration; only the recorded artifact, configuration and auth-password corpus revision 1 twelve cases; approved as redacted semantic observations matching the published checks."
 
 

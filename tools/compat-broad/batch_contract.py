@@ -10,7 +10,7 @@ from broad_cases import generated_programs
 from broad_contract import digest, programs
 
 PROJECT = "fireemu-35fe6"
-NUMBER = "592603257417"
+NUMBER = "<project-number>"
 BASE = f"projects/{PROJECT}/databases/(default)/documents"
 ABSTRACT = "projects/PROJECT/databases/(default)/documents"
 LIMITS = {

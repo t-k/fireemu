@@ -17,7 +17,7 @@ Row-by-row comparison of the approved production record of auth-pending-revocati
 
 Differing rows: none.
 
-Comparison subject (unapproved): `56558eaaa8eaf576d52db0eff93385f7de0031a8d15b7c7998188fad6fa9b831`. Production subject compared: `c6ce38ac6a05b969cdbbf516e77a1fc386e73cb221301d53f98c2c45029a0eb7`.
+Comparison subject (unapproved): `8f1c0e1b92db4748b01234c33c3fdc6372ecfa2ede53747e588982e2cc087c48`. Production subject compared: `6767cd3c7c50ded980559d5bcd7cc66ad6377976972d1a023f9faadb395e4e57`.
 
 Local artifact `0.7.0` built from the tree at `4ae036393e582cf76617bd278f73bc8318cc314a` (repository HEAD `b33474382999c140eb32a4279a9116b0abf988bf` at run time) with recorder files at `c0661db2707ae3d110c33cbc7a5b483717b2dcdb`; strict profile. Owned process exit 0 with listeners closed; both accounts were deleted with absence confirmation. The local held credential's ID token carried auth_time 1789140477 against validSince 1789140477 (local virtual clock, whole seconds).
 

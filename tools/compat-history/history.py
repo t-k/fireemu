@@ -1,6 +1,8 @@
 """Verify immutable evidence at a reviewed Git anchor, never at a receipt-selected revision."""
 
 import argparse
+import hashlib
+import json
 import os
 import re
 import subprocess
@@ -10,6 +12,9 @@ from pathlib import Path, PurePosixPath
 
 ANCHOR = "672db735ad36dc8f473b98bac2906f19f37bb70b"
 ROOT = Path(__file__).resolve().parents[2]
+# The one declared rebind of frozen bytes: the 2026-11-10 mask of the old oracle project number. The record lists,
+# for every file it changed, the sha256 the file had at the anchor and the sha256 it has now.
+REBIND_RECORD = "spec/compatibility/oracle-number-mask-2026-11-10.json"
 TEST_DIRS = (
     "tools/compat-inventory",
     "tools/aggregation-limit",
@@ -86,7 +91,21 @@ def git(root, *args):
         raise ValueError("Required local Git history unavailable") from error
 
 
-def verify_frozen(root, anchor, prefixes):
+def load_rebound(root):
+    """Frozen files the mask record changed, as {path: (sha256 at the anchor, sha256 now)}."""
+    record = Path(root) / REBIND_RECORD
+    if not record.is_file():
+        return {}
+    files = json.loads(record.read_bytes())["files"]
+    return {name: (info["preSha256"], info["postSha256"]) for name, info in files.items()}
+
+
+def verify_frozen(root, anchor, prefixes, rebound=None):
+    """Compare the working tree with the anchor; `rebound` names the only files allowed to differ, each
+    pinned to the exact bytes it had at the anchor and the exact bytes it must have now. Without `rebound`
+    the record of `root` is used (none in an archived anchor checkout, so that checkout stays byte-exact)."""
+    if rebound is None:
+        rebound = load_rebound(root)
     require(re.fullmatch(r"[0-9a-f]{40}", anchor), "Full pinned commit required")
     require(
         git(root, "rev-parse", anchor + "^{commit}").decode().strip() == anchor,
@@ -156,17 +175,27 @@ def verify_frozen(root, anchor, prefixes):
             and not any((root / p).is_symlink() for p in (relative, *relative.parents)),
             "Missing or linked frozen input",
         )
-        require(
-            path.read_bytes() == git(root, "cat-file", "blob", oid),
-            "Frozen bytes changed: " + name,
-        )
+        blob = git(root, "cat-file", "blob", oid)
+        if name in rebound:
+            before, after = rebound[name]
+            require(
+                hashlib.sha256(blob).hexdigest() == before,
+                "Rebind record does not match the anchor: " + name,
+            )
+            require(
+                hashlib.sha256(path.read_bytes()).hexdigest() == after,
+                "Frozen bytes changed after the rebind: " + name,
+            )
+        else:
+            require(path.read_bytes() == blob, "Frozen bytes changed: " + name)
 
 
 @contextmanager
 def snapshot(root, anchor, prefixes, *, current_prefixes=None):
     root = root.resolve()
     current_prefixes = prefixes if current_prefixes is None else current_prefixes
-    verify_frozen(root, anchor, current_prefixes)
+    rebound = load_rebound(root)
+    verify_frozen(root, anchor, current_prefixes, rebound)
     with tempfile.TemporaryDirectory(prefix="fireemu-history-") as temporary:
         archived = Path(temporary) / "source"
         subprocess.run(
@@ -191,11 +220,11 @@ def snapshot(root, anchor, prefixes, *, current_prefixes=None):
             git(archived, "rev-parse", "HEAD").decode().strip() == anchor,
             "Wrong snapshot revision",
         )
-        verify_frozen(archived, anchor, prefixes)
+        verify_frozen(archived, anchor, prefixes, {})
         try:
             yield archived
         finally:
-            verify_frozen(root, anchor, current_prefixes)
+            verify_frozen(root, anchor, current_prefixes, rebound)
 
 
 def offline_environment(source):

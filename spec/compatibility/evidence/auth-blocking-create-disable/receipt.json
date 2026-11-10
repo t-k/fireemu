@@ -204,7 +204,7 @@
     "target": "production",
     "targetRecordExists": true
   },
-  "publicationContractSha256": "941013476ee6409aa322e25c7e4737eac6d873f8d7f4637a2e7820951688314d",
+  "publicationContractSha256": "014a8ee0ed6197180d6889ed13cff5eebbe4781a9ec8438d23b7e2f29ce92249",
   "schemaVersion": 1,
   "scope": "Ten sequential REST observations in production only with a first-generation beforeSignIn function deployed for the run that answers disabled: true when the signing-in email's local part starts with a dedicated prefix. Target T signs up with that prefix, so the request that creates the account is the request the function disables; control C signs up with a random local part. Whether T's sign-up is accepted or refused, whether tokens are returned and serve lookup and refresh, whether a record for T exists afterwards and is disabled, what T's own sign-in and a second sign-up do, and C's sign-up, sign-in and photo URL readback are recorded. The function was removed and the trigger registration restored with a digest comparison; accounts were deleted with absence confirmation (or, for a refused creation with no record, the email re-read as absent). No MFA, phone or SMS configuration was touched. No human approval and no local artifact comparison in this record.",
   "sourceReviewSha256": "e210926d18fab6c8efd7b54e2a6365846f4dbd9d73198a2d5f194f56f3930ee7"

@@ -1,7 +1,7 @@
 {
   "kind": "second-broad-local-http-v1",
   "caseManifestPath": "spec/compatibility/broad-second-candidate.json",
-  "caseManifestDigest": "ea3b5263bcb31cf318c9146d2afcd988be0b5a6cec85108565ae991bdd7b1097",
+  "caseManifestDigest": "3113343cc4f7559c179792b53c1a417b82765de55d5fc0320d132a5c1debb8f5",
   "comparison": {
     "id": "current-http-legacy-json-v1",
     "http": "bounded-http-v1",

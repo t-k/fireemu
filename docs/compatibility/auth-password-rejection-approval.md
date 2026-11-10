@@ -4,7 +4,7 @@
 
 The 16 auth-password-rejection revision 1 cases, limited to the recorded artifact, configuration and corpus; end-user token REST routes, no tenant, local strict profile and recorded production authentication/password-policy settings. Approved as redacted observations: five-character ASCII update refusal under the minimum-six policy, preserved use of the original ID token, refresh token and password after refusal, selected account-field preservation, final valid change and new-credential use, and recorded account deletion/process termination.
 
-Subject: `d1fee3f26e44d169ac1719c5af76738a7ced8830f0d1d8e97ce1e8c594b265c8`. Recomputed from the complete receipt during offline validation; this approval cannot transfer to a changed subject.
+Subject: `d3ca3cc27c2d04ad4009cfe4266fcb95d1df09272b84f5ed2ef1f35a2719630b`. Recomputed from the complete receipt during offline validation; this approval cannot transfer to a changed subject.
 
 Reviewed commit: `503f0ccbaf4664aa7c539fdd2f96ae9f01960538`. Reviewer: `github:t-k (id:426779)`. Approval date: 2026-09-10.
 

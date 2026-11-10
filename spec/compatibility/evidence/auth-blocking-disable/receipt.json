@@ -205,7 +205,7 @@
     },
     "target": "production"
   },
-  "publicationContractSha256": "2a0d0200754ca8a6f1a4b30af7df62ccc14ff0c866e6352c648058e9954026c7",
+  "publicationContractSha256": "5d5ccccf7cada35e794d866df6c917247c7fe71ecb690c5a9e3dbb38c66a58f6",
   "schemaVersion": 1,
   "scope": "Twelve sequential REST observations in production only with a first-generation beforeSignIn blocking function deployed for the run: it answers disabled: true for accounts carrying a dedicated custom claim and passes every other sign-in through. Target C (no second factor, claim) signs in with a password; target A (phone factor, claim) completes a phone MFA finalize; control B (phone factor, no claim) completes before and after. Any returned tokens are used for lookup and refresh, the disabled flag is read back through Admin, and a second sign-in follows. Phone MFA with test phone numbers, no tenant, one function shape, one run. The function was removed and the configuration, including the trigger registration, restored with a digest comparison. Admin is used for owned account setup, readback and cleanup. No human approval, no local artifact comparison, no rejecting function or beforeCreate, and no propagation claim about the persisted flag.",
   "sourceReviewSha256": "6d9e080c2e5df6c9b90c4bd00614b07e5e1a721a5e29399cefbaf65686a19200"

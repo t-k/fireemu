@@ -871,12 +871,12 @@
         }
       ]
     },
-    "publicationContractSha256": "c9a574a760a7397535e82cea48761b391545bde8042f9def39e2a895195103a4",
+    "publicationContractSha256": "38661dae5315ffe04dde5fe94ba9c2710e1299efe8f38b8c4e0a9154fa4dfa0c",
     "schemaVersion": 2,
     "scope": "Twelve sequential REST route observations before and after end-user deletion of target A, with independent unaffected account B. Fixed initial ID/refresh tokens, password signin and derived-token lookup; no tenant, owned strict artifact and recorded production settings. Admin is used for owned account readback and cleanup only. No human approval, universal propagation, SDK, Rules or elapsed-expiry claim.",
     "sourceReviewSha256": "e89fcf7fb2e5aa726a330481c890866a15d02baf082e396e6cfc7a1e8c82d6a0"
   },
-  "previousSubject": "04f8ac7d63ee9e34eab54057a03c876dce2d75bc8e0e5eb0430b1f7cb5faedc1",
-  "publicationContractSha256": "5aa4e424c1dc69bbfa12ced8af9407ade2fcce268bb899c040e4e4b8014062a8",
+  "previousSubject": "292b07f395d7baa5037ee944c738ca437db466f48809e877588d8e96a3385816",
+  "publicationContractSha256": "a2286ad629ea85e2f42954e60a827e1b2aeddff5fd690fb651adb461a35aa631",
   "schemaVersion": 1
 }

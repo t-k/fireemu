@@ -31,7 +31,7 @@ The old local assumptions that both authenticated updates must be refused and bo
 | Local execution commit | `ed90292a067866999a308f5c9bf029e0846c17b0` |
 | Artifact SHA256 | `8e433fc24df9585573ce6a213152269de8d51a22d60b1800a4d0e62e0d15508e` |
 | Observer SHA256 | `3a7001525e2580ab6e0654794fd9c3ab0556d06238163960c700f23816a8c0d7` |
-| Manifest digest | `6f0fa73a8fe494709b883c440266c721157d8ec44252fb81c331f2a10642d534` |
+| Manifest digest | `bfbe4e08aca8fc514554ec98e89914a5044aab611b66dfb311215968a1708522` |
 | New comparison contract digest | `467df4b222eec0b35a800c5cddc434413711c26400668cd4fddb57bdfed09cea` |
 | Local requests | 91:31 Auth,60 Firestore,0 metadata;29 recovery requests included |
 | Recording / cleanup / compatibility | Complete / complete /46 matches |

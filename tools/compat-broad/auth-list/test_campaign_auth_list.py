@@ -495,7 +495,7 @@ def test_v4_campaign_package_binds_integrated_artifact_result():
     result = json.loads(result_path.read_bytes())
     artifact = package["localShadow"]["ownedArtifact"]
     assert hashlib.sha256(package_path.read_bytes()).hexdigest() == (
-        "c5919b58a017b2a4bdc36bcfd2ea69bdae05197a640d74e1227695f245ed0a30"
+        "4db9b9a8ab2a53c6f3ca8aa9569e4a47867bf7a2f39dc4703c28c72b2beb4657"
     )
     assert package["kind"] == "production-campaign-auth-list-next-v4"
     assert artifact["sha256"] == hashlib.sha256(result_path.read_bytes()).hexdigest()
@@ -526,7 +526,7 @@ def test_v5_campaign_package_binds_manifest_source_commit():
     result = json.loads(result_path.read_bytes())
     artifact = package["localShadow"]["ownedArtifact"]
     assert hashlib.sha256(package_path.read_bytes()).hexdigest() == (
-        "c78e9d9ffad56982ec660425487fc6ff7ce669e713348adfa273785d635778c9"
+        "14d672e92bf9039a72af5dbb9985e88c25aef5d668496d4d7e2cd2ea70f589fe"
     )
     assert package["kind"] == "production-campaign-auth-list-next-v5"
     assert package["sourceCommit"] == campaign_auth_list.SOURCE_COMMIT
@@ -560,7 +560,7 @@ def test_v6_campaign_package_preserves_historical_hashes():
     result = json.loads(result_path.read_bytes())
     artifact = package["localShadow"]["ownedArtifact"]
     assert hashlib.sha256(package_path.read_bytes()).hexdigest() == (
-        "576199d9e801569d0fd74687c9706f21fbd02f84619692353b4599653f1433bd"
+        "a17f3ec38552ec38fcc32cb126094e326b5b6bcd8597077e47754ca2a24d5834"
     )
     assert package["kind"] == "production-campaign-auth-list-next-v6"
     assert package["sourceCommit"] == campaign_auth_list.SOURCE_COMMIT
@@ -600,7 +600,7 @@ def test_v7_campaign_package_preserves_historical_shadow_and_result():
     result = json.loads(result_path.read_bytes())
     artifact = package["localShadow"]["ownedArtifact"]
     assert hashlib.sha256(package_path.read_bytes()).hexdigest() == (
-        "c7a57c8e930692223b0c8fba22d03c8957ad16ccaf53a46fa335246889db4457"
+        "4a5718221bc00afc1543efcef7e6c4e2e13c27d4352811c9e567cfbad02c1067"
     )
     assert package["kind"] == "production-campaign-auth-list-next-v7"
     assert package["adapter"]["shadowCommit"] == (
@@ -631,7 +631,7 @@ def test_v8_campaign_package_preserves_historical_shadow_and_result():
     result = json.loads(result_path.read_bytes())
     artifact = package["localShadow"]["ownedArtifact"]
     assert hashlib.sha256(package_path.read_bytes()).hexdigest() == (
-        "cff20c69f2dd0f9bfd7b0c08a15ec2749296155036934722d4570f6d51018146"
+        "9c9e19b965f6ce8d0fec885caa16402acdba4e50533691f7e3c3fb15a2b2e4ba"
     )
     assert package["kind"] == "production-campaign-auth-list-next-v8"
     assert package["adapter"]["shadowCommit"] == (

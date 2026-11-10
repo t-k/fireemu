@@ -170,7 +170,7 @@
     "target": "production",
     "trigger": "password-reset"
   },
-  "publicationContractSha256": "45c334dfaab6ed44289c57a6f49630cf39df6ac2367f287a80803a82167792c0",
+  "publicationContractSha256": "16f263a94869d01365379cc64d2b8ef5afa0f64313999368d8d638b29e3a174a",
   "schemaVersion": 1,
   "scope": "Seven sequential REST observations in production only for the password-reset trigger: a fresh phone MFA completion (control) whose session is reused; a pending credential and SMS session are held; then, as the one transition, an admin PASSWORD_RESET OOB link is issued and resetPassword sets a new password; the held credential is presented to mfaSignIn:start and :finalize on the session opened before the transition, with lookup and refresh of any returned tokens; a fresh completion (control) closes the run. Phone MFA with one test phone number, no tenant, no blocking function, one run. For provider-unlink the federated identity is linked administratively as a precondition before the held credential (a refused link aborts the run). The oracle configuration was changed for the run and restored with a digest comparison. Admin is used for owned account setup, readback and cleanup. No human approval, no local artifact comparison, and no claim about other triggers, tenants, SDK or Rules; the held rows are the observation, not a rule about revocation.",
   "sourceReviewSha256": "e79144abc528b6619fc253a34cbb23658057fc020791c5ae0050dda65428f4be"

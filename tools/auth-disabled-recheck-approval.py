@@ -14,7 +14,7 @@ publisher = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(publisher)
 APPROVAL = ROOT / "spec/compatibility/evidence/auth-disabled-recheck/approval.json"
 PAGE = ROOT / "docs/compatibility/auth-disabled-recheck-approval.md"
-SUBJECT = "b9592f50c07bcac36b387dfa3baa4bbfe0bf328a6499c4e1855e541400b63e81"
+SUBJECT = "3f08c189e0fbbbf887c105a23e520749fba6fed56bba350e49b65d3f6e128d54"
 SCOPE = "Eighteen observations rechecked on the recorded corrected local artifact against unchanged saved production observations. No tenant, local strict profile and recorded production authentication/password-policy settings. Admin disables and re-enables owned target A; independent B is the unaffected control. Each phase follows the recorded order: password signin, fixed original ID-token lookup, then fixed original refresh-token exchange; successful issued tokens are used for lookup. Approval includes selected state checks, Admin account cleanup and UID/email absence, and owned process termination. Only elapsedMs is excluded from semantic comparison: the three disabled-A routes return USER_DISABLED and the remaining fifteen succeed. This is not a new production run. Approval does not cover all operation orders after re-enable, long-term validity, SDK/checkRevoked, Rules, actual expiry, propagation time or fault recovery."
 
 

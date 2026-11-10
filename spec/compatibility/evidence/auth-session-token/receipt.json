@@ -2484,7 +2484,7 @@
       "sessionsSeparated": true
     }
   },
-  "publicationContractSha256": "3ec68e3dbd690a022c22af3e909bb4ed1c41c428d50f47168d3868b02291c926",
+  "publicationContractSha256": "2faffc104216501cd6a5a5e3b808a55705b55671cff269da590797737a3e6d5e",
   "schemaVersion": 2,
   "scope": "Diagnostic REST observation of frozen pre-change A/B ID and refresh tokens after session A changes the password, with changed-response token controls. No tenant; strict owned local artifact; recorded production authentication/password policy; auth-session-token revision 1. Target offsets 0/10/30 seconds, request-start deadline 45 seconds. No universal immediate-revocation oracle, SDK checkRevoked, Rules, elapsed expiry, same-second boundary, whole-session lineage, physical-device or public npm claim.",
   "sourceReviewSha256": "4a47607b3233035b6b300fe2939f7cd8416d12762a18fcc9c041e59fb0296c06"

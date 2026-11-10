@@ -103,7 +103,7 @@ def project(report, target):
     else:
         require(
             report["project"] == "fireemu-35fe6"
-            and report["projectNumber"] == "592603257417"
+            and report["projectNumber"] == "<project-number>"
             and report["configurationUnchanged"] is True
         )
         result["configurationSha256"] = report["configReadback"]["sha256"]

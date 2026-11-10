@@ -18,7 +18,7 @@ APPROVAL = (
     / "spec/compatibility/evidence/auth-refusal-precedence/comparison-approval.json"
 )
 PAGE = ROOT / "docs/compatibility/auth-refusal-precedence-comparison-approval.md"
-SUBJECT = "81b71859a84bb7aa08dc8312b1fbf59c94d62e6a1e3eb8d1c71609b2f4e5f2f1"
+SUBJECT = "580b1694232d6f2bdbff27cccaad8d4a6a61478673b53ffea234316e95246546"
 SOURCE_COMMIT = "c3a7973b31274311ac64835aec761e0bb2a4c1e9"
 SCOPE = "Row-by-row comparison of the approved production record of auth-refusal-precedence revision 1 with one run of the same corpus on an owned local fireemu artifact built after the end-user accounts:update route was corrected to authenticate before authorizing administrator-only fields (strict profile, --only auth, no configuration change, codes read from the emulator inspection route; artifact, runtime inputs and recorder files all bound to commit c3a7973b). All nine semantic projections agree, including the tampered-token update now refused INVALID_ID_TOKEN. Approved as a comparison of these cases on that artifact, profile and recorder; not a production run, and not a claim that the local artifact matches on anything outside these nine cases or that the non-tampered session-failure orderings are production-observed."
 CASES = [

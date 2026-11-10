@@ -124,7 +124,7 @@
     "edition": "STANDARD",
     "observerSha256": "8f1ecf23589a86637f8a700f7ba4400b2f7be2305e9681e14ce6ceb59538c8cd",
     "project": "fireemu-35fe6",
-    "projectNumber": "592603257417"
+    "projectNumber": "<project-number>"
   },
   "kind": "production-campaign-explain-01-v4",
   "networkCalls": 0,

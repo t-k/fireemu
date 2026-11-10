@@ -23,7 +23,7 @@ Production lifetime: usable none, refused [600, 1800, 3300, 3900], lower bound N
 
 Start acceptance and MFA completion remain distinct; neither a matching survival lower bound nor a matching refusal proves the same TTL. Refusal candidates use each run's measured intervals and do not establish age causality.
 
-Comparison subject (unapproved): `7a81e3c255dc531925f6ce2a656f68f40532a088c8fc745123e3821f9691dbb0`. Production subject compared: `fa7a8be261077f7f670965297772d43afae793dc131d010b1ce32efb87e28f0b`.
+Comparison subject (unapproved): `e082b4f2cef04bf03c05ac5eae3301721078d87d358b06505d18391a5cf98584`. Production subject compared: `0ffdcd07fac2fad30bb3d6089b11c2078282c3675be9e4698335e758f244e394`.
 
 Local artifact `0.7.0` built from the tree at `267b10f5a1edf70a2da1a7dff7260e9945f2bd05` (repository HEAD `267b10f5a1edf70a2da1a7dff7260e9945f2bd05` at run time) with recorder files at `267b10f5a1edf70a2da1a7dff7260e9945f2bd05`; strict profile, pendings aged by the virtual clock. Owned process exit 0 with listeners closed; every account was deleted with absence confirmation.
 

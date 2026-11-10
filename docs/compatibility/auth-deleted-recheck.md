@@ -2,7 +2,7 @@
 
 Candidate only: 12 redacted REST observations match between the corrected local artifact and the retained production observation. No approval is granted or inherited.
 
-Review subject (unapproved): `538747b5e8e9fc3be27952255019fe1a147b766d12c919e8b8c1aef865744174`.
+Review subject (unapproved): `a527057df18eab02938cd851407962cf4f1599e725269f42cd32af55e7967cb9`.
 Local runtime source: `cff2b3890f83c18839272950038bb99427392d02`; artifact SHA-256: `8f39ae7fd00f25028e317dc716ce74545364f1098de6c3a618d1c9cc2550c530`.
 Local capture: `2026-09-10T23:04:09.440463+00:00`. Production capture: `2026-09-10T16:06:59.559810+00:00` (reused unchanged; not a new production run).
 

@@ -18,7 +18,7 @@ APPROVAL = (
     / "spec/compatibility/evidence/auth-mfa-start-disabled/comparison-approval.json"
 )
 PAGE = ROOT / "docs/compatibility/auth-mfa-start-disabled-comparison-approval.md"
-SUBJECT = "07636ce70c9c46289b4e49d64b4f09fcae997901e1bcc89771e4ead3e7968353"
+SUBJECT = "04c3b5e15414abb4831f80cb1f1825ce768e0842a01eef7bb724ccf98d153427"
 SOURCE_COMMIT = "aef95ad3e6f623d6ce8263f52ce20791b67afe68"
 SCOPE = "Row-by-row comparison of the approved production record of auth-mfa-start-disabled with one run of the same corpus on an owned local fireemu artifact built after mfa_sign_in_start stopped refusing a disabled account (strict profile, artifact, runtime inputs and recorder files all bound to one commit). All six semantic projections agree, including mfaSignIn:start accepted on the disabled account and refused at finalize. Approved as a comparison of these cases on that artifact, profile and recorder; the pre-fix mismatch comparison stays in history. Not a production run and not a claim beyond these six cases."
 

@@ -20,7 +20,7 @@ Row-by-row comparison of the production candidate record of auth-blocking-readba
 
 Differing rows: none.
 
-Comparison subject (unapproved): `2ad20cfc17f7f67e49daf21b03686a154386ae7d0ea96f857e262e2b61af53a1`. Production subject compared: `81dae6d26f525a31e121abb87669e875026696f50ce44a223fc9c396c9806b9b`.
+Comparison subject (unapproved): `6aa2bee43e4020514a4e53023e4e91f7d85a8000bb27b316c300a77b6dde9556`. Production subject compared: `096d16ab0e6b95394847f5dd5fe46ce2ee40b1d717f99c4bbdf11d7cfb7e536e`.
 
 Local artifact `0.7.0` built from the tree at `3cadafe7a42effb58b392897298e583a32e51792` (repository HEAD `3cadafe7a42effb58b392897298e583a32e51792` at run time) with recorder files at `3cadafe7a42effb58b392897298e583a32e51792`; strict profile; the Functions runtime served the local fixture through the repository runner at digest `a4a19393c150bf1f…`. Owned process exit 0 with listeners closed; both accounts and the pending state were deleted with absence confirmation.
 

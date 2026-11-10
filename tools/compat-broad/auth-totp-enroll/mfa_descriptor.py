@@ -56,7 +56,7 @@ from o8_admission import authorize_transport
 from o8_campaign import CAMPAIGN_APPROVAL_FIELDS, CampaignDescriptor
 
 CAMPAIGN = CAMPAIGN_ID
-PROJECT_NUMBER = "592603257417"
+PROJECT_NUMBER = "<project-number>"
 _NONCE = re.compile(r"^[0-9a-f]{32}$")
 FROZEN_INPUTS_KIND = "mfa-frozen-inputs-v1"
 PERMISSION_KIND = "mfa-owner-execution-permission-v1"

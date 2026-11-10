@@ -123,7 +123,7 @@ def project(report, recorder_commit):
         and report["acceptance"] == "candidate"
         and report["target"] == "production"
         and report["project"] == "fireemu-35fe6"
-        and report["projectNumber"] == "592603257417"
+        and report["projectNumber"] == "<project-number>"
         and digest(report["corpus"]) == digest(CORPUS)
         and complete(report)
     )

@@ -15,6 +15,6 @@ uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-aut
 AUTH_PASSWORD_REJECTION_LIVE_LOCAL=1 uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/auth-password-rejection -q
 ```
 
-Production is fixed to fireemu-35fe6 / 592603257417, with auth/client-policy pre/post readback. Private exclusive-create journal and verified UID readback precede mutation; cleanup verifies UID/email ownership and absence independently of working passwords. The owned launcher builds/copies and proves strict artifact/process identity and exit/listener closure, using OS-assigned ports. Normal cleanup is not fault-injected recovery.
+Production is fixed to fireemu-35fe6 / <project-number>, with auth/client-policy pre/post readback. Private exclusive-create journal and verified UID readback precede mutation; cleanup verifies UID/email ownership and absence independently of working passwords. The owned launcher builds/copies and proves strict artifact/process identity and exit/listener closure, using OS-assigned ports. Normal cleanup is not fault-injected recovery.
 
 No previous evidence or approval is rewritten. Raw credentials/identities/messages are never public. Projected comparisons remain recorder testimony, not independent token-signature evidence. Other weak values, Unicode, null/empty, full policy boundaries, SDK/Rules, MFA and actual expiry remain separate future verification, not exclusions from the compatibility goal.

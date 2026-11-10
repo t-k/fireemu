@@ -4,10 +4,10 @@
   "acceptance": "candidate",
   "recordedAt": "2026-09-09T14:33:09.128781+00:00",
   "project": "fireemu-35fe6",
-  "expectedProjectNumber": "592603257417",
+  "expectedProjectNumber": "<project-number>",
   "sourceCommit": "85e238c1106a7efb25cf7dc74812aba7fa313271",
   "binarySha256": "3b86ac12c6a1d97c520169cc06a141e65feef001abf2c23a86e856a495306c2a",
-  "probeSha256": "ed363f8319d26a75461298b9de9bfb5e13c9a286b13ed0b64fd97d0fde8fb28d",
+  "probeSha256": "70b9aeef4de4391af9142a44383d66ac89b0f33f40e5fe0206f5b0e76c8192b8",
   "profile": "production",
   "sdk": "none (REST via Python stdlib)",
   "cases": [

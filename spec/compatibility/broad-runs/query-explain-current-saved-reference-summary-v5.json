@@ -2,13 +2,13 @@
   "productionExecuted": false,
   "evaluator": {
     "sourceCommit": "f01237eb24b1c0d2379c86ef605b6332ffc49750",
-    "sourceDigest": "70f5dfad3b67b9ee9e33ed22838741963abf332147a4acadbea6dfa07e316de3",
-    "anchorSha256": "9e37814496d154a639d265ad98a38198bde9810ac4b2d386e6517dbec9cd016f",
+    "sourceDigest": "7dd1144990fb7f12038697efd62639eacea83f48fb56b4a63d9ea9336783e284",
+    "anchorSha256": "8be4fcac00022fa26a192288a8c826236754da1504a3d21469ed5765dc13f15e",
     "historicalEvaluator": {
       "executionCommit": "1ea996e30d1448ed246ea7a8b25e52c6e893f519",
       "sourceCommit": "33dd069ea9590727164c45381f8b427247ecd56b",
-      "sourceDigest": "5a34deafc320c52f7cb0037ccae1d7ec20d96b93fbf9e98dbaa0fb1a7670a2d3",
-      "anchorFileSha256": "37eccdb4ba38f84a73e8d45eb77ab84134bdc56b1a2950a55def3ccf173d5a94",
+      "sourceDigest": "f009b6438ac4f09278a196d4dabbf369305bec45b5e6355584b4b07b0fbcb624",
+      "anchorFileSha256": "55ebfa247938257f8d3fe5f814640d273b2a4b7ee8dfa7f59b25e03ddbd718d0",
       "contractDigest": "dafe4b80196a357ceaf448ed642de69c5cfa54dc0e3a2b57e5a8cb7403ccde14"
     }
   },
@@ -229,8 +229,8 @@
       "collectorCommit": "cce4a4f9b7369938c89bd32a5106e8d3cab59f83",
       "collectorSourceSha256": "c38238e334b8d503c14216a55d25525044b47772c5ce4cf00ced1a0106ae62de",
       "observerSha256": "50237253ac6043079619d309f7c1ded9e18cd0887c7221f0b7216fe1420ea915",
-      "manifestDigest": "556e8dac39a2b816205e2b26ec54c71039a7eea6495aeb9f9fdb6991e7d35dd3",
-      "comparisonContractDigest": "4a2f7ac753b9f3bf8af2eb86f717acabf12f82741b5ae739fcc298da3ae6dbb6",
+      "manifestDigest": "982f217016c06b6d0c68646b16b37f59c4377d00bb001099018290915d83ce6e",
+      "comparisonContractDigest": "ffce5608c3162abd0bc404d05b356d574c2b0420e7b5b371230fd0224a2514a2",
       "configurationDigest": "cf2b716aa3ecc5bbb5dfc248980d05d05401f49897d39ffb3d0159ad8a63db80"
     },
     "artifactSha256": "26a0e9a2623073616dd0ce6e8554946f697ff5e919b34c98ef94e6eb0f38c8c6",

@@ -41,7 +41,7 @@ Diagnostic REST observation of frozen pre-change A/B ID and refresh tokens after
 | delete | accepted | accepted | Same observed result | 35208–35211 / 53117–53561 |
 | deleted-account-absent | accepted | accepted | Same observed result | 35216–35216 / 54206–54206 |
 
-Review subject (no approval granted): `2650710c03f4ea3fce3e066ef14be16be801b63af14916666b7d7a5bfb24e4f1`.
+Review subject (no approval granted): `87d06ec14e58712a0188b4b7578afc656ac26fec0df1471421551bc3aa59fd92`.
 
 Baseline and final control intervals are measured from recorder start; @offset samples are measured from the completed password-change response. Each request records actual start/end and refresh-derived lookup intervals. Sample starts more than 2000ms late, completion beyond 45000ms, missing samples or failed fresh controls are inconclusive. The schedule never extends until rejection. A difference between timed observations is not automatically a runtime incompatibility or an exact revocation-latency measurement.
 

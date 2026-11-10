@@ -10,7 +10,7 @@ This is a finite Standard/Native REST, strict-profile, admin-bypass slice. It do
 
 [Corpus revision rationale](../../tools/compat-inventory/aggregation-corpus-revisions.md) explains the corrected limit expectation, independent ordering controls, rejection comparison scope and immutable history.
 
-Approval subject: `08f92bf428850eefda32833de2003a3f93c94955e6793247e8ea2f7d8e94def3`. Approved cases: 14/14. [Approval record](../../spec/compatibility/evidence/aggregation/index.json).
+Approval subject: `124d6b4ae962f08a21e3ba5ebd25741a669c652fd1b106fe49308a7de946a098`. Approved cases: 14/14. [Approval record](../../spec/compatibility/evidence/aggregation/index.json).
 
 | Obligation / parent REQ-FS-PARITY-01 | Condition | Cases | Approval |
 | --- | --- | --- | --- |

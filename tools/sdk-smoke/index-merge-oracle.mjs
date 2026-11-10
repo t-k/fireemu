@@ -9,7 +9,7 @@
 // documented cases and primary-key cases are asserted, including successful result order.
 //
 // Env: PRODUCTION_ORACLE_PROJECT_ID=fireemu-35fe6
-//      PRODUCTION_ORACLE_EXPECTED_PROJECT_NUMBER=592603257417
+//      PRODUCTION_ORACLE_EXPECTED_PROJECT_NUMBER=<project-number>
 //      (or FIRESTORE_EMULATOR_HOST for a local run)
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -24,7 +24,11 @@ if (!process.env.FIRESTORE_EMULATOR_HOST) {
     "fireemu-35fe6",
     "An explicitly selected oracle or emulator is required",
   );
-  assert.equal(process.env.PRODUCTION_ORACLE_EXPECTED_PROJECT_NUMBER, "592603257417");
+  assert.match(
+    process.env.PRODUCTION_ORACLE_EXPECTED_PROJECT_NUMBER ?? "",
+    /^\d{10,13}$/,
+    "PRODUCTION_ORACLE_EXPECTED_PROJECT_NUMBER must be the oracle project number",
+  );
 }
 const app = initializeApp({
   projectId: production || "demo-app",

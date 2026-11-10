@@ -32,7 +32,7 @@ PARENT_DENOMINATORS = [
     {
         "path": "spec/compatibility/denominators/ip-fs-standard-2026-09-14.v2.json",
         "version": "ip-fs-standard-2026-09-14.v2",
-        "sha256": "22d9aa2f3ff3172a0e0f0f4cabfa49ba5304175806f5c15bc3a02fba1e95b5fe",
+        "sha256": "29ee683b33cb401571b4a5fce36155d5d4605405a57d6073e7e377c0ab573b26",
     },
 ]
 EXCLUSION_IDS = (

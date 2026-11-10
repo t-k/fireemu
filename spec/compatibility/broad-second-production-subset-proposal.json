@@ -10,7 +10,7 @@
   "validUntil": null,
   "target": {
     "project": "fireemu-35fe6",
-    "projectNumber": "592603257417",
+    "projectNumber": "<project-number>",
     "database": "(default)",
     "edition": "standard",
     "databaseType": "FIRESTORE_NATIVE",

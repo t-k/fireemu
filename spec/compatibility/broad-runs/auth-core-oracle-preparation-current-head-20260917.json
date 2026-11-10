@@ -46,7 +46,7 @@
     "boundPriorReplay": {
       "classification": "saved-production-reference MATCH only; stale for current-head promotion until recompare",
       "path": "spec/compatibility/broad-runs/515f0cf4-auth-saved-reference-replay.json",
-      "sha256": "5d7c9e8aad4bc749d05e7d211609793854966c7f05704d68aba50885848f19c9",
+      "sha256": "20898f381e0765a0174f3e1f5031b03cf73f98d60632e449060ef0004b9e0ce5",
       "sourceCommit": "515f0cf4afa1b12e887b84552aa20851ab3142ae"
     },
     "campaignId": "AUTH-CORE-SAVED-REFERENCE-REPLAY-02",
@@ -85,7 +85,7 @@
         "sha256": "660bddd2abb2fa4b96e045c9b3d4b940139fd35f4c36d881d975beb6ad2f2978"
       },
       "path": "spec/compatibility/broad-runs/auth-password-policy-sdk-next-v2.json",
-      "sha256": "85308b9411863beab74a023db46deeabe10e60121527e994e8db4e0d0acecbe7",
+      "sha256": "5fc84eae9a37da6adf9c63ea963ec64427aa52b51d1cca3c99e43031936d2f8f",
       "status": "BLOCKED_OWNER"
     },
     {
@@ -95,7 +95,7 @@
         "sha256": "a4f737118d9a6ca4cb332b6fd1b129d43e03a5f49ccae5c29592b9318d49bad9"
       },
       "path": "spec/compatibility/broad-runs/auth-settings-sdk-next-v2.json",
-      "sha256": "99f68c193dd76641efacf7c4b68f35d0d156dd620056d36ae6f5f5cb8c4712f8",
+      "sha256": "cc35b48de791f5ebd7592f2787a794b4228f65e31d8a0fddb83832e9da1e7cb7",
       "status": "BLOCKED_OWNER"
     }
   ],
@@ -124,7 +124,7 @@
       "action": "Do not rewrite; perform a new current-head saved-reference recompare when an artifact is available.",
       "path": "spec/compatibility/broad-runs/515f0cf4-auth-saved-reference-replay.json",
       "reason": "The saved replay is valid immutable saved-production-reference evidence but binds source/artifact 515f0cf4, not the current feature head.",
-      "sha256": "5d7c9e8aad4bc749d05e7d211609793854966c7f05704d68aba50885848f19c9"
+      "sha256": "20898f381e0765a0174f3e1f5031b03cf73f98d60632e449060ef0004b9e0ce5"
     }
   ],
   "version": 1

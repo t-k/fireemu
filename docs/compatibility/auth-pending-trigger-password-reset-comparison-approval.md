@@ -4,7 +4,7 @@ Verified and approved within this limited scope. This is not a new production ru
 
 Row-by-row comparison of the approved production record of the password-reset trigger with one run of the same corpus on an owned local fireemu artifact (strict profile, artifact, runtime inputs and recorder files all bound to one commit). All seven semantic projections agree. Approved as a comparison of these cases on that artifact, profile and recorder; not a production run, and not a claim that the local artifact matches on anything outside these seven cases or for any other trigger.
 
-Subject: `e24e311a4c2485518121364c48fd79a537725f9bd704c92884635bea96fdd6b6`. Recomputed from the complete record; this approval cannot transfer to a changed subject.
+Subject: `2e4bf5825048ca75ed1ef9505dc0771321fef66fadc5a0f3b24068edc6b5c9b5`. Recomputed from the complete record; this approval cannot transfer to a changed subject.
 
 Reviewed commit: `2a05cf20ec01c4e62a6a1d5d497df2aac51b101f`. Reviewer: `github:t-k (id:426779)`. Approval date: 2026-09-12.
 

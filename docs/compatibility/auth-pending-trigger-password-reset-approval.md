@@ -4,7 +4,7 @@
 
 Seven production-only observations projected without secrets from the saved 2026-09-12 run of the password-reset trigger (auth-pending-trigger), recorded from a committed checkout. A pending MFA credential and SMS session held from before the transition are presented after it; whether they still start and finalize is the observed outcome, with a baseline and a final fresh completion as controls, the configuration restored with a matching whole-configuration digest, and the account deleted with UID/email absence. The approval does not extend to a production/local comparison of this corpus, to any other trigger, to a rule about revocation, to tenants, SDK or Rules.
 
-Subject: `962e5d44b5ace414a8ad3743b2db3441d2757f151c3087ee26b8c825c5d76b6b`. Recomputed from the complete receipt; this approval cannot transfer to a changed subject.
+Subject: `9e855872b7e9bdb6e2cfc7c67ea90a7c429c3ad4367caa0b57e1a2d7e89c4975`. Recomputed from the complete receipt; this approval cannot transfer to a changed subject.
 
 Reviewed commit: `2a05cf20ec01c4e62a6a1d5d497df2aac51b101f`. Reviewer: `github:t-k (id:426779)`. Approval date: 2026-09-12.
 

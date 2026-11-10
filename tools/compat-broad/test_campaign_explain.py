@@ -305,7 +305,7 @@ def test_configuration_binds_accepted_metadata_and_key():
         == "7878eb2600c66f48c82ef55fb8c2443ab15689ea7542a77fbda206da06f817c2"
     )
     assert (
-        value["apiKeyOwnership"]["parent"] == "projects/592603257417/locations/global"
+        value["apiKeyOwnership"]["parent"] == "projects/<project-number>/locations/global"
     )
     assert value["pricingLocation"] == "us-central1"
     assert value["pricingCheckedAt"].startswith("2026-09-14")

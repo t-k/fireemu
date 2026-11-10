@@ -4,7 +4,7 @@
 
 Three auth-password-unicode-boundary revision 1 input patterns, limited to the recorded artifact, configuration and generated patterns. End-user token REST routes, no tenant, local strict profile and recorded production minimum 6 / maximum 4096 password policy. Approval covers 4095/4096 UTF-16-unit acceptance, 4097-unit refusal and error, branch-specific credential use, selected account-state checks and recorded account deletion/process termination. It does not cover all Unicode strings, normalization, minimum-length counting, other API routes, SDK, Rules, elapsed expiry or fault recovery.
 
-Subject: `3b300cebcbddac2db8528f4c9f9ca29b1b767932ce47aede41ee4e6e6946121c`. Recomputed from the complete receipt; this approval cannot transfer to a changed subject.
+Subject: `3860597a555493c3dcb23881aab26fe94e14046b1eb1f5d07b8d2f8ed79aa2cc`. Recomputed from the complete receipt; this approval cannot transfer to a changed subject.
 
 Reviewed commit: `e464affdd06065007cedc1b71a031d9453ff31df`. Reviewer: `github:t-k (id:426779)`. Approval date: 2026-09-11.
 

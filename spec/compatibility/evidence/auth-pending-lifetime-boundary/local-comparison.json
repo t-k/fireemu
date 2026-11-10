@@ -843,7 +843,7 @@
     "target": "local",
     "wallElapsedSeconds": 0.38698795810341835
   },
-  "productionSubjectSha256": "fa7a8be261077f7f670965297772d43afae793dc131d010b1ce32efb87e28f0b",
+  "productionSubjectSha256": "0ffdcd07fac2fad30bb3d6089b11c2078282c3675be9e4698335e758f244e394",
   "publicationContractSha256": "9cc63c67bd1e089a429197c14c480619b3d5afe45a5ca7c6a94b223d5049fef1",
   "schemaVersion": 1,
   "scope": "Row-by-row comparison of the recorded production observations of auth-pending-lifetime-boundary with one run of the same corpus on an owned local fireemu artifact (strict profile, --only auth, no configuration change, codes read from the emulator inspection route, pendings aged by advancing the virtual clock). Semantic projections exclude elapsed milliseconds and the measured pending and session ages. A comparison record, not a new production run, not an approval, and not a claim beyond these ten cases."

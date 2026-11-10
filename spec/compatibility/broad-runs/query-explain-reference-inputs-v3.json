@@ -67,7 +67,7 @@
       "collectorCommit": "aad1a41de926fae244b42ac1bd2baa57bf2bcdde",
       "collectorSourceSha256": "9be7b9318790245af53dc07527cd5304bd22ab83fd038a84c9dc35e9efade4bb",
       "observerSha256": "5c19995f167474442356e4bbe381c5f823f101ebe83557982ea12666c0a9a571",
-      "manifestDigest": "7937d8b106276c7d4f0197bf8a92b1b3c7fcd7c72c34029b22f606b508d0e466",
+      "manifestDigest": "9e39bf548dd79a19e8c09931968effe7650ac81341a27201cad3ae8826c65675",
       "comparisonContractDigest": "dfe6aea6a18c7eedf33a439fcd72b347064d800ab966111c44f4ccc1974b4e94",
       "configurationDigest": "cf2b716aa3ecc5bbb5dfc248980d05d05401f49897d39ffb3d0159ad8a63db80"
     },

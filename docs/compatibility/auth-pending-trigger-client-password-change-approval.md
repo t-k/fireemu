@@ -4,7 +4,7 @@
 
 Seven production-only observations projected without secrets from the saved 2026-09-12 run of the client-password-change trigger (auth-pending-trigger), recorded from a committed checkout. A pending MFA credential and SMS session held from before the transition are presented after it; whether they still start and finalize is the observed outcome, with a baseline and a final fresh completion as controls, the configuration restored with a matching whole-configuration digest, and the account deleted with UID/email absence. The approval does not extend to a production/local comparison of this corpus, to any other trigger, to a rule about revocation, to tenants, SDK or Rules.
 
-Subject: `698884037cb56f6ec50d5656fb57b490512c26556eae58c35e7147bd581aa1d6`. Recomputed from the complete receipt; this approval cannot transfer to a changed subject.
+Subject: `49a6986eef4a1d52bef70f203131815da525f527cafd90da113eccbd2ecdd048`. Recomputed from the complete receipt; this approval cannot transfer to a changed subject.
 
 Reviewed commit: `2a05cf20ec01c4e62a6a1d5d497df2aac51b101f`. Reviewer: `github:t-k (id:426779)`. Approval date: 2026-09-12.
 

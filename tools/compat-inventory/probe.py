@@ -20,7 +20,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 PROJECT = "fireemu-35fe6"
-NUMBER = "592603257417"
+NUMBER = "<project-number>"
 DATABASE = f"projects/{PROJECT}/databases/(default)"
 
 

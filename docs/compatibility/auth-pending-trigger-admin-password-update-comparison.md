@@ -16,7 +16,7 @@ Row-by-row comparison of the approved production record of the admin-password-up
 
 Differing rows: none.
 
-Comparison subject (unapproved): `d8f2fddb886843bc587055da62b80701e4ace991ace7a2d2b17f7854f70e8144`. Production subject compared: `1a36ed91dac879a888df07afd40547dc7fa962eb14abe942f37d618bb7d66c62`.
+Comparison subject (unapproved): `fd33db679ecada8553644fbb4f15fb8bdbb5b148aba2aff75f6d0fb6603fab0d`. Production subject compared: `cc42b7b219b78e31907930e15031dfb0d4750bfe537b7563592a097a25524c08`.
 
 Local artifact `0.7.0` built from the tree at `d3c2f4fc3772af8cd9a5095c481e42bc4ee4d299` (repository HEAD `d3c2f4fc3772af8cd9a5095c481e42bc4ee4d299` at run time) with recorder files at `d3c2f4fc3772af8cd9a5095c481e42bc4ee4d299`; strict profile. Owned process exit 0 with listeners closed; the account was deleted with absence confirmation.
 

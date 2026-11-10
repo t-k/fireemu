@@ -5,7 +5,7 @@
   "productionExecuted": false,
   "sourceCommit": "97ef1d3a8fb52938bbe26b1da9c85b9c5b430dd3",
   "artifactSha256": "d8b6e59ce625e4593eaf05fed7394f4e2c561a72efdecd39977de4115761d8cc",
-  "manifestSha256": "854bdbf4adb8ba6d643129d5c8a2ccc737b7f071a6c078e9147d1f59630d6021",
+  "manifestSha256": "d6af66830c38d2b642c1b2b88072f385cd6ded85a7de0e22b45d4472d3fe93fe",
   "execution": {
     "runner": "existing shared gate plus current-head Rust gRPC/REST integration harnesses",
     "commands": [

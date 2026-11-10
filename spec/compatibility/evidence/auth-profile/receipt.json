@@ -753,7 +753,7 @@
     "recordedAt": "2026-09-10T04:10:52.215005+00:00",
     "target": "production"
   },
-  "publicationContractSha256": "f29318b7dc0ba43a6d37095be0e68b2d558c659e28e626abf87c47553167af48",
+  "publicationContractSha256": "217f691c90cd50ff8a3305e2b15479f4ace70fb15c9466b1a0f629c308048848",
   "schemaVersion": 2,
   "scope": "Photo URL REST updates using end-user tokens; no tenant; strict owned local artifact and recorded production configuration; auth-photo-url corpus revision 1 only. Redacted semantic observations, not raw responses, independent JWT verification, expiry enforcement, SDK, MFA, Rules, credential changes or public npm compatibility.",
   "sourceReviewSha256": "e84d4351089bbf00c5ab32cab20d4bf648cfb29e542bd616dc97b4e93db2ba4e"

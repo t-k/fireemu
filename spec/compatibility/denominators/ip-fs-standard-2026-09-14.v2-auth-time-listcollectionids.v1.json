@@ -5,7 +5,7 @@
   "parentDenominator": {
     "path": "spec/compatibility/denominators/ip-fs-standard-2026-09-14.v2.json",
     "version": "ip-fs-standard-2026-09-14.v2",
-    "sha256": "22d9aa2f3ff3172a0e0f0f4cabfa49ba5304175806f5c15bc3a02fba1e95b5fe"
+    "sha256": "29ee683b33cb401571b4a5fce36155d5d4605405a57d6073e7e377c0ab573b26"
   },
   "sourceSnapshot": {
     "path": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
@@ -35,11 +35,11 @@
   ],
   "mappingSource": {
     "path": "spec/compatibility/denominators/ip-fs-standard-2026-09-14.v2-auth-time-listcollectionids.v1.mapping.json",
-    "sha256": "62f6ba9cf4d5fb3f99928ee319f8a4fa530c75e6e87957f73e956ef82bf8e51d"
+    "sha256": "137386322850fdd4f74d6ea306a7b4f34d9b1e63f424d0a0ceb7e1bede6ca641"
   },
   "generator": {
     "path": "tools/compat-inventory/production_denominator_v2_auth_time.py",
-    "sha256": "0c39dca9cb52ecd7bef5f14aacd53021972110a821a1c6a501afd88fea9c296e"
+    "sha256": "035bd8f7833c44db42a8e9ba9bcd247775fc5c9f93f2211d29b7d2f8641537cc"
   },
   "targets": [
     {
@@ -32637,18 +32637,18 @@
       "adapterId": "auth-refresh-auth-time.v1",
       "adapter": {
         "path": "tools/compat-inventory/production_denominator_v2_auth_time.py",
-        "sha256": "0c39dca9cb52ecd7bef5f14aacd53021972110a821a1c6a501afd88fea9c296e"
+        "sha256": "035bd8f7833c44db42a8e9ba9bcd247775fc5c9f93f2211d29b7d2f8641537cc"
       },
       "production": {
         "receipt": {
           "path": "spec/compatibility/evidence/auth-session-v2/receipt.json",
-          "sha256": "25d255bb7bcc9cfc6142b4680398f516915dd906488fd3c8c87b1e6d84a4acd8"
+          "sha256": "51b3ad564b9ea9f8fc7dc1c876b2d3191e119a4c50b01ee97588cec02f8619be"
         }
       },
       "local": {
         "receipt": {
           "path": "spec/compatibility/evidence/auth-session-v2/receipt.json",
-          "sha256": "25d255bb7bcc9cfc6142b4680398f516915dd906488fd3c8c87b1e6d84a4acd8"
+          "sha256": "51b3ad564b9ea9f8fc7dc1c876b2d3191e119a4c50b01ee97588cec02f8619be"
         }
       },
       "corpus": {
@@ -32668,7 +32668,7 @@
       ],
       "approval": {
         "path": "spec/compatibility/evidence/auth-session-v2/approval.json",
-        "sha256": "6dac635866e293c4fabafb3c2dd88d3980ee663cb606cdc8b981dc97b61f4732"
+        "sha256": "0ceebc884b57637f3db982da5a78a4d56a67525470741ec7eb805c4db01d282b"
       }
     },
     {
@@ -32676,18 +32676,18 @@
       "adapterId": "auth-refresh-auth-time.v1",
       "adapter": {
         "path": "tools/compat-inventory/production_denominator_v2_auth_time.py",
-        "sha256": "0c39dca9cb52ecd7bef5f14aacd53021972110a821a1c6a501afd88fea9c296e"
+        "sha256": "035bd8f7833c44db42a8e9ba9bcd247775fc5c9f93f2211d29b7d2f8641537cc"
       },
       "production": {
         "receipt": {
           "path": "spec/compatibility/evidence/auth-session-continuity/receipt.json",
-          "sha256": "70a6c0dbd9f1ea7fad4d884bb61c341791d8a2f3ee45fa21454dcc45bededaf8"
+          "sha256": "3fa34c81a5e6328ab93607f017d51d2ade680335b4357c2faf4b581d6a34d546"
         }
       },
       "local": {
         "receipt": {
           "path": "spec/compatibility/evidence/auth-session-continuity/receipt.json",
-          "sha256": "70a6c0dbd9f1ea7fad4d884bb61c341791d8a2f3ee45fa21454dcc45bededaf8"
+          "sha256": "3fa34c81a5e6328ab93607f017d51d2ade680335b4357c2faf4b581d6a34d546"
         }
       },
       "corpus": {
@@ -32708,7 +32708,7 @@
       ],
       "approval": {
         "path": "spec/compatibility/evidence/auth-session-continuity/approval.json",
-        "sha256": "19cad2ffdb18d98e41ba579c92af8bfdc35d9458b249b680f08ab4a2be1ce09b"
+        "sha256": "f3015f30d3c0d67f84969e0cdc7a2a95fe4da6c14de686a3954894b6dbce1f43"
       }
     },
     {
@@ -32716,18 +32716,18 @@
       "adapterId": "firestore-list-collection-ids.v1",
       "adapter": {
         "path": "tools/compat-inventory/production_denominator_v2_auth_time.py",
-        "sha256": "0c39dca9cb52ecd7bef5f14aacd53021972110a821a1c6a501afd88fea9c296e"
+        "sha256": "035bd8f7833c44db42a8e9ba9bcd247775fc5c9f93f2211d29b7d2f8641537cc"
       },
       "production": {
         "receipt": {
           "path": "spec/compatibility/broad-runs/a12183a0-second-current.json",
-          "sha256": "613376ceac1ae5126803efe55f32f01ae8fcf27b20f8ded3d5cbbf23d102add9"
+          "sha256": "9435cdf396913e29f79633b2aed19720ae028108828228cf7143f6e7dcf9c7f4"
         }
       },
       "local": {
         "receipt": {
           "path": "spec/compatibility/broad-runs/a12183a0-second-current.json",
-          "sha256": "613376ceac1ae5126803efe55f32f01ae8fcf27b20f8ded3d5cbbf23d102add9"
+          "sha256": "9435cdf396913e29f79633b2aed19720ae028108828228cf7143f6e7dcf9c7f4"
         }
       },
       "corpus": {
@@ -32747,7 +32747,7 @@
       ],
       "approval": {
         "path": "spec/compatibility/broad-runs/a12183a0-second-current.json",
-        "sha256": "613376ceac1ae5126803efe55f32f01ae8fcf27b20f8ded3d5cbbf23d102add9"
+        "sha256": "9435cdf396913e29f79633b2aed19720ae028108828228cf7143f6e7dcf9c7f4"
       }
     }
   ],

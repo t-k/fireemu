@@ -8,4 +8,4 @@ This immutable overlay preserves the v1 target ledger byte-for-byte through an e
 
 The provider-unlink record retains a private raw receipt hash and a normalized semantic comparison. Those limitations do not prove wire bytes, headers or timing. Exact case and target selectors are required; feature groups never propagate evidence.
 
-Parent: `spec/compatibility/denominators/ip-fs-standard-2026-09-14.v1.json` (`189b614707fd0cbf7090146679c14a9d27184340cecf67d934c3ffe7fdca038b`). Mapping: `spec/compatibility/denominators/ip-fs-standard-2026-09-14.v2.mapping.json` (`badf38d58402bbfb9d0e75c1699d779466ae4b54f35cd6dd1904639443a21216`).
+Parent: `spec/compatibility/denominators/ip-fs-standard-2026-09-14.v1.json` (`189b614707fd0cbf7090146679c14a9d27184340cecf67d934c3ffe7fdca038b`). Mapping: `spec/compatibility/denominators/ip-fs-standard-2026-09-14.v2.mapping.json` (`421450b7b5be25839bc38c991b68b823c4680275ac5038ceed472688923d561a`).

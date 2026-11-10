@@ -404,29 +404,27 @@ fn the_xml_style_put_admits_the_limit_and_refuses_one_byte_more() {
     // The strict profile answers this unsigned XML-style PUT with AccessDenied before any size
     // check, so the emulator profile (which admits it, as the official emulator does) is the one
     // that reaches the cap.
-    for acceptance in [TokenAcceptance::EmulatorMock] {
-        let s = state(acceptance);
-        let ok = handle(
-            &s,
-            req(
-                "PUT",
-                &format!("/{BUCKET}/xml-ok.txt"),
-                &[OWNER, ("content-type", "text/plain")],
-                b"abc",
-            ),
-        );
-        assert_stored(&s, &ok, "xml-ok.txt", "XML PUT at the limit");
-        let over = handle(
-            &s,
-            req(
-                "PUT",
-                &format!("/{BUCKET}/xml-over.txt"),
-                &[OWNER, ("content-type", "text/plain")],
-                b"abcd",
-            ),
-        );
-        assert_too_large(&s, &over, "xml-over.txt", "XML PUT over the limit");
-    }
+    let s = state(TokenAcceptance::EmulatorMock);
+    let ok = handle(
+        &s,
+        req(
+            "PUT",
+            &format!("/{BUCKET}/xml-ok.txt"),
+            &[OWNER, ("content-type", "text/plain")],
+            b"abc",
+        ),
+    );
+    assert_stored(&s, &ok, "xml-ok.txt", "XML PUT at the limit");
+    let over = handle(
+        &s,
+        req(
+            "PUT",
+            &format!("/{BUCKET}/xml-over.txt"),
+            &[OWNER, ("content-type", "text/plain")],
+            b"abcd",
+        ),
+    );
+    assert_too_large(&s, &over, "xml-over.txt", "XML PUT over the limit");
 }
 
 fn form_post(s: &StorageState, key: &str, file: &[u8]) -> StorageResponse {

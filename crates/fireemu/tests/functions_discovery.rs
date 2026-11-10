@@ -1574,3 +1574,30 @@ async fn esm_callable_app_check_options_are_observed_by_the_loaded_module_graph(
     assert_eq!(report["graphs"]["esm"], "instrumented");
     runner.shutdown().await;
 }
+
+#[test]
+#[ignore = "requires tools/sdk-smoke dependencies; CI runs this test after npm ci"]
+fn blocking_node_observes_production_and_default_shape() {
+    let dir = scratch("blocking-node-shape");
+    for (config, locale) in [
+        (r#"{"schemaVersion":1,"productionExact":true}"#, "und"),
+        (r#"{"schemaVersion":1}"#, "en"),
+    ] {
+        let path = dir.join("fireemu.json");
+        std::fs::write(&path, config).unwrap();
+        let script = r#"set -eu
+curl -fsS -H 'content-type: application/json' -d '{"email":"node@example.test","password":"hunter22","returnSecureToken":true}' "http://$FIREBASE_AUTH_EMULATOR_HOST/identitytoolkit.googleapis.com/v1/accounts:signUp?key=fake"
+"#;
+        let out = exec_command(
+            &fixture("blocking-auth-production-shape"),
+            Some(&path),
+            &["/bin/sh", "-c", script],
+        );
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(out.status.success(), "{stdout}\n{}", stderr(&out));
+        // The production token omits disabled for an enabled user; the Node SDK reports false in both modes.
+        let expected = format!(r#"\"locale\":\"{locale}\",\"disabled\":false"#);
+        assert!(stdout.contains(&expected), "{stdout}");
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}

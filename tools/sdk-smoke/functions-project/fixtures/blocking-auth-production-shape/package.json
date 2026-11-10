@@ -1,0 +1,6 @@
+{
+  "name": "fireemu-smoke-functions-blocking-auth",
+  "private": true,
+  "main": "index.js",
+  "description": "Blocking Identity Platform discovery fixture."
+}

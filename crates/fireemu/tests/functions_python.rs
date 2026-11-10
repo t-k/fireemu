@@ -539,3 +539,46 @@ except Exception as error:
         assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), expected);
     }
 }
+
+#[test]
+#[ignore = "requires the fixture virtual environment; CI creates it"]
+fn the_blocking_key_is_not_the_id_token_key() {
+    let dir = scratch("blocking-key-separate");
+    let firebase = firebase_json(&dir, &fixture(), None);
+    let config = dir.join("fireemu.json");
+    std::fs::write(
+        &config,
+        r#"{"schemaVersion":1,"productionExact":true,"auth":{"idTokenSigning":"session-rsa"}}"#,
+    )
+    .unwrap();
+    let cache = dir.join("cache");
+    std::fs::create_dir_all(&cache).unwrap();
+    let config = config.display().to_string();
+    let out = exec_with_env(
+        &firebase,
+        &["--config", &config],
+        &["true"],
+        &[("HOME", &cache), ("XDG_CACHE_HOME", &cache)],
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "{stdout}\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let kid_after = |prefix: &str| {
+        let rest = stdout
+            .split(prefix)
+            .nth(1)
+            .unwrap_or_else(|| panic!("{prefix} missing in {stdout}"));
+        rest.split(|c: char| !c.is_ascii_alphanumeric())
+            .next()
+            .unwrap()
+            .to_owned()
+    };
+    let id_kid = kid_after("id tokens:        RS256 (kid ");
+    let blocking_kid = kid_after("blocking tokens:  production (RS256 kid ");
+    assert!(!id_kid.is_empty() && !blocking_kid.is_empty());
+    assert_ne!(id_kid, blocking_kid, "{stdout}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

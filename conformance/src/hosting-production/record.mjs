@@ -375,6 +375,8 @@ async function precheck(api) {
     `${HOSTING}/projects/${PROJECT}/sites/${SITE}/channels?pageSize=100`,
     "channels",
   );
+  // A second page would hide channels the precheck cannot read: stop rather than guess.
+  if (channels.nextPageToken) throw new Error("the channel list is paged; read it by hand first");
   if ((channels.channels ?? []).some((c) => String(c.name).split("/").at(-1).startsWith("hst-"))) {
     throw new Error("channels of an earlier run remain");
   }

@@ -1,26 +1,49 @@
-# Hosting production observation proposal
+# Hosting production observation (packet v1 outline)
 
-Status: unsent, awaiting owner approval of an exact executable packet. This document grants no sending authority. Use one disposable preview channel and never release to the live channel. No credentials or project identifiers belong in this packet.
+Status: unsent. This document grants no sending authority; the owner and the coordinator approve an exact frozen packet. No credential, project number or API key belongs here or in any file of the repository.
 
-Observe the shared static, redirect, rewrite, header, cleanUrls, trailingSlash, i18n, reserved-path and 404 conditions under three bounded configuration versions. Record request target, method, status, selected headers, body bytes and content digest. Follow no redirect automatically. Production Functions/Run provisioning and invocations need a separate approved packet; they are not concealed in this budget.
+## What is observed
 
-| Operation | Maximum requests |
-| --- | ---: |
-| Service/site/channel prechecks | 3 |
-| Create preview channel | 1 |
-| Three versions: create, populate, up to twelve uploads, finalize, release | 48 |
-| Serving observations, 24 per version | 72 |
-| Version metadata readback | 3 |
-| Version files listing, one page per version | 3 |
-| Delete channel and three versions | 4 |
-| Cleanup readbacks | 4 |
-| Reserved resolution or cleanup requests | 12 |
-| Total hard cap | 150 |
+Ten site versions, each deployed to its own disposable preview channel (24 hour TTL) of the default Hosting site of the Identity Platform sandbox project, through the Hosting REST API (never the firebase CLI, whose channel commands rewrite the project's authorized domains) and never to the live channel. Each version's requests are sent to its channel host with a client that keeps the request target literal, follows no redirect, decompresses nothing and never retries. The same requests are sent to fireemu (strict and emulator profiles) by `conformance/src/hosting-production/local.mjs`, and the shaped rows are compared by `compare.mjs`.
 
-Each request, including a failed request or cleanup request, consumes the cap. Pagination beyond the single allowed files-list page stops collection rather than increasing the bound. The exact packet must specify how ambiguous creation/deletion responses remain unresolved and how later cleanup verification is performed. Automatic retries, unknown upstream requests and unbounded polling are prohibited.
+| Version | Site configuration | Observes |
+| --- | --- | --- |
+| v01 | redirects, rewrites, headers, 404.html, content-type files, compressible files | static files, redirects (including 39 capture-encoding edges), rewrites, headers and caching, 404 handling, conditional and range requests, methods, reserved paths, content types, compression and Vary |
+| v02 | `cleanUrls`, `appAssociation: AUTO` | cleanUrls path selection, `/.well-known` association files |
+| v03, v04 | `trailingSlash` true / false | trailing-slash canonicalization |
+| v05, v06 | `cleanUrls` with `trailingSlash` true / false | the combinations |
+| v07, v08 | `i18n` (alone, and with cleanUrls and trailingSlash) | language and country selection by header and by cookie |
+| v09 | catch-all redirect | reserved initialization paths before a configured redirect |
+| v10 | sixteen header rules, one per glob pattern, and a catch-all rewrite | which patterns match which paths |
 
-Upload at most 1 MiB per version and receive at most 8 MiB overall. Estimate cost as stored GB-month multiplied by the applicable storage price plus transferred GB multiplied by the applicable transfer price. Free allowances apply project-wide; do not assume unused allowance or claim a zero-dollar run. Illustrative estimate, using prices checked on 2026-11-07: using USD0.026/GB storage and USD0.15/GB transfer, a full monthly-bill illustration with 3 MiB of stored user payload and 8 MiB transferred is about USD0.00134 before any allowance. The monthly storage assumption is illustrative; the cited pages do not establish precise prorating for this packet. This excludes unknown reserved-file storage, protocol overhead, taxes and other project activity; it is neither a billing cap nor a zero-cost promise. The owner must review current prices and project usage before sending. The twelve reserved requests do not authorize Functions or Run deployment.
+The corpus is `conformance/src/hosting-production/corpus.mjs`; its pinned form is `corpus.manifest.json`. There are 201 requests (three of them information only). Function and Cloud Run rewrites are out of scope for this parent (owner ledger 2435), and `ignore` is a deploy-tool rule that the REST API cannot observe: both are recorded as NOT_COMPARED in the closure record.
 
-Record the API's string `fileCount` independently from the uploaded manifest. Enumerate returned file paths to distinguish reserved files from user files, without assuming equality of their counts. Historical metadata statements and the public REST schema are not production evidence for this parent.
+## Budget of one attempt
 
-References: [Hosting Version API](https://firebase.google.com/docs/reference/hosting/rest/v1beta1/sites.versions), [Hosting usage and pricing](https://firebase.google.com/docs/hosting/usage-quotas-pricing), and [Firebase pricing](https://firebase.google.com/pricing).
+| Kind | Cap | Expected |
+| --- | ---: | ---: |
+| token refreshes | 3 | 1 |
+| control (Hosting, Service Usage and Identity Toolkit reads and writes) | 90 | 65 |
+| cleanup (deletes, listings and the read-backs) | 45 | 23 |
+| uploads | 20 | 14 |
+| edge (requests to preview channel hosts, readiness probes included) | 250 | 210 |
+
+A request that would exceed its kind is not sent. Every request, failed or not, counts. Two independent recordings are planned (the recorder is run twice on fresh channels). Cost: stored well under 100 KB, transferred about 2 MB per recording; at the published Hosting prices (10 GB storage and 10 GB transfer free, US$0.026/GB and US$0.15/GB beyond; the allowance is project-wide) the cost is zero inside the allowance and below US$0.01 otherwise. The ledger reserves US$1 per attempt and at most US$3 with retries.
+
+## Unknown answers
+
+A 3xx, 5xx, status below 200, timeout, abort or unreadable body of an API write is unknown. A create with an unknown answer is probed once with a read; an unconfirmed channel or version create stops the run (`needs-recovery`) and is settled only by a later read, never by a 404 during the run. A delete with an unknown answer is never re-sent. A 409 after an unknown request settles nothing. Edge answers of 429 or 5xx, timeouts and resets are unknown rows, never retried; a request whose header depends on an earlier answer (an ETag) that did not arrive is not sent.
+
+## Cleanup
+
+Each version's channel and version are deleted right after its requests. At the end the channel list must hold no channel of the run, the version list (at most three pages) must hold no version labelled with the run that is not DELETED, and the project's authorized domains must equal their value before. The Hosting API's `fileCount` is a string and counts the reserved `/__/firebase/init.js` and `init.json`; the recorder stores it as returned and lists the returned file paths separately.
+
+## Masking
+
+The reserved initialization bodies hold a web API key and the project number. Rows keep their byte count and line count and, for the JSON, the key order and the type and byte length of each value; no value is retained. Any other value found in a row that equals a private value stops that row (it becomes an unknown row) and the run is flagged for review.
+
+## Judge
+
+`judge.mjs` compares status, a fixed set of headers, body size and digest (the decoded body when either side is content-encoded) and the layout of the initialization JSON. ETag and Last-Modified are compared by form. Edge headers that differ on every request (date, age, via, x-cache and similar) are recorded and never compared. Any other header that appears and is neither compared nor volatile is listed as unclassified; the review has to name each before the closure.
+
+References: [Hosting REST API, sites.versions](https://firebase.google.com/docs/reference/hosting/rest/v1beta1/sites.versions), [Hosting usage and pricing](https://firebase.google.com/docs/hosting/usage-quotas-pricing).

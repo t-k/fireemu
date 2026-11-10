@@ -565,3 +565,20 @@ test("a private value in a header name is withheld and requires review", async (
   assert.equal(terminal(r).needsReview, true);
   noSecrets(r, secrets);
 });
+
+test("a paged channel list or an earlier run's channel stops the run before any write or ledger row", async () => {
+  for (const [what, listing] of [
+    ["paged", { channels: [], nextPageToken: "more" }],
+    ["earlier", { channels: [{ name: "projects/p/sites/s/channels/hst-ffffff-v01" }] }],
+  ]) {
+    const ledger = [JSON.stringify(closed)];
+    await assert.rejects(
+      run({
+        overrides: [fault("GET /channels\\?pageSize=100/", reply(200, listing), 1)],
+        setup: (_world, _deps, rows) => rows.splice(0, rows.length, ...ledger),
+      }),
+      /paged|earlier run/,
+      what,
+    );
+  }
+});

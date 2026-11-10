@@ -2,13 +2,23 @@
   "schemaVersion": 1,
   "parent": "HOSTING",
   "parentStatus": "IMPLEMENTING",
-  "inventoryStatus": "DRAFT",
-  "oracleTrack": "not-recorded",
+  "inventoryStatus": "PROPOSED",
+  "oracleTrack": "preview-channel-observations",
   "scopeDecisions": [
     {
       "id": "HOSTING-LOCAL-ONLY",
       "decision": "Only local registered Functions targets can be rewritten. No Cloud Run lookup or live Functions fallback is allowed. Missing local targets remain unverified and are not an approved production equivalence.",
       "status": "IMPLEMENTING"
+    },
+    {
+      "id": "HOSTING-ORACLE",
+      "decision": "Production is observed only through disposable preview channels (24 hour TTL) of the default site of the Identity Platform sandbox, one channel per site version, through the Hosting REST API. The live channel is never released to and the firebase CLI is not used, so the project's authorized domains are not written. A preview channel is not the live channel: a claim is limited to what a preview channel serves.",
+      "status": "IMPLEMENTING"
+    },
+    {
+      "id": "HOSTING-REST-SCOPE",
+      "decision": "Function and Cloud Run rewrites are out of scope for this parent (owner ledger 2435). They are recorded as NOT_COMPARED with the official-emulator comparison as their only evidence. The REST API carries a file manifest, so the deploy-time `ignore` rule is not observable in production.",
+      "status": "ANSWERED"
     }
   ],
   "conditions": [
@@ -30,7 +40,13 @@
         "static-post",
         "range"
       ],
-      "officialFixture": "conformance/hosting-fixtures/official.json"
+      "officialFixture": "conformance/hosting-fixtures/official.json",
+      "productionCorpus": {
+        "versions": [
+          "v01"
+        ],
+        "requests": 23
+      }
     },
     {
       "conditionId": "HOSTING/redirects",
@@ -48,7 +64,14 @@
         "redirect-capture-prefix",
         "redirect-capture-literal"
       ],
-      "officialFixture": "conformance/hosting-fixtures/official.json"
+      "officialFixture": "conformance/hosting-fixtures/official.json",
+      "productionCorpus": {
+        "versions": [
+          "v01",
+          "v09"
+        ],
+        "requests": 46
+      }
     },
     {
       "conditionId": "HOSTING/rewrites",
@@ -63,7 +86,14 @@
         "rewrite-first",
         "static"
       ],
-      "officialFixture": "conformance/hosting-fixtures/official.json"
+      "officialFixture": "conformance/hosting-fixtures/official.json",
+      "productionCorpus": {
+        "versions": [
+          "v01",
+          "v10"
+        ],
+        "requests": 3
+      }
     },
     {
       "conditionId": "HOSTING/glob-matching",
@@ -75,7 +105,13 @@
       "fixture": "conformance/hosting-fixtures/glob-cases.json",
       "productionEvidence": [],
       "officialFixture": "conformance/hosting-fixtures/official-globs.json",
-      "fixtureSelection": "All 138 pattern/path pairs"
+      "fixtureSelection": "All 138 pattern/path pairs",
+      "productionCorpus": {
+        "versions": [
+          "v10"
+        ],
+        "requests": 11
+      }
     },
     {
       "conditionId": "HOSTING/headers-cache",
@@ -93,7 +129,13 @@
         "modified-static",
         "modified-rewrite"
       ],
-      "officialFixture": "conformance/hosting-fixtures/official.json"
+      "officialFixture": "conformance/hosting-fixtures/official.json",
+      "productionCorpus": {
+        "versions": [
+          "v01"
+        ],
+        "requests": 6
+      }
     },
     {
       "conditionId": "HOSTING/clean-urls",
@@ -124,7 +166,13 @@
         "clean-noslash-_dir_",
         "clean-noslash-_dir_index.html"
       ],
-      "officialFixture": "conformance/hosting-fixtures/official.json"
+      "officialFixture": "conformance/hosting-fixtures/official.json",
+      "productionCorpus": {
+        "versions": [
+          "v02"
+        ],
+        "requests": 7
+      }
     },
     {
       "conditionId": "HOSTING/trailing-slash",
@@ -161,7 +209,18 @@
         "clean-noslash-_dir_",
         "clean-noslash-_dir_index.html"
       ],
-      "officialFixture": "conformance/hosting-fixtures/official.json"
+      "officialFixture": "conformance/hosting-fixtures/official.json",
+      "productionCorpus": {
+        "versions": [
+          "v01",
+          "v03",
+          "v04",
+          "v05",
+          "v06",
+          "v08"
+        ],
+        "requests": 30
+      }
     },
     {
       "conditionId": "HOSTING/i18n",
@@ -179,7 +238,14 @@
         "i18n-language-cookie",
         "i18n-fallback"
       ],
-      "officialFixture": "conformance/hosting-fixtures/official.json"
+      "officialFixture": "conformance/hosting-fixtures/official.json",
+      "productionCorpus": {
+        "versions": [
+          "v07",
+          "v08"
+        ],
+        "requests": 17
+      }
     },
     {
       "conditionId": "HOSTING/reserved-paths",
@@ -196,7 +262,14 @@
         "reserved-emulator-js",
         "reserved-unknown"
       ],
-      "officialFixture": "conformance/hosting-fixtures/official.json"
+      "officialFixture": "conformance/hosting-fixtures/official.json",
+      "productionCorpus": {
+        "versions": [
+          "v01",
+          "v09"
+        ],
+        "requests": 11
+      }
     },
     {
       "conditionId": "HOSTING/not-found",
@@ -212,36 +285,61 @@
         "404-direct",
         "default-404"
       ],
-      "officialFixture": "conformance/hosting-fixtures/official.json"
+      "officialFixture": "conformance/hosting-fixtures/official.json",
+      "productionCorpus": {
+        "versions": [
+          "v01"
+        ],
+        "requests": 4
+      }
     },
     {
-      "conditionId": "HOSTING/function-rewrites",
-      "description": "Registered local Functions rewrites",
+      "conditionId": "HOSTING/content-types",
+      "description": "Content-Type per extension, including charset, no extension and unknown extension",
       "status": "UNVERIFIED",
       "recipeIds": [
-        "hosting/function-rewrites"
+        "hosting/content-types"
       ],
       "fixture": "conformance/hosting-fixtures/cases.json",
       "productionEvidence": [],
-      "fixtureCaseIds": [
-        "function",
-        "function-post"
-      ],
-      "officialFixture": "conformance/hosting-fixtures/official.json"
+      "productionCorpus": {
+        "versions": [
+          "v01"
+        ],
+        "requests": 32
+      }
     },
     {
-      "conditionId": "HOSTING/run-rewrites",
-      "description": "Registered local Run-style rewrites",
+      "conditionId": "HOSTING/compression-vary",
+      "description": "Content-Encoding and Vary for compressible and incompressible types",
       "status": "UNVERIFIED",
       "recipeIds": [
-        "hosting/run-rewrites"
+        "hosting/compression-vary"
       ],
       "fixture": "conformance/hosting-fixtures/cases.json",
       "productionEvidence": [],
-      "fixtureCaseIds": [
-        "run"
+      "productionCorpus": {
+        "versions": [
+          "v01"
+        ],
+        "requests": 10
+      }
+    },
+    {
+      "conditionId": "HOSTING/app-association",
+      "description": "appAssociation: AUTO and the /.well-known association files",
+      "status": "UNVERIFIED",
+      "recipeIds": [
+        "hosting/app-association"
       ],
-      "officialFixture": "conformance/hosting-fixtures/official.json"
+      "fixture": "conformance/hosting-fixtures/cases.json",
+      "productionEvidence": [],
+      "productionCorpus": {
+        "versions": [
+          "v02"
+        ],
+        "requests": 2
+      }
     }
   ],
   "integratedRegression": {
@@ -251,8 +349,68 @@
     "scope": "82 HTTP cases and 138 glob pairs; no production evidence"
   },
   "productionProposal": "spec/compatibility/hosting-production-packet.md",
+  "recordingPolicy": {
+    "observedPasses": 0,
+    "requiredPasses": 2,
+    "waiver": null
+  },
+  "excludedFromParent": [
+    {
+      "conditionId": "HOSTING/function-rewrites",
+      "description": "Registered local Functions rewrites",
+      "status": "NOT_COMPARED",
+      "recipeIds": [
+        "hosting/function-rewrites"
+      ],
+      "reason": "Out of scope for this parent: a production function rewrite needs a deployed function, and fireemu forwards to the local Functions runtime. The official-emulator comparison is the only evidence.",
+      "authority": "owner ledger 2435 and coordinator rulings 2026-11-10"
+    },
+    {
+      "conditionId": "HOSTING/run-rewrites",
+      "description": "Registered local Run-style rewrites",
+      "status": "NOT_COMPARED",
+      "recipeIds": [
+        "hosting/run-rewrites"
+      ],
+      "reason": "Out of scope for this parent: a production Cloud Run rewrite needs a deployed service, and fireemu forwards to the local function of the same id. The official-emulator comparison is the only evidence.",
+      "authority": "owner ledger 2435 and coordinator rulings 2026-11-10"
+    },
+    {
+      "conditionId": "HOSTING/ignore",
+      "description": "The ignore globs that choose which files exist",
+      "status": "NOT_COMPARED",
+      "recipeIds": [
+        "hosting/ignore"
+      ],
+      "reason": "The ignore globs are not observable in production; official-emulator comparison only. The REST API receives a file manifest, so the rule is applied by the deploy tool (firebase-tools listFiles) before upload; the 3,220-row comparison against that function is the evidence.",
+      "authority": "owner ledger 2435 and coordinator rulings 2026-11-10"
+    },
+    {
+      "conditionId": "HOSTING/local-safety",
+      "description": "Path confinement, the Host guard, ports, --only selection and lifecycle",
+      "status": "NOT_COMPARED",
+      "recipeIds": [
+        "hosting/local-safety"
+      ],
+      "reason": "Path confinement, the Host guard, ports and lifecycle are not observable in production; official-emulator comparison only. These are properties of the local process (retained-handle confinement, DNS-rebinding refusal, port search, readiness) with no production counterpart.",
+      "authority": "owner ledger 2435 and coordinator rulings 2026-11-10"
+    }
+  ],
+  "corpusPath": "conformance/src/hosting-production/corpus.manifest.json",
+  "corpusSha256": "9c86405766440def7b565417de145b01cfed2395b7819fdba2596f6183b355ab",
+  "corpusContentSha256": "fa57f2b080426de0ea30e5b9758f117481a770561e625903974c4672fca43150",
+  "recorder": "conformance/src/hosting-production/record.mjs",
+  "judge": "conformance/src/hosting-production/judge.mjs",
+  "recordings": [],
+  "limitations": [
+    "Observations come from preview channels only; the live channel is never touched.",
+    "Edge-set headers (date, age, via, x-cache*, x-served-by, x-timer, server, alt-svc) are recorded and never compared; any other header that is neither compared nor volatile must be named by the review.",
+    "The reserved initialization bodies keep byte count, line count and, for JSON, key order with value types and byte lengths; no value is retained.",
+    "ETag and Last-Modified are compared by form, not by value.",
+    "The redirect `type` default of the CLI is not observable through the REST API, which requires a status code."
+  ],
   "outOfScope": [
-    "Production deployment and live upstream routing are not executed by this offline task.",
-    "No condition is promoted from official-emulator behavior or documentation alone."
+    "Production deployment of functions and live upstream routing are not executed (owner ledger 2435).",
+    "No condition is promoted from official-emulator behavior or documentation alone; the NOT_COMPARED entries are excluded from the parent claim, not verified."
   ]
 }

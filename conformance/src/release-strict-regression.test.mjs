@@ -28,6 +28,7 @@ import {
   EXCLUDED_PARTS,
   FUNCTIONS_HTTP_LOCK_SUCCESSORS,
   FUNCTIONS_HTTP_RECORDED_REQUEST_KINDS,
+  GROUPS,
   RUNS,
   runEntry,
   assertNoOutboundNetwork,
@@ -48,6 +49,7 @@ import {
   planComparisons,
   planRelease,
   readReleaseJson,
+  selectGroup,
 } from "./release-strict-regression.mjs";
 import { PROGRAMS } from "./firestore-probe/programs.mjs";
 import { createBudget } from "../functions-http/harness.mjs";
@@ -671,6 +673,8 @@ test("the arguments name an output directory and accept nothing else", () => {
     out: "dir",
     dist: "npm/dist",
   });
+  assert.equal(parseArguments(["--out", "dir", "--group", "rtdb"]).group, "rtdb");
+  assert.throws(() => parseArguments(["--out", "dir", "--group", "unknown"]), /unknown group/);
   assert.throws(() => parseArguments([]), /--out/);
   assert.throws(() => parseArguments(["--out"]), /--out/);
   assert.throws(() => parseArguments(["--out", "dir", "--record"]), /unknown/);
@@ -1123,6 +1127,62 @@ const strictProductionJob = () => {
   assert.ok(start > 0 && end > start, "the strict-production job is in release.yml");
   return workflow.slice(start, end);
 };
+
+test("groups partition runs and keep each comparison together", () => {
+  const ids = Object.values(GROUPS).flat();
+  assert.equal(new Set(ids).size, ids.length);
+  assert.deepEqual([...ids].sort(), RUNS.map(({ id }) => id).sort());
+  const comparisons = planComparisons(committedClosures(), readJson).comparisons;
+  for (const comparison of comparisons) {
+    assert.equal(
+      Object.values(GROUPS).filter((group) => comparison.runIds.every((id) => group.includes(id)))
+        .length,
+      1,
+      comparison.path,
+    );
+  }
+  const matrix = strictProductionJob().match(/group: \[([^\]]+)\]/);
+  assert.ok(matrix);
+  assert.deepEqual(
+    matrix[1].split(",").map((name) => name.trim()),
+    Object.keys(GROUPS),
+  );
+});
+
+test("group selection filters runs, comparisons, exports and the R10 report", () => {
+  const plan = planComparisons(committedClosures(), readJson);
+  const all = selectGroup(plan);
+  assert.deepEqual(all.runs, RUNS);
+  assert.deepEqual(all.comparisons, plan.comparisons);
+  assert.equal(all.reportsR10, true);
+  const comparisons = [];
+  const copies = [];
+  for (const [group, ids] of Object.entries(GROUPS)) {
+    const selected = selectGroup(plan, group);
+    assert.deepEqual(selected.runs.map(({ id }) => id).sort(), [...ids].sort());
+    assert.deepEqual(
+      selected.comparisons,
+      plan.comparisons.filter((comparison) => comparison.runIds.every((id) => ids.includes(id))),
+    );
+    assert.equal(selected.reportsR10, group === "rest");
+    comparisons.push(...selected.comparisons);
+    const groupCopies = exportCopies(selected.comparisons, selected.runs);
+    for (const copy of groupCopies)
+      assert.ok(ids.includes(copy.from.replace(/-export\.json$/, "")));
+    copies.push(...groupCopies);
+  }
+  assert.equal(new Set(comparisons).size, comparisons.length);
+  assert.deepEqual(new Set(comparisons), new Set(plan.comparisons));
+  const sortCopies = (items) => items.map((item) => JSON.stringify(item)).sort();
+  assert.deepEqual(sortCopies(copies), sortCopies(exportCopies(plan.comparisons, RUNS)));
+});
+
+test("a comparison spanning groups is selected by no group", () => {
+  const comparison = { path: "synthetic.json", runIds: ["R10", "R20"] };
+  for (const group of Object.keys(GROUPS)) {
+    assert.deepEqual(selectGroup({ comparisons: [comparison] }, group).comparisons, []);
+  }
+});
 
 test("the strict-production job installs the blocking fixture's dependencies before the loopback run", () => {
   const job = strictProductionJob();
@@ -2083,7 +2143,7 @@ test("every release command binds its declared mode to the actual CLI action", (
   }
 });
 
-test("R19 executes with the reviewed interpreter and owns both expanded output paths", async () => {
+test("R19 executes with the reviewed interpreter and owns its output path", async () => {
   const { chmodSync } = await import("node:fs");
   const dir = mkdtempSync(join(tmpdir(), "fireemu R19 setup-"));
   try {
@@ -2111,11 +2171,11 @@ console.log(JSON.stringify({ args }));
       env: { PATH: dir, R19_OWNED_OUT: dir },
     });
     assert.deepEqual(entry.record.errors, []);
-    assert.equal(entry.record.commands.length, 2);
-    for (const [index, command] of entry.record.commands.entries()) {
+    assert.equal(entry.record.commands.length, 1);
+    for (const command of entry.record.commands) {
       assert.deepEqual(command.argv.slice(0, 5), ["uv", "run", "--python", "3.12.13", "python"]);
       const output = command.argv[command.argv.indexOf("--out") + 1];
-      assert.equal(output, join(dir, index === 0 ? "R19-export.json.check" : "R19-export.json"));
+      assert.equal(output, join(dir, "R19-export.json"));
       assert.ok(existsSync(output + ".receipt"));
       assert.deepEqual(
         JSON.parse(readFileSync(output + ".receipt", "utf8")),

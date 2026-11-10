@@ -204,13 +204,19 @@ jobs:
   # Linux arm64 is not here: it shares this source with linux x64 and is exercised in the
   # release workflow, which builds and tests it on a native arm64 runner.
   platforms:
-    name: tests (${{ matrix.os }})
+    name: tests (${{ matrix.os }}${{ matrix.shard && format(' {0}', matrix.shard) || '' }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest]
+        include:
+          - os: macos-latest
+            shard: 1/2
+          - os: macos-latest
+            shard: 2/2
+          - os: windows-latest
+            shard: ''
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
@@ -257,7 +263,7 @@ jobs:
             cargo nextest run --workspace --exclude fireemu-verification-quint --exclude traceability-check --lib --profile pr
             cargo nextest run -p fireemu --bin fireemu --test exec_windows --profile pr
           else
-            cargo nextest run --workspace --profile pr
+            cargo nextest run --workspace --profile pr --partition count:${{ matrix.shard }}
           fi
 
   # The Functions runner is Node code that shapes every event the emulator delivers. Its tests

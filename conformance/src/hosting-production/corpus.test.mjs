@@ -130,3 +130,8 @@ test("the budget the recorder is held to", () => {
   assert.ok(counts.requests <= 210, "edge requests stay inside the frozen cap");
   assert.ok(counts.distinctBodies <= 16, "uploads stay few");
 });
+
+test("the recorder's pin is the corpus digest", async () => {
+  const { CORPUS_SHA256 } = await import("./pins.mjs");
+  assert.equal(CORPUS_SHA256, corpusManifest().corpusSha256);
+});

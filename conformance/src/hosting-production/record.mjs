@@ -213,7 +213,14 @@ export async function recordHosting(env, deps) {
   await deps.appendLedger(
     `${JSON.stringify({ ts: new Date(startedAt).toISOString(), ...base, event: "started", authorizedDomainsBefore: before })}\n`,
   );
-  const state = { stop: false, halt: undefined, needsRecovery: [], residual: [], review: false };
+  const state = {
+    stop: false,
+    halt: undefined,
+    needsRecovery: [],
+    openCreates: [],
+    residual: [],
+    review: false,
+  };
   deps.installSignals(() => {
     state.stop = true;
   });
@@ -264,6 +271,7 @@ export async function recordHosting(env, deps) {
     unknownRows: unknownCount,
     needsReview: state.review,
     needsRecovery: state.needsRecovery,
+    openUnknownCreates: state.openCreates,
     residual: state.residual,
     readback,
     requests,
@@ -296,6 +304,10 @@ export async function recordHosting(env, deps) {
       estimatedUsd: ESTIMATED_USD,
       unknownRows: unknownCount,
       residual: state.residual.length + state.needsRecovery.length,
+      // What a later recovery carries forward: creates no own 2xx read has shown, and the deletes
+      // that did not answer 2xx. Both stay open until the coordinator's own A2 read-back.
+      openUnknownCreates: state.openCreates,
+      residualEntries: state.residual,
       lockKept: !ok || outcome === "observed-unknown" || state.review,
       needsReview: state.review || !ok,
       ...(state.halt || writeError
@@ -381,6 +393,17 @@ async function precheck(api) {
   if ((channels.channels ?? []).some((c) => String(c.name).split("/").at(-1).startsWith("hst-"))) {
     throw new Error("channels of an earlier run remain");
   }
+  // The final read-back reads at most 3 pages of versions, and each attempt adds 10 (deleted ones
+  // stay listed). Stop before any write when the list already runs past 2 pages.
+  let token = "";
+  for (let page = 0; page < 2; page += 1) {
+    const query = `pageSize=100${token ? `&pageToken=${encodeURIComponent(token)}` : ""}`;
+    const versions = await read(`${HOSTING}/sites/${SITE}/versions?${query}`, "versions");
+    token = versions.nextPageToken ?? "";
+    if (!token) break;
+    if (page === 1)
+      throw new Error("the site's version list runs past 2 pages; clear it by hand first");
+  }
   const config = await read(
     `https://identitytoolkit.googleapis.com/admin/v2/projects/${PROJECT}/config`,
     "config",
@@ -394,7 +417,9 @@ async function deployAndServe({ version, record, run, api, deps, secrets, state,
     record.failure = reason;
     if (halt) state.halt ??= `${version.id}: ${reason}`;
   };
-  const channelsUrl = `${HOSTING}/projects/-/sites/${SITE}/channels`;
+  // The channel path names the project, as every recorded channel create did (the `-` wildcard is
+  // recorded for version creates and releases only).
+  const channelsUrl = `${HOSTING}/projects/${PROJECT}/sites/${SITE}/channels`;
   // a. the preview channel
   let created = await api.call("control", "POST", `${channelsUrl}?channelId=${record.channelId}`, {
     ttl: "86400s",
@@ -409,6 +434,7 @@ async function deployAndServe({ version, record, run, api, deps, secrets, state,
     );
     if (probe.kind !== "ok") {
       state.needsRecovery.push(`${record.channelId}: channel create unknown`);
+      state.openCreates.push(`channel:${record.channelId}`);
       fail("channel create unknown");
       return;
     }
@@ -442,6 +468,7 @@ async function deployAndServe({ version, record, run, api, deps, secrets, state,
   });
   if (made.kind === "unknown") {
     state.needsRecovery.push(`${version.id}: version create unknown`);
+    state.openCreates.push(`version:${version.id}`);
     fail("version create unknown");
     return;
   }
@@ -647,20 +674,25 @@ async function removeVersion({ record, api, state }) {
 
 async function listVersions(api, run) {
   const found = [];
+  const details = [];
   let token = "";
   for (let page = 0; page < 3; page += 1) {
     const query = `pageSize=100${token ? `&pageToken=${encodeURIComponent(token)}` : ""}`;
     const listed = await api.call("cleanup", "GET", `${HOSTING}/sites/${SITE}/versions?${query}`);
-    if (listed.kind !== "ok") return { error: listed.status, found };
+    if (listed.kind !== "ok") return { error: listed.status, found, details };
     for (const version of listed.value.versions ?? []) {
       if (version.labels?.["fireemu-run"] === run && version.status !== "DELETED") {
         found.push(String(version.name));
+        details.push({
+          name: String(version.name),
+          versionId: version.labels?.["fireemu-version"],
+        });
       }
     }
     token = listed.value.nextPageToken ?? "";
-    if (!token) return { found };
+    if (!token) return { found, details };
   }
-  return { found, truncated: true };
+  return { found, details, truncated: true };
 }
 
 async function finalReadback({ run, api, state, before }) {
@@ -704,7 +736,16 @@ async function finalReadback({ run, api, state, before }) {
 
 // ---- recovery -----------------------------------------------------------------------------------------------
 
-/** Deletes what an unfinished or needs-recovery run of this task left, and reads it back. */
+/**
+ * The recovery of a run that ended `needs-recovery` (or never wrote a terminal row): it deletes what
+ * is listed under the run's prefix and label, records each own DELETE answer, reads everything back,
+ * and writes ONE row that never closes the run (`recovery-read`; `admit` does not accept it). Only
+ * the coordinator closes the run, after its own A2 read-back at least 10 minutes later. Rules
+ * (checklist section 3): an unknown create settles only on an own 2xx read that shows the resource,
+ * then deleted with a 2xx and read back absent; absence never settles it. A DELETE that did not
+ * answer 2xx stays residual. Run it only under its own recovery packet, never under the recording
+ * envelope.
+ */
 export async function recoverHosting(env, deps) {
   const lines = (await deps.readLedger())
     .split("\n")
@@ -712,7 +753,7 @@ export async function recoverHosting(env, deps) {
     .map((text) => JSON.parse(text))
     .filter((line) => line.project === PROJECT && line.taskId === TASK_ID);
   const last = lines.at(-1);
-  if (!last || !(last.event === "started" || last.event === "needs-recovery")) {
+  if (!last || !["started", "needs-recovery", "recovery-read"].includes(last.event)) {
     throw new Error("the ledger shows no run of this task to recover");
   }
   const run = last.run;
@@ -721,54 +762,97 @@ export async function recoverHosting(env, deps) {
   const before = started?.authorizedDomainsBefore;
   if (!Array.isArray(before))
     throw new Error(`run ${run} has no started row with authorizedDomainsBefore`);
+  // What the run (or the recovery before this one) left open. A run with no terminal row may have
+  // an unknown create nobody wrote down: it stays open for the coordinator.
+  const carried = last.openUnknownCreates ?? ["run-ended-without-a-terminal-row"];
+  const carriedResidual = last.residualEntries ?? last.carriedResidual ?? [];
   const adc = await deps.ownerAdc();
   const budget = createBudget({ token: 3, control: 0, cleanup: CAPS.cleanup, upload: 0, edge: 0 });
   const runDir = await deps.makeRunDir(`hosting-recover-${run}-${deps.now()}`);
   const api = makeApi({ deps, budget, adc, runDir });
   const state = { needsRecovery: [], residual: [] };
   const deleted = [];
+  const answered = (what, answer) => {
+    deleted.push({ what, kind: answer.kind, status: answer.status });
+    if (answer.kind !== "ok")
+      state.residual.push(`${what} delete ${answer.kind} (${answer.status})`);
+    return answer.kind === "ok";
+  };
+  const channelsDeleted = new Set();
   const channels = await api.call(
     "cleanup",
     "GET",
     `${HOSTING}/projects/${PROJECT}/sites/${SITE}/channels?pageSize=100`,
   );
+  const channelsSeen = new Set();
   if (channels.kind === "ok") {
     for (const channel of channels.value.channels ?? []) {
       const id = String(channel.name).split("/").at(-1);
       if (!id.startsWith(`hst-${run}-`)) continue;
+      channelsSeen.add(id);
       const answer = await api.call(
         "cleanup",
         "DELETE",
         `${HOSTING}/projects/${PROJECT}/sites/${SITE}/channels/${id}`,
       );
-      deleted.push(`channel ${id}: ${answer.kind}`);
+      if (answered(`channel ${id}`, answer)) channelsDeleted.add(id);
     }
   } else state.needsRecovery.push("channels list failed");
+  const versionsDeleted = new Set();
   const versions = await listVersions(api, run);
-  for (const name of versions.found) {
-    const answer = await api.call("cleanup", "DELETE", `${HOSTING}/${name}`);
-    deleted.push(`${name}: ${answer.kind}`);
+  for (const detail of versions.details) {
+    const answer = await api.call("cleanup", "DELETE", `${HOSTING}/${detail.name}`);
+    if (answered(`version ${detail.name}`, answer)) versionsDeleted.add(detail.versionId);
   }
   if (versions.error || versions.truncated) state.needsRecovery.push("versions list incomplete");
   const readback = await finalReadback({ run, api, state, before });
-  const ok =
-    state.needsRecovery.length === 0 && readback.clean && readback.domainsUnchanged === true;
+  const channelsLeft = new Set(readback.channelsLeft ?? []);
+  const versionsLeft = readback.versionsLeft ?? [];
+  // A create settles only when an own read showed the resource and the own delete read back absent.
+  const open = carried.filter((entry) => {
+    const [kind, id] = entry.split(":");
+    if (kind === "channel")
+      return !(channelsSeen.has(id) && channelsDeleted.has(id) && !channelsLeft.has(id));
+    if (kind === "version") return !(versionsDeleted.has(id) && versionsLeft.length === 0);
+    return true;
+  });
+  const clean =
+    state.needsRecovery.length === 0 &&
+    state.residual.length === 0 &&
+    readback.clean &&
+    readback.domainsUnchanged === true &&
+    open.length === 0 &&
+    carriedResidual.length === 0;
+  const at = deps.now();
   await deps.appendLedger(
     `${JSON.stringify({
-      ts: new Date(deps.now()).toISOString(),
+      ts: new Date(at).toISOString(),
       project: PROJECT,
       database: null,
       taskId: TASK_ID,
       run,
       runDir,
-      event: ok ? "cleanup-verified" : "needs-recovery",
-      outcome: ok ? "recovered" : "needs-recovery",
+      // Never a closing event: the coordinator writes the close row after the A2 read-back.
+      event: "recovery-read",
+      outcome: clean ? "recovery-read-clean" : "needs-recovery",
       deleted,
+      residual: state.residual,
+      openUnknownCreates: open,
+      carriedResidual,
+      domainsUnchanged: readback.domainsUnchanged,
+      readbackClean: readback.clean,
+      a2ReadNotBefore: new Date(at + 10 * 60_000).toISOString(),
       requests: budget.snapshot(),
       estimatedUsd: 0,
     })}\n`,
   );
-  return { outcome: ok ? "recovered" : "needs-recovery", deleted, readback, exitCode: ok ? 0 : 1 };
+  return {
+    outcome: clean ? "recovery-read-clean" : "needs-recovery",
+    deleted,
+    openUnknownCreates: open,
+    readback,
+    exitCode: clean ? 0 : 1,
+  };
 }
 
 // ---- production effects -----------------------------------------------------------------------------------------

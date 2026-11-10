@@ -36,7 +36,7 @@ A 3xx, 5xx, status below 200, timeout, abort or unreadable body of an API write 
 
 ## Cleanup
 
-Each version's channel and version are deleted right after its requests. At the end the channel list must hold no channel of the run, the version list (at most three pages) must hold no version labelled with the run that is not DELETED, and the project's authorized domains must equal their value before. The Hosting API's `fileCount` is a string and counts the reserved `/__/firebase/init.js` and `init.json`; the recorder stores it as returned and lists the returned file paths separately.
+Each version's channel and version are deleted right after its requests. At the end the channel list must hold no channel of the run, the version list (at most three pages) must hold no version labelled with the run that is not DELETED, and the project's authorized domains must equal their value before. A recovery run only deletes what is listed under the run's prefix and label, records each delete answer and reads back; it never closes the run. An unknown create settles only on an own 2xx read that shows the resource (then it is deleted and read back); a 404 or an empty list never settles it, and the coordinator alone closes the run after its own read-back at least 10 minutes later. The site's version list must fit the read-back's three pages: the precheck refuses to start when it already runs past two. The Hosting API's `fileCount` is a string and counts the reserved `/__/firebase/init.js` and `init.json`; the recorder stores it as returned and lists the returned file paths separately.
 
 ## Masking
 

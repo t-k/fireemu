@@ -11,7 +11,7 @@ const request = (world, method, url, body) =>
 
 test("the fake API deploys and deletes a channel and version", async () => {
   const world = createWorld({ run: "123abc", secrets: { apiKey: "private-value" } });
-  const channels = `${root}/projects/-/sites/${site}/channels`;
+  const channels = `${root}/projects/${site}/sites/${site}/channels`;
   const channelId = "hst-123abc-v01";
   const channel = JSON.parse(
     (
@@ -198,18 +198,21 @@ test("records and cleans the full corpus with bounded, counted requests", async 
   assert.ok([...r.world.state.versions.values()].every((version) => version.status === "DELETED"));
   assert.equal(r.world.state.releasedVersions.size, 10);
   const counts = { token: 1, control: 0, cleanup: 0, upload: 0, edge: 0 };
-  for (const call of r.world.log) {
+  // The first five calls are the read-only prechecks (service, site, channels, versions, config);
+  // the deletes and the final listings are cleanup.
+  r.world.log.forEach((call, index) => {
     if (call.kind === "edge" || call.kind === "upload") counts[call.kind]++;
     else if (
-      call.method === "DELETE" ||
-      (call.method === "GET" &&
-        (call.url.includes("/sites/fireemu-oracle-idp/versions?") ||
-          (call.url.includes("/channels?") && counts.control >= 4) ||
-          (call.url.includes("identitytoolkit") && counts.control >= 4)))
+      index >= 5 &&
+      (call.method === "DELETE" ||
+        (call.method === "GET" &&
+          (call.url.includes("/sites/fireemu-oracle-idp/versions?") ||
+            call.url.includes("/channels?") ||
+            call.url.includes("identitytoolkit"))))
     )
       counts.cleanup++;
     else counts.control++;
-  }
+  });
   assert.deepEqual(resultOf(r).requests, counts);
   for (const kind of Object.keys(CAPS)) assert.ok(counts[kind] <= CAPS[kind]);
   for (const name of ["rows.json", "deploy.json", "result.json", "journal.jsonl"])
@@ -490,37 +493,163 @@ test("dependent etags are forwarded or cause an unsent dependency row", async ()
   );
 });
 
-test("recovery deletes leftovers, reports failures and rejects closed runs", async () => {
-  for (const fail of [false, true]) {
-    const r = await run();
-    const channel = [...r.world.state.channels.values()][0];
-    channel.deleted = false;
-    const version = [...r.world.state.versions.values()][0];
-    version.deleted = false;
-    version.status = "CREATED";
-    r.ledger.push(
-      JSON.stringify({
-        ...closed,
-        taskId: TASK_ID,
-        event: "started",
-        run: "abc123",
-        authorizedDomainsBefore: ["localhost"],
-      }),
-    );
-    if (fail) {
-      const http = r.deps.http;
-      r.deps.http = (call) => (call.method === "DELETE" ? reply(500) : http(call));
-    }
-    const start = r.world.log.length;
-    const recovered = await recoverHosting({}, r.deps);
-    assert.equal(recovered.outcome, fail ? "needs-recovery" : "recovered");
-    assert.equal(terminal(r).event, fail ? "needs-recovery" : "cleanup-verified");
-    assert.ok(
-      r.world.log.slice(start).every((call) => call.method !== "POST" && call.kind !== "edge"),
-    );
-  }
+const startedRow = {
+  ...closed,
+  taskId: TASK_ID,
+  event: "started",
+  run: "abc123",
+  authorizedDomainsBefore: ["localhost"],
+};
+const endedRow = (extra = {}) => ({
+  ...closed,
+  taskId: TASK_ID,
+  event: "needs-recovery",
+  outcome: "needs-recovery",
+  run: "abc123",
+  openUnknownCreates: [],
+  residualEntries: [],
+  ...extra,
+});
+/** A finished run whose first channel and version are still live, as the recovery finds them. */
+async function leftover(extraEnded) {
   const r = await run();
-  await assert.rejects(recoverHosting({}, r.deps));
+  const channel = [...r.world.state.channels.values()][0];
+  channel.deleted = false;
+  const version = [...r.world.state.versions.values()][0];
+  version.deleted = false;
+  version.status = "CREATED";
+  r.ledger.push(JSON.stringify(startedRow), JSON.stringify(endedRow(extraEnded)));
+  return { r, channel, version };
+}
+const lastRow = (r) => JSON.parse(r.ledger.at(-1));
+const admitFor = (r, env = {}) =>
+  admit({ ledgerText: r.ledger.join("\n"), now: now + 3 * 3600_000, env });
+
+test("recovery deletes leftovers and reads back, but never writes a closing row", async () => {
+  const { r, channel, version } = await leftover();
+  const start = r.world.log.length;
+  const recovered = await recoverHosting({}, r.deps);
+  assert.equal(recovered.outcome, "recovery-read-clean");
+  assert.equal(channel.deleted, true);
+  assert.equal(version.deleted, true);
+  const row = lastRow(r);
+  assert.equal(row.event, "recovery-read");
+  assert.equal(row.outcome, "recovery-read-clean");
+  assert.equal(row.a2ReadNotBefore, new Date(now + 600_000).toISOString());
+  assert.deepEqual(row.openUnknownCreates, []);
+  assert.ok(row.deleted.every((entry) => entry.kind === "ok"));
+  assert.ok(
+    r.world.log.slice(start).every((call) => call.method !== "POST" && call.kind !== "edge"),
+  );
+  // Even a clean recovery is not a close: the coordinator writes it after the A2 read-back.
+  assert.throws(() => admitFor(r), /does not close its run/);
+  r.ledger.push(
+    JSON.stringify({
+      ts: new Date(now + 3600_000).toISOString(),
+      project: PROJECT,
+      taskId: TASK_ID,
+      run: "abc123",
+      event: "cleanup-verified",
+      outcome: "recorded",
+    }),
+  );
+  // The recorded run and the started row this test adds are two attempts, so the next is the third.
+  assert.equal(admitFor(r).attempt, 3, "only the coordinator's close row admits the next attempt");
+});
+
+test("a recovery DELETE that answers 503, times out or is refused stays residual and open", async () => {
+  for (const value of [reply(503), reply(404), reply(403), "timeout"]) {
+    const { r } = await leftover();
+    const http = r.deps.http;
+    r.deps.http = async (call) =>
+      call.method === "DELETE"
+        ? value === "timeout"
+          ? { status: 0, text: "" }
+          : value
+        : http(call);
+    const recovered = await recoverHosting({}, r.deps);
+    assert.equal(recovered.outcome, "needs-recovery", JSON.stringify(value));
+    const row = lastRow(r);
+    assert.equal(row.event, "recovery-read");
+    assert.ok(row.residual.length >= 1);
+    assert.ok(row.deleted.some((entry) => entry.kind !== "ok"));
+    assert.throws(() => admitFor(r), /does not close its run/);
+  }
+});
+
+test("an unknown create stays open through a recovery that lists nothing; admission refuses attempt 2", async () => {
+  const r = await run({ overrides: [fault(channelsPost, "network-error")] });
+  assert.equal(r.result.outcome, "needs-recovery");
+  const ended = terminal(r);
+  assert.deepEqual(ended.openUnknownCreates, ["channel:hst-abc123-v01"]);
+  assert.equal(r.world.state.channels.size, 0, "the world applied nothing");
+  const recovered = await recoverHosting({}, r.deps);
+  assert.equal(recovered.outcome, "needs-recovery");
+  assert.deepEqual(recovered.openUnknownCreates, ["channel:hst-abc123-v01"]);
+  const row = lastRow(r);
+  assert.equal(row.event, "recovery-read");
+  assert.deepEqual(row.openUnknownCreates, ["channel:hst-abc123-v01"]);
+  assert.throws(() => admitFor(r), /does not close its run/);
+  // A second recovery reads the same open create from the first.
+  assert.deepEqual((await recoverHosting({}, r.deps)).openUnknownCreates, [
+    "channel:hst-abc123-v01",
+  ]);
+});
+
+test("a create that an own read shows and a 2xx delete removes is settled; one never shown is not", async () => {
+  const r = await run();
+  const channel = [...r.world.state.channels.values()][0];
+  channel.deleted = false;
+  const version = [...r.world.state.versions.values()][0];
+  version.deleted = false;
+  version.status = "CREATED";
+  r.ledger.push(
+    JSON.stringify(startedRow),
+    JSON.stringify(
+      endedRow({
+        openUnknownCreates: ["channel:hst-abc123-v01", "version:v01", "channel:hst-abc123-v09"],
+      }),
+    ),
+  );
+  const recovered = await recoverHosting({}, r.deps);
+  assert.deepEqual(
+    recovered.openUnknownCreates,
+    ["channel:hst-abc123-v09"],
+    "v09 was never listed",
+  );
+  assert.equal(recovered.outcome, "needs-recovery");
+});
+
+test("a run with no terminal row, or with unknown deletes, cannot be recovered clean", async () => {
+  const r = await run();
+  r.ledger.push(JSON.stringify(startedRow));
+  const none = await recoverHosting({}, r.deps);
+  assert.deepEqual(none.openUnknownCreates, ["run-ended-without-a-terminal-row"]);
+  const { r: again } = await leftover({
+    residualEntries: ["hst-abc123-v01: channel delete unknown (500)"],
+  });
+  const carried = await recoverHosting({}, again.deps);
+  assert.equal(carried.outcome, "needs-recovery");
+  assert.deepEqual(lastRow(again).carriedResidual, [
+    "hst-abc123-v01: channel delete unknown (500)",
+  ]);
+  const closedRun = await run();
+  await assert.rejects(recoverHosting({}, closedRun.deps), /no run of this task to recover/);
+});
+
+test("recovery also takes a needs-recovery run and leaves another run's channel alone", async () => {
+  const { r, channel } = await leftover();
+  const other = {
+    ...channel,
+    name: "projects/p/sites/s/channels/hst-ffffff-v01",
+    url: `https://${hostOf("hst-ffffff-v01")}`,
+    deleted: false,
+  };
+  r.world.state.channels.set("hst-ffffff-v01", other);
+  const recovered = await recoverHosting({}, r.deps);
+  assert.equal(recovered.outcome, "recovery-read-clean");
+  assert.equal(other.deleted, false);
+  assert.equal(channel.deleted, true);
 });
 
 test("web config validates project, number and key and includes the app hash", () => {
@@ -738,39 +867,6 @@ test("a disabled Hosting API stops the run before any write", async () => {
   );
 });
 
-test("recovery also takes a needs-recovery run and leaves another run's channel alone", async () => {
-  const r = await run();
-  const channel = [...r.world.state.channels.values()][0];
-  channel.deleted = false;
-  const other = {
-    ...channel,
-    name: "projects/p/sites/s/channels/hst-ffffff-v01",
-    url: `https://${hostOf("hst-ffffff-v01")}`,
-    deleted: false,
-  };
-  r.world.state.channels.set("hst-ffffff-v01", other);
-  r.ledger.push(
-    JSON.stringify({
-      ...closed,
-      taskId: TASK_ID,
-      event: "started",
-      run: "abc123",
-      authorizedDomainsBefore: ["localhost"],
-    }),
-    JSON.stringify({
-      ...closed,
-      taskId: TASK_ID,
-      event: "needs-recovery",
-      outcome: "needs-recovery",
-      run: "abc123",
-    }),
-  );
-  const recovered = await recoverHosting({}, r.deps);
-  assert.equal(recovered.outcome, "recovered", "another run's channel is not this run's to judge");
-  assert.equal(other.deleted, false);
-  assert.equal(channel.deleted, true);
-});
-
 test("the ledger row says whether the lock stays", async () => {
   const served = {
     outcome: "answered",
@@ -838,7 +934,12 @@ test("a hash the version does not hold, an unfinalized version and an endless li
     overrides: [
       {
         match: "GET /versions\\?pageSize=100/",
-        answer: reply(200, { versions: [], nextPageToken: "more" }),
+        answer: (() => {
+          let calls = 0;
+          // The precheck reads one page; every later listing (the read-back) never ends.
+          return () =>
+            ++calls <= 1 ? undefined : reply(200, { versions: [], nextPageToken: "more" });
+        })(),
       },
     ],
   });
@@ -917,4 +1018,54 @@ test("an answer below 200 is unknown", () => {
   assert.equal(classify({ status: 100, text: "" }).kind, "unknown");
   assert.equal(classify({ status: 399, text: "{}" }).kind, "unknown");
   assert.equal(classify({ status: 400, text: "{}" }).kind, "refused");
+});
+
+test("the channel is created under the project id, as every recorded create was", async () => {
+  const r = await run();
+  const create = r.world.log.find(
+    (call) => call.method === "POST" && call.url.includes("channelId="),
+  );
+  assert.ok(
+    create.url.startsWith(
+      "https://firebasehosting.googleapis.com/v1beta1/projects/fireemu-oracle-idp/sites/fireemu-oracle-idp/channels?channelId=",
+    ),
+  );
+  // The wildcard is recorded for version creates and releases, and the fake refuses it for a channel.
+  const wildcard = await r.world.http({
+    method: "POST",
+    url: `${root}/projects/-/sites/${site}/channels?channelId=hst-abc123-v99`,
+    body: "{}",
+  });
+  assert.equal(wildcard.status, 404);
+  const versionCreate = r.world.log.find((call) =>
+    call.url.endsWith("/projects/-/sites/fireemu-oracle-idp/versions"),
+  );
+  assert.ok(versionCreate);
+});
+
+test("a site whose version list already runs past two pages stops the run before any write", async () => {
+  for (const [pages, refused] of [
+    [1, false],
+    [2, false],
+    [3, true],
+  ]) {
+    let reads = 0;
+    const attempt = run({
+      overrides: [
+        {
+          match: "GET /versions\\?pageSize=100/",
+          answer: () => {
+            reads += 1;
+            // Only the precheck's own reads are shaped; the read-back's reads are the world's.
+            if (reads > 2) return undefined;
+            return reads < pages
+              ? reply(200, { versions: [], nextPageToken: `t${reads}` })
+              : undefined;
+          },
+        },
+      ],
+    });
+    if (refused) await assert.rejects(attempt, /runs past 2 pages/);
+    else assert.equal((await attempt).result.closureReady, true, `${pages} pages`);
+  }
 });

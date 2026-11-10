@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { gzipSync } from "node:zlib";
+import { brotliCompressSync, gzipSync } from "node:zlib";
 import test from "node:test";
 
 import {
@@ -468,4 +468,45 @@ test("shaping: a target with a query is still an init body; text is kept up to 8
   assert.equal(row({ infoOnly: true }).infoOnly, true);
   assert.equal(row().infoOnly, undefined);
   assert.equal(row({}, { body: Buffer.alloc(0) }).bodyKind, "none");
+});
+
+test("an init body that arrives compressed keeps layout only: no digest of the body or of its decoding", () => {
+  const json = JSON.stringify({ apiKey: "SECRETKEY-123456", projectId: "p" });
+  for (const encoding of ["gzip", "br"]) {
+    const compress = encoding === "gzip" ? gzipSync : brotliCompressSync;
+    const init = row(
+      { target: "/__/firebase/init.json" },
+      {
+        headers: [
+          ["Content-Type", "application/json"],
+          ["Content-Encoding", encoding],
+        ],
+        body: compress(Buffer.from(json)),
+      },
+    );
+    assert.equal(init.bodyKind, "init-json");
+    assert.deepEqual(init.layout.keys, ["apiKey", "projectId"]);
+    for (const field of ["bodySha256", "decodedSha256", "decodedBytes", "bodyText"]) {
+      assert.equal(init[field], undefined, `${encoding} ${field}`);
+    }
+    assertNoSecrets(init, CTX.secrets);
+  }
+  const js = row(
+    { target: "/__/firebase/init.js" },
+    {
+      headers: [
+        ["Content-Type", "application/javascript"],
+        ["Content-Encoding", "gzip"],
+      ],
+      body: gzipSync(Buffer.from("a\nb\n")),
+    },
+  );
+  assert.deepEqual(js.layout, { lineCount: 3 });
+  assert.equal(js.decodedSha256, undefined);
+  // An ordinary compressed answer keeps its decoded digest.
+  const plain = row(
+    {},
+    { headers: [["Content-Encoding", "gzip"]], body: gzipSync(Buffer.from("x")) },
+  );
+  assert.ok(plain.decodedSha256);
 });

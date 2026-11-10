@@ -159,17 +159,21 @@ export function shapeRow(spec, answer, ctx) {
     bodyBytes: body.length,
   };
   const encoding = headers["content-encoding"]?.[0]?.toLowerCase();
+  const kind = initKind(spec.target);
   let plain = body;
   if (encoding && encoding !== "identity") {
     try {
       plain = decode(body, encoding) ?? body;
-      row.decodedBytes = plain.length;
-      row.decodedSha256 = sha256(plain);
+      // A reserved init body holds the API key and the number: it keeps no digest of any form,
+      // not even of its decoded bytes.
+      if (!(kind && answer.status === 200)) {
+        row.decodedBytes = plain.length;
+        row.decodedSha256 = sha256(plain);
+      }
     } catch {
       row.decodeError = encoding;
     }
   }
-  const kind = initKind(spec.target);
   if (kind && answer.status === 200) {
     row.bodyKind = kind;
     row.layout = initLayout(kind, plain);

@@ -49,7 +49,7 @@
     "conformance/src/functions-python-replay.test.mjs": "cbcc02cb8ac4d53bdbb5a43ba5a98e5d8f6bfdd149050513904c545994192e1f",
     "conformance/src/hosting-production/corpus.manifest.json": "9c86405766440def7b565417de145b01cfed2395b7819fdba2596f6183b355ab",
     "conformance/src/hosting-production/judge.mjs": "c35018577caaacf7a7eb5637fefad8d33aa1245003cfdd71e898c2a1ac975af5",
-    "conformance/src/hosting-production/record.mjs": "51a55281d3bf3fdf884218e2a5e57c0c53207868d6a31d642505a57182ab3f4b",
+    "conformance/src/hosting-production/record.mjs": "98e8232ac45911f7c8f36a39c6ad73179e2764ff42d512c78d2d89f57e3924fb",
     "conformance/src/hosting/run.mjs": "60f51e78ed905dadf5fa8f8e2098d9717abdf845ac3d5e5618e72e3a430490a8",
     "conformance/src/release-strict-regression.test.mjs": "33938307deea400dc712c59e848a185a26aab08c5b8a50b65e79b9dcccbd3bd2",
     "conformance/src/rtdb-finite-families-closure.test.mjs": "0fb70d489213edca6b71670ffe20fc92138cd0cdf0a07f7e3dff93aaa2303303",
@@ -270,7 +270,7 @@
     "spec/compatibility/fs-listen-sdk-browser-local-shadow.json": "41b2adb3265f6120291f48ea72532fb6927c4fda93f3893ace16a207d7122797",
     "spec/compatibility/fs-listen-sdk-local-shadow.json": "aea62689faa5e52ca96e1b3af9c6bc971cd72101ee588b371dd04f2121a56c95",
     "spec/compatibility/gaps.json": "d20fe030f9e2bdff1a587421ffae216c73b30fb7ff7468e7383be5bccbd3df9d",
-    "spec/compatibility/hosting-production-packet.md": "3962bb2ff8cba39d7d0bcfb40a5b9906e14d424e3f6000d5b13919a3a8701438",
+    "spec/compatibility/hosting-production-packet.md": "29b6a50a882a7c8d48c2a5f3ea53f606bbd83e0ea130ec0647430f14cc6bed83",
     "spec/limits/firestore-standard-2026-08-25.json": "a5c9da71bd74c7341da1cb3d25542db3aecb935b2387d4a61c8cb43857055fa4"
   }
 }

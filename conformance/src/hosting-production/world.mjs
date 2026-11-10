@@ -69,6 +69,9 @@ export function createWorld({ run, secrets, overrides = [] }) {
       if (method === "GET")
         return response(200, { channels: [...state.channels.values()].filter((c) => !c.deleted) });
       if (method === "POST") {
+        // Every recorded channel create names the project; the `-` wildcard is recorded for version
+        // creates and releases only.
+        if (path.includes("/projects/-/")) return error(404, "channel create needs the project id");
         const id = url.searchParams.get("channelId");
         if (!id) return error(400, "channelId required");
         if (state.channels.has(id) && !state.channels.get(id).deleted)

@@ -270,7 +270,7 @@
     "spec/compatibility/fs-listen-sdk-browser-local-shadow.json": "41b2adb3265f6120291f48ea72532fb6927c4fda93f3893ace16a207d7122797",
     "spec/compatibility/fs-listen-sdk-local-shadow.json": "aea62689faa5e52ca96e1b3af9c6bc971cd72101ee588b371dd04f2121a56c95",
     "spec/compatibility/gaps.json": "d20fe030f9e2bdff1a587421ffae216c73b30fb7ff7468e7383be5bccbd3df9d",
-    "spec/compatibility/hosting-production-packet.md": "b94cb1f855a8d3a745886e00595afe14d2c65b22b923152ce187b287d6b7434c",
+    "spec/compatibility/hosting-production-packet.md": "3962bb2ff8cba39d7d0bcfb40a5b9906e14d424e3f6000d5b13919a3a8701438",
     "spec/limits/firestore-standard-2026-08-25.json": "a5c9da71bd74c7341da1cb3d25542db3aecb935b2387d4a61c8cb43857055fa4"
   }
 }

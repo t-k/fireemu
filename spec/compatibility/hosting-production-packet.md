@@ -32,7 +32,7 @@ A request that would exceed its kind is not sent. Every request, failed or not, 
 
 ## Unknown answers
 
-A 3xx, 5xx, status below 200, timeout, abort or unreadable body of an API write is unknown. A create with an unknown answer is probed once with a read; an unconfirmed channel or version create stops the run (`needs-recovery`) and is settled only by a later read, never by a 404 during the run. A delete with an unknown answer is never re-sent. A 409 after an unknown request settles nothing. Edge answers of 429 or 5xx, timeouts and resets are unknown rows, never retried; a request whose header depends on an earlier answer (an ETag) that did not arrive is not sent.
+A 3xx, 5xx, status below 200, timeout, abort or unreadable body of an API write is unknown. A create with an unknown answer is probed once with a read; an unconfirmed channel or version create stops the run (`needs-recovery`) and is settled only by a later read, never by a 404 during the run. A delete with an unknown answer is never re-sent, and a delete that answers 404 for a resource the run saw created settles nothing in the run (only a later read does). A 409 after an unknown request settles nothing. Edge answers of 429 or 5xx, timeouts and resets are unknown rows, never retried; a request whose header depends on an earlier answer (an ETag) that did not arrive is not sent.
 
 ## Cleanup
 

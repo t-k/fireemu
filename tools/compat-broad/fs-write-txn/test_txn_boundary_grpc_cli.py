@@ -158,8 +158,8 @@ def test_baseline_snapshot_cannot_differ_from_its_packet_pin(packet, tmp_path, m
 def test_boundary_namespace_is_excluded_from_current_guarded_prior_manifests():
     import txn_idle_grpc_cli as prior_idle
     import txn_retry_grpc_cli as prior_retry
-    assert prior_idle.runner_sha256()=='c97641ac4a79057fe97e3bcb753c1902ae9fcc636d8ae3ae29d2a11181e089e3'
-    assert prior_retry.runner_sha256()=='09bae4910ec7145f505950d43d75ed1aa089704a44a01f29fef01d1bb4a16802'
+    assert prior_idle.runner_sha256()=='fed19dd198d429a3117c7f2d7210d34d07f002d8eaa5578e1d7d4db212019268'
+    assert prior_retry.runner_sha256()=='d77f8a5e94dae696040f020fe10ed2e0b0a73d97f7b73c70388973f736b8ebe9'
     manifest=cli.source_manifest()
     for name in ['program.py','collector.py','runner.py','authority.py','wire.py','cli.py','transport.mjs','transport.test.mjs']:
         assert 'tools/compat-broad/fs-write-txn/txn_boundary_grpc_'+name in manifest

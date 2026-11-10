@@ -15,7 +15,7 @@ import uuid
 from pathlib import Path
 
 from batch_adapter import Adapter, candidate
-from batch_contract import NUMBER, PROJECT, wrapper_exit_code
+from batch_contract import LOCAL_NUMBER, PROJECT, wrapper_exit_code
 from broad import cleanup_run, save, source_inputs
 from broad_contract import ROOT, local_origin
 from owned_runner import (
@@ -174,7 +174,7 @@ def run(
         {
             "schemaVersion": 1,
             "profile": "strict",
-            "daemon": {"authProjectNumbers": {PROJECT: NUMBER}},
+            "daemon": {"authProjectNumbers": {PROJECT: LOCAL_NUMBER}},
             "firestore": {"edition": "standard", "apiMode": "native"},
         },
     )

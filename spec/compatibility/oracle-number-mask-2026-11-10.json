@@ -3693,14 +3693,14 @@
       "digestRewrites": [
         [
           "cf4d19957960d983fd8f4fac7c6de3610fa9db689103d910531a644a89b2ff5d",
-          "5aea6ed5351bd98501c5d0ff4c66fd056c6deec931ab85c7e52e22c1cd74917a"
+          "0685c1fcf03dfb9af37013cbfb16470e13376fc111382cdfdebd74aca3aa6b96"
         ],
         [
           "d47fb7b26aed49807dac33832cb4fc4ca59d8abe2917883953fd0f8b02dc01a4",
-          "7df79d1458f5487b4850d71aca29fc34fffa1a8ba04e2edbd055d4af49bbc46a"
+          "fbe0fc272778b71f287c7f67a79acacaf5191fd79e1f44140b701cf592020645"
         ]
       ],
-      "postSha256": "5136a5b8690950a8db4e7eebf25b55fb417a86c6e288b73172dd58555fcac0c6",
+      "postSha256": "b3bea4c9f392b486f8ab508e4151d2c55c258c0337768f6274daa7bf0a6251dc",
       "preSha256": "2159688a7df4b843dab26acfd96016a50b6c3f656ea1b809d476d1066955c67e"
     },
     "spec/compatibility/broad-runs/prod-campaign-explain-01-v9.json": {
@@ -3711,14 +3711,14 @@
         ],
         [
           "d47fb7b26aed49807dac33832cb4fc4ca59d8abe2917883953fd0f8b02dc01a4",
-          "7df79d1458f5487b4850d71aca29fc34fffa1a8ba04e2edbd055d4af49bbc46a"
+          "fbe0fc272778b71f287c7f67a79acacaf5191fd79e1f44140b701cf592020645"
         ]
       ],
       "maskedOccurrences": 1,
       "maskedOffsets": [
         4071
       ],
-      "postSha256": "bfe4c184815c29dc983c163785f798ca922a65b92c79b0ebe65b5cf1ac4ec7bb",
+      "postSha256": "44b171364b4d700d5bc5139df4dca484f6d3aebe5dd320d42e6abca4286f75b9",
       "preSha256": "677a49c8cb4ceb3c834ac1eb89c3ba9aefdf429457e1160f1826c7e1632b73b3"
     },
     "spec/compatibility/broad-runs/prod-campaign-explain-01.json": {
@@ -5545,11 +5545,12 @@
       "preSha256": "bebfab5ffa43a7d6b8024ee6919591c937aa6c56f3424092197bcc9866167178"
     },
     "tools/compat-broad/batch_contract.py": {
+      "editedAfterCascade": true,
       "maskedOccurrences": 1,
       "maskedOffsets": [
         299
       ],
-      "postSha256": "d2bac514610ae8a3e2035035a1db12fdf94c2bce26d9ca70c94c748391fadbde",
+      "postSha256": "75a80f6b6c4c296a702d6768ca5e550f16bbf09c4d7146bbad24cdce58c1841e",
       "preSha256": "06cb50513edf937bee3486c1649d480b663d255d8f023d3d5187ceff212e79ef"
     },
     "tools/compat-broad/batch_pair.py": {
@@ -5567,12 +5568,13 @@
       "preSha256": "3a415aba47e28e7a78922ff5499a1d2327cfbb6a1494914b5ebb6db40da6c104"
     },
     "tools/compat-broad/campaign_explain.py": {
+      "editedAfterCascade": true,
       "maskedOccurrences": 2,
       "maskedOffsets": [
         8149,
         8211
       ],
-      "postSha256": "312c722872362a379027391aafcf0348534917821640857d0e9fae249c5c8143",
+      "postSha256": "e74c59d7c3c0e4a07cd5ccc897170499f5c893ac6cb75f0081cf59ddd035d313",
       "preSha256": "4ea4306731a0e7a23057f7815f21e3128509e3a0152939dc59ccc418a7c36bba"
     },
     "tools/compat-broad/fs-commit-transform-limits/fixtures/commit-v10-held-reservation.json": {
@@ -5646,14 +5648,14 @@
       "digestRewrites": [
         [
           "24dabc8b04779c1538290be2d3ba107942952252a8483108ce75b2830abba749",
-          "c97641ac4a79057fe97e3bcb753c1902ae9fcc636d8ae3ae29d2a11181e089e3"
+          "fed19dd198d429a3117c7f2d7210d34d07f002d8eaa5578e1d7d4db212019268"
         ],
         [
           "d50c95fac8f3a034f5b7919114d22abecb2cecad7ce9f8791320ebc9b80c0a14",
-          "09bae4910ec7145f505950d43d75ed1aa089704a44a01f29fef01d1bb4a16802"
+          "d77f8a5e94dae696040f020fe10ed2e0b0a73d97f7b73c70388973f736b8ebe9"
         ]
       ],
-      "postSha256": "c8b17b72b10510318415a71cbaa2cbfea9b9c9722d06e0f7e9834bf987b5f0e9",
+      "postSha256": "5cafe30f48fc836a2d07ff89ee7dda8536308d0d4bbeb8416ec02ffb2133d86b",
       "preSha256": "b441dad647b4082d61c42df1f2a110bb42111df8e46ba644740d835bcb97dc4b"
     },
     "tools/compat-broad/fs-write-txn/test_txn_expiry_evidence.py": {
@@ -5678,14 +5680,14 @@
       "digestRewrites": [
         [
           "24dabc8b04779c1538290be2d3ba107942952252a8483108ce75b2830abba749",
-          "c97641ac4a79057fe97e3bcb753c1902ae9fcc636d8ae3ae29d2a11181e089e3"
+          "fed19dd198d429a3117c7f2d7210d34d07f002d8eaa5578e1d7d4db212019268"
         ],
         [
           "d50c95fac8f3a034f5b7919114d22abecb2cecad7ce9f8791320ebc9b80c0a14",
-          "09bae4910ec7145f505950d43d75ed1aa089704a44a01f29fef01d1bb4a16802"
+          "d77f8a5e94dae696040f020fe10ed2e0b0a73d97f7b73c70388973f736b8ebe9"
         ]
       ],
-      "postSha256": "b0b0e6ed5e73f7f342ac32a4a451072d47de7f80bb459f3daa6ba53515ad6ee7",
+      "postSha256": "797170429283c2f8281e01ab5ab921f15580bf4069c116b0b327cef8c39165b2",
       "preSha256": "dd5781a972d73a193c689cacd9795c015d420bbedd1a141e882767d36ffd5aef"
     },
     "tools/compat-broad/production-admission/test_reservations.py": {

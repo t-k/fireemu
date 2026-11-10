@@ -11,6 +11,9 @@ from broad_contract import digest, programs
 
 PROJECT = "fireemu-35fe6"
 NUMBER = "<project-number>"
+# The owned local daemon needs a decimal project number. It runs with this stand-in; the oracle project's own
+# number is not committed and NUMBER above stands for it in every recorded production body.
+LOCAL_NUMBER = "123456789012"
 BASE = f"projects/{PROJECT}/databases/(default)/documents"
 ABSTRACT = "projects/PROJECT/databases/(default)/documents"
 LIMITS = {

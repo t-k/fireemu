@@ -19,6 +19,7 @@ from urllib.parse import quote
 
 from batch_contract import (
     DATABASE_PROJECTION,
+    LOCAL_NUMBER,
     NUMBER,
     PROJECT,
     database_evidence,
@@ -1238,7 +1239,7 @@ def validate_local_runtime(value, directory):
     )
     expected_config = {
         **CONFIG,
-        "daemon": {"authProjectNumbers": {PROJECT: NUMBER}},
+        "daemon": {"authProjectNumbers": {PROJECT: LOCAL_NUMBER}},
         "firestore": {**FIRESTORE_CONFIG, "indexFile": "<owned-private-index-file>"},
     }
     _require(

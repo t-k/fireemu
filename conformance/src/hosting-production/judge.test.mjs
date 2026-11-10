@@ -640,6 +640,21 @@ test("an entry's etagSuffix is removed from the tag, the rest is still compared 
     "KNOWN_DIFFERENCE",
   );
   assert.equal(compareRows(tagged(`"${hex}"`), tagged(`"${hex}"`), options).status, "MATCH");
+  // the suffix is removed from either side, and only at the end of the tag
+  assert.equal(
+    compareRows(tagged(`"${hex}"`), tagged(`"${hex}-br"`), options).status,
+    "KNOWN_DIFFERENCE",
+  );
+  assert.equal(compareRows(tagged(`"${hex}-brx"`), tagged(`"${hex}"`), options).status, "MISMATCH");
+  assert.equal(
+    compareRows(tagged(`"${hex}-br-gz"`), tagged(`"${hex}"`), options).status,
+    "MISMATCH",
+  );
+  // an entry with no etagSuffix changes no tag (a tag that happens to end in "undefined" stays)
+  const plain = {
+    known: { entries: [{ ...entry, etagSuffix: undefined }], kind: "production-vs-local" },
+  };
+  assert.equal(compareRows(tagged('"abcundefined"'), tagged('"abc"'), plain).status, "MISMATCH");
   // a short tag is a different form once the suffix is gone
   assert.equal(compareRows(tagged('"abc-br"'), tagged(`"${hex}"`), options).status, "MISMATCH");
 });

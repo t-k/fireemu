@@ -632,8 +632,9 @@ test("a channel url that only looks like the run's host, or is not https, sends 
     });
     assert.equal(edgeCalls(r).length, 0, url);
     assert.match(deployOf(r).v01.failure, /channel host/);
-    assert.equal(r.result.outcome, "failed-cleaned", "the channel is deleted by its id");
-    assert.ok([...r.world.state.channels.values()].every((channel) => channel.deleted));
+    // The injected answer created nothing in the fake world, so the run's DELETE reads 404 for a
+    // create it saw answered 2xx: not settled in the run.
+    assert.equal(r.result.outcome, "needs-recovery");
   }
 });
 
@@ -864,4 +865,56 @@ test("a dependent header whose source request got no answer is an unsent depende
     ["unknown", "dependency"],
   );
   assert.equal(r.result.outcome, "observed-unknown");
+});
+
+test("a delete that answers 404 for a confirmed create settles nothing in the run", async () => {
+  for (const [what, match] of [
+    ["channel", channelDelete],
+    ["version", "DELETE /versions/"],
+  ]) {
+    const r = await run({ overrides: [fault(match, reply(404))] });
+    assert.equal(r.result.outcome, "needs-recovery", what);
+    assert.equal(terminal(r).closureReady, false, what);
+    assert.ok(
+      resultOf(r).residual.some((entry) =>
+        new RegExp(`${what} delete refused \\(404\\)`).test(entry),
+      ),
+    );
+  }
+});
+
+test("an unknown channel create that an own read then shows lets the run go on and clean up", async () => {
+  let world;
+  const r = await run({
+    overrides: [
+      fault(
+        channelsPost,
+        async (call) => {
+          await world.http(call);
+          return reply(500);
+        },
+        1,
+      ),
+    ],
+    setup: (created) => {
+      world = created;
+    },
+  });
+  assert.equal(r.result.outcome, "observed-unknown", "the dependency row is the only unknown");
+  assert.equal(deployOf(r).v01.channelCreate, "unknown");
+  assert.equal(deployOf(r).v01.channelCreated, true);
+  assert.ok(
+    rowsOf(r)
+      .filter((row) => row.version === "v01")
+      .some((row) => row.outcome === "answered"),
+  );
+  assert.ok([...r.world.state.channels.values()].every((channel) => channel.deleted));
+  assert.equal(terminal(r).closureReady, true);
+});
+
+test("an answer below 200 is unknown", () => {
+  assert.equal(classify({ status: 199, text: "{}" }).kind, "unknown");
+  assert.equal(classify({ status: 100, text: "" }).kind, "unknown");
+  assert.equal(classify({ status: 399, text: "{}" }).kind, "unknown");
+  assert.equal(classify({ status: 400, text: "{}" }).kind, "refused");
 });

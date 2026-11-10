@@ -625,7 +625,9 @@ async function removeVersion({ record, api, state }) {
   const attempt = async (what, url) => {
     try {
       const answer = await api.call("cleanup", "DELETE", url);
-      if (answer.kind === "ok" || answer.status === 404) return "deleted";
+      // Only the run's own 2xx settles a delete. A 404 for a resource this run confirmed creating is not
+      // settled in the run (read-after-write lag can hide a live resource): it is left for the A2 read.
+      if (answer.kind === "ok") return "deleted";
       state.residual.push(`${record.channelId}: ${what} delete ${answer.kind} (${answer.status})`);
       return answer.kind;
     } catch (error) {

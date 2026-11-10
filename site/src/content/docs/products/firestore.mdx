@@ -5,7 +5,19 @@ description: Run Cloud Firestore locally with production's query, index, transac
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-Fireemu serves Cloud Firestore over gRPC, REST and the WebChannel transport the Web SDK uses, with Firestore Security Rules. Connect to it at `127.0.0.1:8080` (see [Connect your app](../../getting-started/connect/)).
+Fireemu serves Cloud Firestore over gRPC, REST and the WebChannel transport the Web SDK uses, with Firestore Security Rules.
+
+## Connect
+
+Firestore listens on `127.0.0.1:8080` by default (`--firestore-port` or `firebase.json` changes it; see [all default ports](../../getting-started/install/#default-ports)).
+
+```js
+// Web SDK
+import { getFirestore, connectFirestoreEmulator } from 'firebase/firestore';
+connectFirestoreEmulator(getFirestore(app), '127.0.0.1', 8080);
+```
+
+The Admin SDK needs no code: under `fireemu exec`, `FIRESTORE_EMULATOR_HOST` is set to the Firestore `host:port` for your command (see [Environment variables](../../reference/environment-variables/)). With `fireemu up`, set it yourself, for example `FIRESTORE_EMULATOR_HOST=127.0.0.1:8080`. More SDKs and the project ID rules: [Connect your app](../../getting-started/connect/).
 
 ## Editions and API modes
 
@@ -18,7 +30,9 @@ Select the database edition and API mode in `fireemu.toml`. `fireemu init` write
 schemaVersion = 1
 
 [firestore]
+# "standard" or "enterprise"
 edition = "standard"
+# "native" or "mongodb-compatible"
 apiMode = "native"
 ```
 
@@ -42,7 +56,7 @@ apiMode = "native"
 
 ## Composite indexes
 
-Production refuses a query whose composite index is not defined. The official emulator assumes every index exists, so a missing index is usually found only after deploying. Fireemu checks each query against the indexes declared in `firestore.indexes.json` (referenced from `firebase.json`), as production does.
+Production refuses a query whose composite index is not defined. The official emulator does not check composite indexes and runs every query, so a missing index first shows up when the query reaches production. Fireemu checks each query against the indexes declared in `firestore.indexes.json` (referenced from `firebase.json`), as production does.
 
 | `firestore.missingIndexes` | Behavior |
 |---|---|
@@ -62,9 +76,12 @@ The report on standard error is easy to miss in a CI log. Under `strict` with `"
 
 ```toml
 schemaVersion = 1
+# "strict" (the default) or "emulator"; "report" below needs strict
 profile = "strict"
 
 [firestore]
+# "refuse" (the default): refuse the query with FAILED_PRECONDITION
+# "report": run the query, and list each missing index
 missingIndexes = "report"
 ```
 
@@ -128,22 +145,108 @@ npx fireemu exec -- sh -c '
 }
 ```
 
+#### Response format
+
 - Each entry is one index per database, in the order it was first needed, with production's refusal text. `indexesJson` groups the entries per database in the shape `firestore.indexes.json` holds, so you can merge the `indexes` array of a database into that file.
+
+#### Sessions and clearing
+
 - `GET /v1/sessions/{session}/firestore/missingIndexes` lists only the session's project; `GET /v1/firestore/missingIndexes` lists every project. A session `reset` does not clear the list, so a suite that resets between cases still reports every index it missed, and deleting a session clears its project's entries.
-- The list holds at most 1,000 entries. Past that, `truncated` is `true` and `dropped` counts the queries served whose index is not listed. A project whose every index was dropped is answered with `409` and a message that the list is full, never with an empty list, so a check on `count` cannot pass on an incomplete list. Clear the list and run again.
 - `DELETE` on either route clears the list and the dropped count and answers `{"cleared": <count>}`. The session route clears that session's project only; the route without a session clears every session's entries, so a test world that shares a daemon with others should use the session route. An index that is needed again afterwards is reported again.
+- With `fireemu/testing`, call `world.control('GET', '/v1/sessions/default/firestore/missingIndexes')` and `world.control('DELETE', ...)` on the same path, so the read and the clear stay within your world's project.
+
+#### Limits and refusals
+
+- The list holds at most 1,000 entries. Past that, `truncated` is `true` and `dropped` counts the queries served whose index is not listed. A project whose every index was dropped is answered with `409` and a message that the list is full, never with an empty list, so a check on `count` cannot pass on an incomplete list. Clear the list and run again.
 - Where nothing is reported (the `emulator` profile, `strict` with `"refuse"`, or Firestore not selected), `GET` answers `409` with `FAILED_PRECONDITION`, so a check that depends on the list cannot pass on an empty answer. `DELETE` still answers `{"cleared": 0}`.
 - A page in a browser needs `Authorization: Bearer <control token>` for both methods, as for the resource report, because the entries name the fields your queries filter and order on.
-- With `fireemu/testing`, call `world.control('GET', '/v1/sessions/default/firestore/missingIndexes')` and `world.control('DELETE', ...)` on the same path, so the read and the clear stay within your world's project.
 
 ### Checks on `firestore.indexes.json`
 
 Under `strict`, Fireemu refuses at start-up (and keeps the previous indexes when the file changes while it runs) what `firebase deploy` refuses, and the message names the entry:
 
-- A composite index with a single field, such as `indexes[3]` with only `{"fieldPath": "n", "order": "ASCENDING"}`. Production answers "this index is not necessary, configure using single field index controls". Declare it under `fieldOverrides` instead, which is also how a collection-group query on one field is enabled. `(field, __name__ DESC)`, `(__name__ DESC)` and a single vector field are accepted, as production accepts them.
-- An entry without a `fields` array, which is what a misspelled key such as `feilds` looks like.
-- A `fieldOverrides` entry without an `indexes` array. A TTL-only override needs `"indexes": []`.
-- A `fieldOverrides` index that has only a `vectorConfig`: each override index needs exactly one of `order` and `arrayConfig`. Declare a single vector field as a composite index instead, as production does.
+The message starts with the path of the file, as in `./firestore.indexes.json: indexes[0] (collection group notes): ...`. Each refusal below is shown with the entry that causes it and one that production accepts.
+
+**A composite index with a single field.** Production answers "this index is not necessary, configure using single field index controls". Declare it under `fieldOverrides` instead, which is also how a collection-group query on one field is enabled. `(field, __name__ DESC)`, `(__name__ DESC)` and a single vector field are accepted, as production accepts them.
+
+```json title="Refused"
+{ "indexes": [
+  { "collectionGroup": "notes", "queryScope": "COLLECTION",
+    "fields": [{ "fieldPath": "owner", "order": "ASCENDING" }] }
+] }
+```
+
+```text
+indexes[0] (collection group notes): this index is not necessary, configure using single field index controls
+```
+
+```json title="Accepted"
+{ "indexes": [],
+  "fieldOverrides": [
+    { "collectionGroup": "notes", "fieldPath": "owner",
+      "indexes": [{ "queryScope": "COLLECTION", "order": "ASCENDING" }] }
+] }
+```
+
+**An entry without a `fields` array**, which is what a misspelled key such as `feilds` looks like.
+
+```json title="Refused"
+{ "indexes": [
+  { "collectionGroup": "notes", "queryScope": "COLLECTION",
+    "feilds": [{ "fieldPath": "owner", "order": "ASCENDING" },
+               { "fieldPath": "created", "order": "ASCENDING" }] }
+] }
+```
+
+```text
+indexes[0] (collection group notes): Must contain "fields" (an array of index fields)
+```
+
+```json title="Accepted"
+{ "indexes": [
+  { "collectionGroup": "notes", "queryScope": "COLLECTION",
+    "fields": [{ "fieldPath": "owner", "order": "ASCENDING" },
+               { "fieldPath": "created", "order": "ASCENDING" }] }
+] }
+```
+
+**A `fieldOverrides` entry without an `indexes` array.** A TTL-only override needs `"indexes": []`.
+
+```json title="Refused"
+{ "fieldOverrides": [
+  { "collectionGroup": "notes", "fieldPath": "expireAt", "ttl": true }
+] }
+```
+
+```text
+fieldOverrides[0] (notes.expireAt): Must contain "indexes" (an array, empty for a TTL-only override)
+```
+
+```json title="Accepted"
+{ "fieldOverrides": [
+  { "collectionGroup": "notes", "fieldPath": "expireAt", "ttl": true, "indexes": [] }
+] }
+```
+
+**A `fieldOverrides` index that has only a `vectorConfig`.** Each override index needs exactly one of `order` and `arrayConfig`. Declare a single vector field as a composite index instead, as production does.
+
+```json title="Refused"
+{ "fieldOverrides": [
+  { "collectionGroup": "notes", "fieldPath": "emb",
+    "indexes": [{ "queryScope": "COLLECTION", "vectorConfig": { "dimension": 3, "flat": {} } }] }
+] }
+```
+
+```text
+fieldOverrides[0] (notes.emb): Must contain exactly one of "arrayConfig,order" in each of its indexes
+```
+
+```json title="Accepted"
+{ "indexes": [
+  { "collectionGroup": "notes", "queryScope": "COLLECTION",
+    "fields": [{ "fieldPath": "emb", "vectorConfig": { "dimension": 3, "flat": {} } }] }
+] }
+```
 
 A missing or empty `queryScope` is read as `COLLECTION`, and the older `collectionId` and field `mode` keys are read as `collectionGroup` and `order` / `arrayConfig`, as `firebase deploy` reads them. The limits of at most 200 composite indexes, 100 fields per index and one array field per index apply under both profiles. The Admin API's `indexes.create` applies the same checks, and counts the indexes of the file and the ones created at run time together against the 200.
 

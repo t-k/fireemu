@@ -5,7 +5,7 @@ description: Firebase Authentication and Identity Platform locally, including TO
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-Fireemu serves Firebase Authentication with the Identity Platform features: multi-factor authentication including TOTP, multi-tenancy, OIDC and SAML providers, and blocking functions. Connect to it at `http://127.0.0.1:9099` (see [Connect your app](../../getting-started/connect/)).
+Fireemu serves Firebase Authentication with the Identity Platform features: multi-factor authentication including TOTP, multi-tenancy, OIDC and SAML providers, and blocking functions. Connect to it at `http://127.0.0.1:9099` (see [Connect your app](../../getting-started/connect/); `FIREBASE_AUTH_EMULATOR_HOST` is in the [environment variables](../../reference/environment-variables/)).
 
 ## Local verification messages
 
@@ -161,7 +161,7 @@ Declare project OIDC and SAML resources with `auth.providers.oidc` and `auth.pro
 
 ## Multi-factor authentication
 
-The official emulator has no TOTP. Fireemu supports TOTP and SMS second factors.
+The official Authentication emulator supports phone (SMS) second factors only. Fireemu supports TOTP and SMS second factors.
 
 Under `strict`, TOTP is enabled only through the project's MFA configuration, as in production. That configuration is on by default (SMS and TOTP enabled), so enrolling a second factor needs no console toggle, Admin API call or `auth.mfa` block. With `productionExact` a new project starts with MFA off, as production does, and enrollment answers `OPERATION_NOT_ALLOWED` until it is enabled. Declare the configuration with `auth.mfa`, in the shape Identity Platform uses, to mirror your project or to turn MFA off (`auth.mfa.state = "DISABLED"`); a declared block always decides:
 

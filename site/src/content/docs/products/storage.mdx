@@ -10,7 +10,7 @@ Fireemu serves Cloud Storage for Firebase at `127.0.0.1:9199`, with both API dia
 - the Firebase Storage protocol the client SDKs use, including resumable uploads and download tokens;
 - the Cloud Storage JSON API the Admin SDK and the Google Cloud client libraries use, including copy and rewrite.
 
-Both dialects share one store, so an object uploaded through one is visible through the other. See [Connect your app](../../getting-started/connect/) for the environment variables and `connectStorageEmulator`. The Storage emulator keeps its objects in memory.
+Both dialects share one store, so an object uploaded through one is visible through the other. See [Connect your app](../../getting-started/connect/) for `connectStorageEmulator`, and [Environment variables](../../reference/environment-variables/) for `FIREBASE_STORAGE_EMULATOR_HOST` and `STORAGE_EMULATOR_HOST`. The Storage emulator keeps its objects in memory.
 
 ## Buckets that do not exist
 

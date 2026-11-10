@@ -26,9 +26,9 @@ The corpus is `conformance/src/hosting-production/corpus.mjs`; its pinned form i
 | control (Hosting, Service Usage and Identity Toolkit reads and writes) | 90 | 65 |
 | cleanup (deletes, listings and the read-backs) | 45 | 23 |
 | uploads | 20 | 14 |
-| edge (requests to preview channel hosts, readiness probes included) | 250 | 210 |
+| edge (requests to preview channel hosts, readiness probes included) | 330 | 210 |
 
-A request that would exceed its kind is not sent. Every request, failed or not, counts. Two independent recordings are planned (the recorder is run twice on fresh channels). Cost: stored well under 100 KB, transferred about 2 MB per recording; at the published Hosting prices (10 GB storage and 10 GB transfer free, US$0.026/GB and US$0.15/GB beyond; the allowance is project-wide) the cost is zero inside the allowance and below US$0.01 otherwise. The ledger reserves US$1 per attempt and at most US$3 with retries.
+A request that would exceed its kind is not sent. Every request, failed or not, counts. Two independent recordings are planned (the recorder is run twice on fresh channels). Cost: stored well under 100 KB, transferred about 2 MB per recording; at the published Hosting prices (10 GB storage and 10 GB transfer free, US$0.026/GB and US$0.15/GB beyond; the allowance is project-wide) the cost is zero inside the allowance and below US$0.01 otherwise. A version whose release is not served yet is probed up to 12 times, 10 s apart (about 110 s); a version still dark afterwards keeps its last answer and whether the channel still holds the release, and is not released again. The ledger reserves US$1 per attempt; attempts are counted per envelope (at most 3 each, `FIREEMU_HOSTING_ENVELOPE`) and the parent's reservation over all envelopes is at most US$6.00.
 
 ## Unknown answers
 

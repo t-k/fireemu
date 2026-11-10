@@ -103,6 +103,7 @@ import {
 
 const now = Date.parse("2026-11-10T12:00:00Z");
 const fakeSecrets = { apiKey: "AIzaFAKEFAKEFAKEFAKEFAKEFAKE12345", projectNumber: "123456789012" };
+const ENVELOPE = "HOSTING-PRODUCTION-V4-20261111";
 const closed = {
   ts: "2026-11-10T00:00:00Z",
   project: PROJECT,
@@ -174,7 +175,7 @@ async function run(options = {}) {
     ...options.deps,
   };
   options.setup?.(world, deps, ledger);
-  const result = await recordHosting({}, deps);
+  const result = await recordHosting({ FIREEMU_HOSTING_ENVELOPE: ENVELOPE, ...options.env }, deps);
   return { result, world, ledger, files, sleeps, deps };
 }
 
@@ -593,17 +594,111 @@ test("stop during the second version leaves later rows unknown and cleans up", a
 
 test("admission checks closure, age, unfinished attempts and project scope", () => {
   const check = (lines, env = {}) =>
-    admit({ ledgerText: lines.map((line) => JSON.stringify(line)).join("\n"), now, env });
+    admit({
+      ledgerText: lines.map((line) => JSON.stringify(line)).join("\n"),
+      now,
+      env: { FIREEMU_HOSTING_ENVELOPE: ENVELOPE, ...env },
+    });
   assert.equal(check([closed]).attempt, 1);
   assert.throws(() => check([{ ...closed, event: "needs-recovery" }]));
   const recent = { ...closed, ts: new Date(now).toISOString() };
   assert.throws(() => check([recent]));
   assert.equal(check([recent], { FIREEMU_HOSTING_SOLE_SENDER: "1" }).attempt, 1);
-  const started = { ...closed, taskId: TASK_ID, event: "started" };
+  const started = { ...closed, taskId: TASK_ID, event: "started", envelopeId: ENVELOPE };
   assert.throws(() => check([started, closed]));
   const done = { ...closed, taskId: TASK_ID };
   assert.equal(check([started, done, { ...started, project: "other" }]).attempt, 2);
   assert.throws(() => check([started, done, started, done, started, done]));
+});
+
+// Attempts 1 and 2 (runs 03d922 and bba4c0) were started under earlier envelopes; their started rows
+// carry no envelope id. The V4 envelope allows 3 launches of its own, so the first V4 launch is its
+// attempt 1, while the money already reserved still counts (US$2.00 before the first V4 launch).
+const priorAttempt = (attempt, extra = {}) => [
+  { ...closed, taskId: TASK_ID, event: "started", attempt, ...extra },
+  { ...closed, taskId: TASK_ID, event: "finished", outcome: "failed-cleaned", attempt },
+  { ...closed, taskId: TASK_ID, event: "cleanup-verified", outcome: "failed-cleaned", attempt },
+];
+const v4Attempt = (attempt, extra = {}) =>
+  priorAttempt(attempt, { envelopeId: ENVELOPE, ...extra });
+
+test("a new envelope counts its own attempts from 1 and the reserved money from all rows", () => {
+  const check = (lines, env = {}) =>
+    admit({
+      ledgerText: lines.map((line) => JSON.stringify(line)).join("\n"),
+      now,
+      env: { FIREEMU_HOSTING_ENVELOPE: ENVELOPE, ...env },
+    });
+  const old = [...priorAttempt(1), ...priorAttempt(2, { envelopeId: "HOSTING-PRODUCTION-V3-20261111" })];
+  assert.deepEqual(check(old), { attempt: 1, cumulativeReservedUsd: 3 });
+  const one = [...old, ...v4Attempt(1)];
+  assert.deepEqual(check(one), { attempt: 2, cumulativeReservedUsd: 4 });
+  const two = [...one, ...v4Attempt(2)];
+  assert.deepEqual(check(two), { attempt: 3, cumulativeReservedUsd: 5 });
+  assert.throws(() => check([...two, ...v4Attempt(3)]), /attempt 4 exceeds 3 attempts/);
+  // another envelope's rows do not use this envelope's three launches
+  const other = [...old, ...v4Attempt(1, { envelopeId: "HOSTING-PRODUCTION-V5-20261111" })];
+  assert.equal(check(other).attempt, 1);
+  // the envelope is the one named by the caller, not the latest one in the ledger
+  assert.equal(check(one, { FIREEMU_HOSTING_ENVELOPE: "HOSTING-PRODUCTION-V5-20261111" }).attempt, 1);
+});
+
+test("the cumulative reservation of the parent never passes US$6.00", () => {
+  const rows = (n) =>
+    Array.from({ length: n }, (_, i) =>
+      priorAttempt(i + 1, { envelopeId: `HOSTING-PRODUCTION-V${i + 10}-20261111` }),
+    ).flat();
+  const check = (n) =>
+    admit({
+      ledgerText: rows(n)
+        .map((line) => JSON.stringify(line))
+        .join("\n"),
+      now,
+      env: { FIREEMU_HOSTING_ENVELOPE: ENVELOPE },
+    });
+  assert.equal(check(5).cumulativeReservedUsd, 6);
+  assert.throws(() => check(6), /US\$6\.00/);
+});
+
+test("admission needs the envelope id, in the form of a HOSTING envelope", () => {
+  for (const value of [undefined, "", "V4", "HOSTING-PRODUCTION-V4 20261111",
+    "OTHER-V4-20261111",
+    "HOSTING-PRODUCTION-",
+    "xHOSTING-PRODUCTION-V4-20261111",
+  ])
+    assert.throws(
+      () =>
+        admit({
+          ledgerText: JSON.stringify(closed),
+          now,
+          env: value === undefined ? {} : { FIREEMU_HOSTING_ENVELOPE: value },
+        }),
+      /FIREEMU_HOSTING_ENVELOPE/,
+      String(value),
+    );
+});
+
+test("the started row carries the envelope and the attempt of that envelope", async () => {
+  const old = [...priorAttempt(1), ...priorAttempt(2)];
+  const r = await run({
+    setup: (_world, _deps, ledger) => {
+      ledger.splice(0, ledger.length, ...old.map((line) => JSON.stringify(line)));
+    },
+  });
+  const started = r.ledger.map((line) => JSON.parse(line)).find((line) => line.event === "started" && line.run === "abc123");
+  assert.equal(started.attempt, 1);
+  assert.equal(started.envelopeId, ENVELOPE);
+  assert.equal(started.reservedUsd, 1);
+  assert.equal(started.cumulativeReservedUsd, 3);
+  assert.equal(terminal(r).attempt, 1);
+  assert.equal(terminal(r).cumulativeReservedUsd, 3);
+});
+
+test("a run without an envelope id sends nothing", async () => {
+  await assert.rejects(
+    run({ env: { FIREEMU_HOSTING_ENVELOPE: undefined } }),
+    /FIREEMU_HOSTING_ENVELOPE/,
+  );
 });
 
 test("dependent etags are forwarded or cause an unsent dependency row", async () => {
@@ -626,6 +721,7 @@ const startedRow = {
   ...closed,
   taskId: TASK_ID,
   event: "started",
+  envelopeId: ENVELOPE,
   run: "abc123",
   authorizedDomainsBefore: ["localhost"],
 };
@@ -652,7 +748,11 @@ async function leftover(extraEnded) {
 }
 const lastRow = (r) => JSON.parse(r.ledger.at(-1));
 const admitFor = (r, env = {}) =>
-  admit({ ledgerText: r.ledger.join("\n"), now: now + 3 * 3600_000, env });
+  admit({
+    ledgerText: r.ledger.join("\n"),
+    now: now + 3 * 3600_000,
+    env: { FIREEMU_HOSTING_ENVELOPE: ENVELOPE, ...env },
+  });
 
 test("recovery deletes leftovers and reads back, but never writes a closing row", async () => {
   const { r, channel, version } = await leftover();

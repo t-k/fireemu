@@ -42,6 +42,8 @@ const ALLOWED_HOSTS = new Set([
   "oauth2.googleapis.com",
 ]);
 const MAX_ATTEMPTS = 3;
+/** Ruling 13: the parent's reservation over all envelopes. */
+const MAX_CUMULATIVE_USD = 6;
 const RESERVED_USD_PER_ATTEMPT = 1;
 const ESTIMATED_USD = 0.05;
 const WAIT_MS = 30 * 60_000;
@@ -92,9 +94,14 @@ const rowTime = (line) => Date.parse(line.ts ?? line.recordedAt ?? "");
  * Plain admission on the sandbox ledger text: the last row for the project closes its run and is at
  * least 30 minutes old (unless the coordinator, as the only sender on the project with the previous
  * run closed, sets FIREEMU_HOSTING_SOLE_SENDER=1: owner ledger 1299); every own `started` row has a
- * later own row; at most MAX_ATTEMPTS attempts (1 plus 2 retries). Returns the attempt number.
+ * later own row; at most MAX_ATTEMPTS attempts per envelope (FIREEMU_HOSTING_ENVELOPE, required) and
+ * US$6.00 reserved over all envelopes. Returns the attempt number of the envelope and the reserved sum.
  */
 export function admit({ ledgerText, now, env }) {
+  const envelope = env.FIREEMU_HOSTING_ENVELOPE;
+  if (!/^HOSTING-PRODUCTION-[A-Z0-9-]{3,60}$/.test(envelope ?? "")) {
+    throw new Error("FIREEMU_HOSTING_ENVELOPE must name the envelope (HOSTING-PRODUCTION-...)");
+  }
   const lines = ledgerText
     .split("\n")
     .filter((text) => text.trim())
@@ -118,11 +125,20 @@ export function admit({ ledgerText, now, env }) {
       throw new Error("an own started row has no terminal row: recover that attempt first");
     }
   });
-  const attempt = own.filter((line) => line.event === "started").length + 1;
+  // The attempts are counted per envelope: the started rows of this envelope (the caller names it;
+  // a row of an earlier envelope has another id or none). The money is counted over all own rows.
+  const started = own.filter((line) => line.event === "started");
+  const attempt = started.filter((line) => line.envelopeId === envelope).length + 1;
   if (attempt > MAX_ATTEMPTS) {
-    throw new Error(`attempt ${attempt} exceeds ${MAX_ATTEMPTS} attempts (1 plus 2 retries)`);
+    throw new Error(`attempt ${attempt} exceeds ${MAX_ATTEMPTS} attempts of the envelope ${envelope}`);
   }
-  return { attempt };
+  const cumulativeReservedUsd = (started.length + 1) * RESERVED_USD_PER_ATTEMPT;
+  if (cumulativeReservedUsd > MAX_CUMULATIVE_USD) {
+    throw new Error(
+      `the cumulative reservation ${cumulativeReservedUsd} passes US$${MAX_CUMULATIVE_USD.toFixed(2)}`,
+    );
+  }
+  return { attempt, cumulativeReservedUsd };
 }
 
 // ---- secrets -----------------------------------------------------------------------------------------
@@ -186,7 +202,11 @@ export function classify(reply) {
 export async function recordHosting(env, deps) {
   await deps.assertCleanTree();
   const { corpus } = await deps.readSources();
-  const { attempt } = admit({ ledgerText: await deps.readLedger(), now: deps.now(), env });
+  const { attempt, cumulativeReservedUsd } = admit({
+    ledgerText: await deps.readLedger(),
+    now: deps.now(),
+    env,
+  });
   const adc = await deps.ownerAdc();
   const webConfig = await deps.webConfig();
   const secrets = secretsFromWebConfig(webConfig);
@@ -214,7 +234,8 @@ export async function recordHosting(env, deps) {
     attempt,
     run,
     reservedUsd: RESERVED_USD_PER_ATTEMPT,
-    cumulativeReservedUsd: attempt * RESERVED_USD_PER_ATTEMPT,
+    cumulativeReservedUsd,
+    envelopeId: env.FIREEMU_HOSTING_ENVELOPE,
   };
   await deps.appendLedger(
     `${JSON.stringify({ ts: new Date(startedAt).toISOString(), ...base, event: "started", authorizedDomainsBefore: before })}\n`,

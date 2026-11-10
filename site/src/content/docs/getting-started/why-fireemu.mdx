@@ -11,15 +11,15 @@ The Firebase Local Emulator Suite is Google's official tool. It covers more prod
 
 ## Compared with the Local Emulator Suite
 
-| | Local Emulator Suite (`firebase-tools` 15.28.2) | Fireemu | Fireemu profile |
-|---|---|---|---|
-| Maintained by | Google | The Fireemu project | |
-| Products | Firestore, Realtime Database, Authentication, Cloud Storage, Functions, Pub/Sub, Eventarc, Cloud Tasks, Hosting, App Hosting, Data Connect, Extensions | Firestore, Authentication, Cloud Storage, Functions, Pub/Sub, Eventarc, Cloud Tasks, Realtime Database and Hosting (both partial), App Check. App Hosting and Data Connect are not yet supported, and Extensions are not planned ([status](../../#supported-products)) | |
-| Runtime | The Firestore and Realtime Database emulators run as Java (`java -jar`) processes next to the Node.js CLI | A single native binary, installed and started through the npm package (Node.js 20 or newer) | |
-| Startup and memory, Firestore only | 3,043 ms until the SDK can use Firestore; 390 MiB idle memory (PSS) | 140 ms; 11 MiB. One `standard` run at commit `f3b942c` on a GitHub Actions Linux runner, JDK 21.0.8, five measured pairs ([conditions](../../compatibility/performance/)) | `emulator` |
-| Composite index missing for a query | The query runs | `FAILED_PRECONDITION` with the console link, as production answers. With `firestore.missingIndexes = "report"` the query runs and the missing index is reported | `strict` (default); the `emulator` profile runs the query, as the Local Emulator Suite does |
-| TOTP multi-factor authentication | The Authentication emulator accepts phone (SMS) second factors; other factor types are answered with `MFA provider not supported!` | TOTP and SMS, through the project's MFA configuration | `strict` and `emulator` |
-| App Check | No App Check emulator | Debug-token exchange, enforcement for Authentication, Firestore, Storage and callable functions; no attestation providers | `strict` and `emulator` ([details](../../products/app-check/)) |
+| | Local Emulator Suite (`firebase-tools` 15.28.2) | Fireemu |
+|---|---|---|
+| Maintained by | Google | The Fireemu project |
+| Products | Firestore, Realtime Database, Authentication, Cloud Storage, Functions, Pub/Sub, Eventarc, Cloud Tasks, Hosting, App Hosting, Data Connect, Extensions | Firestore, Authentication, Cloud Storage, Functions, Pub/Sub, Eventarc, Cloud Tasks, Realtime Database and Hosting (both partial), App Check. App Hosting and Data Connect are not yet supported, and Extensions are not planned ([status](../../#supported-products)) |
+| Runtime | The Firestore and Realtime Database emulators run as Java (`java -jar`) processes next to the Node.js CLI | A single native binary, installed and started through the npm package (Node.js 20 or newer) |
+| Startup and memory, Firestore only | 3,043 ms until the SDK can use Firestore; 390 MiB idle memory (PSS) | `emulator` profile: 140 ms; 11 MiB. One `standard` run at commit `f3b942c` on a GitHub Actions Linux runner, JDK 21.0.8, five measured pairs ([conditions](../../compatibility/performance/)) |
+| A query whose composite index is not defined | The query runs | `strict` profile (the default): `FAILED_PRECONDITION` with the console link, as production answers; with `firestore.missingIndexes = "report"` the query runs and the missing index is reported. `emulator` profile: the query runs, as in the Local Emulator Suite |
+| TOTP multi-factor authentication | The Authentication emulator accepts phone (SMS) second factors; other factor types are answered with `MFA provider not supported!` | Both profiles: TOTP and SMS, through the project's MFA configuration |
+| App Check | No App Check emulator | Both profiles: debug-token exchange, and enforcement for Authentication, Firestore, Storage and callable functions; no attestation providers ([details](../../products/app-check/)) |
 
 More differences that change a test result, with production's answer next to each, are in the [compatibility tables](../../compatibility/#fireemu-the-official-emulator-and-production).
 

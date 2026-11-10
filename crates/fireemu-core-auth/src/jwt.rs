@@ -287,7 +287,7 @@ fn radix_to_f64(digits: &str, bits_per_digit: u32) -> Option<f64> {
     let head: u64 = bits
         .iter()
         .take(53)
-        .fold(0, |acc, bit| acc << 1 | u64::from(*bit));
+        .fold(0, |acc, bit| acc * 2 + u64::from(*bit));
     if length <= 53 {
         #[allow(clippy::cast_precision_loss)]
         return Some(head as f64);

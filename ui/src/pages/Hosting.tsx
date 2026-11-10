@@ -135,6 +135,7 @@ const Hosting: Component = () => {
               <Section title={t("hosting.site")}>
                 <Field label={t("hosting.url")}>
                   <a
+                    class="text-blue-700 underline dark:text-blue-300"
                     data-testid="hosting-url"
                     href={served().url}
                     target="_blank"

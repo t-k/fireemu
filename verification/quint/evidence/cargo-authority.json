@@ -441,6 +441,7 @@
         "registry+https://github.com/rust-lang/crates.io-index#regex@1.13.1",
         "registry+https://github.com/rust-lang/crates.io-index#rustix@1.1.4",
         "registry+https://github.com/rust-lang/crates.io-index#serde_json@1.0.151",
+        "registry+https://github.com/rust-lang/crates.io-index#sha2@0.10.9",
         "registry+https://github.com/rust-lang/crates.io-index#tokio@1.53.3",
         "registry+https://github.com/rust-lang/crates.io-index#toml@0.9.12+spec-1.1.0",
         "registry+https://github.com/rust-lang/crates.io-index#zeroize@1.9.0"

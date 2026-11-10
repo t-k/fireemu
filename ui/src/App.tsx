@@ -15,6 +15,7 @@ const OFFICIAL_NAV: NavItem[] = [
   { href: "/auth", key: "nav.auth" },
   { href: "/storage", key: "nav.storage" },
   { href: "/functions", key: "nav.functions" },
+  { href: "/hosting", key: "nav.hosting" },
   { href: "/alerts", key: "nav.alerts" },
   { href: "/rules", key: "nav.rules" },
   { href: "/appcheck", key: "nav.appCheck" },
@@ -143,7 +144,10 @@ export const App: Component<RouteSectionProps> = (props) => {
               {appState.clock()}
             </span>
             <span class="text-zinc-500">
-              ({appState.config().clockPinned ? t("overview.clockPinned") : t("overview.clockWall")}
+              (
+              {appState.config().clockMode === "frozen"
+                ? t("overview.clockFrozen")
+                : t("overview.clockRealtime")}
               )
             </span>
           </span>

@@ -38,7 +38,7 @@ export type FunctionInfo = {
   /** The codebase that exports it (absent on an older daemon). */
   codebase?: string;
   /** The runtime of that codebase; absent when the daemon does not know it. */
-  runtime?: FunctionRuntime;
+  runtime?: FunctionRuntime | undefined;
   /** When a scheduled function next runs on the virtual clock (RFC 3339), if reachable. */
   nextRun?: string;
   /** For a task queue: how many tasks wait, and the first of them (the count is exact). */

@@ -4651,3 +4651,47 @@ fn sum_scalar_preserves_unrecorded_long_type() {
     assert!(is_unobserved(&strict("sum", &[int(7)])));
     assert_eq!(strict("sum", &[array(vec![Value::Integer(7)])]), int(7));
 }
+
+#[test]
+fn like_maps_resolver_errors_with_their_own_answers() {
+    fn error_of(error: RegexError) -> RegexResolver {
+        match error {
+            RegexError::InvalidSyntax => |_, _, _, _| Err(RegexError::InvalidSyntax),
+            RegexError::Unobserved => |_, _, _, _| Err(RegexError::Unobserved),
+            RegexError::ResourceLimit => |_, _, _, _| Err(RegexError::ResourceLimit),
+            RegexError::TooManyCaptureGroups => |_, _, _, _| Err(RegexError::TooManyCaptureGroups),
+        }
+    }
+    let call = |error: RegexError| {
+        let runtime = RuntimeContext {
+            regex_resolver: Some(error_of(error)),
+            ..RuntimeContext::default()
+        };
+        let cx = Context {
+            unrecorded: Unrecorded::OfficialEmulator,
+            condition: false,
+            runtime: &runtime,
+        };
+        (function("like").unwrap().eval)(&[text("abc"), text("a%")], cx)
+    };
+    assert_eq!(
+        call(RegexError::InvalidSyntax),
+        invalid("Unsupported regex syntax.")
+    );
+    for error in [RegexError::Unobserved, RegexError::ResourceLimit] {
+        assert_eq!(
+            call(error),
+            Eval::Error(EvalError::Unobserved {
+                function: "like",
+                reason: "regex compilation exceeded local resources",
+            })
+        );
+    }
+    assert_eq!(
+        call(RegexError::TooManyCaptureGroups),
+        Eval::Error(EvalError::Unobserved {
+            function: "like",
+            reason: "the regex resolver returned an incompatible result",
+        })
+    );
+}

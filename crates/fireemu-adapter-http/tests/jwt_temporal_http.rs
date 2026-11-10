@@ -678,6 +678,7 @@ fn hand_made_token_shapes_follow_firebase_tools_in_the_emulator_profile_and_stri
 /// API has none either (`operations.js:164-169`); an imported one always has (`:341`), and an
 /// email change through `accounts:update` sets it (`:861-862`). Strict refuses the shape.
 #[test]
+#[allow(clippy::too_many_lines)]
 fn which_accounts_have_a_valid_since_decides_a_token_without_iat() {
     for profile in [Profile::Emulator, Profile::Strict] {
         let (state, signer, original, _) = setup_with(profile, true);
@@ -757,6 +758,50 @@ fn which_accounts_have_a_valid_since_decides_a_token_without_iat() {
             lookup_answer(&state, &bare("admin-made")),
             expect(true),
             "{profile:?} email changed by the Admin API"
+        );
+        // An old token (issued before the change) is accepted while the account holds no
+        // validSince, and refused once an email change through accounts:update has set one.
+        let old = |uid: &str| {
+            retargeted(
+                &original,
+                signer.as_ref(),
+                uid,
+                &[
+                    ("iat", Some(json!(NOW - 100))),
+                    ("auth_time", Some(json!(NOW - 100))),
+                ],
+            )
+        };
+        let plain = handle_with(
+            &state,
+            "POST",
+            "/identitytoolkit.googleapis.com/v1/projects/demo-app/accounts",
+            &owner(),
+            &json!({"email": "old-token@example.invalid", "localId": "old-token"}),
+        );
+        assert_eq!(plain.status, 200, "{}", plain.body);
+        let before = lookup_answer(&state, &old("old-token"));
+        assert_eq!(
+            before.0,
+            if profile == Profile::Emulator {
+                200
+            } else {
+                400
+            },
+            "{profile:?} old token before the change: {before:?}"
+        );
+        let changed = handle_with(
+            &state,
+            "POST",
+            "/identitytoolkit.googleapis.com/v1/projects/demo-app/accounts:update",
+            &owner(),
+            &json!({"localId": "old-token", "email": "old-token-2@example.invalid"}),
+        );
+        assert_eq!(changed.status, 200, "{}", changed.body);
+        assert_eq!(
+            lookup_answer(&state, &old("old-token")).0,
+            400,
+            "{profile:?} old token after the email change"
         );
         let second = handle(&state, "POST", SIGN_UP, &json!({"returnSecureToken": true}));
         let second_uid = second.body["localId"].as_str().unwrap().to_owned();

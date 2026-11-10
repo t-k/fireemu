@@ -14,11 +14,12 @@
 //!   surface's allowance, and is read the same way (`Number(exp)`); only an `exp` that is `NaN`
 //!   counts as none.
 //!
-//! `NUMBERS` was produced by Node, not by this crate:
-//! `Number(JSON.parse(raw))` for each raw JSON text (Node 24).
+//! `NUMBERS` was produced by Node, not by this crate: `node tests/fixtures/js_number_table.mjs
+//! numbers` prints `Number(JSON.parse(raw))` for each raw JSON text, as exact bits (Node 24).
 
 #![allow(
     clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
     clippy::format_push_string,
     clippy::type_complexity
 )]
@@ -47,35 +48,35 @@ fn at(seconds: i64) -> LogicalInstant {
 /// `Number(JSON.parse(raw))`; `None` is `NaN`. Written out by Node, so its digits are not regrouped.
 #[allow(clippy::unreadable_literal, clippy::approx_constant)]
 const NUMBERS: &[(&str, Option<f64>)] = &[
-    ("null", Some(0.0)),
-    ("true", Some(1.0)),
-    ("false", Some(0.0)),
-    ("[]", Some(0.0)),
-    ("[1]", Some(1.0)),
-    ("[0]", Some(0.0)),
-    ("[1788004860]", Some(1788004860.0)),
-    ("[[1788004860]]", Some(1788004860.0)),
+    ("null", Some(f64::from_bits(0x0000000000000000))),
+    ("true", Some(f64::from_bits(0x3ff0000000000000))),
+    ("false", Some(f64::from_bits(0x0000000000000000))),
+    ("[]", Some(f64::from_bits(0x0000000000000000))),
+    ("[1]", Some(f64::from_bits(0x3ff0000000000000))),
+    ("[0]", Some(f64::from_bits(0x0000000000000000))),
+    ("[1788004860]", Some(f64::from_bits(0x41daa4b27f000000))),
+    ("[[1788004860]]", Some(f64::from_bits(0x41daa4b27f000000))),
     ("[1,2]", None),
-    ("[null]", Some(0.0)),
+    ("[null]", Some(f64::from_bits(0x0000000000000000))),
     ("[true]", None),
-    ("[\"7\"]", Some(7.0)),
+    ("[\"7\"]", Some(f64::from_bits(0x401c000000000000))),
     ("[[],[]]", None),
     ("{}", None),
     ("{\"a\":1}", None),
-    ("\"\"", Some(0.0)),
-    ("\"   \"", Some(0.0)),
-    ("\"12\"", Some(12.0)),
-    ("\" 12 \"", Some(12.0)),
-    ("\"+5\"", Some(5.0)),
-    ("\"-0\"", Some(-0.0)),
-    ("\"1e3\"", Some(1000.0)),
-    ("\"1.5\"", Some(1.5e+0)),
-    ("\".5\"", Some(5e-1)),
-    ("\"5.\"", Some(5.0)),
-    ("\"+.5e-3\"", Some(5e-4)),
-    ("\"-1788004860\"", Some(-1788004860.0)),
-    ("\"1788004860\"", Some(1788004860.0)),
-    ("\"1788004860.5\"", Some(1.7880048605e+9)),
+    ("\"\"", Some(f64::from_bits(0x0000000000000000))),
+    ("\"   \"", Some(f64::from_bits(0x0000000000000000))),
+    ("\"12\"", Some(f64::from_bits(0x4028000000000000))),
+    ("\" 12 \"", Some(f64::from_bits(0x4028000000000000))),
+    ("\"+5\"", Some(f64::from_bits(0x4014000000000000))),
+    ("\"-0\"", Some(f64::from_bits(0x8000000000000000))),
+    ("\"1e3\"", Some(f64::from_bits(0x408f400000000000))),
+    ("\"1.5\"", Some(f64::from_bits(0x3ff8000000000000))),
+    ("\".5\"", Some(f64::from_bits(0x3fe0000000000000))),
+    ("\"5.\"", Some(f64::from_bits(0x4014000000000000))),
+    ("\"+.5e-3\"", Some(f64::from_bits(0x3f40624dd2f1a9fc))),
+    ("\"-1788004860\"", Some(f64::from_bits(0xc1daa4b27f000000))),
+    ("\"1788004860\"", Some(f64::from_bits(0x41daa4b27f000000))),
+    ("\"1788004860.5\"", Some(f64::from_bits(0x41daa4b27f200000))),
     ("\"Infinity\"", Some(f64::INFINITY)),
     ("\"+Infinity\"", Some(f64::INFINITY)),
     ("\"-Infinity\"", Some(f64::NEG_INFINITY)),
@@ -88,22 +89,22 @@ const NUMBERS: &[(&str, Option<f64>)] = &[
     ("\"1e400\"", Some(f64::INFINITY)),
     ("\"-1e309\"", Some(f64::NEG_INFINITY)),
     ("\"1e309\"", Some(f64::INFINITY)),
-    ("\"1e-400\"", Some(0.0)),
-    ("\"0x1\"", Some(1.0)),
-    ("\"0X1F\"", Some(31.0)),
-    ("\"0x6A92B4FC\"", Some(1787999484.0)),
-    (
-        "\"0xffffffffffffffffffffffffffffffff\"",
-        Some(3.402823669209385e+38),
-    ),
-    ("\"0o17\"", Some(15.0)),
-    ("\"0b101\"", Some(5.0)),
+    ("\"1e-400\"", Some(f64::from_bits(0x0000000000000000))),
+    ("\"0x1\"", Some(f64::from_bits(0x3ff0000000000000))),
+    ("\"0X1F\"", Some(f64::from_bits(0x403f000000000000))),
+    ("\"0x6A92B4FC\"", Some(f64::from_bits(0x41daa4ad3f000000))),
+    ("\"0xffffffffffffffffffffffffffffffff\"", Some(f64::from_bits(0x47f0000000000000))),
+    ("\"0o17\"", Some(f64::from_bits(0x402e000000000000))),
+    ("\"0b101\"", Some(f64::from_bits(0x4014000000000000))),
     ("\"-0x1\"", None),
     ("\"+0x1\"", None),
     ("\"0x\"", None),
     ("\"0xg\"", None),
     ("\"0b2\"", None),
     ("\"0o8\"", None),
+    ("\"0x0\"", Some(f64::from_bits(0x0000000000000000))),
+    ("\"0b0\"", Some(f64::from_bits(0x0000000000000000))),
+    ("\"0o0\"", Some(f64::from_bits(0x0000000000000000))),
     ("\"1_0\"", None),
     ("\"1e\"", None),
     ("\"e5\"", None),
@@ -111,29 +112,76 @@ const NUMBERS: &[(&str, Option<f64>)] = &[
     ("\"1 2\"", None),
     ("\"1,5\"", None),
     ("\"abc\"", None),
-    ("\"\\u00a01788004860\\u00a0\"", Some(1788004860.0)),
-    ("\"\\ufeff5\"", Some(5.0)),
+    ("\"\\u00a01788004860\\u00a0\"", Some(f64::from_bits(0x41daa4b27f000000))),
+    ("\"\\ufeff5\"", Some(f64::from_bits(0x4014000000000000))),
     ("\"\\u00855\"", None),
-    ("\"\\u20285\\u2029\"", Some(5.0)),
-    ("\"\\t\\n5\\r\\u000b\\f\"", Some(5.0)),
+    ("\"\\u20285\\u2029\"", Some(f64::from_bits(0x4014000000000000))),
+    ("\"\\t\\n5\\r\\u000b\\f\"", Some(f64::from_bits(0x4014000000000000))),
     ("\"\\u200b5\"", None),
-    ("0", Some(0.0)),
-    ("-1", Some(-1.0)),
-    ("1788004860", Some(1788004860.0)),
-    ("1788004860.5", Some(1.7880048605e+9)),
-    ("-1788004860.5", Some(-1.7880048605e+9)),
-    ("1e308", Some(1e+308)),
-    ("1.7976931348623157e308", Some(1.7976931348623157e+308)),
-    ("-1e308", Some(-1e+308)),
-    ("9007199254740993", Some(9.007199254740992e+15)),
-    ("9223372036854775807", Some(9.223372036854776e+18)),
-    ("9223372036854775808", Some(9.223372036854776e+18)),
-    ("-9223372036854775808", Some(-9.223372036854776e+18)),
+    ("0", Some(f64::from_bits(0x0000000000000000))),
+    ("-1", Some(f64::from_bits(0xbff0000000000000))),
+    ("1788004860", Some(f64::from_bits(0x41daa4b27f000000))),
+    ("1788004860.5", Some(f64::from_bits(0x41daa4b27f200000))),
+    ("-1788004860.5", Some(f64::from_bits(0xc1daa4b27f200000))),
+    ("1e308", Some(f64::from_bits(0x7fe1ccf385ebc8a0))),
+    ("1.7976931348623157e308", Some(f64::from_bits(0x7fefffffffffffff))),
+    ("-1e308", Some(f64::from_bits(0xffe1ccf385ebc8a0))),
+    ("9007199254740993", Some(f64::from_bits(0x4340000000000000))),
+    ("9223372036854775807", Some(f64::from_bits(0x43e0000000000000))),
+    ("9223372036854775808", Some(f64::from_bits(0x43e0000000000000))),
+    ("-9223372036854775808", Some(f64::from_bits(0xc3e0000000000000))),
     ("1e400", Some(f64::INFINITY)),
     ("-1e400", Some(f64::NEG_INFINITY)),
-    ("5e-324", Some(5e-324)),
-    ("0.0", Some(0.0)),
-    ("-0.0", Some(-0.0)),
+    ("5e-324", Some(f64::from_bits(0x0000000000000001))),
+    ("0.0", Some(f64::from_bits(0x0000000000000000))),
+    ("-0.0", Some(f64::from_bits(0x8000000000000000))),
+    ("[1e400]", Some(f64::INFINITY)),
+    ("[-1e400]", Some(f64::NEG_INFINITY)),
+    ("[[1e400]]", Some(f64::INFINITY)),
+    ("[[-1e400]]", Some(f64::NEG_INFINITY)),
+    ("[-0]", Some(f64::from_bits(0x0000000000000000))),
+    ("[-0.0]", Some(f64::from_bits(0x0000000000000000))),
+    ("[1e21]", Some(f64::from_bits(0x444b1ae4d6e2ef50))),
+    ("[1e-7]", Some(f64::from_bits(0x3e7ad7f29abcaf48))),
+    ("[5e-324]", Some(f64::from_bits(0x0000000000000001))),
+    ("[1.7976931348623157e308]", Some(f64::from_bits(0x7fefffffffffffff))),
+    ("[1e300,1e300]", None),
+    ("[0.1]", Some(f64::from_bits(0x3fb999999999999a))),
+    ("[123456789012345680000]", Some(f64::from_bits(0x441ac53a7e04bcda))),
+    ("[9007199254740993]", Some(f64::from_bits(0x4340000000000000))),
+    ("[\"1e400\"]", Some(f64::INFINITY)),
+    ("[[],[1]]", None),
+    ("[1.5e-7]", Some(f64::from_bits(0x3e8421f5f40d8376))),
+    ("[1e22]", Some(f64::from_bits(0x4480f0cf064dd592))),
+    ("[-1e21]", Some(f64::from_bits(0xc44b1ae4d6e2ef50))),
+    ("\"0x201a86d280cba5a\"", Some(f64::from_bits(0x43800d43694065d3))),
+    ("\"0x20000000000001\"", Some(f64::from_bits(0x4340000000000000))),
+    ("\"0x20000000000002\"", Some(f64::from_bits(0x4340000000000001))),
+    ("\"0x20000000000003\"", Some(f64::from_bits(0x4340000000000002))),
+    ("\"0x20000000000005\"", Some(f64::from_bits(0x4340000000000002))),
+    ("\"0x20000000000006\"", Some(f64::from_bits(0x4340000000000003))),
+    ("\"0x20000000000007\"", Some(f64::from_bits(0x4340000000000004))),
+    ("\"0x1fffffffffffff\"", Some(f64::from_bits(0x433fffffffffffff))),
+    ("\"0x3fffffffffffff\"", Some(f64::from_bits(0x4350000000000000))),
+    ("\"0X7fffffffffffffff\"", Some(f64::from_bits(0x43e0000000000000))),
+    ("\"0xffffffffffffffff\"", Some(f64::from_bits(0x43f0000000000000))),
+    ("\"0x10000000000000001\"", Some(f64::from_bits(0x43f0000000000000))),
+    ("\"0x1000000000000000100000000000000000001\"", Some(f64::from_bits(0x48f0000000000000))),
+    ("\"0x20000000000000000000000000000000000000000000000000000000000000000000\"", Some(f64::from_bits(0x50c0000000000000))),
+    ("\"0o400000000000000001\"", Some(f64::from_bits(0x4340000000000000))),
+    ("\"0o400000000000000003\"", Some(f64::from_bits(0x4340000000000002))),
+    ("\"0o1777777777777777777777\"", Some(f64::from_bits(0x43f0000000000000))),
+    ("\"0o2000000000000000000000\"", Some(f64::from_bits(0x43f0000000000000))),
+    ("\"0b100000000000000000000000000000000000000000000000000001\"", Some(f64::from_bits(0x4340000000000000))),
+    ("\"0b100000000000000000000000000000000000000000000000000011\"", Some(f64::from_bits(0x4340000000000002))),
+    ("\"0b100000000000000000000000000000000000000000000000000010\"", Some(f64::from_bits(0x4340000000000001))),
+    ("\"0b111111111111111111111111111111111111111111111111111111\"", Some(f64::from_bits(0x4350000000000000))),
+    ("\"0b11111111111111111111111111111111111111111111111111111\"", Some(f64::from_bits(0x433fffffffffffff))),
+    ("\"0B1000000000000000000000000000000000000000000000000000011\"", Some(f64::from_bits(0x4350000000000001))),
+    ("\"0b1000000000000000000000000000000000000000000000000000000000000\"", Some(f64::from_bits(0x43b0000000000000))),
+    ("\"0x1000000000000000000000000000000000000000000000000000000000000\"", Some(f64::from_bits(0x4ef0000000000000))),
+    ("\"0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\"", Some(f64::INFINITY)),
+    ("\"0x1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\"", Some(f64::from_bits(0x7fb0000000000000))),
 ];
 
 // ---------------------------------------------------------------------------------------
@@ -366,6 +414,44 @@ fn iat_decides_revocation_alone_for_every_account_and_every_value() {
             }
         }
     }
+}
+
+/// A radix `iat` compares at the value Node gives it, right at the `validSince` boundary: the
+/// rounding is done once, so `0x201a86d280cba5a` is 144581849829390944 and not the 144581849829390912
+/// that rounding after every digit gives.
+#[test]
+fn a_radix_iat_compares_at_its_rounded_value_on_both_sides_of_the_boundary() {
+    let mut checked = 0;
+    for (raw, number) in NUMBERS.iter().filter(|(raw, _)| raw.starts_with("\"0")) {
+        let Some(value) = number.filter(|v| (9.0e15..4.0e18).contains(v)) else {
+            continue;
+        };
+        let rounded = value as i64;
+        for valid_since in [rounded, value.next_up() as i64, value.next_down() as i64] {
+            let (mut store, uid) = store_for(Profile::Emulator, Account::Anonymous);
+            store.set_valid_since(&uid, at(valid_since)).unwrap();
+            let token = token(
+                &claims_of(&store, &uid),
+                &[
+                    ("iat", Some(raw)),
+                    ("auth_time", None),
+                    ("exp", Some("1788008460")),
+                ],
+            );
+            let expected = if official_accepts(Some(valid_since), *number) {
+                Ok(())
+            } else {
+                Err(JwtError::Revoked)
+            };
+            assert_eq!(
+                verify(Surface::Toolkit, Profile::Emulator, &store, &token),
+                expected,
+                "iat={raw} validSince={valid_since}"
+            );
+            checked += 1;
+        }
+    }
+    assert!(checked >= 30, "only {checked} boundary cases ran");
 }
 
 /// A token with no `iat` at all, `auth_time` or not.

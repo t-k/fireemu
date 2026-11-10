@@ -204,11 +204,106 @@ fn js_join(value: &JsonValue) -> String {
         JsonValue::Null => String::new(),
         JsonValue::Bool(flag) => flag.to_string(),
         JsonValue::Int(number) => number.to_string(),
-        JsonValue::Float(number) => number.to_string(),
+        JsonValue::Float(number) => js_number_to_string(*number),
         JsonValue::String(text) => text.clone(),
         JsonValue::Array(items) => items.iter().map(js_join).collect::<Vec<_>>().join(","),
         JsonValue::Object(_) => "[object Object]".to_owned(),
     }
+}
+
+/// ECMAScript `Number::toString(x)` in base 10: `NaN`, `Infinity`, `-Infinity`, `0` for either
+/// zero, and otherwise the shortest digits that read back as `x`, written positionally for a
+/// decimal exponent from -6 to 21 and in exponent form (`1e+21`, `1.5e-7`) beyond.
+fn js_number_to_string(number: f64) -> String {
+    if number.is_nan() {
+        return "NaN".to_owned();
+    }
+    if number == 0.0 {
+        return "0".to_owned();
+    }
+    if number.is_infinite() {
+        return if number > 0.0 {
+            "Infinity"
+        } else {
+            "-Infinity"
+        }
+        .to_owned();
+    }
+    // `{:e}` writes the shortest round-trip digits as `d.ddde<exp>`.
+    let scientific = format!("{:e}", number.abs());
+    let (mantissa, exponent) = scientific.split_once('e').unwrap_or((&scientific, "0"));
+    let digits: String = mantissa.chars().filter(char::is_ascii_digit).collect();
+    let exponent: i32 = exponent.parse().unwrap_or(0);
+    // `k` digits and the decimal point after `n` of them (ECMAScript's k and n).
+    let k = i32::try_from(digits.len()).unwrap_or(i32::MAX);
+    let n = exponent + 1;
+    let sign = if number < 0.0 { "-" } else { "" };
+    let body = if k <= n && n <= 21 {
+        format!(
+            "{digits}{}",
+            "0".repeat(usize::try_from(n - k).unwrap_or(0))
+        )
+    } else if 0 < n && n <= 21 {
+        let (whole, fraction) = digits.split_at(usize::try_from(n).unwrap_or(0));
+        format!("{whole}.{fraction}")
+    } else if -6 < n && n <= 0 {
+        format!("0.{}{digits}", "0".repeat(usize::try_from(-n).unwrap_or(0)))
+    } else {
+        let power = n - 1;
+        let sign_of_power = if power < 0 { '-' } else { '+' };
+        if k == 1 {
+            format!("{digits}e{sign_of_power}{}", power.abs())
+        } else {
+            format!(
+                "{}.{}e{sign_of_power}{}",
+                &digits[..1],
+                &digits[1..],
+                power.abs()
+            )
+        }
+    };
+    format!("{sign}{body}")
+}
+
+/// An unsigned integer written in a power-of-two base (`bits` per digit), as the nearest double
+/// with ties to even, which is what `Number("0x...")` gives: the exact value is rounded once, not
+/// after every digit. `None` for an empty or invalid digit string.
+fn radix_to_f64(digits: &str, bits_per_digit: u32) -> Option<f64> {
+    let mut bits: Vec<bool> = Vec::new();
+    for c in digits.chars() {
+        let digit = c.to_digit(1 << bits_per_digit)?;
+        for shift in (0..bits_per_digit).rev() {
+            bits.push(digit >> shift & 1 == 1);
+        }
+    }
+    if bits.is_empty() {
+        return None;
+    }
+    let Some(first) = bits.iter().position(|bit| *bit) else {
+        return Some(0.0);
+    };
+    let bits = &bits[first..];
+    let length = bits.len();
+    let head: u64 = bits
+        .iter()
+        .take(53)
+        .fold(0, |acc, bit| acc << 1 | u64::from(*bit));
+    if length <= 53 {
+        #[allow(clippy::cast_precision_loss)]
+        return Some(head as f64);
+    }
+    let round_bit = bits[53];
+    let sticky = bits[54..].iter().any(|bit| *bit);
+    let mantissa = if round_bit && (sticky || head & 1 == 1) {
+        head + 1
+    } else {
+        head
+    };
+    // `mantissa` is at most 2^53, which a double holds exactly; the scaling is a power of two,
+    // so it is exact until it overflows to infinity.
+    let shift = i32::try_from(length - 53).unwrap_or(i32::MAX).min(4096);
+    #[allow(clippy::cast_precision_loss)]
+    Some(mantissa as f64 * 2.0_f64.powi(shift))
 }
 
 /// ECMAScript `StringToNumber`: surrounding white space is dropped (the code points JavaScript
@@ -227,19 +322,9 @@ fn string_to_number(text: &str) -> Option<f64> {
         "-Infinity" => return Some(f64::NEG_INFINITY),
         _ => {}
     }
-    let radix_digits = |prefixes: [&str; 2], radix: u32| {
-        let digits = prefixes
-            .iter()
-            .find_map(|prefix| text.strip_prefix(prefix))?;
-        (!digits.is_empty()).then_some(())?;
-        digits.chars().try_fold(0.0_f64, |acc, c| {
-            c.to_digit(radix)
-                .map(|d| acc * f64::from(radix) + f64::from(d))
-        })
-    };
-    for (prefixes, radix) in [(["0x", "0X"], 16), (["0o", "0O"], 8), (["0b", "0B"], 2)] {
-        if text.get(..2).is_some_and(|head| prefixes.contains(&head)) {
-            return radix_digits(prefixes, radix);
+    for (prefixes, bits) in [(["0x", "0X"], 4), (["0o", "0O"], 3), (["0b", "0B"], 1)] {
+        if let Some(digits) = prefixes.iter().find_map(|prefix| text.strip_prefix(prefix)) {
+            return radix_to_f64(digits, bits);
         }
     }
     // The decimal literal grammar. Rust's parser checks the exponent itself; the mantissa is
@@ -1410,4 +1495,77 @@ fn check_auth_time(
         return Err(JwtError::Malformed);
     }
     Ok(Some(auth_time))
+}
+
+#[cfg(test)]
+mod number_tests {
+    use super::{js_number_to_string, radix_to_f64};
+
+    /// `(bits of x, String(x))` as Node prints them: `node tests/fixtures/js_number_table.mjs
+    /// strings`.
+    #[allow(clippy::unreadable_literal)]
+    const STRINGS: &[(u64, &str)] = &[
+        (0x0000000000000000, "0"),
+        (0x8000000000000000, "0"),
+        (0x3ff0000000000000, "1"),
+        (0xbff0000000000000, "-1"),
+        (0x3fb999999999999a, "0.1"),
+        (0x3ff8000000000000, "1.5"),
+        (0x419d6f3454000000, "123456789"),
+        (0x4415af1d78b58c40, "100000000000000000000"),
+        (0x444b1ae4d6e2ef50, "1e+21"),
+        (0x4454542ba12a337c, "1.5e+21"),
+        (0x3eb0c6f7a0b5ed8d, "0.000001"),
+        (0x3e7ad7f29abcaf48, "1e-7"),
+        (0x3e8421f5f40d8376, "1.5e-7"),
+        (0x3e8091b5aeffdb8e, "1.2345e-7"),
+        (0x441ac53a7e04bcda, "123456789012345680000"),
+        (0x7fefffffffffffff, "1.7976931348623157e+308"),
+        (0x0000000000000001, "5e-324"),
+        (0x4340000000000000, "9007199254740992"),
+        (0xc340000000000000, "-9007199254740992"),
+        (0xc44b1ae4d6e2ef50, "-1e+21"),
+        (0x41daa4b27f200000, "1788004860.5"),
+        (0x54b249ad2594c37d, "1e+100"),
+        (0x3eb4b3fd5942cd96, "0.000001234"),
+        (0x4059000000000000, "100"),
+        (0x40f86a0000000000, "100000"),
+        (0x4029000000000000, "12.5"),
+        (0x3ee4f8b588e368f1, "0.00001"),
+        (0x3ff0000000000001, "1.0000000000000002"),
+        (0x7ff0000000000000, "Infinity"),
+        (0xfff0000000000000, "-Infinity"),
+        (0x7ff8000000000000, "NaN"),
+    ];
+
+    #[test]
+    fn numbers_are_written_as_javascript_writes_them() {
+        for (bits, expected) in STRINGS {
+            assert_eq!(
+                js_number_to_string(f64::from_bits(*bits)),
+                *expected,
+                "{bits:#x}"
+            );
+        }
+    }
+
+    #[test]
+    fn radix_integers_round_once_to_the_nearest_even_double() {
+        // 2^53 + 1 is a tie between 2^53 and 2^53 + 2, and rounds to the even one.
+        assert_eq!(
+            radix_to_f64("20000000000001", 4),
+            Some(9_007_199_254_740_992.0)
+        );
+        assert_eq!(
+            radix_to_f64("20000000000003", 4),
+            Some(9_007_199_254_740_996.0)
+        );
+        assert_eq!(radix_to_f64("", 4), None);
+        assert_eq!(radix_to_f64("0", 4), Some(0.0));
+        assert_eq!(radix_to_f64("0008", 4), Some(8.0));
+        assert_eq!(radix_to_f64("g", 4), None);
+        assert_eq!(radix_to_f64("8", 3), None);
+        assert_eq!(radix_to_f64("2", 1), None);
+        assert_eq!(radix_to_f64(&"f".repeat(260), 4), Some(f64::INFINITY));
+    }
 }

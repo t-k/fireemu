@@ -72,6 +72,23 @@ LANES["fs-ent-pipeline-emulator"] = {
   localConfig: "fs-ent-pipeline.emulator.fireemu.json",
 };
 
+// The pipeline regex observation (owner decision 2404): the four regex functions over Unicode
+// subjects, in the same named Enterprise database and with the same request layer as the O-series
+// lane, but with its own corpus, fixture and ledger task, so a recording here touches nothing the
+// O-series lane compares. The harness files are shared unchanged, so the O-series harness digest
+// stays valid.
+LANES["fs-ent-pipeline-regex"] = {
+  ...LANES["fs-ent-pipeline"],
+  id: "fs-ent-pipeline-regex",
+  taskId: "FS-PIPELINE-REGEX",
+  corpus: "../fs-ent-pipeline/regex-corpus.mjs",
+  fixture: "fs-ent-pipeline-regex-production.json",
+};
+LANES["fs-ent-pipeline-regex-emulator"] = {
+  ...LANES["fs-ent-pipeline-regex"],
+  localConfig: "fs-ent-pipeline.emulator.fireemu.json",
+};
+
 export function selectLane(name = process.env.FIREEMU_SANDBOX_LANE ?? "fs-query-index") {
   const lane = LANES[name];
   if (!lane) throw new Error(`unknown sandbox lane ${name}`);

@@ -777,3 +777,57 @@ fn candidate_json_eligibility_bounds_depth_and_width() {
     let wide = Value::Array(vec![Value::Null; 32_768]);
     assert!(!candidate_json_eligible(&wide));
 }
+
+fn regex_call_shape(name: &str, args: &Value) -> Option<String> {
+    let text = json!({"structuredPipeline": {"pipeline": {"stages": [
+        {"name": "collection", "args": [{"referenceValue": "/rx"}]},
+        {"name": "select", "args": [{"mapValue": {"fields": {"v": {"functionValue": {"name": name, "args": args}}}}}]},
+    ]}}})
+    .to_string();
+    shape_of_text(&text)
+}
+
+/// FS-PIPELINE-REGEX-20261110-01 recorded the capture-limit refusal for `regex_find` and
+/// `regex_find_all` only; `regex_contains` and `regex_match` accept several groups, so that
+/// text has no recorded shape for them. The syntax refusal is recorded for all four.
+#[test]
+fn the_recorded_regex_refusal_texts_pass_the_gate_for_their_functions_only() {
+    const CAPTURES: &str = "At most one capture group is supported.";
+    const SYNTAX: &str = "Unsupported regex syntax.";
+    let args = json!([{"fieldReferenceValue": "s"}, {"stringValue": "(a)(b)"}]);
+    for name in ["regex_find", "regex_find_all"] {
+        let gate = RefusalGate::Recorded(regex_call_shape(name, &args), DB.to_owned());
+        assert_eq!(
+            gate.answer(invalid(CAPTURES)).code(),
+            tonic::Code::InvalidArgument,
+            "{name}"
+        );
+    }
+    for name in ["regex_contains", "regex_match"] {
+        let gate = RefusalGate::Recorded(regex_call_shape(name, &args), DB.to_owned());
+        assert_eq!(
+            gate.answer(invalid(CAPTURES)).code(),
+            tonic::Code::Unimplemented,
+            "{name}"
+        );
+    }
+    for name in [
+        "regex_contains",
+        "regex_match",
+        "regex_find",
+        "regex_find_all",
+    ] {
+        let gate = RefusalGate::Recorded(regex_call_shape(name, &args), DB.to_owned());
+        assert_eq!(
+            gate.answer(invalid(SYNTAX)).code(),
+            tonic::Code::InvalidArgument,
+            "{name}"
+        );
+        assert_eq!(
+            gate.answer(invalid("At most two capture groups are supported."))
+                .code(),
+            tonic::Code::Unimplemented,
+            "{name}"
+        );
+    }
+}

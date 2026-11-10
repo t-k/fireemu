@@ -34,6 +34,7 @@ import {
   assertNoOutboundNetwork,
   commandModes,
   compareLaneExport,
+  eventarcSourceRebinds,
   exportCopies,
   forbiddenEnvironment,
   judge,
@@ -96,6 +97,269 @@ test("a lane export equal to the committed comparison passes", () => {
     const path = `${EVIDENCE}/${name}-comparison.json`;
     assert.deepEqual(compareLaneExport(readJson(path), exportOf(path), BINARY), [], name);
   }
+});
+
+test("compareLaneExport applies the EVENTARC source rebind to current and historical exports", () => {
+  const expected = readJson("spec/compatibility/closure/evidence/EVENTARC-comparison.json.gz");
+  const { sourceRebinds } = readJson(
+    "spec/compatibility/closure/evidence/EVENTARC-adjudication.json",
+  );
+  const [rebind] = sourceRebinds;
+  const actual = {
+    ...expected,
+    artifactSha256: BINARY,
+    sourcePins: { ...expected.sourcePins, [rebind.path]: rebind.sha256 },
+  };
+  assert.deepEqual(compareLaneExport(expected, actual, BINARY, { sourceRebinds }), []);
+  assert.ok(compareLaneExport(expected, actual, BINARY).some((d) => d.startsWith("sourcePins:")));
+  assert.deepEqual(
+    compareLaneExport(expected, { ...expected, artifactSha256: BINARY }, BINARY, { sourceRebinds }),
+    [],
+  );
+});
+
+test("EVENTARC source rebind refuses unrelated or unverified pin changes", () => {
+  const expected = readJson("spec/compatibility/closure/evidence/EVENTARC-comparison.json.gz");
+  const { sourceRebinds } = readJson(
+    "spec/compatibility/closure/evidence/EVENTARC-adjudication.json",
+  );
+  const [rebind] = sourceRebinds;
+  const other = "conformance/src/eventarc-production/compare.mjs";
+  const actual = {
+    ...expected,
+    artifactSha256: BINARY,
+    sourcePins: { ...expected.sourcePins, [rebind.path]: rebind.sha256 },
+  };
+  const wrong = "f".repeat(64);
+  const cases = [
+    [actual, [{ ...rebind, previousSha256: wrong }]],
+    [{ ...actual, sourcePins: { ...actual.sourcePins, [rebind.path]: wrong } }, sourceRebinds],
+    [actual, [{ ...rebind, sha256: wrong }]],
+    [{ ...actual, sourcePins: { ...actual.sourcePins, [other]: wrong } }, sourceRebinds],
+    [
+      {
+        ...expected,
+        artifactSha256: BINARY,
+        sourcePins: { ...expected.sourcePins, [other]: wrong },
+      },
+      [],
+    ],
+    [actual, [{ ...rebind, path: other }]],
+  ];
+  for (const [exported, rebinds] of cases) {
+    assert.ok(
+      compareLaneExport(expected, exported, BINARY, { sourceRebinds: rebinds }).some((d) =>
+        d.startsWith("sourcePins:"),
+      ),
+    );
+  }
+  const unrelated = readJson(`${EVIDENCE}/AUTH-CONFIG-SDK-comparison.json`);
+  const exported = { ...unrelated, artifactSha256: BINARY };
+  assert.deepEqual(compareLaneExport(unrelated, exported, BINARY, { sourceRebinds }), []);
+  assert.ok(
+    compareLaneExport(unrelated, { ...exported, fixtureSha256: wrong }, BINARY, {
+      sourceRebinds,
+    }).some((d) => d.startsWith("fixtureSha256:")),
+  );
+});
+
+test("compareLaneExport applies an EVENTARC source rebind to the path it names only", () => {
+  const expected = readJson("spec/compatibility/closure/evidence/EVENTARC-comparison.json.gz");
+  const [rebind] = readJson(
+    "spec/compatibility/closure/evidence/EVENTARC-adjudication.json",
+  ).sourceRebinds;
+  const other = "conformance/src/eventarc-production/compare.mjs";
+  const actual = {
+    ...expected,
+    artifactSha256: BINARY,
+    sourcePins: { ...expected.sourcePins, [other]: rebind.sha256 },
+  };
+  assert.ok(
+    compareLaneExport(expected, actual, BINARY, { sourceRebinds: [rebind] }).some((difference) =>
+      difference.startsWith("sourcePins:"),
+    ),
+  );
+});
+
+const adjudicationPath = "spec/compatibility/closure/evidence/EVENTARC-adjudication.json";
+const recordsPath = "spec/compatibility/closure/record-digests.json";
+const closurePath = "spec/compatibility/closure/EVENTARC.json";
+const eventarcPath = "spec/compatibility/closure/evidence/EVENTARC-comparison.json.gz";
+const eventarcDisk = () =>
+  new Map(
+    [adjudicationPath, recordsPath, closurePath].map((path) => [path, readFileSync(repo(path))]),
+  );
+const diskRead = (disk) => (path) => {
+  if (!disk.has(path)) throw new Error(`missing ${path}`);
+  return disk.get(path);
+};
+const writeDiskJson = (disk, path, value) => disk.set(path, Buffer.from(JSON.stringify(value)));
+const diskDigest = (disk) => createHash("sha256").update(disk.get(adjudicationPath)).digest("hex");
+const eventarcJudge = (disk, actual) =>
+  judge(
+    { path: eventarcPath, kind: "eventarc-production-comparison-v1", runIds: ["test"] },
+    { test: actual },
+    { binarySha256: BINARY, readJson, readBytes: diskRead(disk) },
+  );
+
+test("EVENTARC adjudication is verified before its rebinds are used", () => {
+  const disk = eventarcDisk();
+  const expected = readJson(eventarcPath);
+  const rebinds = eventarcSourceRebinds(diskRead(disk));
+  assert.deepEqual(rebinds, readJson(adjudicationPath).sourceRebinds);
+  assert.equal(rebinds.length, 1);
+  assert.equal(rebinds[0].path, "conformance/src/eventarc-production/run.mjs");
+  const other = "conformance/src/eventarc-production/compare.mjs";
+  const extra = { path: other, previousSha256: expected.sourcePins[other], sha256: "e".repeat(64) };
+  const actual = {
+    ...expected,
+    artifactSha256: BINARY,
+    sourcePins: { ...expected.sourcePins, [other]: extra.sha256 },
+  };
+  const adjudication = JSON.parse(disk.get(adjudicationPath));
+  adjudication.sourceRebinds.push(extra);
+  writeDiskJson(disk, adjudicationPath, adjudication);
+  assert.throws(() => eventarcSourceRebinds(diskRead(disk)), /^Error: EVENTARC adjudication/);
+  const differences = eventarcJudge(disk, actual);
+  assert.ok(
+    differences.some((difference) => difference.includes("EVENTARC source rebinds refused")),
+  );
+  assert.ok(differences.some((difference) => difference.startsWith("sourcePins:")));
+  const digest = diskDigest(disk);
+  const records = JSON.parse(disk.get(recordsPath));
+  const closure = JSON.parse(disk.get(closurePath));
+  const originalRecords = disk.get(recordsPath);
+  records.records[adjudicationPath] = digest;
+  writeDiskJson(disk, recordsPath, records);
+  assert.throws(() => eventarcSourceRebinds(diskRead(disk)), /EVENTARC adjudication/);
+  disk.set(recordsPath, originalRecords);
+  closure.retrospectiveAdjudication.sha256 = digest;
+  writeDiskJson(disk, closurePath, closure);
+  assert.throws(() => eventarcSourceRebinds(diskRead(disk)), /EVENTARC adjudication/);
+  const changed = eventarcDisk();
+  const changedAdjudication = JSON.parse(changed.get(adjudicationPath));
+  changedAdjudication.reason = "changed";
+  writeDiskJson(changed, adjudicationPath, changedAdjudication);
+  assert.throws(() => eventarcSourceRebinds(diskRead(changed)), /EVENTARC adjudication/);
+  const missing = judge(
+    { path: eventarcPath, kind: expected.kind, runIds: ["test"] },
+    { test: actual },
+    { binarySha256: BINARY, readJson },
+  );
+  assert.ok(missing.some((difference) => difference.includes("EVENTARC source rebinds refused")));
+});
+
+test("EVENTARC source rebind refuses a path outside the allowed driver", () => {
+  const disk = eventarcDisk();
+  const expected = readJson(eventarcPath);
+  const [driver] = eventarcSourceRebinds(diskRead(disk));
+  const other = "conformance/src/eventarc-production/compare.mjs";
+  const extra = { path: other, previousSha256: expected.sourcePins[other], sha256: "e".repeat(64) };
+  const actual = {
+    ...expected,
+    artifactSha256: BINARY,
+    sourcePins: { ...expected.sourcePins, [other]: extra.sha256 },
+  };
+  const adjudication = JSON.parse(disk.get(adjudicationPath));
+  adjudication.sourceRebinds.push(extra);
+  writeDiskJson(disk, adjudicationPath, adjudication);
+  const digest = diskDigest(disk);
+  const records = JSON.parse(disk.get(recordsPath));
+  records.records[adjudicationPath] = digest;
+  writeDiskJson(disk, recordsPath, records);
+  const closure = JSON.parse(disk.get(closurePath));
+  closure.retrospectiveAdjudication.sha256 = digest;
+  writeDiskJson(disk, closurePath, closure);
+  assert.throws(() => eventarcSourceRebinds(diskRead(disk)), /EVENTARC adjudication.*compare\.mjs/);
+  assert.ok(
+    eventarcJudge(disk, actual).some((difference) =>
+      difference.includes("EVENTARC source rebinds refused"),
+    ),
+  );
+  assert.ok(
+    compareLaneExport(expected, actual, BINARY, { sourceRebinds: [extra] }).some((difference) =>
+      difference.includes("is not allowed"),
+    ),
+  );
+  const driverExport = {
+    ...expected,
+    artifactSha256: BINARY,
+    sourcePins: { ...expected.sourcePins, [driver.path]: driver.sha256 },
+  };
+  assert.deepEqual(eventarcJudge(eventarcDisk(), driverExport), []);
+});
+
+test("EVENTARC adjudication pins are each required", () => {
+  // A harmless change keeps every rebind path allowed, so only the digest checks can refuse it.
+  const altered = () => {
+    const disk = eventarcDisk();
+    const adjudication = JSON.parse(disk.get(adjudicationPath));
+    adjudication.note = "changed";
+    writeDiskJson(disk, adjudicationPath, adjudication);
+    return disk;
+  };
+  const pin = (disk, which) => {
+    const digest = diskDigest(disk);
+    if (which.includes("records")) {
+      const records = JSON.parse(disk.get(recordsPath));
+      records.records[adjudicationPath] = digest;
+      writeDiskJson(disk, recordsPath, records);
+    }
+    if (which.includes("closure")) {
+      const closure = JSON.parse(disk.get(closurePath));
+      closure.retrospectiveAdjudication.sha256 = digest;
+      writeDiskJson(disk, closurePath, closure);
+    }
+    return disk;
+  };
+  for (const which of [[], ["records"], ["closure"]]) {
+    assert.throws(
+      () => eventarcSourceRebinds(diskRead(pin(altered(), which))),
+      /EVENTARC adjudication: digest mismatch/,
+      which.join(","),
+    );
+  }
+  assert.deepEqual(
+    eventarcSourceRebinds(diskRead(pin(altered(), ["records", "closure"]))),
+    readJson(adjudicationPath).sourceRebinds,
+  );
+});
+
+test("judge reads EVENTARC adjudication only for the EVENTARC comparison", () => {
+  const reads = [];
+  const disk = eventarcDisk();
+  const context = {
+    binarySha256: BINARY,
+    readJson,
+    readBytes: (path) => {
+      reads.push(path);
+      return diskRead(disk)(path);
+    },
+  };
+  const expected = readJson(eventarcPath);
+  const [rebind] = readJson(adjudicationPath).sourceRebinds;
+  const actual = {
+    ...expected,
+    artifactSha256: BINARY,
+    sourcePins: { ...expected.sourcePins, [rebind.path]: rebind.sha256 },
+  };
+  assert.deepEqual(
+    judge({ path: eventarcPath, kind: expected.kind, runIds: ["test"] }, { test: actual }, context),
+    [],
+  );
+  assert.ok(reads.includes(adjudicationPath));
+  reads.length = 0;
+  const other = `${EVIDENCE}/AUTH-CONFIG-SDK-comparison.json`;
+  const unrelated = readJson(other);
+  assert.deepEqual(
+    judge(
+      { path: other, kind: unrelated.kind, runIds: ["test"] },
+      { test: { ...unrelated, artifactSha256: BINARY } },
+      context,
+    ),
+    [],
+  );
+  assert.deepEqual(reads, []);
 });
 
 test("a row order change alone is not a difference", () => {
@@ -673,7 +937,7 @@ test("the arguments name an output directory and accept nothing else", () => {
     out: "dir",
     dist: "npm/dist",
   });
-  assert.equal(parseArguments(["--out", "dir", "--group", "rtdb"]).group, "rtdb");
+  assert.equal(parseArguments(["--out", "dir", "--group", "rtdb-a"]).group, "rtdb-a");
   assert.throws(() => parseArguments(["--out", "dir", "--group", "unknown"]), /unknown group/);
   assert.throws(() => parseArguments([]), /--out/);
   assert.throws(() => parseArguments(["--out"]), /--out/);
@@ -1147,6 +1411,17 @@ test("groups partition runs and keep each comparison together", () => {
     matrix[1].split(",").map((name) => name.trim()),
     Object.keys(GROUPS),
   );
+});
+
+test("rtdb is split in two groups covering R22 to R36 once", () => {
+  assert.deepEqual(Object.keys(GROUPS), ["eventarc", "transaction", "rtdb-a", "rtdb-b", "rest"]);
+  assert.deepEqual(
+    [...GROUPS["rtdb-a"], ...GROUPS["rtdb-b"]].sort(),
+    Array.from({ length: 15 }, (_, index) => `R${index + 22}`),
+  );
+  assert.ok(GROUPS["rtdb-a"].length > 0);
+  assert.ok(GROUPS["rtdb-b"].length > 0);
+  assert.equal(Object.hasOwn(GROUPS, "rtdb"), false);
 });
 
 test("group selection filters runs, comparisons, exports and the R10 report", () => {

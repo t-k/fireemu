@@ -199,6 +199,12 @@ export const HARNESS_LANES = {
     files: ["fs-ent-pipeline/harness.mjs", "fs-ent-pipeline/session.mjs"],
     extra: "",
   },
+  // FS-PIPELINE-REGEX (2026-11-10): the same request layer as the O-series lane, its own fixture.
+  "fs-ent-pipeline-regex": {
+    fixture: "fs-ent-pipeline-regex-production.json",
+    files: ["fs-ent-pipeline/harness.mjs", "fs-ent-pipeline/session.mjs"],
+    extra: "",
+  },
   "fs-config-lifecycle": {
     fixture: "fs-config-lifecycle-production.json",
     files: [

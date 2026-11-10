@@ -493,8 +493,8 @@ function assertRetrospectiveClosure(
     assert.equal(rebind.comparisonLogicChanged, false, "comparison logic is unchanged");
     assert.ok(rebind.reason?.length > 40 && rebind.previousRole?.length > 40, "rebind says why");
     assert.match(rebind.residualSha256, hash);
-    assert.equal(rebind.residualEqualsPrevious, true);
-    assert.ok(rebind.changedFunctions?.length > 0);
+    assert.equal(rebind.residualEqualsPrevious, true, "residual equals previous");
+    assert.ok(rebind.changedFunctions?.length > 0, "changed functions are named");
   }
   for (const [index, entry] of adjudication.cases.entries()) {
     assert.equal(entry.originalProofSelector, `/cases/${index}`, "original proof selector");
@@ -742,6 +742,21 @@ const retrospectiveCounters = [
     /unchanged/,
   ],
   ["rebind without a reason", (a) => (a.sourceRebinds[0].reason = ""), /says why/],
+  [
+    "rebind that does not equal the previous residual",
+    (a) => (a.sourceRebinds[0].residualEqualsPrevious = false),
+    /residual equals previous/,
+  ],
+  [
+    "rebind that names no changed function",
+    (a) => (a.sourceRebinds[0].changedFunctions = []),
+    /changed functions are named/,
+  ],
+  [
+    "rebind that cannot be recognised as a hash",
+    (a) => (a.sourceRebinds[0].residualSha256 = "residual"),
+    /residual/,
+  ],
   [
     "widened historical exception",
     (a) => a.limitations.historicalPublish404.cases.push("C124"),

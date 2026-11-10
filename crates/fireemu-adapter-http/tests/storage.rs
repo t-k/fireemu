@@ -5254,11 +5254,10 @@ proptest::proptest! {
     #[test]
     fn the_body_cap_is_the_object_limit_plus_the_overhead(limit in 0_u64..=u64::MAX) {
         use fireemu_adapter_http::storage_server::{body_cap_for_object_limit, BODY_OVERHEAD_BYTES};
-        let cap = body_cap_for_object_limit(limit);
-        match usize::try_from(limit).ok().and_then(|l| l.checked_add(BODY_OVERHEAD_BYTES)) {
-            Some(expected) => proptest::prop_assert_eq!(cap, Some(expected)),
-            None => proptest::prop_assert_eq!(cap, None),
-        }
+        let expected = limit
+            .checked_add(BODY_OVERHEAD_BYTES as u64)
+            .and_then(|total| usize::try_from(total).ok());
+        proptest::prop_assert_eq!(body_cap_for_object_limit(limit), expected);
     }
 }
 

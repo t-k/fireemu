@@ -488,7 +488,11 @@ function assertRetrospectiveClosure(
   );
   for (const rebind of rebinds) {
     const source = rebound.find(({ path }) => path === rebind.path);
-    assert.equal(rebind.previousSha256, historicalPublicHashes.get(rebind.path), "reviewed history");
+    assert.equal(
+      rebind.previousSha256,
+      historicalPublicHashes.get(rebind.path),
+      "reviewed history",
+    );
     assert.equal(rebind.sha256, source.sha256, "rebind names the pinned bytes");
     assert.equal(rebind.comparisonLogicChanged, false, "comparison logic is unchanged");
     assert.ok(rebind.reason?.length > 40 && rebind.previousRole?.length > 40, "rebind says why");

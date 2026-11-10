@@ -779,3 +779,44 @@ mod zero_length_tests {
         ));
     }
 }
+
+#[cfg(test)]
+mod body_budget_tests {
+    use super::*;
+
+    /// The budget admits a charge exactly up to its limit, refuses the byte past it and a sum
+    /// that would overflow, and gives released bytes back. Direct calls, so a mutant that admits
+    /// or refuses everything fails here at once instead of through a socket that waits.
+    #[test]
+    fn the_budget_admits_up_to_its_limit_and_gives_released_bytes_back() {
+        let budget = BodyBudget::new(8);
+        assert!(budget.charge(5), "5 of 8 fits");
+        assert_eq!(budget.in_flight(), 5);
+        assert!(budget.charge(3), "5 + 3 is exactly the limit");
+        assert_eq!(budget.in_flight(), 8);
+        assert!(!budget.charge(1), "one byte past the limit is refused");
+        assert_eq!(budget.in_flight(), 8, "a refused charge changes nothing");
+        budget.release(5);
+        assert_eq!(budget.in_flight(), 3);
+        assert!(budget.charge(5), "released bytes are available again");
+        budget.release(8);
+        assert_eq!(budget.in_flight(), 0);
+        assert!(
+            !budget.charge(usize::MAX),
+            "a sum that overflows is refused"
+        );
+        assert_eq!(budget.in_flight(), 0);
+    }
+
+    /// A reconfigured limit applies to the next charge, in both directions.
+    #[test]
+    fn a_reconfigured_limit_applies_to_the_next_charge() {
+        let budget = BodyBudget::new(8);
+        budget.set_limit(2);
+        assert!(!budget.charge(3));
+        assert!(budget.charge(2));
+        budget.set_limit(10);
+        assert!(budget.charge(8));
+        assert_eq!(budget.in_flight(), 10);
+    }
+}

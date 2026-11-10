@@ -4864,7 +4864,15 @@ async fn await_in_flight(budget: &BodyBudget, bytes: usize) {
 async fn read_response(stream: &mut tokio::net::TcpStream) -> String {
     use tokio::io::AsyncReadExt;
     let mut response = Vec::new();
-    stream.read_to_end(&mut response).await.unwrap();
+    // A bounded wait: a server that admitted a request it should have refused waits for the rest
+    // of the body, and a test that waited with it would time out instead of failing.
+    tokio::time::timeout(
+        std::time::Duration::from_secs(20),
+        stream.read_to_end(&mut response),
+    )
+    .await
+    .expect("no response within 20 s: the request was admitted when it should have been answered")
+    .unwrap();
     String::from_utf8_lossy(&response).into_owned()
 }
 

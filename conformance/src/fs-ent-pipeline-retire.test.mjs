@@ -182,6 +182,21 @@ test("S0 passes only on exactly the expected database, and says why when it does
     assert.equal(verdict.ok, false, JSON.stringify(overrides));
     assert.match(verdict.reasons.join(";"), pattern);
   }
+  // The operations list of a database just created holds its done CreateDatabase operation
+  // (the O-1 create answer of 2026-10-19: done true, a response that is the database).
+  const created = ok({
+    operations: [
+      {
+        name: `${DB}/operations/create-1`,
+        metadata: {
+          "@type": "type.googleapis.com/google.firestore.admin.v1.CreateDatabaseMetadata",
+        },
+        done: true,
+        response: { "@type": "type.googleapis.com/google.firestore.admin.v1.Database", name: DB },
+      },
+    ],
+  });
+  assert.equal(judgeS0(s0Answers({ "s0-operations": created })).ok, true);
   // A missing answer (the run stopped earlier) is not a pass.
   const stopped = s0Answers();
   delete stopped["s0-operations"];

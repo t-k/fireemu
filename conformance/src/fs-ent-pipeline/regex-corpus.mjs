@@ -133,11 +133,20 @@ export const PAIRS = [
 
 export const stepIdOf = (name, label) => `${name.replaceAll("_", "-")}-${label}`;
 
-const GROUPS = [...new Set(PAIRS.map((pair) => pair.group))];
+// The programs whose subjects hold control characters (vertical tab, NEL, U+0001, U+007F) come
+// last: if production refused to store such a string, the seed would fail and end the recording,
+// and only these two programs would be lost.
+const GROUPS = ["digit", "word", "flag", "backslash", "capture", "space", "control"];
+
+/** The probe document of one group: only the subjects its pairs read, in the order of PROBE. */
+const seedOf = (group) => {
+  const used = new Set(PAIRS.filter((pair) => pair.group === group).map((pair) => pair.subject));
+  return Object.fromEntries(Object.entries(PROBE).filter(([name]) => used.has(name)));
+};
 
 export const PROGRAMS = GROUPS.map((group) => ({
   id: `${REGEX_PREFIX}rx/${group}`,
-  seed: [["rx/d1", PROBE]],
+  seed: [["rx/d1", seedOf(group)]],
   steps: PAIRS.filter((pair) => pair.group === group).flatMap((pair) =>
     REGEX_FUNCTIONS.map((name) =>
       read(

@@ -83,9 +83,19 @@ test("every pair is asked of all four regex functions, in one program, subject t
   }
 });
 
-test("each program seeds one probe document and reads only that collection", () => {
+test("each program seeds one probe document with only the subjects its pairs read", () => {
   for (const p of PROGRAMS) {
-    assert.deepEqual(p.seed, [["rx/d1", PROBE]]);
+    const group = p.id.split("/").at(-1);
+    const used = new Set(PAIRS.filter((pair) => pair.group === group).map((pair) => pair.subject));
+    assert.equal(p.seed.length, 1);
+    assert.equal(p.seed[0][0], "rx/d1");
+    // The subjects the group reads, in the order of the probe table, and nothing else.
+    assert.deepEqual(
+      Object.keys(p.seed[0][1]),
+      Object.keys(PROBE).filter((name) => used.has(name)),
+      group,
+    );
+    for (const [name, value] of Object.entries(p.seed[0][1])) assert.deepEqual(value, PROBE[name]);
     for (const s of p.steps) {
       assert.equal(s.rpc, "executePipeline");
       assert.equal(s.transport, undefined);
@@ -98,6 +108,19 @@ test("each program seeds one probe document and reads only that collection", () 
     assert.match(name, /^[a-z][a-z0-9]*$/);
     assert.deepEqual(Object.keys(value), ["stringValue"]);
   }
+});
+
+test("the programs whose seeds hold control characters come last, so a refusal costs only them", () => {
+  const groups = PROGRAMS.map((p) => p.id.split("/").at(-1));
+  assert.deepEqual(groups, ["digit", "word", "flag", "backslash", "capture", "space", "control"]);
+  // C0 controls other than tab and newline, DEL and the C1 controls.
+  const odd = (text) =>
+    [...text].some((ch) => {
+      const n = ch.codePointAt(0);
+      return (n < 0x20 && n !== 9 && n !== 10) || (n >= 0x7f && n <= 0x9f);
+    });
+  const holding = PROGRAMS.map((p) => Object.values(p.seed[0][1]).some((v) => odd(v.stringValue)));
+  assert.deepEqual(holding, [false, false, false, false, false, true, true]);
 });
 
 test("labels are unique, patterns and subjects are never empty, groups are the known six", () => {

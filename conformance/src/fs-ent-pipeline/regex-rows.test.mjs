@@ -43,3 +43,8 @@ test("the table keeps the recorded facts the issue names", () => {
     ],
   });
 });
+
+test("the saved request export of the strict refusal gate is exactly the regex programs", async () => {
+  const { EXPORT, regexRequestsText } = await import("./regex-requests.mjs");
+  assert.equal(readFileSync(EXPORT, "utf8"), regexRequestsText());
+});

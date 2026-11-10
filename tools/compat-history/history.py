@@ -13,8 +13,14 @@ from pathlib import Path, PurePosixPath
 ANCHOR = "672db735ad36dc8f473b98bac2906f19f37bb70b"
 ROOT = Path(__file__).resolve().parents[2]
 # The one declared rebind of frozen bytes: the 2026-11-10 mask of the old oracle project number. The record lists,
-# for every file it changed, the sha256 the file had at the anchor and the sha256 it has now.
+# for every file it changed, the sha256 the file had at the anchor, the byte offsets of the masked number and the
+# digest pairs that followed. The record is pinned here by its own sha256, and a frozen file may differ from the
+# anchor only by exactly those substitutions (see `rebuild`); the record's postSha256 is never trusted.
 REBIND_RECORD = "spec/compatibility/oracle-number-mask-2026-11-10.json"
+REBIND_RECORD_SHA256 = "1078f70f6fea7c3616b6e3d964d1ffaee263b8c6ee951226591185ebc1068b9c"
+PLACEHOLDER = b"<project-number>"
+NUMBER_LENGTH = 12
+HEX64 = re.compile(r"[0-9a-f]{64}")
 TEST_DIRS = (
     "tools/compat-inventory",
     "tools/aggregation-limit",
@@ -91,19 +97,78 @@ def git(root, *args):
         raise ValueError("Required local Git history unavailable") from error
 
 
-def load_rebound(root):
-    """Frozen files the mask record changed, as {path: (sha256 at the anchor, sha256 now)}."""
+def load_rebound(root, pinned=None):
+    """The mask record's entries as {path: entry}, or {} when `root` has no record.
+
+    The record must be the pinned one: any other bytes are refused, so editing the record is not a way to change
+    a frozen file. Entries for files outside the frozen sets are inert; `verify_frozen` reads only the ones it
+    meets."""
     record = Path(root) / REBIND_RECORD
     if not record.is_file():
         return {}
-    files = json.loads(record.read_bytes())["files"]
-    return {name: (info["preSha256"], info["postSha256"]) for name, info in files.items()}
+    data = record.read_bytes()
+    require(
+        hashlib.sha256(data).hexdigest() == (pinned or REBIND_RECORD_SHA256),
+        "Rebind record is not the pinned record",
+    )
+    return json.loads(data)["files"]
+
+
+def rebuild(blob, entry, name):
+    """The bytes a frozen file must have now: the anchor blob with the number at each recorded offset replaced by
+    the placeholder, then each recorded digest replaced by its successor. Nothing else may differ."""
+    require(
+        isinstance(entry, dict) and not entry.get("editedAfterCascade"),
+        "Rebind entry is not a mask and cannot be rebuilt: " + name,
+    )
+    offsets = entry.get("maskedOffsets", [])
+    pairs = entry.get("digestRewrites", [])
+    require(bool(offsets) or bool(pairs), "Rebind entry names no substitution: " + name)
+    require(
+        hashlib.sha256(blob).hexdigest() == entry.get("preSha256"),
+        "Rebind record does not match the anchor: " + name,
+    )
+    require(
+        all(type(offset) is int for offset in offsets)
+        and entry.get("maskedOccurrences", len(offsets)) == len(offsets),
+        "Rebind offsets are not a count of integers: " + name,
+    )
+    pieces, last = [], 0
+    for offset in offsets:  # an offset before the end of the previous one (unsorted, repeated, overlapping) fails here
+        end = offset + NUMBER_LENGTH
+        require(
+            offset >= last and end <= len(blob) and blob[offset:end].isdigit(),
+            "Rebind offset is not a digit run: " + name,
+        )
+        require(
+            not blob[offset - 1 : offset].isdigit() and not blob[end : end + 1].isdigit(),
+            "Rebind offset is not a whole number: " + name,
+        )
+        pieces += [blob[last:offset], PLACEHOLDER]
+        last = end
+    data = b"".join([*pieces, blob[last:]])
+    successors = {}
+    for pair in pairs:
+        require(
+            isinstance(pair, list)
+            and len(pair) == 2
+            and all(isinstance(item, str) and HEX64.fullmatch(item) for item in pair)
+            and pair[0] not in successors
+            and pair[0].encode() in data,
+            "Rebind digest pair is not a digest present in the file: " + name,
+        )
+        successors[pair[0]] = pair[1]
+    if successors:
+        data = re.sub(
+            "|".join(successors).encode(), lambda found: successors[found.group().decode()].encode(), data
+        )
+    return data
 
 
 def verify_frozen(root, anchor, prefixes, rebound=None):
-    """Compare the working tree with the anchor; `rebound` names the only files allowed to differ, each
-    pinned to the exact bytes it had at the anchor and the exact bytes it must have now. Without `rebound`
-    the record of `root` is used (none in an archived anchor checkout, so that checkout stays byte-exact)."""
+    """Compare the working tree with the anchor; `rebound` ({path: record entry}) names the only files allowed to
+    differ, and each must equal `rebuild` of its anchor blob. Without `rebound` the pinned record of `root` is
+    used (none in an archived anchor checkout, so that checkout stays byte-exact)."""
     if rebound is None:
         rebound = load_rebound(root)
     require(re.fullmatch(r"[0-9a-f]{40}", anchor), "Full pinned commit required")
@@ -177,14 +242,9 @@ def verify_frozen(root, anchor, prefixes, rebound=None):
         )
         blob = git(root, "cat-file", "blob", oid)
         if name in rebound:
-            before, after = rebound[name]
             require(
-                hashlib.sha256(blob).hexdigest() == before,
-                "Rebind record does not match the anchor: " + name,
-            )
-            require(
-                hashlib.sha256(path.read_bytes()).hexdigest() == after,
-                "Frozen bytes changed after the rebind: " + name,
+                path.read_bytes() == rebuild(blob, rebound[name], name),
+                "Frozen bytes changed beyond the rebind: " + name,
             )
         else:
             require(path.read_bytes() == blob, "Frozen bytes changed: " + name)

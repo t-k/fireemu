@@ -670,3 +670,28 @@ fn a_pattern_over_the_length_limit_or_expanding_past_the_rewritten_limit_is_a_re
 }
 
 const _: () = assert!(MAX_PATTERN_BYTES < MAX_REWRITTEN_BYTES);
+
+#[test]
+fn the_rewritten_limit_counts_the_text_that_is_kept_and_is_inclusive() {
+    for mode in BOTH {
+        // Exactly at the limit: 49,932 x 21 bytes plus four literal bytes.
+        let exact = format!("{}aaaa", r"\S".repeat(MAX_REWRITTEN_BYTES / 21));
+        let analysis = analyze(&exact, mode).unwrap();
+        assert_eq!(analysis.pattern.len(), MAX_REWRITTEN_BYTES);
+        // One byte more is over it.
+        let over = format!("{exact}a");
+        assert_eq!(
+            analyze(&over, mode).map(|_| ()),
+            Err(RegexError::ResourceLimit)
+        );
+        // The expansion alone fits and the kept literal text takes it over.
+        let kept = format!("{}{}", r"\S".repeat(49_000), "a".repeat(30_000));
+        assert!(kept.len() <= MAX_PATTERN_BYTES);
+        assert_eq!(
+            analyze(&kept, mode).map(|_| ()),
+            Err(RegexError::ResourceLimit)
+        );
+        let fits = format!("{}{}", r"\S".repeat(49_000), "a".repeat(10_000));
+        assert!(analyze(&fits, mode).is_ok());
+    }
+}

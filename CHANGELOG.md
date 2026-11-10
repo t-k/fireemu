@@ -8,6 +8,10 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Changed
+
+- Pub/Sub: the emulator profile accepts topic `kmsKeyName` and `tags`, stores them as sent, and returns them over REST and gRPC (measured on the official emulator, pubsub-emulator 0.8.35, 2026-11-10: it stores any key name and any tags, including empty keys and values, unvalidated, and refuses every `UpdateTopic` mask). `UpdateTopic` applies the `kms_key_name` mask (a mask that names it while the topic carries none clears it); a mask that names `tags` is answered `INVALID_ARGUMENT` because tags are immutable. Nothing is enforced or validated. Before, both profiles refused both fields with `UNIMPLEMENTED`. The strict profile still refuses them, now with a message that says why (production's answer is not recorded and Fireemu has no Cloud KMS or tag inventory to check against) and how to proceed (leave the field out, or use `profile = "emulator"`).
+
 ## [0.47.0] - 2026-11-10
 
 ### Added

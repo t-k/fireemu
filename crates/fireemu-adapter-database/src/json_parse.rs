@@ -36,6 +36,17 @@ pub fn parse_with_keys(text: &str) -> Result<(Json, Vec<KeyAt>), ParseError> {
     Ok((value, parser.keys))
 }
 
+/// [`parse_with_keys`] for the claims of a token, which also says whether the object's `iat` (the
+/// last one of a repeated key) is a number as the official emulator reads one: a number literal that
+/// is not an integer beyond the i64 range. The value alone cannot tell, because this parser reads
+/// such an integer as a double (a number) and `1e400` as the string "Infinity" (not a number),
+/// while the official emulator refuses the first as an `iat` and takes the second for one.
+pub fn parse_claims(text: &str) -> Result<(Json, bool), ParseError> {
+    let mut parser = Parser::new(text, true);
+    let value = parser.whole()?;
+    Ok((value, parser.iat_is_number))
+}
+
 /// How a lone surrogate escape (`"\ud83d"` without its pair) in a string is read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Lone {
@@ -201,6 +212,10 @@ struct Parser<'a> {
     skipped: usize,
     limit: usize,
     keys: Vec<KeyAt>,
+    /// What the last number read can be as an `iat` (see [`parse_claims`]); `None` before one is read.
+    last_number_is_iat: Option<bool>,
+    /// Whether the outermost object's last `iat` member is a number the official emulator reads as one.
+    iat_is_number: bool,
     /// The last position computed: byte index, line and column. Positions are asked for in
     /// increasing order, so each is computed from the previous one in linear total time.
     mark: (usize, usize, usize),
@@ -218,6 +233,8 @@ impl<'a> Parser<'a> {
             skipped: 0,
             limit: 0,
             keys: Vec::new(),
+            last_number_is_iat: None,
+            iat_is_number: false,
             mark: (0, 1, 1),
         }
     }
@@ -357,10 +374,18 @@ impl<'a> Parser<'a> {
             self.skip_whitespace();
             self.expect(":")?;
             self.skip_whitespace();
+            let is_iat = depth == 0 && key == "iat";
+            if is_iat {
+                self.last_number_is_iat = None;
+            }
             self.enter(|| Step::Key(key.clone()));
             let value = self.value(depth + 1);
             self.leave();
             let value = value?;
+            if is_iat {
+                self.iat_is_number = matches!(value, Json::Number(_) | Json::String(_))
+                    && self.last_number_is_iat == Some(true);
+            }
             // A repeated key keeps its last value.
             map.insert(key, value);
             self.skip_whitespace();
@@ -615,9 +640,11 @@ impl<'a> Parser<'a> {
         let text = &self.text[start..self.at];
         if integral {
             if let Ok(int) = text.parse::<i64>() {
+                self.last_number_is_iat = Some(true);
                 return Ok(Json::Number(Number::Int(int)));
             }
         }
+        self.last_number_is_iat = Some(!integral);
         // Beyond the i64 range an integer is a double, as the server stores it. Beyond the
         // double range the official emulator stores the string "Infinity" or "-Infinity".
         let double: f64 = text.parse().map_err(|_| ParseError)?;

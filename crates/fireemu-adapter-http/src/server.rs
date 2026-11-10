@@ -94,8 +94,9 @@ async fn respond(
         .path_and_query()
         .map_or_else(|| req.uri().path().to_owned(), |pq| pq.as_str().to_owned());
     // The emulator accepts the API key header as an alternative to the query key.
-    // Leave strict profile routing unchanged.
+    // Preserve Authorization-bearing requests and leave strict profile routing unchanged.
     if state.stateless_refresh_tokens
+        && !req.headers().contains_key(hyper::header::AUTHORIZATION)
         && (path.starts_with("/identitytoolkit.googleapis.com/")
             || path.starts_with("/securetoken.googleapis.com/"))
         && !path.split_once('?').is_some_and(|(_, query)| {

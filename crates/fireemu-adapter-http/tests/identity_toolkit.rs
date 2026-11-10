@@ -3014,6 +3014,60 @@ async fn serves_over_a_real_socket() {
     server.abort();
 }
 
+#[tokio::test]
+async fn api_key_header_precedence_over_a_real_socket() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    for required in [false, true] {
+        let mut shared = state();
+        let mut tenancy = Tenancy::new("demo-app");
+        tenancy.declare_default_api_keys(&["allowed".to_owned()]);
+        shared.tenancy = Some(Arc::new(RwLock::new(tenancy)));
+        if required {
+            shared.client_api_key =
+                fireemu_adapter_http::identity_toolkit::ClientApiKeyPolicy::EmulatorRequired;
+        }
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(fireemu_adapter_http::server::serve(
+            listener,
+            Arc::new(shared),
+        ));
+        for (query, headers, expected) in [
+            (
+                "",
+                "Authorization: Bearer owner\r\nX-Goog-Api-Key: unknown\r\n",
+                200,
+            ),
+            ("", "X-Goog-Api-Key: allowed\r\n", 200),
+            ("", "X-Goog-Api-Key: unknown\r\n", 400),
+            ("?key=allowed", "", 200),
+            ("?key=allowed", "X-Goog-Api-Key: unknown\r\n", 200),
+            ("?key=unknown", "X-Goog-Api-Key: allowed\r\n", 400),
+            (
+                "?key=unknown",
+                "Authorization: Bearer owner\r\nX-Goog-Api-Key: allowed\r\n",
+                400,
+            ),
+            ("", "", if required { 403 } else { 200 }),
+        ] {
+            let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+            let request = format!(
+                "POST {V1}/accounts:signUp{query} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\n{headers}Content-Length: 2\r\nConnection: close\r\n\r\n{{}}"
+            );
+            stream.write_all(request.as_bytes()).await.unwrap();
+            let mut response = Vec::new();
+            stream.read_to_end(&mut response).await.unwrap();
+            let text = String::from_utf8(response).unwrap();
+            assert!(
+                text.starts_with(&format!("HTTP/1.1 {expected} ")),
+                "required={required}, query={query}, headers={headers}"
+            );
+        }
+        server.abort();
+    }
+}
+
 /// The strict profile frames the three recorded answers as production does (lean-v5): headers, the
 /// recorded member order, a two-space layout with a final line feed and, when the request accepts
 /// it, a gzip body. The emulator profile keeps the official emulator's framing, and an answer the

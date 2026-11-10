@@ -816,7 +816,7 @@
     "crates/fireemu/src/hub.rs": "c87f1af44966a39c27dde4ed0dba08a02902c50e95796fcd3e3f102d5a09808c",
     "crates/fireemu/src/import_export.rs": "420dd4fd658ca40bff749edcca9cb3a8fd95427f6114cd7c2189021f8871e255",
     "crates/fireemu/src/init.rs": "d3098e8c0cb9bb1b33ba505e9ef6394e74232c44112a882b9e0b932852aafbde",
-    "crates/fireemu/src/main.rs": "3bf608dd867b88caac16d08e2d334971b5ac9b60ff21acc482eed083ab2eb383",
+    "crates/fireemu/src/main.rs": "e4ba4327a2fb0bcfcf3bf50111246c9d1805c9af73284bd511bb0bfffaa5e648",
     "crates/fireemu/src/managed_storage.rs": "d310c41f7adc44f01ed599c0b4b2adeb599a740b45717f21ac0950b80524ed8b",
     "crates/fireemu/src/python_functions.rs": "b4adbd482d2b52fdd9e861c1e2caa33665f8ff0b8fdc72b4762f455d28793ffc",
     "crates/fireemu/src/readiness.rs": "7913412c16f9377083235acb57d2432baf1c9ae9a5a999caf9a230293c49ff82",

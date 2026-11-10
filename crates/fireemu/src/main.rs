@@ -2913,6 +2913,68 @@ async fn bind_listener(addr: &str) -> Result<tokio::net::TcpListener, String> {
         .map_err(|error| format!("bind {addr}: {error}"))
 }
 
+/// The ports every configured address names, whether or not the product is selected.
+fn configured_ports(cfg: &RuntimeConfig) -> Vec<u16> {
+    [
+        &cfg.firestore_addr,
+        &cfg.http_addr,
+        &cfg.storage_addr,
+        &cfg.functions_addr,
+        &cfg.hosting_addr,
+        &cfg.eventarc_addr,
+        &cfg.tasks_addr,
+        &cfg.pubsub_addr,
+        &cfg.database_addr,
+        &cfg.hub_addr,
+        &cfg.ui_addr,
+        &cfg.logging_addr,
+    ]
+    .into_iter()
+    .filter_map(|addr| addr.rsplit_once(':')?.1.parse::<u16>().ok())
+    .filter(|port| *port != 0)
+    .collect()
+}
+
+/// How the kernel picks an ephemeral port; a test swaps it to force a collision.
+type EphemeralPick = fn(&str) -> std::io::Result<std::net::TcpListener>;
+
+fn kernel_pick(addr: &str) -> std::io::Result<std::net::TcpListener> {
+    std::net::TcpListener::bind(addr)
+}
+
+/// Binds `addr` (port 0 asked of the kernel) on a port no configured address names. The
+/// kernel hands out ephemeral ports at random, and Linux prefers the lower half of the range
+/// (about 7000 ports) for a `SO_REUSEADDR` listener, so a port the user configured for a product that is not
+/// running, or one a selected product has yet to bind, is taken often enough to matter: the
+/// unselected product would then be listening, or the selected one would fail to bind. Every
+/// rejected listener is held until a usable one is found, so the kernel cannot offer it again.
+fn bind_ephemeral_avoiding(
+    addr: &str,
+    avoid: &[u16],
+    pick: EphemeralPick,
+) -> Result<tokio::net::TcpListener, String> {
+    let mut rejected = Vec::new();
+    for _ in 0..256 {
+        let listener = pick(addr).map_err(|error| format!("bind {addr}: {error}"))?;
+        let port = listener
+            .local_addr()
+            .map_err(|error| format!("bind {addr}: {error}"))?
+            .port();
+        if avoid.contains(&port) {
+            rejected.push(listener);
+            continue;
+        }
+        listener
+            .set_nonblocking(true)
+            .map_err(|error| format!("bind {addr}: {error}"))?;
+        return tokio::net::TcpListener::from_std(listener)
+            .map_err(|error| format!("bind {addr}: {error}"));
+    }
+    Err(format!(
+        "bind {addr}: every ephemeral port offered was a configured one"
+    ))
+}
+
 async fn bind_relocatable_listener(
     addr: &str,
     explicit: bool,
@@ -2968,6 +3030,15 @@ async fn bind_hosting(
 }
 
 async fn bind_listeners(cfg: &RuntimeConfig, only: &Selection) -> Result<Listeners, String> {
+    bind_listeners_with(cfg, only, kernel_pick).await
+}
+
+async fn bind_listeners_with(
+    cfg: &RuntimeConfig,
+    only: &Selection,
+    pick: EphemeralPick,
+) -> Result<Listeners, String> {
+    let configured = configured_ports(cfg);
     // Every product listener reads the DNS-rebinding `Host` policy per request; it is in place
     // before the first listener exists.
     let host_policy = cfg.host_policy();
@@ -2979,7 +3050,7 @@ async fn bind_listeners(cfg: &RuntimeConfig, only: &Selection) -> Result<Listene
     // and best effort: a selected product configured on 4400 must win and disable discovery.
     let prebound_hub = if cfg.hub_addr_explicit {
         if cfg.hub_auto_port {
-            Some(bind_listener(&cfg.hub_addr).await?)
+            Some(bind_ephemeral_avoiding(&cfg.hub_addr, &configured, pick)?)
         } else {
             hub::bind(&cfg.hub_addr, true).await?
         }
@@ -2995,7 +3066,7 @@ async fn bind_listeners(cfg: &RuntimeConfig, only: &Selection) -> Result<Listene
         bind_listener(&cfg.http_addr).await?
     } else {
         // Loopback, ephemeral: the configured Auth port belongs to whoever wants it.
-        bind_listener("127.0.0.1:0").await?
+        bind_ephemeral_avoiding("127.0.0.1:0", &configured, pick)?
     };
     let storage = if only.storage {
         Some(bind_listener(&cfg.storage_addr).await?)
@@ -5695,6 +5766,179 @@ mod storage_endpoint_tests {
             storage_endpoint(&firestore_only, &all).as_deref(),
             Some("http://127.0.0.1:9199")
         );
+    }
+}
+
+#[cfg(test)]
+mod ephemeral_bind_tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    thread_local! {
+        static OFFERED: RefCell<Vec<std::net::TcpListener>> = const { RefCell::new(Vec::new()) };
+    }
+
+    /// Offers the queued listeners first (last one first), then whatever the kernel picks.
+    fn scripted_pick(addr: &str) -> std::io::Result<std::net::TcpListener> {
+        match OFFERED.with(|q| q.borrow_mut().pop()) {
+            Some(listener) => Ok(listener),
+            None => std::net::TcpListener::bind(addr),
+        }
+    }
+
+    fn offer(listeners: Vec<std::net::TcpListener>) {
+        OFFERED.with(|q| *q.borrow_mut() = listeners);
+    }
+
+    fn port_of(listener: &std::net::TcpListener) -> u16 {
+        listener.local_addr().unwrap().port()
+    }
+
+    // The failure seen on Linux CI: the kernel hands the control listener the port a test
+    // had configured for the Auth emulator it left out of --only.
+    #[tokio::test]
+    async fn an_ephemeral_bind_never_takes_a_configured_port() {
+        let configured = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let usable = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let (configured_port, usable_port) = (port_of(&configured), port_of(&usable));
+        offer(vec![usable, configured]);
+        let bound =
+            bind_ephemeral_avoiding("127.0.0.1:0", &[configured_port], scripted_pick).unwrap();
+        assert_eq!(bound.local_addr().unwrap().port(), usable_port);
+    }
+
+    thread_local! {
+        static REJECTED_PORT: std::cell::Cell<u16> = const { std::cell::Cell::new(0) };
+        static STILL_HELD: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+    }
+
+    /// The first offer is the avoided port; at the second, the avoided port must still be
+    /// taken, or the kernel could offer it again.
+    fn checking_pick(addr: &str) -> std::io::Result<std::net::TcpListener> {
+        if let Some(listener) = OFFERED.with(|q| q.borrow_mut().pop()) {
+            return Ok(listener);
+        }
+        let port = REJECTED_PORT.with(std::cell::Cell::get);
+        STILL_HELD.with(|held| {
+            held.set(Some(
+                std::net::TcpListener::bind(format!("127.0.0.1:{port}")).is_err(),
+            ));
+        });
+        std::net::TcpListener::bind(addr)
+    }
+
+    #[tokio::test]
+    async fn a_rejected_port_stays_held_until_a_usable_one_is_found() {
+        let configured = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = port_of(&configured);
+        REJECTED_PORT.with(|cell| cell.set(port));
+        offer(vec![configured]);
+        bind_ephemeral_avoiding("127.0.0.1:0", &[port], checking_pick).unwrap();
+        assert_eq!(STILL_HELD.with(std::cell::Cell::get), Some(true));
+    }
+
+    #[tokio::test]
+    async fn an_ephemeral_bind_with_nothing_to_avoid_takes_the_first_offer() {
+        let first = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let first_port = port_of(&first);
+        offer(vec![first]);
+        let bound = bind_ephemeral_avoiding("127.0.0.1:0", &[], scripted_pick).unwrap();
+        assert_eq!(bound.local_addr().unwrap().port(), first_port);
+    }
+
+    fn same_port(_addr: &str) -> std::io::Result<std::net::TcpListener> {
+        OFFERED
+            .with(|q| q.borrow().last().map(std::net::TcpListener::try_clone))
+            .unwrap()
+    }
+
+    // Every attempt is offered a clone of the same configured socket.
+    #[tokio::test]
+    async fn an_ephemeral_bind_gives_up_when_every_offer_is_configured() {
+        let held = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = port_of(&held);
+        offer(vec![held]);
+        let error = bind_ephemeral_avoiding("127.0.0.1:0", &[port], same_port)
+            .err()
+            .unwrap();
+        assert!(error.contains("configured"), "{error}");
+    }
+
+    fn no_hub_no_logging() -> RuntimeConfig {
+        RuntimeConfig {
+            logging_enabled: false,
+            hub_addr: "127.0.0.1:0".to_owned(),
+            hub_addr_explicit: true,
+            hub_auto_port: false,
+            ..RuntimeConfig::default()
+        }
+    }
+
+    // Wiring: the control listener of a run without Auth avoids the Auth port the
+    // configuration names, which the run leaves alone.
+    #[tokio::test]
+    async fn the_control_listener_avoids_the_unselected_auth_port() {
+        let auth = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut cfg = no_hub_no_logging();
+        cfg.http_addr = format!("127.0.0.1:{}", port_of(&auth));
+        cfg.firestore_addr = "127.0.0.1:0".to_owned();
+        offer(vec![auth.try_clone().unwrap()]);
+        let only = Selection::parse("firestore").unwrap();
+        let listeners = bind_listeners_with(&cfg, &only, scripted_pick)
+            .await
+            .unwrap();
+        assert_ne!(
+            listeners.control.local_addr().unwrap().port(),
+            port_of(&auth)
+        );
+    }
+
+    // Wiring: the automatic Hub avoids the port of a product the run leaves out.
+    #[tokio::test]
+    async fn the_automatic_hub_avoids_an_unselected_products_port() {
+        let firestore = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut cfg = no_hub_no_logging();
+        cfg.hub_auto_port = true;
+        cfg.http_addr = "127.0.0.1:0".to_owned();
+        cfg.firestore_addr = format!("127.0.0.1:{}", port_of(&firestore));
+        offer(vec![firestore.try_clone().unwrap()]);
+        let only = Selection::parse("auth").unwrap();
+        let listeners = bind_listeners_with(&cfg, &only, scripted_pick)
+            .await
+            .unwrap();
+        assert_ne!(
+            listeners.hub.unwrap().local_addr().unwrap().port(),
+            port_of(&firestore)
+        );
+    }
+
+    #[test]
+    fn the_configured_ports_are_every_nonzero_address_port() {
+        let at = |port: u16| format!("127.0.0.1:{port}");
+        let cfg = RuntimeConfig {
+            firestore_addr: at(1),
+            http_addr: at(2),
+            storage_addr: at(3),
+            functions_addr: at(4),
+            hosting_addr: at(5),
+            eventarc_addr: at(6),
+            tasks_addr: at(7),
+            pubsub_addr: at(8),
+            database_addr: at(9),
+            hub_addr: at(10),
+            ui_addr: at(11),
+            logging_addr: at(0),
+            ..RuntimeConfig::default()
+        };
+        assert_eq!(configured_ports(&cfg), (1..=11).collect::<Vec<u16>>());
+        let bracketed = RuntimeConfig {
+            http_addr: "[::1]:12".to_owned(),
+            ..cfg
+        };
+        // 12 is named by no other address, so only the bracketed host can supply it.
+        let mut expected: Vec<u16> = (1..=11).collect();
+        expected[1] = 12;
+        assert_eq!(configured_ports(&bracketed), expected);
     }
 }
 

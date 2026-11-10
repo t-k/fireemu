@@ -3,6 +3,15 @@
 use fireemu_core_firestore::pipeline_exec::{RegexError, Unrecorded};
 use regex_syntax::ast::{self, Ast, Visitor};
 
+/// The longest pattern `analyze` accepts, in bytes. Production recorded no pattern-length limit
+/// (very long patterns were not observed), so this is a local bound on preprocessing work. A longer
+/// pattern is `ResourceLimit`, the class the engine's own size limit already produces: strict
+/// answers it as unobserved.
+pub(super) const MAX_PATTERN_BYTES: usize = 128 * 1024;
+/// The longest rewritten pattern `analyze` returns, in bytes: a local bound, applied before the
+/// regex engine's compiled-size limit (10 MiB). A pattern whose rewrite is longer is `ResourceLimit`.
+pub(super) const MAX_REWRITTEN_BYTES: usize = 1024 * 1024;
+
 pub(super) struct Analysis {
     pub(super) pattern: String,
     pub(super) capture_groups: usize,
@@ -270,7 +279,23 @@ impl Visitor for Walker<'_> {
     }
 }
 
+/// Applies `(start, end, replacement)` edits, sorted and not overlapping, in one pass.
+pub(super) fn apply_edits(pattern: &str, edits: &[(usize, usize, String)]) -> String {
+    let mut result = String::with_capacity(pattern.len());
+    let mut cursor = 0;
+    for (start, end, replacement) in edits {
+        result.push_str(&pattern[cursor..*start]);
+        result.push_str(replacement);
+        cursor = *end;
+    }
+    result.push_str(&pattern[cursor..]);
+    result
+}
+
 pub(super) fn analyze(pattern: &str, mode: Unrecorded) -> Result<Analysis, RegexError> {
+    if pattern.len() > MAX_PATTERN_BYTES {
+        return Err(RegexError::ResourceLimit);
+    }
     let tree = ast::parse::ParserBuilder::new()
         .build()
         .parse(pattern)
@@ -308,12 +333,18 @@ pub(super) fn analyze(pattern: &str, mode: Unrecorded) -> Result<Analysis, Regex
         return Err(RegexError::Unobserved);
     }
     walker.edits.sort_by_key(|edit| edit.0);
-    let mut result = pattern.to_owned();
-    for (start, end, replacement) in walker.edits.into_iter().rev() {
-        result.replace_range(start..end, &replacement);
+    let removed = walker.edits.iter().fold(0_usize, |sum, (start, end, _)| {
+        sum.saturating_add(end - start)
+    });
+    let rewritten_len = walker.edits.iter().fold(
+        pattern.len().saturating_sub(removed),
+        |len, (_, _, replacement)| len.saturating_add(replacement.len()),
+    );
+    if rewritten_len > MAX_REWRITTEN_BYTES {
+        return Err(RegexError::ResourceLimit);
     }
     Ok(Analysis {
-        pattern: result,
+        pattern: apply_edits(pattern, &walker.edits),
         capture_groups: walker.capture_groups,
     })
 }

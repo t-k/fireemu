@@ -667,5 +667,6 @@ fn a_pattern_over_the_length_limit_or_expanding_past_the_rewritten_limit_is_a_re
         let analysis = analyze(&fits, mode).unwrap();
         assert!(analysis.pattern.len() <= MAX_REWRITTEN_BYTES);
     }
-    assert!(MAX_PATTERN_BYTES < MAX_REWRITTEN_BYTES);
 }
+
+const _: () = assert!(MAX_PATTERN_BYTES < MAX_REWRITTEN_BYTES);

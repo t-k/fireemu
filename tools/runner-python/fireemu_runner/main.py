@@ -6,7 +6,7 @@ import platform
 import sys
 import traceback
 
-from . import appcheck
+from . import appcheck, blocking
 from .dispatch import Dispatcher
 from .environment import EnvironmentGate, load_local_secrets
 from .framing import FrameWriter, ProtocolError, read_frame
@@ -30,10 +30,12 @@ def load_codebase(source: str) -> dict:
 
 
 def serve(
-    functions: dict, codebase: str, secret: str, stdin, writer: FrameWriter, gate: EnvironmentGate | None = None, app_check_verified: bool = False
+    functions: dict, codebase: str, secret: str, stdin, writer: FrameWriter, gate: EnvironmentGate | None = None, app_check_verified: bool = False, blocking_verified: bool = False
 ) -> int:
     """Says hello, then serves frames from `stdin` until `shutdown` or the end of the stream."""
     manifest = build_manifest(functions, app_check_verified)
+    if not blocking_verified and any(spec["trigger"]["type"] == "blockingAuth" for spec in manifest["functions"]):
+        blocking.announce_default_note(sys.stderr)
     server = None
     port = None
     if any(spec["trigger"]["type"] in HTTP_TRIGGERS for spec in manifest["functions"]):
@@ -84,9 +86,12 @@ def run(argv) -> int:
         return 1
     # Before any user code runs, so the Admin SDK's App Check service is built against the emulator's keys.
     app_check_verified = appcheck.install_from_environment(os.environ)
+    blocking_verified = blocking.install_from_environment(os.environ)
     try:
         functions = load_codebase(args.source)
     except BaseException:  # a failing import in user code is reported with its traceback
         traceback.print_exc()
         return 1
+    if blocking_verified:
+        return serve(functions, args.codebase, secret, sys.stdin.buffer, writer, gate, app_check_verified, blocking_verified=True)
     return serve(functions, args.codebase, secret, sys.stdin.buffer, writer, gate, app_check_verified)

@@ -5,7 +5,7 @@ description: Serve one Firebase Hosting site locally from firebase.json, with re
 
 Fireemu serves one Firebase Hosting site from the `hosting` entry of `firebase.json`: static files, redirects, rewrites, custom headers, clean URLs, trailing-slash handling and localized content. A rewrite can send a request to a function of a Functions codebase in the same run. Hosting is served **without a production parity claim**: the behaviour is compared offline with `firebase-tools` 15.28.2 on a finite set of cases, and production observations are still pending (see [Verification status](#verification-status)).
 
-Hosting is available since v0.45.0. Behaviour that is on `main` but not in a release yet is marked **unreleased** below; the site tracks `main`, and npm serves the latest release.
+Hosting is available since v0.45.0. Behaviour that changed in a later release is listed under [Changes in v0.47.0](#changes-in-v0470) below.
 
 ## Start Hosting
 
@@ -89,9 +89,9 @@ Hosting behaves the same under `strict` and `emulator`, and `productionExact` ch
 - The hosted SDK scripts under `/__/firebase/<version>/`, deployed Cloud Run services and deployed functions (no live fallback).
 - A file with no extension, or an extension that `mime-types` does not know, is served as `application/octet-stream`. The `firebase-tools` emulator sends the literal text `false` as its `Content-Type` there, and production's behaviour was not recorded. The `Content-Type` of a custom header rule replaces the one Fireemu chooses.
 
-## Unreleased
+## Changes in v0.47.0
 
-These changes are on `main` and not in v0.46.0 (see the [changelog](https://github.com/t-k/fireemu/blob/main/CHANGELOG.md)):
+These changes are in v0.47.0 and later; v0.45.0 and v0.46.0 behaved differently (see the [changelog](https://github.com/t-k/fireemu/blob/main/CHANGELOG.md)):
 
 - An `i18n.root` written with a leading or trailing slash (`/locales`, the form Firebase's documentation shows) finds the same files as `locales`, and an empty root is no root, as in `superstatic`. Before, only a root without a leading slash worked.
 - Content types come from the `mime-types`/`mime-db` table of the `firebase-tools` emulator (generated from it), with its `Vary: Accept-Encoding` rule. Before, a short built-in table served every other extension, such as `.woff2`, `.gif` or `.ico`, as `application/octet-stream` and `.js` as `text/javascript`.

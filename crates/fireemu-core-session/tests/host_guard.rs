@@ -71,7 +71,6 @@ fn a_public_name_and_malformed_authorities_are_refused_by_default() {
         "cloudworkstations.dev",
         "evilcloudworkstations.dev",
         "cloudworkstations.dev.evil.example",
-        "x.app.github.dev",
         "fireemu",
         "fireemu:8080",
         "",
@@ -132,11 +131,11 @@ fn allowed_hosts_match_exactly_by_suffix_or_all() {
     assert!(!one(&exact, "ci.example"));
     assert!(!one(&exact, "emulator.ci.example.evil"));
 
-    let suffix = policy(&[".svc.cluster.local"], false);
-    assert!(one(&suffix, "svc.cluster.local"));
-    assert!(one(&suffix, "fireemu.ns.svc.cluster.local:8080"));
-    assert!(!one(&suffix, "evilsvc.cluster.local"));
-    assert!(!one(&suffix, "cluster.local"));
+    let suffix = policy(&[".svc.corp.example"], false);
+    assert!(one(&suffix, "svc.corp.example"));
+    assert!(one(&suffix, "fireemu.ns.svc.corp.example:8080"));
+    assert!(!one(&suffix, "evilsvc.corp.example"));
+    assert!(!one(&suffix, "corp.example"));
 
     let all = policy(&["*"], false);
     for host in ["evil.example", "fireemu", "a.b.c:1"] {
@@ -291,7 +290,16 @@ fn public_name() -> impl Strategy<Value = String> {
         "reserved suffixes are admitted on purpose",
         |(labels, tld)| {
             let name = format!("{}.{tld}", labels.join("."));
-            let reserved = ["localhost", "internal", "com", "app"];
+            let reserved = [
+                "localhost",
+                "internal",
+                "com",
+                "app",
+                "test",
+                "local",
+                "arpa",
+                "dev",
+            ];
             (!reserved.contains(&tld.as_str())).then_some(name)
         },
     )
@@ -492,4 +500,135 @@ fn entries_that_turn_the_defence_off_are_warned_about() {
         "{tld:?}"
     );
     assert!(tld[1].contains("\".dev\""), "{tld:?}");
+}
+
+/// Owner decision 2401: the special-use suffixes `.test`, `.local` and `.home.arpa` (RFC 6761,
+/// RFC 6762, RFC 8375; public DNS answers none of them) and GitHub Codespaces' `.app.github.dev`
+/// are admitted by default, on a label boundary only.
+#[test]
+fn special_use_names_and_codespaces_are_admitted_on_a_label_boundary() {
+    let default = HostPolicy::default();
+    for host in [
+        "myapp.test",
+        "api.myapp.test:8080",
+        "MyApp.TEST.",
+        "my-mac.local:9199",
+        "MY-MAC.LOCAL.",
+        "printer.home.arpa",
+        "nas.lan.home.arpa:9000",
+        "fluffy-space-8080.app.github.dev",
+        "Fluffy-Space-9099.APP.GITHUB.DEV.:443",
+    ] {
+        assert!(one(&default, host), "{host}");
+    }
+    for host in [
+        "test",
+        "local",
+        "home.arpa",
+        "arpa",
+        "app.github.dev",
+        "github.dev",
+        "x.github.dev",
+        "evil-test",
+        "eviltest",
+        "evil-local",
+        "evil.home-arpa",
+        "evilhome.arpa",
+        "x.evilapp.github.dev",
+        "evil-app.github.dev",
+        "local.example",
+        "test.evil.example",
+        "home.arpa.evil.example",
+        "app.github.dev.evil.example",
+        "x.app.github.dev.evil.example",
+        "x.test.evil",
+    ] {
+        assert!(!one(&default, host), "{host}");
+    }
+}
+
+/// The PICT table of the new defaults (docs.local/pict/host-allowlist-defaults, 2-way over
+/// suffix x name shape x spelling x non-loopback opt-in) against an independent oracle.
+#[test]
+fn the_default_suffix_table_matches_the_oracle() {
+    let table = include_str!("data/host_guard_defaults_pict.tsv");
+    let mut rows = 0;
+    for line in table.lines().skip(1) {
+        let fields: Vec<&str> = line.split('\t').collect();
+        let [suffix, shape, form, opt_in] = fields[..] else {
+            panic!("bad row {line:?}");
+        };
+        let name = match shape {
+            "subdomain" => format!("x.{suffix}"),
+            "deep-subdomain" => format!("a.b.{suffix}"),
+            "bare" => suffix.to_owned(),
+            "glued-prefix" => format!("evil{suffix}"),
+            "embedded-label" => format!("{suffix}.evil.example"),
+            "hyphen-label" => format!("evil-{suffix}"),
+            other => panic!("{other}"),
+        };
+        let host = match form {
+            "plain" => name.clone(),
+            "upper" => name.to_ascii_uppercase(),
+            "trailing-dot" => format!("{name}."),
+            "port" => format!("{name}:9199"),
+            "upper-dot-port" => format!("{}.:9199", name.to_ascii_uppercase()),
+            other => panic!("{other}"),
+        };
+        let single_label = opt_in == "on";
+        let expected = match shape {
+            "subdomain" | "deep-subdomain" => true,
+            "embedded-label" => false,
+            // Without a dot these are single-label names, admitted only with the opt-in.
+            "bare" | "glued-prefix" | "hyphen-label" => single_label && !name.contains('.'),
+            other => panic!("{other}"),
+        };
+        assert_eq!(
+            one(&policy(&[], single_label), &host),
+            expected,
+            "{line} -> {host}"
+        );
+        rows += 1;
+    }
+    assert!(rows >= 30, "{rows}");
+}
+
+/// Spellings of the new default suffixes that are not the suffix: percent-encoding, a Unicode
+/// look-alike and its punycode form, repeated dots and invalid ports are all refused.
+#[test]
+fn look_alikes_of_the_special_use_suffixes_are_refused() {
+    let default = HostPolicy::default();
+    for host in [
+        "x%2Etest",
+        "x.%74est",
+        "x.app.github%2Edev",
+        "x.te\u{17f}t",
+        "x.\u{442}est",
+        "x.xn--est-j2c",
+        "x.app.githu\u{0432}.dev",
+        "x.app.xn--githu-mvf.dev",
+        "x..test",
+        "x.test..",
+        "x.local..:9199",
+        ".test",
+        "..local",
+        "x.home..arpa",
+        "x.test:",
+        "x.test:65536",
+        "x.local:9x",
+        "x.app.github.dev:-1",
+        "x.home.arpa:+80",
+    ] {
+        assert!(!one(&default, host), "{host:?}");
+    }
+    // The genuine spellings next to them are admitted.
+    for host in [
+        "x.test",
+        "x.test.",
+        "x.local:9199",
+        "x.home.arpa:80",
+        "x.app.github.dev:65535",
+    ] {
+        assert!(one(&default, host), "{host:?}");
+    }
 }

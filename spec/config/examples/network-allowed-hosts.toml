@@ -4,7 +4,7 @@ profile = "strict"
 
 [network]
 allowNonLoopbackHosts = true
-allowedHosts = ["emulator.ci.example", ".svc.cluster.local"]
+allowedHosts = ["emulator.ci.example", ".corp.example"]
 
 [limits]
 catalog = "firestore-standard-2026-08-25"

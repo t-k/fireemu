@@ -899,7 +899,7 @@ export async function productionDeps() {
         const response = await fetch(url, {
           method,
           headers,
-          body,
+          ...(body === undefined ? undefined : { body }),
           redirect: "manual",
           signal: AbortSignal.timeout(60_000),
         });

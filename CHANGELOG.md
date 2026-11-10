@@ -316,7 +316,7 @@ Firestore Enterprise pipelines (FS-PIPELINE) are `COMPAT_VERIFIED` against produ
 
 - Realtime Database: the entries of a multi-path write (a REST `PATCH`, a realtime merge, and the writes registered with `onDisconnect` when the connection ends) reach a connection's listens in the order of the official emulator, not in key or registration order. Up to four entries come in the order they were sent or registered; from five on, in the order of the hash of their keys. One production recording agrees for a set of six keys (it fired `e6`, `e5`, `marker`, `e4`, `e3`, `e2` for the keys `e2` to `marker`); the other forms below follow the official emulator and have not been observed in production, and the RTDB closure still lists reconnect ordering (CV08) and onDisconnect cancel and re-register (CV10) as unobserved. Entries whose keys are paths (`a/x`) are gathered by their first key in the hash order of the keys as sent, and the children an onDisconnect value splits into when a cancel falls below it go in key order; a cancel of a path the value does not hold leaves the value whole, and null children are dropped when a value is registered, as the official emulator does. A listen at or above the write hears first, a listen above an entry before the one at it, and the members of a merge frame follow the same order.
 - The UI's Overview page no longer shows the "Product scope" table of supported, deferred and not-planned products. It listed Realtime Database as deferred, which is no longer true, and the compatibility and scope information is kept on the documentation site. The rest of the Overview is unchanged.
-- The README, and with it the npm package page, is now a short overview with a quick start, a scope summary and links. The configuration and usage details it carried are on the [documentation site](https://fireemu.github.io/fireemu/), which gains the parts it lacked: `fireemu config show` and `init --reference`, the remaining discovery ownership rules, Auth authorized domains, provider declarations, tenant and MFA declaration details and the unsigned-token rules, schedule and manual-run semantics, Firestore history and Storage stored-byte limit details, macOS export ACL rules, and the container exposure rules.
+- The README, and with it the npm package page, is now a short overview with a quick start, a scope summary and links. The configuration and usage details it carried are on the [documentation site](https://t-k.github.io/fireemu/), which gains the parts it lacked: `fireemu config show` and `init --reference`, the remaining discovery ownership rules, Auth authorized domains, provider declarations, tenant and MFA declaration details and the unsigned-token rules, schedule and manual-run semantics, Firestore history and Storage stored-byte limit details, macOS export ACL rules, and the container exposure rules.
 - Pipelines (`ExecutePipeline` and REST `:executePipeline`) now frame a small answer as production does: all results in one response message (gRPC) or one array element (REST), as the FS-ENT-ORACLE O-1 recordings show, instead of one result per message or element. Larger answers are cut at about 1 MiB; where production cuts them is unobserved. A refusal that follows results over gRPC still arrives after them, and a REST refusal still answers the error alone.
 - `select({__name__: field("__name__")})` now answers the document name, as production did for the form alone (O5 `appendix#proposed-select-name-field`) and as the official emulator does beside other aliases: the result carries `name`, and the other aliases as fields. The strict profile answers only the recorded form (alone, unquoted) and refuses the others as unobserved; the emulator profile no longer refuses what the official emulator accepts.
 - The emulator profile now refuses a REST `runQuery`, `runAggregationQuery` or `partitionQuery` whose field filter names an unknown operator in production's words, the 400 `INVALID_ARGUMENT` with the transcoder's `Invalid value at 'structured_query.where.field_filter.op' (…)` message and its `BadRequest` detail (recorded 2026-09-24), instead of fireemu's own `unknown field filter operator`. The request was refused before as well (the official emulator answers `Payload isn't valid for request.`); the strict profile already answered this way.
@@ -332,7 +332,7 @@ Two more parents are `COMPAT_VERIFIED` against production, the Firebase Realtime
 
 RTDB: Production parity covers only the recorded cases: REST PUT/GET/PATCH values and priorities, `format=export`, `orderBy` with `startAt`/`limitToFirst`/`limitToLast`, ETag and `if-match`, and the recorded errors; Security Rules loading and owner/UID `.read`/`.write` evaluation; anonymous event streams; and the web SDK's value listeners, onDisconnect `set`, `remove`, one transaction schedule and email/password Auth over WebSocket and long polling. The Rules coverage view, import/export and the UI database view are compared with the official emulator. Unverified in production (they follow the official emulator): REST POST/push ids, DELETE, server values (`.sv`), `shallow`, `print=silent`, `equalTo`/`endAt`/`startAfter`/`endBefore`, `$priority` ordering, `timeout` and `writeSizeLimit`; Security Rules `.validate`, cascading, `data`/`newData`/`root`, query-based rules, `auth.token` claims and `.indexOn` refusal texts beyond the recorded query; SDK child events, SDK queries, `update`/`push` and multi-location updates, SDK server values, reconnect/resume and event ordering, query-scoped cancellation, onDisconnect cancel and re-register, and Functions trigger delivery; token expiry and revocation, and the mobile, Java and Python SDKs are outside the scope.
 
-FS-TEXT-SEARCH: every recorded production search response (531 responses, 223 distinct queries) is replayed through the local engine. Membership and result order match production for Latin-script text: all 64 score-sorted cases and 96 of the 104 unsorted cases keep production order, and the remaining 8 have a known membership difference. Numeric `score()` values are approximate, only their order is compared, and `productionExact` still refuses every text search. See [local text search](https://github.com/fireemu/fireemu/blob/main/docs/text-search.md#production-comparison).
+FS-TEXT-SEARCH: every recorded production search response (531 responses, 223 distinct queries) is replayed through the local engine. Membership and result order match production for Latin-script text: all 64 score-sorted cases and 96 of the 104 unsorted cases keep production order, and the remaining 8 have a known membership difference. Numeric `score()` values are approximate, only their order is compared, and `productionExact` still refuses every text search. See [local text search](https://github.com/t-k/fireemu/blob/main/docs/text-search.md#production-comparison).
 
 Known differences:
 
@@ -345,7 +345,7 @@ Known differences:
 
 ### Added
 
-- Firestore Enterprise full-text search: the `search` stage runs over REST and gRPC on Enterprise Native databases (owner-only while Security Rules are configured), with Unicode normalization, positional phrases, exclusions, indexed-field restrictions, `score()` ordering by an occurrence and adjacency relevance model, and creation-time ordering; updates and deletes are reflected at the current snapshot. Text index definitions (`searchConfig.textSpec`) load from the configured `firestore.indexes.json` and are loaded again when it changes. Explicit control actions advance, complete, fail and repair a generation-scoped index build, and session snapshots and resets include the text catalog. Query analysis matches the indexed text: an unquoted colon separates words, and a query term keeps the combining mark that case folding splits off a Latin letter such as `İ`, as production recorded (`İstanbul` matches no document, `istanbul` matches `İstanbul`). See [local text search](https://github.com/fireemu/fireemu/blob/main/docs/text-search.md).
+- Firestore Enterprise full-text search: the `search` stage runs over REST and gRPC on Enterprise Native databases (owner-only while Security Rules are configured), with Unicode normalization, positional phrases, exclusions, indexed-field restrictions, `score()` ordering by an occurrence and adjacency relevance model, and creation-time ordering; updates and deletes are reflected at the current snapshot. Text index definitions (`searchConfig.textSpec`) load from the configured `firestore.indexes.json` and are loaded again when it changes. Explicit control actions advance, complete, fail and repair a generation-scoped index build, and session snapshots and resets include the text catalog. Query analysis matches the indexed text: an unquoted colon separates words, and a query term keeps the combining mark that case folding splits off a Latin letter such as `İ`, as production recorded (`İstanbul` matches no document, `istanbul` matches `İstanbul`). See [local text search](https://github.com/t-k/fireemu/blob/main/docs/text-search.md).
 - An Enterprise Native database configured in Fireemu's configuration, not only one created through the Admin API, now serves the Firestore Admin REST API's index and long-running operation methods, text indexes included; other Admin methods keep their refusals. An index list with a `pageSize` other than 0 is refused with `Invalid page size. Only 0 is supported.`
 - Realtime Database triggers for Cloud Functions: v1 `database.ref()` / `database.instance().ref()` `onCreate`, `onUpdate`, `onDelete` and `onWrite`, and v2 `onValueCreated`, `onValueUpdated`, `onValueDeleted` and `onValueWritten`, scoped to their project, instance and reference pattern. A codebase that exports them is no longer refused at discovery. A write and its events commit together, and a write that no trigger reference can reach is applied without capturing snapshots. While the event queue is full, a write whose events would fit an empty queue is refused with 503; a write whose events can never fit (more than 4096 events or 64 MiB) is applied without them, and an event larger than an invocation frame (16 MiB) is dropped alone. Drops print one warning per session and are counted as `admission.database_fanout_dropped`. Local instances are in `us-central1`, so a 2nd-gen trigger in another region does not fire, and a warning at load says so, as the official emulator warns. Trigger delivery has not been observed in production.
 - Realtime Database Rules coverage reports, as the official emulator serves them: `/.inspect/coverage?ns=<instance>` (an HTML viewer) and `/.inspect/coverage.json?ns=<instance>`. Each expression keeps its first 64 distinct results (at most 64 KiB of strings) and counts later new results in `values-omitted`.
@@ -371,7 +371,7 @@ Known differences:
 - Add default-session Firestore diagnostic counts, estimated coverage memory, and explicit generation/interval-checked clearing of coverage and retained request traces. Clearing preserves rules and unsaved drafts. Collection intervals are separated when completed evaluations merge, so an earlier-started evaluation can finish in the new interval. Memory estimates exclude source, AST, trace payloads and allocator overhead and do not represent process RSS.
 - Add paired-binary and mixed-service benchmark measurements, with an optional pinned baseline build in CI.
 
-- The Firebase Realtime Database is served: the REST API with event streams, and the WebSocket and long-polling protocols the SDKs use, with listens, queries, transactions and `onDisconnect` writes. It starts with `--only database`, `emulators.database` in `firebase.json`, `daemon.databasePort` or `--database-port` (port 9000 by default), and `exec` sets `FIREBASE_DATABASE_EMULATOR_HOST`. Its behavior is compared with the official emulator (firebase-database-emulator v4.11.2); it has no parity claim yet, because production has not been observed, and rules coverage reports, Functions triggers and an Emulator UI view are not implemented. Where production has not been observed it follows the official emulator, and that behavior may change. See the [Realtime Database page](https://fireemu.github.io/fireemu/products/realtime-database/).
+- The Firebase Realtime Database is served: the REST API with event streams, and the WebSocket and long-polling protocols the SDKs use, with listens, queries, transactions and `onDisconnect` writes. It starts with `--only database`, `emulators.database` in `firebase.json`, `daemon.databasePort` or `--database-port` (port 9000 by default), and `exec` sets `FIREBASE_DATABASE_EMULATOR_HOST`. Its behavior is compared with the official emulator (firebase-database-emulator v4.11.2); it has no parity claim yet, because production has not been observed, and rules coverage reports, Functions triggers and an Emulator UI view are not implemented. Where production has not been observed it follows the official emulator, and that behavior may change. See the [Realtime Database page](https://t-k.github.io/fireemu/products/realtime-database/).
 - Realtime Database Security Rules (`.read`, `.write`, `.validate`, `.indexOn`) are compared with the official emulator over REST, SSE with and without range/count queries, and unqueried realtime listens; long polling shares the realtime session implementation. This does not claim coverage of every WebSocket query shape. `onDisconnect` registration checks an update entry by entry against the current tree and refuses it if any entry fails. At disconnect, entries denied alone are dropped, then the retained entries are judged as one combined update; a failure there prevents all retained entries from applying. The `database` section of `firebase.json` loads them as firebase-tools does (the single form into `<project>-default-rtdb`, the array form per deploy target or instance); a file that does not load stops startup with its line and column, a changed file is loaded again, and `/.settings/rules.json` reads and replaces them, as `@firebase/rules-unit-testing` does. A rules change, a write, a session reset or a snapshot restore cancels the listens and event streams the rules no longer allow. Comparison is limited to recorded official-emulator cases. The listed unsupported syntax, snapshot identity comparisons and evaluation errors are refused when rules load or produce rule errors. The eight recorded patterns refused by the official emulator's determinization resource limit are also rejected when fireemu loads rules, including in unevaluated expression branches. This does not establish complete regular-expression or production equivalence. See the page for the listed differences.
 - Realtime Database credentials follow the profile: a single `Bearer owner` or `access_token=owner` is the owner administrator; other single Bearer/access-token credentials are administrators under `emulator`, as on the official emulator, and are refused with 401 under `strict`. Under `strict`, `auth=` must be a token Fireemu's Auth verifies for the instance's project, and other unusable credentials are refused with 401. In either profile, a repeated query parameter, multiple Authorization headers, or multiple credential sources is refused with 400 even when the values are identical. `auth.allowUnsignedIdTokens` now also decides whether the database's rules accept `@firebase/rules-unit-testing` mock tokens. An instance without rules is open, or, with the new `database.defaultAccess = "locked"` (the `productionExact` default, strict profile only), answers only the `owner` credential. The start banner's `database rules:` line names each rules file and its instance.
 - The Realtime Database rules route (`/.settings/rules.json`) requires a loopback peer, as the Firestore and Storage rules routes do. Non-loopback requests are refused with 403 before credential evaluation, including repeated-leading-slash and percent-encoded `.settings` paths.
@@ -1267,53 +1267,53 @@ Security Rules (FS-RULES): behavior below was measured against a real Firestore 
 
 [Unreleased]: https://github.com/fireemu/fireemu/compare/v0.48.0...HEAD
 [0.48.0]: https://github.com/fireemu/fireemu/compare/v0.47.0...v0.48.0
-[0.47.0]: https://github.com/fireemu/fireemu/compare/v0.46.0...v0.47.0
-[0.46.0]: https://github.com/fireemu/fireemu/compare/v0.45.0...v0.46.0
-[0.45.0]: https://github.com/fireemu/fireemu/compare/v0.44.0...v0.45.0
-[0.44.0]: https://github.com/fireemu/fireemu/compare/v0.43.0...v0.44.0
-[0.43.0]: https://github.com/fireemu/fireemu/compare/v0.42.0...v0.43.0
-[0.42.0]: https://github.com/fireemu/fireemu/compare/v0.41.0...v0.42.0
-[0.41.0]: https://github.com/fireemu/fireemu/compare/v0.40.0...v0.41.0
-[0.40.0]: https://github.com/fireemu/fireemu/compare/v0.39.0...v0.40.0
-[0.39.0]: https://github.com/fireemu/fireemu/compare/v0.38.1...v0.39.0
-[0.38.1]: https://github.com/fireemu/fireemu/compare/v0.38.0...v0.38.1
-[0.38.0]: https://github.com/fireemu/fireemu/compare/v0.37.0...v0.38.0
-[0.37.0]: https://github.com/fireemu/fireemu/compare/v0.36.0...v0.37.0
-[0.36.0]: https://github.com/fireemu/fireemu/compare/v0.35.0...v0.36.0
-[0.35.0]: https://github.com/fireemu/fireemu/compare/v0.34.0...v0.35.0
-[0.34.0]: https://github.com/fireemu/fireemu/compare/v0.33.0...v0.34.0
-[0.33.0]: https://github.com/fireemu/fireemu/compare/v0.32.0...v0.33.0
-[0.32.0]: https://github.com/fireemu/fireemu/compare/v0.31.0...v0.32.0
-[0.31.0]: https://github.com/fireemu/fireemu/compare/v0.30.0...v0.31.0
-[0.30.0]: https://github.com/fireemu/fireemu/compare/v0.29.0...v0.30.0
-[0.29.0]: https://github.com/fireemu/fireemu/compare/v0.28.0...v0.29.0
-[0.28.0]: https://github.com/fireemu/fireemu/compare/v0.27.1...v0.28.0
-[0.27.1]: https://github.com/fireemu/fireemu/compare/v0.27.0...v0.27.1
-[0.27.0]: https://github.com/fireemu/fireemu/compare/v0.26.0...v0.27.0
-[0.26.0]: https://github.com/fireemu/fireemu/compare/v0.25.0...v0.26.0
-[0.25.0]: https://github.com/fireemu/fireemu/compare/v0.24.0...v0.25.0
-[0.24.0]: https://github.com/fireemu/fireemu/compare/v0.23.0...v0.24.0
-[0.23.0]: https://github.com/fireemu/fireemu/compare/v0.22.0...v0.23.0
-[0.22.0]: https://github.com/fireemu/fireemu/compare/v0.21.0...v0.22.0
-[0.21.0]: https://github.com/fireemu/fireemu/compare/v0.20.0...v0.21.0
-[0.20.0]: https://github.com/fireemu/fireemu/compare/v0.19.0...v0.20.0
-[0.19.0]: https://github.com/fireemu/fireemu/compare/v0.18.0...v0.19.0
-[0.18.0]: https://github.com/fireemu/fireemu/compare/v0.17.0...v0.18.0
-[0.17.0]: https://github.com/fireemu/fireemu/compare/v0.16.0...v0.17.0
-[0.16.0]: https://github.com/fireemu/fireemu/compare/v0.15.0...v0.16.0
-[0.15.0]: https://github.com/fireemu/fireemu/compare/v0.14.0...v0.15.0
-[0.14.0]: https://github.com/fireemu/fireemu/compare/v0.13.0...v0.14.0
-[0.13.0]: https://github.com/fireemu/fireemu/compare/v0.12.0...v0.13.0
-[0.12.0]: https://github.com/fireemu/fireemu/compare/v0.11.0...v0.12.0
-[0.11.0]: https://github.com/fireemu/fireemu/compare/v0.10.0...v0.11.0
-[0.10.0]: https://github.com/fireemu/fireemu/compare/v0.9.0...v0.10.0
-[0.9.0]: https://github.com/fireemu/fireemu/compare/v0.8.0...v0.9.0
-[0.8.0]: https://github.com/fireemu/fireemu/compare/v0.7.1...v0.8.0
-[0.7.1]: https://github.com/fireemu/fireemu/compare/v0.7.0...v0.7.1
-[0.7.0]: https://github.com/fireemu/fireemu/compare/v0.6.0...v0.7.0
-[0.6.0]: https://github.com/fireemu/fireemu/compare/v0.5.0...v0.6.0
-[0.5.0]: https://github.com/fireemu/fireemu/compare/v0.4.0...v0.5.0
-[0.4.0]: https://github.com/fireemu/fireemu/compare/v0.3.0...v0.4.0
-[0.3.0]: https://github.com/fireemu/fireemu/compare/v0.2.0...v0.3.0
-[0.2.0]: https://github.com/fireemu/fireemu/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/fireemu/fireemu/releases/tag/v0.1.0
+[0.47.0]: https://github.com/t-k/fireemu/compare/v0.46.0...v0.47.0
+[0.46.0]: https://github.com/t-k/fireemu/compare/v0.45.0...v0.46.0
+[0.45.0]: https://github.com/t-k/fireemu/compare/v0.44.0...v0.45.0
+[0.44.0]: https://github.com/t-k/fireemu/compare/v0.43.0...v0.44.0
+[0.43.0]: https://github.com/t-k/fireemu/compare/v0.42.0...v0.43.0
+[0.42.0]: https://github.com/t-k/fireemu/compare/v0.41.0...v0.42.0
+[0.41.0]: https://github.com/t-k/fireemu/compare/v0.40.0...v0.41.0
+[0.40.0]: https://github.com/t-k/fireemu/compare/v0.39.0...v0.40.0
+[0.39.0]: https://github.com/t-k/fireemu/compare/v0.38.1...v0.39.0
+[0.38.1]: https://github.com/t-k/fireemu/compare/v0.38.0...v0.38.1
+[0.38.0]: https://github.com/t-k/fireemu/compare/v0.37.0...v0.38.0
+[0.37.0]: https://github.com/t-k/fireemu/compare/v0.36.0...v0.37.0
+[0.36.0]: https://github.com/t-k/fireemu/compare/v0.35.0...v0.36.0
+[0.35.0]: https://github.com/t-k/fireemu/compare/v0.34.0...v0.35.0
+[0.34.0]: https://github.com/t-k/fireemu/compare/v0.33.0...v0.34.0
+[0.33.0]: https://github.com/t-k/fireemu/compare/v0.32.0...v0.33.0
+[0.32.0]: https://github.com/t-k/fireemu/compare/v0.31.0...v0.32.0
+[0.31.0]: https://github.com/t-k/fireemu/compare/v0.30.0...v0.31.0
+[0.30.0]: https://github.com/t-k/fireemu/compare/v0.29.0...v0.30.0
+[0.29.0]: https://github.com/t-k/fireemu/compare/v0.28.0...v0.29.0
+[0.28.0]: https://github.com/t-k/fireemu/compare/v0.27.1...v0.28.0
+[0.27.1]: https://github.com/t-k/fireemu/compare/v0.27.0...v0.27.1
+[0.27.0]: https://github.com/t-k/fireemu/compare/v0.26.0...v0.27.0
+[0.26.0]: https://github.com/t-k/fireemu/compare/v0.25.0...v0.26.0
+[0.25.0]: https://github.com/t-k/fireemu/compare/v0.24.0...v0.25.0
+[0.24.0]: https://github.com/t-k/fireemu/compare/v0.23.0...v0.24.0
+[0.23.0]: https://github.com/t-k/fireemu/compare/v0.22.0...v0.23.0
+[0.22.0]: https://github.com/t-k/fireemu/compare/v0.21.0...v0.22.0
+[0.21.0]: https://github.com/t-k/fireemu/compare/v0.20.0...v0.21.0
+[0.20.0]: https://github.com/t-k/fireemu/compare/v0.19.0...v0.20.0
+[0.19.0]: https://github.com/t-k/fireemu/compare/v0.18.0...v0.19.0
+[0.18.0]: https://github.com/t-k/fireemu/compare/v0.17.0...v0.18.0
+[0.17.0]: https://github.com/t-k/fireemu/compare/v0.16.0...v0.17.0
+[0.16.0]: https://github.com/t-k/fireemu/compare/v0.15.0...v0.16.0
+[0.15.0]: https://github.com/t-k/fireemu/compare/v0.14.0...v0.15.0
+[0.14.0]: https://github.com/t-k/fireemu/compare/v0.13.0...v0.14.0
+[0.13.0]: https://github.com/t-k/fireemu/compare/v0.12.0...v0.13.0
+[0.12.0]: https://github.com/t-k/fireemu/compare/v0.11.0...v0.12.0
+[0.11.0]: https://github.com/t-k/fireemu/compare/v0.10.0...v0.11.0
+[0.10.0]: https://github.com/t-k/fireemu/compare/v0.9.0...v0.10.0
+[0.9.0]: https://github.com/t-k/fireemu/compare/v0.8.0...v0.9.0
+[0.8.0]: https://github.com/t-k/fireemu/compare/v0.7.1...v0.8.0
+[0.7.1]: https://github.com/t-k/fireemu/compare/v0.7.0...v0.7.1
+[0.7.0]: https://github.com/t-k/fireemu/compare/v0.6.0...v0.7.0
+[0.6.0]: https://github.com/t-k/fireemu/compare/v0.5.0...v0.6.0
+[0.5.0]: https://github.com/t-k/fireemu/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/t-k/fireemu/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/t-k/fireemu/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/t-k/fireemu/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/t-k/fireemu/releases/tag/v0.1.0

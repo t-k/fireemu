@@ -429,6 +429,14 @@ if response.code == 200:
                 "{stdout}"
             );
             assert!(stderr.contains("incorrect \"aud\""), "{stderr}");
+            // The blocking key signs blocking tokens only: ID tokens stay unsigned-emulator.
+            assert!(
+                stdout.contains("blocking tokens:  production (RS256 kid "),
+                "{stdout}"
+            );
+            assert!(!stdout.contains("id tokens:"), "{stdout}");
+        } else {
+            assert!(!stdout.contains("blocking tokens:"), "{name}: {stdout}");
         }
         assert_eq!(
             stderr.matches("functions.authBlockingToken").count(),

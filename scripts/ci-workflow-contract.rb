@@ -68,6 +68,8 @@ assert(pr_steps.none? { |step| step["uses"].to_s.match?(%r{\Apnpm/action-setup@}
 end
 
 platform_steps = jobs.fetch("platforms").fetch("steps")
+assert(jobs.dig("platforms", "name").to_s.start_with?("tests ("), "platform tests must retain the tests ( name prefix")
+assert(jobs.dig("platforms", "strategy", "fail-fast") == false, "platform tests must run every partition without fail-fast")
 platform_runs = platform_steps.map { |step| step["run"] }.compact.join("\n")
 platform_matrix = jobs.dig("platforms", "strategy", "matrix")
 assert(platform_matrix == { "include" => [{ "os" => "macos-latest", "shard" => "1/2" }, { "os" => "macos-latest", "shard" => "2/2" }, { "os" => "windows-latest", "shard" => "" }] }, "platform tests must run both macOS partitions and one unpartitioned Windows job")
@@ -157,6 +159,7 @@ assert(
 )
 strict = release.dig("jobs", "strict-production")
 assert(strict, "release must compare the strict profile of the installed artifact with the committed production recordings")
+assert(strict["name"].to_s.start_with?("strict-production"), "strict-production must retain the strict-production name prefix")
 assert(strict.fetch("needs").include?("build"), "strict-production must test the built platform package")
 assert(strict["continue-on-error"].nil?, "strict-production must block publication")
 assert(strict.dig("strategy", "fail-fast") == false && strict.dig("strategy", "matrix", "group") == %w[eventarc transaction rtdb rest], "strict-production must run every group without fail-fast")
@@ -252,6 +255,9 @@ assert(extraction.dig("env", "VERSION") == "${{ steps.version.outputs.version }}
 assert(plan_steps.index(notes_upload) > plan_steps.index(extraction), "the notes are uploaded after they are extracted")
 
 publish_steps = release.dig("jobs", "publish", "steps")
+assert(!release.dig("jobs", "publish").key?("if"), "release publish must not bypass required jobs")
+assert(publish_steps.none? { |step| step.key?("continue-on-error") }, "release publish steps must not hide failures")
+assert(publish_steps.none? { |step| step["if"].to_s.match?(/\b(?:always|failure|cancelled)\s*\(\s*\)/i) }, "release publish steps must not bypass failures or cancellations")
 release_assets_upload = uploads.call("publish", "release-assets").first
 assert(release_assets_upload.dig("with", "path") == "dist/*", "the release assets are the attested dist directory")
 assert(release_assets_upload["if"] == "needs.plan.outputs.publish == 'true'", "a dry run must not upload release assets")

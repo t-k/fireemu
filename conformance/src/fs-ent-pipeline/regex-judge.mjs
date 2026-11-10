@@ -4,7 +4,9 @@
 // functions (fs-ent-pipeline-production.json, program `fs-ent-pipeline/o8b/strings-main`):
 //   200  one frame {executionTime, results:[{fields:{v}}]} with v a boolean, a string, null, or an
 //        array of strings (an unmatched group in an array may come back as null);
-//   400  one frame {error:{code:400, message:"Unsupported regex syntax.", status:"INVALID_ARGUMENT"}}.
+//   400  one frame {error:{code:400, status:"INVALID_ARGUMENT", message}} with the message
+//        "Unsupported regex syntax." or, for find and find_all with several groups,
+//        "At most one capture group is supported.".
 // fireemu's own refusal of a function it has not observed is a 501 UNIMPLEMENTED. Anything else is
 // `unknown`: the row is not used, and nothing is guessed.
 
@@ -18,6 +20,8 @@ const hasKeys = (value, keys) =>
 const unknown = (reason) => ({ kind: "unknown", reason });
 
 const SYNTAX_MESSAGE = "Unsupported regex syntax.";
+// Recorded by FS-PIPELINE-REGEX (2026-11-10) for regex_find and regex_find_all with two groups.
+const CAPTURES_MESSAGE = "At most one capture group is supported.";
 
 function readItem(value) {
   if (hasKeys(value, ["stringValue"]) && typeof value.stringValue === "string")
@@ -64,8 +68,10 @@ export function readAnswer(answer) {
     const { error } = frame;
     if (!hasKeys(error, ["code", "message", "status"])) return unknown("error has other keys");
     if (error.code !== status) return unknown("error code differs from the status");
-    if (status === 400 && error.message === SYNTAX_MESSAGE && error.status === "INVALID_ARGUMENT")
-      return { kind: "refused-syntax" };
+    if (status === 400 && error.status === "INVALID_ARGUMENT") {
+      if (error.message === SYNTAX_MESSAGE) return { kind: "refused-syntax" };
+      if (error.message === CAPTURES_MESSAGE) return { kind: "refused-captures" };
+    }
     if (status === 501 && typeof error.message === "string" && error.status === "UNIMPLEMENTED")
       return { kind: "unimplemented" };
   }

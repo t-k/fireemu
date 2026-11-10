@@ -26,6 +26,18 @@ const syntax = {
     { error: { code: 400, message: "Unsupported regex syntax.", status: "INVALID_ARGUMENT" } },
   ],
 };
+const captures = {
+  status: 400,
+  body: [
+    {
+      error: {
+        code: 400,
+        message: "At most one capture group is supported.",
+        status: "INVALID_ARGUMENT",
+      },
+    },
+  ],
+};
 const bool = (v) => ({ booleanValue: v });
 const text = (v) => ({ stringValue: v });
 const none = { nullValue: null };
@@ -50,6 +62,7 @@ test("recorded O-8B answers are read as their value", () => {
     items: [{ kind: "string", value: "a" }, { kind: "null" }],
   });
   assert.deepEqual(readAnswer(syntax), { kind: "refused-syntax" });
+  assert.deepEqual(readAnswer(captures), { kind: "refused-captures" });
 });
 
 test("the real recorded rows of the same route read as they were recorded", () => {
@@ -176,6 +189,37 @@ test("every unrecorded shape is unknown, never a value", () => {
     "extra error key",
   );
   unknown({ status: 403, body: syntax.body }, "right body, wrong status");
+  unknown({ status: 403, body: captures.body }, "capture message, wrong status");
+  unknown(
+    {
+      status: 400,
+      body: [
+        {
+          error: {
+            code: 400,
+            message: "At most one capture group is supported",
+            status: "INVALID_ARGUMENT",
+          },
+        },
+      ],
+    },
+    "capture message without the final full stop",
+  );
+  unknown(
+    {
+      status: 400,
+      body: [
+        {
+          error: {
+            code: 400,
+            message: "At most one capture group is supported.",
+            status: "UNKNOWN",
+          },
+        },
+      ],
+    },
+    "capture message, other status text",
+  );
 });
 
 test("fireemu's refusal of an unobserved function is its own kind", () => {
@@ -460,5 +504,79 @@ test("a printed row names the production, prediction, strict and emulator readin
   assert.equal(
     formatRows({ rows: [row] }),
     'p#s\tproduction=bool:true\tprediction=null\tstrict=unimplemented\temulator=string:"x"\tvsPrediction=differs\tvsStrict=unobserved\tvsEmulator=differs',
+  );
+});
+
+test("the recorded production rows of the regex observation all read, and the facts they show are pinned", () => {
+  const fixture = JSON.parse(
+    readFileSync(new URL("../fs-ent-pipeline-regex-production.json", import.meta.url), "utf8"),
+  );
+  const pred = JSON.parse(
+    readFileSync(new URL("./fs-ent-pipeline/regex-predictions.json", import.meta.url), "utf8"),
+  );
+  const side = { results: {} };
+  const report = reportRows({ fixture, strict: side, emulator: side, predictions: pred });
+  assert.equal(report.rows.length, PAIRS.length * 4);
+  assert.deepEqual([...new Set(report.rows.map((r) => r.production.kind))].toSorted(), [
+    "array",
+    "bool",
+    "null",
+    "refused-captures",
+    "refused-syntax",
+    "string",
+  ]);
+  const row = (name, label) => report.rows.find((r) => r.id.endsWith(`#${stepIdOf(name, label)}`));
+  const same = (name, label, outcome) =>
+    assert.deepEqual(row(name, label).production, outcome, `${name} ${label}`);
+  // Shorthand classes and boundaries are ASCII only; \\s also takes the vertical tab.
+  same("regex_contains", "d-arabic", { kind: "bool", value: false });
+  same("regex_contains", "nd-arabic", { kind: "bool", value: true });
+  same("regex_contains", "w-eacute", { kind: "bool", value: false });
+  same("regex_contains", "nw-eacute", { kind: "bool", value: true });
+  same("regex_contains", "b-cafe-edge", { kind: "bool", value: true });
+  same("regex_contains", "s-nbsp", { kind: "bool", value: false });
+  same("regex_contains", "ns-nbsp", { kind: "bool", value: true });
+  same("regex_contains", "s-vt", { kind: "bool", value: true });
+  same("regex_contains", "s-nel", { kind: "bool", value: false });
+  same("regex_contains", "s-em", { kind: "bool", value: false });
+  // Unicode property classes are Unicode.
+  same("regex_contains", "pnd-arabic", { kind: "bool", value: true });
+  same("regex_contains", "pl-eacute", { kind: "bool", value: true });
+  // Not RE2: POSIX classes and (?m) are refused, (?i) does not fold beyond ASCII, (?u) and (?-u)
+  // are accepted, (?U) does not make a quantifier lazy.
+  for (const label of [
+    "posix-digit",
+    "posix-word",
+    "posix-nbsp",
+    "posix-vt",
+    "m-anchor",
+    "ctl-class",
+    "del-class",
+  ])
+    same("regex_contains", label, { kind: "refused-syntax" });
+  same("regex_contains", "i-eacute", { kind: "bool", value: false });
+  same("regex_contains", "i-ascii-ctl", { kind: "bool", value: true });
+  same("regex_contains", "u-flag", { kind: "bool", value: false });
+  same("regex_contains", "nu-flag", { kind: "bool", value: false });
+  same("regex_find", "ungreedy", { kind: "string", value: "aaa" });
+  // Captures: find and find_all take at most one group; contains and match do not care.
+  same("regex_find", "cap-two", { kind: "refused-captures" });
+  same("regex_find_all", "cap-alt-first", { kind: "refused-captures" });
+  same("regex_contains", "cap-two", { kind: "bool", value: true });
+  same("regex_find", "cap-opt-unmatched", { kind: "null" });
+  same("regex_find_all", "cap-all-alt", {
+    kind: "array",
+    items: [
+      { kind: "string", value: "a" },
+      { kind: "null" },
+      { kind: "string", value: "a" },
+      { kind: "null" },
+    ],
+  });
+  // No row is unknown, and none differs between the two recordings.
+  assert.equal(report.counts.vsPrediction.unknown, undefined);
+  assert.equal(
+    Object.keys(fixture.programs).every((id) => fixture.programs[id].second === undefined),
+    true,
   );
 });

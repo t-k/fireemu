@@ -1318,3 +1318,32 @@ test("the channel's release is matched to the version whatever form its name has
   });
   assert.equal(deployOf(r).v01.releaseOnChannel, true);
 });
+
+test("a stop during the readiness window reads no channel and keeps no release verdict", async () => {
+  let stop;
+  const r = await run({
+    setup: (_world, deps) => {
+      deps.installSignals = (handler) => {
+        stop = handler;
+      };
+    },
+    overrides: [
+      {
+        match: "GET /ready.txt/",
+        answer: (call) => {
+          if (!call.host.includes("-v01-")) return undefined;
+          stop();
+          return answer(404);
+        },
+      },
+    ],
+  });
+  assert.equal(deployOf(r).v01.failure, "stopped");
+  assert.equal("releaseOnChannel" in deployOf(r).v01, false);
+  assert.equal(
+    r.world.log.filter(
+      (call) => call.method === "GET" && call.url?.endsWith("/channels/hst-abc123-v01"),
+    ).length,
+    0,
+  );
+});

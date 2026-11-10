@@ -45,6 +45,19 @@ fn free_port() -> u16 {
     port
 }
 
+/// Three ports nothing is listening on, distinct from each other: all three are held at once
+/// before they are released, so the kernel cannot hand the same one out twice.
+fn distinct_free_ports() -> [u16; 3] {
+    let held: Vec<std::net::TcpListener> = (0..3)
+        .map(|_| std::net::TcpListener::bind("127.0.0.1:0").unwrap())
+        .collect();
+    let ports: Vec<u16> = held
+        .iter()
+        .map(|listener| listener.local_addr().unwrap().port())
+        .collect();
+    [ports[0], ports[1], ports[2]]
+}
+
 fn scratch(name: &str) -> Scratch {
     Scratch::new("exec", name)
 }
@@ -900,6 +913,10 @@ fn an_unselected_service_binds_no_listener_at_all() {
     // Whatever `--only` leaves out must not be bound by the daemon while it serves, which is what
     // "the service is not started" means. The check reads the daemon's own listeners (lsof on the
     // parent of the command), so a parallel test that reuses a freed port cannot fail it.
+    // A freed port can still be taken by the daemon's own ephemeral binds (the control listener
+    // and the automatic Hub). The daemon now skips every configured port, and the scripted
+    // collision tests in `ephemeral_bind_tests` (crates/fireemu/src/main.rs) are the
+    // deterministic guard for that; this test checks the whole run end to end.
     for (label, only, want) in [
         ("firestore-only", "firestore", [true, false, false]),
         ("auth-only", "auth", [false, true, false]),
@@ -911,7 +928,7 @@ fn an_unselected_service_binds_no_listener_at_all() {
             [true, false, true],
         ),
     ] {
-        let ports = [free_port(), free_port(), free_port()];
+        let ports = distinct_free_ports();
         let dir = scratch(&format!("lifecycle-{label}"));
         let probe = dir.join("probe.txt");
         // The command is a direct child of the daemon and runs while it is serving.

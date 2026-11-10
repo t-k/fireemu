@@ -638,6 +638,187 @@ fn auth_tokens_need_a_subject_and_an_issue_time() {
     );
 }
 
+/// The unsigned token the tests present: header `{"alg":"none"}`, the given claims, no signature.
+fn unsigned_token(claims: &str) -> String {
+    let table = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let encode = |text: &str| {
+        let mut out = String::new();
+        for chunk in text.as_bytes().chunks(3) {
+            let b = [
+                chunk[0],
+                *chunk.get(1).unwrap_or(&0),
+                *chunk.get(2).unwrap_or(&0),
+            ];
+            let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
+            for i in 0..=chunk.len() {
+                out.push(char::from(table[((n >> (18 - 6 * i)) & 63) as usize]));
+            }
+        }
+        out
+    };
+    format!("{}.{}.", encode(r#"{"alg":"none"}"#), encode(claims))
+}
+
+/// The `iat` shapes the official emulator (firebase-database-emulator v4.11.2, firebase-tools
+/// 15.28.2) was probed with over `auth` (docs.local/runs/rtdb-token-iat): `iat` is a number
+/// when it is an integer literal that fits an i64, or any literal with a fraction or an
+/// exponent (`1e400` is an infinite double); everything else is "Missing claim 'iat'".
+#[test]
+fn auth_token_iat_is_a_number_as_the_official_emulator_reads_one() {
+    let accepted = [
+        "1",
+        "0",
+        "-1",
+        "-0",
+        "1.5",
+        "0.1",
+        "1.0",
+        "1e3",
+        "1E3",
+        "1e30",
+        "1.7976931348623157e308",
+        "4.9e-324",
+        "1e-400",
+        "9223372036854775807",
+        "-9223372036854775808",
+        "123456789012345678",
+        // Beyond the double range the official emulator reads an infinite double, a number.
+        "1e400",
+        "-1e400",
+    ];
+    let refused = [
+        r#""1""#,
+        r#""x""#,
+        r#""""#,
+        r#"" 1 ""#,
+        r#""0x10""#,
+        r#""Infinity""#,
+        "null",
+        "true",
+        "false",
+        "[1]",
+        r#"{"a":1}"#,
+        // An integer literal beyond the i64 range is not a number the official emulator
+        // reads as `iat` (it keeps it as a big integer in any other claim).
+        "9223372036854775808",
+        "-9223372036854775809",
+        "12345678901234567890",
+        "18446744073709551615",
+    ];
+    let mut db = Database::new(RestOptions::default(), 1);
+    let (mut s, _) = open(&mut db, "/.ws?v=5&ns=iat");
+    let mut id = 0;
+    let mut auth = |claims: &str| {
+        id += 1;
+        let frame = request(
+            id,
+            "auth",
+            &format!(r#"{{"cred":"{}"}}"#, unsigned_token(claims)),
+        );
+        send(&mut db, &mut s, &frame).concat()
+    };
+    for iat in accepted {
+        let answer = auth(&format!(r#"{{"sub":"u1","iat":{iat}}}"#));
+        assert!(answer.contains(r#""s":"ok""#), "iat {iat}: {answer}");
+        assert!(answer.contains(r#""uid":"u1""#), "iat {iat}: {answer}");
+    }
+    for iat in refused {
+        let answer = auth(&format!(r#"{{"sub":"u1","iat":{iat}}}"#));
+        assert!(
+            answer.contains(r#""s":"invalid_token""#)
+                && answer.contains("Missing claim 'iat' in auth token."),
+            "iat {iat}: {answer}"
+        );
+    }
+    // The last of a repeated `iat` decides.
+    for (claims, ok) in [
+        (r#"{"sub":"u1","iat":"1","iat":2}"#, true),
+        (r#"{"sub":"u1","iat":1,"iat":2}"#, true),
+        (r#"{"sub":"u1","iat":2,"iat":"x"}"#, false),
+        (r#"{"sub":"u1","iat":1e400,"iat":"x"}"#, false),
+        (r#"{"sub":"u1","iat":"x","iat":1e400}"#, true),
+        (r#"{"sub":"u1","iat":1,"iat":12345678901234567890}"#, false),
+        (r#"{"sub":"u1","iat":12345678901234567890,"iat":1}"#, true),
+    ] {
+        let answer = auth(claims);
+        assert_eq!(answer.contains(r#""s":"ok""#), ok, "{claims}: {answer}");
+    }
+    // Only the top-level `iat` is the issue time: a nested one, and another claim holding an
+    // out-of-range number, change nothing.
+    for claims in [
+        r#"{"sub":"u1","iat":1,"x":{"iat":"x"}}"#,
+        r#"{"sub":"u1","iat":1,"x":12345678901234567890}"#,
+        r#"{"sub":"u1","iat":1,"x":1e400}"#,
+    ] {
+        let answer = auth(claims);
+        assert!(answer.contains(r#""s":"ok""#), "{claims}: {answer}");
+    }
+    // Both claims are checked, `iat` first: a token missing both is told about `iat`
+    // (docs.local/runs/rtdb-token-iat/ws-matrix-4.txt).
+    for (claims, missing) in [
+        (r#"{"sub":1,"iat":1e400}"#, "sub"),
+        (r#"{"iat":1}"#, "sub"),
+        (r#"{"sub":null,"iat":12345678901234567890}"#, "iat"),
+        (r#"{"sub":1,"iat":12345678901234567890}"#, "iat"),
+        (r#"{"sub":1}"#, "iat"),
+        (r#"{"iat":"x"}"#, "iat"),
+        ("{}", "iat"),
+    ] {
+        let answer = auth(claims);
+        assert!(
+            answer.contains(&format!("Missing claim '{missing}' in auth token.")),
+            "{claims}: {answer}"
+        );
+    }
+}
+
+/// Strict keeps its own reading of `iat` (a finite number, `sub` checked first), unchanged by the
+/// emulator profile's following the official emulator.
+#[test]
+fn strict_reads_auth_token_claims_as_before() {
+    let mut db = Database::new(
+        RestOptions {
+            credentials: fireemu_adapter_database::rest::Credentials {
+                strict: true,
+                ..Default::default()
+            },
+            ..RestOptions::default()
+        },
+        1,
+    );
+    let (mut s, _) = open(&mut db, "/.ws?v=5&ns=iatstrict");
+    let mut id = 0;
+    let mut auth = |claims: &str| {
+        id += 1;
+        let frame = request(
+            id,
+            "auth",
+            &format!(r#"{{"cred":"{}"}}"#, unsigned_token(claims)),
+        );
+        send(&mut db, &mut s, &frame).concat()
+    };
+    for (claims, ok) in [
+        (r#"{"sub":"u1","iat":1}"#, true),
+        (r#"{"sub":"u1","iat":9223372036854775808}"#, true),
+        (r#"{"sub":"u1","iat":12345678901234567890}"#, true),
+        (r#"{"sub":"u1","iat":1e400}"#, false),
+        (r#"{"sub":"u1","iat":-1e400}"#, false),
+        (r#"{"sub":"u1","iat":"1"}"#, false),
+    ] {
+        let answer = auth(claims);
+        assert_eq!(answer.contains(r#""s":"ok""#), ok, "{claims}: {answer}");
+    }
+    // `sub` is told first when both are missing.
+    for claims in ["{}", r#"{"iat":"x"}"#] {
+        let answer = auth(claims);
+        assert!(
+            answer.contains("Missing claim 'sub' in auth token."),
+            "{claims}: {answer}"
+        );
+    }
+    assert!(auth(r#"{"sub":"u1"}"#).contains("Missing claim 'iat' in auth token."));
+}
+
 mod properties {
     use super::*;
     use fireemu_adapter_database::realtime::{split_frames, MAX_FRAME_CHARS};

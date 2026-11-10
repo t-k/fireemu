@@ -1318,6 +1318,8 @@ pub struct RuntimeConfig {
     pub pubsub_dead_letter_authorization: DeadLetterAuthorization,
     /// `database.defaultAccess`: what a Realtime Database without rules allows.
     pub database_default_access: DatabaseDefaultAccess,
+    /// `functions.authBlockingToken`: the Auth blocking function token mode.
+    pub functions_auth_blocking_token: AuthBlockingToken,
     /// The rules files the `database` section of `firebase.json` names, and where each
     /// applies.
     pub database_rules: Vec<DatabaseRulesEntry>,
@@ -1438,6 +1440,44 @@ pub enum DatabaseDefaultAccess {
     Open,
     /// Only the `owner` credential is allowed.
     Locked,
+}
+
+/// `functions.authBlockingToken`: the Auth blocking function token mode.
+///
+/// Both profiles default to `emulated`: the official Auth emulator's unsigned token has the
+/// local runner address as its audience and expires 70 seconds after issue, and Admin SDKs skip
+/// verification. `productionExact` selects `production` under strict: an RS256 token with a kid,
+/// the registered cloudfunctions.net audience and a 300-second lifetime, verified by Python.
+/// Node functions receive the same production-shaped token but do not verify it, so they behave as before.
+/// Production mode requires the strict profile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AuthBlockingToken {
+    /// The official emulator's unsigned token.
+    #[default]
+    Emulated,
+    /// The production-signed token and Python verification.
+    Production,
+}
+
+impl AuthBlockingToken {
+    /// Parses the configuration spelling.
+    #[must_use]
+    pub fn parse_config(text: &str) -> Option<Self> {
+        match text {
+            "emulated" => Some(Self::Emulated),
+            "production" => Some(Self::Production),
+            _ => None,
+        }
+    }
+
+    /// The configuration spelling.
+    #[must_use]
+    pub const fn as_config_str(self) -> &'static str {
+        match self {
+            Self::Emulated => "emulated",
+            Self::Production => "production",
+        }
+    }
 }
 
 /// A rules file of the `database` section of `firebase.json`.
@@ -1769,6 +1809,7 @@ impl Default for RuntimeConfig {
             pubsub_local_bearer_token: None,
             pubsub_dead_letter_authorization: DeadLetterAuthorization::Implicit,
             database_default_access: DatabaseDefaultAccess::Open,
+            functions_auth_blocking_token: AuthBlockingToken::Emulated,
             database_rules: Vec::new(),
             database_rules_resolved: Vec::new(),
             pubsub_push_minimum_redelivery_interval_millis:
@@ -2178,12 +2219,13 @@ pub(crate) const SCHEDULER_KEYS: [&str; 5] = [
 ];
 
 /// The keys of the `functions` section.
-pub(crate) const FUNCTIONS_KEYS: [&str; 6] = [
+pub(crate) const FUNCTIONS_KEYS: [&str; 7] = [
     "manifest",
     "source",
     "runner",
     "maxGlobalConcurrency",
     "unservedTriggers",
+    "authBlockingToken",
     "clock",
 ];
 
@@ -4223,6 +4265,11 @@ impl RuntimeConfig {
         } else {
             DatabaseDefaultAccess::Open
         };
+        self.functions_auth_blocking_token = if exact {
+            AuthBlockingToken::Production
+        } else {
+            AuthBlockingToken::Emulated
+        };
         self.app_check.debug_tokens = if !exact && self.profile == CompatibilityProfile::Strict {
             AppCheckDebugTokens::Any
         } else {
@@ -4312,6 +4359,10 @@ impl RuntimeConfig {
             (
                 "database.defaultAccess",
                 self.database_default_access.as_config_str(),
+            ),
+            (
+                "functions.authBlockingToken",
+                self.functions_auth_blocking_token.as_config_str(),
             ),
         ];
         self.development_defaults = values
@@ -4878,6 +4929,25 @@ impl RuntimeConfig {
             if !FUNCTIONS_KEYS.contains(&key.as_str()) {
                 return Err(ConfigError(format!("unknown config key functions.{key}")));
             }
+        }
+        if let Some(value) = f.get("authBlockingToken") {
+            let mode = value
+                .as_str()
+                .and_then(AuthBlockingToken::parse_config)
+                .ok_or_else(|| {
+                    ConfigError(
+                        "functions.authBlockingToken must be \"emulated\" or \"production\""
+                            .to_owned(),
+                    )
+                })?;
+            if mode == AuthBlockingToken::Production && cfg.profile != CompatibilityProfile::Strict
+            {
+                return Err(ConfigError(
+                    "functions.authBlockingToken \"production\" requires the strict profile"
+                        .to_owned(),
+                ));
+            }
+            cfg.functions_auth_blocking_token = mode;
         }
         if let Some(value) = f.get("clock") {
             let modes = value
@@ -6586,6 +6656,10 @@ mod tests {
                     json!(cfg.database_default_access.as_config_str()),
                 ),
                 (
+                    "functions.authBlockingToken",
+                    json!(cfg.functions_auth_blocking_token.as_config_str()),
+                ),
+                (
                     "functions.clock.date",
                     json!(if cfg.functions_clock.date_virtual {
                         "virtual"
@@ -6635,7 +6709,9 @@ mod tests {
                     }
                     ("pubsub.deadLetterAuthorization", true) => json!("iam"),
                     ("database.defaultAccess", true) => json!("locked"),
-                    ("eventarc.authentication", true) => json!("production"),
+                    ("functions.authBlockingToken" | "eventarc.authentication", true) => {
+                        json!("production")
+                    }
                     // The key only matters to the strict profile; the emulator profile
                     // runs the query (Report is its inert value).
                     ("firestore.missingIndexes", _) if profile == "emulator" => json!("report"),
@@ -10100,6 +10176,75 @@ mod tests {
     }
 
     #[test]
+    fn auth_blocking_token_follows_profile_exact_and_explicit_precedence() {
+        for profile in ["emulator", "strict"] {
+            for exact in [None, Some(true), Some(false)] {
+                for key in [None, Some("emulated"), Some("production")] {
+                    let mut input = json!({"schemaVersion": 1, "profile": profile});
+                    if let Some(exact) = exact {
+                        input["productionExact"] = json!(exact);
+                    }
+                    if let Some(key) = key {
+                        input["functions"] = json!({"authBlockingToken": key});
+                    }
+                    let parsed = RuntimeConfig::from_json(&input);
+                    if profile == "emulator" && (exact == Some(true) || key == Some("production")) {
+                        assert!(parsed.is_err(), "{input}");
+                        continue;
+                    }
+                    let cfg = parsed.unwrap_or_else(|e| panic!("{input}: {e:?}"));
+                    let value = key.unwrap_or(if exact == Some(true) {
+                        "production"
+                    } else {
+                        "emulated"
+                    });
+                    let source = if key.is_some() {
+                        "explicit"
+                    } else if exact == Some(true) {
+                        "productionExact"
+                    } else {
+                        "default"
+                    };
+                    let entry = cfg
+                        .development_defaults
+                        .iter()
+                        .find(|entry| entry["key"] == "functions.authBlockingToken")
+                        .unwrap();
+                    assert_eq!(
+                        cfg.functions_auth_blocking_token.as_config_str(),
+                        value,
+                        "{input}"
+                    );
+                    assert_eq!(entry["value"], value, "{input}");
+                    assert_eq!(entry["source"], source, "{input}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn auth_blocking_token_rejects_invalid_values() {
+        for value in [
+            json!("unknown"),
+            json!(""),
+            json!(1),
+            json!(null),
+            json!(true),
+        ] {
+            let input = json!({"schemaVersion": 1, "functions": {"authBlockingToken": value}});
+            assert_eq!(
+                RuntimeConfig::from_json(&input).unwrap_err().0,
+                "functions.authBlockingToken must be \"emulated\" or \"production\""
+            );
+        }
+        let input = json!({"schemaVersion": 1, "profile": "emulator", "functions": {"authBlockingToken": "production"}});
+        assert_eq!(
+            RuntimeConfig::from_json(&input).unwrap_err().0,
+            "functions.authBlockingToken \"production\" requires the strict profile"
+        );
+    }
+
+    #[test]
     fn development_defaults_report_effective_values_and_sources() {
         let keys = [
             "auth.allowUnsignedCustomTokens",
@@ -10110,6 +10255,7 @@ mod tests {
             "auth.tenantIdFormat",
             "pubsub.deadLetterAuthorization",
             "appCheck.debugTokens",
+            "functions.authBlockingToken",
         ];
         let defaults = [
             "true",
@@ -10120,6 +10266,7 @@ mod tests {
             "readable",
             "implicit",
             "any",
+            "emulated",
         ];
         let production = [
             "false",
@@ -10130,6 +10277,7 @@ mod tests {
             "generated",
             "iam",
             "registered",
+            "production",
         ];
         for exact in [None, Some(false), Some(true)] {
             let mut input = json!({"schemaVersion": 1});

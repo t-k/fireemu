@@ -37,7 +37,7 @@ For more detail, start with `--log-verbosity debug`, which also prints the resol
 
 ## Report an issue
 
-[Open an issue on GitHub](https://github.com/t-k/fireemu/issues) with:
+[Open an issue on GitHub](https://github.com/fireemu/fireemu/issues) with:
 
 - the Fireemu and Firebase SDK versions, the profile, and the Firebase product involved;
 - a minimal reproduction;

@@ -4,8 +4,8 @@ import starlight from '@astrojs/starlight';
 import { fileURLToPath } from 'node:url';
 
 // The deployment target is set by the Pages workflow. The defaults build for
-// https://t-k.github.io/fireemu/, the project page of the repository.
-const site = process.env.FIREEMU_SITE_URL ?? 'https://t-k.github.io';
+// https://fireemu.github.io/fireemu/, the project page of the repository.
+const site = process.env.FIREEMU_SITE_URL ?? 'https://fireemu.github.io';
 const base = process.env.FIREEMU_SITE_BASE ?? '/fireemu';
 
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
@@ -24,10 +24,10 @@ export default defineConfig({
 			description:
 				'A local Firebase emulator for tests and CI that follows production Firebase behavior.',
 			social: [
-				{ icon: 'github', label: 'GitHub', href: 'https://github.com/t-k/fireemu' },
+				{ icon: 'github', label: 'GitHub', href: 'https://github.com/fireemu/fireemu' },
 				{ icon: 'npm', label: 'npm', href: 'https://www.npmjs.com/package/fireemu' },
 			],
-			editLink: { baseUrl: 'https://github.com/t-k/fireemu/edit/main/site/' },
+			editLink: { baseUrl: 'https://github.com/fireemu/fireemu/edit/main/site/' },
 			lastUpdated: false,
 			customCss: ['./src/styles/custom.css'],
 			components: {

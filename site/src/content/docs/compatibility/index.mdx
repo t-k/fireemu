@@ -9,7 +9,7 @@ import ProductTable from '../../../components/ProductTable.astro';
 import ProductionAreas from '../../../components/ProductionAreas.astro';
 import CapabilityTable from '../../../components/CapabilityTable.astro';
 
-The tables on this page are generated from the records in the repository when the site is built: the [compatibility contract](https://github.com/t-k/fireemu/blob/main/spec/compatibility/contract.json), the [production verification records](https://github.com/t-k/fireemu/tree/main/spec/compatibility/closure) and the [capability manifest](https://github.com/t-k/fireemu/blob/main/crates/fireemu/src/capabilities.json).
+The tables on this page are generated from the records in the repository when the site is built: the [compatibility contract](https://github.com/fireemu/fireemu/blob/main/spec/compatibility/contract.json), the [production verification records](https://github.com/fireemu/fireemu/tree/main/spec/compatibility/closure) and the [capability manifest](https://github.com/fireemu/fireemu/blob/main/crates/fireemu/src/capabilities.json).
 
 Check support for the specific APIs and conditions your application uses, rather than relying on product names alone.
 
@@ -19,7 +19,7 @@ Every product in the Local Emulator Suite of `firebase-tools` 15.28.2, the offic
 
 <ProductTable />
 
-Fireemu is compatible with the Local Emulator Suite products that firebase-tools 15.28.2 ships and that Fireemu serves with parity (Cloud Firestore, Firebase Authentication, Cloud Storage for Firebase, Cloud Functions, Cloud Pub/Sub and Eventarc, with Security Rules on the Firestore and Storage surfaces), under the `emulator` compatibility profile and the evidence recorded in [`spec/compatibility/contract.json`](https://github.com/t-k/fireemu/blob/main/spec/compatibility/contract.json). It makes no complete-suite and no unqualified superset claim, because:
+Fireemu is compatible with the Local Emulator Suite products that firebase-tools 15.28.2 ships and that Fireemu serves with parity (Cloud Firestore, Firebase Authentication, Cloud Storage for Firebase, Cloud Functions, Cloud Pub/Sub and Eventarc, with Security Rules on the Firestore and Storage surfaces), under the `emulator` compatibility profile and the evidence recorded in [`spec/compatibility/contract.json`](https://github.com/fireemu/fireemu/blob/main/spec/compatibility/contract.json). It makes no complete-suite and no unqualified superset claim, because:
 
 - the Realtime Database is served without a parity claim against the official emulator (an open gap);
 - Firebase Hosting is served without a parity claim (an open gap);

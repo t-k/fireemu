@@ -2322,6 +2322,64 @@ fn an_oversized_import_is_refused_as_too_large() {
 }
 
 #[test]
+fn the_object_limit_is_readable_and_bounds_a_write_with_admission_exactly() {
+    let mut s = StorageState::new(1);
+    assert_eq!(
+        s.max_object_bytes(),
+        fireemu_core_storage::store::MAX_OBJECT_BYTES
+    );
+    s.set_max_object_bytes(3);
+    assert_eq!(s.max_object_bytes(), 3);
+    let write = |s: &mut StorageState, object: &str, len: usize| {
+        s.put_with_admission(
+            &bucket(),
+            &name(object),
+            vec![0; len],
+            NewMetadata::default(),
+            Precondition::default(),
+            t(0),
+            |_: &[StorageEvent]| Ok(()),
+        )
+        .map(|_| ())
+    };
+    assert_eq!(write(&mut s, "exact", 3), Ok(()));
+    assert_eq!(write(&mut s, "over", 4), Err(StorageError::TooLarge));
+}
+
+#[test]
+fn an_import_follows_the_configured_object_limit() {
+    use fireemu_core_storage::store::ImportedObject;
+    let imported = |object: &str| ImportedObject {
+        bucket: bucket(),
+        name: name(object),
+        generation: 1,
+        metageneration: 1,
+        content_type: "application/octet-stream".to_owned(),
+        content_disposition: None,
+        content_encoding: None,
+        content_language: None,
+        cache_control: None,
+        custom: BTreeMap::new(),
+        custom_defined: false,
+        time_created: t(0),
+        updated: t(0),
+        download_tokens: Vec::new(),
+        md5: None,
+        crc32c: None,
+        size: None,
+    };
+    let mut s = StorageState::new(1);
+    s.set_max_object_bytes(3);
+    assert!(s.insert_imported(imported("exact"), vec![0; 3]).is_ok());
+    assert_eq!(
+        s.insert_imported(imported("over"), vec![0; 4]),
+        Err(StorageError::TooLarge)
+    );
+    s.set_max_object_bytes(4);
+    assert!(s.insert_imported(imported("raised"), vec![0; 4]).is_ok());
+}
+
+#[test]
 fn an_import_may_fill_the_custom_metadata_budget_exactly() {
     use fireemu_core_storage::store::{ImportedObject, MAX_CUSTOM_METADATA_BYTES};
     let imported = |object: &str, value_len: usize| ImportedObject {

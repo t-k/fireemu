@@ -19,6 +19,15 @@ test.describe("Functions", () => {
     await expect(table).toContainText("HTTP callable");
   });
 
+  test("names the runtime of each function and the codebase runner", async ({ page }) => {
+    await gotoApp(page, "/functions");
+    await expect(page.getByTestId("function-runtime-mirrorTodo")).toHaveText("Node.js");
+    await expect(page.getByTestId("function-status")).toContainText("Auth events held");
+    await expect(page.getByTestId("status-auth-events-pending")).toHaveText("0");
+    await expect(page.getByTestId("codebase-status-default")).toContainText("Node.js");
+    await expect(page.getByTestId("codebase-status-default")).toContainText("running");
+  });
+
   test("runs a schedule now and publishes a Pub/Sub message, showing invocations and logs", async ({
     page,
     request,

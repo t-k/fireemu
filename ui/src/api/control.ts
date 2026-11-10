@@ -34,10 +34,24 @@ export type FunctionsStatus = {
   succeeded: number;
   deadLettered: number;
   catchUpPending: boolean;
+  /** Auth user events held until the event queue has room (absent on an older daemon). */
+  authEventsPending?: number;
+  /** Cloud Tasks handed to a queue handler and not yet answered. */
+  tasksInFlight?: number;
   overlapRejected: number;
   runnerAlive: boolean;
   epoch: number;
   functions: string[];
+  /** Exports a runner found and cannot serve, so nothing a codebase declared is invisible. */
+  ignored?: IgnoredExport[];
+};
+
+export type IgnoredExport = {
+  name: string;
+  region: string;
+  triggerType: string;
+  scope: string;
+  reason: string;
 };
 
 const base = (session: string): string => `control/v1/sessions/${encodeURIComponent(session)}`;

@@ -119,8 +119,10 @@ const Overview: Component = () => {
           </Field>
           <Field label={t("overview.clock")} mono>
             <span data-testid="overview-clock">{appState.clock()}</span>{" "}
-            <span class="text-zinc-500">
-              ({config().clockPinned ? t("overview.clockPinned") : t("overview.clockWall")})
+            <span class="text-zinc-500" data-testid="overview-clock-mode">
+              {config().clockMode === "frozen"
+                ? t("overview.clockFrozen")
+                : t("overview.clockRealtime")}
             </span>
           </Field>
         </Section>
@@ -145,6 +147,39 @@ const Overview: Component = () => {
           <Field label={t("overview.ui")} mono>
             http://{config().uiAddr}/ui
           </Field>
+        </Section>
+        <Section title={t("overview.hostNames")}>
+          <div data-testid="host-names">
+            <p class="mb-2 text-sm text-zinc-500">{t("overview.hostNamesHint")}</p>
+            <Field label={t("overview.hostNamesAlways")}>
+              <span class="mono">
+                {[...config().hosts.defaultNames, ...config().hosts.defaultSuffixes].join(", ")}
+              </span>
+              {", "}
+              {t("overview.hostNamesAnyIp")}
+            </Field>
+            <Field label={t("overview.hostNamesAdded")}>
+              <Show
+                when={config().hosts.allowed.length > 0}
+                fallback={<p data-testid="host-names-none">{t("overview.hostNamesNone")}</p>}
+              >
+                <span class="mono">{config().hosts.allowed.join(", ")}</span>
+              </Show>
+            </Field>
+            <Field label={t("overview.hostNamesSingleLabel")}>
+              <span data-testid="host-names-single-label">
+                {config().hosts.allowNonLoopbackHosts ? t("app.yes") : t("app.no")}
+              </span>
+            </Field>
+            <Show when={config().hosts.allowed.includes("*")}>
+              <div
+                data-testid="host-names-open"
+                class="mt-2 rounded-md border border-amber-400 bg-amber-50 p-3 text-sm dark:bg-amber-900/30"
+              >
+                {t("overview.hostNamesOpen")}
+              </div>
+            </Show>
+          </div>
         </Section>
         <Section title={t("overview.rules")}>
           <Field label={t("overview.rules")}>

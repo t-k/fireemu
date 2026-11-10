@@ -5,7 +5,9 @@
 //! no `Origin`. The only thing that still gives such a request away is its `Host`, which names
 //! the attacker's domain. The guard admits only names an attacker cannot serve a page from.
 
-use fireemu_core_session::host_guard::{admits, AllowedHost, HostPolicy, RefusalLog, DOCS_URL};
+use fireemu_core_session::host_guard::{
+    admits, default_names, default_suffixes, AllowedHost, HostPolicy, RefusalLog, DOCS_URL,
+};
 use proptest::prelude::*;
 
 fn policy(entries: &[&str], single_label: bool) -> HostPolicy {
@@ -630,5 +632,30 @@ fn look_alikes_of_the_special_use_suffixes_are_refused() {
         "x.app.github.dev:65535",
     ] {
         assert!(one(&default, host), "{host:?}");
+    }
+}
+
+#[test]
+fn the_listed_defaults_are_exactly_what_the_default_policy_admits() {
+    let default = HostPolicy::default();
+    assert!(!default_names().is_empty() && !default_suffixes().is_empty());
+    for name in default_names() {
+        assert!(one(&default, name), "{name}");
+        assert!(one(&default, &name.to_ascii_uppercase()), "{name}");
+    }
+    for suffix in default_suffixes() {
+        assert!(suffix.starts_with('.'), "{suffix}");
+        assert!(one(&default, &format!("app{suffix}:3000")), "{suffix}");
+        assert!(one(&default, &format!("a.b{suffix}")), "{suffix}");
+        // The domain itself is not a subdomain: only `localhost` is a default name.
+        let bare = &suffix[1..];
+        assert_eq!(
+            one(&default, bare),
+            default_names().contains(&bare),
+            "{suffix}"
+        );
+        // A look-alike that merely ends in the same letters is not under the domain.
+        assert!(!one(&default, &format!("evil{bare}")), "{suffix}");
+        assert!(!one(&default, &format!("{bare}.evil.example")), "{suffix}");
     }
 }

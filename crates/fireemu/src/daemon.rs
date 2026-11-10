@@ -1233,6 +1233,7 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
             exporter.products,
             &cfg.auth_project,
             cfg.profile != crate::config::CompatibilityProfile::Strict,
+            cfg.storage_max_object_bytes,
         )
         .map_err(|e| format!("--import {}: {e}", dir.display()))?;
         if !quiet {
@@ -1537,6 +1538,8 @@ async fn serve_suite(
         )
     );
     if let Some(listener) = storage_listener {
+        fireemu_adapter_http::storage_server::BODY_BUDGET
+            .set_limit(cfg.storage_buffered_body_budget_bytes);
         spawn_server!(
             "Storage",
             fireemu_adapter_http::storage_server::serve_storage(listener, storage.clone())
@@ -1545,7 +1548,9 @@ async fn serve_suite(
     if let Some(listener) = hub_listener {
         spawn_server!("Emulator Hub", hub::serve(listener, hub_state.clone()));
     }
+    let mut hosting_info = None;
     if let (Some(listener), Some(config)) = (hosting_listener, cfg.hosting.clone()) {
+        let site_config = config.data().clone();
         let emulators = serde_json::Value::Object(hub_emulators(&addrs).into_iter().filter(|entry| matches!(entry.name, "auth"|"firestore"|"functions"|"storage"|"database")).map(|entry| (entry.name.to_owned(), serde_json::json!({"host":entry.addr.ip().to_string(),"port":entry.addr.port(),"hostAndPort":entry.addr.to_string()}))).collect());
         let prepared = crate::hosting::prepare(
             config,
@@ -1554,6 +1559,12 @@ async fn serve_suite(
             emulators,
             matches!(cfg.profile, crate::config::CompatibilityProfile::Strict),
         )?;
+        hosting_info = addrs.hosting.map(|addr| fireemu_adapter_ui::HostingInfo {
+            addr: addr.to_string(),
+            public_root: prepared.public_root().to_owned(),
+            public_exists: prepared.public_exists(),
+            config: site_config,
+        });
         spawn_server!("Hosting", crate::hosting::serve(listener, prepared));
     }
     let functions_http_admission = fireemu_adapter_functions::http::HttpAdmission::new();
@@ -1735,6 +1746,7 @@ async fn serve_suite(
             storage: storage.clone(),
             control: control.clone(),
             functions: functions_runtime.clone(),
+            hosting: hosting_info,
             app_check,
             addrs: (
                 addrs.firestore.unwrap_or(addrs.control),

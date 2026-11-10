@@ -1364,6 +1364,8 @@ pub struct RuntimeConfig {
     /// with another key are refused as production's API front end refuses them; when none is,
     /// any key is accepted, as by the official emulator.
     pub auth_api_keys: Vec<String>,
+    /// Require a client API key in the emulator profile (`auth.requireClientApiKey`).
+    pub auth_require_client_api_key: bool,
     /// App Check (`appCheck`); disabled by default.
     pub app_check: AppCheckConfig,
 }
@@ -1826,6 +1828,7 @@ impl Default for RuntimeConfig {
             auth_idp_signers: None,
             auth_idp_assertions: IdpAssertionMode::Fixture,
             auth_api_keys: Vec::new(),
+            auth_require_client_api_key: false,
             // The strict profile's development default: served without registration.
             app_check: AppCheckConfig {
                 debug_tokens: AppCheckDebugTokens::Any,
@@ -2128,6 +2131,7 @@ impl RuntimeConfig {
             "scheduler.overlap" => Some(json!(self.scheduler_overlap)),
             "auth.idTokenSigning" => Some(json!(match self.id_token_signing { fireemu_core_auth::jwt::SigningMode::UnsignedEmulator => "unsigned-emulator", fireemu_core_auth::jwt::SigningMode::SessionRsa => "session-rsa" })),
             "auth.apiKeys" => Some(json!(self.auth_api_keys)),
+            "auth.requireClientApiKey" => Some(json!(self.auth_require_client_api_key)),
             "auth.customTokenSigners" => Some(json!(self.auth_custom_token_signers)),
             "auth.idpSigners" => Some(json!(self.auth_idp_signers)),
             "auth.authorizedDomains" => Some(json!(self.auth_authorized_domains)),
@@ -2230,9 +2234,10 @@ pub(crate) const FUNCTIONS_KEYS: [&str; 7] = [
 ];
 
 /// The keys of the `auth` section (spec/config/fireemu.schema.json).
-pub(crate) const AUTH_KEYS: [&str; 28] = [
+pub(crate) const AUTH_KEYS: [&str; 29] = [
     "enabled",
     "apiKeys",
+    "requireClientApiKey",
     "projectIssuer",
     "idTokenSigning",
     "customTokenSigners",
@@ -5587,6 +5592,11 @@ impl RuntimeConfig {
                 }
                 cfg.id_token_signing = m;
             }
+            if let Some(value) = auth.get("requireClientApiKey") {
+                cfg.auth_require_client_api_key = value.as_bool().ok_or_else(|| {
+                    ConfigError("auth.requireClientApiKey must be a boolean".to_owned())
+                })?;
+            }
             if let Some(keys) = auth.get("apiKeys") {
                 let keys = keys
                     .as_array()
@@ -6174,6 +6184,7 @@ mod tests {
             ("rules.denialLog", json!("summary"), "default"),
             ("auth.idTokenSigning", json!("unsigned-emulator"), "default"),
             ("auth.apiKeys", json!([]), "default"),
+            ("auth.requireClientApiKey", json!(false), "default"),
             ("auth.allowUnsignedCustomTokens", json!(true), "default"),
             ("auth.allowUnsignedIdTokens", json!(true), "default"),
             ("auth.customTokenSigners", json!(null), "unset"),
@@ -6575,6 +6586,10 @@ mod tests {
                 (
                     "auth.allowUnsignedIdTokens",
                     json!(cfg.auth_allow_unsigned_id_tokens),
+                ),
+                (
+                    "auth.requireClientApiKey",
+                    json!(cfg.auth_require_client_api_key),
                 ),
                 (
                     "auth.idpAssertions",
@@ -8452,6 +8467,19 @@ mod tests {
                 "{bad}"
             );
         }
+    }
+
+    #[test]
+    fn require_client_api_key_config_is_boolean_and_defaults_off() {
+        let parse =
+            |auth: Value| RuntimeConfig::from_json(&json!({"schemaVersion": 1, "auth": auth}));
+        assert!(!parse(json!({})).unwrap().auth_require_client_api_key);
+        assert!(
+            parse(json!({"requireClientApiKey": true}))
+                .unwrap()
+                .auth_require_client_api_key
+        );
+        assert!(parse(json!({"requireClientApiKey": "true"})).is_err());
     }
 
     #[test]

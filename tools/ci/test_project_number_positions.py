@@ -56,14 +56,18 @@ POSITIONS = {
     "service agent": re.compile(r"(?<!\d)(?:service-)?(\d{10,13})@[a-z0-9.-]*(?:gserviceaccount|gcp-sa)"),
     "gcf bucket": re.compile(r"gcf-(?:v2-)?(?:sources|uploads)-(\d{10,13})(?!\d)"),
     "operation name": re.compile(r"acat\.p2-(\d{10,13})(?!\d)"),
-    "number constant": re.compile(r"(?<![A-Za-z0-9])(?:[A-Z]+_)*NUMBER[ \t]*=[ \t]*[\"']?(\d{10,13})(?!\d)"),
-    "project number field": re.compile(r"(?i)project[ _-]?number\W{0,8}(?:is\s*)?(\d{10,13})(?!\d)"),
-    "project id field": re.compile(r"(?i)project[ _-]?id\W{0,8}(?:is\s*)?(\d{10,13})(?!\d)"),
-    "project in prose": re.compile(r"(?i)\bproject(?:\s|\\[nrt])*(\d{10,13})(?![0-9A-Za-z])"),
-    "id and number pair": re.compile(
-        r"(?i)(?<![a-z0-9])[a-z][a-z0-9]*(?:-[a-z0-9]+)+[\"'`]?\s*(?:[/:]|\bto\b)\s*(?:number\s*)?[\"'`]?(\d{10,13})(?![0-9A-Za-z])"
+    "number constant": re.compile(r"(?<![A-Za-z0-9])(?:[A-Z]+_)*NUMBER[ \t]*=[ \t]*[\"']?(\d{10,13})(?![0-9A-Za-z])"),
+    "project number field": re.compile(
+        r"(?i)project(?:[_-]|\s+)?number\W{0,8}(?:is)?[\s\"'`]*(\d{10,13})(?![0-9A-Za-z])"
     ),
-    "user project header": re.compile(r"(?i)user-project\W{0,4}(\d{10,13})(?!\d)"),
+    "project id field": re.compile(
+        r"(?i)project(?:[_-]|\s+)?id\W{0,8}(?:is)?[\s\"'`]*(\d{10,13})(?![0-9A-Za-z])"
+    ),
+    "project in prose": re.compile(r"(?i)\bproject(?:[\s\"'`]|\\[nrt])*(\d{10,13})(?![0-9A-Za-z])"),
+    "id and number pair": re.compile(
+        r"(?i)(?<![a-z0-9])[a-z][a-z0-9]*(?:-[a-z0-9]+)+[\"'`]?\s*(?:[/:]|\bto\b)\s*(?:number\s*)?[\"'`]?\s*(\d{10,13})(?![0-9A-Za-z])"
+    ),
+    "user project header": re.compile(r"(?i)user-project\W{0,4}(\d{10,13})(?![0-9A-Za-z])"),
 }
 
 
@@ -144,6 +148,44 @@ class ProjectNumberPositionsTest(unittest.TestCase):
         ):
             self.assertTrue(found_in(text % planted), text)
 
+    def test_spacing_and_quoting_variants_are_found(self):
+        planted = "987654321098"
+        for text in (
+            "project `%s`",  # a backtick-quoted number after the word
+            'project_id is "%s"',  # a quote after is
+            "project_id is '%s'",
+            "project  number %s",  # two spaces
+            "project\tnumber %s",  # a tab
+            "project \t number\n%s",
+            "project_number is `%s`",
+            "project  id is %s",
+            'project number is "%s"',
+            "project\tid %s",
+            '{"fireemu-35fe6" : " %s"}',  # a space before the colon and one inside the value
+            "{'fireemu-35fe6' :\t'%s'}",
+            "fireemu-35fe6 /  `%s`",
+            "fireemu-35fe6\t/\tnumber \"%s\"",
+        ):
+            self.assertTrue(found_in(text % planted), repr(text))
+
+    def test_near_misses_of_the_variants_are_not_findings(self):
+        planted = "987654321098"
+        for text in (
+            "projectile %s",  # not the word project
+            "subproject %s",
+            "my-project %sx",
+            "project number %s77",  # fourteen digits
+            "project number %sab",  # a word or hex continues
+            "project_id is %sxyz",
+            "project  numbers",  # no number
+            'NUMBER = "%sab"',
+            "x-goog-user-project: %sx",
+            "project_id is 987654321",  # nine digits
+            'project_id is "98765432109876"',  # fourteen digits
+            "projects",
+        ):
+            self.assertEqual(found_in(text % planted if "%s" in text else text), set(), repr(text))
+
     def test_a_thirteen_and_a_ten_digit_number_are_found_too(self):
         for number in ("9876543210987", "9876543210"):
             self.assertTrue(numbers_in_positions("projects/" + number + "/x", frozenset()), number)
@@ -193,12 +235,29 @@ class ProjectNumberPositionsTest(unittest.TestCase):
             (top / "docs.local" / "sandbox-oracles.md").write_text("note %s, phone 5" % second)
             self.assertEqual(local_real_numbers(checkout), {first, second})
 
+    def assert_none_close(self, allowed, real_numbers):
+        # A boolean and a fixed message: a failure must never print a number.
+        self.assertFalse(
+            any(too_close(a, r) for a in allowed for r in real_numbers),
+            "an allowlist entry is within 2 digits of a local project number",
+        )
+
+    def test_the_proximity_failure_prints_no_number(self):
+        allowed, real = {"246813579025"}, {"246813579024"}  # made up
+        with self.assertRaises(AssertionError) as caught:
+            self.assert_none_close(allowed, real)
+        output = str(caught.exception)
+        self.assertIn("within 2 digits", output)
+        self.assertNotRegex(output, r"\d{6,}")
+        for number in allowed | real:
+            self.assertNotIn(number, output)
+        self.assert_none_close({"135792468013"}, real)
+
     def test_no_made_up_number_is_near_a_real_local_project_number(self):
         real_numbers = local_real_numbers()
         if real_numbers is None:
             self.skipTest("CLAUDE.local.md and docs.local/sandbox-oracles.md are not present (CI); the pre-commit run checks this")
-        close = sorted(a for a in ALLOWED_MADE_UP_NUMBERS for r in real_numbers if too_close(a, r))
-        self.assertEqual(close, [], "made-up numbers within 2 digits of, or sharing a prefix with, a real number")
+        self.assert_none_close(ALLOWED_MADE_UP_NUMBERS, real_numbers)
 
     def test_the_list_holds_only_digit_runs(self):
         self.assertTrue(all(re.fullmatch(r"\d{10,13}", number) for number in ALLOWED_MADE_UP_NUMBERS))

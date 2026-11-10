@@ -283,3 +283,23 @@ def test_runner_accepts_emulated_token_and_announces_default():
         assert process.stderr.count(note) == 1
     finally:
         process.kill()
+
+
+@pytest.mark.parametrize("attribute, value", [
+    ("_JWTVerifier", None),
+    ("_auth_utils", type("NoEmulationCheck", (), {"is_emulated": None})()),
+])
+def test_an_sdk_whose_internals_differ_is_refused_not_ignored(monkeypatch, attribute, value):
+    monkeypatch.setattr(token_verifier, attribute, value)
+    env = {blocking.ENVIRONMENT_VARIABLE: json.dumps({"keys": [jwk()]})}
+    with pytest.raises(blocking.VerificationUnavailable, match="unsupported SDK"):
+        blocking.install_from_environment(env)
+    assert not env
+
+
+def test_an_sdk_without_a_certificate_url_is_refused_not_ignored(monkeypatch):
+    monkeypatch.setattr(token_verifier._token_gen, "ID_TOKEN_CERT_URI", "")
+    env = {blocking.ENVIRONMENT_VARIABLE: json.dumps({"keys": [jwk()]})}
+    with pytest.raises(blocking.VerificationUnavailable, match="unsupported SDK"):
+        blocking.install_from_environment(env)
+    assert not env

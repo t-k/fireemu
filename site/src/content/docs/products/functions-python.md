@@ -24,7 +24,7 @@ Fireemu serves HTTP (`https_fn.on_request`), callable (`https_fn.on_call`), Fire
 
 ## Auth blocking functions and the audience check
 
-With firebase-functions (Python) 0.6.0 and firebase-tools 15.28.2, production delivers a token whose `cloudfunctions.net` audience the Python SDK refuses: the function fails closed and sign-up returns 503 `Error code: 47`. By default fireemu runs the function, as the official emulator does, and prints a diagnostic line about this production failure. To reproduce it, set `productionExact` to `true`, or set `functions.authBlockingToken` to `"production"` under the strict profile. Node functions are unaffected. A later firebase-functions or firebase-tools release may change the audience rule; this setting follows the SDK installed in the codebase's own virtual environment, and only 0.6.0 has been recorded.
+With firebase-functions (Python) 0.6.0 and firebase-tools 15.28.2, production delivers a token whose `cloudfunctions.net` audience the Python SDK refuses: the function fails closed and sign-up returns 503 `Error code: 47`. By default fireemu runs the function, as the official emulator does, and prints a diagnostic line about this production failure. To reproduce it, set `productionExact` to `true`, or set `functions.authBlockingToken` to `"production"` under the strict profile. Node functions receive the same production-shaped token but do not verify it, so they behave as before. A later firebase-functions or firebase-tools release may change the audience rule; this setting follows the SDK installed in the codebase's own virtual environment, and only 0.6.0 has been recorded.
 
 ## Production verification
 

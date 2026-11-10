@@ -54,6 +54,10 @@ fn firebase_json(dir: &Path, source: &Path, runtime: Option<&str>) -> PathBuf {
 }
 
 fn exec(config: &Path, extra: &[&str], command: &[&str]) -> Output {
+    exec_with_env(config, extra, command, &[])
+}
+
+fn exec_with_env(config: &Path, extra: &[&str], command: &[&str], env: &[(&str, &Path)]) -> Output {
     let mut args: Vec<String> = vec!["exec".into()];
     for a in [
         "--firestore-port",
@@ -90,6 +94,7 @@ fn exec(config: &Path, extra: &[&str], command: &[&str]) -> Output {
     args.extend(command.iter().map(|s| (*s).to_owned()));
     Command::new(env!("CARGO_BIN_EXE_fireemu"))
         .args(&args)
+        .envs(env.iter().copied())
         .stdin(Stdio::null())
         .output()
         .unwrap()
@@ -415,7 +420,15 @@ if response.code == 200:
             vec![]
         };
         let python = interpreter().display().to_string();
-        let out = exec(&firebase, &extra, &[&python, "-c", script]);
+        let cache = dir.join("cache");
+        std::fs::create_dir_all(cache.join("Library/Caches")).unwrap();
+        std::fs::create_dir_all(cache.join(".cache")).unwrap();
+        let out = exec_with_env(
+            &firebase,
+            &extra,
+            &[&python, "-c", script],
+            &[("HOME", &cache), ("XDG_CACHE_HOME", &cache)],
+        );
         let stdout = String::from_utf8_lossy(&out.stdout);
         let stderr = String::from_utf8_lossy(&out.stderr);
         assert!(out.status.success(), "{name}: {stdout}\n{stderr}");
@@ -435,6 +448,10 @@ if response.code == 200:
                 "{stdout}"
             );
             assert!(!stdout.contains("id tokens:"), "{stdout}");
+            assert!(!cache.join("Library/Caches/fireemu/session-rsa").exists());
+            assert!(!cache.join(".cache/fireemu/session-rsa").exists());
+            assert!(!cache.join("fireemu/session-rsa").exists());
+            assert!(!cache.join("session-rsa").exists());
         } else {
             assert!(!stdout.contains("blocking tokens:"), "{name}: {stdout}");
         }
@@ -462,4 +479,63 @@ fn the_emulator_profile_refuses_the_production_blocking_token() {
         "{stderr}"
     );
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+#[ignore = "requires the fixture virtual environment; CI creates it"]
+fn a_token_signed_with_the_daemons_key_verifies_in_the_python_runner() {
+    use fireemu_adapter_http::signing::RsaSigner;
+    use fireemu_core_auth::jwt::{base64url_decode, base64url_encode, encode_payload_with};
+    let signer = RsaSigner::from_seed(7).unwrap();
+    let other = RsaSigner::from_seed(8).unwrap();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let claims = serde_json::json!({"aud":"https://pcblock-abc123-uc.a.run.app", "iss":"https://securetoken.google.com/demo-py", "sub":"interop-user", "iat":now, "exp":now + 300});
+    let token = encode_payload_with(&claims.to_string(), Some(signer.as_ref()));
+    let parts: Vec<_> = token.split('.').collect();
+    let mut payload = base64url_decode(parts[1]).unwrap();
+    // Flip one bit of the subject so the payload stays valid JSON and only the signature check can refuse it.
+    let position = payload
+        .windows(b"interop-user".len())
+        .position(|window| window == b"interop-user")
+        .unwrap();
+    payload[position] ^= 1;
+    let tampered = format!("{}.{}.{}", parts[0], base64url_encode(&payload), parts[2]);
+    let wrong_key = encode_payload_with(&claims.to_string(), Some(other.as_ref()));
+    let script = r#"import os, sys
+from fireemu_runner.blocking import install_from_environment
+install_from_environment(os.environ)
+from firebase_functions.private.token_verifier import verify_auth_blocking_token
+import firebase_admin
+firebase_admin.initialize_app(options={"projectId": "demo-py"})
+try:
+    print(verify_auth_blocking_token(sys.argv[1])['uid'])
+except Exception as error:
+    print(type(error).__name__)
+"#;
+    for (candidate, expected) in [
+        (token, "interop-user"),
+        (tampered, "InvalidAuthBlockingTokenError"),
+        (wrong_key, "InvalidAuthBlockingTokenError"),
+    ] {
+        let out = Command::new(interpreter())
+            .args(["-c", script, &candidate])
+            .env(
+                "PYTHONPATH",
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/runner-python"),
+            )
+            .env("FIREEMU_AUTH_BLOCKING_JWKS", signer.jwks().to_string())
+            .env("GCLOUD_PROJECT", "demo-py")
+            .env("FIREBASE_AUTH_EMULATOR_HOST", "127.0.0.1:9")
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), expected);
+    }
 }

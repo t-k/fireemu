@@ -5996,7 +5996,7 @@ impl BlockingAuthBridge {
         })
     }
 
-    /// Signs production-shaped blocking tokens with the session key.
+    /// Signs production-shaped blocking tokens with the in-memory blocking key.
     #[must_use]
     pub fn with_production_token(
         mut self,
@@ -6708,8 +6708,17 @@ impl BlockingAuthBridge {
             target.region,
             target.function
         );
-        let issued_at =
-            i64::try_from(self.runtime.now().as_nanos() / 1_000_000_000).unwrap_or_default();
+        let issued_at = if self.production_token.is_some() {
+            i64::try_from(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs(),
+            )
+            .unwrap_or_default()
+        } else {
+            i64::try_from(self.runtime.now().as_nanos() / 1_000_000_000).unwrap_or_default()
+        };
         let audience = self.production_token.as_ref().map_or_else(
             || format!("http://{}{path}", target.addr),
             |_| {
@@ -11140,6 +11149,14 @@ exports.add = onCall({{}}, observe("add"));
         let production =
             BlockingAuthBridge::new(runtime.clone()).with_production_token(Some(signer));
         let emulated = BlockingAuthBridge::new(runtime.clone());
+        let runtime_seconds = i64::try_from(runtime.now().as_nanos() / 1_000_000_000).unwrap();
+        let before = i64::try_from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+        )
+        .unwrap();
         let answers = tokio::task::spawn_blocking(move || {
             [
                 production
@@ -11152,6 +11169,14 @@ exports.add = onCall({{}}, observe("add"));
         })
         .await
         .unwrap();
+        let after = i64::try_from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+        )
+        .unwrap();
+        assert!(!(before..=after).contains(&runtime_seconds));
         for (answer, production) in answers.iter().zip([true, false]) {
             let body: serde_json::Value =
                 serde_json::from_str(answer["body"].as_str().unwrap()).unwrap();
@@ -11168,6 +11193,7 @@ exports.add = onCall({{}}, observe("add"));
                     .map(|h| h[1].as_str().unwrap())
             };
             if production {
+                assert!((before..=after).contains(&claims["iat"].as_i64().unwrap()));
                 assert_eq!(header["alg"], "RS256");
                 assert_eq!(
                     claims["aud"],
@@ -11180,6 +11206,7 @@ exports.add = onCall({{}}, observe("add"));
                 assert_eq!(get("content-type"), Some("application/json; charset=utf-8"));
                 assert_eq!(get("user-agent"), Some("Google-Firebase"));
             } else {
+                assert_eq!(claims["iat"], runtime_seconds);
                 assert_eq!(header["alg"], "none");
                 assert_eq!(
                     claims["aud"],

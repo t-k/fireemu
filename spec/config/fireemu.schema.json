@@ -915,7 +915,7 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "authBlockingToken": { "enum": ["emulated", "production"], "default": "emulated", "description": "The development default is emulated; productionExact selects production, which requires the strict profile. Production delivers a signed token and the Python runner verifies it using the SDK rules." },
+        "authBlockingToken": { "enum": ["emulated", "production"], "default": "emulated", "description": "The development default is emulated; productionExact selects production, which requires the strict profile. Production delivers a signed token and the Python runner verifies it using the SDK rules. Node functions receive the same production-shaped token but do not verify it, so they behave as before." },
         "clock": { "type": "object", "additionalProperties": false, "properties": {
           "date": { "enum": ["real", "virtual"], "default": "real" },
           "timers": { "enum": ["real", "virtual"], "default": "real" },

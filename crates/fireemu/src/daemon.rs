@@ -2200,9 +2200,13 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         if (want_auth_key || want_blocking_key || (want_app_check && !cfg.app_check.implicit())) && !quiet {
             println!("  generating the RSA signing keys ...");
         }
-        let mut auth_key = (want_auth_key || want_blocking_key).then(|| {
+        let auth_key = want_auth_key.then(|| {
             let seed = cfg.seed ^ 0x2256;
             tokio::task::spawn_blocking(move || session_rsa_cache::load_or_generate(seed))
+        });
+        let blocking_key = want_blocking_key.then(|| {
+            let seed = cfg.seed ^ 0xB10C;
+            tokio::task::spawn_blocking(move || fireemu_adapter_http::signing::RsaSigner::from_seed(seed))
         });
         // The development default serves App Check without anyone asking for it, so its key is
         // generated when something first needs it; an App Check the configuration enables is
@@ -2417,10 +2421,10 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         // The runner's functions see exactly the services this run selected: an unselected
         // one leaves its variable unset there too, so a handler cannot reach a product the
         // suite is not running.
-        let blocking_signer = if want_blocking_key {
-            let signer = auth_key.take().expect("blocking key task exists").await.map_err(|e| format!("session RSA key: {e}"))??;
+        let blocking_signer = if let Some(task) = blocking_key {
+            let signer = task.await.map_err(|e| format!("blocking RSA key: {e}"))??;
             if !quiet {
-                println!("  blocking tokens:  production (RS256 kid {}), signed with the session key", signer.kid());
+                println!("  blocking tokens:  production (RS256 kid {}), key held in memory only", signer.kid());
             }
             Some(signer)
         } else {
@@ -2461,12 +2465,8 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         // Auth signing is independent of rules, listener binding and Functions discovery.
         // Await it only after those startup tasks have had the whole key-generation window
         // to make progress; no Auth listener is served until the tasks below are spawned.
-        let auth_signer = if let Some(task) = auth_key {
-            Some(task.await.map_err(|e| format!("session RSA key: {e}"))??)
-        } else {
-            blocking_signer.clone()
-        };
-        if let Some(signer) = auth_signer.filter(|_| want_auth_key) {
+        if let Some(task) = auth_key {
+            let signer = task.await.map_err(|e| format!("session RSA key: {e}"))??;
             if !quiet {
                 println!(
                     "  id tokens:        RS256 (kid {})   JWKS: http://{}/.well-known/jwks.json",

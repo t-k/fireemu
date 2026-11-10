@@ -162,6 +162,29 @@ test("EVENTARC source rebind refuses unrelated or unverified pin changes", () =>
   );
 });
 
+test("compareLaneExport applies an EVENTARC source rebind to the path it names only", () => {
+  const expected = readJson("spec/compatibility/closure/evidence/EVENTARC-comparison.json.gz");
+  const driver = "conformance/src/eventarc-production/run.mjs";
+  const other = "conformance/src/eventarc-production/compare.mjs";
+  const rebind = {
+    path: other,
+    previousSha256: expected.sourcePins[other],
+    sha256: "e".repeat(64),
+  };
+  const actual = {
+    ...expected,
+    artifactSha256: BINARY,
+    sourcePins: { ...expected.sourcePins, [other]: rebind.sha256 },
+  };
+  assert.deepEqual(compareLaneExport(expected, actual, BINARY, { sourceRebinds: [rebind] }), []);
+  const moved = { ...actual, sourcePins: { ...actual.sourcePins, [driver]: "d".repeat(64) } };
+  assert.ok(
+    compareLaneExport(expected, moved, BINARY, { sourceRebinds: [rebind] }).some((d) =>
+      d.startsWith("sourcePins:"),
+    ),
+  );
+});
+
 test("judge reads EVENTARC adjudication only for the EVENTARC comparison", () => {
   const adjudication = "spec/compatibility/closure/evidence/EVENTARC-adjudication.json";
   const eventarc = "spec/compatibility/closure/evidence/EVENTARC-comparison.json.gz";

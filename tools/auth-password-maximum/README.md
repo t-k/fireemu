@@ -13,7 +13,7 @@ uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-aut
 AUTH_PASSWORD_MAXIMUM_LIVE_LOCAL=1 uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/auth-password-maximum -q
 ```
 
-The owned runner builds/copies strict artifacts, uses OS-assigned ports, verifies process identity, hashes, exit and listener closure. Production is fixed to fireemu-35fe6 / 592603257417 with auth and policy readbacks. Admin APIs establish ownership and cleanup only. UID/email absence is checked separately from DELETE success. This is not every 4096-character string, Unicode counting, all prefixes, SDK/Rules, elapsed expiry, revocation propagation or fault-injected recovery. New subject remains unapproved.
+The owned runner builds/copies strict artifacts, uses OS-assigned ports, verifies process identity, hashes, exit and listener closure. Production is fixed to fireemu-35fe6 / <project-number> with auth and policy readbacks. Admin APIs establish ownership and cleanup only. UID/email absence is checked separately from DELETE success. This is not every 4096-character string, Unicode counting, all prefixes, SDK/Rules, elapsed expiry, revocation propagation or fault-injected recovery. New subject remains unapproved.
 
 ## Runtime correction and evidence history
 

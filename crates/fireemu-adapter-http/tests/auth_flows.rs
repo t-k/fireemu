@@ -3471,9 +3471,10 @@ fn requests_naming_an_unknown_tenant_make_it_on_the_way() {
     let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
     s.registry = Some(registry.clone());
 
+    // Client SDKs send an API key; since owner decision 2421 a keyless request makes no tenant.
     let (status, made) = post(
         &s,
-        &format!("{V1}/accounts:signUp"),
+        &format!("{V1}/accounts:signUp?key=k"),
         &json!({"tenantId": "made-one", "email": "a@example.com", "password": "hunter22"}),
     );
     assert_eq!(status, 200, "{made}");

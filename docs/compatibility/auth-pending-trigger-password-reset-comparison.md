@@ -16,7 +16,7 @@ Row-by-row comparison of the approved production record of the password-reset tr
 
 Differing rows: none.
 
-Comparison subject (unapproved): `e24e311a4c2485518121364c48fd79a537725f9bd704c92884635bea96fdd6b6`. Production subject compared: `962e5d44b5ace414a8ad3743b2db3441d2757f151c3087ee26b8c825c5d76b6b`.
+Comparison subject (unapproved): `2e4bf5825048ca75ed1ef9505dc0771321fef66fadc5a0f3b24068edc6b5c9b5`. Production subject compared: `9e855872b7e9bdb6e2cfc7c67ea90a7c429c3ad4367caa0b57e1a2d7e89c4975`.
 
 Local artifact `0.7.0` built from the tree at `d3c2f4fc3772af8cd9a5095c481e42bc4ee4d299` (repository HEAD `d3c2f4fc3772af8cd9a5095c481e42bc4ee4d299` at run time) with recorder files at `d3c2f4fc3772af8cd9a5095c481e42bc4ee4d299`; strict profile. Owned process exit 0 with listeners closed; the account was deleted with absence confirmation.
 

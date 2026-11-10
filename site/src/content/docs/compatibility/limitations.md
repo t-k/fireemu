@@ -11,7 +11,12 @@ npx fireemu capabilities
 
 ## Unsupported products
 
-App Hosting and Data Connect are not currently supported. Firebase Extensions support is not planned. Firebase Hosting is served for one site, without a production parity claim; see [Firebase Hosting](../../products/hosting/#not-supported) for what it does not support.
+App Hosting and Data Connect are not currently supported. Firebase Extensions support is not planned.
+
+## Partially supported products
+
+- **Realtime Database.** Served and verified against production for its recorded cases only (see [Production verification](../#production-verification)). Broader production compatibility is unverified, and there is no parity claim against the official emulator. Details: [Realtime Database](../../products/realtime-database/#differences-from-the-official-emulator) and the list below.
+- **Firebase Hosting.** Served for one site, without a production parity claim. See [Firebase Hosting](../../products/hosting/#not-supported) for what it does not support.
 
 ## Unsupported features
 

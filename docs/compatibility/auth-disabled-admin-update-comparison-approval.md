@@ -4,7 +4,7 @@ Verified and approved within this limited scope. This is not a new production ru
 
 Row-by-row comparison of the approved production record of auth-disabled-admin-update revision 1 with one run of the same corpus on the owned local artifact built from the tree at the recorded commit after the token rule was corrected: all ten semantic projections agree. Approved as a comparison of these ten cases on that artifact, profile and recorder; not a claim beyond them.
 
-Subject: `87086b8343892b9bffd0a8e913b72658c6d277e2ea86d26dd88382b9acb8cc90`. Recomputed from the complete record; this approval cannot transfer to a changed subject.
+Subject: `a1ee9774159a2f62d9ef62cb1313aab8963edf741095b99518f7c5e1e07d7fa3`. Recomputed from the complete record; this approval cannot transfer to a changed subject.
 
 Reviewed commit: `3cadafe7a42effb58b392897298e583a32e51792`. Reviewer: `github:t-k (id:426779)`. Approval date: 2026-09-12.
 

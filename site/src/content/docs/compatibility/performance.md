@@ -5,7 +5,7 @@ description: Startup time, memory and throughput compared with the official Fire
 
 Fireemu is compared with the official Firestore emulator using the same SDK workloads. Both run one after the other on the same GitHub Actions Linux runner, with Fireemu using the `emulator` profile. The benchmark also checks the results of each operation.
 
-The following results come from one `standard` run at commit `f3b942c`. Ratios are calculated from five measured pairs; absolute values depend on the environment.
+The following results come from one `standard` run at commit `f3b942c`, comparing against the Firestore emulator that `firebase-tools` 15.28.2 runs, with JDK 21.0.8. Ratios are calculated from five measured pairs; absolute values depend on the environment.
 
 | Metric | Official emulator | Fireemu | Comparison |
 |---|---:|---:|---:|

@@ -18,7 +18,7 @@ class World:
         self.delay = delay
         self.now = 1000.0
         self.config = {
-            "name": "projects/592603257417/config",
+            "name": "projects/<project-number>/config",
             "mfa": {"state": "DISABLED"},
             "blockingFunctions": {"forwardInboundCredentials": {}},
         }

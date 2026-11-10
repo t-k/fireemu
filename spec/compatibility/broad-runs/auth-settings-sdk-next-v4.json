@@ -288,17 +288,17 @@
     {
       "path": "spec/compatibility/broad-runs/515f0cf4-auth-saved-reference-replay.json",
       "role": "immutable saved-production replay; current source recompare still required",
-      "sha256": "5d7c9e8aad4bc749d05e7d211609793854966c7f05704d68aba50885848f19c9"
+      "sha256": "20898f381e0765a0174f3e1f5031b03cf73f98d60632e449060ef0004b9e0ce5"
     },
     {
       "path": "spec/compatibility/broad-runs/auth-settings-sdk-next-v2.json",
       "role": "immutable prior current-head rebind; superseded only for source binding, not deleted or rewritten",
-      "sha256": "99f68c193dd76641efacf7c4b68f35d0d156dd620056d36ae6f5f5cb8c4712f8"
+      "sha256": "cc35b48de791f5ebd7592f2787a794b4228f65e31d8a0fddb83832e9da1e7cb7"
     },
     {
       "path": "spec/compatibility/broad-runs/auth-settings-sdk-next-v3.json",
       "role": "immutable prior current-head rebind; superseded only for source binding, not deleted or rewritten",
-      "sha256": "25fd75b985675704826eacda85760305153cf8f366ea0a7c50ba6112fcb64143"
+      "sha256": "2d21be00887e66c41be53c222c172dcfa5a92aa2213663c6af762c762ca13336"
     }
   ],
   "productionExecuted": false,
@@ -387,7 +387,7 @@
       "path": "spec/compatibility/broad-runs/auth-settings-sdk-next-v3.json",
       "preservation": "immutable historical current-head rebind artifact; never overwrite",
       "productionExecuted": false,
-      "sha256": "25fd75b985675704826eacda85760305153cf8f366ea0a7c50ba6112fcb64143",
+      "sha256": "2d21be00887e66c41be53c222c172dcfa5a92aa2213663c6af762c762ca13336",
       "version": 3
     }
   },

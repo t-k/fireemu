@@ -14,7 +14,7 @@
     },
     "daemon": {
       "authProjectNumbers": {
-        "fireemu-35fe6": "592603257417"
+        "fireemu-35fe6": "<project-number>"
       }
     }
   },
@@ -97,7 +97,7 @@
   "comparison": {
     "kind": "second45-mapping-comparison-v1",
     "semanticContract": "second45-received-json-semantics-v1",
-    "manifestDigest": "ff2ae95690a72a54b4e39ffc4077e3c39dd86564a8adc530ab144b5e0d086bab",
+    "manifestDigest": "d2936b35d642e5d4a3a40ee1e2930de1a93cfb0cb376f87b9628f3c3d22fd412",
     "recordingComplete": true,
     "safety": true,
     "mapping": "match",
@@ -369,12 +369,12 @@
   },
   "productionProposal": {
     "caseManifest": "spec/compatibility/broad-second45-local-admission.json",
-    "manifestDigest": "ff2ae95690a72a54b4e39ffc4077e3c39dd86564a8adc530ab144b5e0d086bab",
+    "manifestDigest": "d2936b35d642e5d4a3a40ee1e2930de1a93cfb0cb376f87b9628f3c3d22fd412",
     "observerDigest": "8bd1a239a9fe165829f842374af5f31ce4580e6424f94cc6221b43bc9a941c8b",
     "comparisonContract": "second45-mapping-comparison-v1",
     "semanticContract": "second45-received-json-semantics-v1",
     "project": "fireemu-35fe6",
-    "projectNumber": "592603257417",
+    "projectNumber": "<project-number>",
     "database": "(default)",
     "edition": "Standard Native",
     "rows": 45,

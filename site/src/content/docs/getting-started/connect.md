@@ -15,23 +15,13 @@ npx fireemu exec -- node ./scripts/seed.mjs
 
 | Variable | Value |
 |---|---|
-| `FIRESTORE_EMULATOR_HOST`, `FIREBASE_FIRESTORE_EMULATOR_ADDRESS` | Firestore `host:port` |
+| `FIRESTORE_EMULATOR_HOST` | Firestore `host:port` |
 | `FIREBASE_AUTH_EMULATOR_HOST` | Authentication `host:port` |
-| `FIREBASE_STORAGE_EMULATOR_HOST` | Storage `host:port` |
-| `STORAGE_EMULATOR_HOST` | Storage URL (`http://host:port`) for the Cloud Storage client libraries; with Storage App Check `enforced` and `appCheck.storageServerRequests` set to `"capability"` it also carries a per-run Admin capability (see [App Check](../../products/app-check/)) |
-| `FIREBASE_DATABASE_EMULATOR_HOST` | Realtime Database `host:port`, when the Realtime Database runs |
-| `PUBSUB_EMULATOR_HOST` | Pub/Sub `host:port`, when Pub/Sub runs |
-| `CLOUD_EVENTARC_EMULATOR_HOST` | Eventarc URL, when Functions run |
-| `CLOUD_TASKS_EMULATOR_HOST` | Cloud Tasks `host:port`, when Functions run |
-| `FIREEMU_FUNCTIONS_HOST` | Functions `host:port`, when Functions run |
-| `FIREEMU_APP_CHECK_EMULATOR_HOST`, `FIREEMU_APP_CHECK_JWKS_URL` | App Check exchange host and JWKS URL, when `appCheck.enabled` |
-| `FIREBASE_EMULATOR_HUB` | Emulator Hub `host:port`, when the Hub is running |
-| `FIREBASE_LOGGING_EMULATOR_HOST` | Logging emulator `host:port` |
+| `FIREBASE_STORAGE_EMULATOR_HOST`, `STORAGE_EMULATOR_HOST` | Storage `host:port` and `http://host:port` |
 | `GCLOUD_PROJECT`, `GOOGLE_CLOUD_PROJECT` | The project ID |
-| `FIREBASE_CONFIG` | Set from the project ID unless your environment already has it |
 | `FIREEMU_CONTROL_URL`, `FIREEMU_CONTROL_TOKEN` | Fireemu's control API, used by `fireemu/testing` |
 
-Variables for emulators that are not selected are left as your environment had them.
+Variables for the other emulators (Realtime Database, Pub/Sub, Eventarc, Cloud Tasks, App Check, the Hub) are listed with the conditions in [Environment variables](../../reference/environment-variables/). Variables for emulators that are not selected are left as your environment had them.
 
 ```js
 import { initializeApp } from 'firebase-admin/app';

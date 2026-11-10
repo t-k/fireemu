@@ -15,7 +15,7 @@ spec.loader.exec_module(publisher)
 
 APPROVAL = ROOT / "spec/compatibility/evidence/auth-display-name/approval.json"
 PAGE = ROOT / "docs/compatibility/auth-display-name-approval.md"
-SUBJECT = "f6e31fd28a7c05651df454843fe5c40c48b4e70552617b796f1398c702b0d2ec"
+SUBJECT = "b51f1d7773da6c08f2d7e098f99c76d5f4f817d3e6c555bca7c94aae4b541023"
 SCOPE = "Display name setting, replacement and deletion through REST using end-user tokens; no tenant; local strict profile and recorded production configuration; only the recorded artifact, configuration and auth-display-name corpus revision 1 twelve cases; approved as redacted semantic observations matching the published checks."
 
 

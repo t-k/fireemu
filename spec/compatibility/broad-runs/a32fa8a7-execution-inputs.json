@@ -3,11 +3,11 @@
   "productionExecuted": false,
   "frozenCommit": "a32fa8a7fa9b2b3f4e286a3d8167723c8c26fcf0",
   "observerSha256": "de284c0a6c8496eb91f5765d9822a1c60d1d4c4e2bcd26a728fd187d95adb34a",
-  "manifestSha256": "4b6d42bc5acd1a697622b25325ba67620af272d5c44f5d00982dbffe8bb8cc3f",
+  "manifestSha256": "854aa3d3446158f89da7cd69665cee759dea8dc4ed7fe0e5bd842977923e7811",
   "manifest": {
     "schemaVersion": 1,
     "project": "fireemu-35fe6",
-    "projectNumber": "592603257417",
+    "projectNumber": "<project-number>",
     "database": "(default)",
     "edition": "STANDARD",
     "databaseType": "FIRESTORE_NATIVE",
@@ -699,7 +699,7 @@
   },
   "comparisonContract": {
     "version": "batch-pair-v1",
-    "manifestDigest": "4b6d42bc5acd1a697622b25325ba67620af272d5c44f5d00982dbffe8bb8cc3f",
+    "manifestDigest": "854aa3d3446158f89da7cd69665cee759dea8dc4ed7fe0e5bd842977923e7811",
     "rowTable": [
       {
         "id": "firestore:broad/refusal-preserves-state#read-normal",
@@ -1034,7 +1034,7 @@
     "edition": "Standard Native",
     "project": "fireemu-35fe6"
   },
-  "comparisonContractDigest": "453565e1eb4f74219d8648f3409ee996a0514d83222669f3edf29d8f7feb6434",
+  "comparisonContractDigest": "6915ab4c7f2b1c75affb8fcf865e046db7a7aab840eebdd8e31ec9fe5e065c67",
   "databaseProjectionContract": {
     "version": "database-settings-v1",
     "excludedResponseFields": [
@@ -1052,7 +1052,7 @@
   },
   "databaseProjectionContractDigest": "79690548d106bfdacef8d5440e12c07d3384cbfb8ce7908ca6b93c3098268627",
   "project": "fireemu-35fe6",
-  "projectNumber": "592603257417",
+  "projectNumber": "<project-number>",
   "limits": {
     "total": 2400,
     "auth": 400,

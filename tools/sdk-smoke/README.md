@@ -204,7 +204,7 @@ For example, set `BENCH_CONCURRENCY=32 BENCH_DURATION_MS=10000 BENCH_OPERATIONS=
 fireemu exec --config tools/sdk-smoke/fireemu.index-merge.json --firebase-json conformance/firebase.json --only firestore -- sh -c 'cd tools/sdk-smoke && GOOGLE_CLOUD_PROJECT=demo-app npm run smoke:index-merge'
 ```
 
-Against production, set `PRODUCTION_ORACLE_PROJECT_ID=fireemu-35fe6` and `PRODUCTION_ORACLE_EXPECTED_PROJECT_NUMBER=592603257417` (the conformance indexes must be deployed to that project). Recorded on 2026-09-08: every case agreed between production and fireemu, including the bare `orderBy(__name__, desc)` family, which both reject without an explicit `__name__ DESC` index in the query's scope (the wildcard override does not change that) and both serve for `ord`, whose index is declared.
+Against production, set `PRODUCTION_ORACLE_PROJECT_ID=fireemu-35fe6` and `PRODUCTION_ORACLE_EXPECTED_PROJECT_NUMBER=<project-number>` (the conformance indexes must be deployed to that project). Recorded on 2026-09-08: every case agreed between production and fireemu, including the bare `orderBy(__name__, desc)` family, which both reject without an explicit `__name__ DESC` index in the query's scope (the wildcard override does not change that) and both serve for `ord`, whose index is declared.
 
 ### Timestamp array storage precision
 
@@ -219,7 +219,7 @@ fireemu exec --only firestore --project demo-app -- node tools/sdk-smoke/timesta
 Run against the explicitly authorized production oracle using Application Default Credentials:
 
 ```sh
-PRODUCTION_ORACLE_PROJECT_ID=fireemu-35fe6 PRODUCTION_ORACLE_EXPECTED_PROJECT_NUMBER=592603257417 node tools/sdk-smoke/timestamp-array-oracle.mjs
+PRODUCTION_ORACLE_PROJECT_ID=fireemu-35fe6 PRODUCTION_ORACLE_EXPECTED_PROJECT_NUMBER=<project-number> node tools/sdk-smoke/timestamp-array-oracle.mjs
 ```
 
 The production path checks the actual project number before writing. The local path accepts only loopback endpoints. Each case exclusively creates a UUID document and deletes only that owned document in cleanup. Output retains request values, stored values, and precise update times. A failed remote create with an uncertain response can leave its uniquely named fixture behind.

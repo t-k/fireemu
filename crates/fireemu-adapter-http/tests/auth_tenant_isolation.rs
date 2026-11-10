@@ -2026,12 +2026,14 @@ fn deleting_a_tenant_invalidates_its_credentials_and_leaves_the_sibling_and_proj
                 400,
                 "INVALID_REFRESH_TOKEN",
             ),
+            // A keyless request makes no tenant (owner decision 2421), so the emulator profile
+            // meets the deleted tenant as strict does.
             (
                 Selector::BodyOnly,
                 400,
-                "USER_NOT_FOUND",
+                "TENANT_DELETED",
                 400,
-                "INVALID_REFRESH_TOKEN",
+                "TENANT_DELETED",
             ),
             (
                 Selector::QueryOnly,

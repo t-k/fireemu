@@ -36,7 +36,7 @@ The start banner shows the address and the rules in force:
 
 ## Connect
 
-`fireemu exec` sets `FIREBASE_DATABASE_EMULATOR_HOST` for the command it runs, and the Admin SDK reads it.
+`fireemu exec` sets `FIREBASE_DATABASE_EMULATOR_HOST` for the command it runs, and the Admin SDK reads it (see [Environment variables](../../reference/environment-variables/)).
 
 `exec` also sets `FIREBASE_CONFIG` with the `databaseURL` `https://<project>.firebaseio.com`, as firebase-tools does, so an Admin SDK app initialized without options reads and writes the instance `<project>`, not `<project>-default-rtdb`, which the single rules form and the client example below use. Pass `databaseURL: 'https://<project>-default-rtdb.firebaseio.com'` to `initializeApp` to share an instance with clients. Web and mobile clients connect explicitly:
 
@@ -130,10 +130,13 @@ An instance with no rules file follows `database.defaultAccess`:
 <TabItem label="TOML">
 
 ```toml
+# Configuration schema version: 1.
 schemaVersion = 1
+# Compatibility profile: "strict" or "emulator".
 profile = "strict"
 
 [database]
+# Access without a rules file: "open" or "locked"; "locked" requires strict.
 defaultAccess = "locked"
 ```
 

@@ -26,7 +26,7 @@ G0_ORIGINAL_MANIFEST_DIGEST = (
 G0_NORMALIZATION_VERSION = "shared-g0-batchwrite-status-resource-v1"
 G0_FROZEN_SOURCE = "a35f85b464743d62344a3a58763d382b5b3838ce"
 G0_FROZEN_INPUTS_SHA256 = (
-    "a3193a57fd84c416358cb16a66e72a94bfd5d95cb76f36afbed7189e3abb4bc0"
+    "653bba409e5f096de69e4dfbabf3e812fbca828e2e6e170f0d145b1bdff8d121"
 )
 # Recomputed from the complete Python observer sources in each archived Git tree.
 G0_LOCAL_OBSERVERS = {

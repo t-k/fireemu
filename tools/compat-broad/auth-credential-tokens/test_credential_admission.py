@@ -29,8 +29,8 @@ from broad_contract import digest
 from credential_cases import CAMPAIGN_ID
 
 NONCE = "5b3f9c1e7a2d4f608c1b2a3d4e5f6071"
-AUTH_BODY = {"name": "projects/592603257417/config", "mfa": {"state": "DISABLED"}}
-PROJECT_BODY = {"projectId": "fireemu-35fe6", "projectNumber": "592603257417"}
+AUTH_BODY = {"name": "projects/<project-number>/config", "mfa": {"state": "DISABLED"}}
+PROJECT_BODY = {"projectId": "fireemu-35fe6", "projectNumber": "<project-number>"}
 
 
 def frozen_checkout(tmp_path: Path) -> Path:

@@ -19,7 +19,7 @@ Ten sequential REST observations in production only with a first-generation befo
 
 Control sign-up photo URL persisted: **False**. Target sign-up: accepted; record exists afterwards: True, disabled: False.
 
-Review subject (unapproved): `42916d35d24a90b70dbc95d0f8c5a99172b62b279c267a45fecf332f4dcbaa55`.
+Review subject (unapproved): `9d9ade45cceaab9e67e7e4cbe7d825a0ddcdfca6dd34ac2539a82ee298410b5b`.
 
 What this record supports: a photoUrl sent with accounts:signUp is not on the record read back through privileged lookup and is not visible to a beforeSignIn function on the creating request; fireemu keeps ignoring the field. What it does not support: any statement about a created-then-disabled account, which revision 2 of the corpus (an email-prefix selector) is designed to observe.
 

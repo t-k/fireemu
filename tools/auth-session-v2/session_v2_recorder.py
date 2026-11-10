@@ -36,7 +36,7 @@ from session_v2_contract import (
 )
 
 PROJECT = "fireemu-35fe6"
-NUMBER = "592603257417"
+NUMBER = "<project-number>"
 ROOT = Path(__file__).resolve().parents[2]
 PASSWORD_POLICY = {
     "customStrengthOptions": {"minPasswordLength": 6, "maxPasswordLength": 4096},

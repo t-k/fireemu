@@ -17,7 +17,7 @@ APPROVAL = (
     ROOT / "spec/compatibility/evidence/auth-blocking-disable/comparison-approval.json"
 )
 PAGE = ROOT / "docs/compatibility/auth-blocking-disable-comparison-approval.md"
-SUBJECT = "6c130b97db655709ced0357d700314f9be1bce8a7099dfeb18ceeed51b86ae08"
+SUBJECT = "2d658c18109ef988e7ebd50415450c1d0c57cc34196c7927d74e8755e5df86cd"
 SOURCE_COMMIT = "bfe70d7f1bb8d95d1f4a49abfc2f3c09a4da0122"
 SCOPE = "Row-by-row comparison of the approved production record of auth-blocking-disable revision 1 with one run of the same corpus on the owned local artifact built after fireemu stopped persisting a hook disable for an existing account's first-factor sign-in: all twelve semantic projections agree, including the immediate readback of the flag that differed on the uncorrected artifact (that earlier comparison stays in history at commit 98be375). Production used the recorded first-generation blocking function; the owned local run used the equivalent second-generation Identity fixture installed with npm ci from the committed lockfile, with the runner, fixture files, lockfile and artifact bound to committed content. Approved as a comparison of these cases on that artifact, profile and recorder; not a claim of Functions SDK generation parity or beyond these cases."
 CASES = [

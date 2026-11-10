@@ -655,7 +655,7 @@
       }
     ]
   },
-  "productionSubjectSha256": "c5edbe9850fc52c66c666ca0c62961af3c4ad214fc074a950380c592960560fd",
+  "productionSubjectSha256": "dc566656b98026aad05bccc1e55388ae90b24271902a8149979ffd7f2a08e570",
   "publicationContractSha256": "99f84b14927061843a48e13c69c8272d0d779ac70123a44273268d5ab2684245",
   "schemaVersion": 1,
   "scope": "Row-by-row comparison of the production candidate record of auth-disabled-admin-update revision 1 with one run of the same corpus on an owned local fireemu artifact (strict profile, --only auth, no configuration change). Semantic projections exclude elapsed milliseconds. This is a comparison record, not a new production run, not an approval, and not a claim beyond these ten cases."

@@ -806,7 +806,7 @@
     "tools/compat-broad/test_broad.py": "764388e995fa0fbb61eb5267b85c5bbd34e8c123b7b0062d3c5364fd03615a71",
     "tools/compat-broad/broad_contract.py": "9fc2243f8ac119c42542b689b8d01cc5da4f606a0e1251ed0cb7f31b7c533d9e",
     "tools/compat-broad/second_cases.py": "c3870a92529b49f283f6e51fe33ad4fe1bf1056f03fa667f329e62f14925c687",
-    "tools/compat-broad/batch_pair.py": "3a415aba47e28e7a78922ff5499a1d2327cfbb6a1494914b5ebb6db40da6c104",
+    "tools/compat-broad/batch_pair.py": "fa5e74e381fe2d4555fa18a9b2448e58e0be9fdca95f4b8481b637350278414a",
     "tools/compat-broad/broad_cases.py": "19ddca137c4e7d5d88081996cc23f8421b6178a43d5f7abe84fd3a9201711679",
     "tools/compat-broad/test_readiness.py": "b26c134185ed06f13fa573a990dcf085ea6fa4d18b6d8cb8730f9e1df7c0cb04",
     "tools/compat-broad/test_partition.py": "54f7df03b940d9f963a6a8d78ef1ffddd95c6a4669e485fe9a488581ee4bdfaa",

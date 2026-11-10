@@ -15,7 +15,7 @@ spec.loader.exec_module(publisher)
 
 APPROVAL = ROOT / "spec/compatibility/evidence/auth-password-rejection/approval.json"
 PAGE = ROOT / "docs/compatibility/auth-password-rejection-approval.md"
-SUBJECT = "d1fee3f26e44d169ac1719c5af76738a7ced8830f0d1d8e97ce1e8c594b265c8"
+SUBJECT = "d3ca3cc27c2d04ad4009cfe4266fcb95d1df09272b84f5ed2ef1f35a2719630b"
 SCOPE = "The 16 auth-password-rejection revision 1 cases, limited to the recorded artifact, configuration and corpus; end-user token REST routes, no tenant, local strict profile and recorded production authentication/password-policy settings. Approved as redacted observations: five-character ASCII update refusal under the minimum-six policy, preserved use of the original ID token, refresh token and password after refusal, selected account-field preservation, final valid change and new-credential use, and recorded account deletion/process termination."
 
 

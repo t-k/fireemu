@@ -2,14 +2,14 @@
   "kind": "initial46-production-candidate",
   "executionCommit": "bc38f392077784509f7fbb8993d5be66c1a8be14",
   "observerSha256": "1501aea61749d79d32238b9329f3d75370d9d500322ffab331ec0c8b3505342f",
-  "manifestSha256": "4b6d42bc5acd1a697622b25325ba67620af272d5c44f5d00982dbffe8bb8cc3f",
-  "comparisonContractDigest": "ec0ef13fc77b6edf0f4940f472267b91b117707b36aac15a00c0a6aea96e89dc",
+  "manifestSha256": "854aa3d3446158f89da7cd69665cee759dea8dc4ed7fe0e5bd842977923e7811",
+  "comparisonContractDigest": "f061cb4eaa9df8ee367a6f64f3a4f2d0522841ee30389b1150c340f1b329e53e",
   "databaseProjectionContractDigest": "24b4847314fe67940a1e0e8eb53e34e2bd007ef2e1d942639b51564677d30f18",
   "approval": {
     "frozenCommit": "bc38f392077784509f7fbb8993d5be66c1a8be14",
     "observerSha256": "1501aea61749d79d32238b9329f3d75370d9d500322ffab331ec0c8b3505342f",
-    "manifestSha256": "4b6d42bc5acd1a697622b25325ba67620af272d5c44f5d00982dbffe8bb8cc3f",
-    "comparisonContractDigest": "ec0ef13fc77b6edf0f4940f472267b91b117707b36aac15a00c0a6aea96e89dc",
+    "manifestSha256": "854aa3d3446158f89da7cd69665cee759dea8dc4ed7fe0e5bd842977923e7811",
+    "comparisonContractDigest": "f061cb4eaa9df8ee367a6f64f3a4f2d0522841ee30389b1150c340f1b329e53e",
     "databaseProjectionContractDigest": "24b4847314fe67940a1e0e8eb53e34e2bd007ef2e1d942639b51564677d30f18",
     "quotaProject": "fireemu-35fe6",
     "databaseProjection": {
@@ -34,7 +34,7 @@
     "nonce": "377db86cda534573b00d4422bd81db77",
     "kind": "owner-execution-permission",
     "project": "fireemu-35fe6",
-    "projectNumber": "592603257417",
+    "projectNumber": "<project-number>",
     "ownerIdentity": "Owner participating in this conversation (user)",
     "permissionReference": "User message: ok, responding to bc38f392 single-run proposal published at8c3b5929, one-hour validity and unused bound nonce",
     "issuedAt": 1789224661.188821,
@@ -737,7 +737,7 @@
       "firstDivergentRows": [
         "auth:broad/refresh-after-change"
       ],
-      "observation": "Production project_id is592603257417, local isfireemu-35fe6",
+      "observation": "Production project_id is<project-number>, local isfireemu-35fe6",
       "minimalCandidate": "Owned password sign-in then refresh; current corpus includes password change",
       "impact": "Project number versus project ID representation",
       "source": "crates/fireemu-adapter-http/src/identity_toolkit.rs refresh response uses store.project_id()",
@@ -754,7 +754,7 @@
     "production/result.json": "174dcc8c7615197fceb820f084cd61aefe4fa11acca86bb87a01e2a6b3369cd9",
     "production/responses.jsonl": "69462bad092f3088198682811f971a6fe3f55952f327e7a0e662fd4eb369070b",
     "production/ownership.jsonl": "417445ed18199d1c1924398e6631dce1921b4a02d5f00aa624aba02bd8084e9f",
-    "comparison.json": "11fc7072bc70f19c541d200b92b2babb4a502b89348b9e856dcfab56f5d02187"
+    "comparison.json": "9ff22bccad74fa66d0edcca91e0d065d68d81db0949d09ba6070cf0134f77c90"
   },
   "localBatchSha256": "07285ef50aa8002d6f9906f79e30f38786debaf85cf65faa9cc02b4fe90723bc"
 }

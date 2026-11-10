@@ -23,7 +23,7 @@ Outcomes are accepted, auth-rejected with a fixed error category, unexpected, tr
 
 ## Safety and commands
 
-Production is fixed to the authorized fireemu-35fe6 / 592603257417 project, no tenant. Existing email/privacy/hooks preflight and explicit client password policy checks apply. No project configuration is changed. Admin APIs establish ownership and cleanup only. Private journals are created before signup, and verified UID is persisted before mutation or recovery deletion. Unknown creation outcomes are never resolved from an empty email lookup alone.
+Production is fixed to the authorized fireemu-35fe6 / <project-number> project, no tenant. Existing email/privacy/hooks preflight and explicit client password policy checks apply. No project configuration is changed. Admin APIs establish ownership and cleanup only. Private journals are created before signup, and verified UID is persisted before mutation or recovery deletion. Unknown creation outcomes are never resolved from an empty email lookup alone.
 
 Use new private output directories outside tracked paths:
 

@@ -16,7 +16,7 @@ Seven sequential REST observations in production only for the provider-unlink tr
 
 Transition (`trigger`): **accepted / none**. Held credential after the transition: start accepted / none, finalize accepted / none. Provider linked as a precondition: True.
 
-Review subject (unapproved): `8628018a57979e03f35c49950dbd7114e50c8e0b97d0b2f9063f09aa100c2f24`.
+Review subject (unapproved): `cb6853bcf078ea3632340c87c6f361ac4fee8353efad0c14b157d9e58fcb7b10`.
 
 The held credential and SMS session were created before the transition and presented afterwards on the same session, so the held rows show the transition's effect on the pre-existing credential. The held rows are diagnostic: accepted and refused are both valid observations, and lookup and refresh run only when the held finalize was accepted. Elapsed milliseconds are cumulative from the recorder's measurement origin, sampled when each row is recorded; they are excluded from semantic equality.
 

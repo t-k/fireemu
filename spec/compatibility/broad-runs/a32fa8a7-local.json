@@ -439,7 +439,7 @@
     "schemaVersion": 2,
     "comparisonBinding": {
       "version": "batch-pair-v1",
-      "manifestDigest": "4b6d42bc5acd1a697622b25325ba67620af272d5c44f5d00982dbffe8bb8cc3f",
+      "manifestDigest": "854aa3d3446158f89da7cd69665cee759dea8dc4ed7fe0e5bd842977923e7811",
       "rowTable": [
         {
           "id": "firestore:broad/refusal-preserves-state#read-normal",
@@ -792,7 +792,7 @@
     },
     "configurationUnchanged": null,
     "databaseObservations": [],
-    "manifestDigest": "4b6d42bc5acd1a697622b25325ba67620af272d5c44f5d00982dbffe8bb8cc3f",
+    "manifestDigest": "854aa3d3446158f89da7cd69665cee759dea8dc4ed7fe0e5bd842977923e7811",
     "observerDigest": "de284c0a6c8496eb91f5765d9822a1c60d1d4c4e2bcd26a728fd187d95adb34a",
     "productionExecuted": false,
     "rows": [

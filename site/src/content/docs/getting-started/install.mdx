@@ -5,16 +5,20 @@ description: Install Fireemu from npm, create fireemu.toml, and start the emulat
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-## Requirements
+## Prerequisites
 
-- Node.js 20 or newer.
-- To run Cloud Functions, `firebase-functions` v6 or v7 in the codebase. A Python codebase needs Python 3.10 to 3.14 and its own `venv` with `firebase-functions` instead (macOS and Linux; see [Cloud Functions](../../products/functions-python/)).
+:::note[Before you start]
+- **Node.js 20 or newer** (the package's `engines` field is `>=20`). It runs the `fireemu` launcher and the Functions runner.
+- **A supported platform.** The package installs a prebuilt binary for your platform; no Java or other runtime is needed.
 
 | OS | Architecture |
 |---|---|
 | macOS 13 or newer | Apple silicon, Intel |
-| Linux | x86-64, arm64 |
+| Linux (any glibc or musl distribution, including Alpine and distroless) | x86-64, arm64 |
 | Windows 10 or newer | x86-64 |
+:::
+
+To run Cloud Functions you also need `firebase-functions` v6 or v7 in the codebase. A Python codebase needs Python 3.10 to 3.14 and its own `venv` with `firebase-functions` instead (macOS and Linux; see [Cloud Functions](../../products/functions-python/)).
 
 ## Install
 
@@ -38,19 +42,24 @@ For CI or a script, use the non-interactive form. An existing `fireemu.toml` is 
 npx fireemu init --yes
 ```
 
-The generated file looks like this:
+`npx fireemu init --yes` writes exactly this file (the comments are added here to explain each line):
 
 <Tabs syncKey="config-format">
 <TabItem label="TOML">
 
 ```toml
+# Editor hint: points TOML-aware editors at the JSON Schema for completion and validation.
 #:schema https://raw.githubusercontent.com/fireemu/fireemu/main/spec/config/fireemu.schema.json
+# The configuration format version. The only value is 1.
 schemaVersion = 1
+# "strict" follows production (the default and recommended); "emulator" follows the pinned official emulator.
 profile = "strict"
-
-[firestore]
-edition = "standard"
-apiMode = "native"
+# The same schema URL as a data key, so JSON-oriented tools find it.
+"$schema" = "https://raw.githubusercontent.com/fireemu/fireemu/main/spec/config/fireemu.schema.json"
+# "native" (Firestore Native mode API) or "mongodb-compatible".
+firestore.apiMode = "native"
+# "standard" or "enterprise".
+firestore.edition = "standard"
 ```
 
 </TabItem>
@@ -60,6 +69,7 @@ apiMode = "native"
 {
   "schemaVersion": 1,
   "profile": "strict",
+  "$schema": "https://raw.githubusercontent.com/fireemu/fireemu/main/spec/config/fireemu.schema.json",
   "firestore": {
     "edition": "standard",
     "apiMode": "native"
@@ -69,6 +79,8 @@ apiMode = "native"
 
 </TabItem>
 </Tabs>
+
+The JSON tab is the equivalent `fireemu.json`, which `init` does not write. When `./firebase.json` exists (or you pass `--firebase-json <file>`), `init` references it and adds one more line, `firebaseJson = "firebase.json"`, so ports, Security Rules, indexes and Functions codebases are read from that file. Every key is listed in the [configuration schema](../../reference/configuration/); `npx fireemu init --reference` also writes `fireemu.reference.toml`, which describes every key and is not loaded.
 
 ## Start the emulators
 

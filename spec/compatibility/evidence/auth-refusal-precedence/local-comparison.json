@@ -642,7 +642,7 @@
       }
     ]
   },
-  "productionSubjectSha256": "6c76f862a7b7a2d9ad557ae43d03d3787221089a76e999ae03478e20069fe3c4",
+  "productionSubjectSha256": "52da79dbcfd40cb43baca7f0dcf4dacc90d7d5a421a7a5e5f2616ce9a044417c",
   "publicationContractSha256": "51847ed530e1d86ba16194e146c02410537640801ebd20c2e137c01ed78f3706",
   "schemaVersion": 1,
   "scope": "Row-by-row comparison of the approved production record of auth-refusal-precedence revision 1 with one run of the same corpus on an owned local fireemu artifact built after the end-user accounts:update route was corrected to authenticate before authorizing administrator-only fields (strict profile, --only auth, no configuration change, codes read from the emulator inspection route). Semantic projections exclude elapsed milliseconds. This is a comparison record, not a new production run, not an approval, and not a claim that the local artifact matches on anything outside these nine cases."

@@ -3,9 +3,9 @@
   "executionCommit": "b0c1f3ef9646cdee400d25a5a61ec818e32daa1f",
   "productionExecuted": false,
   "productionCompatibility": "unobserved",
-  "manifestDigest": "6f275645a8a0c7fb957bd37242a28eacf81af3734444912770edc3f28a494d98",
+  "manifestDigest": "0af45e517ff2f7e97d977a699a69fb01b9fe0bd3a6e44b9cb28ed9b17dda115d",
   "observerDigest": "8774e7c20cc7a21f718a7624506f9f8d05aafa2a07959b1922dad2580aeeb526",
-  "comparisonContractDigest": "99fa75e87625e9af687a9be9c19819406475d784180e411fd85e91a72d4ee29d",
+  "comparisonContractDigest": "8f50911528cf22231d4a568a86c023f74f14a5c5cf7fb385e7d59b91bcf84833",
   "local": {
     "rows": 45,
     "recordingComplete": true,
@@ -91,11 +91,11 @@
       "publicationCommit": "ab7bd698",
       "executionCommit": "bc38f392077784509f7fbb8993d5be66c1a8be14",
       "observerDigest": "1501aea61749d79d32238b9329f3d75370d9d500322ffab331ec0c8b3505342f",
-      "manifestDigest": "4b6d42bc5acd1a697622b25325ba67620af272d5c44f5d00982dbffe8bb8cc3f",
-      "comparisonContractDigest": "ec0ef13fc77b6edf0f4940f472267b91b117707b36aac15a00c0a6aea96e89dc",
+      "manifestDigest": "854aa3d3446158f89da7cd69665cee759dea8dc4ed7fe0e5bd842977923e7811",
+      "comparisonContractDigest": "f061cb4eaa9df8ee367a6f64f3a4f2d0522841ee30389b1150c340f1b329e53e",
       "fileSha256": {
-        "bc38f392-paired-observations.json": "a7809362c9c3a69d6a03a4f68e69aea0de34e29771f5bd36b2053359c609114c",
-        "bc38f392-execution-result.json": "5997e5ecc9f3da0addeed6b88c290cfc97c496e317c7625a9175232105953b88"
+        "bc38f392-paired-observations.json": "774dc8cdd4f8bea057a1ba80409f3828726784e6e6fc15a594f386460f272905",
+        "bc38f392-execution-result.json": "de9d0e64f024f7e98a1d18633f1dff82e14d8133d4474c53ec9c135152e84691"
       },
       "originalComparisonCounts": {
         "match": 35,

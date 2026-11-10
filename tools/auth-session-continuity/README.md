@@ -20,6 +20,6 @@ uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/a
 AUTH_SESSION_CONTINUITY_LIVE_LOCAL=1 uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/auth-session-continuity -q
 ```
 
-The owned runner builds/copies the strict artifact, proves instance identity and checks exit/listener closure. Production remains fixed to the authorized fireemu-35fe6 / 592603257417 project and recorded policy settings. Private journal precedes signup; verified UID is persisted before cleanup; deletion requires exact owner confirmation and UID/email absence. Normal cleanup does not establish fault-injected recovery.
+The owned runner builds/copies the strict artifact, proves instance identity and checks exit/listener closure. Production remains fixed to the authorized fireemu-35fe6 / <project-number> project and recorded policy settings. Private journal precedes signup; verified UID is persisted before cleanup; deletion requires exact owner confirmation and UID/email absence. Normal cleanup does not establish fault-injected recovery.
 
 The source review reuses prior official snapshots without changing their acquisition dates. This is a new candidate, not inherited approval. It does not establish one-hour expiry, permanent validity, whole rotated-session lineage, SDK checkRevoked, Rules or a simultaneous randomized comparison with the earlier password-change run. Older records/approvals remain immutable; their historical checks are separate from current-runtime regression checks.

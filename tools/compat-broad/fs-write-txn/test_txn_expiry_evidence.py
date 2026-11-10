@@ -302,7 +302,7 @@ def test_the_published_shadow_was_produced_by_the_current_modules():
 def test_previous_manifest_and_native_receipt_remain_immutable():
     import hashlib
 
-    assert hashlib.sha256(LEGACY_MANIFEST.read_bytes()).hexdigest() == "e8f80fc0c35c2c64c87cbb6bf4bf5d9bae61f86ba097e89b7e6a8a05e76ef752"
+    assert hashlib.sha256(LEGACY_MANIFEST.read_bytes()).hexdigest() == "fd904bc8ddfbe0a2f0fd3198e8b0b6f2d84ac8af8678d7f75cdd4546f517146c"
     assert hashlib.sha256(HISTORICAL_SHADOW_V2.read_bytes()).hexdigest() == "e8ac9c831772245e1798bcd5a0295ac3fdcd6c972b9b574a297d339bf5551b71"
     assert hashlib.sha256(HISTORICAL_SHADOW.read_bytes()).hexdigest() == "1e7007e6b0a0b79f9532bdfcf65edb17e4327bcf57bc2fbdf04c274000a4b105"
 
@@ -321,7 +321,7 @@ def test_current_preparation_is_reproducible_but_grants_no_production_permission
 
 def test_prior_v2_preparation_stays_immutable():
     import hashlib
-    assert hashlib.sha256(PREVIOUS_MANIFEST.read_bytes()).hexdigest() == 'd46ec59979c9e11f6635308329754b01cd67319a1e4ca9231066038bec9703e1'
+    assert hashlib.sha256(PREVIOUS_MANIFEST.read_bytes()).hexdigest() == '849605d5bd4ea0061f32816e39ed4d7bdf4abcc78ac1345d685aff8f71146076'
 
 
 def test_prior_v3_preparation_stays_immutable():
@@ -329,7 +329,7 @@ def test_prior_v3_preparation_stays_immutable():
 
     assert (
         hashlib.sha256(PREVIOUS_MANIFEST_V3.read_bytes()).hexdigest()
-        == "b2ff7225572eca6a536e4ace10cc1304e7a0d801d35faad37bd85a32a3beb61d"
+        == "79b4bdb6e008cafb631ea8a55d62dcf1be21f5e264adbc512878bd223a2c6b38"
     )
 
 

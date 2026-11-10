@@ -4,7 +4,7 @@
 
 The 34 auth-session-continuity revision 1 observations, limited to the recorded artifact, configuration and corpus; no-password-change end-user REST continuity, no tenant, local strict profile and recorded production authentication/password-policy settings. Approved as redacted observations of successful use of fixed A/B tokens and reference-refresh credentials at target offsets 0/10/30 seconds, successful lookup with refresh-issued ID tokens, fixed invalid-input rejection and recorded deletion/process termination checks.
 
-Subject: `8d8214f936b5061bf584e164f55a4a41c8a0a346354b0cb955c04973e29ee0b2`. Recomputed from the complete receipt during offline validation; this approval cannot transfer to a changed subject.
+Subject: `920fe1a0b28d95d89ca06f34d711d020aa8039fbded777f281ba7a5610dd0029`. Recomputed from the complete receipt during offline validation; this approval cannot transfer to a changed subject.
 
 Reviewed commit: `8c0513c5d7eb1a601f759ea0d3b8d5d243beb05b`. Reviewer: `github:t-k (id:426779)`. Approval date: 2026-09-10.
 

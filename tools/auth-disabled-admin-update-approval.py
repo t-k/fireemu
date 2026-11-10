@@ -15,7 +15,7 @@ publisher = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(publisher)
 APPROVAL = ROOT / "spec/compatibility/evidence/auth-disabled-admin-update/approval.json"
 PAGE = ROOT / "docs/compatibility/auth-disabled-admin-update-approval.md"
-SUBJECT = "c5edbe9850fc52c66c666ca0c62961af3c4ad214fc074a950380c592960560fd"
+SUBJECT = "dc566656b98026aad05bccc1e55388ae90b24271902a8149979ffd7f2a08e570"
 SOURCE_COMMIT = "3cadafe7a42effb58b392897298e583a32e51792"
 SCOPE = "Ten-case frame (eight executed rows, two conditionally skipped rows) projected without secrets from the saved 2026-09-12 production run of auth-disabled-admin-update revision 1. Approved as recorded: an administrative password replacement and a photo update of a disabled account are accepted and applied with no tokens returned, the account's own sign-in stays USER_DISABLED, the replaced password signs in after re-enablement, the control signs in at every phase, the configuration and password policy are unchanged, and both accounts are deleted with absence confirmation. The two token rows were skipped because no tokens were returned and are not approved as executed. No tenant, two update fields, a single run; not extended to other fields, self-service updates, SDK or Rules."
 CASES = [

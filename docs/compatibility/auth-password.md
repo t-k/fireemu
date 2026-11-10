@@ -19,7 +19,7 @@ Password change REST using fresh end-user tokens; no tenant; strict owned local 
 | delete | Matched | Matched | — / — |
 | deleted-account-absent | Matched | Matched | — / — |
 
-Review subject (no approval granted): `aaa9cf7bd198aa7ca6c9215718323539c50ff339d02ab0392f8d26ba85eaa9fb`.
+Review subject (no approval granted): `114d9a2634417dd6ca8ac130c90ea70cadd9a465e7dce7618048ff9f9775fb65`.
 
 The original random password is proven by baseline signin before accounts:update changes it to a distinct random password with returnSecureToken=true. The update response ID token is used for lookup; its refresh token is used for refresh and a further lookup. The old password is expected to fail with HTTP400 INVALID_LOGIN_CREDENTIALS under the recorded improved-email-privacy setting. The new password must sign in as the same UID and its ID token must retrieve that account.
 

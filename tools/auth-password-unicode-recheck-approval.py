@@ -16,7 +16,7 @@ APPROVAL = (
     ROOT / "spec/compatibility/evidence/auth-password-unicode-recheck/approval.json"
 )
 PAGE = ROOT / "docs/compatibility/auth-password-unicode-recheck-approval.md"
-SUBJECT = "5f13dcc611017940756158cbf225cc2efd85ffeed4d40fca4445039d7088a885"
+SUBJECT = "e660bd99da8c990aaa708c17926eff424044a0912450f3c1baead3b3e351f1fe"
 SCOPE = "Eight recorded input patterns rechecked on the corrected local artifact against unchanged saved production observations. End-user token REST routes, no tenant, local strict profile and the recorded minimum 6 / maximum 4096 password policy. Approval covers acceptance/refusal, branch-specific credential use, selected account-state checks and recorded account deletion/process termination. This is not a new production run; random prefixes and accounts differ between runs. It does not cover all Unicode strings, normalization, length limits on other routes, elapsed expiry, SDK, Rules or fault recovery."
 
 

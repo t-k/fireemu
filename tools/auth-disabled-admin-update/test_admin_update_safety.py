@@ -36,7 +36,7 @@ class World:
 
     def request(self, url, body=None, token=None, quota=False, form=False):
         if url.endswith("/config"):
-            return 200, {"name": "projects/592603257417/config"}
+            return 200, {"name": "projects/<project-number>/config"}
         if "passwordPolicy" in url:
             return 200, recorder.PASSWORD_POLICY
         if "accounts:lookup" in url and token:

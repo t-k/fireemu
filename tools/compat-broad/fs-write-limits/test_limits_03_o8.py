@@ -50,7 +50,7 @@ from test_campaign_03 import (
 )
 
 NONCE = "b" * 32
-PROJECT_BODY = {"projectId": "fireemu-35fe6", "projectNumber": "592603257417"}
+PROJECT_BODY = {"projectId": "fireemu-35fe6", "projectNumber": "<project-number>"}
 DATABASE_BODY = {
     "name": "projects/fireemu-35fe6/databases/(default)",
     "uid": "fixture-uid",
@@ -58,7 +58,7 @@ DATABASE_BODY = {
     "databaseEdition": "STANDARD",
     "locationId": "us-central1",
 }
-AUTH_BODY = {"name": "projects/592603257417/config", "mfa": {"state": "DISABLED"}}
+AUTH_BODY = {"name": "projects/<project-number>/config", "mfa": {"state": "DISABLED"}}
 # The observed production readback of `collectionGroups/pk/fields/*`, which
 # carries the identical `fieldPath: "*"`, `indexes: []` override (read-only GET,
 # HTTP 200, 2026-09-21 07:05 UTC), verbatim: `indexes` and `usesAncestorConfig`

@@ -753,7 +753,7 @@
     "recordedAt": "2026-09-10T04:54:15.059126+00:00",
     "target": "production"
   },
-  "publicationContractSha256": "b54b9d5b35890a6d56ab81d3787ec34ccb78be2ecc1cfddf5f9f67f20ca67e87",
+  "publicationContractSha256": "f04810c614749d1d3683bf2b01fbeeaf4c87dda22ec29cb6f2d567864f44c0b0",
   "schemaVersion": 2,
   "scope": "Display name REST updates using end-user tokens; no tenant; strict owned local artifact and recorded production configuration; auth-display-name corpus revision 1 only. Redacted semantic observations, not raw responses, independent JWT verification, expiry enforcement, SDK, MFA, Rules, credential changes or public npm compatibility.",
   "sourceReviewSha256": "23a47d09a30f1e065a640f14b49feeca52d5e19c6329c8c4e5d5ae02cfba7c12"

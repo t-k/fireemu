@@ -218,7 +218,7 @@
       }
     ]
   },
-  "publicationContractSha256": "fa25d9ad0f68d362cbed9c99466b0a7c9fdb26c6a5171a51abc67ccd97c3cc50",
+  "publicationContractSha256": "5bc187d98c8a9525541fe40c225efbef4863f29d63a0af3b0f2db58fdd922c67",
   "schemaVersion": 1,
   "scope": "Ten sequential REST observations in production only: password sign-ins of target A and control B, then A is disabled through privileged accounts:update and read back; while disabled, an administrative password replacement and an administrative photo update are attempted on A (whether tokens are returned is the observation; any returned tokens are tried for lookup and refresh), A signs in with the new password, B signs in; A is re-enabled and read back, and both sign in again. No tenant, no configuration change (the configuration and the recorded password policy are read before and after and must be unchanged), a single run. Admin is used for owned account setup, the disable and re-enable transitions, the two updates, readback and cleanup. No human approval, no local artifact comparison, and no claim about other update fields, tenants, SDK or Rules.",
   "sourceReviewSha256": "568509fd02a002cc6ee85e15d68c192b70e2443daeee5e88a5f21254e7a95f70"

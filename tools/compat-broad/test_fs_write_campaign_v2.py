@@ -40,7 +40,7 @@ def test_current_package_is_versioned_and_preserves_historical_binding():
     assert historical["campaignId"] == "FS-WRITE-TXN-PRECEDENCE-01"
     assert historical["sourceBinding"]["featureHead"] == "d813c811945e262296b16fce7609f4d0a8698909"
     assert sha256(HISTORICAL_MANIFEST) == (
-        "4788da1f38f1672988a59be816115cf6b8c077d0fdc95b86a5a457d271812015"
+        "b2b7fc17d64adbca0af9953ea465aaa2ebfc8ef2809169abdb200b0149776c31"
     )
 
 

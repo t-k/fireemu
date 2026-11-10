@@ -15,7 +15,7 @@ Six sequential REST observations in production only: a fresh phone MFA completio
 
 mfaSignIn:start on the disabled account: **accepted / none**; its finalize: refused / USER_DISABLED. After re-enablement the same pending credential: start accepted / none, finalize accepted / none.
 
-Review subject (unapproved): `e0fdb84012734f99533f84e7fab173d26e1f0f0a9112f4703d990f1a968df442`.
+Review subject (unapproved): `c2ac827f2c56fd942e364166919009909070666852bb75f099dd5cf5c0731515`.
 
 The pending credential was obtained while the account was enabled, then the account was disabled through privileged accounts:update and read back. The held rows are diagnostic: accepted and refused are both valid observations, and each finalize runs only when its own start returned a session. Elapsed milliseconds are cumulative from the recorder's measurement origin, sampled when each row is recorded; they are excluded from semantic equality.
 

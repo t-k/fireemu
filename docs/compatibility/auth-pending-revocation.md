@@ -17,7 +17,7 @@ Eight sequential REST observations in production only: fresh phone MFA completio
 
 Held credential outcome: **accepted** after the `validSince` update and its readback. The ID token returned for the held credential carried `auth_time` 1789100213 and `iat` 1789100213 against the set `validSince` 1789100211 (whole seconds).
 
-Review subject (unapproved): `c6ce38ac6a05b969cdbbf516e77a1fc386e73cb221301d53f98c2c45029a0eb7`.
+Review subject (unapproved): `6767cd3c7c50ded980559d5bcd7cc66ad6377976972d1a023f9faadb395e4e57`.
 
 The held credential was issued, then after a two-second wait `validSince` was set to the current whole second through privileged `accounts:update` and read back for the target while the control stayed unchanged; only then was the held credential presented. The wait precedes the update, not the retry: the interval between the update and the retry was not measured in this run. Baseline rows completed a different fresh pending credential of each account before the update; fresh rows completed new pending credentials after the held observation. Elapsed milliseconds are cumulative time from the recorder's measurement origin (set before account setup), sampled when each row is recorded after its checks; they are neither request latency nor time since the revocation, and are excluded from semantic equality.
 

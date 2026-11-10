@@ -933,11 +933,11 @@ def validate_limits_preparation_response(slot, result):
         raise ValueError("sanitized metadata attestation required")
     value = body["value"]
     if slot == "project":
-        valid = value == {"projectId": "fireemu-35fe6", "projectNumber": "592603257417"}
+        valid = value == {"projectId": "fireemu-35fe6", "projectNumber": "<project-number>"}
     elif slot == "auth":
-        valid = value == {"name": "projects/592603257417/config"}
+        valid = value == {"name": "projects/<project-number>/config"}
     elif slot == "key":
-        parent = "projects/592603257417/locations/global"
+        parent = "projects/<project-number>/locations/global"
         valid = (
             set(value) == {"parent", "name"}
             and value["parent"] == parent

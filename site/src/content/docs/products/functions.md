@@ -6,7 +6,11 @@ description: Run Cloud Functions for Firebase locally, with HTTP, callable, even
 Fireemu loads the Functions codebases declared in `firebase.json` and runs them with Node.js. Running Functions requires `firebase-functions` v6 or v7 in the codebase. When a codebase is loaded, the Eventarc and Cloud Tasks emulators start with it. Python codebases (`python310` to `python314`) run too; see [Cloud Functions (Python)](../functions-python/). Unless a section says otherwise, this page describes Node.js codebases.
 
 ```sh
-# All codebases declared in firebase.json
+# Only Functions (with Eventarc and Cloud Tasks); add the services your functions use,
+# for example --only functions,firestore,auth
+npx fireemu up --only functions
+
+# All codebases declared in firebase.json, with the default services
 npx fireemu up
 
 # One codebase
@@ -15,6 +19,15 @@ npx fireemu up --only functions:<codebase>
 # One directory, whatever firebase.json declares
 npx fireemu up --functions ./functions
 ```
+
+Functions listens on `127.0.0.1:5001` by default (`--functions-port` or `firebase.json` changes it). Point the Web SDK at it:
+
+```js
+import { getFunctions, connectFunctionsEmulator } from 'firebase/functions';
+connectFunctionsEmulator(getFunctions(app), '127.0.0.1', 5001);
+```
+
+Under `fireemu exec`, `FIREEMU_FUNCTIONS_HOST` holds the `host:port` for your command (see [Environment variables](../../reference/environment-variables/)).
 
 ## Supported triggers
 
@@ -32,17 +45,31 @@ These are the Node.js `firebase-functions` exports. See the [Functions support i
 | Realtime Database | `database.ref()` and `database.instance().ref()` `onCreate`, `onUpdate`, `onDelete`, `onWrite` | `onValueCreated`, `Updated`, `Deleted`, `Written` |
 | Eventarc and alerts | | `onCustomEventPublished`, `onAlertPublished` |
 
-Local Realtime Database instances are in `us-central1`, so a 2nd-gen database trigger in another region does not fire, and a warning at load says so. [Local Functions triggers](../realtime-database/#local-functions-triggers) describes how a write and its events are admitted. Production observations cover fixed administrator and unauthenticated sequences, plus 12 writes by an email/password user over REST and the web SDK, including ancestor and multi-path writes and redelivery after a failed invocation. Delivery timing, other providers and unrecorded write or handler shapes remain unverified.
+Production observations of Realtime Database triggers cover fixed administrator and unauthenticated sequences, plus 12 writes by an email/password user over REST and the web SDK, including ancestor and multi-path writes and redelivery after a failed invocation. Delivery timing, other providers and unrecorded write or handler shapes remain unverified. [Local Functions triggers](../realtime-database/#local-functions-triggers) describes how a write and its events are admitted.
 
-Storage archive events fire only for a bucket whose versioning was turned on (`PATCH /storage/v1/b/{bucket}` with `{"versioning":{"enabled":true}}`), and their shape is unrecorded.
-
-Triggers for products Fireemu does not deliver events for, such as Data Connect (deferred), cannot run. Remote Config handlers run only through the local injection action, and its production event shape is unobserved. By default discovery refuses a codebase that exports one; set `functions.unservedTriggers` to `"report"` to report each one and load the rest. The Functions page of the [Emulator UI](../../guides/ui/) and `GET /v1/sessions/default/functions` on the control API list every ignored export with the reason.
+:::caution[Trigger caveats]
+- **Realtime Database, 2nd generation.** Local Realtime Database instances are in `us-central1`, so a 2nd-gen database trigger in another region does not fire, and a warning at load says so.
+- **Products Fireemu does not deliver events for.** Triggers for products such as Data Connect (deferred) cannot run. By default discovery refuses a codebase that exports one (`functions.unservedTriggers = "refuse"`); set it to `"report"` to report each one and load the rest. The Functions page of the [Emulator UI](../../guides/ui/) and `GET /v1/sessions/default/functions` on the control API list every ignored export with the reason.
+- **Remote Config.** Handlers run only through the local injection action, and its production event shape is unobserved.
+- **Storage archive events.** They fire only for a bucket whose versioning was turned on (`PATCH /storage/v1/b/{bucket}` with `{"versioning":{"enabled":true}}`), and their shape is unrecorded.
+- **`beforeEmailSent`.** It runs under `strict` only.
+:::
 
 ## Parameters and secrets
 
-`defineString`, `defineInt`, `defineBoolean`, `defineFloat` and `defineList` resolve as a deploy resolves them: a value from `.env`, `.env.<projectId>` (or `.env.<alias>`) or `.env.local` wins, then the parameter's `default`. A parameter with neither a value nor a default refuses to start the codebase, naming the parameter and the files a value goes in, because `firebase deploy` stops for it in the same way. `.env.local` is applied by Fireemu and the official emulator but is never deployed, so a value that is only there is missing in production.
+`defineString`, `defineInt`, `defineBoolean`, `defineFloat` and `defineList` resolve as a deploy resolves them. Files are applied in the order below, a later file overriding an earlier one, and then the parameter's `default` applies. A parameter with neither a value nor a default refuses to start the codebase, naming the parameter and the files a value goes in, because `firebase deploy` stops for it in the same way. Secrets (`defineSecret`) come from `.secret.local` and reach only a function that declares them.
 
-Secrets (`defineSecret`) come from `.secret.local` and reach only a function that declares them.
+| File (in the codebase directory) | Holds | Precedence | Deployed |
+|---|---|---|---|
+| `.env` | Parameter values | Lowest | Yes, as `firebase deploy` reads it |
+| `.env.<projectId>` (or `.env.<alias>`) | Values for one project | Over `.env` | Yes, when you deploy that project |
+| `.env.local` | Values for local runs | Highest | Never: a value that is only here is missing in production. Applied by Fireemu and the official emulator |
+| `.secret.local` | `defineSecret` values | The only source of secrets here | Never: a deploy needs the secret in Secret Manager |
+| `default` in `defineString` and the others | A fallback | Below every file | In the code |
+
+- Having both `.env.<projectId>` and `.env.<alias>` stops startup, as `firebase deploy` does.
+- Fireemu never contacts Secret Manager. A secret a function declares but `.secret.local` lacks reads as the empty string, and a startup warning names the secret and the functions.
+- `.runtimeconfig.json` is passed to the code as `CLOUD_RUNTIME_CONFIG` for a codebase that reads it. `firebase-functions` v7 has removed `functions.config()`, so a v7 codebase does not read it.
 
 ## Who can call a function
 
@@ -58,7 +85,27 @@ For a test that only needs current work to settle, send `POST /v1/sessions/defau
 
 ## Scheduled functions
 
-A schedule runs on Fireemu's virtual clock. Unless you pin a start time with `daemon.clockStart`, that clock follows real time, so occurrences come due as time passes; with a pinned start it stands still, and you move the clock to make occurrences due (or run a scheduled function immediately from the UI). See [Time and scheduled functions](../../guides/time/).
+A schedule runs on Fireemu's virtual clock. Unless you pin a start time with `daemon.clockStart`, that clock follows real time, so occurrences come due as time passes; with a pinned start it stands still, and you move the clock to make occurrences due. See [Time and scheduled functions](../../guides/time/).
+
+### Run now
+
+To run a scheduled function or release a delayed task without waiting:
+
+| | Scheduled function | Task-queue function (tasks waiting for their `scheduleTime`) |
+|---|---|---|
+| Emulator UI, Functions page | Run it immediately, or advance the clock to its next occurrence | The waiting tasks, with their due time and a **Run now** button |
+| Control API | `POST /v1/sessions/default/functions/{name}:run` | The same route releases all waiting tasks; with `{"task": "<task id>"}` it releases one (404 for an unknown id) |
+| Virtual clock | Pin `daemon.clockStart`, or set `daemon.clock = "frozen"`, then `POST /v1/sessions/default/clock:advance` with `{"seconds": 86400}` (also `{"millis": n}`, `clock:advanceTo` and `clock:set`), or use the Runtime page | `functions.clock.tasks = "virtual"` with a pinned `daemon.clockStart`, then move the clock |
+
+The control API is not on the UI port. Its address is the `control API:` line of the startup output: the Authentication port (9099 by default) when Authentication runs, another port otherwise. Under `fireemu exec` it is `$FIREEMU_CONTROL_URL`, with `Authorization: Bearer $FIREEMU_CONTROL_TOKEN` (the token is required only when `network.allowNonLoopbackHosts` is set). For example, with `fireemu up`:
+
+```sh
+curl -X POST http://127.0.0.1:9099/v1/sessions/default/functions/nightly:run
+# {"enqueued":true,"function":"nightly"}
+curl -X POST http://127.0.0.1:9099/v1/sessions/default/clock:advance -H 'content-type: application/json' -d '{"seconds": 86400}'
+```
+
+A name that is unknown or not scheduled answers `400 INVALID_ARGUMENT`. A manual run does not consume the next occurrence; see [Run a scheduled function now](../../guides/time/#run-a-scheduled-function-now).
 
 Publishing a message to a first-generation schedule's `firebase-schedule-<function>-<region>` topic under `strict` also invokes the handler, preserving the original Pub/Sub data, attributes, ordering key and message ID. Normal scheduled occurrences and manual runs still invoke it once.
 
@@ -70,10 +117,18 @@ Under the `strict` profile the daemon also verifies a callable's `Authorization`
 
 ## When the event queue is full
 
-The runtime holds at most 4096 undelivered events (and 64 MiB of payloads). What happens to an event that does not fit depends on its source, and for these sources none loses it silently:
+The runtime holds at most 4096 undelivered events (and 64 MiB of payloads). An event that does not fit is never lost silently, and what happens depends on its source:
+
+- **Firestore, Storage, the Pub/Sub emulator and a control Pub/Sub publish:** the write or publish is refused, and nothing is delivered. A control publish answers `429 RESOURCE_EXHAUSTED`.
+- **Authentication:** a user created or deleted is committed either way. Its events are held in a bounded queue and delivered, oldest first, when capacity returns; only a backlog beyond 4096 held events drops one, and that drop is counted and logged.
+
+<details>
+<summary>Details</summary>
 
 - Firestore, Storage, the Pub/Sub emulator and the control Pub/Sub publish (`POST /v1/sessions/{session}/pubsub/topics/{topic}:publish`) reserve the whole fan-out first, every message to every subscribed function with the copies a `duplicate` fault asks for. When it does not fit, the write or publish is refused (a control publish answers `429 RESOURCE_EXHAUSTED` and issues no message id) and nothing is delivered.
 - An Auth user created or deleted is committed whether or not the queue has room, as production never refuses a sign-up because functions are behind. An event the queue cannot take yet is held and delivered when capacity returns, oldest first and whole. `GET /v1/sessions/{session}/functions` shows the held count as `authEventsPending`, and `await-idle` waits for it. At most 4096 events are held: one beyond that is dropped, counted as `admission.auth_event_dropped` in the resource report and logged. A session reset discards held events with the rest of the queue.
+
+</details>
 
 ## Exports that never run
 

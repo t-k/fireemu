@@ -3,7 +3,7 @@
   "executionCommit": "ed90292a067866999a308f5c9bf029e0846c17b0",
   "runtimeFixCommit": "d9d66d825fa5f99fae54b50df50b5260178142c4",
   "observerSha256": "3a7001525e2580ab6e0654794fd9c3ab0556d06238163960c700f23816a8c0d7",
-  "manifestDigest": "6f0fa73a8fe494709b883c440266c721157d8ec44252fb81c331f2a10642d534",
+  "manifestDigest": "bfbe4e08aca8fc514554ec98e89914a5044aab611b66dfb311215968a1708522",
   "comparisonContractDigest": "467df4b222eec0b35a800c5cddc434413711c26400668cd4fddb57bdfed09cea",
   "artifactSha256": "8e433fc24df9585573ce6a213152269de8d51a22d60b1800a4d0e62e0d15508e",
   "runtimeConfiguration": {
@@ -11,7 +11,7 @@
     "profile": "strict",
     "daemon": {
       "authProjectNumbers": {
-        "fireemu-35fe6": "592603257417"
+        "fireemu-35fe6": "<project-number>"
       }
     },
     "firestore": {
@@ -116,7 +116,7 @@
     "localManifest": "acca1ad5fc9360956b31e1612fbfab3b331aaefa88a6ada13ceceac078d7e00d",
     "localBatch": "57b2ebe32b8dae4beb11ad41491a0090f77c6d14df49c0ed132954bbabf039d9",
     "localResponses": "14279837b4b88bcb357f6543690af7aeb8f48096c51a7453dd194488131215dd",
-    "comparison": "4aae1628c54eca47b6fa7c28a3e583b0d9fabfe099f47fac7bbbc60d35851a70",
+    "comparison": "b1038559b870e9d23c791f82d857b5e0183d860c69c7abab74b1796256cb89e4",
     "relatedRustLog": "b9216d99d8b2e861d089a3e38bbd42d6b3004180a5b673327c5ddf4bc85afa7b",
     "targetedRustLog": "55561c61d82174be4afc7468cea360cfc6fc392d779b65f9965268ac7e1d8649",
     "broadTestsLog": "30074ac02cf740f34fa13e8da305329596e92cceeca3b8c9d943d56a4c0bd8f6",

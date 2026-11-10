@@ -632,16 +632,16 @@ def test_sentinel_recovery_claim_rejects_wrong_case_or_allocation_without_mutati
 def preparation_response(slot):
     from batch_contract import DATABASE_PROJECTION
 
-    project = {"projectId": "fireemu-35fe6", "projectNumber": "592603257417"}
+    project = {"projectId": "fireemu-35fe6", "projectNumber": "<project-number>"}
     projection = {
         "name": "projects/fireemu-35fe6/databases/(default)", "uid": "fixture-database-uid",
         "databaseEdition": "STANDARD", "type": "FIRESTORE_NATIVE", "locationId": "us-central1",
     }
-    parent = "projects/592603257417/locations/global"
+    parent = "projects/<project-number>/locations/global"
     values = {
         "project": project,
         "database": {"projection": projection, "projectionDigest": digest({**projection, "concurrencyMode": "PESSIMISTIC"}), "identityProjectionDigest": digest(projection), "responseDigest": digest({**projection, "concurrencyMode": "PESSIMISTIC"}), "contractDigest": digest(DATABASE_PROJECTION)},
-        "auth": {"name": "projects/592603257417/config"},
+        "auth": {"name": "projects/<project-number>/config"},
         "key": {"parent": parent, "name": parent + "/keys/fixture-key-id"},
     }
     if slot == "refresh":

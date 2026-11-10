@@ -19,6 +19,7 @@ from urllib.parse import quote
 
 from batch_contract import (
     DATABASE_PROJECTION,
+    LOCAL_NUMBER,
     NUMBER,
     PROJECT,
     database_evidence,
@@ -236,8 +237,8 @@ def configuration() -> dict:
         "authConfigDigest": "7878eb2600c66f48c82ef55fb8c2443ab15689ea7542a77fbda206da06f817c2",
         "apiKeyDigest": "122fca5d0ae44787ff78dd852f186fbeab71bfef183ea13e30d2d7c86b5aca96",
         "apiKeyOwnership": {
-            "parent": "projects/592603257417/locations/global",
-            "name": "projects/592603257417/locations/global/keys/6209b4d3-e86d-487b-860a-c5a54fdd8004",
+            "parent": "projects/<project-number>/locations/global",
+            "name": "projects/<project-number>/locations/global/keys/6209b4d3-e86d-487b-860a-c5a54fdd8004",
         },
         "pricingSource": "https://firebase.google.com/docs/firestore/pricing",
         "pricingQueryExplainSource": "https://firebase.google.com/docs/firestore/query-data/query-explain",
@@ -1238,7 +1239,7 @@ def validate_local_runtime(value, directory):
     )
     expected_config = {
         **CONFIG,
-        "daemon": {"authProjectNumbers": {PROJECT: NUMBER}},
+        "daemon": {"authProjectNumbers": {PROJECT: LOCAL_NUMBER}},
         "firestore": {**FIRESTORE_CONFIG, "indexFile": "<owned-private-index-file>"},
     }
     _require(

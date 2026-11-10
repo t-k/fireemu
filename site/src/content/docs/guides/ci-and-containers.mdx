@@ -30,9 +30,13 @@ To also check what the development defaults let through, such as unsigned test t
 <TabItem label="TOML">
 
 ```toml
+# Configuration schema version: 1.
 schemaVersion = 1
+# Compatibility profile: "strict" or "emulator".
 profile = "strict"
+# Use production behavior for development defaults: true or false; requires strict.
 productionExact = true
+# Path to Firebase project configuration, relative to this file; a non-empty string.
 firebaseJson = "firebase.json"
 ```
 
@@ -75,10 +79,13 @@ By default every listener is on loopback, which a published container port canno
 <TabItem label="TOML">
 
 ```toml
+# Configuration schema version: 1.
 schemaVersion = 1
+# Path to Firebase project configuration, relative to this file; a non-empty string.
 firebaseJson = "firebase.json"
 
 [network]
+# Allow product emulators to bind non-loopback hosts: true or false.
 allowNonLoopbackHosts = true
 ```
 
@@ -140,7 +147,9 @@ Add the other names your clients use, for example a tunnel, a name in `/etc/host
 
 ```toml
 [network]
+# Allow product emulators to bind non-loopback hosts: true or false.
 allowNonLoopbackHosts = true
+# Additional accepted host names: exact names, dot-prefixed domains, or "*".
 allowedHosts = ["emulator.ci.example", ".corp.example"]
 ```
 

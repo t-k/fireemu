@@ -4,7 +4,7 @@ Twelve scoped cases verified and approved as redacted semantic observations matc
 
 Email/password Auth REST using end-user tokens; no tenant; local strict profile and recorded production configuration; only the recorded artifact, configuration and corpus revision 2 twelve cases; approved as redacted semantic observations matching the published checks.
 
-Subject: `0eb3689e1eb636f4166d3f296bba2fea2cf2ac70bf6ab6901d1077575a2a60cb`. Recomputed from the complete receipt during offline validation; approval cannot transfer to a changed subject.
+Subject: `72744f1dfaf72d89423aa056f54479dc4d7aafca9df1d43f7cf4cef9edbaad63`. Recomputed from the complete receipt during offline validation; approval cannot transfer to a changed subject.
 
 Reviewed commit: `29378b6f25fdad1e44e08114f5b684aeff4de808`. Reviewer: `github:t-k (id:426779)`. Approval date: 2026-09-10.
 

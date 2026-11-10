@@ -896,7 +896,7 @@
     "recordedAt": "2026-09-10T10:12:19.659384+00:00",
     "target": "production"
   },
-  "publicationContractSha256": "a1b58d65664de4b497071698140711d268659d06e9dc4fe45f00a3bab61aae74",
+  "publicationContractSha256": "df2995dd5a88a09996ce086723346823a8236e83b35e90da13cb33f4b54b3c7b",
   "schemaVersion": 2,
   "scope": "Weak-password rejection and preserved credentials through end-user REST under recorded schema 1 ENFORCE length 6\u20134096 policy; one five-character ASCII update input, original strong credentials and final distinct strong update. No tenant; owned strict local artifact and recorded production settings. Auth-password-rejection revision 1, 16 cases; redacted observations only. No general policy-boundary, elapsed expiry, revocation timing, SDK, Rules, MFA or public npm compatibility claim.",
   "sourceReviewSha256": "eb4e741c031c1ab20a642ff8c2215b9fccacd845959b90f4fc260346c499e776"

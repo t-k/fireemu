@@ -21,7 +21,7 @@ Row-by-row comparison of the approved production record of auth-blocking-disable
 
 Differing rows: none.
 
-Comparison subject (unapproved): `6c130b97db655709ced0357d700314f9be1bce8a7099dfeb18ceeed51b86ae08`. Production subject compared: `81e74c75576f91b3cf889cae905e4eb21437a8f6a86846082b160dc1e4e6db0d`.
+Comparison subject (unapproved): `2d658c18109ef988e7ebd50415450c1d0c57cc34196c7927d74e8755e5df86cd`. Production subject compared: `815f37bf9d5682446c26386c5b3fbca1e5b8a763649baf1ceb63bda00cb8eae3`.
 
 Local artifact `0.7.0` built from the tree at `3cadafe7a42effb58b392897298e583a32e51792` (repository HEAD `3cadafe7a42effb58b392897298e583a32e51792` at run time) with recorder files at `3cadafe7a42effb58b392897298e583a32e51792`; strict profile; the Functions runtime served the local fixture through the repository runner at digest `a4a19393c150bf1f…`. Owned process exit 0 with listeners closed; both accounts and the pending state were deleted with absence confirmation.
 

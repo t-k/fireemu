@@ -19,7 +19,7 @@ Photo URL REST updates using end-user tokens; no tenant; strict owned local arti
 | delete | Matched | Matched | — / — |
 | deleted-account-absent | Matched | Matched | — / — |
 
-Review subject (no approval granted): `23913299c5d414abbdffe0692711f77ead500b639318a09a60a5802bd1f199d2`.
+Review subject (no approval granted): `8176f98733cb63ed4712037391a7861cfb06e857739e5fc42070f07d2d08e299`.
 
 The fixed synthetic URLs use example.invalid. first/second identify corpus values; absent, null and empty remain distinct. Arbitrary URL values are never copied; other/invalid-type remain visible mismatches. No image is fetched or uploaded by the recorder. The response classification is recorder testimony, not an independently reconstructable raw response.
 

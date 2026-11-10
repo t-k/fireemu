@@ -24,7 +24,7 @@ The permission proposal caps unresolved-resource retention at 24 hours and requi
 
 ## One remaining owner decision
 
-The generated input package binds the fixed checkout, observer, production manifest, comparison and Database projectionv2 contracts, project `fireemu-35fe6`, project number `592603257417`, database `(default)`, and the limits above. Owner identity, permission reference, permission window, production nonce, approved current Database projection/Auth digest and current location/pricing assumptions remain null. Previous successful environment reads and tariffs remain historical reference only.
+The generated input package binds the fixed checkout, observer, production manifest, comparison and Database projectionv2 contracts, project `fireemu-35fe6`, project number `<project-number>`, database `(default)`, and the limits above. Owner identity, permission reference, permission window, production nonce, approved current Database projection/Auth digest and current location/pricing assumptions remain null. Previous successful environment reads and tariffs remain historical reference only.
 
 The requested future decision is one bounded execution: read-only preflight, then only if all approved conditions match run these 45 rows once, followed by owned cleanup, postflight and comparison with the fixed local receipt. A permission for reads alone does not authorize the data phase. A fresh unused nonce and new permission kind are mandatory; previous batches' permissions are not inherited. Mismatch stops do not rewrite the approved baseline or retry automatically.
 

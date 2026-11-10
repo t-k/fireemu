@@ -20,7 +20,7 @@ class World:
     def __init__(self, shape):
         self.shape = shape  # "refused-no-record" or "accepted-disabled"
         self.config = {
-            "name": "projects/592603257417/config",
+            "name": "projects/<project-number>/config",
             "mfa": {"state": "DISABLED"},
             "blockingFunctions": {"forwardInboundCredentials": {}},
         }

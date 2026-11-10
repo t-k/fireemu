@@ -578,7 +578,7 @@
       }
     ]
   },
-  "productionSubjectSha256": "e0fdb84012734f99533f84e7fab173d26e1f0f0a9112f4703d990f1a968df442",
+  "productionSubjectSha256": "c2ac827f2c56fd942e364166919009909070666852bb75f099dd5cf5c0731515",
   "publicationContractSha256": "0eca30493e92124b4e7f0d9bfdffc123a9800f9f2d38959a3a0d9b5cc7e1e7ed",
   "schemaVersion": 1,
   "scope": "Row-by-row comparison of the approved production record of auth-mfa-start-disabled with one run of the same corpus on an owned local fireemu artifact (strict profile, --only auth, no configuration change, codes read from the emulator inspection route). Semantic projections exclude elapsed milliseconds. A comparison record, not a new production run, not an approval, and not a claim beyond these six cases."

@@ -3,9 +3,9 @@
   "status": "candidate",
   "executionCommit": "774e9d8bf4ec56db47c8f1f4bdabd71ed8bc3ceb",
   "inputPublicationCommit": "4777557d850a54b8c9b2550a43b12a648e6e445a",
-  "manifestDigest": "6f275645a8a0c7fb957bd37242a28eacf81af3734444912770edc3f28a494d98",
+  "manifestDigest": "0af45e517ff2f7e97d977a699a69fb01b9fe0bd3a6e44b9cb28ed9b17dda115d",
   "observerDigest": "2bbf234fd2b1543902b9d3c66720b5fb0d9b86d7a83f5675ae5e544b57f0b313",
-  "comparisonContractDigest": "0625bd76c028de64ff0ae9ae595b1c5f44bd48cc5475c63e806a8060cbf742cb",
+  "comparisonContractDigest": "616eb11a38f9b1f8e6d8ddb58843c798211d087b447edeb2a46af5309600f61a",
   "productionReceiptDigest": "15fc04d515cc71d59719b3934ac5bf47ffff3ca9a4e8034db1c8a6c1dc51a528",
   "productionReceiptFileSha256": "6ff36c6dc6e482299772b75bb3e0ec183aebd9ac053bcb7e8607b617f26c9cd1",
   "localReceiptFileSha256": "22d54900eeb1f27ac2780958167e4c475bea997ab92b986a9c0b394c96c90b94",
@@ -16,7 +16,7 @@
   },
   "comparison": {
     "kind": "second45-production-local-comparison-v2",
-    "comparisonContractDigest": "0625bd76c028de64ff0ae9ae595b1c5f44bd48cc5475c63e806a8060cbf742cb",
+    "comparisonContractDigest": "616eb11a38f9b1f8e6d8ddb58843c798211d087b447edeb2a46af5309600f61a",
     "inputDigests": [
       "15fc04d515cc71d59719b3934ac5bf47ffff3ca9a4e8034db1c8a6c1dc51a528",
       "d259c0f45eac08d75dadac73ab1962ce71f949f749f698aa4b1eacca69ab0bfc"

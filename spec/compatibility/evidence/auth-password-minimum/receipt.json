@@ -802,7 +802,7 @@
     "recordedAt": "2026-09-10T11:01:54.231798+00:00",
     "target": "production"
   },
-  "publicationContractSha256": "16b3dd638a75fb8fe7252794c4a4fe3d194e028240839ec652ea25b20c48f1c3",
+  "publicationContractSha256": "e4b6d6b172917c49546c15729342d019fae66ee93177f80c61bacc151eec1d25",
   "schemaVersion": 2,
   "scope": "Exactly six-character URL-safe ASCII password change via fresh end-user REST token, no tenant, strict owned local artifact and recorded production authentication/password-policy configuration. auth-password-minimum revision 1 only. Explicit schema 1 ENFORCE min 6 / max 4096 policy with no additional character requirements. Twelve redacted cases; not all policy boundaries, Unicode, empty/null, custom combinations, actual expiry, revocation timing, SDK, Rules or public npm compatibility.",
   "sourceReviewSha256": "340b652e2a9bdb8f65ca2031b1d22aa51e0e69ce010336f5d8ef81a1794c4e4f"

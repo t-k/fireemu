@@ -128,8 +128,9 @@ fn an_enforced_request_naming_a_missing_tenant_makes_no_tenant_when_denied() {
     Arc::get_mut(&mut h.auth)
         .expect("the harness is the sole AuthState owner")
         .registry = Some(registry.clone());
+    // Client SDKs send an API key, allowing admitted requests to create tenants.
     let denied = h.post(
-        &format!("{V1}/accounts:signUp"),
+        &format!("{V1}/accounts:signUp?key=k"),
         &json!({"email": "a@example.com", "password": "hunter22", "tenantId": "denied-tenant"}),
         &[],
     );
@@ -139,7 +140,7 @@ fn an_enforced_request_naming_a_missing_tenant_makes_no_tenant_when_denied() {
         "a denied request leaves no tenant behind"
     );
     let admitted = h.post(
-        &format!("{V1}/accounts:signUp"),
+        &format!("{V1}/accounts:signUp?key=k"),
         &json!({"email": "a@example.com", "password": "hunter22", "tenantId": "admitted-tenant"}),
         &[&h.valid_token()],
     );
@@ -341,8 +342,9 @@ fn a_request_the_selection_serves_from_the_default_project_still_makes_its_tenan
                     &body,
                 )
             } else {
+                // Client SDKs send an API key, allowing the request to create its tenant.
                 h.post(
-                    &format!("{V1}/accounts:createAuthUri"),
+                    &format!("{V1}/accounts:createAuthUri?key=k"),
                     &body,
                     &[&h.valid_token()],
                 )
@@ -525,8 +527,9 @@ fn a_request_for_a_non_default_project_is_observed_once() {
 fn a_request_served_from_the_admitted_project_is_observed_once() {
     let (h, _, _) = two_projects();
     let before = observed_count(&h, "demo-app");
+    // Client SDKs send an API key, allowing the request to create its tenant.
     let made = h.post(
-        &format!("{V1}/accounts:signUp"),
+        &format!("{V1}/accounts:signUp?key=k"),
         &json!({"email": "once@example.com", "password": "hunter22", "tenantId": "once-tenant"}),
         &[&h.valid_token()],
     );

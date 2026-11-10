@@ -128,7 +128,7 @@ test("near misses of the recorded 200 are unknown", () => {
     "another lifetime": (b) => (b.expires_in = "7200"),
     "another token type": (b) => (b.token_type = "bearer"),
     "a refresh token left in clear": (b) => (b.refresh_token = "AMf-abc"),
-    "another project": (b) => (b.project_id = "592603257417"),
+    "another project": (b) => (b.project_id = "123456789012"),
     "another user": (b) => (b.user_id = "someone-else"),
     "an unsigned token": (b) => (b.id_token["<jwt>"].header.alg = "none"),
     "a token without a key id": (b) => (b.access_token["<jwt>"].header.kid = "<absent>"),

@@ -3,6 +3,8 @@ title: Troubleshooting
 description: Diagnose installation and startup problems, and report issues.
 ---
 
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
 ## Check the installation
 
 ```sh
@@ -32,6 +34,79 @@ npx fireemu doctor --connect http://127.0.0.1:<port>
 | Functions reload reports snapshot ACL validation failure on Windows | Use a private temporary directory without junctions or other reparse points. Its permissions must restrict access to your account and trusted system accounts, and its ancestors must not allow other accounts to modify it. Ensure Windows PowerShell is available under `SystemRoot`, then retry the source change. See [source reload](../../products/functions/#source-reload). |
 | The UI does not open | `up` starts without the UI when port 4000 is busy. Use `--ui-port`. `exec` starts the UI only with `--ui`. |
 | A scheduled function never runs | Schedules follow the virtual clock. With `daemon.clockStart` pinned (or `daemon.clock = "frozen"`) the clock stands still, so move it or run the function from the UI; without a pinned start it follows real time. See [Time and scheduled functions](../time/). |
+
+## Error messages
+
+<details>
+<summary><code>FAILED_PRECONDITION: The query requires an index</code></summary>
+
+Under `strict` (the default) with `firestore.missingIndexes = "refuse"`, a query whose composite index is not declared is refused, as production refuses it. The SDK receives the `FAILED_PRECONDITION` status (over REST, HTTP 400 with `"status": "FAILED_PRECONDITION"`) and this message:
+
+```text
+The query requires an index. You can create it here: https://console.firebase.google.com/v1/r/project/<project>/firestore/indexes?create_composite=...
+```
+
+Add the index to `firestore.indexes.json` (referenced from `firebase.json`) and restart. To collect every missing index in one run instead of failing at the first, set `firestore.missingIndexes = "report"`: the queries run, and each missing index is printed once on standard error with the entry to add. The `emulator` profile never refuses these queries. See [Composite indexes](../../products/firestore/#composite-indexes).
+
+</details>
+
+<details>
+<summary><code>409 FAILED_PRECONDITION</code> from <code>/v1/firestore/missingIndexes</code></summary>
+
+The control API answers `409` in two cases, so a check on the list cannot pass on an answer that proves nothing:
+
+```text
+FAILED_PRECONDITION : missing composite indexes are reported only under the strict profile with firestore.missingIndexes set to "report" and Firestore selected; ...
+```
+
+Nothing is being reported: the run uses the `emulator` profile, or `strict` with `"refuse"`, or Firestore is not selected. Set `profile = "strict"` and `firestore.missingIndexes = "report"`.
+
+```text
+FAILED_PRECONDITION : <n> quer(y|ies) of this project were served with a missing composite index that is not listed, because the list is full; the list is incomplete, not empty. DELETE it and run again
+```
+
+The list holds at most 1,000 entries. When more distinct indexes were missing, a `200` answer carries `"truncated": true` and a `dropped` count; when every entry of the project was dropped, the answer is this `409` instead. Fix the indexes you already know about, `DELETE` the list and run again. See [Fail a CI job on a missing index](../../products/firestore/#fail-a-ci-job-on-a-missing-index).
+
+</details>
+
+<details>
+<summary><code>403 ... fireemu does not answer Host</code> (<code>network.allowedHosts</code>)</summary>
+
+A request named a `Host` that Fireemu does not answer, as a defence against DNS rebinding. The answer is HTTP 403 with status `PERMISSION_DENIED`:
+
+```text
+fireemu does not answer Host "evil.example": as a defence against DNS rebinding it answers localhost, IP addresses, names under .internal and the names listed in network.allowedHosts (...) (single-label names too with network.allowNonLoopbackHosts); see https://fireemu.github.io/fireemu/guides/ci-and-containers/#host-names-the-emulators-answer
+```
+
+If a client of yours uses that name (a tunnel, a name in `/etc/hosts`, a Compose service name), list it:
+
+<Tabs syncKey="config-format">
+<TabItem label="TOML">
+
+```toml
+[network]
+allowedHosts = ["emulator.ci.example"]
+```
+
+</TabItem>
+<TabItem label="JSON">
+
+```json
+{
+  "network": {
+    "allowedHosts": ["emulator.ci.example"]
+  }
+}
+```
+
+</TabItem>
+</Tabs>
+
+A single-label name such as a Compose service also needs `network.allowNonLoopbackHosts = true`.
+
+Fireemu also writes a `refused Host` warning on standard error, once per name. See [Host names the emulators answer](../ci-and-containers/#host-names-the-emulators-answer).
+
+</details>
 
 For more detail, start with `--log-verbosity debug`, which also prints the resolved configuration.
 

@@ -2,7 +2,7 @@
 
 Status: proposal only. No execution permission, result approval or revision-3 authorization is implied. The current milestone performs local execution only. A future owner approval must name the final frozen observer/manifest hash and the fields below; technical AI review is recorded separately.
 
-Target: project fireemu-35fe6, expected project number592603257417. Firestore database(default), Native Standard only, existing approved location/configuration read back before writes. Enterprise, MongoDB and any additional database are outside this envelope. Abort if project number, edition, database identity or required baseline differs.
+Target: project fireemu-35fe6, expected project number<project-number>. Firestore database(default), Native Standard only, existing approved location/configuration read back before writes. Enterprise, MongoDB and any additional database are outside this envelope. Abort if project number, edition, database identity or required baseline differs.
 
 Permitted operations: Identity Toolkit password/anonymous signUp, signInWithPassword, account lookup/update/delete and Secure Token refresh; privileged account reads/updates/deletes only for run-owned UID/email pairs after marker verification. Firestore get/create/patch/delete, batchGet, runQuery, runAggregationQuery, beginTransaction/commit/rollback and batchWrite, restricted to the run's owned collection/document namespace. No IAM, IdP, tenant, custom-token signing, project config, blocking function, MFA, OOB, SMS, email delivery, Rules, index, backup, database lifecycle, import/export or billing mutation. Existing production session scripts must not be invoked: their broad reset/config behavior is outside this envelope.
 

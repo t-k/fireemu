@@ -1237,14 +1237,14 @@
   "maxRequests": 400,
   "productionExecuted": false,
   "provenance": {
-    "digest": "ca1e40c0fc8c5e83d53e1d141e1322b5bbaf9ffc9399aea4f0654ac70d64fd55",
+    "digest": "2859071ccd437cd41b17ad88dac7002dca9de4953707e73cf772329717bc91d0",
     "evidence": "recomputed-from-worktree",
     "paths": {
       "tools/compat-broad/auth-totp-enroll/mfa_admission.py": "3c2187c81423124147bdc061b017a714a356e2bf210fe3d78c4af62e1edc4093",
       "tools/compat-broad/auth-totp-enroll/mfa_cases.py": "55d5a3a7c140c98eee514bf960db2f0b90701100593c683d4aafcd2a8a58cd9f",
       "tools/compat-broad/auth-totp-enroll/mfa_collector.py": "dbca150727891e3e6341a833afc573693844f2682c2d6068ef52a8c0d8e6b9dd",
       "tools/compat-broad/auth-totp-enroll/mfa_comparator.py": "41aa4014b764761a3359e7c9ce1768225d74896283709d2d248999f2fe6c732e",
-      "tools/compat-broad/auth-totp-enroll/mfa_config_lock.py": "874502103c6ca9c7f738687f032f44e6d8ce28c47a9a3fd015080b3378567039",
+      "tools/compat-broad/auth-totp-enroll/mfa_config_lock.py": "c92de884bd8f3ebcca43f118079330854ef1d72621867758b534be8804476323",
       "tools/compat-broad/auth-totp-enroll/mfa_descriptor.py": "13aa360ddb791639acec0e1b83f36f2f3458164379fcb01760a3c9ffab3a53bd",
       "tools/compat-broad/auth-totp-enroll/mfa_gate.py": "7ac7083dc248993124bbc5f3df2c0cfa752b322b893526ef4577b824091f18e8",
       "tools/compat-broad/auth-totp-enroll/mfa_local_shadow.py": "f8f3f382275ec8f4890bd74fcfc08abcf10e6b1aab469ccdb2ab21bfee719d28",

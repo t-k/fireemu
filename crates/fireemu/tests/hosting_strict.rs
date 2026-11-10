@@ -464,6 +464,11 @@ fn hosting_strict_redirects_decode_each_capture_and_say_so_as_plain_text() {
     assert_eq!(get(&strict, "/capture/:id2/two").status, 404);
     // the emulator profile keeps the oracle: double-encoded, html
     let emulator = site("redirects-emulator", "emulator", &config(), FILES);
+    // ... and a HEAD redirect names no length
+    assert_eq!(
+        send(&emulator, "HEAD", "/old/a", &[]).header("content-length"),
+        None
+    );
     let reply = get(&emulator, "/go1/%2fevil.example");
     assert_eq!(reply.header("location"), Some("/%252fevil.example"));
     assert_eq!(
@@ -509,14 +514,45 @@ fn hosting_strict_reserved_routes() {
         script.header("content-type"),
         Some("text/javascript; charset=utf-8")
     );
+    // the hosted SDK files stay out of the redirects (not served offline: 503)
+    assert_eq!(
+        get(&strict, "/__/firebase/9.0.0/firebase-app.js").status,
+        503
+    );
+    // init.js points the SDK at the emulators of the run only when asked
+    assert!(
+        script.body.contains("var endpoints=null;"),
+        "{}",
+        script.body
+    );
+    let with_emulators = get(&plain, "/__/firebase/init.js?useEmulator=true");
+    assert!(
+        with_emulators.body.contains("var endpoints={"),
+        "{}",
+        with_emulators.body
+    );
+    assert!(with_emulators.body.contains("firebase.initializeApp("));
     // the emulator profile keeps init.* ahead of the redirects
     let emulator = site("reserved-emulator", "emulator", &catch_all, FILES);
     assert_eq!(get(&emulator, "/__/firebase/init.json").status, 200);
     assert_eq!(send(&emulator, "HEAD", "/__/auth/handler", &[]).status, 302);
+    assert_eq!(
+        get(&emulator, "/__/firebase/9.0.0/firebase-app.js").status,
+        503
+    );
+    let emulator_plain = site("reserved-emulator-plain", "emulator", &config(), FILES);
+    assert!(get(&emulator_plain, "/__/firebase/init.js")
+        .body
+        .contains("var endpoints=null;"));
+    assert!(
+        get(&emulator_plain, "/__/firebase/init.js?useEmulator=true")
+            .body
+            .contains("var endpoints={")
+    );
 }
 
 #[test]
-fn a_malformed_target_is_a_chunked_400() {
+fn hosting_strict_a_malformed_target_is_a_chunked_400() {
     let strict = site("malformed", "strict", &config(), FILES);
     // v01.safety-bad-percent
     let reply = get(&strict, "/%GG");
@@ -657,4 +693,130 @@ fn hosting_strict_header_and_rewrite_globs_match_what_production_matched() {
         &[("index.html", "home\n")],
     );
     assert_eq!(get(&emulator, "/a/.hidden").status, 404);
+}
+
+const CLEAN_FILES: &[(&str, &str)] = &[
+    ("index.html", "<h1>home</h1>\n"),
+    ("page.html", "<h1>page</h1>\n"),
+    ("dir/index.html", "<h1>directory</h1>\n"),
+];
+
+/// Rows `v02` to `v06` of the recording: `cleanUrls` and `trailingSlash`, each request with the
+/// status, the `Location` and, for a 200, the body production answered.
+#[test]
+fn hosting_strict_clean_urls_and_trailing_slash_follow_the_recorded_rows() {
+    const HOME: &str = "<h1>home</h1>\n";
+    const PAGE: &str = "<h1>page</h1>\n";
+    const DIRECTORY: &str = "<h1>directory</h1>\n";
+    type Row = (&'static str, u16, &'static str, &'static str);
+    let tables: [(&str, &str, [Row; 7]); 5] = [
+        (
+            "v02",
+            r#"{"cleanUrls": true}"#,
+            [
+                ("/page?q=1", 200, "", PAGE),
+                ("/page/?q=1", 404, "", ""),
+                ("/page.html?q=1", 301, "/page?q=1", ""),
+                ("/dir?q=1", 200, "", DIRECTORY),
+                ("/dir/?q=1", 200, "", DIRECTORY),
+                ("/dir/index.html?q=1", 301, "/dir?q=1", ""),
+                ("/", 200, "", HOME),
+            ],
+        ),
+        (
+            "v03",
+            r#"{"trailingSlash": true}"#,
+            [
+                ("/page?q=1", 404, "", ""),
+                ("/page/?q=1", 404, "", ""),
+                ("/page.html?q=1", 200, "", PAGE),
+                ("/dir?q=1", 301, "/dir/?q=1", ""),
+                ("/dir/?q=1", 200, "", DIRECTORY),
+                ("/dir/index.html?q=1", 200, "", DIRECTORY),
+                ("/", 200, "", HOME),
+            ],
+        ),
+        (
+            "v04",
+            r#"{"trailingSlash": false}"#,
+            [
+                ("/page?q=1", 404, "", ""),
+                ("/page/?q=1", 404, "", ""),
+                ("/page.html?q=1", 200, "", PAGE),
+                ("/dir?q=1", 200, "", DIRECTORY),
+                ("/dir/?q=1", 301, "/dir?q=1", ""),
+                ("/dir/index.html?q=1", 200, "", DIRECTORY),
+                ("/", 200, "", HOME),
+            ],
+        ),
+        (
+            "v05",
+            r#"{"cleanUrls": true, "trailingSlash": true}"#,
+            [
+                ("/page?q=1", 301, "/page/?q=1", ""),
+                ("/page/?q=1", 200, "", PAGE),
+                ("/page.html?q=1", 301, "/page/?q=1", ""),
+                ("/dir?q=1", 301, "/dir/?q=1", ""),
+                ("/dir/?q=1", 200, "", DIRECTORY),
+                ("/dir/index.html?q=1", 301, "/dir/?q=1", ""),
+                ("/", 200, "", HOME),
+            ],
+        ),
+        (
+            "v06",
+            r#"{"cleanUrls": true, "trailingSlash": false}"#,
+            [
+                ("/page?q=1", 200, "", PAGE),
+                ("/page/?q=1", 301, "/page?q=1", ""),
+                ("/page.html?q=1", 301, "/page?q=1", ""),
+                ("/dir?q=1", 200, "", DIRECTORY),
+                ("/dir/?q=1", 301, "/dir?q=1", ""),
+                ("/dir/index.html?q=1", 301, "/dir?q=1", ""),
+                ("/", 200, "", HOME),
+            ],
+        ),
+    ];
+    for (version, config, rows) in tables {
+        let strict = site(
+            &format!("clean-{version}"),
+            "strict",
+            &json(config),
+            CLEAN_FILES,
+        );
+        for (target, status, location, body) in rows {
+            let reply = get(&strict, target);
+            assert_eq!(reply.status, status, "{version} {target}");
+            assert_eq!(
+                reply.header("location").unwrap_or(""),
+                location,
+                "{version} {target}"
+            );
+            if status == 200 {
+                assert_eq!(reply.body, body, "{version} {target}");
+            }
+        }
+    }
+}
+
+/// Function and Cloud Run rewrites are not compared with production (owner ledger 2435) and answer
+/// as before in both profiles: 503 without a Functions runtime.
+#[test]
+fn hosting_strict_function_and_run_rewrites_are_unchanged() {
+    let config = json(
+        r#"{"rewrites": [
+            {"source": "/fn/**", "function": "api"},
+            {"source": "/run/**", "run": {"serviceId": "api"}}
+        ]}"#,
+    );
+    for profile in ["strict", "emulator"] {
+        let site = site(&format!("rewrites-{profile}"), profile, &config, FILES);
+        for target in ["/fn/x", "/run/x"] {
+            let reply = get(&site, target);
+            assert_eq!(reply.status, 503, "{profile} {target}");
+            assert_eq!(
+                reply.body,
+                "Hosting rewrite requires a registered local Functions runtime"
+            );
+        }
+    }
 }

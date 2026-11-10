@@ -859,6 +859,21 @@ mod tests {
     }
 
     #[test]
+    fn a_rule_matches_with_the_flavor_of_its_profile() {
+        let source = serde_json::json!({"source": "/a/*"});
+        assert!(matches_production(&source, "/a/"));
+        assert!(!matches(&source, "/a/"));
+        assert!(matches_production(&source, "/a/.hidden") && !matches(&source, "/a/.hidden"));
+        assert!(!matches_production(&source, "/b/x"));
+        // `glob` wins over `source`, and a regex answers when neither is given
+        let glob_rule = serde_json::json!({"glob": "/b/*", "source": "/a/*"});
+        assert!(matches_production(&glob_rule, "/b/") && !matches_production(&glob_rule, "/a/"));
+        let regex = serde_json::json!({"regex": "^/x/[0-9]+$"});
+        assert!(matches_production(&regex, "/x/12") && matches(&regex, "/x/12"));
+        assert!(!matches_production(&regex, "/x/") && !matches(&regex, "/x/a"));
+    }
+
+    #[test]
     fn production_glob_differs_from_minimatch_only_for_dot_parts_and_the_empty_last_part() {
         // minimatch (the pinned oracle) keeps both, production does not
         assert!(!glob("/a/*", "/a/"));

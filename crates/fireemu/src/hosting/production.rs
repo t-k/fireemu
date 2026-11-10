@@ -46,8 +46,10 @@ pub(super) fn range(header: Option<&str>, length: u64) -> RangeOutcome {
         return RangeOutcome::Whole;
     };
     let (first, last) = (first.trim(), last.trim());
+    // digits only (`parse` refuses the empty text and accepts no sign once this holds)
     let number = |text: &str| -> Option<u64> {
-        (!text.is_empty() && text.bytes().all(|b| b.is_ascii_digit()))
+        text.bytes()
+            .all(|b| b.is_ascii_digit())
             .then(|| text.parse().ok())
             .flatten()
     };

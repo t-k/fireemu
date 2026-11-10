@@ -1602,6 +1602,7 @@ test("the channel's release is true, false for another version, absent when ther
     [{ type: "DEPLOY" }, "absent", ["type"]],
     [{ version: {} }, "absent", ["version"]],
     ["oops", "absent", undefined],
+    [{ version: { name: "" } }, "absent", ["version"]],
   ];
   for (const [release, expected, keys] of cases) {
     const r = await run({ overrides: [dark, channelRead(withRelease(release))] });

@@ -772,6 +772,53 @@ fn auth_token_iat_is_a_number_as_the_official_emulator_reads_one() {
     }
 }
 
+/// Strict keeps its own reading of `iat` (a finite number, `sub` checked first), unchanged by the
+/// emulator profile's following the official emulator.
+#[test]
+fn strict_reads_auth_token_claims_as_before() {
+    let mut db = Database::new(
+        RestOptions {
+            credentials: fireemu_adapter_database::rest::Credentials {
+                strict: true,
+                ..Default::default()
+            },
+            ..RestOptions::default()
+        },
+        1,
+    );
+    let (mut s, _) = open(&mut db, "/.ws?v=5&ns=iatstrict");
+    let mut id = 0;
+    let mut auth = |claims: &str| {
+        id += 1;
+        let frame = request(
+            id,
+            "auth",
+            &format!(r#"{{"cred":"{}"}}"#, unsigned_token(claims)),
+        );
+        send(&mut db, &mut s, &frame).concat()
+    };
+    for (claims, ok) in [
+        (r#"{"sub":"u1","iat":1}"#, true),
+        (r#"{"sub":"u1","iat":9223372036854775808}"#, true),
+        (r#"{"sub":"u1","iat":12345678901234567890}"#, true),
+        (r#"{"sub":"u1","iat":1e400}"#, false),
+        (r#"{"sub":"u1","iat":-1e400}"#, false),
+        (r#"{"sub":"u1","iat":"1"}"#, false),
+    ] {
+        let answer = auth(claims);
+        assert_eq!(answer.contains(r#""s":"ok""#), ok, "{claims}: {answer}");
+    }
+    // `sub` is told first when both are missing.
+    for claims in ["{}", r#"{"iat":"x"}"#] {
+        let answer = auth(claims);
+        assert!(
+            answer.contains("Missing claim 'sub' in auth token."),
+            "{claims}: {answer}"
+        );
+    }
+    assert!(auth(r#"{"sub":"u1"}"#).contains("Missing claim 'iat' in auth token."));
+}
+
 mod properties {
     use super::*;
     use fireemu_adapter_database::realtime::{split_frames, MAX_FRAME_CHARS};

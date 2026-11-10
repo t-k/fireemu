@@ -838,7 +838,13 @@ fn mock_token_with(uid: &str, extra: &str) -> String {
 /// fraction or an exponent (`1e400` too). Any other `iat`, an integer literal beyond the i64
 /// range included, leaves the token nobody (anonymous). Auth's emulator profile admits more
 /// hand-made tokens (a string or missing `iat`), but the official RTDB emulator does not read
-/// those, so neither does the emulator profile here. Strict never admits a hand-made token.
+/// those, so neither does the emulator profile here.
+///
+/// Strict keeps what it did before: it reads no hand-made token, except the SDK's mock token
+/// (the exact header `{"alg":"none","type":"JWT"}`, an empty signature, `aud` the project),
+/// which it reads as it always has, as a user when the parsed `iat` is a finite number. That
+/// is the old classification: an integer literal beyond the i64 range is a double (a user) and
+/// `1e400` is the string "Infinity" (nobody), the reverse of the emulator profile.
 #[test]
 #[allow(clippy::too_many_lines)] // one matrix: profile x token kind x iat
 fn a_hand_made_token_is_a_user_when_its_iat_is_a_number_the_official_emulator_reads() {
@@ -855,22 +861,23 @@ fn a_hand_made_token_is_a_user_when_its_iat_is_a_number_the_official_emulator_re
             "anon":{".read":"auth == null"}}}"#,
     )
     .unwrap();
+    // (iat, a number for the official emulator, a number for strict's mock-token reading)
     let issue_times = [
-        ("1", true),
-        ("-1", true),
-        ("1.5", true),
-        ("1e3", true),
-        ("1e30", true),
-        ("1e400", true),
-        ("-1e400", true),
-        ("9223372036854775807", true),
-        ("9223372036854775808", false),
-        ("-9223372036854775809", false),
-        ("12345678901234567890", false),
-        (r#""1""#, false),
-        (r#""Infinity""#, false),
-        ("null", false),
-        ("true", false),
+        ("1", true, true),
+        ("-1", true, true),
+        ("1.5", true, true),
+        ("1e3", true, true),
+        ("1e30", true, true),
+        ("1e400", true, false),
+        ("-1e400", true, false),
+        ("9223372036854775807", true, true),
+        ("9223372036854775808", false, true),
+        ("-9223372036854775809", false, true),
+        ("12345678901234567890", false, true),
+        (r#""1""#, false, false),
+        (r#""Infinity""#, false, false),
+        ("null", false, false),
+        ("true", false, false),
     ];
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -896,33 +903,50 @@ fn a_hand_made_token_is_a_user_when_its_iat_is_a_number_the_official_emulator_re
             let target = format!("{path}.json?ns=demo-rtdb-default-rtdb&auth={token}");
             request(daemon.database_port(), "GET", &target, &[], "").0
         };
-        let unsigned = |claims: &str| {
+        let unsigned = |header: &str, claims: &str| {
             format!(
                 "{}.{}.",
-                segment(r#"{"alg":"none","typ":"JWT"}"#).trim_end_matches('.'),
+                segment(header).trim_end_matches('.'),
                 segment(claims).trim_end_matches('.')
             )
         };
+        // The header of a hand-made token (`typ`), and the SDK's mock token's (`type`).
+        let hand_made = r#"{"alg":"none","typ":"JWT"}"#;
+        let sdk_mock = r#"{"alg":"none","type":"JWT"}"#;
         let mut tokens = Vec::new();
-        for (iat, number) in issue_times {
-            // Without `aud` (the claims are read unverified), and a mock token of the project.
+        for (iat, number, strict_number) in issue_times {
+            // Without `aud` (the claims are read unverified).
+            let claims = format!(r#"{{"sub":"u1","iat":{iat}}}"#);
             tokens.push((
                 format!("no aud, iat {iat}"),
-                unsigned(&format!(r#"{{"sub":"u1","iat":{iat}}}"#)),
+                unsigned(hand_made, &claims),
                 number,
+                false,
+            ));
+            // Of the project, with each header.
+            let claims = format!(
+                r#"{{"aud":"{PROJECT}","sub":"u1","iat":{iat},"exp":{}}}"#,
+                now + 3600
+            );
+            tokens.push((
+                format!("hand-made, iat {iat}"),
+                unsigned(hand_made, &claims),
+                number,
+                false,
             ));
             tokens.push((
-                format!("mock, iat {iat}"),
-                unsigned(&format!(
-                    r#"{{"aud":"{PROJECT}","sub":"u1","iat":{iat},"exp":{}}}"#,
-                    now + 3600
-                )),
+                format!("sdk mock, iat {iat}"),
+                unsigned(sdk_mock, &claims),
                 number,
+                strict_number,
             ));
         }
-        for (what, token, number) in tokens {
-            if name == "strict" {
-                // Near miss: strict reads no hand-made token, whatever its `iat` is.
+        for (what, token, number, strict_user) in tokens {
+            if name == "strict" && strict_user {
+                assert_eq!(read("/users/u1", &token), 200, "{name}: {what}");
+                assert_eq!(read("/anon", &token), 401, "{name}: {what}");
+            } else if name == "strict" {
+                // Strict refuses the credential.
                 assert_eq!(read("/users/u1", &token), 401, "{name}: {what}");
                 assert_eq!(read("/anon", &token), 401, "{name}: {what}");
             } else if number {
@@ -933,6 +957,7 @@ fn a_hand_made_token_is_a_user_when_its_iat_is_a_number_the_official_emulator_re
                 assert_eq!(read("/anon", &token), 200, "{name}: {what}");
             }
         }
+        let unsigned = |claims: &str| unsigned(hand_made, claims);
         // A missing `iat` leaves the token nobody too.
         let missing = unsigned(r#"{"sub":"u1"}"#);
         if name != "strict" {

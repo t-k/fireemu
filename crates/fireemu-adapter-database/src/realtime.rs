@@ -1125,7 +1125,7 @@ fn authenticate(
     let Some((Json::Object(claims), iat_is_number)) = jwt_claims_with_iat(cred) else {
         return Err(unparsable_token());
     };
-    let auth = auth_from_claims(&claims, iat_is_number).map_err(|name| {
+    let auth = auth_from_claims(&claims, iat_is_number, credentials.strict).map_err(|name| {
         Failure::Status(
             "invalid_token",
             format!("Missing claim '{name}' in auth token."),

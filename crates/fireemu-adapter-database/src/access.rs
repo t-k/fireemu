@@ -71,7 +71,7 @@ impl Credentials {
         let Json::Object(claims) = claims else {
             return None;
         };
-        auth_from_claims(&claims, iat_is_number).ok()
+        auth_from_claims(&claims, iat_is_number, self.strict).ok()
     }
 }
 
@@ -239,18 +239,25 @@ const RESERVED_CLAIMS: [&str; 10] = [
 /// `firebase.sign_in_provider` (else `anonymous`) and `token` the claims, then every other
 /// claim as a member of its own (so a `provider` or `token` claim replaces those), then `uid`
 /// from `sub`. `iat_is_number` says whether the claims' `iat` is a number as the official
-/// emulator reads one (the claims cannot tell: see [`crate::json_parse::parse_claims`]). The
-/// error names the missing claim, `iat` before `sub` when both are missing.
+/// emulator reads one (the claims cannot tell: see [`crate::json_parse::parse_claims`]).
+/// Strict keeps the reading it had before the emulator profile followed the official emulator:
+/// `sub` first, then an `iat` that parsed as a number (so `1e400`, read as a string, is none and an
+/// integer beyond the i64 range, read as a double, is one). The strict daemon reaches this with
+/// the SDK mock token, which is admitted without reading its time claims.
 pub(crate) fn auth_from_claims(
     claims: &BTreeMap<String, Json>,
     iat_is_number: bool,
+    strict: bool,
 ) -> Result<Json, &'static str> {
-    if !iat_is_number {
+    if !strict && !iat_is_number {
         return Err("iat");
     }
     let Some(Json::String(subject)) = claims.get("sub") else {
         return Err("sub");
     };
+    if strict && !matches!(claims.get("iat"), Some(Json::Number(_))) {
+        return Err("iat");
+    }
     let provider = match claims.get("firebase") {
         Some(Json::Object(firebase)) => firebase.get("sign_in_provider").cloned(),
         _ => None,
@@ -840,7 +847,7 @@ mod issue_time_properties {
     proptest! {
         // Without a verifier the claims of the token are read as they stand; with one, the
         // claims text it answers is. Either way a literal is an `iat` exactly when the
-        // official emulator reads it as one, in the emulator profile and under strict.
+        // official emulator reads it as one in the emulator profile; strict reads it as it did.
         #[test]
         fn a_number_literal_is_an_issue_time_as_the_official_emulator_reads_it(
             literal in "-?(0|[1-9][0-9]{0,22})(\\.[0-9]{1,3})?([eE][+-]?[0-9]{1,3})?",
@@ -848,7 +855,14 @@ mod issue_time_properties {
         ) {
             let claims = format!(r#"{{"sub":"u1","iat":{literal}}}"#);
             let token = format!("{}.{}.", b64(r#"{"alg":"none"}"#), b64(&claims));
-            let expected = official_iat(&literal);
+            // Strict keeps its reading from before the profile followed the jar: a finite
+            // number, whatever its spelling (an integer beyond the i64 range is a double; a
+            // literal beyond the double range reads as a string, nobody).
+            let expected = if strict {
+                literal.parse::<f64>().is_ok_and(f64::is_finite)
+            } else {
+                official_iat(&literal)
+            };
             let unverified = Credentials { strict, id_tokens: None };
             prop_assert_eq!(unverified.user(&token, "ns", 0).is_some(), expected, "{}", literal);
             let text = claims.clone();

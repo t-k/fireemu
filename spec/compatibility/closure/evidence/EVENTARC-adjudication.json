@@ -35,7 +35,7 @@
   "sources": [
     {
       "path": "conformance/src/eventarc-production/run.mjs",
-      "sha256": "5c82fddf942f848790624b2d17f4d8add62621341c32bacd2980a5bd88a7cbfe",
+      "sha256": "6b5ff7a3ea452b2dd39c7780eb019ee1fda1ee552d382b05c800f06b04112bff",
       "custody": "public-repository",
       "selector": "whole-file"
     },
@@ -68,7 +68,7 @@
     {
       "path": "conformance/src/eventarc-production/run.mjs",
       "previousSha256": "3356bfc4a2a8ec65fb49b428c95f7743e0ee08b3859ccca980ed0f08856c28a7",
-      "sha256": "5c82fddf942f848790624b2d17f4d8add62621341c32bacd2980a5bd88a7cbfe",
+      "sha256": "6b5ff7a3ea452b2dd39c7780eb019ee1fda1ee552d382b05c800f06b04112bff",
       "previousRole": "The driver bytes that the independent reviews inspected (sourceCommit) and that produced the installed-binary sessions of the acquisition comparison and of the final R20 evidence under finalArtifact.",
       "reason": "The release strict-production row R20 ran the eight installed sessions one after another and took 35 minutes, almost all of it real-time pacing. check now runs them concurrently, with ports held until spawn and recorded in a process-wide registry, one process receipt per session and the same check-evidence.json shape and session order.",
       "comparisonLogicChanged": false,

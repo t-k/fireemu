@@ -1965,8 +1965,8 @@ function checkStub({
     pids.set(name, pid);
     active++;
     max = Math.max(max, active);
-    onStart(session, args);
     try {
+      await onStart(session, args);
       // The first `barrier` sessions wait until `barrier` sessions are in flight at once.
       const limit = performance.now() + 5000;
       if (pid <= barrier) while (active < barrier && performance.now() < limit) await delay(1);
@@ -2151,4 +2151,148 @@ test("check keeps invalid concurrency from starting any session", async (t) => {
     await assert.rejects(check({ ...fixture, concurrency, runSession: stub.runSession }));
   assert.equal(stub.calls, 0);
   assert.deepEqual(readdirSync(fixture.out), []);
+});
+
+test("reservePorts scripted duplicates are skipped, held and closed on release", async () => {
+  const closed = [],
+    firstPorts = [41001, 41002, 41003, 41004, 41005, 41006, 41007];
+  const makeFactory = (script) => () => {
+    const port = script.shift();
+    return {
+      once() {},
+      listen(_port, _host, done) {
+        queueMicrotask(done);
+      },
+      address() {
+        return { port };
+      },
+      close(done) {
+        closed.push(port);
+        done();
+      },
+    };
+  };
+  const first = await reservePorts(7, { makeServer: makeFactory([...firstPorts]) });
+  assert.deepEqual(first.ports, firstPorts);
+  const second = await reservePorts(7, {
+    makeServer: makeFactory([41001, 41008, 41001, 41009, 41010, 41011, 41012, 41013, 41014]),
+  });
+  assert.deepEqual(second.ports, [41008, 41009, 41010, 41011, 41012, 41013, 41014]);
+  assert.deepEqual(closed, []);
+  await second.release();
+  assert.deepEqual(closed, [41001, 41008, 41001, 41009, 41010, 41011, 41012, 41013, 41014]);
+  await second.release();
+  assert.equal(closed.length, 9);
+  await first.release();
+});
+test("reservePorts scripted exhaustion rejects after the retry bound and closes everything", async () => {
+  let calls = 0;
+  const closed = [];
+  const makeServer = () => {
+    calls++;
+    return {
+      once() {},
+      listen(_port, _host, done) {
+        queueMicrotask(done);
+      },
+      address() {
+        return { port: 41200 };
+      },
+      close(done) {
+        closed.push(41200);
+        done();
+      },
+    };
+  };
+  const first = await reservePorts(1, { makeServer });
+  calls = 0;
+  await assert.rejects(reservePorts(1, { makeServer }), /retries exhausted/);
+  assert.equal(calls, 65);
+  assert.deepEqual(closed, Array(65).fill(41200));
+  await first.release();
+});
+test("reservePorts scripted listen failure closes the servers already opened", async () => {
+  let calls = 0;
+  const closed = [],
+    failure = new Error("listen failed");
+  const makeServer = () => {
+    const port = 41300 + ++calls;
+    let onError;
+    return {
+      once(_event, fn) {
+        onError = fn;
+      },
+      listen(_port, _host, done) {
+        queueMicrotask(() => (port === 41303 ? onError(failure) : done()));
+      },
+      address() {
+        return { port };
+      },
+      close(done) {
+        closed.push(port);
+        done();
+      },
+    };
+  };
+  await assert.rejects(reservePorts(3, { makeServer }), (error) => error === failure);
+  assert.deepEqual(closed, [41301, 41302]);
+});
+test("check keeps nothing new starting after an unexpected session error", async (t) => {
+  const fixture = checkFixture(t),
+    stub = checkStub({
+      onStart: (s) => {
+        if (s.phase === "raw" && s.label === "B") throw new Error("session error");
+      },
+    });
+  await assert.rejects(
+    check({ ...fixture, concurrency: 1, runSession: stub.runSession }),
+    /session error/,
+  );
+  assert.equal(stub.calls, 3);
+  assert.deepEqual([...stub.pids.keys()], checkOrder.slice(0, 3));
+});
+test("check keeps the progress file with the completed sessions after an unexpected error", async (t) => {
+  const fixture = checkFixture(t),
+    stub = checkStub({
+      onStart: (s) => {
+        if (s.phase === "raw" && s.label === "C") throw new Error("session error");
+      },
+    });
+  await assert.rejects(
+    check({ ...fixture, concurrency: 1, runSession: stub.runSession }),
+    /session error/,
+  );
+  const evidence = JSON.parse(readFileSync(join(fixture.out, "check-evidence.json"), "utf8"));
+  assert.equal(evidence.complete, false);
+  assert.deepEqual(sessionNames(evidence), checkOrder.slice(0, 3));
+});
+test("check keeps spawned ports free", async (t) => {
+  const fixture = checkFixture(t),
+    errors = [];
+  const stub = checkStub({
+    onStart: async (_, args) => {
+      const fireemu = JSON.parse(readFileSync(args[args.indexOf("--config") + 1], "utf8"));
+      const firebase = JSON.parse(readFileSync(args[args.indexOf("--firebase-json") + 1], "utf8"));
+      const d = fireemu.daemon;
+      assert.equal(firebase.emulators.eventarc.port, d.eventarcPort);
+      for (const port of [
+        d.httpPort,
+        d.firestorePort,
+        d.functionsPort,
+        d.eventarcPort,
+        d.loggingPort,
+        d.hubPort,
+        Number(args[args.indexOf("--tasks-port") + 1]),
+      ]) {
+        try {
+          const server = await bindPort(port);
+          await new Promise((done) => server.close(done));
+        } catch (error) {
+          errors.push(error);
+        }
+      }
+    },
+  });
+  await check({ ...fixture, runSession: stub.runSession });
+  assert.deepEqual(errors, []);
 });

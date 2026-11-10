@@ -940,7 +940,7 @@ const lookup=dns.lookup;dns.lookup=function(h,...a){if(!allowed(h))throw Error('
 const originalFetch=globalThis.fetch;globalThis.fetch=(u,o)=>{const x=new URL(typeof u==='string'?u:u.url||u);if(x.protocol!=='http:'||!allowed(x.hostname))throw Error('offline: remote fetch refused');return originalFetch(u,{...o,redirect:'error'})};
 `;
 const claimedPorts = new Set();
-export async function reservePorts(count = 7) {
+export async function reservePorts(count = 7, { makeServer = createServer } = {}) {
   const servers = [],
     ports = [];
   let released;
@@ -953,7 +953,7 @@ export async function reservePorts(count = 7) {
   try {
     let extras = 0;
     while (ports.length < count) {
-      const server = createServer();
+      const server = makeServer();
       await new Promise((done, reject) => {
         server.once("error", reject);
         server.listen(0, "127.0.0.1", done);

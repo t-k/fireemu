@@ -343,7 +343,7 @@ const historicalPublicHashes = new Map([
 const reboundPublicHashes = new Map([
   [
     "conformance/src/eventarc-production/run.mjs",
-    "5c82fddf942f848790624b2d17f4d8add62621341c32bacd2980a5bd88a7cbfe",
+    "6b5ff7a3ea452b2dd39c7780eb019ee1fda1ee552d382b05c800f06b04112bff",
   ],
 ]);
 const pinnedPublicSha = (path) => {

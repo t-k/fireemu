@@ -23,6 +23,11 @@ export function failedPaths(result) {
     .map(([path]) => path);
 }
 
+/** The exit code of the replay: nonzero when any exported document has a mismatch or an unknown row. */
+export function exitCodeOf(result) {
+  return failedPaths(result).length === 0 ? 0 : 1;
+}
+
 /** The value after `name` in `argv`, or `undefined` when the flag is absent or has no value. */
 export function optionValue(argv, name) {
   const at = argv.indexOf(name);
@@ -78,5 +83,5 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       mismatched: failures,
     }),
   );
-  process.exitCode = failures.length === 0 ? 0 : 1;
+  process.exitCode = exitCodeOf(result);
 }

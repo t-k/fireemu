@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { failedPaths, optionValue, usageOk } from "./release-replay.mjs";
+import { exitCodeOf, failedPaths, optionValue, usageOk } from "./release-replay.mjs";
 
 const document = (MISMATCH, UNKNOWN) => ({
   summary: { MATCH: 201 - MISMATCH - UNKNOWN, MISMATCH, UNKNOWN },
@@ -17,6 +17,13 @@ test("the exit code is nonzero when any exported document has a mismatch or an u
     "a",
     "b",
   ]);
+});
+
+test("the process exits 0 for a clean replay and 1 for any failing document", () => {
+  assert.equal(exitCodeOf({ documents: { a: document(0, 0) } }), 0);
+  assert.equal(exitCodeOf({ documents: {} }), 0);
+  assert.equal(exitCodeOf({ documents: { a: document(0, 0), b: document(1, 0) } }), 1);
+  assert.equal(exitCodeOf({ documents: { a: document(0, 1) } }), 1);
 });
 
 test("the command line needs the local mode, a binary and a new export file", () => {

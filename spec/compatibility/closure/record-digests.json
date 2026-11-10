@@ -49,7 +49,7 @@
     "conformance/src/functions-python-replay.test.mjs": "cbcc02cb8ac4d53bdbb5a43ba5a98e5d8f6bfdd149050513904c545994192e1f",
     "conformance/src/hosting-production/corpus.manifest.json": "9c86405766440def7b565417de145b01cfed2395b7819fdba2596f6183b355ab",
     "conformance/src/hosting-production/judge.mjs": "c35018577caaacf7a7eb5637fefad8d33aa1245003cfdd71e898c2a1ac975af5",
-    "conformance/src/hosting-production/record.mjs": "8ea94131e92031e1d6666a6865cd3a7ed7234e0d3a7d710576645743780b1cc2",
+    "conformance/src/hosting-production/record.mjs": "3caa60e0ece990034ab65d6f0db642754c9bf01f87dd9f8be8588687678d9bbd",
     "conformance/src/hosting/run.mjs": "60f51e78ed905dadf5fa8f8e2098d9717abdf845ac3d5e5618e72e3a430490a8",
     "conformance/src/release-strict-regression.test.mjs": "33938307deea400dc712c59e848a185a26aab08c5b8a50b65e79b9dcccbd3bd2",
     "conformance/src/rtdb-finite-families-closure.test.mjs": "0fb70d489213edca6b71670ffe20fc92138cd0cdf0a07f7e3dff93aaa2303303",

@@ -6657,6 +6657,74 @@ mod tests {
         assert!(!restored.config().allow_duplicate_emails);
     }
 
+    /// firebase-tools gives every imported account a `validSince` (`operations.js:341`), so an
+    /// account restored from an artifact refuses a token with no usable `iat` (emulator profile),
+    /// whether it was imported before or created passwordless, and keeps refusing it through a
+    /// second export and import. An account that was never imported does not refuse it.
+    #[test]
+    fn an_imported_passwordless_account_keeps_its_valid_since_through_export_and_import() {
+        use fireemu_core_auth::{
+            jwt::{encode_payload_with, verify_id_token, FutureClaims, JwtError},
+            mfa::TotpPolicy,
+            store::{AuthStore, NewUser},
+        };
+        use fireemu_core_export::auth::UserRecord;
+        use fireemu_core_types::{
+            determinism::SplitMix64,
+            json::{parse, JsonValue},
+            time::LogicalInstant,
+        };
+        let now = LogicalInstant::from_unix_seconds(1_788_004_860);
+        let path = std::path::Path::new("offline.json");
+        let bare_token = |store: &AuthStore, uid: &str| {
+            let local = store.user_by_id(uid).unwrap().local_id.clone();
+            let claims = store.id_token_claims(&local, None, now).unwrap();
+            let JsonValue::Object(mut object) = parse(&claims.canonical_json()).unwrap() else {
+                panic!("claims are an object");
+            };
+            object.remove("iat");
+            object.remove("auth_time");
+            let mut payload = String::new();
+            fireemu_core_auth::claims::ClaimValue::from_json(&JsonValue::Object(object))
+                .write_canonical_json(&mut payload);
+            encode_payload_with(&payload, None)
+        };
+        let answer = |store: &mut AuthStore, uid: &str| {
+            store.set_future_id_token_claims(FutureClaims::Accept);
+            verify_id_token(&bare_token(store, uid), store, now).map(|_| ())
+        };
+        let mut source = AuthStore::new("demo-app", SplitMix64::new(1), TotpPolicy::default());
+        let created = source
+            .create_user(NewUser::email("created@example.com"), now)
+            .unwrap();
+        let record = UserRecord {
+            local_id: "imported".to_owned(),
+            email: Some("imported@example.com".to_owned()),
+            created_at: Some("100000".to_owned()),
+            ..UserRecord::default()
+        };
+        source
+            .import_user(super::imported_user(&record, path).unwrap())
+            .unwrap();
+        assert_eq!(answer(&mut source, created.as_str()), Ok(()));
+        assert_eq!(answer(&mut source, "imported"), Err(JwtError::Revoked));
+        // Export and import twice: both accounts come back as imported ones.
+        let mut round = source;
+        for _ in 0..2 {
+            let mut next = AuthStore::new("demo-app", SplitMix64::new(2), TotpPolicy::default());
+            for uid in [created.as_str(), "imported"] {
+                let exported =
+                    super::exported_account(&round, round.user_by_id(uid).unwrap(), None);
+                next.import_user_trusted(super::imported_user(&exported, path).unwrap())
+                    .unwrap();
+            }
+            round = next;
+            for uid in [created.as_str(), "imported"] {
+                assert_eq!(answer(&mut round, uid), Err(JwtError::Revoked), "{uid}");
+            }
+        }
+    }
+
     /// The project's multi-factor configuration is not account data: an export carries the
     /// accounts and their factors, and an import leaves the importing project's configuration and
     /// its declared initial one alone (`auth.mfa`).

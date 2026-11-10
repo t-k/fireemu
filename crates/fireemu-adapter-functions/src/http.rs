@@ -277,6 +277,8 @@ fn accepts_callable_stream(headers: &hyper::HeaderMap) -> bool {
         == Some("text/event-stream")
 }
 
+/// The `Origin` of a request to a support listener (Eventarc, Cloud Tasks), which only a
+/// local page may drive: more than one is refused rather than resolved to one of them.
 fn request_origin(headers: &hyper::HeaderMap) -> Result<Option<String>, Refusal> {
     let origins = field_values(headers, "origin");
     if origins.len() > 1 {
@@ -285,15 +287,18 @@ fn request_origin(headers: &hyper::HeaderMap) -> Result<Option<String>, Refusal>
     Ok(origins.into_iter().next())
 }
 
-fn function_origin(
-    headers: &hyper::HeaderMap,
-    callable_preflight: bool,
-) -> Result<Option<String>, Refusal> {
+/// The `Origin` a Functions request is answered for, where the daemon echoes one: the SDK
+/// wrapper's CORS middleware reflects what Node gives it, which is every field joined with `, `.
+/// Nothing is refused here. A request that repeats `Origin` is passed to the function like any
+/// other, with every field forwarded in wire order: CORS is not authorization (no decision
+/// depends on the value), a browser never sends two, and the SDK, a plain Node handler and
+/// production all accept them. DNS rebinding is the `Host` guard's, which runs before this.
+fn function_origin(headers: &hyper::HeaderMap, callable_preflight: bool) -> Option<String> {
     if callable_preflight {
-        Ok(None)
-    } else {
-        request_origin(headers)
+        return None;
     }
+    let origins = field_values(headers, "origin");
+    (!origins.is_empty()).then(|| origins.join(", "))
 }
 
 /// A forwarded response.
@@ -1764,10 +1769,7 @@ async fn respond(
     // The SDK's CORS middleware owns every callable OPTIONS response, including
     // explicit cors:false and origin lists. Preflights do not authenticate or invoke
     // the callable handler, so strip credentials without admitting them.
-    let origin = match function_origin(req.headers(), callable_preflight) {
-        Ok(origin) => origin,
-        Err(refusal) => return Ok(*refusal),
-    };
+    let origin = function_origin(req.headers(), callable_preflight);
     let streaming =
         !callable_preflight && streaming_callable && accepts_callable_stream(req.headers());
     // An entry the daemon marked (a code-level callable that a configured manifest serves as an

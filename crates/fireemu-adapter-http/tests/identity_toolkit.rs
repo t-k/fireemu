@@ -2612,10 +2612,20 @@ fn refresh_authentication_time_remains_revocable_in_both_profiles() {
                     .and_then(fireemu_core_types::json::JsonValue::as_i64),
                 Some(initial_auth_time)
             );
+            // firebase-tools compares `iat` alone against `validSince` (`parseIdToken`,
+            // `operations.js:1727`), and a refreshed token's `iat` is the refresh time, so the
+            // emulator profile admits it (coordinator ruling 2026-11-10, ledger 787); the
+            // token issued before the revocation is the one it refuses.
             let (status, looked_up) = post(
                 &s,
                 &format!("{V1}/accounts:lookup"),
                 &json!({"idToken": refreshed["id_token"]}),
+            );
+            assert_eq!(status, 200, "{looked_up}");
+            let (status, looked_up) = post(
+                &s,
+                &format!("{V1}/accounts:lookup"),
+                &json!({"idToken": signed_in["idToken"]}),
             );
             assert_eq!(status, 400, "{looked_up}");
             assert!(
@@ -6682,6 +6692,10 @@ fn firebase_profile_admin_password_change_preserves_refresh_and_update_is_atomic
         &json!({"grant_type": "refresh_token", "refresh_token": refresh}),
     );
     assert_eq!(status, 200, "{refreshed_before_update}");
+    // The emulator profile judges a token by its `iat` against `validSince` (`operations.js:1727`),
+    // so the change happens a second after the refresh, as a token issued in the second of the
+    // revocation stays valid.
+    advance(&s, 1);
     let (status, _) = admin(
         &s,
         "POST",
@@ -6718,13 +6732,10 @@ fn firebase_profile_admin_password_change_preserves_refresh_and_update_is_atomic
         &format!("{V1}/accounts:lookup"),
         &json!({"idToken": refreshed_after_update["id_token"]}),
     );
-    assert_eq!(status, 400, "{looked_up_after_refresh}");
-    assert!(
-        looked_up_after_refresh["error"]["message"]
-            .as_str()
-            .is_some_and(|message| message.starts_with("TOKEN_EXPIRED")),
-        "{looked_up_after_refresh}"
-    );
+    // The token refreshed after the change was issued at the change's second: `iat >= validSince`,
+    // which is all `parseIdToken` compares (`operations.js:1727`), though it keeps the older
+    // `auth_time` of its session.
+    assert_eq!(status, 200, "{looked_up_after_refresh}");
     let (status, _) = post(
         &s,
         &format!("{V1}/accounts:signInWithPassword"),

@@ -830,6 +830,7 @@ fn the_ui_flags_a_public_directory_that_did_not_exist_at_start() {
 }
 
 /// A runner that speaks the fireemu protocol and exports one scheduled function.
+#[cfg(unix)]
 const SCHEDULE_RUNNER: &str = r#"
 import json, sys
 
@@ -855,6 +856,7 @@ while True:
 
 /// The runtime of each function in the UI follows the codebase's declared `runtime`, or the
 /// loader picked when it declares none (the runner override skips the Python preflight).
+#[cfg(unix)]
 fn function_runtime_in_ui(declared: Option<&str>, name: &str) -> serde_json::Value {
     let dir = Scratch::new("hosting", name);
     std::fs::create_dir_all(dir.join("functions")).unwrap();
@@ -890,6 +892,7 @@ fn function_runtime_in_ui(declared: Option<&str>, name: &str) -> serde_json::Val
     tick["runtime"].clone()
 }
 
+#[cfg(unix)]
 #[test]
 fn the_ui_names_the_runtime_a_codebase_declares_or_the_loader_picked() {
     assert_eq!(

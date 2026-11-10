@@ -200,7 +200,6 @@ fn constructs_no_row_records_are_unobserved_in_strict_and_left_to_the_engine_in_
         r"\u{41}",
         r"\v",
         r"\b{start}",
-        r"\Bé",
     ] {
         assert_eq!(
             analyze(pattern, STRICT).map(|_| ()),

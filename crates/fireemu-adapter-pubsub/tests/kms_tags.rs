@@ -346,6 +346,72 @@ async fn every_tag_set_the_official_emulator_stores_round_trips_over_rest_and_gr
 }
 
 #[tokio::test]
+async fn raw_json_duplicate_members_and_tag_order() {
+    let h = Harness::new(PagingPolicy::Emulator).await;
+    // This pins current behavior: the last duplicate member wins. Neither the gRPC-only
+    // official emulator nor production was recorded for duplicate JSON members.
+    for (id, body) in [
+        (
+            "duplicate-tags",
+            &br#"{"tags":{"k":"first","k":"last"}}"#[..],
+        ),
+        (
+            "duplicate-kms",
+            &br#"{"kmsKeyName":"first","kmsKeyName":"last"}"#[..],
+        ),
+        (
+            "both-spellings",
+            &br#"{"kmsKeyName":"first","kms_key_name":"last"}"#[..],
+        ),
+        ("tags-ab", &br#"{"tags":{"a":"1","b":"2"}}"#[..]),
+        ("tags-ba", &br#"{"tags":{"b":"2","a":"1"}}"#[..]),
+    ] {
+        let mut stream = tokio::net::TcpStream::connect(h.address).await.unwrap();
+        let headers = format!("PUT /v1/projects/demo-app/topics/{id} HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", h.address, body.len());
+        stream.write_all(headers.as_bytes()).await.unwrap();
+        stream.write_all(body).await.unwrap();
+        let mut response = Vec::new();
+        stream.read_to_end(&mut response).await.unwrap();
+        let split = response
+            .windows(4)
+            .position(|bytes| bytes == b"\r\n\r\n")
+            .unwrap();
+        let status: u16 = std::str::from_utf8(&response[..split])
+            .unwrap()
+            .lines()
+            .next()
+            .unwrap()
+            .split_whitespace()
+            .nth(1)
+            .unwrap()
+            .parse()
+            .unwrap();
+        let created: Value = serde_json::from_slice(&response[split + 4..]).unwrap();
+        if id == "both-spellings" {
+            // This also pins current behavior; neither the gRPC-only official emulator nor
+            // production was recorded for duplicate JSON members with both spellings.
+            assert_eq!(status, 400, "{created}");
+            assert_eq!(created["error"]["status"], "INVALID_ARGUMENT");
+            assert_eq!(h.rest_get(id).await.0, 404);
+            continue;
+        }
+        let expected = match id {
+            "duplicate-tags" => json!({"name": topic_name(id), "tags": {"k": "last"}}),
+            "duplicate-kms" => json!({"name": topic_name(id), "kmsKeyName": "last"}),
+            _ => json!({"name": topic_name(id), "tags": {"a": "1", "b": "2"}}),
+        };
+        assert_eq!((status, &created), (200, &expected), "{id}");
+        assert_eq!(h.rest_get(id).await, (200, expected), "{id}");
+        let topic = h.grpc_get(id).await;
+        match id {
+            "duplicate-tags" => assert_eq!(topic.tags, tag_map(&[("k", "last")])),
+            "duplicate-kms" => assert_eq!(topic.kms_key_name, "last"),
+            _ => assert_eq!(topic.tags, tag_map(&[("a", "1"), ("b", "2")])),
+        }
+    }
+}
+
+#[tokio::test]
 async fn snake_case_spelling_of_the_key_name_is_accepted() {
     let h = Harness::new(PagingPolicy::Emulator).await;
     let (status, created) = h.rest_create("snake", json!({"kms_key_name": KEY})).await;

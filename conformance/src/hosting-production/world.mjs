@@ -114,7 +114,13 @@ export function createWorld({ run, secrets, overrides = [], versionNameForm = "s
         state.releasedVersions.set(id, name);
         return response(200, { version: { name } });
       }
-      if (!releases && method === "GET") return response(200, channel);
+      if (!releases && method === "GET") {
+        const released = state.releasedVersions.get(id);
+        return response(
+          200,
+          released ? { ...channel, release: { version: { name: released } } } : channel,
+        );
+      }
       if (!releases && method === "DELETE") {
         channel.deleted = true;
         return response(200, {});

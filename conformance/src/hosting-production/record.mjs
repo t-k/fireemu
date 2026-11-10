@@ -30,7 +30,7 @@ export const TASK_ID = "HOSTING-PRODUCTION";
 export const PROJECT = "fireemu-oracle-idp";
 export const SITE = PROJECT;
 /** The budget of one attempt. `cleanup` has its own reserve so deploys never starve it. */
-export const CAPS = { token: 3, control: 90, cleanup: 45, upload: 20, edge: 250 };
+export const CAPS = { token: 3, control: 90, cleanup: 45, upload: 20, edge: 330 };
 
 const HOSTING = "https://firebasehosting.googleapis.com/v1beta1";
 const UPLOAD_HOST = "upload-firebasehosting.googleapis.com";
@@ -45,8 +45,8 @@ const MAX_ATTEMPTS = 3;
 const RESERVED_USD_PER_ATTEMPT = 1;
 const ESTIMATED_USD = 0.05;
 const WAIT_MS = 30 * 60_000;
-const READINESS_ATTEMPTS = 3;
-const READINESS_GAP_MS = 10_000;
+export const READINESS_ATTEMPTS = 12;
+export const READINESS_GAP_MS = 10_000;
 const REQUEST_GAP_MS = 150;
 const MAX_RESPONSE_BYTES = 1 << 20;
 const RUN_TAG = /^[0-9a-f]{6}$/;
@@ -420,6 +420,24 @@ async function precheck(api) {
   return config.authorizedDomains ?? [];
 }
 
+/** `sites/<site>/versions/<id>` of a version name that may carry a project in front. */
+const shortVersionName = (name) => String(name ?? "").replace(/^projects\/[^/]+\//, "");
+
+/** What a readiness probe that was not the expected answer showed (kept in the deploy record). */
+function probeShape(answer) {
+  const header = (name) =>
+    answer.headers?.find(([key]) => String(key).toLowerCase() === name)?.[1];
+  const body = answer.body ?? Buffer.alloc(0);
+  return {
+    status: answer.status,
+    contentType: header("content-type"),
+    xCache: header("x-cache"),
+    xServedBy: header("x-served-by"),
+    bodyBytes: body.length,
+    bodyHead: body.subarray(0, 200).toString("utf8"),
+  };
+}
+
 /** Deploys one version and serves its requests; returns the rows. Failures are recorded, not thrown. */
 async function deployAndServe({ version, record, run, api, deps, secrets, number, state, sink }) {
   const fail = (reason, { halt = true } = {}) => {
@@ -629,15 +647,28 @@ async function deployAndServe({ version, record, run, api, deps, secrets, number
   };
   record.readiness = [];
   let ready = false;
+  let last;
   for (let attempt = 0; attempt < READINESS_ATTEMPTS && !ready; attempt += 1) {
     if (state.stop) break;
     if (attempt > 0) await deps.sleep(READINESS_GAP_MS);
     const answer = await edge({ method: "GET", target: version.readiness.path }, {});
     record.readiness.push(answer.outcome === "answered" ? answer.status : answer.reason);
     ready = answer.outcome === "answered" && version.readiness.accept.includes(answer.status);
+    last = answer;
   }
   if (!ready) {
+    // Run bba4c0 gave up on four releases after 20 s with no body kept. Keep what the last probe
+    // showed and whether the API still holds this version as the channel's release, so that a
+    // release that never goes live differs from one that is only slow.
+    if (last?.outcome === "answered") record.lastProbe = probeShape(last);
     fail(state.stop ? "stopped" : "not-ready", { halt: false });
+    if (!state.stop) {
+      const channel = await api.call("control", "GET", `${channelsUrl}/${record.channelId}`);
+      record.releaseOnChannel =
+        channel.kind !== "ok"
+          ? "unread"
+          : shortVersionName(channel.value?.release?.version?.name) === shortVersionName(name);
+    }
     return;
   }
   const answers = new Map();

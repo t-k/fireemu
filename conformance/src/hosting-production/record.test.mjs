@@ -93,6 +93,8 @@ import {
   checkReport,
   classify,
   PROJECT,
+  READINESS_ATTEMPTS,
+  READINESS_GAP_MS,
   recordHosting,
   recoverHosting,
   secretsFromWebConfig,
@@ -317,7 +319,7 @@ test("unknown deletes are not retried and successful deletes are read back", asy
   }
 });
 
-test("readiness retries twice, cleans the version and continues", async () => {
+test("readiness polls the whole window, cleans the version and continues", async () => {
   const r = await run({
     overrides: [
       {
@@ -326,7 +328,8 @@ test("readiness retries twice, cleans the version and continues", async () => {
       },
     ],
   });
-  assert.equal(r.sleeps.filter((ms) => ms === 10000).length, 2);
+  assert.equal(r.sleeps.filter((ms) => ms === READINESS_GAP_MS).length, READINESS_ATTEMPTS - 1);
+  assert.equal(deployOf(r).v01.readiness.length, READINESS_ATTEMPTS);
   assert.ok(
     rowsOf(r)
       .filter((row) => row.version === "v01")
@@ -334,6 +337,127 @@ test("readiness retries twice, cleans the version and continues", async () => {
   );
   assert.equal(r.world.state.versions.size, 10);
   assert.ok([...r.world.state.versions.values()].every((version) => version.deleted));
+});
+
+// Run bba4c0 (attempt 2): v05, v06, v09 and v10 answered 404 to /ready.txt three times, 10 s apart,
+// and were given up on, while v01-v04, v07 and v08 were served at once. The 404 came for v09 too,
+// whose `**` redirect would have answered 302 for any path, so the release was not live at the edge
+// yet (not a missing file). The window has to outlast a slow release.
+const SLOW_RELEASES = ["v05", "v06", "v09", "v10"];
+const slowRelease = (probes) => {
+  const seen = new Map();
+  return {
+    match: "GET /ready.txt/",
+    answer: (call) => {
+      const version = SLOW_RELEASES.find((id) => call.host.includes(`-${id}-`));
+      if (!version) return undefined;
+      seen.set(version, (seen.get(version) ?? 0) + 1);
+      return seen.get(version) <= probes ? answer(404) : undefined;
+    },
+  };
+};
+
+test("a release that is live only after the recorded 404s is still observed", async () => {
+  const r = await run({ overrides: [slowRelease(3)] });
+  const rows = rowsOf(r);
+  assert.equal(r.result.outcome, "observed-unknown");
+  assert.deepEqual(
+    rows.filter((row) => row.outcome !== "answered").map((row) => [row.id, row.reason]),
+    [["v01.cond-etag-rewrite", "dependency"]],
+  );
+  for (const id of SLOW_RELEASES) {
+    assert.deepEqual(deployOf(r)[id].readiness, [404, 404, 404, deployOf(r)[id].readiness[3]]);
+    assert.equal(deployOf(r)[id].readiness.at(-1), id === "v09" ? 302 : 200);
+    assert.equal(deployOf(r)[id].failure, undefined);
+  }
+  assert.equal(r.sleeps.filter((ms) => ms === READINESS_GAP_MS).length, 4 * 3);
+});
+
+test("the readiness window is at least three times the 20 s a recorded release stayed dark", () => {
+  assert.ok(READINESS_ATTEMPTS * READINESS_GAP_MS >= 60_000);
+});
+
+test("the worst slow-release window still fits every budget", async () => {
+  const r = await run({ overrides: [slowRelease(READINESS_ATTEMPTS - 1)] });
+  assert.equal(r.result.outcome, "observed-unknown");
+  assert.equal(rowsOf(r).filter((row) => row.reason === "not-ready").length, 0);
+  for (const [kind, count] of Object.entries(resultOf(r).requests)) assert.ok(count <= CAPS[kind]);
+  // 200 requests are sent (one has no dependency answer), 6 versions need 1 probe, 4 need all
+  assert.equal(resultOf(r).requests.edge, 200 + 6 + 4 * READINESS_ATTEMPTS);
+});
+
+test("a version that never becomes ready keeps what the last probe and the channel showed", async () => {
+  const notFound = Buffer.from("Site Not Found");
+  const r = await run({
+    overrides: [
+      {
+        match: "GET /ready.txt/",
+        answer: (call) =>
+          call.host.includes("-v01-")
+            ? {
+                outcome: "answered",
+                status: 404,
+                headers: [
+                  ["Content-Type", "text/html; charset=utf-8"],
+                  ["X-Served-By", "cache-nrt-1"],
+                  ["X-Cache", "MISS"],
+                  ["X-Private", fakeSecrets.apiKey],
+                ],
+                body: notFound,
+              }
+            : undefined,
+      },
+    ],
+  });
+  const v01 = deployOf(r).v01;
+  assert.equal(v01.failure, "not-ready");
+  assert.deepEqual(v01.lastProbe, {
+    status: 404,
+    contentType: "text/html; charset=utf-8",
+    xCache: "MISS",
+    xServedBy: "cache-nrt-1",
+    bodyBytes: notFound.length,
+    bodyHead: "Site Not Found",
+  });
+  // the channel read says whether the API still held this version as the channel's release
+  assert.equal(v01.releaseOnChannel, true);
+  assert.equal(
+    r.world.log.filter(
+      (call) => call.method === "GET" && call.url?.endsWith("/channels/hst-abc123-v01"),
+    ).length,
+    1,
+  );
+  noSecrets(r);
+  // a ready version carries neither
+  assert.equal("lastProbe" in deployOf(r).v02, false);
+  assert.equal("releaseOnChannel" in deployOf(r).v02, false);
+});
+
+test("a channel read that does not show this release, or fails, is recorded as such", async () => {
+  const gone = await run({
+    overrides: [
+      {
+        match: "GET /ready.txt/",
+        answer: (call) => (call.host.includes("-v01-") ? answer(404) : undefined),
+      },
+      fault("GET /channels/hst-abc123-v01$/", (_call, state) => {
+        const channel = state.channels.get("hst-abc123-v01");
+        return reply(200, { ...channel, release: { version: { name: "sites/x/versions/other" } } });
+      }),
+    ],
+  });
+  assert.equal(deployOf(gone).v01.releaseOnChannel, false);
+  const failed = await run({
+    overrides: [
+      {
+        match: "GET /ready.txt/",
+        answer: (call) => (call.host.includes("-v01-") ? answer(404) : undefined),
+      },
+      fault("GET /channels/hst-abc123-v01$/", reply(500)),
+    ],
+  });
+  assert.equal(deployOf(failed).v01.releaseOnChannel, "unread");
+  assert.equal(failed.result.outcome, "failed-cleaned");
 });
 
 test("edge timeout, 503 and redirect are retained without retries", async () => {
@@ -1149,4 +1273,48 @@ test("a version name with no usable id cannot be deleted by the run and stays fo
       .length,
     0,
   );
+});
+
+test("the kept head of a probe body is bounded, and an unanswered last probe keeps none", async () => {
+  const big = await run({
+    overrides: [
+      {
+        match: "GET /ready.txt/",
+        answer: (call) =>
+          call.host.includes("-v01-")
+            ? { ...answer(404), body: Buffer.alloc(500, "x") }
+            : undefined,
+      },
+    ],
+  });
+  assert.equal(deployOf(big).v01.lastProbe.bodyBytes, 500);
+  assert.equal(deployOf(big).v01.lastProbe.bodyHead, "x".repeat(200));
+  const silent = await run({
+    overrides: [
+      {
+        match: "GET /ready.txt/",
+        answer: (call, state) => {
+          if (!call.host.includes("-v01-")) return undefined;
+          state.silent = (state.silent ?? 0) + 1;
+          return state.silent < READINESS_ATTEMPTS ? answer(404) : { status: 0 };
+        },
+      },
+    ],
+  });
+  assert.equal(deployOf(silent).v01.readiness.at(-1), "network-error");
+  assert.equal("lastProbe" in deployOf(silent).v01, false);
+  assert.equal(deployOf(silent).v01.releaseOnChannel, true);
+});
+
+test("the channel's release is matched to the version whatever form its name has", async () => {
+  const r = await run({
+    world: { versionNameForm: "number" },
+    overrides: [
+      {
+        match: "GET /ready.txt/",
+        answer: (call) => (call.host.includes("-v01-") ? answer(404) : undefined),
+      },
+    ],
+  });
+  assert.equal(deployOf(r).v01.releaseOnChannel, true);
 });

@@ -439,7 +439,7 @@ impl Harness {
         use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
         let head = format!(
-            "POST /{PROJECT}/us-central1/add HTTP/1.1\r\norigin: http://localhost:5173\r\norigin: https://evil.example\r\nhost: {}\r\ncontent-type: application/json\r\ncontent-length: {body_len}\r\nconnection: close\r\n\r\n",
+            "POST /{PROJECT}/us-central1/add HTTP/1.1\r\nhost: {}\r\nhost: evil.example\r\ncontent-type: application/json\r\ncontent-length: {body_len}\r\nconnection: close\r\n\r\n",
             self.addr
         );
         let mut stream = tokio::net::TcpStream::connect(self.addr).await?;
@@ -471,7 +471,7 @@ impl Harness {
         use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
         let head = format!(
-            "POST /{PROJECT}/us-central1/add HTTP/1.1\r\norigin: http://localhost:5173\r\norigin: https://evil.example\r\nhost: {}\r\ncontent-type: application/json\r\ntransfer-encoding: chunked\r\nconnection: close\r\n\r\n",
+            "POST /{PROJECT}/us-central1/add HTTP/1.1\r\nhost: {}\r\nhost: evil.example\r\ncontent-type: application/json\r\ntransfer-encoding: chunked\r\nconnection: close\r\n\r\n",
             self.addr
         );
         let mut framed = Vec::with_capacity(body_len + body_len / chunk_len * 12 + 16);
@@ -1063,6 +1063,19 @@ async fn support_service_routes_are_isolated_from_the_functions_listener() {
             "{surface} accepted a non-loopback browser origin"
         );
         assert_eq!(response.body, b"forbidden origin");
+        // The support listeners are driven by local pages only and keep refusing a repeated
+        // Origin (unlike a function, which has its own CORS): the value is not a loopback
+        // origin the listener can vouch for. Only the Functions port stopped refusing.
+        let repeated = h
+            .raw_to_from(
+                addr,
+                path,
+                body,
+                Some("http://localhost:5173\r\norigin: http://localhost:5173"),
+            )
+            .await;
+        assert_eq!(repeated.status, 403, "{surface} accepted a repeated Origin");
+        assert_eq!(repeated.body, b"forbidden origin");
     }
 
     eventarc_server.abort();
@@ -1502,30 +1515,145 @@ async fn callable_origin_post_reaches_the_handler_in_the_emulator_profile() {
     .await;
 }
 
+/// A request that names its origin twice reaches the handler in both profiles, as it reaches
+/// the SDK wrapper and a plain Node handler: Node joins the values with `, ` and the wrapper's
+/// CORS middleware reflects the joined value (measured against firebase-functions 7.3.2 with
+/// Node 24 for `onRequest` with and without `cors`, and for `onCall`; a v1 function behaves the
+/// same). The daemon forwards every field in wire order and decides nothing: not the value, not
+/// the case of the header name, not whether the two agree. A browser never sends two, and the
+/// `Host` guard (DNS rebinding) runs before this and is untouched; see
+/// `a_repeated_host_is_still_refused_before_any_function_runs`.
 #[tokio::test]
-async fn ordinary_function_requests_keep_the_existing_ambiguous_origin_refusal() {
+async fn a_repeated_origin_reaches_ordinary_and_callable_functions_in_both_profiles() {
+    let pairs: [&[(&str, &str)]; 5] = [
+        &[
+            ("origin", "http://localhost:5173"),
+            ("origin", "https://evil.example"),
+        ],
+        &[
+            ("origin", "http://localhost:5173"),
+            ("origin", "http://localhost:5173"),
+        ],
+        &[
+            ("Origin", "http://localhost:5173"),
+            ("ORIGIN", "https://evil.example"),
+        ],
+        &[
+            ("origin", "https://evil.example"),
+            ("origin", "http://127.0.0.1:5173"),
+            ("origin", "null"),
+        ],
+        &[("origin", ""), ("origin", "http://localhost:5173")],
+    ];
+    for profile in [
+        fireemu_adapter_functions::http::FunctionsHttpProfile::Emulator,
+        fireemu_adapter_functions::http::FunctionsHttpProfile::Strict,
+    ] {
+        let h = start_with_consume_profile(true, "disabled", profile).await;
+        let token = h.token();
+        for origins in pairs {
+            let wanted: Vec<&str> = origins.iter().map(|(_, value)| *value).collect();
+            for method in ["POST", "GET"] {
+                let response = h.request(method, "echo", origins).await;
+                assert_eq!(
+                    response.status, 200,
+                    "{profile:?} echo {method} {origins:?}"
+                );
+                let body: Value = serde_json::from_slice(&response.body).unwrap();
+                assert_eq!(echoed(&body, "origin"), wanted, "{profile:?} echo {method}");
+            }
+            for function in ["add", "guardedV2"] {
+                let mut headers = origins.to_vec();
+                headers.push(("x-firebase-appcheck", &token));
+                let (status, body) = h.call(function, &headers).await;
+                assert_eq!(status, 200, "{profile:?} {function} {origins:?}: {body}");
+                assert_eq!(echoed(&body, "origin"), wanted, "{profile:?} {function}");
+            }
+        }
+        h.stop().await;
+    }
+}
+
+/// When the daemon itself refuses a callable (a missing App Check token here), it answers a
+/// browser with the origin as the wrapper's CORS middleware would: a repeated `Origin` is
+/// reflected as Node joins it, and the refusal is the callable's own 401, not a 403 of the
+/// daemon's.
+#[tokio::test]
+async fn a_repeated_origin_does_not_change_the_callable_refusal_or_hide_its_cors_answer() {
+    for profile in [
+        fireemu_adapter_functions::http::FunctionsHttpProfile::Emulator,
+        fireemu_adapter_functions::http::FunctionsHttpProfile::Strict,
+    ] {
+        let h = start_with_consume_profile(true, "disabled", profile).await;
+        let single = h
+            .request("POST", "guarded", &[("origin", "http://127.0.0.1:5173")])
+            .await;
+        let repeated = h
+            .request(
+                "POST",
+                "guarded",
+                &[
+                    ("origin", "http://127.0.0.1:5173"),
+                    ("origin", "https://evil.example"),
+                ],
+            )
+            .await;
+        assert_eq!(repeated.status, single.status, "{profile:?}");
+        assert_eq!(repeated.status, 401, "{profile:?}");
+        assert_eq!(repeated.body, single.body, "{profile:?}");
+        assert_eq!(
+            response_header(&repeated, "access-control-allow-origin"),
+            Some("http://127.0.0.1:5173, https://evil.example"),
+            "{profile:?}"
+        );
+        assert_eq!(response_header(&repeated, "vary"), Some("Origin"));
+        // The preflight is the SDK wrapper's, repeated Origin or not.
+        let preflight = h
+            .request(
+                "OPTIONS",
+                "guarded",
+                &[
+                    ("origin", "http://localhost:5173"),
+                    ("origin", "https://evil.example"),
+                ],
+            )
+            .await;
+        assert_eq!(preflight.status, 200, "{profile:?}");
+        h.stop().await;
+    }
+}
+
+/// The DNS-rebinding guard is what keeps a page on an attacker's name away from the functions
+/// port, and it is separate from `Origin`: a repeated `Host` is refused whatever `Origin` says,
+/// and a request with a good `Host` and no `Origin` is served.
+#[tokio::test]
+async fn a_repeated_host_is_still_refused_before_any_function_runs() {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
     let h = start(true).await;
-    for function in ["add", "echo"] {
-        for method in ["POST", "GET"] {
-            let response = h
-                .request(
-                    method,
-                    function,
-                    &[
-                        ("origin", "http://localhost:5173"),
-                        ("origin", "https://evil.example"),
-                    ],
-                )
-                .await;
-            assert_eq!(response.status, 403);
-            assert_eq!(response.body, b"forbidden origin");
+    for (hosts, expected) in [
+        (format!("host: {}\r\nhost: evil.example\r\n", h.addr), 403),
+        (format!("host: {}\r\n", h.addr), 200),
+    ] {
+        let request = format!(
+            "GET /{PROJECT}/us-central1/echo HTTP/1.1\r\n{hosts}origin: http://localhost:5173\r\nconnection: close\r\n\r\n"
+        );
+        let mut stream = tokio::net::TcpStream::connect(h.addr).await.unwrap();
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut raw = Vec::new();
+        stream.read_to_end(&mut raw).await.unwrap();
+        let response = fireemu_adapter_functions::http::parse_response(&raw, "GET").unwrap();
+        assert_eq!(response.status, expected, "{hosts:?}");
+        if expected == 403 {
+            assert_ne!(response.body, b"forbidden origin");
+            assert!(!response.body.is_empty());
         }
     }
     h.stop().await;
 }
 
-/// The refusal is answered from the head alone, and the client may still be sending the body. The
-/// answer must reach it either way: closing with unread request bytes would turn into a TCP reset
+/// The refusal (a repeated `Host`, which the DNS-rebinding guard refuses from the head alone) is
+/// answered before the body is read, and the client may still be sending the body. The answer
+/// must reach it either way: closing with unread request bytes would turn into a TCP reset
 /// that discards the response (seen as `ConnectionReset` on macOS CI).
 #[tokio::test]
 async fn a_refusal_before_the_body_is_read_still_reaches_a_client_that_sends_its_body_late() {
@@ -1539,7 +1667,10 @@ async fn a_refusal_before_the_body_is_read_still_reaches_a_client_that_sends_its
                     panic!("round {round}, a {body_len}-byte body: the response was lost: {error}")
                 });
             assert_eq!(response.status, 403, "round {round}, {body_len} bytes");
-            assert_eq!(response.body, b"forbidden origin");
+            assert!(
+                !response.body.is_empty(),
+                "the Host guard explains its refusal"
+            );
         }
     }
     h.stop().await;
@@ -1563,7 +1694,10 @@ async fn a_refused_chunked_body_of_the_largest_accepted_size_still_gets_its_answ
                     panic!("round {round}, chunks of {chunk_len}: the response was lost: {error}")
                 });
             assert_eq!(response.status, 403, "round {round}, chunks of {chunk_len}");
-            assert_eq!(response.body, b"forbidden origin");
+            assert!(
+                !response.body.is_empty(),
+                "the Host guard explains its refusal"
+            );
         }
     }
     h.stop().await;

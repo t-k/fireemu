@@ -1482,11 +1482,12 @@ fn reload_marker_publication_does_not_expose_partial_json() {
     let target = signals.join("started.json");
     let paused = signals.join("paused");
     let release = signals.join("release");
+    let writer_pid_file = signals.join("writer-pid");
     let script = format!(
         "{}\n{}\n{}",
         r#"
 const fs = require('node:fs');
-const [target, paused, release] = process.argv.slice(1);
+const [target, paused, release, writerPidFile] = process.argv.slice(1);
 const temporary = `${target}.tmp-${process.pid}`;
 const writeFileSync = fs.writeFileSync.bind(fs);
 const appendFile = (file, value) => {
@@ -1497,6 +1498,7 @@ const appendFile = (file, value) => {
 fs.writeFileSync = (file, value, ...options) => {
   if (file !== target && file !== temporary) return writeFileSync(file, value, ...options);
   writeFileSync(file, '{"marker":');
+  writeFileSync(writerPidFile, String(process.pid));
   writeFileSync(paused, '');
   const gate = new Int32Array(new SharedArrayBuffer(4));
   while (!fs.existsSync(release)) Atomics.wait(gate, 0, 0, 10);
@@ -1512,6 +1514,7 @@ fs.writeFileSync = (file, value, ...options) => {
             .arg(&target)
             .arg(&paused)
             .arg(&release)
+            .arg(&writer_pid_file)
             .spawn()
             .unwrap(),
     );
@@ -1524,7 +1527,10 @@ fs.writeFileSync = (file, value, ...options) => {
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
     let final_path_was_visible_before_completion = target.exists();
-    let temporary = PathBuf::from(format!("{}.tmp-{}", target.display(), child.0.id()));
+    // The writer records its own pid before pausing. The test must not use `child.id()`:
+    // under a Volta shim the spawned process is the shim, and the real node is its child.
+    let writer_pid = std::fs::read_to_string(&writer_pid_file).unwrap_or_default();
+    let temporary = PathBuf::from(format!("{}.tmp-{}", target.display(), writer_pid.trim()));
     let temporary_was_visible_before_completion = temporary.exists();
     let temporary_was_partial =
         std::fs::read_to_string(&temporary).is_ok_and(|contents| contents == "{\"marker\":");

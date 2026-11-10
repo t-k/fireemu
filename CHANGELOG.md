@@ -8,6 +8,8 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+## [0.47.0] - 2026-11-10
+
 ### Added
 
 - `network.allowedHosts` in `fireemu.toml`: further `Host` names the emulators answer, each a name, a name with a leading dot for a domain and its subdomains, or `"*"` for every name. Add the names your clients use that the defaults do not cover, such as a tunnel or a name in `/etc/hosts` outside the special-use suffixes.
@@ -1250,7 +1252,8 @@ Security Rules (FS-RULES): behavior below was measured against a real Firestore 
 - The `strict` and `firebase` compatibility profiles, the Capability Manifest, and the Compatibility Contract pinned to firebase-tools 15.28.2.
 - `fireemu init`, `up`, `exec`, `emulators:export`, `doctor`, and `capabilities` commands, with the official `emulators:start` and `emulators:exec` spellings as aliases.
 
-[Unreleased]: https://github.com/t-k/fireemu/compare/v0.46.0...HEAD
+[Unreleased]: https://github.com/t-k/fireemu/compare/v0.47.0...HEAD
+[0.47.0]: https://github.com/t-k/fireemu/compare/v0.46.0...v0.47.0
 [0.46.0]: https://github.com/t-k/fireemu/compare/v0.45.0...v0.46.0
 [0.45.0]: https://github.com/t-k/fireemu/compare/v0.44.0...v0.45.0
 [0.44.0]: https://github.com/t-k/fireemu/compare/v0.43.0...v0.44.0

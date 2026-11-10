@@ -20,7 +20,7 @@ The same settings can be written as TOML (`fireemu.toml`) or JSON (`fireemu.json
 | `firestore` | Edition, API mode, indexes, limits, history | [Cloud Firestore](../../products/firestore/) |
 | `rules` | Firestore Security Rules source, and the denial log for Firestore and Storage | [Security Rules](../../guides/security-rules/) |
 | `auth` | Sign-in methods, password policy, MFA, tenants, providers, tokens, and whether the Firestore, Storage and Realtime Database Security Rules surfaces accept unsigned mock ID tokens (`allowUnsignedIdTokens`) | [Authentication](../../products/auth/) |
-| `storage` | Storage Security Rules and stored-byte limit | [Cloud Storage](../../products/storage/) |
+| `storage` | Storage Security Rules, object size and memory limits | [Cloud Storage](../../products/storage/) |
 | `database` | What a Realtime Database instance without a rules file allows (`defaultAccess`); `auth.allowUnsignedIdTokens` decides, in both profiles, whether its rules accept `@firebase/rules-unit-testing` mock tokens | [Realtime Database](../../products/realtime-database/) |
 | `functions` | Codebase, runner, application clock, unserved triggers, a fixed list of served functions (`manifest`) | [Cloud Functions](../../products/functions/) |
 | `scheduler` | Time zone, catch-up and overlap of scheduled functions | [Time and scheduled functions](../../guides/time/) |
@@ -33,3 +33,7 @@ The same settings can be written as TOML (`fireemu.toml`) or JSON (`fireemu.json
 | `limits` | Reserved for limit catalogs, warnings, quota accounting and plan overrides. No member changes behavior yet: each is accepted with no effect, or accepts only its empty or default value and refuses any other. Firestore's limits are switched by `firestore.enforceLimits` | |
 | `events` | Delivery of function trigger events: `maxAttempts` for functions declared with `retry` (default 4); `delivery` accepts only `exactly-once-test` | [Profiles and productionExact](../../guides/profiles/) |
 | `trace` | Accepted, currently no effect | |
+
+## Storage size limits
+
+`storage.maxObjectBytes` sets the maximum size of one object (default 268435456 bytes, maximum 2143289343). The request body cap is this value plus 4194304 bytes. `storage.bufferedBodyBudgetBytes` sets the process-wide budget for buffered Storage request bodies (default 1073741824 bytes, maximum 2147483647). Both values must be positive whole numbers. See [Cloud Storage](../../products/storage/) for the separate stored-byte and resumable-upload limits.

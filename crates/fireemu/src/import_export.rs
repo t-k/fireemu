@@ -459,6 +459,7 @@ pub fn prepare(
     products: Products,
     project: &str,
     rtdb_lone_surrogates: bool,
+    storage_max_object_bytes: u64,
 ) -> Result<Prepared, ArtifactError> {
     ensure_directory_inside(dir, dir).map_err(|e| ArtifactError::new("import", dir, e))?;
     let manifest_path = dir.join(METADATA_FILE_NAME);
@@ -514,7 +515,13 @@ pub fn prepare(
                 prepared.firestore_field_config = read_field_config(dir)?;
             }
             Product::Auth => prepared.auth = Some(read_auth_section(dir, section, project)?),
-            Product::Storage => prepared.storage = Some(read_storage_section(dir, section)?),
+            Product::Storage => {
+                prepared.storage = Some(read_storage_section(
+                    dir,
+                    section,
+                    storage_max_object_bytes,
+                )?);
+            }
             Product::Database => {
                 prepared.database =
                     Some(read_database_section(dir, section, rtdb_lone_surrogates)?);
@@ -2760,13 +2767,14 @@ fn read_storage_blob(
     remaining_bytes: &mut u64,
     object: &str,
     expected_size: u64,
+    max_object_bytes: u64,
 ) -> Result<Vec<u8>, ArtifactError> {
     let bytes = read_inside_budgeted(
         dir,
         path,
         remaining_bytes,
         IMPORT_STORAGE_TOTAL_BYTES_LIMIT,
-        fireemu_core_storage::store::MAX_OBJECT_BYTES,
+        max_object_bytes,
         "Storage files",
     )
     .map_err(|error| {
@@ -2867,7 +2875,11 @@ fn read_database_section_within(
     Ok(namespaces)
 }
 
-fn read_storage_section(dir: &Path, section: &Section) -> Result<PreparedStorage, ArtifactError> {
+fn read_storage_section(
+    dir: &Path,
+    section: &Section,
+    max_object_bytes: u64,
+) -> Result<PreparedStorage, ArtifactError> {
     let section_dir = dir.join(&section.path);
     scan_storage_import_tree(dir, &section_dir)?;
     let mut remaining_bytes = IMPORT_STORAGE_TOTAL_BYTES_LIMIT;
@@ -2941,9 +2953,7 @@ fn read_storage_section(dir: &Path, section: &Section) -> Result<PreparedStorage
                 "it is a symlink, which an import never follows",
             ));
         }
-        if blob_meta.len() > fireemu_core_storage::store::MAX_OBJECT_BYTES
-            || blob_meta.len() != meta.size
-        {
+        if blob_meta.len() > max_object_bytes || blob_meta.len() != meta.size {
             return Err(ArtifactError::new(
                 "storage",
                 &blob_path,
@@ -2953,8 +2963,14 @@ fn read_storage_section(dir: &Path, section: &Section) -> Result<PreparedStorage
                 ),
             ));
         }
-        let bytes =
-            read_storage_blob(dir, &blob_path, &mut remaining_bytes, &meta.name, meta.size)?;
+        let bytes = read_storage_blob(
+            dir,
+            &blob_path,
+            &mut remaining_bytes,
+            &meta.name,
+            meta.size,
+            max_object_bytes,
+        )?;
         objects.push((imported_object(&meta, &path)?, bytes));
     }
     Ok((objects, buckets.buckets))
@@ -5844,6 +5860,7 @@ mod tests {
             },
             "demo-app",
             false,
+            fireemu_core_storage::store::MAX_OBJECT_BYTES,
         )
         .expect("Auth export is prepared");
         super::apply(prepared, &destination_endpoints).expect("Auth import succeeds");

@@ -5149,6 +5149,82 @@ async fn a_body_over_the_object_boundary_is_refused_without_buffering_it() {
     server.abort();
 }
 
+/// Starts a server whose store holds `max_object_bytes`, sends one media upload of `len` bytes
+/// (or only its head when `body` is false) and returns the response.
+async fn upload_with_object_limit(
+    budget: &'static BodyBudget,
+    max_object_bytes: u64,
+    len: usize,
+    body: bool,
+) -> String {
+    use tokio::io::AsyncWriteExt;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let shared = Arc::new(state(None));
+    shared
+        .store
+        .lock()
+        .unwrap()
+        .set_max_object_bytes(max_object_bytes);
+    let server = tokio::spawn(serve_storage_with_budget(listener, shared, budget));
+    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    stream
+        .write_all(upload_head("limited.bin", len).as_bytes())
+        .await
+        .unwrap();
+    if body {
+        stream.write_all(&vec![7u8; len]).await.unwrap();
+    }
+    let response = read_response(&mut stream).await;
+    server.abort();
+    response
+}
+
+#[tokio::test]
+async fn a_configured_object_limit_admits_the_limit_and_refuses_one_byte_more() {
+    static BUDGET: BodyBudget = BodyBudget::new(1_572_864);
+    let at = upload_with_object_limit(&BUDGET, 10, 10, true).await;
+    assert!(at.starts_with("HTTP/1.1 200"), "{at}");
+    let over = upload_with_object_limit(&BUDGET, 10, 11, true).await;
+    assert!(over.starts_with("HTTP/1.1 413"), "{over}");
+    assert!(over.contains("object too large"), "{over}");
+    let raised = upload_with_object_limit(&BUDGET, 11, 11, true).await;
+    assert!(raised.starts_with("HTTP/1.1 200"), "{raised}");
+    assert_eq!(BUDGET.in_flight(), 0);
+}
+
+#[tokio::test]
+async fn the_body_cap_follows_the_configured_object_limit() {
+    static BUDGET: BodyBudget = BodyBudget::new(1_572_864);
+    // A lowered limit lowers the body cap: the head alone is refused, nothing is charged.
+    let lowered = fireemu_adapter_http::storage_server::body_cap_for_object_limit(10).unwrap();
+    let refused = upload_with_object_limit(&BUDGET, 10, lowered + 1, false).await;
+    assert!(refused.starts_with("HTTP/1.1 413"), "{refused}");
+    assert_eq!(BUDGET.in_flight(), 0);
+    // A raised limit admits a body past the default cap; the 1.5 MiB budget then refuses it.
+    let raised = upload_with_object_limit(
+        &BUDGET,
+        300 * 1024 * 1024,
+        MAX_STORAGE_BODY_BYTES + 1,
+        false,
+    )
+    .await;
+    assert!(raised.starts_with("HTTP/1.1 503"), "{raised}");
+    assert_eq!(BUDGET.in_flight(), 0);
+}
+
+proptest::proptest! {
+    #[test]
+    fn the_body_cap_is_the_object_limit_plus_the_overhead(limit in 0_u64..=u64::MAX) {
+        use fireemu_adapter_http::storage_server::{body_cap_for_object_limit, BODY_OVERHEAD_BYTES};
+        let cap = body_cap_for_object_limit(limit);
+        match usize::try_from(limit).ok().and_then(|l| l.checked_add(BODY_OVERHEAD_BYTES)) {
+            Some(expected) => proptest::prop_assert_eq!(cap, Some(expected)),
+            None => proptest::prop_assert_eq!(cap, None),
+        }
+    }
+}
+
 #[tokio::test]
 async fn a_failed_upload_releases_its_buffer() {
     use tokio::io::AsyncWriteExt;

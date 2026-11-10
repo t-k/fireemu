@@ -8,6 +8,10 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Changed
+
+- Storage: configure the per-object size cap and process-wide buffered-body budget with `storage.maxObjectBytes` and `storage.bufferedBodyBudgetBytes`; defaults remain 256 MiB and 1 GiB.
+
 ### Fixed
 
 - Emulator profile: an ID token firebase-tools 15.28.2 accepts is no longer refused for its time claims, and the profile now follows its `parseIdToken` (`operations.js:1727`) for revocation. The only time claim compared is `iat`, and only for an account that has a `validSince`: `iat` is read as JavaScript's `Number(iat)` reads it (a numeric string, a fraction, `Infinity`, a one-element array, `null` and `false` compare as the numbers they are), a value that is no number fails the comparison with `TOKEN_EXPIRED`, and a usable `auth_time` never stands in for it. `auth_time` is never read, and `iat` is not read for an account without a `validSince`, so a token with neither is accepted for an anonymous, custom-token, federated or passwordless Admin-created account. The accounts with a `validSince` are those firebase-tools gives one: a password was set (also a removed one), tokens were revoked (an email change through `accounts:update` and a disable revoke too), or the account was imported. `exp` is still checked when it is a number after `Number(exp)` (`false`, `null` and `[1]` are 0 and 1, `"-Infinity"` is expired; 300 s allowance on Identity Toolkit, 30 s on Firestore), and only an `exp` that is missing or `NaN` is none. This applies to Identity Toolkit, Firestore Rules and Storage Rules. The `strict` profile still requires an integer `iat`, `auth_time` and `exp`. Known difference: a fireemu-issued token refreshed from an older sign-in carries the old `auth_time`; the emulator profile now judges it by its `iat`, as firebase-tools does.

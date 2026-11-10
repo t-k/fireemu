@@ -111,7 +111,9 @@ In the measured rules, this also permits listing the ancestor's child prefixes. 
 
 ## Limit the stored bytes
 
-The Storage emulator keeps every object in memory, and by default nothing bounds how much. To cap it, set `storage.maxStoredBytes`. This limit is local to Fireemu; production has none:
+Each object is limited to 256 MiB by default. Set `storage.maxObjectBytes` to change that limit; the HTTP request body limit is 4 MiB larger to allow multipart overhead. `storage.bufferedBodyBudgetBytes` bounds the request bodies buffered across the process and defaults to 1 GiB. Requests that exceed the available budget receive HTTP 503 with `Retry-After: 1`. Both settings accept positive whole numbers of bytes; the maximum is 2143289343 for `maxObjectBytes` and 2147483647 for `bufferedBodyBudgetBytes`. A budget smaller than a request can refuse it even when the object is within its limit. Resumable uploads also have a separate 1 GiB aggregate retained-upload limit, and import has a separate 1 GiB total limit.
+
+The Storage emulator keeps every object in memory, and by default nothing bounds their combined stored size. To cap it, set `storage.maxStoredBytes`. This limit is local to Fireemu; production has none:
 
 <Tabs syncKey="config-format">
 <TabItem label="TOML">

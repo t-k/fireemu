@@ -1209,6 +1209,61 @@ fn every_failure_class_is_caught() {
 }
 
 #[test]
+fn blocking_auth_safety_bounds_are_registered() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let contract: Value = serde_json::from_str(
+        &fs::read_to_string(root.join("spec/compatibility/contract.json")).unwrap(),
+    )
+    .unwrap();
+    let auth = contract["surfaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|surface| surface["id"] == "auth")
+        .unwrap();
+    let claim = auth["claims"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|claim| claim["id"] == "AUTH-CLAIM-BLOCKING-FUNCTIONS")
+        .unwrap();
+    let entries = claim["fireemuOnly"].as_array().unwrap();
+    for (symbol, precision, details) in [
+        (
+            "dispatch_with_blocking_hook",
+            "documented-divergence",
+            "identity changed while the hook was running",
+        ),
+        (
+            "blocking_auth_overload_response",
+            "resource-safety-divergence",
+            "request_concurrency_limit",
+        ),
+        (
+            "MAX_BLOCKING_AUTH_RESPONSE_BYTES",
+            "resource-safety-divergence",
+            "64 KiB",
+        ),
+    ] {
+        assert!(
+            entries.iter().any(|entry| {
+                entry["precision"] == precision
+                    && entry["behaviour"].as_str().is_some_and(|text| {
+                        text.contains(symbol)
+                            && text.contains(details)
+                            && text.contains("both profiles")
+                    })
+            }),
+            "missing blocking Auth safety bound: {symbol}"
+        );
+    }
+}
+
+#[test]
 fn the_repository_matches_its_compatibility_contract() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()

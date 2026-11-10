@@ -813,6 +813,9 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
             }
         },
         client_api_key: match cfg.profile {
+            crate::config::CompatibilityProfile::Emulator if cfg.auth_require_client_api_key => {
+                fireemu_adapter_http::identity_toolkit::ClientApiKeyPolicy::EmulatorRequired
+            }
             crate::config::CompatibilityProfile::Emulator => {
                 fireemu_adapter_http::identity_toolkit::ClientApiKeyPolicy::Optional
             }

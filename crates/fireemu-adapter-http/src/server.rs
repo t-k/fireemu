@@ -89,10 +89,31 @@ async fn respond(
                 .unwrap_or_else(|_| Response::new(Full::new(Bytes::new()))),
         );
     }
-    let path = req
+    let mut path = req
         .uri()
         .path_and_query()
         .map_or_else(|| req.uri().path().to_owned(), |pq| pq.as_str().to_owned());
+    // The emulator accepts the API key header as an alternative to the query key.
+    // Leave strict profile routing unchanged.
+    if state.stateless_refresh_tokens
+        && (path.starts_with("/identitytoolkit.googleapis.com/")
+            || path.starts_with("/securetoken.googleapis.com/"))
+        && !path.split_once('?').is_some_and(|(_, query)| {
+            query
+                .split('&')
+                .any(|part| part.split('=').next() == Some("key"))
+        })
+    {
+        if let Some(key) = req
+            .headers()
+            .get("x-goog-api-key")
+            .and_then(|v| v.to_str().ok())
+        {
+            path.push(if path.contains('?') { '&' } else { '?' });
+            path.push_str("key=");
+            path.push_str(&crate::identity_toolkit::percent_encode(key));
+        }
+    }
     if method == "GET" && path == "/" {
         return Ok(finish(
             200,

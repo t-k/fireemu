@@ -794,10 +794,12 @@ pub enum AuthQueryLimits {
 /// Whether client routes admit a caller that presents neither an API key nor a credential.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientApiKeyPolicy {
-    /// Match the Firebase Auth Emulator, which serves keyless client requests.
+    /// Serve keyless client requests as a local extension.
     Optional,
     /// Refuse them as production's API front end does ("unregistered callers").
     Required,
+    /// Refuse them with the official Auth emulator response.
+    EmulatorRequired,
 }
 
 /// Whether this embedding exposes bounded local `pendingToken` continuation handles.
@@ -3875,13 +3877,12 @@ fn emulator_creates_named_tenant(
     // the store selection itself, not by a copy of its rules) makes nothing here and is admitted
     // by App Check for the project it is served from, by the pipeline. A selection that fails
     // (a tenant not made yet) or lands in this project goes on.
-    if let Ok(store) = select_store(state, routing, path, query, body, resolution) {
-        if store
+    if select_store(state, routing, path, query, body, resolution).is_ok_and(|store| {
+        store
             .lock()
             .is_ok_and(|store| store.project_id() != project)
-        {
-            return Ok(None);
-        }
+    }) {
+        return Ok(None);
     }
     let path_tenant = routes::scoped_target(path).and_then(|(_, tenant)| tenant);
     let body_tenant = match body.get("tenantId") {
@@ -3925,6 +3926,17 @@ fn emulator_creates_named_tenant(
     };
     if registry.tenant_store(&project, &target).is_some() {
         return Ok(None);
+    }
+    if route.class == routes::RouteClass::EndUser
+        && !request.api_key
+        && request.headers.authorization.is_none()
+    {
+        let response = missing_tenant(registry, &project, &target);
+        return Err(if route.handler == routes::Handler::Token {
+            secure_token_error_shape(response)
+        } else {
+            response
+        });
     }
     let Some(CreationParent { parent, candidate }) =
         creation_parent(state, registry, &project, path)
@@ -4346,7 +4358,9 @@ fn handle_with_policy_inner(
     // Production's API front end answers a caller without identity before the service reads
     // any selector, tenant or body (sandbox recording 2026-09-23).
     if let Err(response) = caller_identity_check(state, resolution, headers, api_key) {
-        return if api_service(path) == "securetoken.googleapis.com" {
+        return if api_service(path) == "securetoken.googleapis.com"
+            && state.client_api_key != ClientApiKeyPolicy::EmulatorRequired
+        {
             secure_token_error_shape(response)
         } else {
             response
@@ -5345,6 +5359,19 @@ fn caller_identity_check(
             if state.client_api_key == ClientApiKeyPolicy::Required && !api_key =>
         {
             Err(unregistered_caller())
+        }
+        routes::RouteClass::EndUser
+            if state.client_api_key == ClientApiKeyPolicy::EmulatorRequired && !api_key =>
+        {
+            // firebase-tools 15.28.2: conformance/node_modules/firebase-tools/lib/emulator/auth/server.js:232
+            // and conformance/node_modules/firebase-tools/lib/emulator/auth/errors.js:43-45.
+            let message = "The request is missing a valid API key.";
+            Err(JsonResponse {
+                status: 403,
+                body: json!({"error": {"code": 403, "message": message,
+                    "errors": [{"message": message, "reason": "forbidden", "domain": "global"}],
+                    "status": "PERMISSION_DENIED"}}),
+            })
         }
         _ => Ok(()),
     }
@@ -13596,7 +13623,7 @@ fn oob_link(
     link
 }
 
-fn percent_encode(s: &str) -> String {
+pub(crate) fn percent_encode(s: &str) -> String {
     use std::fmt::Write as _;
     s.bytes()
         .fold(String::with_capacity(s.len()), |mut out, b| {

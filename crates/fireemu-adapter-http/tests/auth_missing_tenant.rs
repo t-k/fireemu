@@ -1297,3 +1297,64 @@ fn keyless_client_does_not_create_a_missing_tenant() {
         .tenant_store("demo-app", "keyless-missing")
         .is_none());
 }
+
+#[test]
+fn keyless_existing_tenant_and_keyed_missing_tenant_are_served() {
+    let (state, registry) = emulator();
+    registry.ensure_tenant("demo-app", "existing").unwrap();
+    let existing = handle(
+        &state,
+        "POST",
+        &format!("{V1}/accounts:signUp"),
+        &json!({"tenantId": "existing"}),
+    );
+    assert_eq!(existing.status, 200, "{}", existing.body);
+    let (status, body) = client(
+        &state,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"tenantId": "keyed-new"}),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert!(registry.tenant_store("demo-app", "keyed-new").is_some());
+}
+
+#[test]
+fn emulator_key_requirement_refuses_without_creating_state() {
+    let (mut state, registry) = emulator();
+    state.client_api_key = ClientApiKeyPolicy::EmulatorRequired;
+    let before = tenant_names(&state, "demo-app");
+    let message = "The request is missing a valid API key.";
+    for path in [format!("{V1}/accounts:signUp"), SECURE_TOKEN.to_owned()] {
+        let response = handle(&state, "POST", &path, &json!({"tenantId": "missing"}));
+        assert_eq!(response.status, 403);
+        assert_eq!(
+            response.body,
+            json!({"error": {"code": 403, "message": message, "errors": [{"message": message, "reason": "forbidden", "domain": "global"}], "status": "PERMISSION_DENIED"}})
+        );
+    }
+    assert_eq!(tenant_names(&state, "demo-app"), before);
+    assert!(registry.tenant_store("demo-app", "missing").is_none());
+    let (status, body) = client(
+        &state,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"tenantId": "keyed"}),
+    );
+    assert_eq!(status, 200, "{body}");
+}
+
+#[test]
+fn strict_keyless_client_still_gets_production_refusal() {
+    let (_, state, registry) = profiles().into_iter().nth(1).unwrap();
+    let response = handle(
+        &state,
+        "POST",
+        &format!("{V1}/accounts:signUp"),
+        &json!({"tenantId": "missing"}),
+    );
+    assert_eq!(response.status, 403);
+    assert!(response.body["error"]["message"]
+        .as_str()
+        .unwrap()
+        .starts_with("Method doesn't allow unregistered callers"));
+    assert!(registry.tenant_store("demo-app", "missing").is_none());
+}

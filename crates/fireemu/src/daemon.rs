@@ -67,6 +67,7 @@ struct BoundStartup {
     app_check_gate: Option<fireemu_core_app_check::AppCheckGate>,
     callable_trusted_protocol: bool,
     functions_runtime: Option<Arc<fireemu_adapter_functions::runtime::FunctionsRuntime>>,
+    blocking_signer: Option<Arc<fireemu_adapter_http::signing::RsaSigner>>,
 }
 
 struct ServiceAssembly {
@@ -551,6 +552,7 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
         app_check_gate,
         callable_trusted_protocol,
         functions_runtime,
+        blocking_signer,
     } = bound;
     let Listeners {
         firestore: grpc_listener,
@@ -776,7 +778,10 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
                         restrictions,
                     )
                     .map_err(|error| format!("auth.blockingFunctions: {error}"))?
-                    .for_profile(cfg.profile),
+                    .for_profile(cfg.profile)
+                    .with_production_token(
+                        blocking_signer.clone().map(|s| s as Arc<dyn IdTokenSigner>),
+                    ),
                 )
                     as Arc<
                         dyn fireemu_adapter_http::identity_toolkit::AuthBlockingHook,
@@ -2188,13 +2193,20 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         // the operating system CSPRNG once per daemon instance (spec 7.2).
         let want_auth_key = only.uses_auth_identity()
             && cfg.id_token_signing == fireemu_core_auth::jwt::SigningMode::SessionRsa;
+        let want_blocking_key = cfg.profile == crate::config::CompatibilityProfile::Strict
+            && cfg.functions_auth_blocking_token == crate::config::AuthBlockingToken::Production
+            && only.functions && only.auth;
         let want_app_check = only.app_check_available(&cfg.app_check);
-        if (want_auth_key || (want_app_check && !cfg.app_check.implicit())) && !quiet {
+        if (want_auth_key || want_blocking_key || (want_app_check && !cfg.app_check.implicit())) && !quiet {
             println!("  generating the RSA signing keys ...");
         }
         let auth_key = want_auth_key.then(|| {
             let seed = cfg.seed ^ 0x2256;
             tokio::task::spawn_blocking(move || session_rsa_cache::load_or_generate(seed))
+        });
+        let blocking_key = want_blocking_key.then(|| {
+            let seed = cfg.seed ^ 0xB10C;
+            tokio::task::spawn_blocking(move || fireemu_adapter_http::signing::RsaSigner::from_seed(seed))
         });
         // The development default serves App Check without anyone asking for it, so its key is
         // generated when something first needs it; an App Check the configuration enables is
@@ -2409,6 +2421,15 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         // The runner's functions see exactly the services this run selected: an unselected
         // one leaves its variable unset there too, so a handler cannot reach a product the
         // suite is not running.
+        let blocking_signer = if let Some(task) = blocking_key {
+            let signer = task.await.map_err(|e| format!("blocking RSA key: {e}"))??;
+            if !quiet {
+                println!("  blocking tokens:  production (RS256 kid {}), key held in memory only", signer.kid());
+            }
+            Some(signer)
+        } else {
+            None
+        };
         let functions_runtime = match functions_listener.as_ref() {
             Some(_) => Some(
                 functions::start(
@@ -2416,6 +2437,7 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                     &clock,
                     &backend,
                     &functions::EmulatorHosts {
+                        blocking_jwks: blocking_signer.as_ref().map(|signer| signer.jwks().to_string()),
                         app_check: want_app_check.then(|| addrs.control.to_string()),
                         firestore: grpc_addr.map(|a| a.to_string()),
                         auth: addrs.auth.map(|a| a.to_string()),
@@ -2500,6 +2522,7 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                 app_check_gate,
                 callable_trusted_protocol,
                 functions_runtime,
+                blocking_signer,
             })?;
         let ready = assemble_suite(assembly, exec.is_some())?;
         serve_suite(ready, exec, signals, ready_file, owner_stdin).await

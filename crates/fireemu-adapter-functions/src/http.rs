@@ -278,13 +278,24 @@ fn accepts_callable_stream(headers: &hyper::HeaderMap) -> bool {
 }
 
 /// The `Origin` of a request to a support listener (Eventarc, Cloud Tasks), which only a
-/// local page may drive: more than one is refused rather than resolved to one of them.
+/// local page may drive. The official emulator has no Origin check there and reflects whatever
+/// Node hands its `cors({ origin: true })`, every field joined with `, `; fireemu keeps its
+/// local-page guard and decides it over the whole set of values: the request is local only if
+/// EVERY value is local, in any order, so a local value can never vouch for a foreign one. A
+/// repeated Origin is not refused as such, and the joined value is what an ACAO reflection echoes.
 fn request_origin(headers: &hyper::HeaderMap) -> Result<Option<String>, Refusal> {
-    let origins = field_values(headers, "origin");
-    if origins.len() > 1 {
-        return Err(Box::new(simple(StatusCode::FORBIDDEN, "forbidden origin")));
+    support_origins(&field_values(headers, "origin"))
+        .map_err(|()| Box::new(simple(StatusCode::FORBIDDEN, "forbidden origin")))
+}
+
+/// The decision of [`request_origin`] over the Origin values in wire order (an unrenderable value
+/// is the empty string, which is not local): `Err` when any value is not local, otherwise the
+/// joined value, or `None` when the request has no Origin.
+fn support_origins(origins: &[String]) -> Result<Option<String>, ()> {
+    if origins.iter().any(|origin| !origin_is_local(origin)) {
+        return Err(());
     }
-    Ok(origins.into_iter().next())
+    Ok((!origins.is_empty()).then(|| origins.join(", ")))
 }
 
 /// The `Origin` a Functions request is answered for, where the daemon echoes one: the SDK
@@ -1695,12 +1706,6 @@ async fn respond_support_request(
         Ok(origin) => origin,
         Err(refusal) => return *refusal,
     };
-    if origin
-        .as_deref()
-        .is_some_and(|value| !origin_is_local(value))
-    {
-        return simple(StatusCode::FORBIDDEN, "forbidden origin");
-    }
     respond_support_surface(
         runtime,
         channels,
@@ -2059,6 +2064,56 @@ pub async fn serve_tasks(
         Arc::new(crate::eventarc_channels::ChannelStore::default()),
     )
     .await
+}
+
+#[cfg(test)]
+mod support_origin_tests {
+    use super::support_origins;
+    use proptest::prelude::*;
+
+    /// A value the local-origin check accepts, or one it must not.
+    fn origin() -> impl Strategy<Value = (String, bool)> {
+        prop_oneof![
+            (1u16..=65535).prop_map(|port| (format!("http://localhost:{port}"), true)),
+            (1u16..=65535).prop_map(|port| (format!("https://127.0.0.1:{port}"), true)),
+            (1u16..=65535).prop_map(|port| (format!("http://[::1]:{port}"), true)),
+            proptest::sample::select(vec![
+                "https://evil.example",
+                "http://localhost.evil.example",
+                "http://localhost@evil.example",
+                "null",
+                "",
+                "http://localhost:1/path",
+            ])
+            .prop_map(|value| (value.to_owned(), false)),
+        ]
+    }
+
+    proptest! {
+        /// The set is local iff every value is; the order never matters; the accepted answer
+        /// is the `, `-joined value in wire order.
+        #[test]
+        fn a_set_of_origins_is_local_only_if_every_value_is_local(
+            values in proptest::collection::vec(origin(), 0..20),
+            seed in any::<u64>(),
+        ) {
+            let origins: Vec<String> = values.iter().map(|(origin, _)| origin.clone()).collect();
+            let all_local = values.iter().all(|(_, local)| *local);
+            let decision = support_origins(&origins);
+            if all_local {
+                prop_assert_eq!(decision, Ok((!origins.is_empty()).then(|| origins.join(", "))));
+            } else {
+                prop_assert_eq!(decision, Err(()));
+            }
+            let mut rotated = origins.clone();
+            if !rotated.is_empty() {
+                let by = usize::try_from(seed % rotated.len() as u64).expect("a small index");
+                rotated.rotate_left(by);
+                rotated.reverse();
+            }
+            prop_assert_eq!(support_origins(&rotated).is_ok(), all_local);
+        }
+    }
 }
 
 #[cfg(test)]

@@ -624,6 +624,33 @@ impl Harness {
         response_after_read(&raw, read, "POST").expect("a well-formed response")
     }
 
+    async fn raw_support_headers(
+        &self,
+        addr: std::net::SocketAddr,
+        method: &str,
+        path: &str,
+        body: &[u8],
+        headers: &[u8],
+    ) -> fireemu_adapter_functions::http::ProxiedResponse {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+        let mut request = format!("{method} {path} HTTP/1.1\r\nhost: {addr}\r\n").into_bytes();
+        request.extend_from_slice(headers);
+        request.extend_from_slice(
+            format!(
+                "content-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                body.len()
+            )
+            .as_bytes(),
+        );
+        request.extend_from_slice(body);
+        let mut stream = tokio::net::TcpStream::connect(addr).await.expect("connect");
+        stream.write_all(&request).await.expect("request");
+        let mut raw = Vec::new();
+        let read = stream.read_to_end(&mut raw).await;
+        response_after_read(&raw, read, method).expect("response")
+    }
+
     async fn raw_to_from(
         &self,
         addr: std::net::SocketAddr,
@@ -1063,9 +1090,7 @@ async fn support_service_routes_are_isolated_from_the_functions_listener() {
             "{surface} accepted a non-loopback browser origin"
         );
         assert_eq!(response.body, b"forbidden origin");
-        // The support listeners are driven by local pages only and keep refusing a repeated
-        // Origin (unlike a function, which has its own CORS): the value is not a loopback
-        // origin the listener can vouch for. Only the Functions port stopped refusing.
+        // Every Origin on a support listener must be local.
         let repeated = h
             .raw_to_from(
                 addr,
@@ -1074,12 +1099,169 @@ async fn support_service_routes_are_isolated_from_the_functions_listener() {
                 Some("http://localhost:5173\r\norigin: http://localhost:5173"),
             )
             .await;
-        assert_eq!(repeated.status, 403, "{surface} accepted a repeated Origin");
-        assert_eq!(repeated.body, b"forbidden origin");
+        let single = h
+            .raw_to_from(addr, path, body, Some("http://localhost:5173"))
+            .await;
+        assert_eq!(repeated.status, single.status, "{surface}");
+        let mixed = h
+            .raw_to_from(
+                addr,
+                path,
+                body,
+                Some("http://localhost:5173\r\norigin: https://attacker.example"),
+            )
+            .await;
+        assert_eq!(mixed.status, 403, "{surface}");
+        assert_eq!(mixed.body, b"forbidden origin");
     }
 
     eventarc_server.abort();
     tasks_server.abort();
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn support_origins_require_every_value_to_be_local() {
+    use fireemu_adapter_functions::http::{FunctionsHttpProfile, HttpAdmission};
+
+    let h = start(true).await;
+    for profile in [FunctionsHttpProfile::Emulator, FunctionsHttpProfile::Strict] {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(
+            fireemu_adapter_functions::http::serve_eventarc_with_profile(
+                listener,
+                h.runtime.clone(),
+                HttpAdmission::new(),
+                profile,
+            ),
+        );
+        let path = "/google/publishEvents";
+        let body = br#"{"events":[]}"#;
+        let single = h
+            .raw_support_headers(
+                addr,
+                "POST",
+                path,
+                body,
+                b"origin: http://localhost:5173\r\n",
+            )
+            .await;
+        assert_eq!(single.status, 200);
+        assert_eq!(
+            h.raw_support_headers(addr, "POST", path, body, b"")
+                .await
+                .status,
+            single.status
+        );
+        let local = b"origin: http://localhost:5173\r\norigin: http://127.0.0.1:8080\r\n";
+        assert_eq!(
+            h.raw_support_headers(addr, "POST", path, body, local)
+                .await
+                .status,
+            single.status
+        );
+        for headers in [
+            b"origin: http://localhost:5173\r\norigin: https://evil.example\r\n".as_slice(),
+            b"origin: https://evil.example\r\norigin: http://localhost:5173\r\n",
+            b"origin: https://evil.example\r\norigin: https://other.example\r\n",
+            b"origin: http://localhost:5173\r\norigin: \x80\r\n",
+            b"origin: https://evil.example\r\n",
+        ] {
+            let response = h
+                .raw_support_headers(addr, "POST", path, body, headers)
+                .await;
+            assert_eq!(response.status, 403);
+            assert_eq!(response.body, b"forbidden origin");
+        }
+        let get = h
+            .raw_support_headers(addr, "GET", "/google/getTriggers", b"", local)
+            .await;
+        assert_eq!(get.status, 200);
+        assert_eq!(
+            response_header(&get, "access-control-allow-origin"),
+            Some("http://localhost:5173, http://127.0.0.1:8080")
+        );
+        let mixed = h
+            .raw_support_headers(
+                addr,
+                "GET",
+                "/google/getTriggers",
+                b"",
+                b"origin: http://localhost:5173\r\norigin: https://evil.example\r\n",
+            )
+            .await;
+        assert_eq!(mixed.status, 403);
+        assert_eq!(response_header(&mixed, "access-control-allow-origin"), None);
+        if profile == FunctionsHttpProfile::Emulator {
+            let host = h.raw_support_headers(addr, "POST", path, body, b"host: localhost\r\norigin: http://localhost:5173\r\norigin: http://127.0.0.1:8080\r\n").await;
+            assert_eq!(host.status, 403);
+            assert_ne!(host.body, b"forbidden origin");
+        }
+        server.abort();
+    }
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn tasks_support_origins_require_every_value_to_be_local() {
+    use fireemu_adapter_functions::http::HttpAdmission;
+
+    let h = start(true).await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(fireemu_adapter_functions::http::serve_tasks(
+        listener,
+        h.runtime.clone(),
+        HttpAdmission::new(),
+    ));
+    let path = "/projects/demo-app/locations/us-central1/queues/taskA";
+    let body = b"{}";
+    let single = h
+        .raw_support_headers(
+            addr,
+            "POST",
+            path,
+            body,
+            b"origin: http://localhost:5173\r\n",
+        )
+        .await;
+    assert_eq!(single.status, 404);
+    assert_eq!(
+        h.raw_support_headers(addr, "POST", path, body, b"")
+            .await
+            .status,
+        single.status
+    );
+    assert_eq!(
+        h.raw_support_headers(
+            addr,
+            "POST",
+            path,
+            body,
+            b"origin: http://localhost:5173\r\norigin: http://127.0.0.1:8080\r\n"
+        )
+        .await
+        .status,
+        single.status
+    );
+    for headers in [
+        b"origin: http://localhost:5173\r\norigin: https://evil.example\r\n".as_slice(),
+        b"origin: https://evil.example\r\norigin: http://localhost:5173\r\n",
+        b"origin: https://evil.example\r\norigin: https://other.example\r\n",
+        b"origin: http://localhost:5173\r\norigin: \x80\r\n",
+        b"origin: https://evil.example\r\n",
+    ] {
+        let response = h
+            .raw_support_headers(addr, "POST", path, body, headers)
+            .await;
+        assert_eq!(response.status, 403);
+        assert_eq!(response.body, b"forbidden origin");
+    }
+    let host = h.raw_support_headers(addr, "POST", path, body, b"host: localhost\r\norigin: http://localhost:5173\r\norigin: http://127.0.0.1:8080\r\n").await;
+    assert_eq!(host.status, 403);
+    assert_ne!(host.body, b"forbidden origin");
+    server.abort();
     h.stop().await;
 }
 

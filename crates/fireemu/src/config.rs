@@ -6974,6 +6974,26 @@ mod tests {
     }
 
     #[test]
+    fn storage_object_and_buffered_body_limits_validate_configured_values() {
+        for key in ["maxObjectBytes", "bufferedBodyBudgetBytes"] {
+            let valid = json!({"schemaVersion": 1, "storage": {key: 1024}});
+            assert!(RuntimeConfig::from_json(&valid).is_ok(), "{key}");
+            for bad in [
+                json!(0),
+                json!(-1),
+                json!(1.5),
+                json!("1024"),
+                json!(null),
+                json!(u64::MAX),
+            ] {
+                let invalid = json!({"schemaVersion": 1, "storage": {key: bad}});
+                let error = RuntimeConfig::from_json(&invalid).unwrap_err();
+                assert!(error.0.contains(&format!("storage.{key}")), "{error}");
+            }
+        }
+    }
+
+    #[test]
     fn storage_max_stored_bytes_bounds_nothing_unless_configured() {
         let parse = |storage: Value| {
             RuntimeConfig::from_json(&json!({"schemaVersion": 1, "storage": storage}))

@@ -915,6 +915,7 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "authBlockingToken": { "enum": ["emulated", "production"], "default": "emulated", "description": "The development default is emulated; productionExact selects production, which requires the strict profile. This setting is recorded but does not yet change runtime behavior." },
         "clock": { "type": "object", "additionalProperties": false, "properties": {
           "date": { "enum": ["real", "virtual"], "default": "real" },
           "timers": { "enum": ["real", "virtual"], "default": "real" },

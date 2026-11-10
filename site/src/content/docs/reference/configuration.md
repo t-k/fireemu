@@ -22,7 +22,7 @@ The same settings can be written as TOML (`fireemu.toml`) or JSON (`fireemu.json
 | `auth` | Sign-in methods, password policy, MFA, tenants, providers, tokens, and whether the Firestore, Storage and Realtime Database Security Rules surfaces accept unsigned mock ID tokens (`allowUnsignedIdTokens`) | [Authentication](../../products/auth/) |
 | `storage` | Storage Security Rules and stored-byte limit | [Cloud Storage](../../products/storage/) |
 | `database` | What a Realtime Database instance without a rules file allows (`defaultAccess`); `auth.allowUnsignedIdTokens` decides, in both profiles, whether its rules accept `@firebase/rules-unit-testing` mock tokens | [Realtime Database](../../products/realtime-database/) |
-| `functions` | Codebase, runner, application clock, unserved triggers, a fixed list of served functions (`manifest`) | [Cloud Functions](../../products/functions/) |
+| `functions` | Codebase, runner, application clock, unserved triggers, a fixed list of served functions (`manifest`), and `authBlockingToken` (`"emulated"` by default, `"production"` with `productionExact` under `strict`; recorded without runtime effect yet) | [Cloud Functions](../../products/functions/) |
 | `scheduler` | Time zone, catch-up and overlap of scheduled functions | [Time and scheduled functions](../../guides/time/) |
 | `pubsub`, `eventarc` | Authentication and delivery settings | [Pub/Sub and Eventarc](../../products/pubsub-eventarc/) |
 | `appCheck` | Apps, debug tokens and enforcement | [App Check](../../products/app-check/) |

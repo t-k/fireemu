@@ -828,3 +828,80 @@ fn the_ui_flags_a_public_directory_that_did_not_exist_at_start() {
         .unwrap()
         .ends_with("/not-created"));
 }
+
+/// A runner that speaks the fireemu protocol and exports one scheduled function.
+const SCHEDULE_RUNNER: &str = r#"
+import json, sys
+
+def send(m):
+    p = json.dumps(m).encode()
+    sys.stdout.buffer.write(f"{len(p)}\n".encode())
+    sys.stdout.buffer.write(p)
+    sys.stdout.buffer.flush()
+
+send({"type": "hello", "runner": "ui-runtime-test", "manifest": {"functions": [
+    {"name": "tick", "trigger": {"type": "schedule", "schedule": "every 5 minutes"}}
+]}})
+while True:
+    line = sys.stdin.buffer.readline()
+    if not line:
+        break
+    msg = json.loads(sys.stdin.buffer.read(int(line.strip())))
+    if msg.get("type") == "shutdown":
+        break
+    if msg.get("type") == "invoke":
+        send({"type": "result", "invocationId": msg["invocationId"], "ok": True})
+"#;
+
+/// The runtime of each function in the UI follows the codebase's declared `runtime`, or the
+/// loader picked when it declares none (the runner override skips the Python preflight).
+fn function_runtime_in_ui(declared: Option<&str>, name: &str) -> serde_json::Value {
+    let dir = Scratch::new("hosting", name);
+    std::fs::create_dir_all(dir.join("functions")).unwrap();
+    std::fs::write(dir.join("runner.py"), SCHEDULE_RUNNER).unwrap();
+    let mut codebase = serde_json::json!({"codebase": "app", "source": "functions"});
+    if let Some(runtime) = declared {
+        codebase["runtime"] = runtime.into();
+    }
+    let mut emulators = emulators();
+    emulators.as_object_mut().unwrap().remove("ui");
+    let firebase = serde_json::json!({"functions": [codebase], "emulators": emulators});
+    let config = serde_json::json!({
+        "schemaVersion": 1,
+        "functions": {"runner": ["python3", dir.join("runner.py").to_str().unwrap()]},
+    });
+    let (_child, descriptor) = start_descriptor(
+        &dir,
+        &firebase,
+        "functions",
+        Some(&config),
+        &["--ui-port", "auto"],
+    );
+    let (status, overview) = ui_get(&descriptor, "/ui/api/functions");
+    assert_eq!(status, 200, "{overview}");
+    let tick = overview["functions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["name"] == "tick")
+        .unwrap_or_else(|| panic!("tick is listed: {overview}"))
+        .clone();
+    assert_eq!(tick["codebase"], "app");
+    tick["runtime"].clone()
+}
+
+#[test]
+fn the_ui_names_the_runtime_a_codebase_declares_or_the_loader_picked() {
+    assert_eq!(
+        function_runtime_in_ui(Some("python312"), "ui-runtime-python"),
+        serde_json::json!({"language": "python", "declared": "python312"})
+    );
+    assert_eq!(
+        function_runtime_in_ui(Some("nodejs22"), "ui-runtime-node"),
+        serde_json::json!({"language": "node", "declared": "nodejs22"})
+    );
+    assert_eq!(
+        function_runtime_in_ui(None, "ui-runtime-bare"),
+        serde_json::json!({"language": "node", "declared": null})
+    );
+}

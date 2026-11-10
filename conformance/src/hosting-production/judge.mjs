@@ -12,7 +12,13 @@
 //  - Volatile edge headers (date, age, via, x-cache, ...) are never compared. Any other header that
 //    is present is listed as unclassified; the review has to name each one before closure.
 //  - A mask hides a value, never a format: nothing here normalizes a length, a precision or an order.
-import { COMPARED_HEADERS, SHAPE_ONLY, VOLATILE_HEADERS, isComparedHeader } from "./rows.mjs";
+import {
+  COMPARED_HEADERS,
+  SDK_ROW_HEADERS,
+  SHAPE_ONLY,
+  VOLATILE_HEADERS,
+  isComparedHeader,
+} from "./rows.mjs";
 
 export const STATUSES = ["MATCH", "MATCH_LAYOUT", "MISMATCH", "UNKNOWN"];
 
@@ -98,6 +104,27 @@ function bodyDifferences(a, b, options) {
 }
 
 /**
+ * Splits the differences of one request into those a known-difference entry covers and the rest.
+ * An entry names its rows, the fields (`"*"` for all) and the comparison kinds it applies to.
+ * @returns {{ remaining: object[], known: { field: string, entry: string }[] }}
+ */
+export function applyKnownDifferences(id, differences, entries = [], kind) {
+  const remaining = [];
+  const known = [];
+  for (const difference of differences) {
+    const entry = entries.find(
+      (candidate) =>
+        candidate.appliesTo.includes(kind) &&
+        candidate.rows.includes(id) &&
+        (candidate.fields === "*" || candidate.fields.includes(difference.field)),
+    );
+    if (entry) known.push({ field: difference.field, entry: entry.id });
+    else remaining.push(difference);
+  }
+  return { remaining, known };
+}
+
+/**
  * Compares two shaped rows of the same request.
  * @returns {{ status: string, differences: object[], reason?: string }}
  */
@@ -117,8 +144,16 @@ export function compareRows(a, b, options = {}) {
   if (a.status !== b.status) differences.push({ field: "status", a: a.status, b: b.status });
   const headers = headerDifferences(a, b);
   differences.push(...headers.differences, ...bodyDifferences(a, b, options));
-  if (differences.length) return { status: "MISMATCH", differences };
-  return { status: headers.layoutOnly ? "MATCH_LAYOUT" : "MATCH", differences };
+  const { remaining, known } = options.known
+    ? applyKnownDifferences(a.id, differences, options.known.entries, options.known.kind)
+    : { remaining: differences, known: [] };
+  const extra = known.length ? { known } : {};
+  if (remaining.length) return { status: "MISMATCH", differences: remaining, ...extra };
+  return {
+    status: headers.layoutOnly ? "MATCH_LAYOUT" : "MATCH",
+    differences: remaining,
+    ...extra,
+  };
 }
 
 /** Header names present on answered rows that are neither compared nor volatile. */
@@ -127,7 +162,12 @@ export function unclassifiedHeaderNames(rows) {
   for (const row of rows) {
     if (row?.outcome !== "answered") continue;
     for (const name of row.headerNames ?? []) {
-      if (!COMPARED_HEADERS.has(name) && !isComparedHeader(name) && !VOLATILE_HEADERS.has(name)) {
+      if (
+        !COMPARED_HEADERS.has(name) &&
+        !isComparedHeader(name) &&
+        !VOLATILE_HEADERS.has(name) &&
+        !SDK_ROW_HEADERS.has(name)
+      ) {
         names.add(name);
       }
     }
@@ -162,6 +202,7 @@ export function compareRuns(ids, rowsA, rowsB, options = {}) {
  */
 export function conditionVerdicts(requests, results) {
   const status = new Map(results.rows.map((row) => [row.id, row.status]));
+  const known = new Map(results.rows.map((row) => [row.id, row.known]));
   const verdicts = {};
   for (const request of requests) {
     if (request.infoOnly) continue;
@@ -170,11 +211,13 @@ export function conditionVerdicts(requests, results) {
         rows: 0,
         counts: Object.fromEntries(STATUSES.map((s) => [s, 0])),
         mismatched: [],
+        knownDifferenceRows: 0,
       });
       const s = status.get(request.id) ?? "UNKNOWN";
       verdict.rows += 1;
       verdict.counts[s] += 1;
       if (s === "MISMATCH") verdict.mismatched.push(request.id);
+      if (known.get(request.id)?.length) verdict.knownDifferenceRows += 1;
     }
   }
   for (const verdict of Object.values(verdicts)) {

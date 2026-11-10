@@ -174,6 +174,12 @@ async function fireemu(binary) {
     const temp = await mkdtemp(resolve(tmpdir(), "hosting-"));
     await mkdir(resolve(temp, "home"));
     const ready = resolve(temp, "ready.json");
+    // The official-emulator fixtures describe the emulator profile; the strict profile answers as
+    // Hosting production does (conformance/src/hosting-production).
+    await writeFile(
+      resolve(temp, "profile.json"),
+      JSON.stringify({ schemaVersion: 1, profile: "emulator" }),
+    );
     await writeFile(
       resolve(temp, "firebase.json"),
       JSON.stringify({
@@ -192,6 +198,8 @@ async function fireemu(binary) {
       binary,
       [
         "up",
+        "--config",
+        resolve(temp, "profile.json"),
         "--only",
         name === "default" ? "hosting,functions" : "hosting",
         "--project",

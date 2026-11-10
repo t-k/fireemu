@@ -26,7 +26,6 @@ export const COMPARED_HEADERS = new Set([
   "content-length",
   "content-range",
   "accept-ranges",
-  "strict-transport-security",
   "allow",
   "content-disposition",
   "x-content-type-options",
@@ -34,6 +33,7 @@ export const COMPARED_HEADERS = new Set([
   "refresh",
   "link",
   "set-cookie",
+  "pragma",
   "x-fixture",
 ]);
 export const COMPARED_PATTERN = /^x-g\d\d$/;
@@ -55,6 +55,22 @@ export const VOLATILE_HEADERS = new Set([
   "connection",
   "keep-alive",
   "transfer-encoding",
+  // Set by the preview channel or by the https edge, which a local http listener is not (ruling 17):
+  // HSTS on every https answer, `noindex` on every preview channel answer.
+  "strict-transport-security",
+  "x-robots-tag",
+]);
+/**
+ * Headers that only the rows of the production-served SDK files carry (`/__/firebase/<version>/*`,
+ * answered by the CDN, a known difference): recorded, named here, never compared.
+ */
+export const SDK_ROW_HEADERS = new Set([
+  "content-security-policy-report-only",
+  "cross-origin-opener-policy",
+  "cross-origin-resource-policy",
+  "expires",
+  "report-to",
+  "x-xss-protection",
 ]);
 
 export const isComparedHeader = (name) => COMPARED_HEADERS.has(name) || COMPARED_PATTERN.test(name);

@@ -67,6 +67,7 @@ fn request(address: &str, target: &str) -> String {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)] // one CLI round trip: serve, probe, shut down, withdraw readiness
 fn hosting_cli_serves_shared_fixture_and_withdraws_readiness_on_shutdown() {
     let fixture =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../conformance/hosting-fixtures");
@@ -78,11 +79,13 @@ fn hosting_cli_serves_shared_fixture_and_withdraws_readiness_on_shutdown() {
     hosting["public"] = dir.join("public").to_string_lossy().to_string().into();
     let firebase = serde_json::json!({"hosting":hosting,"emulators":{"hosting":{"port":0},"ui":{"enabled":false},"logging":{"port":0},"hub":{"port":0}}});
     std::fs::write(dir.join("firebase.json"), firebase.to_string()).unwrap();
+    std::fs::write(dir.join("fireemu.json"), emulator_profile().to_string()).unwrap();
     let ready = dir.join("ready.json");
     let mut child = OwnedChild(
         Command::new(env!("CARGO_BIN_EXE_fireemu"))
+            .args(["up", "--config"])
+            .arg(dir.join("fireemu.json"))
             .args([
-                "up",
                 "--only",
                 "hosting",
                 "--project",
@@ -203,8 +206,14 @@ fn failed_hosting_startup_never_publishes_readiness() {
     );
 }
 
+/// The emulator profile, which answers as the pinned local oracle: the fixture tests below compare
+/// with it. The strict profile answers as Hosting production (`hosting_strict.rs`).
+fn emulator_profile() -> serde_json::Value {
+    serde_json::json!({"schemaVersion": 1, "profile": "emulator"})
+}
+
 fn start(dir: &std::path::Path, firebase: &serde_json::Value, only: &str) -> (OwnedChild, String) {
-    start_with_config(dir, firebase, only, None)
+    start_with_config(dir, firebase, only, Some(&emulator_profile()))
 }
 
 /// [`start`] with a canonical fireemu configuration document.

@@ -3,6 +3,7 @@ import { brotliCompressSync, gzipSync } from "node:zlib";
 import test from "node:test";
 
 import {
+  applyKnownDifferences,
   compareRows,
   compareRuns,
   conditionVerdicts,
@@ -105,12 +106,12 @@ test("a header present on one side only is a mismatch; a volatile one is ignored
   const withHsts = row(
     {},
     {
-      headers: [...answer().headers, ["Strict-Transport-Security", "max-age=31556952"]],
+      headers: [...answer().headers, ["Cache-Control", "max-age=60"]],
     },
   );
   const diff = compareRows(base, withHsts);
   assert.equal(diff.status, "MISMATCH");
-  assert.equal(diff.differences[0].field, "header:strict-transport-security");
+  assert.equal(diff.differences[0].field, "header:cache-control");
   for (const name of VOLATILE_HEADERS) {
     const noisy = row({}, { headers: [...answer().headers, [name, "different"]] });
     assert.equal(compareRows(base, noisy).status, "MATCH", name);
@@ -509,4 +510,95 @@ test("an init body that arrives compressed keeps layout only: no digest of the b
     { headers: [["Content-Encoding", "gzip"]], body: gzipSync(Buffer.from("x")) },
   );
   assert.ok(plain.decodedSha256);
+});
+
+// ---- known differences (rulings 15-17: differences between the recording and strict that are
+// declared, not aligned) ----
+
+const ENTRY = {
+  id: "KD-X",
+  rows: ["v01.x"],
+  fields: ["header:cache-control"],
+  appliesTo: ["production-vs-local"],
+};
+
+test("a known difference is taken out of the mismatch only for its row, field and comparison", () => {
+  const diffs = [
+    { field: "header:cache-control", a: ["a"], b: ["b"] },
+    { field: "status", a: 200, b: 404 },
+  ];
+  const split = applyKnownDifferences("v01.x", diffs, [ENTRY], "production-vs-local");
+  assert.deepEqual(split.known, [{ field: "header:cache-control", entry: "KD-X" }]);
+  assert.deepEqual(split.remaining, [diffs[1]]);
+  // another row, another comparison kind, no entries: nothing is taken out
+  for (const [id, entries, kind] of [
+    ["v01.y", [ENTRY], "production-vs-local"],
+    ["v01.x", [ENTRY], "run-vs-run"],
+    ["v01.x", [], "production-vs-local"],
+  ]) {
+    const none = applyKnownDifferences(id, diffs, entries, kind);
+    assert.deepEqual(none.known, []);
+    assert.deepEqual(none.remaining, diffs);
+  }
+  // "*" covers every field of its rows
+  const all = applyKnownDifferences(
+    "v01.x",
+    diffs,
+    [{ ...ENTRY, fields: "*" }],
+    "production-vs-local",
+  );
+  assert.deepEqual(all.remaining, []);
+  assert.equal(all.known.length, 2);
+});
+
+test("a row whose only differences are known matches and names them; any other difference still mismatches", () => {
+  const a = row({}, { headers: [...answer().headers, ["Cache-Control", "max-age=60"]] });
+  const b = row();
+  const options = { known: { entries: [ENTRY], kind: "production-vs-local" } };
+  const covered = compareRows(a, b, options);
+  assert.equal(covered.status, "MATCH");
+  assert.deepEqual(covered.known, [{ field: "header:cache-control", entry: "KD-X" }]);
+  // the same rows without the entry
+  assert.equal(compareRows(a, b).status, "MISMATCH");
+  // a status difference is not covered by an entry for a header
+  const other = row({}, { status: 404 });
+  const mixed = compareRows(other, b, options);
+  assert.equal(mixed.status, "MISMATCH");
+  assert.deepEqual(
+    mixed.differences.map((d) => d.field),
+    ["status"],
+  );
+  // a condition counts the rows that carry a known difference
+  const results = { rows: [{ id: "v01.x", ...covered }] };
+  const verdicts = conditionVerdicts(
+    [{ id: "v01.x", condition: "static-files", method: "GET", target: "/" }],
+    results,
+  );
+  assert.equal(verdicts["static-files"].knownDifferenceRows, 1);
+  assert.equal(verdicts["static-files"].closable, true);
+});
+
+test("headers set by the https edge or the preview channel are volatile, SDK-row headers are classified", () => {
+  for (const name of ["strict-transport-security", "x-robots-tag"]) {
+    assert.ok(VOLATILE_HEADERS.has(name), name);
+    const noisy = row({}, { headers: [...answer().headers, [name, "x"]] });
+    assert.equal(compareRows(row(), noisy).status, "MATCH", name);
+  }
+  const sdk = row(
+    {},
+    {
+      headers: [
+        ...answer().headers,
+        ["Cross-Origin-Opener-Policy", "same-origin"],
+        ["Pragma", "no-cache"],
+        ["X-Unlisted", "1"],
+      ],
+    },
+  );
+  assert.deepEqual(unclassifiedHeaderNames([sdk]), ["x-unlisted"]);
+  // pragma is compared (the association documents carry it)
+  assert.equal(
+    compareRows(row(), sdk).differences.some((d) => d.field === "header:pragma"),
+    true,
+  );
 });

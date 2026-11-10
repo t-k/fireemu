@@ -653,6 +653,7 @@ dependencies = [
  "regex",
  "rustix",
  "serde_json",
+ "sha2",
  "tokio",
  "toml",
  "zeroize",

@@ -2,6 +2,7 @@
 
 use fireemu_core_types::codec::{percent_decode_bytes, percent_escapes_are_well_formed, PlusMode};
 use md5::{Digest, Md5};
+use sha2::Sha256;
 use std::io::{Read, Seek};
 use std::sync::Arc;
 
@@ -10,7 +11,18 @@ pub(super) struct Asset {
     pub file: std::fs::File,
     pub bytes: u64,
     pub etag: String,
+    /// Lowercase hex SHA-256 of the content: the strict profile's quoted `ETag`.
+    pub sha256: String,
     pub modified: Option<std::time::SystemTime>,
+}
+
+/// Every percent escape decoded (`decodeURIComponent`), as production does for the captures of a
+/// configured redirect: `%2f`, `%3A` and `%3F` become their characters.
+pub(super) fn decode_uri_full(value: &str) -> Option<String> {
+    if !percent_escapes_are_well_formed(value) {
+        return None;
+    }
+    String::from_utf8(percent_decode_bytes(value, PlusMode::Literal)).ok()
 }
 
 pub(super) fn decode_uri(value: &str) -> Option<String> {
@@ -84,6 +96,7 @@ pub(super) fn open(
         return None;
     }
     let mut digest = Md5::new();
+    let mut strong = Sha256::new();
     let mut buffer = vec![0u8; 65536];
     loop {
         let read = file.read(&mut buffer).ok()?;
@@ -91,12 +104,14 @@ pub(super) fn open(
             break;
         }
         digest.update(&buffer[..read]);
+        strong.update(&buffer[..read]);
     }
     file.rewind().ok()?;
     Some(Asset {
         file,
         bytes: metadata.len(),
         etag: format!("{:x}", digest.finalize()),
+        sha256: format!("{:x}", strong.finalize()),
         modified: metadata.modified().ok(),
     })
 }

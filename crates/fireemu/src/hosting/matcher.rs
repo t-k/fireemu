@@ -194,11 +194,18 @@ fn ends(sequence: &[Token], input: &[char], start: usize, nocase: bool) -> BTree
     positions
 }
 
+#[cfg(test)]
 fn segment(pattern: &str, value: &str, dot: bool, nocase: bool) -> bool {
+    segment_with(pattern, value, dot, nocase, false)
+}
+
+/// `empty_matches`: an empty path part (after a trailing slash) is matched like any other text, so
+/// `*`, `?(x)`, `*(x)` and `!(x)` match it. Hosting production does; minimatch does not.
+fn segment_with(pattern: &str, value: &str, dot: bool, nocase: bool, empty_matches: bool) -> bool {
     if !dot && value.starts_with('.') && !pattern.starts_with('.') && !pattern.starts_with("\\.") {
         return false;
     }
-    if value.is_empty() {
+    if value.is_empty() && !empty_matches {
         return pattern.is_empty();
     }
     let chars: Vec<_> = pattern.chars().collect();
@@ -220,6 +227,16 @@ fn slash_split(text: &str) -> Vec<&str> {
 }
 
 fn path_match(pattern: &[&str], path: &[&str], dot: bool, nocase: bool) -> bool {
+    path_match_with(pattern, path, dot, nocase, false)
+}
+
+fn path_match_with(
+    pattern: &[&str],
+    path: &[&str],
+    dot: bool,
+    nocase: bool,
+    empty_matches: bool,
+) -> bool {
     let Some(first) = pattern.first() else {
         // minimatch lets a pattern also match a path with one trailing slash.
         return path.is_empty() || path == [""];
@@ -229,14 +246,15 @@ fn path_match(pattern: &[&str], path: &[&str], dot: bool, nocase: bool) -> bool 
             if !dot && path[..take].iter().any(|part| part.starts_with('.')) {
                 break;
             }
-            if path_match(&pattern[1..], &path[take..], dot, nocase) {
+            if path_match_with(&pattern[1..], &path[take..], dot, nocase, empty_matches) {
                 return true;
             }
         }
         false
     } else {
         path.first().is_some_and(|part| {
-            segment(first, part, dot, nocase) && path_match(&pattern[1..], &path[1..], dot, nocase)
+            segment_with(first, part, dot, nocase, empty_matches)
+                && path_match_with(&pattern[1..], &path[1..], dot, nocase, empty_matches)
         })
     }
 }
@@ -420,6 +438,16 @@ pub(super) fn glob(pattern: &str, path: &str) -> bool {
 }
 
 pub(super) fn glob_with_dot(pattern: &str, path: &str, dot: bool) -> bool {
+    glob_flavored(pattern, path, dot, false)
+}
+
+/// Hosting production's matching: dot files match `*` and `**`, and the empty part after a
+/// trailing slash matches whatever can match nothing.
+pub(super) fn glob_production(pattern: &str, path: &str) -> bool {
+    glob_flavored(pattern, path, true, true)
+}
+
+fn glob_flavored(pattern: &str, path: &str, dot: bool, empty_matches: bool) -> bool {
     // superstatic's configMatcher tests `config.glob || config.source`, so an empty pattern is no
     // pattern at all and matches nothing (not even `/`, which the trailing-slash rule would allow).
     if pattern.is_empty() || pattern.starts_with('#') {
@@ -427,9 +455,15 @@ pub(super) fn glob_with_dot(pattern: &str, path: &str, dot: bool) -> bool {
     }
     let negative = pattern.chars().take_while(|ch| *ch == '!').count();
     let pattern = &pattern[negative..];
-    let matched = alternatives(pattern, false)
-        .iter()
-        .any(|pattern| path_match(&slash_split(pattern), &slash_split(path), dot, false));
+    let matched = alternatives(pattern, false).iter().any(|pattern| {
+        path_match_with(
+            &slash_split(pattern),
+            &slash_split(path),
+            dot,
+            false,
+            empty_matches,
+        )
+    });
     matched != (negative % 2 == 1)
 }
 
@@ -474,13 +508,26 @@ pub(super) fn deploy_ignore(pattern: &str, path: &str, public_root: &str) -> boo
 }
 
 pub(super) fn matches(rule: &serde_json::Value, path: &str) -> bool {
+    matches_flavored(rule, path, false)
+}
+
+/// `matches` with Hosting production's glob (see `glob_production`).
+pub(super) fn matches_production(rule: &serde_json::Value, path: &str) -> bool {
+    matches_flavored(rule, path, true)
+}
+
+fn matches_flavored(rule: &serde_json::Value, path: &str, production: bool) -> bool {
     // The first non-empty of `glob` and `source`, as in `config.glob || config.source`.
     if let Some(pattern) = ["glob", "source"]
         .iter()
         .filter_map(|key| rule.get(*key).and_then(serde_json::Value::as_str))
         .find(|pattern| !pattern.is_empty())
     {
-        glob(pattern, path)
+        if production {
+            glob_production(pattern, path)
+        } else {
+            glob(pattern, path)
+        }
     } else {
         rule.get("regex")
             .and_then(serde_json::Value::as_str)
@@ -740,5 +787,67 @@ mod tests {
             let actual=indices.iter().position(|idx|glob(rows[*idx]["pattern"].as_str().unwrap(),path));
             proptest::prop_assert_eq!(actual,expected);
         }
+    }
+
+    /// Hosting production's header matching, from the rules `v10` of the production recording
+    /// (runs 658bb2 and 9a8d57): which of the 16 header globs answered each of 11 paths.
+    #[test]
+    fn production_glob_matches_the_recorded_header_sets() {
+        const PATTERNS: [&str; 16] = [
+            "/**",
+            "/a/*",
+            "/a/**",
+            "/a/?",
+            "/{a,b}/x",
+            "/a/[ab]",
+            "/a/!(x)",
+            "/a/@(x|y)",
+            "/a/+(x|y)",
+            "/a/?(x)",
+            "/a/*(x)",
+            "!/a/x",
+            "/a/\\*",
+            "/a/.hidden",
+            "/a/**/x",
+            "/{a,{b,c}}/x",
+        ];
+        let recorded: [(&str, &[usize]); 11] = [
+            ("/a/x", &[0, 1, 2, 3, 4, 7, 8, 9, 10, 14, 15]),
+            ("/a/y", &[0, 1, 2, 3, 6, 7, 8, 11]),
+            ("/a/xx", &[0, 1, 2, 6, 8, 10, 11]),
+            ("/a/a", &[0, 1, 2, 3, 5, 6, 11]),
+            ("/b/x", &[0, 4, 11, 15]),
+            ("/a/", &[0, 1, 2, 6, 9, 10, 11]),
+            ("/a/n/x", &[0, 2, 11, 14]),
+            ("/a/.hidden", &[0, 1, 2, 6, 11, 13]),
+            ("/a/*", &[0, 1, 2, 3, 6, 11, 12]),
+            ("/c/x", &[0, 11, 15]),
+            ("/d/x", &[0, 11]),
+        ];
+        for (path, expected) in recorded {
+            let actual: Vec<usize> = PATTERNS
+                .iter()
+                .enumerate()
+                .filter(|(_, pattern)| glob_production(pattern, path))
+                .map(|(index, _)| index)
+                .collect();
+            assert_eq!(actual, expected, "{path}");
+        }
+    }
+
+    #[test]
+    fn production_glob_differs_from_minimatch_only_for_dot_parts_and_the_empty_last_part() {
+        // minimatch (the pinned oracle) keeps both, production does not
+        assert!(!glob("/a/*", "/a/"));
+        assert!(glob_production("/a/*", "/a/"));
+        assert!(!glob("/**", "/a/.hidden"));
+        assert!(glob_production("/**", "/a/.hidden"));
+        assert!(!glob("/a/*", "/a/.hidden"));
+        assert!(glob_production("/a/*", "/a/.hidden"));
+        // a part that needs a character never matches the empty one
+        assert!(!glob_production("/a/?", "/a/"));
+        assert!(!glob_production("/a/[ab]", "/a/"));
+        // the same text elsewhere is unchanged
+        assert_eq!(glob_production("/a/b", "/a/b"), glob("/a/b", "/a/b"));
     }
 }

@@ -4,11 +4,13 @@ mod content_types;
 mod files;
 mod matcher;
 mod mime;
+mod production;
 
 use bytes::Bytes;
 use http_body_util::{combinators::BoxBody, BodyExt, Full};
 use hyper::{body::Incoming, Request, Response};
 use serde_json::Value;
+use sha2::Digest as _;
 use std::convert::Infallible;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -110,6 +112,53 @@ struct Site {
     project: String,
     upstream: Option<std::net::SocketAddr>,
     emulators: Value,
+    /// The strict profile answers as Hosting production does (see `production`); the emulator
+    /// profile answers as the pinned local oracle does.
+    strict: bool,
+}
+
+/// When the process first served a generated file: its `Last-Modified`.
+static STARTED: std::sync::OnceLock<std::time::SystemTime> = std::sync::OnceLock::new();
+
+/// Which configured header rules apply to a response.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HeaderPolicy {
+    All,
+    /// Production's `304` carries the `Cache-Control` of the representation and nothing else
+    /// that the rules set (`v01.cond-etag`).
+    OnlyCacheControl,
+    /// Production's `OPTIONS` answer keeps its own `Cache-Control: no-cache`.
+    ExceptCacheControl,
+}
+
+/// What a response is, for the headers production adds to it (`finish_strict`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Kind {
+    /// Bytes of a deployed file (or a generated stand-in for one): cacheable for an hour.
+    File,
+    /// A redirect, an error page or anything else with no default `Cache-Control`.
+    Other,
+    /// A response of a local Functions runtime: its own headers stand.
+    Passthrough,
+}
+fn marked(mut response: Response<Body>, kind: Kind) -> Response<Body> {
+    response.extensions_mut().insert(kind);
+    response
+}
+
+/// A body of unknown length, so that HTTP/1.1 sends it chunked, as production does for `400`.
+struct Chunked(Full<Bytes>);
+impl hyper::body::Body for Chunked {
+    type Data = Bytes;
+    type Error = std::io::Error;
+    fn poll_frame(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<hyper::body::Frame<Bytes>, Self::Error>>> {
+        std::pin::Pin::new(&mut self.0)
+            .poll_frame(cx)
+            .map(|frame| frame.map(|frame| frame.map_err(|never| match never {})))
+    }
 }
 
 /// Every run of slashes as one, as superstatic's `normalizeMultiSlashes` does.
@@ -145,11 +194,21 @@ impl Site {
             .and_then(Value::as_array)
             .map_or(&[], Vec::as_slice)
     }
+    fn matches(&self, rule: &Value, path: &str) -> bool {
+        if self.strict {
+            matcher::matches_production(rule, path)
+        } else {
+            matcher::matches(rule, path)
+        }
+    }
     fn custom_headers(&self, path: &str, response: &mut Response<Body>) {
+        self.custom_headers_with(path, response, HeaderPolicy::All);
+    }
+    fn custom_headers_with(&self, path: &str, response: &mut Response<Body>, policy: HeaderPolicy) {
         for rule in self
             .rules("headers")
             .iter()
-            .filter(|rule| matcher::matches(rule, path))
+            .filter(|rule| self.matches(rule, path))
         {
             for header in rule
                 .get("headers")
@@ -160,6 +219,15 @@ impl Site {
                 if let (Some(name), Some(value)) =
                     (header["key"].as_str(), header["value"].as_str())
                 {
+                    let is_cache_control = name.eq_ignore_ascii_case("cache-control");
+                    let skipped = match policy {
+                        HeaderPolicy::All => false,
+                        HeaderPolicy::OnlyCacheControl => !is_cache_control,
+                        HeaderPolicy::ExceptCacheControl => is_cache_control,
+                    };
+                    if skipped {
+                        continue;
+                    }
                     if let (Ok(name), Ok(value)) = (
                         hyper::header::HeaderName::try_from(name),
                         hyper::header::HeaderValue::try_from(value),
@@ -189,17 +257,25 @@ impl Site {
                     .unwrap_or("")
             };
             let language_override = cookie("firebase-language-override");
-            let languages: Vec<_> = if language_override.is_empty() {
-                header("accept-language")
-                    .split(',')
-                    .map(|v| v.split('-').next().unwrap_or(""))
-                    .filter(|s| !s.is_empty())
-                    .collect()
+            let languages: Vec<String> = if language_override.is_empty() {
+                if self.strict {
+                    production::accept_languages(header("accept-language"))
+                } else {
+                    header("accept-language")
+                        .split(',')
+                        .map(|v| v.split('-').next().unwrap_or("").to_owned())
+                        .filter(|s| !s.is_empty())
+                        .collect()
+                }
             } else {
-                language_override.split(',').collect()
+                language_override.split(',').map(str::to_owned).collect()
             };
             let country_override = cookie("firebase-country-override");
-            let country = if country_override.is_empty() {
+            // Production decides the country at its edge: a header or cookie the client sends
+            // does not (`v07.country-header`, `v07.country-cookie`, runs 658bb2 and 9a8d57).
+            let country = if self.strict {
+                ""
+            } else if country_override.is_empty() {
                 header("x-country-code")
             } else {
                 country_override
@@ -210,7 +286,7 @@ impl Site {
                 }
                 paths.push(i18n_path(root, &format!("ALL_{country}"), path));
             }
-            for language in languages {
+            for language in &languages {
                 paths.push(i18n_path(root, &format!("{language}_ALL"), path));
                 paths.push(i18n_path(root, language, path));
             }
@@ -265,7 +341,98 @@ impl Site {
             })
             .expect("asset headers")
     }
-    fn redirect(destination: &str, status: u16, head: bool) -> Response<Body> {
+    /// A deployed file as the profile answers it. The emulator profile answers as the pinned oracle
+    /// does (`file_response`); strict adds what production adds: a quoted SHA-256 `ETag`, `304`
+    /// for a matching `If-None-Match` or a not older `If-Modified-Since`, and single `Range`s.
+    async fn serve_asset(
+        &self,
+        path: &str,
+        asset: files::Asset,
+        status: u16,
+        head: bool,
+        request: &hyper::HeaderMap,
+    ) -> Response<Body> {
+        if !self.strict {
+            return Self::file_response(path, asset, status, head);
+        }
+        let etag = format!("\"{}\"", asset.sha256);
+        let header = |name: &str| request.get(name).and_then(|value| value.to_str().ok());
+        if status == 200
+            && production::not_modified(
+                header("if-none-match"),
+                header("if-modified-since"),
+                &etag,
+                asset.modified,
+            )
+        {
+            let not_modified = Response::builder()
+                .status(304)
+                .header("etag", etag)
+                .body(full(Bytes::new()))
+                .expect("304 headers");
+            return marked(not_modified, Kind::File);
+        }
+        let mut builder = Response::builder()
+            .header(
+                "content-type",
+                production::content_type(mime::content_type(path).map(|(mime, _)| mime)),
+            )
+            .header("etag", etag);
+        if let Some(modified) = asset.modified {
+            builder = builder.header("last-modified", httpdate::fmt_http_date(modified));
+        }
+        let length = asset.bytes;
+        let outcome = if status == 200 {
+            production::range(header("range"), length)
+        } else {
+            production::RangeOutcome::Whole
+        };
+        let result = match outcome {
+            production::RangeOutcome::Whole => builder
+                .status(status)
+                .header("content-length", length)
+                .body(if head {
+                    full(Bytes::new())
+                } else {
+                    files::FileBody::new(asset.file, length).boxed()
+                }),
+            production::RangeOutcome::Unsatisfiable => {
+                let mut refusal = response(416, Bytes::new(), None);
+                if let Ok(value) = hyper::header::HeaderValue::try_from(format!("bytes */{length}"))
+                {
+                    refusal.headers_mut().insert("content-range", value);
+                }
+                return marked(refusal, Kind::Other);
+            }
+            production::RangeOutcome::Partial { start, end } => {
+                let size = end - start + 1;
+                let data = if head {
+                    Ok(Vec::new())
+                } else {
+                    let mut file = asset.file;
+                    tokio::task::spawn_blocking(move || {
+                        use std::io::{Read, Seek};
+                        file.seek(std::io::SeekFrom::Start(start))?;
+                        let mut data = vec![0u8; usize::try_from(size).unwrap_or(0)];
+                        file.read_exact(&mut data)?;
+                        Ok::<_, std::io::Error>(data)
+                    })
+                    .await
+                    .unwrap_or_else(|error| Err(std::io::Error::other(error)))
+                };
+                let Ok(data) = data else {
+                    return response(500, "Could not read the file", None);
+                };
+                builder
+                    .status(206)
+                    .header("content-range", format!("bytes {start}-{end}/{length}"))
+                    .header("content-length", size)
+                    .body(full(data))
+            }
+        };
+        marked(result.expect("asset headers"), Kind::File)
+    }
+    fn redirect(&self, destination: &str, status: u16, head: bool) -> Response<Body> {
         let mut result = response(
             status,
             if head {
@@ -273,14 +440,85 @@ impl Site {
             } else {
                 format!("Redirecting to {destination}")
             },
-            Some("text/html; charset=utf-8"),
+            Some(if self.strict {
+                "text/plain; charset=utf-8"
+            } else {
+                "text/html; charset=utf-8"
+            }),
         );
+        if head && self.strict {
+            // `v01.head-redirect`: the length the body would have
+            result.headers_mut().insert(
+                "content-length",
+                hyper::header::HeaderValue::from(format!("Redirecting to {destination}").len()),
+            );
+        }
         if let Ok(location) = hyper::header::HeaderValue::try_from(destination) {
             result.headers_mut().insert("location", location);
         } else {
             return response(400, "Invalid redirect", None);
         }
         result
+    }
+    /// `400` for a malformed target. Production answers `400 Bad Request` as plain text of unknown
+    /// length (`v01.safety-bad-percent`).
+    fn bad_request(&self) -> Response<Body> {
+        if !self.strict {
+            return response(400, "Malformed URL", None);
+        }
+        let body: Body = Chunked(Full::new(Bytes::from_static(b"400 Bad Request"))).boxed();
+        let mut result = Response::builder()
+            .status(400)
+            .header("content-type", "text/plain; charset=utf-8")
+            .header("accept-ranges", "bytes")
+            .body(body)
+            .expect("constant 400 headers");
+        result.extensions_mut().insert(Kind::Other);
+        result
+    }
+    /// What production adds to every answer it generates: `Accept-Ranges`, `Vary` (the request
+    /// headers it varies on) and, for file bytes, `Cache-Control: max-age=3600`. Configured header
+    /// rules are applied afterwards and win.
+    fn finish_strict(&self, response: &mut Response<Body>) {
+        let kind = response
+            .extensions()
+            .get::<Kind>()
+            .copied()
+            .unwrap_or(Kind::Other);
+        if kind == Kind::Passthrough {
+            return;
+        }
+        let status = response.status().as_u16();
+        let localized = self
+            .data
+            .get("i18n")
+            .and_then(|v| v.get("root"))
+            .and_then(Value::as_str)
+            .is_some_and(|root| !root.is_empty());
+        let headers = response.headers_mut();
+        headers.remove("vary");
+        if status != 304 {
+            headers.insert(
+                "accept-ranges",
+                hyper::header::HeaderValue::from_static("bytes"),
+            );
+        }
+        if status != 400 {
+            headers.insert(
+                "vary",
+                hyper::header::HeaderValue::from_static(if localized && kind == Kind::File {
+                    "accept-language, x-country-code, x-fh-requested-host, accept-encoding"
+                } else {
+                    "x-fh-requested-host, accept-encoding"
+                }),
+            );
+        }
+        if kind == Kind::File && !headers.contains_key("cache-control") {
+            headers.insert(
+                "cache-control",
+                hyper::header::HeaderValue::from_static("max-age=3600"),
+            );
+        }
     }
     async fn route(self: Arc<Self>, request: Request<Incoming>) -> Response<Body> {
         if let Err(refusal) = fireemu_core_session::host_guard::admits_request(
@@ -306,33 +544,68 @@ impl Site {
             .map_or(String::new(), |q| format!("?{q}"));
         let head = request.method() == hyper::Method::HEAD;
         let Some(decoded) = files::decode_uri(&path) else {
-            return response(400, "Malformed URL", None);
+            return self.bad_request();
         };
+        // Production matches the parts of a path one by one and decodes every escape of a
+        // captured part (`%2f`, `%3A`, `%3F`) before it builds the `Location` (`v01.edge-1-03`,
+        // `-08`, `-10`); header rules see the ordinarily decoded path (`v01.encoded-static`).
+        if self.strict && files::decode_uri_full(&path).is_none() {
+            return self.bad_request();
+        }
         // The published Hosting priority gives supported reserved routes precedence.
         // The pinned local middleware instead inserts init handling after redirects.
-        let reserved = path == "/__/firebase/init.json"
-            || path == "/__/firebase/init.js"
-            || (path.starts_with("/__/firebase/") && path.split('/').count() >= 5);
+        // Production keeps `/__/auth/handler` and the SDK files out of the redirects, but not
+        // `init.json` and `init.js` (`v09.reserved-json`, `v09.reserved-auth-handler`).
+        let sdk = path.starts_with("/__/firebase/") && path.split('/').count() >= 5;
+        let reserved = if self.strict {
+            path == "/__/auth/handler" || sdk
+        } else {
+            path == "/__/firebase/init.json" || path == "/__/firebase/init.js" || sdk
+        };
         for rule in self.rules("redirects").iter().filter(|_| !reserved) {
-            match configured_redirect(rule, &decoded, &query) {
+            match configured_redirect(rule, &decoded, &path, &query, self.strict) {
                 None => {}
-                Some(Err(())) => return response(400, "Malformed URL", None),
+                Some(Err(())) => return self.bad_request(),
                 Some(Ok(location)) => {
                     let status = rule
                         .get("type")
                         .and_then(Value::as_u64)
                         .and_then(|v| u16::try_from(v).ok())
                         .unwrap_or(301);
-                    return Self::redirect(&location, status, head);
+                    let mut result = self.redirect(&location, status, head);
+                    if self.strict {
+                        // Production's configured redirects carry the configured headers too
+                        // (`v01.redirect-first`: `X-Fixture`).
+                        self.finish_strict(&mut result);
+                        self.custom_headers(&decoded, &mut result);
+                    }
+                    return result;
                 }
             }
+        }
+        let method = request.method().clone();
+        if self.strict && path == "/__/auth/handler" {
+            let mut answer = Self::auth_handler(head);
+            // an edge-generated page: no configured headers (`v01.reserved-auth-handler`)
+            self.finish_strict(&mut answer);
+            return answer;
         }
         let result = self
             .clone()
             .after_redirects(request, &path, &query, head)
             .await;
         let mut result = result;
-        self.custom_headers(&path, &mut result);
+        if self.strict {
+            self.finish_strict(&mut result);
+            let policy = match (result.status().as_u16(), &method) {
+                (304, _) => HeaderPolicy::OnlyCacheControl,
+                (200, &hyper::Method::OPTIONS) => HeaderPolicy::ExceptCacheControl,
+                _ => HeaderPolicy::All,
+            };
+            self.custom_headers_with(&decoded, &mut result, policy);
+        } else {
+            self.custom_headers(&path, &mut result);
+        }
         result
     }
     #[allow(clippy::case_sensitive_file_extension_comparisons)] // The pinned Hosting cleanUrls rule is case-sensitive.
@@ -360,29 +633,38 @@ impl Site {
                     target.push('/');
                 }
                 target.push_str(query);
-                return Some(Self::redirect(&target, 301, head));
+                return Some(self.redirect(&target, 301, head));
             }
-            return Some(Self::file_response(
-                &file,
-                asset,
-                if path == "/404.html" { 404 } else { 200 },
-                head,
-            ));
+            return Some(
+                self.serve_asset(
+                    &file,
+                    asset,
+                    // Production serves `/404.html` as the file it is (`v01.not-found-direct`).
+                    if path == "/404.html" && !self.strict {
+                        404
+                    } else {
+                        200
+                    },
+                    head,
+                    headers,
+                )
+                .await,
+            );
         }
         let has_slash = path.ends_with('/');
         let index = format!("{}/index.html", path.trim_end_matches('/'));
         if let Some((file, asset)) = self.asset(&index, headers).await {
             if (slash.is_none() && !has_slash && !clean) || (slash == Some(true) && !has_slash) {
-                return Some(Self::redirect(&format!("{path}/{query}"), 301, head));
+                return Some(self.redirect(&format!("{path}/{query}"), 301, head));
             }
             if slash == Some(false) && has_slash && path != "/" {
-                return Some(Self::redirect(
+                return Some(self.redirect(
                     &format!("{}{query}", path.trim_end_matches('/')),
                     301,
                     head,
                 ));
             }
-            return Some(Self::file_response(&file, asset, 200, head));
+            return Some(self.serve_asset(&file, asset, 200, head, headers).await);
         }
         if clean {
             let appended = if has_slash && slash.is_some() {
@@ -394,27 +676,126 @@ impl Site {
             };
             if let Some((file, asset)) = self.asset(&appended, headers).await {
                 if slash == Some(false) && has_slash {
-                    return Some(Self::redirect(
+                    return Some(self.redirect(
                         &format!("{}{query}", path.trim_end_matches('/')),
                         301,
                         head,
                     ));
                 }
                 if slash == Some(true) && !has_slash {
-                    return Some(Self::redirect(&format!("{path}/{query}"), 301, head));
+                    return Some(self.redirect(&format!("{path}/{query}"), 301, head));
                 }
                 if appended.ends_with("/index.html") {
                     let target = appended.trim_end_matches("/index.html");
-                    return Some(Self::redirect(
+                    return Some(self.redirect(
                         &format!("{}{query}", if target.is_empty() { "/" } else { target }),
                         301,
                         head,
                     ));
                 }
-                return Some(Self::file_response(&file, asset, 200, head));
+                return Some(self.serve_asset(&file, asset, 200, head, headers).await);
             }
         }
         None
+    }
+    /// A generated body that production serves as a deployed file would be (`init.json`, `init.js`:
+    /// quoted SHA-256 `ETag`, `Last-Modified`, cacheable). The emulator profile sends the bare body.
+    fn generated_file(&self, body: String, head: bool, content_type: &str) -> Response<Body> {
+        if !self.strict {
+            return response(
+                200,
+                if head { String::new() } else { body },
+                Some(content_type),
+            );
+        }
+        let started = *STARTED.get_or_init(std::time::SystemTime::now);
+        let etag = format!("\"{:x}\"", sha2::Sha256::digest(body.as_bytes()));
+        let length = body.len();
+        let mut answer = Response::builder()
+            .status(200)
+            .header("content-type", content_type)
+            .header("content-length", length)
+            .header("etag", etag)
+            .header("last-modified", httpdate::fmt_http_date(started))
+            .body(full(if head { String::new() } else { body }))
+            .expect("generated file headers");
+        answer.extensions_mut().insert(Kind::File);
+        answer
+    }
+    /// `v01.options-static`: an empty `200` that names the methods a deployed file serves.
+    async fn options_response(
+        &self,
+        path: &str,
+        headers: &hyper::HeaderMap,
+    ) -> Option<Response<Body>> {
+        self.asset(path, headers).await?;
+        let mut answer = response(200, Bytes::new(), Some("text/html; charset=UTF-8"));
+        answer.headers_mut().insert(
+            "allow",
+            hyper::header::HeaderValue::from_static("GET, HEAD, OPTIONS"),
+        );
+        answer.headers_mut().insert(
+            "cache-control",
+            hyper::header::HeaderValue::from_static("no-cache"),
+        );
+        Some(answer)
+    }
+    /// `v02.assetlinks`, `v02.apple-app-site-association`: with `appAssociation: "AUTO"` the two
+    /// documents are generated and never cached.
+    fn association_response(&self, path: &str, head: bool) -> Option<Response<Body>> {
+        if !self.strict || self.data["appAssociation"].as_str() != Some("AUTO") {
+            return None;
+        }
+        let document = production::app_association(path)?;
+        let mut answer = response(
+            200,
+            if head {
+                String::new()
+            } else {
+                document.to_owned()
+            },
+            Some("application/json; charset=utf-8"),
+        );
+        answer.headers_mut().insert(
+            "cache-control",
+            hyper::header::HeaderValue::from_static("private, no-store"),
+        );
+        answer.headers_mut().insert(
+            "pragma",
+            hyper::header::HeaderValue::from_static("no-cache"),
+        );
+        Some(answer)
+    }
+    /// `/__/auth/handler`: production answers `200` with its handler page (`462` bytes on the
+    /// recorded `HEAD`), outside the redirects. The page itself was not recorded, so a stand-in
+    /// page answers.
+    fn auth_handler(head: bool) -> Response<Body> {
+        let mut answer = response(
+            200,
+            if head {
+                String::new()
+            } else {
+                "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Authentication</title></head><body></body></html>\n".to_owned()
+            },
+            Some("text/html; charset=utf-8"),
+        );
+        answer.headers_mut().insert(
+            "cache-control",
+            hyper::header::HeaderValue::from_static("max-age=1800"),
+        );
+        answer
+    }
+    /// The `init.js` body: the SDK initialization, with the emulator endpoints on request.
+    fn init_script(&self, query: &str) -> String {
+        let emulators = if query
+            .split(['?', '&'])
+            .any(|part| part == "useEmulator=true")
+        {
+            self.emulators.clone()
+        } else {
+            Value::Null
+        };
+        format!("if(typeof firebase==='undefined')throw new Error('Firebase SDK not detected');var config={};firebase.initializeApp(config);var endpoints={};if(endpoints)Object.keys(endpoints).forEach(function(name){{if(typeof firebase[name]==='function'){{var endpoint=endpoints[name];if(name==='auth')firebase[name]().useEmulator('http://'+endpoint.hostAndPort);else firebase[name]().useEmulator(endpoint.host,endpoint.port);}}}});",self.init_config(),emulators)
     }
     fn init_config(&self) -> Value {
         // This nonsecret key only enables local SDK initialization; it is not a cloud credential.
@@ -427,31 +808,25 @@ impl Site {
         query: &str,
         head: bool,
     ) -> Response<Body> {
+        if request.method() == hyper::Method::OPTIONS && self.strict {
+            if let Some(answer) = self.options_response(path, request.headers()).await {
+                return answer;
+            }
+        }
         if path == "/__/firebase/init.json" {
-            return response(
-                200,
-                if head {
-                    String::new()
-                } else {
-                    self.init_config().to_string()
-                },
-                Some("application/json"),
-            );
+            let body = self.init_config().to_string();
+            return self.generated_file(body, head, "application/json");
         }
         if path == "/__/firebase/init.js" {
-            let emulators = if query
-                .split(['?', '&'])
-                .any(|part| part == "useEmulator=true")
-            {
-                self.emulators.clone()
-            } else {
-                Value::Null
-            };
-            let script=format!("if(typeof firebase==='undefined')throw new Error('Firebase SDK not detected');var config={};firebase.initializeApp(config);var endpoints={};if(endpoints)Object.keys(endpoints).forEach(function(name){{if(typeof firebase[name]==='function'){{var endpoint=endpoints[name];if(name==='auth')firebase[name]().useEmulator('http://'+endpoint.hostAndPort);else firebase[name]().useEmulator(endpoint.host,endpoint.port);}}}});",self.init_config(),emulators);
-            return response(
-                200,
-                if head { String::new() } else { script },
-                Some("application/javascript"),
+            let script = self.init_script(query);
+            return self.generated_file(
+                script,
+                head,
+                if self.strict {
+                    "text/javascript; charset=utf-8"
+                } else {
+                    "application/javascript"
+                },
             );
         }
         if path.starts_with("/__/firebase/") && path.split('/').count() >= 5 {
@@ -467,14 +842,28 @@ impl Site {
         {
             return response;
         }
+        if let Some(answer) = self.association_response(path, head) {
+            return answer;
+        }
         if let Some(rule) = self
             .rules("rewrites")
             .iter()
-            .find(|rule| matcher::matches(rule, path))
+            .find(|rule| self.matches(rule, path))
         {
             if let Some(destination) = rule["destination"].as_str() {
                 if let Some((file, asset)) = self.asset(destination, &hyper::HeaderMap::new()).await
                 {
+                    if self.strict {
+                        return self
+                            .serve_asset(
+                                &file,
+                                asset,
+                                if destination == "/404.html" { 404 } else { 200 },
+                                head,
+                                request.headers(),
+                            )
+                            .await;
+                    }
                     let etag_match = request
                         .headers()
                         .get("if-none-match")
@@ -496,28 +885,38 @@ impl Site {
                     );
                 }
             } else if rule.get("function").is_some() || rule.get("run").is_some() {
-                return self.proxy(request, rule).await;
+                return marked(self.proxy(request, rule).await, Kind::Passthrough);
             }
         }
         if let Some((file, asset)) = self.asset("/404.html", request.headers()).await {
-            let mut result = Self::file_response(&file, asset, 404, head);
+            let mut result = self
+                .serve_asset(&file, asset, 404, head, request.headers())
+                .await;
             self.custom_headers("/404.html", &mut result);
             return result;
         }
+        Self::default_not_found(request.method(), path, head)
+    }
+    /// The page for a path nothing answers and no `404.html` covers. Production's own page is
+    /// 21,376 bytes and was not recorded as text, so this one is shorter (a known difference).
+    fn default_not_found(method: &hyper::Method, path: &str, head: bool) -> Response<Body> {
         let escaped = path
             .replace('&', "&amp;")
             .replace('<', "&lt;")
             .replace('>', "&gt;")
             .replace('"', "&quot;")
             .replace('\'', "&#39;");
-        response(
-            404,
-            if head {
-                String::new()
-            } else {
-                format!("<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Error</title>\n</head>\n<body>\n<pre>Cannot {} {escaped}</pre>\n</body>\n</html>\n",request.method())
-            },
-            Some("text/html; charset=utf-8"),
+        marked(
+            response(
+                404,
+                if head {
+                    String::new()
+                } else {
+                    format!("<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Error</title>\n</head>\n<body>\n<pre>Cannot {method} {escaped}</pre>\n</body>\n</html>\n")
+                },
+                Some("text/html; charset=utf-8"),
+            ),
+            Kind::File,
         )
     }
     async fn proxy(&self, request: Request<Incoming>, rule: &Value) -> Response<Body> {
@@ -658,8 +1057,24 @@ fn encode_redirect_uri(value: &str) -> String {
 }
 
 /// The `Location` of a matching configured redirect, `Err` for a malformed query.
-fn configured_redirect(rule: &Value, decoded: &str, query: &str) -> Option<Result<String, ()>> {
-    let (authority, mut destination) = redirect_destination(rule, decoded)?;
+fn configured_redirect(
+    rule: &Value,
+    decoded: &str,
+    raw: &str,
+    query: &str,
+    strict: bool,
+) -> Option<Result<String, ()>> {
+    let (authority, mut destination) = redirect_destination(rule, decoded, raw, strict)?;
+    if strict {
+        // Production appends the query as sent (`v01.edge-1-11`: `x=%5c` stays lowercase) and
+        // folds the runs of slashes a decoded capture can leave (`v01.edge-1-03`: `%2f` -> `/`).
+        let mut location = encode_redirect_uri(&collapse_slashes(&destination));
+        if !query.is_empty() {
+            location.push(if location.contains('?') { '&' } else { '?' });
+            location.push_str(&query[1..]);
+        }
+        return Some(Ok(format!("{authority}{location}")));
+    }
     if !query.is_empty() {
         destination.push(if destination.contains('?') { '&' } else { '?' });
         let Some(decoded_query) = files::decode_uri(&query[1..]) else {
@@ -673,13 +1088,40 @@ fn configured_redirect(rule: &Value, decoded: &str, query: &str) -> Option<Resul
     )))
 }
 
-fn redirect_parts<'a>(destination: &'a str, source: Option<&str>) -> Option<(&'a str, &'a str)> {
+/// The name of a `:name` source part and the literal that follows it. Production reads a name as
+/// letters and `_` only, so `:id2` is the parameter `id` followed by a literal `2`
+/// (`v01.redirect-capture-prefix`, `-literal`: the source `/capture/:id/:id2` never matched).
+fn capture_part(part: &str, strict: bool) -> Option<(&str, &str)> {
+    let name = part.strip_prefix(':')?;
+    if !strict {
+        return Some((name, ""));
+    }
+    let end = name
+        .find(|ch: char| !(ch.is_ascii_alphabetic() || ch == '_'))
+        .unwrap_or(name.len());
+    Some((&name[..end], &name[end..]))
+}
+
+fn capture_token(strict: bool) -> regex::Regex {
+    regex::Regex::new(if strict {
+        r":([A-Za-z_]+)"
+    } else {
+        r":([A-Za-z0-9_]+)"
+    })
+    .expect("constant capture token")
+}
+
+fn redirect_parts<'a>(
+    destination: &'a str,
+    source: Option<&str>,
+    strict: bool,
+) -> Option<(&'a str, &'a str)> {
     let capture_names: Vec<_> = source
         .into_iter()
         .flat_map(|value| value.split('/'))
-        .filter_map(|part| part.strip_prefix(':'))
+        .filter_map(|part| capture_part(part, strict).map(|(name, _)| name))
         .collect();
-    let tokens = regex::Regex::new(r":([A-Za-z0-9_]+)").expect("constant capture token");
+    let tokens = capture_token(strict);
     let has_capture = |value: &str| {
         tokens
             .captures_iter(value)
@@ -737,30 +1179,49 @@ fn redirect_parts<'a>(destination: &'a str, source: Option<&str>) -> Option<(&'a
     Some(("", destination))
 }
 
-fn redirect_destination(rule: &Value, path: &str) -> Option<(String, String)> {
+fn redirect_destination(
+    rule: &Value,
+    path: &str,
+    raw: &str,
+    strict: bool,
+) -> Option<(String, String)> {
     let destination = rule.get("destination")?.as_str()?;
-    let (authority, destination) =
-        redirect_parts(destination, rule.get("source").and_then(Value::as_str))?;
+    let (authority, destination) = redirect_parts(
+        destination,
+        rule.get("source").and_then(Value::as_str),
+        strict,
+    )?;
     if let Some(source) = rule.get("source").and_then(Value::as_str) {
         if source.contains(':') && destination.contains(':') {
             let source: Vec<_> = source.split('/').collect();
-            let path: Vec<_> = path.split('/').collect();
+            // Strict: the parts are those of the path as sent, each decoded on its own.
+            let decoded_parts: Vec<String>;
+            let path: Vec<&str> = if strict {
+                decoded_parts = raw
+                    .split('/')
+                    .map(|part| files::decode_uri_full(part).unwrap_or_default())
+                    .collect();
+                decoded_parts.iter().map(String::as_str).collect()
+            } else {
+                path.split('/').collect()
+            };
             if source.len() != path.len() {
                 return None;
             }
             let mut captures = std::collections::BTreeMap::new();
             for (pattern, part) in source.iter().zip(path) {
-                if let Some(name) = pattern.strip_prefix(':') {
-                    if part.is_empty() {
+                if let Some((name, literal)) = capture_part(pattern, strict) {
+                    let value = part.strip_suffix(literal)?;
+                    if value.is_empty() {
                         return None;
                     }
-                    captures.insert(name, part);
+                    captures.insert(name, value);
                 } else if *pattern != part {
                     return None;
                 }
             }
             // Expand original destination tokens once; captured text is never reparsed.
-            let tokens = regex::Regex::new(r":([A-Za-z0-9_]+)").expect("constant capture token");
+            let tokens = capture_token(strict);
             return Some((
                 authority.to_owned(),
                 tokens
@@ -775,7 +1236,12 @@ fn redirect_destination(rule: &Value, path: &str) -> Option<(String, String)> {
             ));
         }
     }
-    matcher::matches(rule, path).then(|| (authority.to_owned(), destination.to_owned()))
+    let matched = if strict {
+        matcher::matches_production(rule, path)
+    } else {
+        matcher::matches(rule, path)
+    };
+    matched.then(|| (authority.to_owned(), destination.to_owned()))
 }
 
 /// A site whose configured root has been acquired before readiness publication.
@@ -787,6 +1253,7 @@ pub fn prepare(
     project: String,
     upstream: Option<std::net::SocketAddr>,
     emulators: Value,
+    strict: bool,
 ) -> Result<PreparedSite, String> {
     // firebase-tools 15.28.2 only logs a missing public directory at debug level and serves.
     let root =
@@ -812,6 +1279,7 @@ pub fn prepare(
         project,
         upstream,
         emulators,
+        strict,
     })))
 }
 
@@ -845,7 +1313,7 @@ mod redirect_tests {
     fn location(destination: &str, raw_path: &str, raw_query: &str) -> Option<Result<String, ()>> {
         let rule = json!({"source": "/go/:name", "destination": destination, "type": 302});
         let decoded = files::decode_uri(raw_path).expect("well-formed test path");
-        configured_redirect(&rule, &decoded, raw_query)
+        configured_redirect(&rule, &decoded, raw_path, raw_query, false)
     }
 
     // Review 2026-11-07 P1: a captured `%5c` must not become `/\evil.example`.
@@ -867,6 +1335,99 @@ mod redirect_tests {
         assert_eq!(location("/:name", "/go/x", "?%zz"), Some(Err(())));
         assert_eq!(location(":name", "/go/evil.example", ""), None);
         assert_eq!(location("http://:name/", "/go/evil.example", ""), None);
+    }
+
+    fn strict_location(
+        source: &str,
+        destination: &str,
+        raw_path: &str,
+        raw_query: &str,
+    ) -> Option<String> {
+        let rule = json!({"source": source, "destination": destination, "type": 302});
+        let decoded = files::decode_uri(raw_path).expect("well-formed test path");
+        configured_redirect(&rule, &decoded, raw_path, raw_query, true).map(|found| found.unwrap())
+    }
+
+    // The rows `v01.edge-*` and `v01.redirect-capture-*` of the production recording.
+    #[test]
+    fn strict_redirects_decode_each_capture_and_keep_the_query_as_sent() {
+        for (destination, path, query, expected) in [
+            ("/:name", "/go1/%2fevil.example", "", "/evil.example"),
+            (
+                "/next/:name",
+                "/go2/%2fevil.example",
+                "",
+                "/next/evil.example",
+            ),
+            (
+                "https://example.test/:name",
+                "/go3/%2fevil.example",
+                "",
+                "https://example.test/evil.example",
+            ),
+            ("/:name", "/go1/%3Aother", "", "/:other"),
+            ("/:name", "/go1/a%3Fb", "", "/a?b"),
+            ("/:name", "/go1/plain", "?x=%5c", "/plain?x=%5c"),
+            ("/:name", "/go1/%5cevil.example", "", "/%5Cevil.example"),
+            ("/:name", "/go1/%255cevil.example", "", "/%255cevil.example"),
+            ("/:name", "/go1/a%25b", "", "/a%25b"),
+        ] {
+            let source = format!("/{}/:name", path.split('/').nth(1).unwrap());
+            assert_eq!(
+                strict_location(&source, destination, path, query).as_deref(),
+                Some(expected),
+                "{path}{query}"
+            );
+        }
+        // a query joins a destination that has one with `&`
+        assert_eq!(
+            strict_location("/go1/:name", "/x/:name?a=1", "/go1/b", "?q=2").as_deref(),
+            Some("/x/b?a=1&q=2")
+        );
+    }
+
+    #[test]
+    fn strict_capture_names_are_letters_and_underscores() {
+        assert_eq!(capture_part(":id2", true), Some(("id", "2")));
+        assert_eq!(capture_part(":my_id", true), Some(("my_id", "")));
+        assert_eq!(capture_part(":id2", false), Some(("id2", "")));
+        assert_eq!(capture_part("id", true), None);
+        // `/capture/:id/:id2` never matched in production, `/capture/:name` did
+        assert_eq!(
+            strict_location("/capture/:id/:id2", "/new/:id2/:id", "/capture/one/two", ""),
+            None
+        );
+        assert_eq!(
+            strict_location(
+                "/capture/:id/:id2",
+                "/new/:id2/:id",
+                "/capture/:id2/two",
+                ""
+            ),
+            None
+        );
+        assert_eq!(
+            strict_location(
+                "/capture/:id/:id2",
+                "/new/:id2/:id",
+                "/capture/one/two2",
+                ""
+            )
+            .as_deref(),
+            Some("/new/two2/two"),
+            "the `2` is a literal after the parameter `id`, which the second part then sets to `two`"
+        );
+        assert_eq!(
+            strict_location("/capture/:name", "/new/:name", "/capture/name", "").as_deref(),
+            Some("/new/name")
+        );
+        // the emulator profile reads digits into the name
+        let rule =
+            json!({"source": "/capture/:id/:id2", "destination": "/new/:id2/:id", "type": 302});
+        assert_eq!(
+            configured_redirect(&rule, "/capture/one/two", "/capture/one/two", "", false),
+            Some(Ok("/new/two/one".to_owned()))
+        );
     }
 
     fn encode_component(value: &str) -> String {
@@ -933,6 +1494,7 @@ mod i18n_path_tests {
             project: "demo".to_owned(),
             upstream: None,
             emulators: Value::Null,
+            strict: false,
         }
     }
 

@@ -1547,8 +1547,13 @@ async fn serve_suite(
     }
     if let (Some(listener), Some(config)) = (hosting_listener, cfg.hosting.clone()) {
         let emulators = serde_json::Value::Object(hub_emulators(&addrs).into_iter().filter(|entry| matches!(entry.name, "auth"|"firestore"|"functions"|"storage"|"database")).map(|entry| (entry.name.to_owned(), serde_json::json!({"host":entry.addr.ip().to_string(),"port":entry.addr.port(),"hostAndPort":entry.addr.to_string()}))).collect());
-        let prepared =
-            crate::hosting::prepare(config, cfg.auth_project.clone(), addrs.functions, emulators)?;
+        let prepared = crate::hosting::prepare(
+            config,
+            cfg.auth_project.clone(),
+            addrs.functions,
+            emulators,
+            matches!(cfg.profile, crate::config::CompatibilityProfile::Strict),
+        )?;
         spawn_server!("Hosting", crate::hosting::serve(listener, prepared));
     }
     let functions_http_admission = fireemu_adapter_functions::http::HttpAdmission::new();

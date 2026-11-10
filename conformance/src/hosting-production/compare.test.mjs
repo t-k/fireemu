@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { compareFiles } from "./compare.mjs";
+import { compareFiles, loadKnownDifferences } from "./compare.mjs";
 import { buildCorpus, corpusManifest } from "./corpus.mjs";
 import { shapeRow } from "./rows.mjs";
 
@@ -79,4 +79,64 @@ test("the init.js layout is compared between two recordings, not between product
   assert.equal(local.rows.find((r) => r.id === initJs.id).status, "MATCH");
   const runs = compareFiles({ kind: "run-vs-run", left: a, right: b, corpus });
   assert.equal(runs.rows.find((r) => r.id === initJs.id).status, "MISMATCH");
+});
+
+test("the known differences name corpus rows, a reason, an authority and the comparisons they apply to", () => {
+  const entries = loadKnownDifferences(corpus);
+  const ids = new Set(requests.map((request) => request.id));
+  assert.equal(new Set(entries.map((entry) => entry.id)).size, entries.length);
+  for (const entry of entries) {
+    assert.ok(entry.rows.length > 0 && entry.rows.every((id) => ids.has(id)), entry.id);
+    assert.ok(
+      entry.fields === "*" || (Array.isArray(entry.fields) && entry.fields.length > 0),
+      entry.id,
+    );
+    assert.ok(entry.reason.length > 60, `${entry.id} has a reason`);
+    assert.match(entry.authority, /coordinator ruling 1[5-7]/, entry.id);
+    assert.ok(
+      entry.appliesTo.length > 0 &&
+        entry.appliesTo.every((kind) => ["production-vs-local", "run-vs-run"].includes(kind)),
+    );
+  }
+  // an unknown row id is refused when the file is loaded
+  assert.throws(
+    () => loadKnownDifferences({ versions: [{ requests: [{ id: "v01.none" }] }] }),
+    /not a corpus request/,
+  );
+});
+
+test("a known difference is reported by the comparison and a covered row is not a mismatch", () => {
+  const known = [
+    { id: "KD-T", rows: [requests[0].id], fields: ["status"], appliesTo: ["production-vs-local"] },
+  ];
+  const left = rowsOf(200);
+  const right = rowsOf(200);
+  right[0] = shapeRow(requests[0], answer(404), { origin: "http://o", secrets: [] });
+  const withEntry = compareFiles({
+    kind: "production-vs-local",
+    left: file("a", left),
+    right: file("b", right),
+    corpus,
+    known,
+  });
+  assert.equal(withEntry.summary.MISMATCH, 0);
+  assert.deepEqual(withEntry.knownDifferences, [{ id: "KD-T", rows: 1 }]);
+  assert.deepEqual(withEntry.rows[0].known, [{ field: "status", entry: "KD-T" }]);
+  const without = compareFiles({
+    kind: "production-vs-local",
+    left: file("a", left),
+    right: file("b", right),
+    corpus,
+    known: [],
+  });
+  assert.equal(without.summary.MISMATCH, 1);
+  // the same entry does not apply to a run-vs-run comparison
+  const runs = compareFiles({
+    kind: "run-vs-run",
+    left: file("a", left),
+    right: file("b", right),
+    corpus,
+    known,
+  });
+  assert.equal(runs.summary.MISMATCH, 1);
 });

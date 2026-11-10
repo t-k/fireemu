@@ -128,6 +128,10 @@ export function admit({ ledgerText, now, env }) {
 // ---- secrets -----------------------------------------------------------------------------------------
 
 /** The strings of the private web app config that must never reach a row or a file. */
+/** The sandbox's project number from the private web config (the caller keeps it secret). */
+export const projectNumberOf = (config) =>
+  String(config?.projectNumber ?? config?.messagingSenderId ?? "");
+
 export function secretsFromWebConfig(config) {
   if (config?.projectId !== PROJECT) throw new Error("the web config is not the sandbox's");
   const number = config.projectNumber ?? config.messagingSenderId;
@@ -184,7 +188,9 @@ export async function recordHosting(env, deps) {
   const { corpus } = await deps.readSources();
   const { attempt } = admit({ ledgerText: await deps.readLedger(), now: deps.now(), env });
   const adc = await deps.ownerAdc();
-  const secrets = secretsFromWebConfig(await deps.webConfig());
+  const webConfig = await deps.webConfig();
+  const secrets = secretsFromWebConfig(webConfig);
+  const number = projectNumberOf(webConfig);
   const run = deps.runTag();
   if (!RUN_TAG.test(run)) throw new Error(`run tag ${run} is not six hex digits`);
   const gitSha = await deps.gitSha();
@@ -193,7 +199,7 @@ export async function recordHosting(env, deps) {
     `hosting-production-${new Date(startedAt).toISOString().replaceAll(":", "")}`,
   );
   const budget = createBudget(deps.caps ?? CAPS);
-  const api = makeApi({ deps, budget, adc, runDir });
+  const api = makeApi({ deps, budget, adc, runDir, secrets });
 
   // Read-only prechecks. Nothing is written to production or to the ledger before they pass.
   const before = await precheck(api);
@@ -235,7 +241,7 @@ export async function recordHosting(env, deps) {
     const record = (deployed[version.id] = { channelId: `hst-${run}-${version.id}` });
     const sink = [];
     try {
-      await deployAndServe({ version, record, run, api, deps, secrets, state, sink });
+      await deployAndServe({ version, record, run, api, deps, secrets, number, state, sink });
     } catch (error) {
       // The message may carry whatever an effect threw; it reaches the ledger, so it is masked.
       const message = maskSecrets(String(error.message), secrets);
@@ -287,8 +293,11 @@ export async function recordHosting(env, deps) {
       await deps.writeRunFile(runDir, name, text);
     };
     await write("rows.json", { schema: 1, run, corpusSha256: CORPUS_SHA256, rows });
-    await write("deploy.json", { schema: 1, run, versions: deployed });
-    await write("result.json", result);
+    // A version name production returns under `projects/-` carries the project number: names are
+    // masked before they reach a file (the guard above is a second layer).
+    const masked = (value) => JSON.parse(maskSecrets(JSON.stringify(value), secrets));
+    await write("deploy.json", masked({ schema: 1, run, versions: deployed }));
+    await write("result.json", masked(result));
   } catch (error) {
     writeError = error.message;
   }
@@ -332,13 +341,13 @@ function unknownRows(version, reason, secrets, from = 0) {
 }
 
 /** The counted, allow-listed, never-retrying REST client over `deps.http`. */
-export function makeApi({ deps, budget, adc, runDir }) {
+export function makeApi({ deps, budget, adc, runDir, secrets = [] }) {
   let token;
   const journal = (kind, method, url, status) =>
     deps.appendRunFile(
       runDir,
       "journal.jsonl",
-      `${JSON.stringify({ t: new Date(deps.now()).toISOString(), kind, method, path: pathOf(url), status })}\n`,
+      `${JSON.stringify({ t: new Date(deps.now()).toISOString(), kind, method, path: maskSecrets(pathOf(url), secrets), status })}\n`,
     );
   async function call(kind, method, url, body, { binary = false } = {}) {
     const { protocol, hostname } = new URL(url);
@@ -412,7 +421,7 @@ async function precheck(api) {
 }
 
 /** Deploys one version and serves its requests; returns the rows. Failures are recorded, not thrown. */
-async function deployAndServe({ version, record, run, api, deps, secrets, state, sink }) {
+async function deployAndServe({ version, record, run, api, deps, secrets, number, state, sink }) {
   const fail = (reason, { halt = true } = {}) => {
     record.failure = reason;
     if (halt) state.halt ??= `${version.id}: ${reason}`;
@@ -477,7 +486,18 @@ async function deployAndServe({ version, record, run, api, deps, secrets, state,
     return;
   }
   const name = String(made.value.name ?? "");
-  if (!new RegExp(`^sites/${PROJECT}/versions/[A-Za-z0-9]+$`).test(name)) {
+  // The id is cleaned up by the run whatever the name looks like: a create that answered 2xx is a
+  // confirmed create, and the delete goes to this site's own path with that id.
+  const id = name.split("/").at(-1);
+  if (/^[A-Za-z0-9]{8,64}$/.test(id)) record.versionId = id;
+  // Production names the version `sites/<site>/versions/<id>` or, under the `projects/-` wildcard,
+  // with the project in front (its id or its number). Only this site and this project are accepted.
+  const accepted = [
+    `sites/${SITE}/versions/${id}`,
+    `projects/${PROJECT}/sites/${SITE}/versions/${id}`,
+    ...(/^\d+$/.test(number) ? [`projects/${number}/sites/${SITE}/versions/${id}`] : []),
+  ];
+  if (!record.versionId || !accepted.includes(name)) {
     fail("version name is not the site's");
     return;
   }
@@ -668,7 +688,12 @@ async function removeVersion({ record, api, state }) {
       `${HOSTING}/projects/${PROJECT}/sites/${SITE}/channels/${record.channelId}`,
     );
   }
-  if (record.version) result.version = await attempt("version", `${HOSTING}/${record.version}`);
+  if (record.versionId) {
+    result.version = await attempt(
+      "version",
+      `${HOSTING}/sites/${SITE}/versions/${record.versionId}`,
+    );
+  }
   return result;
 }
 

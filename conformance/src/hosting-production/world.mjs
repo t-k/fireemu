@@ -9,7 +9,18 @@ const error = (status, message) =>
   });
 
 /** A deterministic, entirely in-memory Hosting API and preview edge. */
-export function createWorld({ run, secrets, overrides = [] }) {
+export function createWorld({ run, secrets, overrides = [], versionNameForm = "short" }) {
+  // How version create names the version: `sites/<site>/versions/<id>` (as a list does), or, under
+  // the `projects/-` wildcard, with the project number in front (what production answered).
+  const shown = (name) =>
+    versionNameForm === "number"
+      ? `projects/${secrets.projectNumber}/${name}`
+      : versionNameForm === "projectId"
+        ? `projects/${PROJECT}/${name}`
+        : typeof versionNameForm === "function"
+          ? versionNameForm(name)
+          : name;
+  const short = (name) => String(name).replace(/^projects\/[^/]+\//, "");
   const state = {
     channels: new Map(),
     versions: new Map(),
@@ -96,7 +107,7 @@ export function createWorld({ run, secrets, overrides = [] }) {
       const channel = state.channels.get(id);
       if (!channel || channel.deleted) return error(404, "channel not found");
       if (releases && method === "POST") {
-        const name = url.searchParams.get("versionName");
+        const name = short(url.searchParams.get("versionName"));
         const version = state.versions.get(name);
         if (!version || version.deleted || version.status !== "FINALIZED")
           return error(404, "version not found");
@@ -117,23 +128,26 @@ export function createWorld({ run, secrets, overrides = [] }) {
       const version = {
         name,
         status: "CREATED",
+        createTime: "2026-11-10T16:12:57.000Z",
         labels: parse().labels ?? {},
         config: {},
         files: {},
         deleted: false,
       };
       state.versions.set(name, version);
-      return response(200, version);
+      return response(200, { ...version, name: shown(name) });
     }
     if (path === `/v1beta1/sites/${PROJECT}/versions` && method === "GET")
       return response(200, { versions: [...state.versions.values()] });
     const versionMatch = new RegExp(
-      `^/v1beta1/(sites/${PROJECT}/versions/[^/:]+)(?::(populateFiles)|(/files))?$`,
+      `^/v1beta1/(?:projects/[^/]+/)?(sites/${PROJECT}/versions/[^/:]+)(?::(populateFiles)|(/files))?$`,
     ).exec(path);
     if (versionMatch) {
       const [, name, populate, files] = versionMatch;
       const version = state.versions.get(name);
-      if (!version || version.deleted) return error(404, "version not found");
+      // A deleted version still reads, with status DELETED (recorded by the 2026-09-28 cleanup).
+      const readable = method === "GET" && !populate && !files;
+      if (!version || (version.deleted && !readable)) return error(404, "version not found");
       if (populate && method === "POST") {
         const data = parse();
         if (!data.files || typeof data.files !== "object") return error(400, "files required");

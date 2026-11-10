@@ -127,7 +127,12 @@ const noSecrets = (run, secrets = fakeSecrets) => {
 
 async function run(options = {}) {
   const secrets = options.secrets ?? fakeSecrets;
-  const world = createWorld({ run: "abc123", secrets, overrides: options.overrides ?? [] });
+  const world = createWorld({
+    run: "abc123",
+    secrets,
+    overrides: options.overrides ?? [],
+    ...options.world,
+  });
   const ledger = [JSON.stringify(closed)];
   const files = {};
   const sleeps = [];
@@ -1084,4 +1089,62 @@ test("an unknown delete is carried in the terminal row for the recovery and the 
     terminal(r).residualEntries.some((entry) => /channel delete unknown \(500\)/.test(entry)),
   );
   assert.deepEqual(terminal(r).openUnknownCreates, []);
+});
+
+test("the version name production returned (the project number in front) is accepted, masked in every file, and cleaned", async () => {
+  const r = await run({ world: { versionNameForm: "number" } });
+  assert.equal(r.result.outcome, "observed-unknown", "only the fake's dependency row is unknown");
+  assert.equal(terminal(r).closureReady, true);
+  assert.ok([...r.world.state.versions.values()].every((version) => version.status === "DELETED"));
+  // The in-run calls use the returned name, so the number is in the URLs and must not be in any file.
+  assert.ok(
+    r.world.log.some((call) => call.url.includes(`/projects/${fakeSecrets.projectNumber}/sites/`)),
+  );
+  noSecrets(r);
+  assert.match(r.files["journal.jsonl"], /projects\/#{12}\/sites\//);
+  assert.match(deployOf(r).v01.version, /^projects\/#{12}\/sites\/fireemu-oracle-idp\/versions\//);
+  const projectId = await run({ world: { versionNameForm: "projectId" } });
+  assert.equal(terminal(projectId).closureReady, true);
+});
+
+test("a version create that succeeded and then fails the name check is deleted before the run ends", async () => {
+  const foreign = [
+    ["another site", (name) => `projects/999/sites/other-site/versions/${name.split("/").at(-1)}`],
+    ["another project number", (name) => `projects/555555555555/${name}`],
+    ["another project id", (name) => `projects/other-project/${name}`],
+  ];
+  for (const [what, form] of foreign) {
+    const r = await run({ world: { versionNameForm: form } });
+    assert.match(deployOf(r).v01.failure, /version name is not the site's/, what);
+    assert.equal(r.result.outcome, "failed-cleaned", what);
+    assert.equal(terminal(r).closureReady, true, what);
+    assert.ok(
+      [...r.world.state.versions.values()].every((version) => version.status === "DELETED"),
+      what,
+    );
+    assert.ok(
+      [...r.world.state.channels.values()].every((channel) => channel.deleted),
+      what,
+    );
+    const deletes = r.world.log.filter(
+      (call) => call.method === "DELETE" && call.url.includes("/versions/"),
+    );
+    assert.equal(deletes.length, 1, what);
+    assert.ok(deletes[0].url.endsWith(`/sites/fireemu-oracle-idp/versions/0000000000000001`), what);
+    assert.equal(r.world.log.filter((call) => call.kind === "edge").length, 0, what);
+  }
+});
+
+test("a version name with no usable id cannot be deleted by the run and stays for recovery", async () => {
+  const r = await run({ world: { versionNameForm: () => "x" } });
+  assert.match(deployOf(r).v01.failure, /version name is not the site's/);
+  assert.equal(r.result.outcome, "needs-recovery");
+  assert.deepEqual(resultOf(r).readback.versionsLeft, [
+    "sites/fireemu-oracle-idp/versions/0000000000000001",
+  ]);
+  assert.equal(
+    r.world.log.filter((call) => call.method === "DELETE" && call.url.includes("/versions/"))
+      .length,
+    0,
+  );
 });

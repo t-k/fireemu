@@ -784,6 +784,7 @@ fn every_row_of_the_table_answers_as_the_reference_model() {
 proptest::proptest! {
     #![proptest_config(proptest::test_runner::Config {
         cases: 768,
+        max_shrink_iters: 64,
         ..proptest::test_runner::Config::default()
     })]
 

@@ -222,10 +222,10 @@ fn js_number_to_string(number: f64) -> String {
         return "0".to_owned();
     }
     if number.is_infinite() {
-        return if number > 0.0 {
-            "Infinity"
-        } else {
+        return if number.is_sign_negative() {
             "-Infinity"
+        } else {
+            "Infinity"
         }
         .to_owned();
     }
@@ -237,7 +237,7 @@ fn js_number_to_string(number: f64) -> String {
     // `k` digits and the decimal point after `n` of them (ECMAScript's k and n).
     let k = i32::try_from(digits.len()).unwrap_or(i32::MAX);
     let n = exponent + 1;
-    let sign = if number < 0.0 { "-" } else { "" };
+    let sign = if number.is_sign_negative() { "-" } else { "" };
     let body = if k <= n && n <= 21 {
         format!(
             "{digits}{}",
@@ -250,7 +250,7 @@ fn js_number_to_string(number: f64) -> String {
         format!("0.{}{digits}", "0".repeat(usize::try_from(-n).unwrap_or(0)))
     } else {
         let power = n - 1;
-        let sign_of_power = if power < 0 { '-' } else { '+' };
+        let sign_of_power = if power.is_negative() { '-' } else { '+' };
         if k == 1 {
             format!("{digits}e{sign_of_power}{}", power.abs())
         } else {

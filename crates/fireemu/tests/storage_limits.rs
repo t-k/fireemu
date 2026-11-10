@@ -22,7 +22,7 @@ fn run(name: &str, storage: &str) -> String {
     .unwrap();
     // Two 6-byte objects against a 10-byte bound: the second is refused.
     let probe = r#"for object in a b; do
-curl -s -o /dev/null -w "$object %{http_code}\n" -X POST -H 'Authorization: Bearer owner' --data-binary '123456' "http://$FIREBASE_STORAGE_EMULATOR_HOST/v0/b/demo-storage-limits.appspot.com/o?name=$object"
+curl -s -w "\n$object %{http_code}\n" -X POST -H 'Authorization: Bearer owner' --data-binary '123456' "http://$FIREBASE_STORAGE_EMULATOR_HOST/v0/b/demo-storage-limits.appspot.com/o?name=$object"
 done"#;
     let output = Command::new(env!("CARGO_BIN_EXE_fireemu"))
         .args(["exec", "--config"])
@@ -71,4 +71,45 @@ fn a_configured_stored_byte_limit_refuses_the_write_that_crosses_it() {
     let log = run("unbounded", "");
     assert!(log.contains("a 200"), "{log}");
     assert!(log.contains("b 200"), "{log}");
+}
+
+#[test]
+fn configured_object_limit_reaches_the_storage_server() {
+    let exact = run("object-exact", r#""maxObjectBytes": 6"#);
+    assert!(exact.contains("a 200"), "{exact}");
+    let over = run("object-over", r#""maxObjectBytes": 5"#);
+    assert!(over.contains("a 413"), "{over}");
+    assert!(
+        over.contains(r#"{"error":{"code":413,"message":"object too large"}}"#),
+        "{over}"
+    );
+    let raised = run("object-raised", r#""maxObjectBytes": 7"#);
+    assert!(raised.contains("a 200"), "{raised}");
+    let budget = run("body-budget", r#""bufferedBodyBudgetBytes": 5"#);
+    assert!(budget.contains("a 503"), "{budget}");
+}
+
+#[test]
+fn invalid_object_and_body_limits_refuse_startup() {
+    for key in ["maxObjectBytes", "bufferedBodyBudgetBytes"] {
+        let dir =
+            std::env::temp_dir().join(format!("fireemu-invalid-{key}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let config = dir.join("fireemu.json");
+        std::fs::write(
+            &config,
+            format!(r#"{{"schemaVersion":1,"storage":{{"{key}":0}}}}"#),
+        )
+        .unwrap();
+        let output = Command::new(env!("CARGO_BIN_EXE_fireemu"))
+            .args(["exec", "--config"])
+            .arg(&config)
+            .args(["--only", "storage", "--", "/bin/true"])
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains(&format!("storage.{key}")));
+    }
 }

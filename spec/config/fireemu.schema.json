@@ -822,6 +822,18 @@
         "rules": { "type": "string", "description": "Path of the Storage Security Rules file (service firebase.storage)." },
         "mode": { "enum": ["native"] },
         "objectNameNormalization": { "enum": ["preserve"] },
+        "maxObjectBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2143289343,
+          "description": "Maximum bytes in one Storage object. Defaults to 268435456; the request body limit is this value plus 4194304 bytes."
+        },
+        "bufferedBodyBudgetBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647,
+          "description": "Process-wide budget for concurrently buffered Storage request bodies, in bytes. Defaults to 1073741824."
+        },
         "maxStoredBytes": {
           "type": "integer",
           "minimum": 1,

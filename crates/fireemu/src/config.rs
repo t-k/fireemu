@@ -1078,6 +1078,10 @@ pub struct RuntimeConfig {
     /// `storage.maxStoredBytes`: the object data the Storage emulator retains, a local bound
     /// production does not have (owner ledger 759). `None` bounds nothing.
     pub storage_max_stored_bytes: Option<u64>,
+    /// Maximum size of an individual Storage object.
+    pub storage_max_object_bytes: u64,
+    /// Process-wide budget for buffered Storage request bodies.
+    pub storage_buffered_body_budget_bytes: usize,
     /// `storage.buckets`: Cloud Storage buckets the project owns besides its two default ones,
     /// for the strict profile, which refuses an object operation on a bucket nothing declared.
     pub storage_buckets: Vec<String>,
@@ -1722,6 +1726,9 @@ impl Default for RuntimeConfig {
             history_max_versions_per_path: None,
             history_max_bytes: None,
             storage_max_stored_bytes: None,
+            storage_max_object_bytes: fireemu_core_storage::store::MAX_OBJECT_BYTES,
+            storage_buffered_body_budget_bytes:
+                fireemu_adapter_http::storage_server::DEFAULT_BODY_BUDGET_BYTES,
             storage_buckets: Vec::new(),
             storage_public_buckets: Vec::new(),
             storage_default_bucket: fireemu_adapter_http::storage::DefaultBuckets::Both,
@@ -2082,6 +2089,8 @@ impl RuntimeConfig {
             "rules.denialLog" => Some(json!(if self.rules_denial_log { "summary" } else { "off" })),
             "storage.rules" => Some(json!(self.storage_rules_file)),
             "storage.maxStoredBytes" => Some(json!(self.storage_max_stored_bytes)),
+            "storage.maxObjectBytes" => Some(json!(self.storage_max_object_bytes)),
+            "storage.bufferedBodyBudgetBytes" => Some(json!(self.storage_buffered_body_budget_bytes)),
             "storage.buckets" => Some(json!(self.storage_buckets)),
             "storage.publicBuckets" => Some(json!(self.storage_public_buckets)),
             "storage.defaultBucket" => Some(json!(match self.storage_default_bucket {
@@ -5516,6 +5525,36 @@ impl RuntimeConfig {
             if let Some(source) = storage.get("rules").and_then(Value::as_str) {
                 cfg.storage_rules_file = Some(source.to_owned());
             }
+            for (key, maximum) in [
+                (
+                    "maxObjectBytes",
+                    fireemu_adapter_http::storage_server::MAX_CONFIGURED_OBJECT_BYTES,
+                ),
+                (
+                    "bufferedBodyBudgetBytes",
+                    fireemu_adapter_http::storage_server::MAX_CONFIGURED_BUDGET_BYTES,
+                ),
+            ] {
+                let Some(value) = storage.get(key) else {
+                    continue;
+                };
+                let bytes = value
+                    .as_u64()
+                    .filter(|bytes| (1..=maximum).contains(bytes))
+                    .ok_or_else(|| {
+                        ConfigError(format!(
+                            "storage.{key} must be a whole number of bytes between 1 and {maximum}"
+                        ))
+                    })?;
+                if key == "maxObjectBytes" {
+                    cfg.storage_max_object_bytes = bytes;
+                } else {
+                    cfg.storage_buffered_body_budget_bytes =
+                        usize::try_from(bytes).map_err(|_| {
+                            ConfigError(format!("storage.{key} does not fit this platform"))
+                        })?;
+                }
+            }
             if let Some(value) = storage.get("maxStoredBytes") {
                 let bytes = value.as_u64().filter(|bytes| *bytes >= 1).ok_or_else(|| {
                     ConfigError(
@@ -6022,6 +6061,8 @@ mod tests {
             ("firestore.history.maxVersionsPerPath", json!(7)),
             ("firestore.history.maxBytes", json!(268_435_456)),
             ("storage.maxStoredBytes", json!(8192)),
+            ("storage.maxObjectBytes", json!(1_048_576)),
+            ("storage.bufferedBodyBudgetBytes", json!(2_097_152)),
             (
                 "storage.buckets",
                 json!(["media-bucket", "other.example.com"]),
@@ -6276,6 +6317,12 @@ mod tests {
             ("daemon.authProjectNumbers", json!({}), "default"),
             ("storage.rules", json!(null), "unset"),
             ("storage.maxStoredBytes", json!(null), "unset"),
+            ("storage.maxObjectBytes", json!(268_435_456), "default"),
+            (
+                "storage.bufferedBodyBudgetBytes",
+                json!(1_073_741_824),
+                "default",
+            ),
             ("storage.buckets", json!([]), "default"),
             ("storage.publicBuckets", json!([]), "default"),
             ("storage.defaultBucket", json!("both"), "default"),
@@ -7060,6 +7107,78 @@ mod tests {
                 );
             } else {
                 proptest::prop_assert!(bytes.is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn storage_object_and_buffered_body_limit_defaults() {
+        let cfg = RuntimeConfig::from_json(&json!({"schemaVersion": 1})).unwrap();
+        assert_eq!(cfg.storage_max_object_bytes, 256 * 1024 * 1024);
+        assert_eq!(cfg.storage_buffered_body_budget_bytes, 1024 * 1024 * 1024);
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn storage_object_and_budget_limits_accept_exactly_the_documented_range(
+            value in proptest::prop_oneof![
+                0_u64..4,
+                2_143_289_330_u64..2_143_289_350,
+                2_147_483_640_u64..2_147_483_660,
+                proptest::num::u64::ANY,
+            ],
+        ) {
+            use fireemu_adapter_http::storage_server::{
+                MAX_CONFIGURED_BUDGET_BYTES, MAX_CONFIGURED_OBJECT_BYTES,
+            };
+            for (key, maximum) in [
+                ("maxObjectBytes", MAX_CONFIGURED_OBJECT_BYTES),
+                ("bufferedBodyBudgetBytes", MAX_CONFIGURED_BUDGET_BYTES),
+            ] {
+                let parsed = RuntimeConfig::from_json(
+                    &json!({"schemaVersion": 1, "storage": {key: value}}),
+                );
+                if (1..=maximum).contains(&value) {
+                    let cfg = parsed.unwrap();
+                    let stored = if key == "maxObjectBytes" {
+                        cfg.storage_max_object_bytes
+                    } else {
+                        cfg.storage_buffered_body_budget_bytes as u64
+                    };
+                    proptest::prop_assert_eq!(stored, value);
+                } else {
+                    let message = parsed.unwrap_err().0;
+                    proptest::prop_assert!(message.contains(&format!("storage.{key}")), "{}", message);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_largest_configured_object_limit_has_a_body_cap_that_fits_the_budget_range() {
+        use fireemu_adapter_http::storage_server::{
+            body_cap_for_object_limit, MAX_CONFIGURED_BUDGET_BYTES, MAX_CONFIGURED_OBJECT_BYTES,
+        };
+        let cap = body_cap_for_object_limit(MAX_CONFIGURED_OBJECT_BYTES).unwrap();
+        assert_eq!(cap as u64, MAX_CONFIGURED_BUDGET_BYTES);
+    }
+
+    #[test]
+    fn storage_object_and_buffered_body_limits_validate_configured_values() {
+        for key in ["maxObjectBytes", "bufferedBodyBudgetBytes"] {
+            let valid = json!({"schemaVersion": 1, "storage": {key: 1024}});
+            assert!(RuntimeConfig::from_json(&valid).is_ok(), "{key}");
+            for bad in [
+                json!(0),
+                json!(-1),
+                json!(1.5),
+                json!("1024"),
+                json!(null),
+                json!(u64::MAX),
+            ] {
+                let invalid = json!({"schemaVersion": 1, "storage": {key: bad}});
+                let error = RuntimeConfig::from_json(&invalid).unwrap_err();
+                assert!(error.0.contains(&format!("storage.{key}")), "{error}");
             }
         }
     }

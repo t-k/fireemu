@@ -14,7 +14,7 @@ use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 use crate::hash::{base64, crc32c, md5, Crc32c, Md5};
 use crate::name::{BucketName, ObjectName};
 
-/// Largest object accepted (memory-backed test runtime).
+/// Default largest object accepted (memory-backed test runtime).
 pub const MAX_OBJECT_BYTES: u64 = 256 * 1024 * 1024;
 /// Custom metadata budget (Cloud Storage: 8 KiB of keys and values).
 pub const MAX_CUSTOM_METADATA_BYTES: usize = 8 * 1024;
@@ -759,6 +759,7 @@ pub struct StorageState {
     uploads: BTreeMap<UploadId, UploadSession>,
     retained_upload_bytes: u64,
     retained_upload_limit: u64,
+    max_object_bytes: u64,
     /// `storage.maxStoredBytes`; `None` bounds nothing.
     stored_bytes_limit: Option<u64>,
     /// The length of every blob in `blobs`, summed; kept by `insert_blob` and `remove_blob`.
@@ -819,10 +820,10 @@ fn metadata_budget_size(custom: &BTreeMap<String, String>, download_tokens: &[St
     size
 }
 
-fn upload_size_error(end: u64, total: Option<u64>) -> Option<StorageError> {
+fn upload_size_error(end: u64, total: Option<u64>, max_object_bytes: u64) -> Option<StorageError> {
     if total.is_some_and(|total| end > total) {
         Some(StorageError::UploadSizeMismatch)
-    } else if end > MAX_OBJECT_BYTES {
+    } else if end > max_object_bytes {
         Some(StorageError::TooLarge)
     } else {
         None
@@ -842,6 +843,7 @@ impl StorageState {
             uploads: BTreeMap::new(),
             retained_upload_bytes: 0,
             retained_upload_limit: MAX_RETAINED_UPLOAD_BYTES,
+            max_object_bytes: MAX_OBJECT_BYTES,
             stored_bytes_limit: None,
             stored_bytes: 0,
             next_blob: 0,
@@ -860,6 +862,17 @@ impl StorageState {
             #[cfg(test)]
             upload_accounting_lookups: 0,
         }
+    }
+
+    /// Sets the maximum size of a single object in bytes.
+    pub fn set_max_object_bytes(&mut self, bytes: u64) {
+        self.max_object_bytes = bytes;
+    }
+
+    /// The maximum size of a single object in bytes.
+    #[must_use]
+    pub fn max_object_bytes(&self) -> u64 {
+        self.max_object_bytes
     }
 
     /// Selects production's identities and ordering: generations drawn as microsecond
@@ -1167,6 +1180,7 @@ impl StorageState {
             uploads,
             retained_upload_bytes,
             retained_upload_limit: self.retained_upload_limit,
+            max_object_bytes: self.max_object_bytes,
             stored_bytes_limit: self.stored_bytes_limit,
             stored_bytes,
             next_blob: self.next_blob,
@@ -1642,7 +1656,7 @@ impl StorageState {
         pre: Precondition,
         now: LogicalInstant,
     ) -> Result<ObjectMetadata, StorageError> {
-        if bytes.len() as u64 > MAX_OBJECT_BYTES {
+        if bytes.len() as u64 > self.max_object_bytes {
             return Err(StorageError::TooLarge);
         }
         self.put_prepared(bucket, name, PreparedObject::new(bytes), metadata, pre, now)
@@ -1660,7 +1674,7 @@ impl StorageState {
         now: LogicalInstant,
         admit: impl FnOnce(&[StorageEvent]) -> Result<R, StorageError>,
     ) -> Result<(ObjectMetadata, R), StorageError> {
-        if bytes.len() as u64 > MAX_OBJECT_BYTES {
+        if bytes.len() as u64 > self.max_object_bytes {
             return Err(StorageError::TooLarge);
         }
         self.put_prepared_with_admission(
@@ -1704,7 +1718,7 @@ impl StorageState {
         admit: impl FnOnce(&[StorageEvent]) -> Result<R, StorageError>,
     ) -> Result<(ObjectMetadata, R), StorageError> {
         let PreparedObject { bytes, digests } = prepared;
-        if bytes.len() as u64 > MAX_OBJECT_BYTES {
+        if bytes.len() as u64 > self.max_object_bytes {
             return Err(StorageError::TooLarge);
         }
         let plan = self.plan_put(
@@ -2651,7 +2665,7 @@ impl StorageState {
         object: ImportedObject,
         bytes: Vec<u8>,
     ) -> Result<ObjectMetadata, StorageError> {
-        if bytes.len() as u64 > MAX_OBJECT_BYTES {
+        if bytes.len() as u64 > self.max_object_bytes {
             return Err(StorageError::TooLarge);
         }
         if custom_metadata_size(&object.custom) > MAX_CUSTOM_METADATA_BYTES {
@@ -2781,7 +2795,7 @@ impl StorageState {
         options: UploadOptions,
         now: LogicalInstant,
     ) -> Result<UploadId, StorageError> {
-        if options.total.is_some_and(|t| t > MAX_OBJECT_BYTES) {
+        if options.total.is_some_and(|t| t > self.max_object_bytes) {
             return Err(StorageError::TooLarge);
         }
         if metadata
@@ -2959,7 +2973,7 @@ impl StorageState {
         total: u64,
         now: LogicalInstant,
     ) -> Result<(), StorageError> {
-        if total > MAX_OBJECT_BYTES {
+        if total > self.max_object_bytes {
             return Err(StorageError::TooLarge);
         }
         let u = self.upload_mut(id, now)?;
@@ -2983,6 +2997,7 @@ impl StorageState {
     ) -> Result<u64, StorageError> {
         let retained = self.retained_upload_bytes;
         let limit = self.retained_upload_limit;
+        let max_object_bytes = self.max_object_bytes;
         self.with_upload_session(id, now, |u| {
             match u.state {
                 UploadState::Committed(_) | UploadState::Aborted | UploadState::Denied(_) => {
@@ -3000,7 +3015,7 @@ impl StorageState {
                 return Err(StorageError::UploadOffset { expected: received });
             } else {
                 let skip = usize::try_from(received - offset).unwrap_or(0);
-                if let Some(error) = upload_size_error(end, u.total) {
+                if let Some(error) = upload_size_error(end, u.total, max_object_bytes) {
                     u.state = UploadState::Aborted;
                     u.received = Vec::new();
                     return Err(error);
@@ -3030,6 +3045,7 @@ impl StorageState {
     ) -> Result<u64, StorageError> {
         let retained = self.retained_upload_bytes;
         let limit = self.retained_upload_limit;
+        let max_object_bytes = self.max_object_bytes;
         let attempt = self.with_upload_session(id, now, |u| {
             match u.state {
                 UploadState::Committed(_) | UploadState::Aborted | UploadState::Denied(_) => {
@@ -3041,7 +3057,7 @@ impl StorageState {
                 return Ok(None);
             }
             let end = chunk.len() as u64;
-            if let Some(error) = upload_size_error(end, u.total) {
+            if let Some(error) = upload_size_error(end, u.total, max_object_bytes) {
                 u.state = UploadState::Aborted;
                 u.received = Vec::new();
                 return Err(error);
@@ -3918,14 +3934,17 @@ mod tests {
             1,
             u64::MAX
         ));
-        assert_eq!(upload_size_error(MAX_OBJECT_BYTES, None), None);
         assert_eq!(
-            upload_size_error(MAX_OBJECT_BYTES + 1, None),
+            upload_size_error(MAX_OBJECT_BYTES, None, MAX_OBJECT_BYTES),
+            None
+        );
+        assert_eq!(
+            upload_size_error(MAX_OBJECT_BYTES + 1, None, MAX_OBJECT_BYTES),
             Some(StorageError::TooLarge)
         );
-        assert_eq!(upload_size_error(3, Some(3)), None);
+        assert_eq!(upload_size_error(3, Some(3), MAX_OBJECT_BYTES), None);
         assert_eq!(
-            upload_size_error(4, Some(3)),
+            upload_size_error(4, Some(3), MAX_OBJECT_BYTES),
             Some(StorageError::UploadSizeMismatch)
         );
     }
@@ -4033,6 +4052,87 @@ mod tests {
     }
 
     #[test]
+    fn configured_object_limit_applies_at_the_exact_boundary() {
+        let bucket = BucketName::try_new("demo-limit").unwrap();
+        let mut state = StorageState::new(1);
+        state.set_max_object_bytes(3);
+        let write = |state: &mut StorageState, name: &str, bytes: Vec<u8>| {
+            state.put(
+                &bucket,
+                &ObjectName::try_new(name).unwrap(),
+                bytes,
+                NewMetadata::default(),
+                Precondition::default(),
+                LogicalInstant::UNIX_EPOCH,
+            )
+        };
+        assert!(write(&mut state, "exact", vec![0; 3]).is_ok());
+        assert!(matches!(
+            write(&mut state, "over", vec![0; 4]),
+            Err(StorageError::TooLarge)
+        ));
+        state.set_max_object_bytes(4);
+        assert!(write(&mut state, "raised", vec![0; 4]).is_ok());
+    }
+
+    #[test]
+    fn a_configured_object_limit_bounds_the_resumable_path_too() {
+        let bucket = BucketName::try_new("demo-limit").unwrap();
+        let now = LogicalInstant::UNIX_EPOCH;
+        let mut state = StorageState::new(1);
+        state.set_max_object_bytes(3);
+        let begin = |state: &mut StorageState, name: &str, total: Option<u64>| {
+            state.begin_upload_with(
+                &bucket,
+                &ObjectName::try_new(name).unwrap(),
+                NewMetadata::default(),
+                Precondition::default(),
+                UploadOptions {
+                    total,
+                    ..UploadOptions::default()
+                },
+                now,
+            )
+        };
+        assert!(begin(&mut state, "declared-exact", Some(3)).is_ok());
+        assert_eq!(
+            begin(&mut state, "declared-over", Some(4)),
+            Err(StorageError::TooLarge)
+        );
+        let id = begin(&mut state, "streamed", None).unwrap();
+        assert_eq!(state.append_upload(&id, 0, &[1, 2, 3], now), Ok(3));
+        assert_eq!(
+            state.append_upload(&id, 3, &[4], now),
+            Err(StorageError::TooLarge)
+        );
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn a_configured_object_limit_admits_a_write_exactly_when_it_fits(
+            limit in 1_u64..64,
+            size in 0_usize..80,
+        ) {
+            let bucket = BucketName::try_new("demo-limit").unwrap();
+            let mut state = StorageState::new(1);
+            state.set_max_object_bytes(limit);
+            let result = state.put(
+                &bucket,
+                &ObjectName::try_new("o").unwrap(),
+                vec![0; size],
+                NewMetadata::default(),
+                Precondition::default(),
+                LogicalInstant::UNIX_EPOCH,
+            );
+            if size as u64 <= limit {
+                proptest::prop_assert!(result.is_ok());
+            } else {
+                proptest::prop_assert!(matches!(result, Err(StorageError::TooLarge)));
+            }
+        }
+    }
+
+    #[test]
     fn a_prepared_write_accepts_exactly_the_object_limit_and_refuses_one_byte_more() {
         // Stand-in digests: the size bound is checked before the digests are used, and hashing
         // 256 MiB in an unoptimized test build would take minutes.
@@ -4062,6 +4162,12 @@ mod tests {
         assert_eq!(
             write(&mut state, "exact", prepared(MAX_OBJECT_BYTES)),
             Ok(MAX_OBJECT_BYTES)
+        );
+        state.clear();
+        state.set_max_object_bytes(MAX_OBJECT_BYTES + 1);
+        assert_eq!(
+            write(&mut state, "raised", prepared(MAX_OBJECT_BYTES + 1)),
+            Ok(MAX_OBJECT_BYTES + 1)
         );
     }
 

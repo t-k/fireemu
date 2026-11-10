@@ -81,6 +81,8 @@ maxStoredBytes = 1073741824
 | `storage.defaultBucket` | Which of the project's two default buckets exist under `strict` ([below](#buckets-that-do-not-exist)). |
 | `storage.buckets`, `storage.publicBuckets` | Declare buckets, and buckets whose public URL needs no credential. Ignored by the `emulator` profile. |
 | `storage.maxStoredBytes` | A local cap on stored bytes. A write that would pass it is refused with HTTP 402 (`storage.maxStoredBytes limit exceeded`); see [Limit the stored bytes](#limit-the-stored-bytes). Production has no such limit. |
+| `storage.maxObjectBytes` | Per-object size limit, default 256 MiB (maximum 2143289343). Larger uploads are refused with HTTP 413; see [Limit the stored bytes](#limit-the-stored-bytes). |
+| `storage.bufferedBodyBudgetBytes` | Process-wide budget for buffered request bodies, default 1 GiB. A request past it gets HTTP 503 with `Retry-After: 1`. |
 
 ## Buckets that do not exist
 
@@ -206,6 +208,8 @@ match /teams/{team}/requests/{id} {
 In the measured rules, this also permits listing the ancestor's child prefixes. It does not authorize delimiter-free recursive enumeration of the request's attachments. Keep attachment `get`, `create`, `update` and `delete` conditions unchanged. Do not replace them with a broad recursive `allow read`: `read` includes both `get` and `list`. Listing permission exposes names under the prefix even when a particular object's content cannot be read; it does not grant content access or filter the list to objects with `get` permission.
 
 ## Limit the stored bytes
+
+Each object is limited to 256 MiB by default. Set `storage.maxObjectBytes` to change that limit; the HTTP request body limit is 4 MiB larger to allow multipart overhead. `storage.bufferedBodyBudgetBytes` bounds the request bodies buffered across the process and defaults to 1 GiB. Requests that exceed the available budget receive HTTP 503 with `Retry-After: 1`. Both settings accept positive whole numbers of bytes; the maximum is 2143289343 for `maxObjectBytes` and 2147483647 for `bufferedBodyBudgetBytes`. A budget smaller than a request can refuse it even when the object is within its limit. Resumable uploads also have a separate 1 GiB aggregate retained-upload limit, and import has a separate 1 GiB total limit.
 
 The Storage emulator keeps every object in memory, and by default nothing bounds how much. To cap it, set `storage.maxStoredBytes` to a number of bytes of at least 1 ([Configure](#configure)). This limit is local to Fireemu; production has none.
 

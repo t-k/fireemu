@@ -2870,11 +2870,14 @@ fn storage_state(
         allow_unsigned_id_tokens: cfg.auth_allow_unsigned_id_tokens,
         control_token: Some(control_token),
     });
-    state
-        .store
-        .lock()
-        .map_err(|_| "the Storage store lock is poisoned".to_owned())?
-        .set_stored_bytes_limit(cfg.storage_max_stored_bytes);
+    {
+        let mut store = state
+            .store
+            .lock()
+            .map_err(|_| "the Storage store lock is poisoned".to_owned())?;
+        store.set_stored_bytes_limit(cfg.storage_max_stored_bytes);
+        store.set_max_object_bytes(cfg.storage_max_object_bytes);
+    }
     Ok(state)
 }
 

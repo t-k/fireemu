@@ -13,3 +13,5 @@ apiMode = "native"
 
 [storage]
 maxStoredBytes = 1073741824
+maxObjectBytes = 335544320
+bufferedBodyBudgetBytes = 1073741824

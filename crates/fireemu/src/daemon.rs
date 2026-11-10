@@ -1233,6 +1233,7 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
             exporter.products,
             &cfg.auth_project,
             cfg.profile != crate::config::CompatibilityProfile::Strict,
+            cfg.storage_max_object_bytes,
         )
         .map_err(|e| format!("--import {}: {e}", dir.display()))?;
         if !quiet {
@@ -1537,6 +1538,8 @@ async fn serve_suite(
         )
     );
     if let Some(listener) = storage_listener {
+        fireemu_adapter_http::storage_server::BODY_BUDGET
+            .set_limit(cfg.storage_buffered_body_budget_bytes);
         spawn_server!(
             "Storage",
             fireemu_adapter_http::storage_server::serve_storage(listener, storage.clone())

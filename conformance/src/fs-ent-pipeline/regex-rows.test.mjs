@@ -48,3 +48,35 @@ test("the saved request export of the strict refusal gate is exactly the regex p
   const { EXPORT, regexRequestsText } = await import("./regex-requests.mjs");
   assert.equal(readFileSync(EXPORT, "utf8"), regexRequestsText());
 });
+
+test("an unknown answer or a differing second recording stops the export", () => {
+  const stepId = "regex-contains-d-arabic";
+  const programId = "fs-ent-pipeline-regex/rx/digit";
+  const mutate = (change) => {
+    const copy = structuredClone(fixture);
+    change(copy.programs[programId]);
+    return copy;
+  };
+  assert.throws(
+    () => productionRows(mutate((program) => (program.steps[stepId].status = 503))),
+    /unusable outcome/,
+  );
+  assert.throws(
+    () => productionRows(mutate((program) => (program.second = { [stepId]: { status: 200 } }))),
+    /second recording differs/,
+  );
+  // A second recording that does not hold the step is no difference.
+  assert.equal(
+    productionRows(mutate((program) => (program.second = { other: {} }))).length,
+    PAIRS.length,
+  );
+});
+
+test("the saved table escapes every code point outside printable ASCII, astral ones as pairs", () => {
+  const text = formatRows([
+    { label: "x", subject: "a\u{e9}\u{1f600}\u{7f}~ ", pattern: "", answers: {} },
+  ]);
+  assert.match(text, /"subject":"a\\u00e9\\ud83d\\ude00\\u007f~ "/);
+  for (const ch of text) assert.ok(ch === "\n" || (ch >= " " && ch <= "~"), ch);
+  assert.deepEqual(JSON.parse(text)[0].subject, "a\u{e9}\u{1f600}\u{7f}~ ");
+});

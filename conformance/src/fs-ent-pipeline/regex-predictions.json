@@ -1,0 +1,803 @@
+{
+  "source": "Go regexp (RE2 syntax and semantics), go1.26.10; a prediction to read the recording against, not production evidence. An unmatched capture group is not predicted: production may answer null or an empty string.",
+  "pairs": {
+    "b-cafe-edge": {
+      "contains": true,
+      "match": false,
+      "find": {
+        "kind": "string",
+        "value": "caf"
+      },
+      "findAll": [
+        {
+          "kind": "string",
+          "value": "caf"
+        }
+      ]
+    },
+    "b-cafe-whole": {
+      "contains": false,
+      "match": false,
+      "find": null,
+      "findAll": []
+    },
+    "b-eacute": {
+      "contains": false,
+      "match": false,
+      "find": null,
+      "findAll": []
+    },
+    "bs-hex": {
+      "contains": true,
+      "match": false,
+      "find": {
+        "kind": "string",
+        "value": "\\"
+      },
+      "findAll": [
+        {
+          "kind": "string",
+          "value": "\\"
+        }
+      ]
+    },
+    "bs-in-class": {
+      "contains": true,
+      "match": false,
+      "find": {
+        "kind": "string",
+        "value": "\\"
+      },
+      "findAll": [
+        {
+          "kind": "string",
+          "value": "\\"
+        }
+      ]
+    },
+    "bs-lit": {
+      "contains": true,
+      "match": false,
+      "find": {
+        "kind": "string",
+        "value": "\\"
+      },
+      "findAll": [
+        {
+          "kind": "string",
+          "value": "\\"
+        }
+      ]
+    },
+    "bs-lit-run": {
+      "contains": true,
+      "match": true,
+      "find": {
+        "kind": "string",
+        "value": "a\\b"
+      },
+      "findAll": [
+        {
+          "kind": "string",
+          "value": "a\\b"
+        }
+      ]
+    },
+    "bs-trailing": {
+      "error": true,
+      "find": null,
+      "findAll": null
+    },
+    "bsd-digit": {
+      "contains": false,
+      "match": false,
+      "find": null,
+      "findAll": []
+    },
+    "bsd-pair": {
+      "contains": true,
+      "match": true,
+      "find": {
+        "kind": "string",
+        "value": "\\d"
+      },
+      "findAll": [
+        {
+          "kind": "string",
+          "value": "\\d"
+        }
+      ]
+    },
+    "cap-all-alt": {
+      "contains": true,
+      "match": false,
+      "find": {
+        "kind": "string",
+        "value": "a"
+      },
+      "findAll": [
+        {
+          "kind": "string",
+          "value": "a"
+        },
+        {
+          "kind": "unmatched"
+        },
+        {
+          "kind": "string",
+          "value": "a"
+        },
+        {
+          "kind": "unmatched"
+        }
+      ]
+    },
+    "cap-all-opt": {
+      "contains": true,
+      "match": false,
+      "find": {
+        "kind": "string",
+        "value": "a"
+      },
+      "findAll": [
+        {
+          "kind": "string",
+          "value": "a"
+        }
+      ]
+    },
+    "cap-alt-first": {
+      "contains": true,
+      "match": false,
+      "find": {
+        "kind": "string",
+        "value": "a"
+      },
+      "findAll": [
+        {
+          "kind": "string",
+          "value": "a"
+        },
+        {
+          "kind": "unmatched"
+        }
+      ]
+    },
+    "cap-alt-one": {
+      "contains": true,
+      "match": true,
+      "find": {
+        "kind": "unmatched"
+      },
+      "findAll": [
+        {
+          "kind": "unmatched"
+        }
+      ]
+    },
+    "cap-alt-second": {
+      "contains": true,
+      "match": true,
+      "find": {
+        "kind": "unmatched"
+      },
+      "findAll": [
+        {
+          "kind": "unmatched"
+        }
+      ]
+    },
+    "cap-empty": {
+      "contains": true,
+      "match": false,
+      "find": {
+        "kind": "string"
+      },
+      "findAll": [
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        }
+      ]
+    },
+    "cap-named": {
+      "contains": true,
+      "match": true,
+      "find": {
+        "kind": "string",
+        "value": "a"
+      },
+      "findAll": [
+        {
+          "kind": "string",
+          "value": "a"
+        }
+      ]
+    },
+    "cap-nested": {
+      "contains": true,
+      "match": true,
+      "find": {
+        "kind": "string",
+        "value": "a"
+      },
+      "findAll": [
+        {
+          "kind": "string",
+          "value": "a"
+        }
+      ]
+    },
+    "cap-noncapturing": {
+      "contains": true,
+      "match": true,
+      "find": {
+        "kind": "string",
+        "value": "ab"
+      },
+      "findAll": [
+        {
+          "kind": "string",
+          "value": "ab"
+        }
+      ]
+    },
+    "cap-opt-unmatched": {
+      "contains": true,
+      "match": true,
+      "find": {
+        "kind": "unmatched"
+      },
+      "findAll": [
+        {
+          "kind": "unmatched"
+        }
+      ]
+    },
+    "cap-two": {
+      "contains": true,
+      "match": true,
+      "find": {
+        "kind": "string",
+        "value": "a"
+      },
+      "findAll": [
+        {
+          "kind": "string",
+          "value": "a"
+        }
+      ]
+    },
+    "ctl-class": {
+      "contains": true,
+      "match": false,
+      "find": {
+        "kind": "string",
+        "value": "\u0001"
+      },
+      "findAll": [
+        {
+          "kind": "string",
+          "value": "\u0001"
+        }
+      ]
+    },
+    "ctl-dot": {
+      "contains": true,
+      "match": true,
+      "find": {
+        "kind": "string",
+        "value": "a\u0001b"
+      },
+      "findAll": [
+        {
+          "kind": "string",
+          "value": "a\u0001b"
+        }
+      ]
+    },
+    "ctl-hex": {
+      "contains": true,
+      "match": true,
+      "find": {
+        "kind": "string",
+        "value": "a\u0001b"
+      },
+      "findAll": [
+        {
+          "kind": "string",
+          "value": "a\u0001b"
+        }
+      ]
+    },
+    "ctl-range": {
+      "contains": true,
+      "match": false,
+      "find": {
+        "kind": "string",
+        "value": "\u0001"
+      },
+      "findAll": [
+        {
+          "kind": "string",
+          "value": "\u0001"
+        }
+      ]
+    },
+    "d-arabic": {
+      "contains": false,
+      "match": false,
+      "find": null,
+      "findAll": []
+    },
+    "d-arabic-run": {
+      "contains": false,
+      "match": false,
+      "find": null,
+      "findAll": []
+    },
+    "d-ascii-ctl": {
+      "contains": true,
+      "match": true,
+      "find": {
+        "kind": "string",
+        "value": "123"
+      },
+      "findAll": [
+        {
+          "kind": "string",
+          "value": "123"
+        }
+      ]
+    },
+    "d-bracket": {
+      "contains": false,
+      "match": false,
+      "find": null,
+      "findAll": []
+    },
+    "del-class": {
+      "contains": true,
+      "match": false,
+      "find": {
+        "kind": "string",
+        "value": "\u007f"
+      },
+      "findAll": [
+        {
+          "kind": "string",
+          "value": "\u007f"
+        }
+      ]
+    },
+    "hex-nbsp": {
+      "contains": true,
+      "match": true,
+      "find": {
+        "kind": "string",
+        "value": "a\u00a0b"
+      },
+      "findAll": [
+        {
+          "kind": "string",
+          "value": "a\u00a0b"
+        }
+      ]
+    },
+    "i-ascii-ctl": {
+      "contains": true,
+      "match": true,
+      "find": {
+        "kind": "string",
+        "value": "Ab"
+      },
+      "findAll": [
+        {
+          "kind": "string",
+          "value": "Ab"
+        }
+      ]
+    },
+    "i-eacute": {
+      "contains": true,
+      "match": true,
+      "find": {
+        "kind": "string",
+        "value": "\u00c9"
+      },
+      "findAll": [
+        {
+          "kind": "string",
+          "value": "\u00c9"
+        }
+      ]
+    },
+    "i-group": {
+      "contains": true,
+      "match": true,
+      "find": {
+        "kind": "string",
+        "value": "Ab"
+      },
+      "findAll": [
+        {
+          "kind": "string",
+          "value": "Ab"
+        }
+      ]
+    },
+    "i-kelvin": {
+      "contains": true,
+      "match": true,
+      "find": {
+        "kind": "string",
+        "value": "\u212a"
+      },
+      "findAll": [
+        {
+          "kind": "string",
+          "value": "\u212a"
+        }
+      ]
+    },
+    "i-off": {
+      "contains": true,
+      "match": true,
+      "find": {
+        "kind": "string",
+        "value": "Ab"
+      },
+      "findAll": [
+        {
+          "kind": "string",
+          "value": "Ab"
+        }
+      ]
+    },
+    "i-sigma": {
+      "contains": true,
+      "match": true,
+      "find": {
+        "kind": "string",
+        "value": "\u03c2"
+      },
+      "findAll": [
+        {
+          "kind": "string",
+          "value": "\u03c2"
+        }
+      ]
+    },
+    "m-anchor": {
+      "contains": true,
+      "match": false,
+      "find": {
+        "kind": "string",
+        "value": "b"
+      },
+      "findAll": [
+        {
+          "kind": "string",
+          "value": "b"
+        }
+      ]
+    },
+    "m-off": {
+      "contains": false,
+      "match": false,
+      "find": null,
+      "findAll": []
+    },
+    "nb-eacute": {
+      "contains": true,
+      "match": false,
+      "find": {
+        "kind": "string"
+      },
+      "findAll": [
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        }
+      ]
+    },
+    "nd-arabic": {
+      "contains": true,
+      "match": false,
+      "find": {
+        "kind": "string",
+        "value": "\u0661"
+      },
+      "findAll": [
+        {
+          "kind": "string",
+          "value": "\u0661"
+        },
+        {
+          "kind": "string",
+          "value": "\u0662"
+        },
+        {
+          "kind": "string",
+          "value": "\u0663"
+        }
+      ]
+    },
+    "ns-nbsp": {
+      "contains": true,
+      "match": true,
+      "find": {
+        "kind": "string",
+        "value": "a\u00a0b"
+      },
+      "findAll": [
+        {
+          "kind": "string",
+          "value": "a\u00a0b"
+        }
+      ]
+    },
+    "nu-flag": {
+      "error": true,
+      "find": null,
+      "findAll": null
+    },
+    "nw-cafe": {
+      "contains": true,
+      "match": false,
+      "find": {
+        "kind": "string",
+        "value": "\u00e9"
+      },
+      "findAll": [
+        {
+          "kind": "string",
+          "value": "\u00e9"
+        }
+      ]
+    },
+    "nw-eacute": {
+      "contains": true,
+      "match": true,
+      "find": {
+        "kind": "string",
+        "value": "\u00e9"
+      },
+      "findAll": [
+        {
+          "kind": "string",
+          "value": "\u00e9"
+        }
+      ]
+    },
+    "pl-eacute": {
+      "contains": true,
+      "match": true,
+      "find": {
+        "kind": "string",
+        "value": "\u00e9"
+      },
+      "findAll": [
+        {
+          "kind": "string",
+          "value": "\u00e9"
+        }
+      ]
+    },
+    "pnd-arabic": {
+      "contains": true,
+      "match": true,
+      "find": {
+        "kind": "string",
+        "value": "\u0661\u0662\u0663"
+      },
+      "findAll": [
+        {
+          "kind": "string",
+          "value": "\u0661\u0662\u0663"
+        }
+      ]
+    },
+    "posix-digit": {
+      "contains": false,
+      "match": false,
+      "find": null,
+      "findAll": []
+    },
+    "posix-nbsp": {
+      "contains": false,
+      "match": false,
+      "find": null,
+      "findAll": []
+    },
+    "posix-vt": {
+      "contains": true,
+      "match": true,
+      "find": {
+        "kind": "string",
+        "value": "a\u000bb"
+      },
+      "findAll": [
+        {
+          "kind": "string",
+          "value": "a\u000bb"
+        }
+      ]
+    },
+    "posix-word": {
+      "contains": false,
+      "match": false,
+      "find": null,
+      "findAll": []
+    },
+    "range-ctl": {
+      "contains": false,
+      "match": false,
+      "find": null,
+      "findAll": []
+    },
+    "s-dot": {
+      "contains": false,
+      "match": false,
+      "find": null,
+      "findAll": []
+    },
+    "s-dotall": {
+      "contains": true,
+      "match": true,
+      "find": {
+        "kind": "string",
+        "value": "a\nb"
+      },
+      "findAll": [
+        {
+          "kind": "string",
+          "value": "a\nb"
+        }
+      ]
+    },
+    "s-em": {
+      "contains": false,
+      "match": false,
+      "find": null,
+      "findAll": []
+    },
+    "s-nbsp": {
+      "contains": false,
+      "match": false,
+      "find": null,
+      "findAll": []
+    },
+    "s-nbsp-only": {
+      "contains": false,
+      "match": false,
+      "find": null,
+      "findAll": []
+    },
+    "s-nel": {
+      "contains": false,
+      "match": false,
+      "find": null,
+      "findAll": []
+    },
+    "s-space-ctl": {
+      "contains": true,
+      "match": true,
+      "find": {
+        "kind": "string",
+        "value": "a b"
+      },
+      "findAll": [
+        {
+          "kind": "string",
+          "value": "a b"
+        }
+      ]
+    },
+    "s-vt": {
+      "contains": false,
+      "match": false,
+      "find": null,
+      "findAll": []
+    },
+    "tab-lit": {
+      "contains": true,
+      "match": true,
+      "find": {
+        "kind": "string",
+        "value": "a\tb"
+      },
+      "findAll": [
+        {
+          "kind": "string",
+          "value": "a\tb"
+        }
+      ]
+    },
+    "tab-s": {
+      "contains": true,
+      "match": true,
+      "find": {
+        "kind": "string",
+        "value": "a\tb"
+      },
+      "findAll": [
+        {
+          "kind": "string",
+          "value": "a\tb"
+        }
+      ]
+    },
+    "u-flag": {
+      "error": true,
+      "find": null,
+      "findAll": null
+    },
+    "ungreedy": {
+      "contains": true,
+      "match": true,
+      "find": {
+        "kind": "string",
+        "value": "a"
+      },
+      "findAll": [
+        {
+          "kind": "string",
+          "value": "a"
+        },
+        {
+          "kind": "string",
+          "value": "a"
+        },
+        {
+          "kind": "string",
+          "value": "a"
+        }
+      ]
+    },
+    "w-bracket": {
+      "contains": false,
+      "match": false,
+      "find": null,
+      "findAll": []
+    },
+    "w-cafe-run": {
+      "contains": true,
+      "match": false,
+      "find": {
+        "kind": "string",
+        "value": "caf"
+      },
+      "findAll": [
+        {
+          "kind": "string",
+          "value": "caf"
+        }
+      ]
+    },
+    "w-decomposed": {
+      "contains": true,
+      "match": false,
+      "find": {
+        "kind": "string",
+        "value": "e"
+      },
+      "findAll": [
+        {
+          "kind": "string",
+          "value": "e"
+        }
+      ]
+    },
+    "w-eacute": {
+      "contains": false,
+      "match": false,
+      "find": null,
+      "findAll": []
+    }
+  }
+}

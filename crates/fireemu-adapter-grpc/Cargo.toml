@@ -33,6 +33,7 @@ bytes = "1"
 chrono = "0.4"
 chrono-tz = "0.10"
 regex = "1.13.1"
+regex-syntax = "0.8.11"
 
 [dev-dependencies]
 tokio-stream = { version = "0.1", features = ["net"] }

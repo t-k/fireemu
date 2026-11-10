@@ -732,6 +732,7 @@ dependencies = [
  "prost",
  "prost-types",
  "regex",
+ "regex-syntax",
  "serde_json",
  "sha2",
  "tokio",

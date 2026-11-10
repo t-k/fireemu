@@ -582,3 +582,264 @@ test("a paged channel list or an earlier run's channel stops the run before any 
     );
   }
 });
+
+import { createBudget, makeApi } from "./record.mjs";
+
+const channelsPost = "POST /channels\\?channelId=/";
+const hostOf = (id) => `fireemu-oracle-idp--${id}-abcdef12.web.app`;
+
+test("the REST client refuses an unreviewed host or scheme before it sends or spends", async () => {
+  let sent = 0;
+  const budget = createBudget();
+  const api = makeApi({
+    deps: {
+      now: () => 0,
+      token: async () => ({ value: "t", expiresAt: 1e12 }),
+      http: async () => {
+        sent += 1;
+        return reply(200);
+      },
+      appendRunFile: async () => {},
+    },
+    budget,
+    adc: {},
+    runDir: "/r",
+  });
+  await assert.rejects(api.call("control", "GET", "https://evil.example/x"), /not reviewed/);
+  await assert.rejects(
+    api.call("control", "GET", "http://firebasehosting.googleapis.com/x"),
+    /not reviewed/,
+  );
+  assert.equal(sent, 0);
+  assert.deepEqual(budget.snapshot(), { token: 0, control: 0, cleanup: 0, upload: 0, edge: 0 });
+});
+
+test("a channel url that only looks like the run's host, or is not https, sends no edge request", async () => {
+  const urls = [
+    `https://${hostOf("hst-abc123-extra")}`,
+    `https://${hostOf("hst-ffffff-v01")}`,
+    `http://${hostOf("hst-abc123-v01")}`,
+  ];
+  for (const url of urls) {
+    const r = await run({
+      overrides: [
+        fault(
+          channelsPost,
+          reply(200, { name: "projects/p/sites/s/channels/hst-abc123-v01", url }),
+        ),
+      ],
+    });
+    assert.equal(edgeCalls(r).length, 0, url);
+    assert.match(deployOf(r).v01.failure, /channel host/);
+    assert.equal(r.result.outcome, "failed-cleaned", "the channel is deleted by its id");
+    assert.ok([...r.world.state.channels.values()].every((channel) => channel.deleted));
+  }
+});
+
+test("the channel is created with a 24 hour ttl and the run label, the version with its labels", async () => {
+  const r = await run();
+  const body = (call) => JSON.parse(call.body);
+  const channel = r.world.log.find(
+    (call) => call.method === "POST" && call.url.includes("channelId="),
+  );
+  assert.deepEqual(body(channel), { ttl: "86400s", labels: { "fireemu-run": "abc123" } });
+  const version = r.world.log.find(
+    (call) => call.method === "POST" && call.url.endsWith("/versions"),
+  );
+  assert.deepEqual(body(version), {
+    labels: { "fireemu-run": "abc123", "fireemu-version": "v01" },
+  });
+  for (const call of r.world.log.filter((c) => c.kind !== "edge")) {
+    assert.equal(call.headers["x-goog-user-project"], PROJECT, call.url);
+    assert.equal(call.headers.authorization, "Bearer fake-bearer");
+  }
+});
+
+test("only a 400 on a version with optional keys is resent; any other refusal fails the version", async () => {
+  const r = await run({ overrides: [fault(finalize, reply(403), 2)] });
+  assert.equal(r.world.log.filter((call) => call.method === "PATCH").length, 2);
+  assert.equal(deployOf(r).v02.droppedConfig, undefined);
+  assert.match(deployOf(r).v02.failure, /finalize failed \(403\)/);
+  assert.equal(r.result.outcome, "failed-cleaned");
+});
+
+test("an edge answer of 500 or 429 is an unknown row", async () => {
+  const r = await run({
+    overrides: [
+      fault("GET /data.json$/", answer(500), 1),
+      fault("GET /data.json\\?q=1$/", answer(429), 1),
+    ],
+  });
+  const byId = Object.fromEntries(rowsOf(r).map((row) => [row.id, row]));
+  assert.deepEqual(
+    [byId["v01.static"].outcome, byId["v01.static"].reason],
+    ["unknown", "http-500"],
+  );
+  assert.deepEqual([byId["v01.query"].outcome, byId["v01.query"].reason], ["unknown", "http-429"]);
+});
+
+test("a refused delete is residual, and an unknown delete that took effect still needs recovery", async () => {
+  const refused = await run({ overrides: [fault(channelDelete, reply(403))] });
+  assert.ok(
+    resultOf(refused).residual.some((entry) => /channel delete refused \(403\)/.test(entry)),
+  );
+  assert.equal(refused.result.outcome, "needs-recovery");
+  const took = await run({
+    overrides: [
+      fault(channelDelete, (_call, state) => {
+        state.channels.get("hst-abc123-v01").deleted = true;
+        return reply(500);
+      }),
+    ],
+  });
+  assert.equal(resultOf(took).readback.clean, true, "the read-back alone would pass");
+  assert.equal(took.result.outcome, "needs-recovery");
+  assert.equal(terminal(took).event, "needs-recovery");
+  assert.equal(terminal(took).closureReady, false);
+});
+
+test("authorized domains that change during the run leave the run needing recovery", async () => {
+  const r = await run({
+    overrides: [
+      fault(
+        "GET /admin/v2/projects/fireemu-oracle-idp/config/",
+        reply(200, { authorizedDomains: ["other.example"] }),
+        2,
+      ),
+    ],
+  });
+  assert.equal(r.result.outcome, "needs-recovery");
+  assert.equal(resultOf(r).readback.domainsUnchanged, false);
+});
+
+test("a thrown effect with a private value in its message reaches no file and no ledger row", async () => {
+  const r = await run({
+    setup: (_world, deps) => {
+      deps.edge = async () => {
+        throw new Error(`boom ${fakeSecrets.apiKey}`);
+      };
+    },
+  });
+  assert.equal(r.result.outcome, "failed-cleaned");
+  assert.match(terminal(r).reason, /exception: boom #+/);
+  noSecrets(r);
+});
+
+test("a disabled Hosting API stops the run before any write", async () => {
+  await assert.rejects(
+    run({
+      overrides: [
+        fault("GET /v1/projects/fireemu-oracle-idp/services/", reply(200, { state: "DISABLED" })),
+      ],
+    }),
+    /DISABLED/,
+  );
+});
+
+test("recovery also takes a needs-recovery run and leaves another run's channel alone", async () => {
+  const r = await run();
+  const channel = [...r.world.state.channels.values()][0];
+  channel.deleted = false;
+  const other = {
+    ...channel,
+    name: "projects/p/sites/s/channels/hst-ffffff-v01",
+    url: `https://${hostOf("hst-ffffff-v01")}`,
+    deleted: false,
+  };
+  r.world.state.channels.set("hst-ffffff-v01", other);
+  r.ledger.push(
+    JSON.stringify({
+      ...closed,
+      taskId: TASK_ID,
+      event: "started",
+      run: "abc123",
+      authorizedDomainsBefore: ["localhost"],
+    }),
+    JSON.stringify({
+      ...closed,
+      taskId: TASK_ID,
+      event: "needs-recovery",
+      outcome: "needs-recovery",
+      run: "abc123",
+    }),
+  );
+  const recovered = await recoverHosting({}, r.deps);
+  assert.equal(recovered.outcome, "recovered", "another run's channel is not this run's to judge");
+  assert.equal(other.deleted, false);
+  assert.equal(channel.deleted, true);
+});
+
+test("the ledger row says whether the lock stays", async () => {
+  const served = {
+    outcome: "answered",
+    status: 200,
+    headers: [
+      ["etag", '"x"'],
+      ["content-type", "text/html"],
+    ],
+    body: Buffer.from("first\n"),
+  };
+  const clean = await run({ overrides: [fault("GET /rewrite/a$/", served, undefined)] });
+  assert.equal(clean.result.outcome, "recorded");
+  assert.equal(terminal(clean).lockKept, false);
+  const unknown = await run();
+  assert.equal(terminal(unknown).lockKept, true);
+  const broken = await run({ overrides: [fault(channelDelete, reply(500))] });
+  assert.equal(terminal(broken).lockKept, true);
+});
+
+test("a stop during a version's requests ends its serving at once", async () => {
+  let stop;
+  const r = await run({
+    setup: (world, deps) => {
+      deps.installSignals = (handler) => {
+        stop = handler;
+      };
+      deps.edge = async (call) => {
+        const value = await world.edge(call);
+        if (call.host.includes("-v02-") && call.target !== "/ready.txt") stop();
+        return value;
+      };
+    },
+  });
+  const v02 = rowsOf(r).filter((row) => row.version === "v02");
+  assert.equal(v02[0].outcome, "answered");
+  assert.ok(v02.slice(1).every((row) => row.reason === "stopped"));
+  assert.equal(edgeCalls(r).filter((call) => call.host.includes("-v02-")).length, 2);
+});
+
+test("a hash the version does not hold, an unfinalized version and an endless listing fail safe", async () => {
+  const hash = await run({
+    overrides: [
+      fault(
+        "POST /:populateFiles/",
+        reply(200, {
+          uploadRequiredHashes: ["deadbeef"],
+          uploadUrl: "https://upload-firebasehosting.googleapis.com/upload/x",
+        }),
+      ),
+    ],
+  });
+  assert.match(deployOf(hash).v01.failure, /hash the version does not hold/);
+  assert.equal(hash.world.log.filter((call) => call.kind === "upload").length, 0);
+  const created = await run({
+    overrides: [
+      fault(
+        "GET /sites/fireemu-oracle-idp/versions/[0-9]+$/",
+        reply(200, { status: "CREATED", fileCount: "1" }),
+        1,
+      ),
+    ],
+  });
+  assert.match(deployOf(created).v01.failure, /version is CREATED/);
+  const endless = await run({
+    overrides: [
+      {
+        match: "GET /versions\\?pageSize=100/",
+        answer: reply(200, { versions: [], nextPageToken: "more" }),
+      },
+    ],
+  });
+  assert.equal(endless.result.outcome, "needs-recovery");
+  assert.equal(resultOf(endless).readback.versionsTruncated, true);
+});

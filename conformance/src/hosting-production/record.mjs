@@ -24,7 +24,7 @@ import { servingConfig } from "./convert.mjs";
 import { buildCorpus, corpusManifest } from "./corpus.mjs";
 import { requestHeaders } from "./local.mjs";
 import { CORPUS_SHA256 } from "./pins.mjs";
-import { assertNoSecrets, shapeRow } from "./rows.mjs";
+import { assertNoSecrets, maskSecrets, shapeRow } from "./rows.mjs";
 
 export const TASK_ID = "HOSTING-PRODUCTION";
 export const PROJECT = "fireemu-oracle-idp";
@@ -230,8 +230,9 @@ export async function recordHosting(env, deps) {
     try {
       await deployAndServe({ version, record, run, api, deps, secrets, state, sink });
     } catch (error) {
-      state.halt ??=
-        error instanceof CapReached ? `cap: ${error.message}` : `exception: ${error.message}`;
+      // The message may carry whatever an effect threw; it reaches the ledger, so it is masked.
+      const message = maskSecrets(String(error.message), secrets);
+      state.halt ??= error instanceof CapReached ? `cap: ${message}` : `exception: ${message}`;
       record.failure ??= state.halt;
     } finally {
       record.cleanup = await removeVersion({ record, api, state });
@@ -319,7 +320,7 @@ function unknownRows(version, reason, secrets, from = 0) {
 }
 
 /** The counted, allow-listed, never-retrying REST client over `deps.http`. */
-function makeApi({ deps, budget, adc, runDir }) {
+export function makeApi({ deps, budget, adc, runDir }) {
   let token;
   const journal = (kind, method, url, status) =>
     deps.appendRunFile(

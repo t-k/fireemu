@@ -854,3 +854,14 @@ test("a version create that was never applied is still unknown: absence does not
     assert.ok(resultOf(r).needsRecovery.some((entry) => /version create unknown/.test(entry)));
   }
 });
+
+test("a dependent header whose source request got no answer is an unsent dependency row", async () => {
+  const r = await run({ overrides: [fault("GET /data.json$/", "timeout", 1)] });
+  const byId = Object.fromEntries(rowsOf(r).map((row) => [row.id, row]));
+  assert.equal(byId["v01.static"].reason, "network-error");
+  assert.deepEqual(
+    [byId["v01.cond-etag"].outcome, byId["v01.cond-etag"].reason],
+    ["unknown", "dependency"],
+  );
+  assert.equal(r.result.outcome, "observed-unknown");
+});

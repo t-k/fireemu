@@ -61,3 +61,22 @@ test("a row file of another corpus is refused", () => {
     /not a row file of the pinned corpus/,
   );
 });
+
+test("the init.js layout is compared between two recordings, not between production and local", () => {
+  const initJs = requests.find((r) => r.target === "/__/firebase/init.js");
+  const rowOf = (lines) =>
+    requests.map((spec) =>
+      spec.id === initJs.id
+        ? shapeRow(
+            spec,
+            { ...answer(200), body: Buffer.from("x\n".repeat(lines)) },
+            { origin: "http://o", secrets: [] },
+          )
+        : shapeRow(spec, answer(200), { origin: "http://o", secrets: [] }),
+    );
+  const [a, b] = [file("a", rowOf(3)), file("b", rowOf(5))];
+  const local = compareFiles({ kind: "production-vs-local", left: a, right: b, corpus });
+  assert.equal(local.rows.find((r) => r.id === initJs.id).status, "MATCH");
+  const runs = compareFiles({ kind: "run-vs-run", left: a, right: b, corpus });
+  assert.equal(runs.rows.find((r) => r.id === initJs.id).status, "MISMATCH");
+});

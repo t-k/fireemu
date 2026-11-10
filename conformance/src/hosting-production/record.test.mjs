@@ -674,6 +674,7 @@ test("admission needs the envelope id, in the form of a HOSTING envelope", () =>
     "HOSTING-PRODUCTION-V4 20261111",
     "OTHER-V4-20261111",
     "HOSTING-PRODUCTION-",
+    "HOSTING-PRODUCTION-V4-20261111 extra",
     "xHOSTING-PRODUCTION-V4-20261111",
   ])
     assert.throws(

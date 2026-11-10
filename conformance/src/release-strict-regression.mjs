@@ -1704,6 +1704,17 @@ export function exportCopies(comparisons, runs) {
     }));
 }
 
+export function selectGroup(plan, group) {
+  const ids = group ? new Set(GROUPS[group]) : undefined;
+  return {
+    runs: ids ? RUNS.filter((run) => ids.has(run.id)) : RUNS,
+    comparisons: ids
+      ? plan.comparisons.filter((comparison) => comparison.runIds.every((id) => ids.has(id)))
+      : plan.comparisons,
+    reportsR10: !ids || ids.has("R10"),
+  };
+}
+
 /** Validate each retained export snapshot before writing any public comparison copy. */
 export async function copyValidatedExportSnapshots(
   outDir,
@@ -1774,11 +1785,7 @@ async function main() {
     .filter((name) => name.endsWith(".json") && name !== "record-digests.json")
     .map((name) => ({ name, closure: readJson(`${CLOSURE_DIR}/${name}`) }));
   const plan = planRelease(closures, readJson);
-  const ids = args.group ? new Set(GROUPS[args.group]) : undefined;
-  const runs = ids ? RUNS.filter((run) => ids.has(run.id)) : RUNS;
-  const comparisons = ids
-    ? plan.comparisons.filter((comparison) => comparison.runIds.every((id) => ids.has(id)))
-    : plan.comparisons;
+  const { runs, comparisons, reportsR10 } = selectGroup(plan, args.group);
   const binarySha256 = await sha256File(binary);
   const tarballs = {};
   if (args.dist) {
@@ -1826,7 +1833,7 @@ async function main() {
       }
     if (!fatalTimeout) await copyValidatedExportSnapshots(out, exportCopies(comparisons, runs));
   }
-  if (!fatalTimeout && (!ids || ids.has("R10"))) {
+  if (!fatalTimeout && reportsR10) {
     const expectedRaw = context.readJson(
       "spec/compatibility/closure/evidence/integration-v0.8.0/FS-DATA-WRITE-regression.json",
     ).current.rawLocalResultDigests.strict;

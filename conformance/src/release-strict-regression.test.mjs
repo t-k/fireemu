@@ -49,6 +49,7 @@ import {
   planComparisons,
   planRelease,
   readReleaseJson,
+  selectGroup,
 } from "./release-strict-regression.mjs";
 import { PROGRAMS } from "./firestore-probe/programs.mjs";
 import { createBudget } from "../functions-http/harness.mjs";
@@ -1149,16 +1150,38 @@ test("groups partition runs and keep each comparison together", () => {
 });
 
 test("group selection filters runs, comparisons, exports and the R10 report", () => {
-  const source = readFileSync(repo("conformance/src/release-strict-regression.mjs"), "utf8");
-  assert.match(source, /RUNS\.filter\(\(run\) => ids\.has\(run\.id\)\)/);
-  assert.match(
-    source,
-    /plan\.comparisons\.filter\(\(comparison\) => comparison\.runIds\.every\(\(id\) => ids\.has\(id\)\)\)/,
-  );
-  assert.match(source, /runUntilFatal\(runs,/);
-  assert.match(source, /for \(const comparison of comparisons\)/);
-  assert.match(source, /exportCopies\(comparisons, runs\)/);
-  assert.match(source, /!fatalTimeout && \(!ids \|\| ids\.has\("R10"\)\)/);
+  const plan = planComparisons(committedClosures(), readJson);
+  const all = selectGroup(plan);
+  assert.deepEqual(all.runs, RUNS);
+  assert.deepEqual(all.comparisons, plan.comparisons);
+  assert.equal(all.reportsR10, true);
+  const comparisons = [];
+  const copies = [];
+  for (const [group, ids] of Object.entries(GROUPS)) {
+    const selected = selectGroup(plan, group);
+    assert.deepEqual(selected.runs.map(({ id }) => id).sort(), [...ids].sort());
+    assert.deepEqual(
+      selected.comparisons,
+      plan.comparisons.filter((comparison) => comparison.runIds.every((id) => ids.includes(id))),
+    );
+    assert.equal(selected.reportsR10, group === "rest");
+    comparisons.push(...selected.comparisons);
+    const groupCopies = exportCopies(selected.comparisons, selected.runs);
+    for (const copy of groupCopies)
+      assert.ok(ids.includes(copy.from.replace(/-export\.json$/, "")));
+    copies.push(...groupCopies);
+  }
+  assert.equal(new Set(comparisons).size, comparisons.length);
+  assert.deepEqual(new Set(comparisons), new Set(plan.comparisons));
+  const sortCopies = (items) => items.map((item) => JSON.stringify(item)).sort();
+  assert.deepEqual(sortCopies(copies), sortCopies(exportCopies(plan.comparisons, RUNS)));
+});
+
+test("a comparison spanning groups is selected by no group", () => {
+  const comparison = { path: "synthetic.json", runIds: ["R10", "R20"] };
+  for (const group of Object.keys(GROUPS)) {
+    assert.deepEqual(selectGroup({ comparisons: [comparison] }, group).comparisons, []);
+  }
 });
 
 test("the strict-production job installs the blocking fixture's dependencies before the loopback run", () => {

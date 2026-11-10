@@ -617,6 +617,7 @@ test("the REST client refuses an unreviewed host or scheme before it sends or sp
 test("a channel url that only looks like the run's host, or is not https, sends no edge request", async () => {
   const urls = [
     `https://${hostOf("hst-abc123-extra")}`,
+    `https://${hostOf("hst-abc123-vzz")}`,
     `https://${hostOf("hst-ffffff-v01")}`,
     `http://${hostOf("hst-abc123-v01")}`,
   ];
@@ -842,4 +843,14 @@ test("a hash the version does not hold, an unfinalized version and an endless li
   });
   assert.equal(endless.result.outcome, "needs-recovery");
   assert.equal(resultOf(endless).readback.versionsTruncated, true);
+});
+
+test("a version create that was never applied is still unknown: absence does not settle it", async () => {
+  for (const injected of ["network-error", reply(500), reply(302)]) {
+    const r = await run({ overrides: [fault(versionCreate, injected)] });
+    assert.equal(r.world.state.versions.size, 0, "the world applied nothing");
+    assert.equal(r.result.outcome, "needs-recovery");
+    assert.equal(terminal(r).closureReady, false);
+    assert.ok(resultOf(r).needsRecovery.some((entry) => /version create unknown/.test(entry)));
+  }
 });

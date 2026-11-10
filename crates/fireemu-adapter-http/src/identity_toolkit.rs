@@ -5399,7 +5399,8 @@ struct DispatchOptions {
     idp_signers: Option<Arc<IdpSignerTrust>>,
     /// The parent project's live authorized domains, read when a strict tenant-scoped request
     /// was admitted. A tenant store holds only the project defaults, so a tenant-scoped action
-    /// link never checks its own list; without this snapshot it is refused.
+    /// link never checks its own list (without this snapshot it is refused), and the client
+    /// project configuration reports this list for a tenant-scoped request.
     parent_authorized_domains: Option<Vec<String>>,
 }
 
@@ -5555,7 +5556,11 @@ fn dispatch(
             !options.stateless_refresh_tokens,
             options.idp_signers.as_deref(),
         ),
-        Handler::Projects => client_project_config(store, !options.stateless_refresh_tokens),
+        Handler::Projects => client_project_config(
+            store,
+            !options.stateless_refresh_tokens,
+            options.parent_authorized_domains.as_deref(),
+        ),
         Handler::RecaptchaParams => {
             let mut body = json!({
                 "kind": "identitytoolkit#GetRecaptchaParamResponse",
@@ -10321,12 +10326,25 @@ fn custom_token_claims_hold(payload: &JsonValue, now_secs: i64) -> bool {
 /// `GET v1/projects`: the project named by its number, as production and the official
 /// emulator both answer, and the project's authorized domains (sandbox read 2026-09-25). The
 /// emulator profile keeps the official emulator's `localhost` until domains are configured.
-fn client_project_config(store: &AuthStore, strict: bool) -> JsonResponse {
+///
+/// The list is the project's: production's request has no tenant field and the SDK adds none
+/// for a tenant client, and the SDK checks its origin against this list. A strict request that
+/// still selects a tenant store (the query `tenantId`) is answered with
+/// `parent_authorized_domains`, the parent project's live list read when the request was
+/// admitted, never with the tenant store's own list (only the project defaults) or a copy. A
+/// tenant request without that snapshot reports no domain, so the SDK refuses every origin.
+fn client_project_config(
+    store: &AuthStore,
+    strict: bool,
+    parent_authorized_domains: Option<&[String]>,
+) -> JsonResponse {
     let project = store.project_number().map_or_else(
         || store.project_id().to_owned(),
         |number| number.to_string(),
     );
-    let domains = if strict || store.sign_in_config().authorized_domains.is_some() {
+    let domains = if strict && store.tenant_id().is_some() {
+        parent_authorized_domains.unwrap_or(&[]).to_vec()
+    } else if strict || store.sign_in_config().authorized_domains.is_some() {
         store.authorized_domains()
     } else {
         vec!["localhost".to_owned()]

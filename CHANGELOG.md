@@ -8,6 +8,10 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Fixed
+
+- Strict profile: the client project configuration (`GET /v1/projects`) of a request that names a tenant now reports the parent project's live `authorizedDomains`, the list tenant action links are checked against, instead of the tenant store's own default list. The Firebase JS SDK sends no tenant on this call and production's request has no tenant field, so the answer is the project's. A tenant cannot change what the configuration reports. The emulator profile is unchanged; the official emulator reads no tenant there. Production's answer to a `tenantId` query on this route was not recorded.
+
 ## [0.47.0] - 2026-11-10
 
 ### Added

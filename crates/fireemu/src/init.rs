@@ -206,6 +206,9 @@ fn reference_document(is_toml: bool) -> String {
                 | "auth.signIn.email.passwordRequired"
                 | "auth.signIn.anonymous.enabled"
                 | "auth.signIn.phoneNumber.enabled"
+                // An opt-in for official-emulator parity; listing it as active would turn it into an
+                // explicit choice in every generated file.
+                | "auth.requireClientApiKey"
         );
         let no_effect = crate::config::NO_EFFECT_KEYS.contains(&path.as_str());
         let inherited = sections.last().expect("section").1;

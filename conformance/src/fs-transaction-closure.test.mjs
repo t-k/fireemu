@@ -86,7 +86,9 @@ test("FS-TRANSACTION approved regression is rerun through the public recipe rout
   const run = RUNS.find(({ id }) => id === "R19");
   assert.deepEqual(
     run.commands.map(({ mode }) => mode),
-    ["check", "export-comparison"],
+    // `check` repeated export-comparison's replay and validation (both call run_release());
+    // the release runner keeps the one whose export is judged.
+    ["export-comparison"],
   );
   assert.ok(run.commands.every(({ argv }) => argv.includes("{bin}") && argv.includes("--binary")));
   assert.ok(

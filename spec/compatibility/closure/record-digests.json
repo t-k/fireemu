@@ -48,7 +48,7 @@
     "conformance/src/functions-python-closure.test.mjs": "06514720111f5e6b9202c97ef56aa07c32e9b1c10b99a4184b72b7274cb3e070",
     "conformance/src/functions-python-replay.test.mjs": "cbcc02cb8ac4d53bdbb5a43ba5a98e5d8f6bfdd149050513904c545994192e1f",
     "conformance/src/hosting/run.mjs": "60f51e78ed905dadf5fa8f8e2098d9717abdf845ac3d5e5618e72e3a430490a8",
-    "conformance/src/release-strict-regression.test.mjs": "cc6c9d30cdfd0fb96c9e388317dbaa09f08e19be1f7e0b4e1d53202f6ed2c5fd",
+    "conformance/src/release-strict-regression.test.mjs": "83bf7fa9226f84cebbae21b21d210f111a6fdefb505e7ab1a192a035948de436",
     "conformance/src/rtdb-finite-families-closure.test.mjs": "0fb70d489213edca6b71670ffe20fc92138cd0cdf0a07f7e3dff93aaa2303303",
     "conformance/src/rtdb-functions/breadth-compare.test.mjs": "5fcac52df61d08ceb9297081aa98c12ef6c0bc91ecff537e52122e0cde46e8dc",
     "conformance/src/rtdb-functions/breadth-judge.mjs": "57bf34e08d09184e7ba5895c69f39e58f34921c703cd8a22e27622bb48b599ac",

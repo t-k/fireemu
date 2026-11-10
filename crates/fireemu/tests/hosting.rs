@@ -889,6 +889,17 @@ fn function_runtime_in_ui(declared: Option<&str>, name: &str) -> serde_json::Val
         .unwrap_or_else(|| panic!("tick is listed: {overview}"))
         .clone();
     assert_eq!(tick["codebase"], "app");
+    // The codebase list carries the same runtime.
+    let listed = overview["codebases"].as_array().unwrap();
+    assert_eq!(listed.len(), 1, "{overview}");
+    assert_eq!(listed[0]["codebase"], "app");
+    assert_eq!(
+        (listed[0]["language"].clone(), listed[0]["declared"].clone()),
+        (
+            tick["runtime"]["language"].clone(),
+            tick["runtime"]["declared"].clone()
+        )
+    );
     tick["runtime"].clone()
 }
 

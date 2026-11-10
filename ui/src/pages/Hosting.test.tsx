@@ -146,6 +146,26 @@ describe("Hosting", () => {
     ]);
   });
 
+  it("shows the region the server routes a rewrite to: the rule's, or the default", async () => {
+    vi.mocked(hosting.hostingInfo).mockReturnValue(
+      okAsync({
+        ...served,
+        site: {
+          public: "dist",
+          rewrites: [
+            { source: "/a/**", function: "a", region: "europe-west1" },
+            { source: "/b/**", function: "b" },
+          ],
+        },
+      } as HostingInfo),
+    );
+    const ui = render(() => <Hosting />);
+    await waitFor(() => expect(ui.getByTestId("hosting-rewrites")).toBeTruthy());
+    const rows = ui.getByTestId("hosting-rewrites").querySelectorAll("tbody tr");
+    expect(rows[0]!.textContent).toContain("function a (europe-west1)");
+    expect(rows[1]!.textContent).toContain("function b (us-central1)");
+  });
+
   it("lists redirects with the status (301 when unset) and headers with their pairs", async () => {
     const ui = render(() => <Hosting />);
     await waitFor(() => expect(ui.getByTestId("hosting-redirects")).toBeTruthy());

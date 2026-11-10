@@ -966,9 +966,7 @@ const Functions: Component = () => {
                           <For each={st().codebases}>
                             {(codebase) => {
                               const runtime = () =>
-                                o()?.functions.find(
-                                  (f) => f.codebase === codebase.codebase && f.runtime,
-                                )?.runtime;
+                                o()?.codebases?.find((c) => c.codebase === codebase.codebase);
                               return (
                                 <li data-testid={`codebase-status-${codebase.codebase}`}>
                                   {codebase.codebase}{" "}

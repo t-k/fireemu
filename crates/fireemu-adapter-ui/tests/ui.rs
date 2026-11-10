@@ -2384,6 +2384,11 @@ async fn each_function_names_its_codebase_and_the_runtime_that_runs_it() {
     let s = Arc::new(state);
     let (status, body) = call(&s, request("GET", "/ui/api/functions", &Value::Null)).await;
     assert_eq!(status, 200);
+    // The runtime is also listed per codebase, whether or not it registered a function.
+    assert_eq!(
+        body["codebases"],
+        json!([{"codebase": "default", "language": "python", "declared": "python312"}])
+    );
     let functions = body["functions"].as_array().unwrap();
     assert!(!functions.is_empty());
     for function in functions {
@@ -2418,10 +2423,46 @@ async fn a_function_of_an_undeclared_runtime_reports_the_language_alone_and_an_u
         function["runtime"],
         json!({"language": "node", "declared": null})
     );
+    assert_eq!(
+        body["codebases"],
+        json!([{"codebase": "default", "language": "node", "declared": null}])
+    );
     // No codebase information at all (a state built without it): the field is absent.
     let (s2, runtime2) = state_with_functions().await;
     let (_, body) = call(&s2, request("GET", "/ui/api/functions", &Value::Null)).await;
     assert!(body["functions"][0].get("runtime").is_none(), "{body}");
+    assert_eq!(body["codebases"], json!([]));
     runtime.runner().shutdown().await;
     runtime2.runner().shutdown().await;
+}
+
+#[tokio::test]
+async fn a_codebase_that_registered_no_function_is_still_listed_with_its_runtime() {
+    let (s, runtime) = state_with_functions().await;
+    let mut state = Arc::try_unwrap(s).ok().expect("the state is unshared");
+    state.info.codebases = vec![
+        CodebaseInfo {
+            name: "default".to_owned(),
+            language: "node".to_owned(),
+            declared: Some("nodejs22".to_owned()),
+        },
+        CodebaseInfo {
+            name: "ignored-only".to_owned(),
+            language: "python".to_owned(),
+            declared: None,
+        },
+    ];
+    let (_, body) = call(
+        &Arc::new(state),
+        request("GET", "/ui/api/functions", &Value::Null),
+    )
+    .await;
+    assert_eq!(
+        body["codebases"],
+        json!([
+            {"codebase": "default", "language": "node", "declared": "nodejs22"},
+            {"codebase": "ignored-only", "language": "python", "declared": null},
+        ])
+    );
+    runtime.runner().shutdown().await;
 }

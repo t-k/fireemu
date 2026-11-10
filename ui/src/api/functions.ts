@@ -27,6 +27,9 @@ export type TriggerInfo =
 /** The loader that runs a codebase and the `runtime` its `firebase.json` declared, if any. */
 export type FunctionRuntime = { language: "node" | "python"; declared: string | null };
 
+/** One loaded codebase and its runtime, also when it registered no function. */
+export type CodebaseRuntime = { codebase: string } & FunctionRuntime;
+
 export type FunctionInfo = {
   name: string;
   region: string;
@@ -132,6 +135,8 @@ export type FunctionsOverview = {
   /** The Functions port address, or null when no codebase is loaded (no invocation). */
   functionsAddr?: string | null;
   functions: FunctionInfo[];
+  /** The runtime of each loaded codebase (absent on an older daemon). */
+  codebases?: CodebaseRuntime[];
   status?: FunctionsDiagnosticStatus;
   history: InvocationInfo[];
   deadLetters: InvocationInfo[];

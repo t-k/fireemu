@@ -327,6 +327,11 @@ it("shows the held Auth events, the queue and schedule counters, each codebase's
           runtime: { language: "node", declared: null },
         },
       ],
+      codebases: [
+        { codebase: "py-app", language: "python", declared: "python312" },
+        { codebase: "default", language: "node", declared: null },
+        { codebase: "ignored-only", language: "python", declared: null },
+      ],
       status: {
         ...owner.status!,
         authEventsPending: 3,
@@ -336,6 +341,7 @@ it("shows the held Auth events, the queue and schedule counters, each codebase's
         codebases: [
           { codebase: "py-app", functions: ["py"], runnerAlive: true },
           { codebase: "default", functions: ["js"], runnerAlive: false },
+          { codebase: "ignored-only", functions: [], runnerAlive: true },
         ],
         ignored: [
           {
@@ -363,6 +369,11 @@ it("shows the held Auth events, the queue and schedule counters, each codebase's
   const js = ui.getByTestId("codebase-status-default").textContent ?? "";
   expect(js).toContain("Node.js");
   expect(js).toContain("stopped");
+  // A codebase that registered no function still shows its runtime, from the codebase list.
+  const only = ui.getByTestId("codebase-status-ignored-only").textContent ?? "";
+  expect(only).toContain("Python");
+  expect(only).not.toContain("Python (");
+  expect(only).toContain("running");
   const ignored = ui.getByTestId("ignored-exports").textContent ?? "";
   expect(ignored).toContain("legacy");
   expect(ignored).toContain("unsupported trigger");

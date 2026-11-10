@@ -36,27 +36,63 @@ describe("rewriteTarget", () => {
       { destination: "/x.html", function: "api" },
       { kind: "file", destination: "/x.html" },
     ],
-    [{ function: "api" }, { kind: "function", id: "api", region: null }],
+    [{ function: "api" }, { kind: "function", id: "api", region: "us-central1" }],
     [
       { function: { functionId: "api", region: "europe-west1", pinTag: true } },
       { kind: "function", id: "api", region: "europe-west1" },
     ],
-    [{ function: {} }, { kind: "function", id: "", region: null }],
-    [{ function: 3 }, { kind: "function", id: "", region: null }],
-    [{ function: null }, { kind: "function", id: "", region: null }],
-    [{ run: null }, { kind: "run", id: "", region: null }],
+    [{ function: {} }, { kind: "function", id: "", region: "us-central1" }],
+    [{ function: 3 }, { kind: "function", id: "", region: "us-central1" }],
+    [{ function: null }, { kind: "function", id: "", region: "us-central1" }],
+    [{ run: null }, { kind: "run", id: "", region: "us-central1" }],
     [
       { run: { serviceId: "web", region: "us-central1" } },
       { kind: "run", id: "web", region: "us-central1" },
     ],
-    [{ run: "web" }, { kind: "run", id: "web", region: null }],
+    [{ run: "web" }, { kind: "run", id: "web", region: "us-central1" }],
+    // The rule's own region applies when the target names none (hosting.rs `proxy`).
+    [
+      { source: "/api/**", function: "api", region: "europe-west1" },
+      { kind: "function", id: "api", region: "europe-west1" },
+    ],
+    [
+      { function: { functionId: "api" }, region: "asia-east1" },
+      { kind: "function", id: "api", region: "asia-east1" },
+    ],
+    [
+      { run: { serviceId: "web" }, region: "europe-west4" },
+      { kind: "run", id: "web", region: "europe-west4" },
+    ],
+    // The target's region wins over the rule's.
+    [
+      { function: { functionId: "api", region: "us-east1" }, region: "europe-west1" },
+      { kind: "function", id: "api", region: "us-east1" },
+    ],
+    // A present target region that is no string still wins, leaving the default.
+    [
+      { function: { functionId: "api", region: 7 }, region: "europe-west1" },
+      { kind: "function", id: "api", region: "us-central1" },
+    ],
+    [
+      { function: { functionId: "api", region: null }, region: "europe-west1" },
+      { kind: "function", id: "api", region: "us-central1" },
+    ],
+    // A rule region that is no string leaves the default; an array target has no region key.
+    [
+      { function: "api", region: 3 },
+      { kind: "function", id: "api", region: "us-central1" },
+    ],
+    [
+      { function: ["x"], region: "europe-west1" },
+      { kind: "function", id: "", region: "europe-west1" },
+    ],
     [
       { function: "f", run: { serviceId: "r" } },
-      { kind: "function", id: "f", region: null },
+      { kind: "function", id: "f", region: "us-central1" },
     ],
     [
       { destination: "", run: { serviceId: "r" } },
-      { kind: "run", id: "r", region: null },
+      { kind: "run", id: "r", region: "us-central1" },
     ],
     [{ dynamicLinks: true }, { kind: "none" }],
     [{}, { kind: "none" }],

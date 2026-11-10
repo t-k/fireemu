@@ -27,7 +27,7 @@ const rewriteText = (target: RewriteTarget): string => {
       return "-";
     default: {
       const label = target.kind === "function" ? t("hosting.function") : t("hosting.cloudRun");
-      return `${label} ${target.id}${target.region === null ? "" : ` (${target.region})`}`;
+      return `${label} ${target.id} (${target.region})`;
     }
   }
 };

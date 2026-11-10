@@ -20,21 +20,38 @@ export const ruleMatcher = (rule: HostingRule): RuleMatcher => {
 /** Where a rewrite sends a request. */
 export type RewriteTarget =
   | { kind: "file"; destination: string }
-  | { kind: "function"; id: string; region: string | null }
-  | { kind: "run"; id: string; region: string | null }
+  | { kind: "function"; id: string; region: string }
+  | { kind: "run"; id: string; region: string }
   | { kind: "none" };
+
+/** The region the server routes a service rewrite to when nothing names one. */
+const DEFAULT_REGION = "us-central1";
+
+/**
+ * The region the server routes to: the target object's own `region` when that key is present,
+ * otherwise the rule's `region`, otherwise `us-central1`. A key that is present but not a string
+ * still wins and leaves the default, as in the server (hosting.rs `proxy`).
+ */
+const effectiveRegion = (rule: HostingRule, target: unknown): string => {
+  const own =
+    target !== null && typeof target === "object" && Object.hasOwn(target, "region")
+      ? (target as Record<string, unknown>)
+      : rule;
+  return typeof own.region === "string" ? own.region : DEFAULT_REGION;
+};
 
 const serviceTarget = (
   kind: "function" | "run",
-  value: unknown,
+  rule: HostingRule,
   idKey: "functionId" | "serviceId",
 ): RewriteTarget => {
-  if (typeof value === "string") return { kind, id: value, region: null };
+  const value = rule[kind];
+  const region = effectiveRegion(rule, value);
+  if (typeof value === "string") return { kind, id: value, region };
   if (value !== null && typeof value === "object") {
-    const record = value as Record<string, unknown>;
-    return { kind, id: text(record[idKey]) ?? "", region: text(record.region) };
+    return { kind, id: text((value as Record<string, unknown>)[idKey]) ?? "", region };
   }
-  return { kind, id: "", region: null };
+  return { kind, id: "", region };
 };
 
 /**
@@ -44,8 +61,8 @@ const serviceTarget = (
 export const rewriteTarget = (rule: HostingRule): RewriteTarget => {
   const destination = text(rule.destination);
   if (destination !== null) return { kind: "file", destination };
-  if (rule.function !== undefined) return serviceTarget("function", rule.function, "functionId");
-  if (rule.run !== undefined) return serviceTarget("run", rule.run, "serviceId");
+  if (rule.function !== undefined) return serviceTarget("function", rule, "functionId");
+  if (rule.run !== undefined) return serviceTarget("run", rule, "serviceId");
   return { kind: "none" };
 };
 

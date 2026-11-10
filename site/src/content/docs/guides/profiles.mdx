@@ -18,7 +18,9 @@ The `emulator` profile accepts behavior that production refuses, so a test can p
 <TabItem label="TOML">
 
 ```toml
+# Configuration schema version: 1.
 schemaVersion = 1
+# Compatibility profile: "strict" or "emulator".
 profile = "strict"
 ```
 
@@ -53,11 +55,15 @@ To get production's behavior for all of them at once, set `productionExact` to `
 <TabItem label="TOML">
 
 ```toml
+# Configuration schema version: 1.
 schemaVersion = 1
+# Compatibility profile: "strict" or "emulator".
 profile = "strict"
+# Use production behavior for development defaults: true or false; requires strict.
 productionExact = true
 
 [auth]
+# Accept unsigned emulator custom tokens: true or false.
 allowUnsignedCustomTokens = true
 ```
 

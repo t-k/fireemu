@@ -103,3 +103,8 @@ ul.conditions {
 .sl-markdown-content table {
 	max-width: 100%;
 }
+
+/* Keep a status badge on one line, also in a narrow table column. */
+.sl-markdown-content .sl-badge {
+	white-space: nowrap;
+}

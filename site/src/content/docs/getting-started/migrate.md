@@ -3,7 +3,7 @@ title: Migrate from the Local Emulator Suite
 description: Move a project from firebase emulators:exec to Fireemu.
 ---
 
-Fireemu reads your existing `firebase.json`, serves the same ports, and accepts the official command names, so most projects move by changing one command.
+If you decide to try Fireemu, it reads your existing `firebase.json`, serves the same default ports, and accepts the official command names, so most projects move by changing one command. Before you switch, check that the products you use are on the [supported list](../../#supported-products): the Local Emulator Suite also serves App Hosting, Data Connect and Extensions, which Fireemu does not, and Hosting and the Realtime Database are partial.
 
 ## Steps
 
@@ -29,7 +29,7 @@ Fireemu reads your existing `firebase.json`, serves the same ports, and accepts 
 
 ## When a test fails under `strict`
 
-A test that passed on the official emulator but fails under `strict` usually shows behavior your application would also meet in production. Fix the test or the application, or relax only the specific setting below, rather than switching the whole profile to `emulator`.
+A test that passed on the official emulator but fails under `strict` often shows behavior your application would also meet in production. Fix the test or the application, or relax only the specific setting below, rather than switching the whole profile to `emulator`.
 
 - **Unsigned emulator ID tokens.** `@firebase/rules-unit-testing`'s `authenticatedContext()` and the client SDK's `mockUserToken` work under `strict` by default. Set `auth.allowUnsignedIdTokens` to `false` to disable their fallback on the Security Rules surfaces and test production's refusal of them. For a refusal test, use the SDK helper's default `iat: 0` / `exp: 3600` with a clock after expiry; fireemu-issued tokens that pass normal verification are still accepted. Use `auth.idTokenSigning = "session-rsa"` to refuse all unsigned ID tokens. See [Unsigned mock ID tokens](../../products/auth/#unsigned-mock-id-tokens).
 - **Named databases.** Declare each named database in the `firestore` array of `firebase.json`, with its `rules` and `indexes` files, or create it through the Admin API, as production needs it created. A database created at run time has no Security Rules until you load some for it (see [Firestore](../../products/firestore/#named-databases)).

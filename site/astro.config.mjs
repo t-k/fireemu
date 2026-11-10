@@ -85,6 +85,7 @@ export default defineConfig({
 					items: [
 						{ label: 'CLI', slug: 'reference/cli' },
 						{ label: 'Configuration schema', slug: 'reference/configuration' },
+						{ label: 'Environment variables', slug: 'reference/environment-variables' },
 					],
 				},
 			],

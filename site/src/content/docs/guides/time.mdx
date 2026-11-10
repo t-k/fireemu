@@ -17,10 +17,13 @@ Pinning `daemon.clockStart` makes a run reproducible, so the clock then stands s
 <TabItem label="TOML">
 
 ```toml
+# Configuration schema version: 1.
 schemaVersion = 1
 
 [daemon]
+# Start the virtual clock at this date-time.
 clockStart = "2026-01-31T23:59:00Z"
+# Virtual clock behavior: "realtime" or "frozen".
 clock = "frozen"
 ```
 
@@ -82,17 +85,23 @@ By default your function code sees real time. A Python codebase always does: it 
 <TabItem label="TOML">
 
 ```toml
+# Configuration schema version: 1.
 schemaVersion = 1
 
 [daemon]
+# Start the virtual clock at this date-time.
 clockStart = "2026-01-31T23:59:00Z"
 
 [functions]
+# Directory of the Functions codebase.
 source = "./functions"
 
 [functions.clock]
+# Functions date clock: "real" or "virtual".
 date = "virtual"
+# Functions timer clock: "real" or "virtual".
 timers = "real"
+# Cloud Tasks clock: "real" or "virtual".
 tasks = "virtual"
 ```
 

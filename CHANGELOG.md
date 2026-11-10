@@ -10,7 +10,7 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ### Fixed
 
-- A run that leaves Auth out of `--only`, and a Hub started with `--hub-port 0`, no longer let the kernel pick an ephemeral port that another address in the configuration names. The control listener (which takes an ephemeral port when Auth is not selected) and the automatic Hub could land on the port configured for an unselected product, which then looked as if it were running, or on one a selected product had yet to bind, which then failed to start with `address in use`. The pick now skips every configured port. This showed up as a rare failure of `an_unselected_service_binds_no_listener_at_all` on Linux, where a listener that sets `SO_REUSEADDR` is offered only the lower half of the ephemeral range.
+- A run that leaves Auth out of `--only`, and a Hub started with `--hub-port 0`, no longer let the kernel pick an ephemeral port that another address in the configuration names. The control listener (which takes an ephemeral port when Auth is not selected) and the automatic Hub could land on the port configured for an unselected product, which then looked as if it were running, or on one a selected product had yet to bind, which then failed to start with `address in use`. The pick now skips every configured port. This showed up as a rare failure of `an_unselected_service_binds_no_listener_at_all` on Linux, where the allocator prefers the lower half of the ephemeral range, and odd ports, for a listener that sets `SO_REUSEADDR`, which makes a collision with the freed ports of a test likelier.
 
 ## [0.48.0] - 2026-11-10
 

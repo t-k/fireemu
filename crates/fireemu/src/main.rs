@@ -2943,8 +2943,8 @@ fn kernel_pick(addr: &str) -> std::io::Result<std::net::TcpListener> {
 }
 
 /// Binds `addr` (port 0 asked of the kernel) on a port no configured address names. The
-/// kernel hands out ephemeral ports at random, and Linux gives a `SO_REUSEADDR` listener a
-/// pool of only about 7000 of them, so a port the user configured for a product that is not
+/// kernel hands out ephemeral ports at random, and Linux prefers the lower half of the range
+/// (about 7000 ports) for a `SO_REUSEADDR` listener, so a port the user configured for a product that is not
 /// running, or one a selected product has yet to bind, is taken often enough to matter: the
 /// unselected product would then be listening, or the selected one would fail to bind. Every
 /// rejected listener is held until a usable one is found, so the kernel cannot offer it again.
@@ -5932,10 +5932,13 @@ mod ephemeral_bind_tests {
         };
         assert_eq!(configured_ports(&cfg), (1..=11).collect::<Vec<u16>>());
         let bracketed = RuntimeConfig {
-            http_addr: "[::1]:7".to_owned(),
+            http_addr: "[::1]:12".to_owned(),
             ..cfg
         };
-        assert!(configured_ports(&bracketed).contains(&7));
+        // 12 is named by no other address, so only the bracketed host can supply it.
+        let mut expected: Vec<u16> = (1..=11).collect();
+        expected[1] = 12;
+        assert_eq!(configured_ports(&bracketed), expected);
     }
 }
 

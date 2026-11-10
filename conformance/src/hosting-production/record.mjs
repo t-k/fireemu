@@ -130,7 +130,9 @@ export function admit({ ledgerText, now, env }) {
   const started = own.filter((line) => line.event === "started");
   const attempt = started.filter((line) => line.envelopeId === envelope).length + 1;
   if (attempt > MAX_ATTEMPTS) {
-    throw new Error(`attempt ${attempt} exceeds ${MAX_ATTEMPTS} attempts of the envelope ${envelope}`);
+    throw new Error(
+      `attempt ${attempt} exceeds ${MAX_ATTEMPTS} attempts of the envelope ${envelope}`,
+    );
   }
   const cumulativeReservedUsd = (started.length + 1) * RESERVED_USD_PER_ATTEMPT;
   if (cumulativeReservedUsd > MAX_CUMULATIVE_USD) {
@@ -446,8 +448,7 @@ const shortVersionName = (name) => String(name ?? "").replace(/^projects\/[^/]+\
 
 /** What a readiness probe that was not the expected answer showed (kept in the deploy record). */
 function probeShape(answer) {
-  const header = (name) =>
-    answer.headers?.find(([key]) => String(key).toLowerCase() === name)?.[1];
+  const header = (name) => answer.headers?.find(([key]) => String(key).toLowerCase() === name)?.[1];
   const body = answer.body ?? Buffer.alloc(0);
   return {
     status: answer.status,

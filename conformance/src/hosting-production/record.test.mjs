@@ -629,7 +629,10 @@ test("a new envelope counts its own attempts from 1 and the reserved money from 
       now,
       env: { FIREEMU_HOSTING_ENVELOPE: ENVELOPE, ...env },
     });
-  const old = [...priorAttempt(1), ...priorAttempt(2, { envelopeId: "HOSTING-PRODUCTION-V3-20261111" })];
+  const old = [
+    ...priorAttempt(1),
+    ...priorAttempt(2, { envelopeId: "HOSTING-PRODUCTION-V3-20261111" }),
+  ];
   assert.deepEqual(check(old), { attempt: 1, cumulativeReservedUsd: 3 });
   const one = [...old, ...v4Attempt(1)];
   assert.deepEqual(check(one), { attempt: 2, cumulativeReservedUsd: 4 });
@@ -640,7 +643,10 @@ test("a new envelope counts its own attempts from 1 and the reserved money from 
   const other = [...old, ...v4Attempt(1, { envelopeId: "HOSTING-PRODUCTION-V5-20261111" })];
   assert.equal(check(other).attempt, 1);
   // the envelope is the one named by the caller, not the latest one in the ledger
-  assert.equal(check(one, { FIREEMU_HOSTING_ENVELOPE: "HOSTING-PRODUCTION-V5-20261111" }).attempt, 1);
+  assert.equal(
+    check(one, { FIREEMU_HOSTING_ENVELOPE: "HOSTING-PRODUCTION-V5-20261111" }).attempt,
+    1,
+  );
 });
 
 test("the cumulative reservation of the parent never passes US$6.00", () => {
@@ -661,7 +667,11 @@ test("the cumulative reservation of the parent never passes US$6.00", () => {
 });
 
 test("admission needs the envelope id, in the form of a HOSTING envelope", () => {
-  for (const value of [undefined, "", "V4", "HOSTING-PRODUCTION-V4 20261111",
+  for (const value of [
+    undefined,
+    "",
+    "V4",
+    "HOSTING-PRODUCTION-V4 20261111",
     "OTHER-V4-20261111",
     "HOSTING-PRODUCTION-",
     "xHOSTING-PRODUCTION-V4-20261111",
@@ -685,7 +695,9 @@ test("the started row carries the envelope and the attempt of that envelope", as
       ledger.splice(0, ledger.length, ...old.map((line) => JSON.stringify(line)));
     },
   });
-  const started = r.ledger.map((line) => JSON.parse(line)).find((line) => line.event === "started" && line.run === "abc123");
+  const started = r.ledger
+    .map((line) => JSON.parse(line))
+    .find((line) => line.event === "started" && line.run === "abc123");
   assert.equal(started.attempt, 1);
   assert.equal(started.envelopeId, ENVELOPE);
   assert.equal(started.reservedUsd, 1);

@@ -171,7 +171,7 @@ pub enum FutureClaims {
     /// has one (`parseIdToken`, `lib/emulator/auth/operations.js:1727`:
     /// `!user.validSince || decoded.payload.iat >= Number(user.validSince)`). So the profile
     /// follows that line exactly: a future time claim is accepted, `auth_time` is never read,
-    /// and `iat` is compared as JavaScript compares it (`Number(iat)`, see [`js_number`]; a
+    /// and `iat` is compared as JavaScript compares it (`Number(iat)`, see `js_number`; a
     /// value that is not a number fails the comparison) for an account that has a `validSince`
     /// (see `official_valid_since_is_set`) and is not compared at all for any other. A usable
     /// `auth_time` never stands in for an `iat` that does not compare. An `exp` that is present

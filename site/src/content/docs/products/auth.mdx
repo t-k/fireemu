@@ -5,35 +5,96 @@ description: Firebase Authentication and Identity Platform locally, including TO
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-Fireemu serves Firebase Authentication with the Identity Platform features: multi-factor authentication including TOTP, multi-tenancy, OIDC and SAML providers, and blocking functions. Connect to it at `http://127.0.0.1:9099` (see [Connect your app](../../getting-started/connect/); `FIREBASE_AUTH_EMULATOR_HOST` is in the [environment variables](../../reference/environment-variables/)).
+Fireemu serves Firebase Authentication with the Identity Platform features: multi-factor authentication including TOTP, multi-tenancy, OIDC and SAML providers, and blocking functions.
+
+:::note[What Fireemu adds for local testing]
+The Authentication emulator of `firebase-tools` 15.28.2 supports phone (SMS) second factors, tenants, fixture `oidc.*` and `saml.*` sign-in, and the `beforeCreate` and `beforeSignIn` blocking functions. Fireemu adds:
+
+- **TOTP second factors**, alongside SMS, used through the SDK's `TotpMultiFactorGenerator` ([walkthrough](#test-totp-enrollment-and-sign-in)).
+- **OIDC and SAML provider resources** declared in `auth.providers`. Under `strict`, sign-in through an undeclared or disabled `oidc.*` or `saml.*` provider is refused, as production refuses it, and `auth.idpAssertions = "signed"` verifies signed assertions locally ([OIDC and SAML providers](#oidc-and-saml-providers)).
+- **Tenant checks as production applies them.** Under `strict`, a request that names a tenant the project does not have is refused instead of creating the tenant ([Multi-tenancy](#multi-tenancy)).
+- **The `beforeEmailSent` blocking function**, under `strict` ([Blocking functions](#blocking-functions)).
+
+Which areas are compared with recordings from real Firebase projects is on the [compatibility tables](../../compatibility/); what is not supported is on [Limitations](../../compatibility/limitations/).
+:::
+
+## Connect
+
+The Authentication emulator listens on `127.0.0.1:9099` by default (`--http-port` or `firebase.json` changes it).
+
+```js
+// Web SDK
+import { getAuth, connectAuthEmulator } from 'firebase/auth';
+const auth = getAuth(app);
+connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true });
+```
+
+The Admin SDK reads `FIREBASE_AUTH_EMULATOR_HOST`. Under `fireemu exec` it is set to `127.0.0.1:9099` for your command; with `fireemu up`, set it yourself: `FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099`. See [Connect your app](../../getting-started/connect/) and the [environment variables](../../reference/environment-variables/).
 
 ## Local verification messages
 
-Fireemu prints local email action links and SMS verification codes to the console and the Emulator UI logs so you can complete sign-in and account-management flows without sending real messages. These logs contain credentials for the local emulator accounts; treat captured logs accordingly when sharing test output.
+Fireemu prints local email action links and SMS verification codes to the daemon's standard output (and the Logging emulator) as they are issued, so you can complete sign-in and account-management flows without sending real messages. These lines contain credentials for the local emulator accounts; treat captured logs accordingly when sharing test output. A run prints, for example:
+
+```text
+  auth codes:       email action links and SMS codes are printed here as they are issued (they are credentials: do not forward this output to CI or shared logs; auth.logActionCodes = false silences them)
+  auth: To verify the email address ada@example.test, follow this link: http://127.0.0.1:9099/emulator/action?mode=verifyEmail&lang=en&oobCode=oob-3fb5430a00cf9e1a0002&apiKey=fake-api-key
+  auth: To reset the password for ada@example.test, follow this link: http://127.0.0.1:9099/emulator/action?mode=resetPassword&lang=en&oobCode=oob-039b95aa9467d4c80003&apiKey=fake-api-key&newPassword=NEW_PASSWORD_HERE
+  auth: To verify the phone number +15555550100, use the code 551768.
+```
+
+A test reads the same values from the emulator's REST routes instead of parsing the console. Each returns the codes issued so far for the project:
+
+```sh
+curl http://127.0.0.1:9099/emulator/v1/projects/demo-shop/oobCodes
+# {"oobCodes":[{"email":"ada@example.test","oobCode":"oob-3fb5430a00cf9e1a0002","oobLink":"http://127.0.0.1:9099/emulator/action?mode=verifyEmail&...","requestType":"VERIFY_EMAIL"}, ...]}
+
+curl http://127.0.0.1:9099/emulator/v1/projects/demo-shop/verificationCodes
+# {"verificationCodes":[{"code":"551768","phoneNumber":"+15555550100","sessionInfo":"sms-4e2ee8b8ae04bce80004"}]}
+```
+
+`auth.logActionCodes = false` stops the console lines (for a shared or captured log); the REST routes keep working. `--log-verbosity quiet` also silences them.
 
 ## Configure your project
 
 The `auth` section of `fireemu.toml` declares the project configuration your application relies on, so a test does not have to set it through the Admin API every time.
 
+**Basic sign-in and accounts**
+
 | What you can configure | Settings |
 |---|---|
 | Enable or disable email/password, anonymous and phone sign-in | `auth.signIn` |
-| Test phone numbers and verification codes | `auth.signIn.phoneNumber.testPhoneNumbers` |
 | Authorized domains for action-link continue URLs | `auth.authorizedDomains` |
 | Accounts that share an email address | `auth.signIn.allowDuplicateEmails` |
 | Password requirements and enforcement at sign-in | `auth.passwordPolicy` |
-| Multi-factor authentication | `auth.mfa` (and `auth.totp` in the `emulator` profile) |
-| Tenants and the multi-tenancy switch | `auth.tenants`, `auth.multiTenant` |
 | End-user account creation and deletion | `auth.client.permissions` |
 | Email enumeration protection | `auth.improvedEmailPrivacy` |
+
+**Advanced security and multi-factor authentication**
+
+| What you can configure | Settings |
+|---|---|
+| Multi-factor authentication | `auth.mfa` (and `auth.totp` in the `emulator` profile) |
+| Public keys for verifying custom tokens and OIDC ID tokens | `auth.customTokenSigners`, `auth.idpSigners` |
+| Fixture identity-provider assertions, or signed assertions verified as production does | `auth.idpAssertions` |
+
+**Enterprise and multi-tenant**
+
+| What you can configure | Settings |
+|---|---|
+| Tenants and the multi-tenancy switch | `auth.tenants`, `auth.multiTenant` |
 | Per-project and per-tenant overrides | `auth.passwordPolicyOverrides`, `auth.configOverrides` |
 | Blocking functions | `auth.blockingFunctions` |
 | OIDC and SAML providers | `auth.providers.oidc`, `auth.providers.saml` |
-| Sign-up quota and local quota-exceeded simulation | `auth.quota`, `auth.quotaSimulation` |
+
+**Testing and mocks**
+
+| What you can configure | Settings |
+|---|---|
+| Test phone numbers and verification codes | `auth.signIn.phoneNumber.testPhoneNumbers` |
 | Unsigned emulator custom tokens (accepted by default; refused with `productionExact`) | `auth.allowUnsignedCustomTokens` |
 | The unsigned mock ID token fallback in Firestore, Storage and Realtime Database Security Rules (on by default; off with `productionExact`) | `auth.allowUnsignedIdTokens` |
-| Fixture identity-provider assertions, or signed assertions verified as production does | `auth.idpAssertions` |
-| Public keys for verifying custom tokens and OIDC ID tokens | `auth.customTokenSigners`, `auth.idpSigners` |
+| Sign-up quota and local quota-exceeded simulation | `auth.quota`, `auth.quotaSimulation` |
+| Printing email action links and SMS codes on the console (on by default) | `auth.logActionCodes` |
 
 This example enables email/password and phone sign-in, disables anonymous sign-in, requires passwords of at least 12 characters with uppercase, lowercase and numeric characters, and prevents users from deleting their own accounts:
 
@@ -166,7 +227,49 @@ Use `auth.passwordPolicyOverrides` to specify different password policies for in
 
 ### OIDC and SAML providers
 
-Declare project OIDC and SAML resources with `auth.providers.oidc` and `auth.providers.saml`, using the Admin v2 resource fields and an ID-only `name` such as `oidc.fixture` or `saml.fixture`. Full resource names are refused. For example, `auth.providers.oidc = [{ name = "oidc.fixture", enabled = true, clientId = "local-client", issuer = "https://issuer.test", responseType = { idToken = true } }]` initializes that provider in both profiles.
+Declare project OIDC and SAML resources with `auth.providers.oidc` and `auth.providers.saml`, using the Admin v2 resource fields and an ID-only `name` such as `oidc.fixture` or `saml.fixture`. Full resource names are refused. This initializes an OIDC provider in both profiles:
+
+<Tabs syncKey="config-format">
+<TabItem label="TOML">
+
+```toml
+schemaVersion = 1
+
+[[auth.providers.oidc]]
+# Provider id, in the form oidc.<id> (a full resource name is refused)
+name = "oidc.fixture"
+enabled = true
+clientId = "local-client"
+issuer = "https://issuer.test"
+
+[auth.providers.oidc.responseType]
+idToken = true
+```
+
+</TabItem>
+<TabItem label="JSON">
+
+```json
+{
+  "schemaVersion": 1,
+  "auth": {
+    "providers": {
+      "oidc": [
+        {
+          "name": "oidc.fixture",
+          "enabled": true,
+          "clientId": "local-client",
+          "issuer": "https://issuer.test",
+          "responseType": { "idToken": true }
+        }
+      ]
+    }
+  }
+}
+```
+
+</TabItem>
+</Tabs>
 
 - **Fixture assertions (the default).** Both profiles accept the fixture assertions the official emulator accepts (a JSON or unsigned ID token, a JSON SAML response, the sign-in widget). The `emulator` profile accepts them whether or not the provider is declared, and the `strict` profile refuses an `oidc.*` or `saml.*` provider that is not declared (or is disabled), as production does.
 - **Signed assertions.** With `auth.idpAssertions` set to `"signed"` (or `productionExact`, or `auth.idpSigners` present), strict OIDC sign-in needs matching public issuer keys in `auth.idpSigners`; no key is fetched. Strict SAML then uses the declared provider certificates and retains its existing assertion checks.
@@ -236,7 +339,72 @@ adjacentIntervals = 1
 - An export does not carry the project's `mfa` configuration, so an imported project keeps its own `auth.mfa` or Admin-set configuration.
 - The `emulator` profile keeps `auth.totp` working. Under `strict`, `auth.totp` is enough by default; under `productionExact`, or with an `auth.mfa` that leaves TOTP off, it prints a startup warning naming `auth.mfa`.
 
-A TOTP code accepted to complete enrollment must not be immediately reused for sign-in. In a test with virtual time, complete enrollment, advance the world clock by the secret's actual period, and generate the sign-in code for that new instant. Use matching algorithm and digit settings. See the [TOTP test recipe](https://github.com/fireemu/fireemu/blob/main/docs/test-worlds.md#totp-enrollment-consumes-a-code).
+### Test TOTP enrollment and sign-in
+
+A test gets the TOTP secret from the SDK itself: `TotpMultiFactorGenerator.generateSecret(session)` returns a `TotpSecret` whose `secretKey` is the base32 shared secret, with `hashingAlgorithm`, `codeLength` and `codeIntervalSeconds`. The SDK has no function that computes a code, so the test computes the RFC 6238 code with those values, as an authenticator app would. A sign-in hint (`resolver.hints`) holds the factor's `uid`, `displayName` and `enrollmentTime`, never the secret.
+
+Enrolling a second factor needs a verified email address, as in production (`auth/unverified-email` otherwise). The test verifies it with the action link the emulator issued, read from the `oobCodes` route ([Local verification messages](#local-verification-messages)). This flow ran against a local `fireemu up` (0.48.0, `strict` profile, default MFA configuration) with `firebase` 12.18.0:
+
+```js
+import { initializeApp } from 'firebase/app';
+import {
+  getAuth, connectAuthEmulator, createUserWithEmailAndPassword, sendEmailVerification,
+  applyActionCode, reauthenticateWithCredential, EmailAuthProvider, multiFactor,
+  TotpMultiFactorGenerator, signInWithEmailAndPassword, getMultiFactorResolver, signOut,
+} from 'firebase/auth';
+import { createHmac } from 'node:crypto';
+
+const BASE = 'http://127.0.0.1:9099';
+const auth = getAuth(initializeApp({ projectId: 'demo-shop', apiKey: 'fake-api-key' }));
+connectAuthEmulator(auth, BASE, { disableWarnings: true });
+
+// RFC 6238 code from a TotpSecret (base32 key, period, digits, algorithm).
+function totp(secret, atMs = Date.now()) {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  const bits = [...secret.secretKey.replace(/=+$/, '')]
+    .map((c) => alphabet.indexOf(c).toString(2).padStart(5, '0')).join('');
+  const key = Buffer.from(bits.match(/.{8}/g).map((b) => parseInt(b, 2)));
+  const counter = Buffer.alloc(8);
+  counter.writeBigUInt64BE(BigInt(Math.floor(atMs / 1000 / secret.codeIntervalSeconds)));
+  const h = createHmac(secret.hashingAlgorithm.toLowerCase(), key).update(counter).digest();
+  const o = h[h.length - 1] & 15;
+  const n = ((h[o] & 0x7f) << 24) | (h[o + 1] << 16) | (h[o + 2] << 8) | h[o + 3];
+  return String(n % 10 ** secret.codeLength).padStart(secret.codeLength, '0');
+}
+
+const email = 'grace@example.test';
+const password = 'demo-pass-123';
+const { user } = await createUserWithEmailAndPassword(auth, email, password);
+
+// Verify the email with the action code the emulator issued.
+await sendEmailVerification(user);
+const { oobCodes } = await (await fetch(`${BASE}/emulator/v1/projects/demo-shop/oobCodes`)).json();
+await applyActionCode(auth, oobCodes.findLast((c) => c.email === email && c.requestType === 'VERIFY_EMAIL').oobCode);
+await reauthenticateWithCredential(user, EmailAuthProvider.credential(email, password));
+
+// Enroll: the secret comes from the SDK, the code from the helper above.
+const secret = await TotpMultiFactorGenerator.generateSecret(await multiFactor(user).getSession());
+await multiFactor(user).enroll(
+  TotpMultiFactorGenerator.assertionForEnrollment(secret, totp(secret)), 'Authenticator');
+await signOut(auth);
+
+// The enrollment code used up its time step; sign in with a code from the next one.
+const period = secret.codeIntervalSeconds * 1000;
+await new Promise((r) => setTimeout(r, period - (Date.now() % period) + 500));
+
+try {
+  await signInWithEmailAndPassword(auth, email, password);
+} catch (error) {
+  if (error.code !== 'auth/multi-factor-auth-required') throw error;
+  const resolver = getMultiFactorResolver(auth, error);
+  const hint = resolver.hints.find((h) => h.factorId === TotpMultiFactorGenerator.FACTOR_ID);
+  const credential = await resolver.resolveSignIn(
+    TotpMultiFactorGenerator.assertionForSignIn(hint.uid, totp(secret)));
+  console.log('signed in as', credential.user.email);
+}
+```
+
+Successful TOTP enrollment consumes the accepted time step. Reusing that code to sign in in the same step is refused, so the sample waits for the next step. In a test with virtual time, advance the world clock by the secret's actual period instead, and generate the sign-in code for that new instant; see the [TOTP test recipe](https://github.com/fireemu/fireemu/blob/main/docs/test-worlds.md#totp-enrollment-consumes-a-code).
 
 ## Multi-tenancy
 
@@ -358,6 +526,8 @@ To test sign-up quota errors, set `auth.quotaSimulation`:
 <TabItem label="TOML">
 
 ```toml
+schemaVersion = 1
+
 [auth.quotaSimulation]
 # Sign-up quota simulation: "off", "observe", or "enforce".
 mode = "enforce"
@@ -370,6 +540,7 @@ defaultQuotaPerHour = 5
 
 ```json
 {
+  "schemaVersion": 1,
   "auth": {
     "quotaSimulation": {
       "mode": "enforce",

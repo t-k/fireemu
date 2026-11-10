@@ -2341,6 +2341,8 @@ pub fn ignored_warnings(
 /// cannot reach a product this run is not serving.
 #[derive(Debug, Clone)]
 pub struct EmulatorHosts {
+    /// Public signing keys for Python blocking functions.
+    pub blocking_jwks: Option<String>,
     /// App Check on the control listener, independent of whether Auth is selected.
     pub app_check: Option<String>,
     /// Firestore gRPC / REST.
@@ -4104,9 +4106,15 @@ async fn start_codebase(
             "FIREEMU_APP_CHECK_EMULATOR_HOST"
                 | "FIREEMU_APP_CHECK_JWKS_URL"
                 | "FIREEMU_APP_CHECK_ADMIN"
+                | "FIREEMU_AUTH_BLOCKING_JWKS"
         )
     };
     env.retain(|(name, _)| !is_app_check_route(name));
+    if python {
+        if let Some(jwks) = &hosts.blocking_jwks {
+            env.push(("FIREEMU_AUTH_BLOCKING_JWKS".to_owned(), jwks.clone()));
+        }
+    }
     if admin_app_check_offered(hosts.admin_app_check.is_some(), python) {
         // The daemon owns the question and the answer; the runner only asks (see
         // `tools/runner-node/admin-app-check.mjs`).
@@ -5374,6 +5382,7 @@ pub fn auth_sink(
 /// Identity Platform's synchronous bridge to before-create and before-sign-in functions.
 pub struct BlockingAuthBridge {
     runtime: Arc<FunctionsRuntime>,
+    production_token: Option<Arc<dyn fireemu_core_auth::jwt::IdTokenSigner>>,
     deadline: Duration,
     forward_inbound_credentials: bool,
     settings: Arc<RwLock<BlockingAuthSettings>>,
@@ -5431,11 +5440,18 @@ fn epoch_millis(at: fireemu_core_types::time::LogicalInstant) -> serde_json::Val
     serde_json::json!(i64::try_from(at.as_nanos() / 1_000_000).unwrap_or_default())
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BlockingTokenShape {
+    Emulated,
+    Production,
+}
+
 /// The token's `user_record`: the account's members, with production's absent members left out.
 fn blocking_auth_user_record(
     tenant: Option<&str>,
     request: &fireemu_adapter_http::identity_toolkit::AuthBlockingContext,
     user: &fireemu_core_auth::store::UserRecord,
+    shape: BlockingTokenShape,
 ) -> serde_json::Map<String, serde_json::Value> {
     use serde_json::{json, Map, Value};
     let mut record = Map::new();
@@ -5453,7 +5469,9 @@ fn blocking_auth_user_record(
     if let Some(phone) = &user.phone_number {
         record.insert("phone_number".to_owned(), json!(phone));
     }
-    record.insert("disabled".to_owned(), json!(user.disabled));
+    if shape == BlockingTokenShape::Emulated || user.disabled {
+        record.insert("disabled".to_owned(), json!(user.disabled));
+    }
     if let Some(claims) = user
         .custom_claims
         .attributes_text()
@@ -5539,6 +5557,7 @@ fn blocking_auth_claims(
     event_id: &str,
     issued_at: i64,
     audience: &str,
+    shape: BlockingTokenShape,
 ) -> serde_json::Map<String, serde_json::Value> {
     use serde_json::{json, Map, Value};
 
@@ -5550,18 +5569,35 @@ fn blocking_auth_claims(
     claims.insert("aud".to_owned(), json!(audience));
     claims.insert("iat".to_owned(), json!(issued_at));
     // The official emulator's lifetime: the deadline in milliseconds divided by 100.
-    claims.insert("exp".to_owned(), json!(issued_at + 70));
+    claims.insert(
+        "exp".to_owned(),
+        json!(
+            issued_at
+                + if shape == BlockingTokenShape::Production {
+                    300
+                } else {
+                    70
+                }
+        ),
+    );
     claims.insert("event_id".to_owned(), json!(event_id));
     claims.insert("event_type".to_owned(), json!(event.as_str()));
     claims.insert("user_agent".to_owned(), json!(BLOCKING_AUTH_USER_AGENT));
     claims.insert("ip_address".to_owned(), json!(BLOCKING_AUTH_IP_ADDRESS));
-    claims.insert("locale".to_owned(), json!(BLOCKING_AUTH_LOCALE));
+    claims.insert(
+        "locale".to_owned(),
+        json!(if shape == BlockingTokenShape::Production {
+            "und"
+        } else {
+            BLOCKING_AUTH_LOCALE
+        }),
+    );
     // A mail event has no user: its token names the address and the kind of mail instead.
     if let Some(user) = user {
         claims.insert("sub".to_owned(), json!(user.local_id.as_str()));
         claims.insert(
             "user_record".to_owned(),
-            Value::Object(blocking_auth_user_record(tenant, request, user)),
+            Value::Object(blocking_auth_user_record(tenant, request, user, shape)),
         );
     }
     if let Some(email) = &request.email {
@@ -5598,6 +5634,20 @@ fn blocking_auth_claims(
         }
     }
     claims
+}
+
+fn production_blocking_audience(project: &str, region: &str, function: &str) -> String {
+    format!("https://{region}-{project}.cloudfunctions.net/{function}")
+}
+
+fn signed_blocking_jwt(
+    claims: &serde_json::Map<String, serde_json::Value>,
+    signer: &dyn fireemu_core_auth::jwt::IdTokenSigner,
+) -> String {
+    fireemu_core_auth::jwt::encode_payload_with(
+        &serde_json::Value::Object(claims.clone()).to_string(),
+        Some(signer),
+    )
 }
 
 /// An unsigned (`alg: none`) JWT of `claims`, as the official Auth emulator sends it.
@@ -5933,6 +5983,7 @@ impl BlockingAuthBridge {
         let runtime_now = runtime.now();
         Ok(Self {
             runtime,
+            production_token: None,
             deadline: BLOCKING_AUTH_DEADLINE,
             forward_inbound_credentials,
             settings: Arc::new(RwLock::new(BlockingAuthSettings {
@@ -5943,6 +5994,16 @@ impl BlockingAuthBridge {
             send_events: false,
             trigger_times: RwLock::new([runtime_now; 4]),
         })
+    }
+
+    /// Signs production-shaped blocking tokens with the session key.
+    #[must_use]
+    pub fn with_production_token(
+        mut self,
+        signer: Option<Arc<dyn fireemu_core_auth::jwt::IdTokenSigner>>,
+    ) -> Self {
+        self.production_token = signer;
+        self
     }
 
     /// Serves Identity Platform's email and SMS events too, as production does (the strict
@@ -6011,6 +6072,7 @@ impl BlockingAuthBridge {
     fn with_deadline(runtime: Arc<FunctionsRuntime>, deadline: Duration) -> Self {
         Self {
             runtime,
+            production_token: None,
             deadline,
             forward_inbound_credentials: false,
             settings: Arc::new(RwLock::new(BlockingAuthSettings {
@@ -6648,6 +6710,21 @@ impl BlockingAuthBridge {
         );
         let issued_at =
             i64::try_from(self.runtime.now().as_nanos() / 1_000_000_000).unwrap_or_default();
+        let audience = self.production_token.as_ref().map_or_else(
+            || format!("http://{}{path}", target.addr),
+            |_| {
+                production_blocking_audience(
+                    self.runtime.project(),
+                    &target.region,
+                    &target.function,
+                )
+            },
+        );
+        let shape = if self.production_token.is_some() {
+            BlockingTokenShape::Production
+        } else {
+            BlockingTokenShape::Emulated
+        };
         let claims = blocking_auth_claims(
             project,
             tenant,
@@ -6656,11 +6733,20 @@ impl BlockingAuthBridge {
             user,
             &format!("fireemu-blocking-{}", self.runtime.trigger_generation()),
             issued_at,
-            &format!("http://{}{path}", target.addr),
+            &audience,
+            shape,
         );
         // The token the function's firebase-functions decodes into its event, as Identity
         // Platform and the official Auth emulator deliver it.
-        let body = serde_json::json!({"data": {"jwt": unsigned_jwt(&claims)}}).to_string();
+        let (jwt, content_type, user_agent) = match &self.production_token {
+            Some(signer) => (
+                signed_blocking_jwt(&claims, signer.as_ref()),
+                "application/json; charset=utf-8",
+                "User-Agent: Google-Firebase\r\n",
+            ),
+            None => (unsigned_jwt(&claims), "application/json", ""),
+        };
+        let body = serde_json::json!({"data": {"jwt": jwt}}).to_string();
         // Recovery and virtual-clock acknowledgement share the platform's native deadline.
         // A warm native-clock runner keeps its full budget; a function with an equal own
         // timeout still times out before the platform envelope.
@@ -6680,7 +6766,7 @@ impl BlockingAuthBridge {
                 TcpStream::connect_timeout(&address, blocking_auth_remaining(deadline)?)
                     .map_err(|error| blocking_auth_io_failure(&error))?;
             let request = format!(
-                "POST {path} HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\nX-Fireemu-Runner-Secret: {}\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
+                "POST {path} HTTP/1.1\r\nHost: {}\r\nContent-Type: {content_type}\r\n{user_agent}X-Fireemu-Runner-Secret: {}\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
                 target.addr,
                 target.secret,
                 body.len(),
@@ -9604,6 +9690,7 @@ root	unchanged	small	firstGen";
         let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../fireemu-adapter-functions/tests/fake_runner.py");
         let hosts = super::EmulatorHosts {
+            blocking_jwks: None,
             app_check: None,
             firestore: None,
             auth: None,
@@ -9712,6 +9799,7 @@ root	unchanged	small	firstGen";
         let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../fireemu-adapter-functions/tests/fake_runner.py");
         let hosts = super::EmulatorHosts {
+            blocking_jwks: None,
             app_check: None,
             firestore: None,
             auth: None,
@@ -9805,6 +9893,7 @@ root	unchanged	small	firstGen";
         let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../fireemu-adapter-functions/tests/fake_runner.py");
         let hosts = super::EmulatorHosts {
+            blocking_jwks: None,
             app_check: None,
             firestore: None,
             auth: None,
@@ -9910,6 +9999,7 @@ root	unchanged	small	firstGen";
         let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../fireemu-adapter-functions/tests/fake_runner.py");
         let hosts = super::EmulatorHosts {
+            blocking_jwks: None,
             app_check: None,
             firestore: None,
             auth: None,
@@ -10040,6 +10130,7 @@ exports.add = onCall({{}}, observe("add"));
         let runner = root.join("tools/runner-node/index.mjs");
         let node = std::env::var("FIREEMU_NODE").unwrap_or_else(|_| "node".to_owned());
         let hosts = super::EmulatorHosts {
+            blocking_jwks: None,
             app_check: None,
             firestore: None,
             auth: None,
@@ -10112,6 +10203,145 @@ exports.add = onCall({{}}, observe("add"));
         );
     }
 
+    static BLOCKING_TEST_SIGNER: std::sync::OnceLock<
+        Arc<fireemu_adapter_http::signing::RsaSigner>,
+    > = std::sync::OnceLock::new();
+    static OTHER_BLOCKING_TEST_SIGNER: std::sync::OnceLock<
+        Arc<fireemu_adapter_http::signing::RsaSigner>,
+    > = std::sync::OnceLock::new();
+
+    #[test]
+    fn signed_blocking_token_has_a_verifiable_signature() {
+        use fireemu_core_auth::jwt::{base64url_decode, IdTokenSigner};
+        let signer = BLOCKING_TEST_SIGNER
+            .get_or_init(|| fireemu_adapter_http::signing::RsaSigner::from_seed(1).unwrap());
+        let other = OTHER_BLOCKING_TEST_SIGNER
+            .get_or_init(|| fireemu_adapter_http::signing::RsaSigner::from_seed(2).unwrap());
+        let claims = serde_json::json!({"aud": "example"})
+            .as_object()
+            .unwrap()
+            .clone();
+        let jwt = super::signed_blocking_jwt(&claims, signer.as_ref());
+        let parts: Vec<_> = jwt.split('.').collect();
+        assert_eq!(parts.len(), 3);
+        let header: serde_json::Value =
+            serde_json::from_slice(&base64url_decode(parts[0]).unwrap()).unwrap();
+        assert_eq!(
+            header,
+            serde_json::json!({"alg":"RS256", "kid":signer.kid(), "typ":"JWT"})
+        );
+        let input = format!("{}.{}", parts[0], parts[1]);
+        let mut signature = base64url_decode(parts[2]).unwrap();
+        assert!(signer.verify(input.as_bytes(), &signature));
+        assert!(!other.verify(input.as_bytes(), &signature));
+        let mut altered = input.into_bytes();
+        let index = parts[0].len() + 1;
+        altered[index] ^= 1;
+        assert!(!signer.verify(&altered, &signature));
+        signature[0] ^= 1;
+        assert!(!signer.verify(format!("{}.{}", parts[0], parts[1]).as_bytes(), &signature));
+    }
+
+    #[test]
+    fn production_blocking_token_claims_and_audience() {
+        use fireemu_core_auth::mfa::TotpPolicy;
+        use fireemu_core_auth::store::{AuthStore, NewUser};
+        use fireemu_core_functions::manifest::BlockingAuthEvent;
+        use fireemu_core_types::{determinism::SplitMix64, time::LogicalInstant};
+        let mut store = AuthStore::new("demo-app", SplitMix64::new(7), TotpPolicy::default());
+        let uid = store
+            .create_user(
+                NewUser::email("person@example.test"),
+                LogicalInstant::from_unix_seconds(100),
+            )
+            .unwrap();
+        let mut user = store.user_by_id(uid.as_str()).unwrap().clone();
+        let context = fireemu_adapter_http::identity_toolkit::AuthBlockingContext {
+            sign_in_method: Some("password".to_owned()),
+            ..Default::default()
+        };
+        let audience = super::production_blocking_audience("demo-app", "us-central1", "fn");
+        assert_eq!(
+            audience,
+            "https://us-central1-demo-app.cloudfunctions.net/fn"
+        );
+        let claims = super::blocking_auth_claims(
+            "demo-app",
+            None,
+            BlockingAuthEvent::BeforeCreate,
+            &context,
+            Some(&user),
+            "event",
+            100,
+            &audience,
+            super::BlockingTokenShape::Production,
+        );
+        assert_eq!(claims["exp"], 400);
+        assert_eq!(claims["locale"], "und");
+        assert_eq!(claims["aud"], audience);
+        assert!(claims["user_record"].get("disabled").is_none());
+        let emulated = super::blocking_auth_claims(
+            "demo-app",
+            None,
+            BlockingAuthEvent::BeforeCreate,
+            &context,
+            Some(&user),
+            "event",
+            100,
+            &audience,
+            super::BlockingTokenShape::Emulated,
+        );
+        assert_eq!(emulated["exp"], 170);
+        assert_eq!(emulated["locale"], "en");
+        assert_eq!(emulated["user_record"]["disabled"], false);
+        assert_eq!(
+            claims.keys().collect::<Vec<_>>(),
+            emulated.keys().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            claims.keys().map(String::as_str).collect::<Vec<_>>(),
+            [
+                "aud",
+                "event_id",
+                "event_type",
+                "exp",
+                "iat",
+                "ip_address",
+                "iss",
+                "locale",
+                "sign_in_method",
+                "sub",
+                "user_agent",
+                "user_record"
+            ]
+        );
+        user.disabled = true;
+        let disabled = super::blocking_auth_claims(
+            "demo-app",
+            None,
+            BlockingAuthEvent::BeforeCreate,
+            &context,
+            Some(&user),
+            "event",
+            100,
+            &audience,
+            super::BlockingTokenShape::Production,
+        );
+        assert_eq!(disabled["user_record"]["disabled"], true);
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn production_audience_preserves_parts(project in "[a-z][a-z0-9-]{0,20}", region in "[a-z][a-z0-9-]{0,20}", function in "[a-z][a-z0-9-]{0,20}") {
+            let result = super::production_blocking_audience(&project, &region, &function);
+            let suffix = format!(".cloudfunctions.net/{function}");
+            proptest::prop_assert!(result.starts_with("https://"));
+            proptest::prop_assert!(result.ends_with(&suffix));
+            let host = result.strip_prefix("https://").unwrap().strip_suffix(&suffix).unwrap();
+            proptest::prop_assert_eq!(host.strip_prefix(&format!("{region}-")), Some(project.as_str()));
+        }
+    }
+
     fn claims_for(
         tenant: Option<&str>,
         event: fireemu_core_functions::manifest::BlockingAuthEvent,
@@ -10127,6 +10357,7 @@ exports.add = onCall({{}}, observe("add"));
             "event-1",
             1_788_004_860,
             "http://127.0.0.1:1/demo-app/us-central1/fn",
+            super::BlockingTokenShape::Emulated,
         ))
     }
 
@@ -10884,6 +11115,86 @@ exports.add = onCall({{}}, observe("add"));
         runtime.shutdown().await;
     }
 
+    #[tokio::test(flavor = "current_thread")]
+    async fn bridge_delivers_production_and_emulated_tokens() {
+        use fireemu_adapter_http::identity_toolkit::AuthBlockingHook;
+        use fireemu_core_auth::{
+            jwt::base64url_decode,
+            mfa::TotpPolicy,
+            store::{AuthStore, NewUser},
+        };
+        use fireemu_core_functions::manifest::BlockingAuthEvent;
+        use fireemu_core_types::{determinism::SplitMix64, time::LogicalInstant};
+        let signer = BLOCKING_TEST_SIGNER
+            .get_or_init(|| fireemu_adapter_http::signing::RsaSigner::from_seed(1).unwrap())
+            .clone();
+        let runtime = runtime_with_blocking_auth_policy_order(&[("guardA", false, false)]).await;
+        let mut store = AuthStore::new("demo-app", SplitMix64::new(7), TotpPolicy::default());
+        let uid = store
+            .create_user(
+                NewUser::email("person@example.test"),
+                LogicalInstant::from_unix_seconds(100),
+            )
+            .unwrap();
+        let user = store.user_by_id(uid.as_str()).unwrap().clone();
+        let production =
+            BlockingAuthBridge::new(runtime.clone()).with_production_token(Some(signer));
+        let emulated = BlockingAuthBridge::new(runtime.clone());
+        let answers = tokio::task::spawn_blocking(move || {
+            [
+                production
+                    .invoke(BlockingAuthEvent::BeforeCreate, &user)
+                    .unwrap(),
+                emulated
+                    .invoke(BlockingAuthEvent::BeforeCreate, &user)
+                    .unwrap(),
+            ]
+        })
+        .await
+        .unwrap();
+        for (answer, production) in answers.iter().zip([true, false]) {
+            let body: serde_json::Value =
+                serde_json::from_str(answer["body"].as_str().unwrap()).unwrap();
+            let parts: Vec<_> = body["data"]["jwt"].as_str().unwrap().split('.').collect();
+            let header: serde_json::Value =
+                serde_json::from_slice(&base64url_decode(parts[0]).unwrap()).unwrap();
+            let claims: serde_json::Value =
+                serde_json::from_slice(&base64url_decode(parts[1]).unwrap()).unwrap();
+            let headers = answer["headers"].as_array().unwrap();
+            let get = |name: &str| {
+                headers
+                    .iter()
+                    .find(|h| h[0] == name)
+                    .map(|h| h[1].as_str().unwrap())
+            };
+            if production {
+                assert_eq!(header["alg"], "RS256");
+                assert_eq!(
+                    claims["aud"],
+                    "https://us-central1-demo-app.cloudfunctions.net/guardA"
+                );
+                assert_eq!(
+                    claims["exp"].as_i64().unwrap() - claims["iat"].as_i64().unwrap(),
+                    300
+                );
+                assert_eq!(get("content-type"), Some("application/json; charset=utf-8"));
+                assert_eq!(get("user-agent"), Some("Google-Firebase"));
+            } else {
+                assert_eq!(header["alg"], "none");
+                assert_eq!(
+                    claims["aud"],
+                    format!(
+                        "http://{}/demo-app/us-central1/guardA",
+                        get("host").unwrap()
+                    )
+                );
+                assert_eq!(get("content-type"), Some("application/json"));
+                assert_eq!(get("user-agent"), None);
+            }
+        }
+        runtime.shutdown().await;
+    }
+
     /// Each invocation path delivers its event to the selected function and answers what the
     /// function answered (the fake runner echoes the request): the user events carry the
     /// user, the mail event the address, and a bridge without the email event runs nothing.
@@ -11064,6 +11375,7 @@ exports.add = onCall({{}}, observe("add"));
             "event-1",
             1_788_004_860,
             "http://127.0.0.1:1/demo-app/us-central1/fn",
+            super::BlockingTokenShape::Emulated,
         );
         assert_eq!(claims["event_type"], "beforeSendEmail");
         assert_eq!(claims["email"], "a@example.com");
@@ -11753,6 +12065,7 @@ exports.add = onCall({{}}, observe("add"));
             ignore: Vec::new(),
         };
         let hosts = super::EmulatorHosts {
+            blocking_jwks: None,
             app_check: None,
             firestore: None,
             auth: None,
@@ -11827,6 +12140,7 @@ exports.add = onCall({{}}, observe("add"));
 
     fn no_hosts() -> super::EmulatorHosts {
         super::EmulatorHosts {
+            blocking_jwks: None,
             app_check: None,
             firestore: None,
             auth: None,
@@ -12044,6 +12358,59 @@ sys.stdin.buffer.read()
     }
 
     #[tokio::test]
+    async fn blocking_jwks_is_owned_by_the_daemon_and_only_sent_to_python() {
+        let script = r"
+import json,os,sys
+value=json.dumps({'type':'hello','runner':'probe','manifest':{'functions':[{'name':'job','trigger':{'type':'schedule','schedule':'every 1 minutes'}}]},'adminAppCheck':{'instrumentation':json.dumps([os.environ.get('FIREEMU_AUTH_BLOCKING_JWKS'), json.loads(os.environ.get('FIREEMU_LOCAL_SECRETS_JSON','{}')).get('FIREEMU_AUTH_BLOCKING_JWKS')])}}).encode()
+sys.stdout.buffer.write(str(len(value)).encode()+b'\n'+value)
+sys.stdout.buffer.flush()
+sys.stdin.buffer.read()
+";
+        let (dir, python) = python_codebase("blocking-jwks");
+        let manifest_path = dir.join("manifest.json");
+        std::fs::write(&manifest_path, scheduled_with(json!({})).to_string()).unwrap();
+        std::fs::write(dir.join(".env"), "FIREEMU_AUTH_BLOCKING_JWKS=user-value\n").unwrap();
+        std::fs::write(
+            dir.join(".secret.local"),
+            "FIREEMU_AUTH_BLOCKING_JWKS=secret-value\n",
+        )
+        .unwrap();
+        let cfg = crate::config::RuntimeConfig {
+            functions_runner: Some(vec![
+                "python3".to_owned(),
+                "-c".to_owned(),
+                script.to_owned(),
+            ]),
+            functions_manifest: Some(manifest_path.display().to_string()),
+            ..crate::config::RuntimeConfig::default()
+        };
+        let node = crate::config::FunctionsCodebase {
+            runtime: Some("nodejs20".to_owned()),
+            ..python.clone()
+        };
+        let cache = Arc::new(super::NodeProbeCache::default());
+        let snapshot = VirtualClock::new(cfg.clock_start).snapshot();
+        for (codebase, jwks, expected) in [
+            (&python, Some("public-jwks"), Some("public-jwks")),
+            (&python, None, None),
+            (&node, Some("public-jwks"), None),
+        ] {
+            let mut hosts = no_hosts();
+            hosts.blocking_jwks = jwks.map(str::to_owned);
+            let started =
+                super::start_codebase(&cfg, codebase, &hosts, "s", false, &cache, snapshot)
+                    .await
+                    .unwrap();
+            let report = started.runner.hello().admin_app_check.clone().unwrap();
+            let values: serde_json::Value =
+                serde_json::from_str(report["instrumentation"].as_str().unwrap()).unwrap();
+            assert_eq!(values, json!([expected, null]));
+            started.runner.kill_now();
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
     async fn a_virtual_date_is_refused_for_a_runner_without_a_clock_and_the_message_names_python() {
         // A runner that says hello and announces no clock capability, as the Python runner does.
         let script = r"
@@ -12149,6 +12516,7 @@ sys.stdin.buffer.read()
             ignore: Vec::new(),
         };
         let hosts = super::EmulatorHosts {
+            blocking_jwks: None,
             app_check: None,
             firestore: None,
             auth: None,

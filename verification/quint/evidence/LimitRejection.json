@@ -465,7 +465,7 @@
     "crates/fireemu-core-session/src/barrier.rs": "7ac719c2ff1ee5300c544d4bc568956726c829b6766b765ab2e9fa3001a54b52",
     "crates/fireemu-core-session/src/clock.rs": "307e4819cf1c4c516ab4e0c41d941ace6d07fb393f46ee3427ccd87edcfdae2c",
     "crates/fireemu-core-session/src/fault.rs": "04a4a18b63afb6763ffd78234f853fd23a007214943c25c8c3c7aebee50060c5",
-    "crates/fireemu-core-session/src/host_guard.rs": "9e4b174d01509774ff394003a85a6e84b83a9ce64956069470da8627381e2a61",
+    "crates/fireemu-core-session/src/host_guard.rs": "7a9dc8869a02c99d350493415629375effb978049f72e97b68b814ee7ff6d016",
     "crates/fireemu-core-session/src/idle.rs": "53bd98a30a3d61cf0be88222f4d3700e84cdc46636e885c5f4fb1945532104b8",
     "crates/fireemu-core-session/src/lib.rs": "1d0b6a1eedb6a84aec0b20756ae8ce6a6808715d50178553c85b914dce5d496b",
     "crates/fireemu-core-session/src/loopback.rs": "8cb57c2c82ab96881fddd62ab3aca77c0788e52d59438679f06d4e581904e86c",

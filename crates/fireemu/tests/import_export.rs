@@ -1497,7 +1497,19 @@ fn a_configured_storage_object_limit_applies_to_an_import() {
     let export = copy_fixture("official-multiproduct", &dir);
     let config = dir.join("fireemu.json");
     let marker = dir.join("command-ran");
-    for (limit, accepted) in [(1_u64, false), (1_048_576, true)] {
+    let largest = std::fs::read_dir(export.join("storage_export/blobs"))
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.metadata().unwrap().len())
+        .max()
+        .unwrap();
+    assert!(largest > 1, "the fixture needs a blob larger than one byte");
+    for (limit, accepted) in [
+        (1_u64, false),
+        (largest - 1, false),
+        (largest, true),
+        (1_048_576, true),
+    ] {
         std::fs::write(
             &config,
             format!(r#"{{"schemaVersion":1,"storage":{{"maxObjectBytes":{limit}}}}}"#),

@@ -2322,6 +2322,31 @@ fn an_oversized_import_is_refused_as_too_large() {
 }
 
 #[test]
+fn the_object_limit_is_readable_and_bounds_a_write_with_admission_exactly() {
+    let mut s = StorageState::new(1);
+    assert_eq!(
+        s.max_object_bytes(),
+        fireemu_core_storage::store::MAX_OBJECT_BYTES
+    );
+    s.set_max_object_bytes(3);
+    assert_eq!(s.max_object_bytes(), 3);
+    let write = |s: &mut StorageState, object: &str, len: usize| {
+        s.put_with_admission(
+            &bucket(),
+            &name(object),
+            vec![0; len],
+            NewMetadata::default(),
+            Precondition::default(),
+            t(0),
+            |_: &[StorageEvent]| Ok(()),
+        )
+        .map(|_| ())
+    };
+    assert_eq!(write(&mut s, "exact", 3), Ok(()));
+    assert_eq!(write(&mut s, "over", 4), Err(StorageError::TooLarge));
+}
+
+#[test]
 fn an_import_follows_the_configured_object_limit() {
     use fireemu_core_storage::store::ImportedObject;
     let imported = |object: &str| ImportedObject {

@@ -5213,6 +5213,43 @@ async fn the_body_cap_follows_the_configured_object_limit() {
     assert_eq!(BUDGET.in_flight(), 0);
 }
 
+#[tokio::test]
+async fn a_reconfigured_body_budget_limit_applies_to_the_next_request() {
+    static BUDGET: BodyBudget = BodyBudget::new(1_572_864);
+    assert_eq!(BUDGET.limit(), 1_572_864);
+    let admitted = upload_with_object_limit(&BUDGET, 100, 11, true).await;
+    assert!(admitted.starts_with("HTTP/1.1 200"), "{admitted}");
+    BUDGET.set_limit(10);
+    assert_eq!(BUDGET.limit(), 10);
+    let refused = upload_with_object_limit(&BUDGET, 100, 11, true).await;
+    assert!(refused.starts_with("HTTP/1.1 503"), "{refused}");
+    assert!(
+        refused.to_ascii_lowercase().contains("retry-after: 1"),
+        "{refused}"
+    );
+    BUDGET.set_limit(11);
+    let at_limit = upload_with_object_limit(&BUDGET, 100, 11, true).await;
+    assert!(at_limit.starts_with("HTTP/1.1 200"), "{at_limit}");
+    assert_eq!(BUDGET.in_flight(), 0);
+}
+
+#[test]
+fn the_documented_storage_limits_keep_their_values() {
+    use fireemu_adapter_http::storage_server::{
+        body_cap_for_object_limit, BODY_OVERHEAD_BYTES, DEFAULT_BODY_BUDGET_BYTES,
+        MAX_CONFIGURED_BUDGET_BYTES, MAX_CONFIGURED_OBJECT_BYTES,
+    };
+    assert_eq!(BODY_OVERHEAD_BYTES, 4 * 1024 * 1024);
+    assert_eq!(MAX_STORAGE_BODY_BYTES, 272_629_760);
+    assert_eq!(DEFAULT_BODY_BUDGET_BYTES, 1_073_741_824);
+    assert_eq!(
+        body_cap_for_object_limit(fireemu_core_storage::store::MAX_OBJECT_BYTES),
+        Some(MAX_STORAGE_BODY_BYTES)
+    );
+    assert_eq!(MAX_CONFIGURED_BUDGET_BYTES, 2_147_483_647);
+    assert_eq!(MAX_CONFIGURED_OBJECT_BYTES, 2_143_289_343);
+}
+
 proptest::proptest! {
     #[test]
     fn the_body_cap_is_the_object_limit_plus_the_overhead(limit in 0_u64..=u64::MAX) {

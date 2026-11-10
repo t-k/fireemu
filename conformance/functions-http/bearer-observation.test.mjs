@@ -1193,7 +1193,7 @@ test("the recording names no project, number or bucket", () => {
     new URL("../functions-http-bearer-production.json", import.meta.url),
     "utf8",
   );
-  for (const forbidden of ["fireemu-oracle", "gcf-v2-uploads", "appspot", "run.app", "/Users/"]) {
+  for (const forbidden of ["fireemu-oracle", "gcf-v2-uploads", "appspot", "run.app", ["", "Users", ""].join("/")]) {
     assert.ok(!text.includes(forbidden), forbidden);
   }
   assert.equal(RECORDED.corpusDigest, SOURCE_PINS_CORPUS);

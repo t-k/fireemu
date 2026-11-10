@@ -1025,6 +1025,10 @@ fn hosting_strict_a_request_that_climbs_is_a_same_origin_redirect_to_the_normali
         Some("/index.html?x=1")
     );
     assert_eq!(get(&hosting, "/a/../b/").header("location"), Some("/b/"));
+    // RFC 3986: a path that ends in a dot segment ends in a slash; a single dot vanishes
+    assert_eq!(get(&hosting, "/a/b/..").header("location"), Some("/a/"));
+    assert_eq!(get(&hosting, "/a/b/.").header("location"), Some("/a/b/"));
+    assert_eq!(get(&hosting, "/a/./b").header("location"), Some("/a/b"));
     // a name that merely contains dots is not a dot segment
     assert_eq!(get(&hosting, "/..data.json").status, 404);
     // the emulator profile keeps refusing with 404
@@ -1059,4 +1063,50 @@ fn hosting_strict_a_range_is_streamed_whatever_the_size_of_the_file() {
     let head = send(&hosting, "HEAD", "/big.bin", &[("Range", "bytes=10-19")]);
     assert_eq!((head.status, head.body.as_str()), (206, ""));
     assert_eq!(head.header("content-length"), Some("10"));
+}
+
+#[test]
+fn hosting_strict_a_backslash_in_a_climbing_path_is_never_a_redirect_to_another_site() {
+    // A browser reads `\` in a URL as `/`: `Location: /\evil.example` would be `//evil.example`. The
+    // closure delta review's probes, and the control set around them, must all stay on the origin.
+    for profile in ["strict", "exact", "emulator"] {
+        let hosting = outside_site(&format!("backslash-{profile}"), profile, &json("{}"));
+        for target in [
+            "/./\\evil.example",
+            "/a/../\\\\evil.example/",
+            "/./\\\\evil.example",
+            "/../\\evil.example",
+            "/%2e%2e/\\evil.example",
+            "/a/.\\b/../c",
+            "/./%5cevil.example",
+            "/./%5c%5cevil.example",
+            "/./%2f%2fevil.example",
+            "/.//evil.example",
+            "/..//evil.example",
+            "/a/..//evil.example/",
+        ] {
+            let reply = get(&hosting, target);
+            if let Some(location) = reply.header("location") {
+                assert!(location.starts_with('/'), "{profile} {target}: {location}");
+                assert!(
+                    !location.starts_with("//")
+                        && !location.starts_with("/\\")
+                        && !location.contains('\\'),
+                    "{profile} {target}: {location}"
+                );
+            }
+            if target.contains('\\') {
+                // the raw backslash is refused like any other unserved path
+                assert_eq!(reply.status, 404, "{profile} {target}");
+                assert_eq!(reply.header("location"), None, "{profile} {target}");
+            }
+        }
+        // the escaped backslash is a harmless path part of this origin
+        if profile != "emulator" {
+            assert_eq!(
+                get(&hosting, "/./%5cevil.example").header("location"),
+                Some("/%5cevil.example")
+            );
+        }
+    }
 }

@@ -16,6 +16,29 @@ import { fileURLToPath } from "node:url";
 import { comparisons } from "./closure-evidence.mjs";
 import { runLocal } from "./local.mjs";
 
+/** The paths of the exported documents that have a mismatch or an unknown row. */
+export function failedPaths(result) {
+  return Object.entries(result.documents)
+    .filter(([, document]) => document.summary.MISMATCH > 0 || document.summary.UNKNOWN > 0)
+    .map(([path]) => path);
+}
+
+/** The value after `name` in `argv`, or `undefined` when the flag is absent or has no value. */
+export function optionValue(argv, name) {
+  const at = argv.indexOf(name);
+  const value = at < 0 ? undefined : argv[at + 1];
+  return value === undefined || value.startsWith("--") ? undefined : value;
+}
+
+/** Whether the command line is `local --fireemu <binary> --export <file>`. */
+export function usageOk(argv) {
+  return (
+    argv[0] === "local" &&
+    optionValue(argv, "--fireemu") !== undefined &&
+    optionValue(argv, "--export") !== undefined
+  );
+}
+
 /** The committed comparison documents, keyed by their repository path. */
 export async function replay(binary) {
   const local = await runLocal({ binary, profile: "strict" });
@@ -39,22 +62,20 @@ export async function replay(binary) {
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const option = (name) => process.argv[process.argv.indexOf(name) + 1];
-  if (process.argv[2] !== "local" || !option("--fireemu") || !option("--export")) {
+  const option = (name) => optionValue(process.argv, name);
+  if (!usageOk(process.argv.slice(2))) {
     throw new Error("usage: release-replay.mjs local --fireemu <binary> --export <new file>");
   }
   const result = await replay(resolve(option("--fireemu")));
   await writeFile(resolve(option("--export")), `${JSON.stringify(result, null, 2)}\n`, {
     flag: "wx",
   });
-  const failures = Object.entries(result.documents).filter(
-    ([, document]) => document.summary.MISMATCH > 0 || document.summary.UNKNOWN > 0,
-  );
+  const failures = failedPaths(result);
   console.log(
     JSON.stringify({
       kind: result.kind,
       documents: Object.keys(result.documents),
-      mismatched: failures.map(([path]) => path),
+      mismatched: failures,
     }),
   );
   process.exitCode = failures.length === 0 ? 0 : 1;

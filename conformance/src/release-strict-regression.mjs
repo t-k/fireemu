@@ -41,6 +41,9 @@ import { federationEnvironment } from "./release-openssl.mjs";
 import { bindingProblems } from "./harness-registry.mjs";
 import { EXPECTED_ACTIONS, localSetupDigest } from "./harness-target/local-tenancy.mjs";
 import { findPackagedRunner, packagedRunnerCandidates } from "./packaged-runner.mjs";
+import { judgeHosting } from "./hosting-production/release-judge.mjs";
+
+export { judgeHosting };
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const CONFORMANCE = join(ROOT, "conformance");
@@ -1672,27 +1675,6 @@ async function observe(run, entry, context) {
   }
   const path = values.export;
   return existsSync(path) ? await readJsonFile(path) : undefined;
-}
-
-/**
- * The Hosting comparison the binary produced against the committed one: the whole document, row for
- * row, with no status relabelled, and the binary the export names is the one under test.
- */
-export function judgeHosting(path, expected, observed, context) {
-  if (observed === undefined) return [`${path}: R37 produced no export`];
-  const differences = [];
-  if (observed.kind !== "hosting-comparison-v1-export") differences.push("the export kind differs");
-  if (observed.binarySha256 !== context.binarySha256) {
-    differences.push("the export names another binary than the one under test");
-  }
-  const actual = observed.documents?.[path];
-  if (actual === undefined) return [...differences, `${path}: not in the export`];
-  if (actual.summary?.MISMATCH !== 0 || actual.summary?.UNKNOWN !== 0) {
-    differences.push(`${path}: the replay has a mismatch or an unknown row`);
-  }
-  if (!isDeepStrictEqual(actual, expected))
-    differences.push(`${path}: differs from the committed comparison`);
-  return differences;
 }
 
 export function judge(comparison, observations, context) {

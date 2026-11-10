@@ -212,6 +212,8 @@ test("the release comparisons are the committed ones, and the limitations name w
     "Range on HEAD",
     "productionExact",
     "init.js",
+    "raw backslash",
+    "/a/b/..",
   ]) {
     assert.ok(limits.includes(text), text);
   }

@@ -10379,9 +10379,6 @@ mod tests {
         }
     }
 
-    /// Naming a Pub/Sub project number is how a configuration asks for production's dead-letter
-    /// grants, and the report says so; an empty map, the emulator profile and an explicit key
-    /// say something else.
     #[test]
     fn the_hosting_development_defaults_are_off_unless_production_exact_or_declared() {
         let modes = |input: Value| {
@@ -10486,6 +10483,9 @@ mod tests {
         }
     }
 
+    /// Naming a Pub/Sub project number is how a configuration asks for production's dead-letter
+    /// grants, and the report says so; an empty map, the emulator profile and an explicit key
+    /// say something else.
     #[test]
     fn the_database_default_access_is_open_unless_production_exact_or_declared() {
         let access = |input: Value| {

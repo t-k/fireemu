@@ -1969,6 +1969,33 @@ mod tests {
 
     const MODE_KEYS: [&str; 4] = ["order", "arrayConfig", "searchConfig", "vectorConfig"];
 
+    #[test]
+    fn emulator_uses_deploy_field_mode_precedence() {
+        let keys = ["order", "arrayConfig", "vectorConfig", "searchConfig"];
+        for mask in 1u32..16 {
+            let mut field = json!({"fieldPath": "b"});
+            for (i, key) in keys.iter().enumerate() {
+                if mask & (1 << i) != 0 { field[*key] = mode_value(key); }
+            }
+            let selected = keys.iter().enumerate().find(|(i, _)| mask & (1 << i) != 0).unwrap().1;
+            let actual = parse_index_field(&field, IndexFileChecks::Emulator).unwrap();
+            let expected = parse_index_field(&json!({"fieldPath": "b", *selected: mode_value(selected)}), IndexFileChecks::Deploy).unwrap();
+            assert_eq!(actual, expected, "{field}");
+            assert_eq!(parse_index_field(&field, IndexFileChecks::Deploy).is_ok(), mask.count_ones() == 1, "{field}");
+        }
+        for value in [json!(false), json!(0), json!("")] {
+            let field = json!({"fieldPath": "b", "order": "ASCENDING", "searchConfig": value});
+            assert!(parse_index_field(&field, IndexFileChecks::Emulator).is_ok());
+            assert!(parse_index_field(&field, IndexFileChecks::Deploy).is_err());
+            let absent = json!({"fieldPath": "b", "searchConfig": value});
+            assert!(parse_index_field(&absent, IndexFileChecks::Emulator).is_err());
+            assert!(parse_index_field(&absent, IndexFileChecks::Deploy).is_err());
+        }
+        let field = json!({"fieldPath": "b", "order": "", "arrayConfig": "CONTAINS"});
+        assert_eq!(parse_index_field(&field, IndexFileChecks::Emulator).unwrap().unwrap().mode, IndexFieldMode::Contains);
+        assert!(parse_index_field(&field, IndexFileChecks::Deploy).is_err());
+    }
+
     proptest::proptest! {
         /// Any combination of the four `IndexField` modes other than exactly one is refused, in
         /// a composite index and under both profiles; exactly one loads.

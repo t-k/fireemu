@@ -399,7 +399,12 @@ fn the_oracle_predicates_agree_with_every_recorded_single_class_row() {
             continue;
         };
         let expected = single_class_matches(&row.subject, *predicate, *negated);
-        assert_eq!(row.answers["regex_find_all"], strings(&expected), "{}", row.label);
+        assert_eq!(
+            row.answers["regex_find_all"],
+            strings(&expected),
+            "{}",
+            row.label
+        );
         checked += 1;
     }
     assert!(checked >= 5, "{checked}");
@@ -410,7 +415,10 @@ fn the_oracle_predicates_agree_with_every_recorded_single_class_row() {
             _ => continue,
         };
         assert_eq!(
-            row.answers["regex_find_all"]["items"].as_array().unwrap().len(),
+            row.answers["regex_find_all"]["items"]
+                .as_array()
+                .unwrap()
+                .len(),
             counted,
             "{}",
             row.label

@@ -43,7 +43,12 @@ fn unrecorded() -> Vec<(&'static str, &'static str, &'static str, [Value; 4])> {
         ("br_unrecorded_braces", "aa", "a{2}", found("aa")),
         ("br_unrecorded_anchor", "a", r"\Aa", found("a")),
         ("br_unrecorded_lookaround", "ab", "a(?=b)", refused()),
-        ("br_unrecorded_prop_name", "\u{3b1}", r"\p{Greek}", found("\u{3b1}")),
+        (
+            "br_unrecorded_prop_name",
+            "\u{3b1}",
+            r"\p{Greek}",
+            found("\u{3b1}"),
+        ),
         ("br_unrecorded_flag_combo", "Ab", "(?is)ab", found("Ab")),
         ("br_unrecorded_class_fold", "B", "(?i)[a-c]", found("B")),
         ("br_unrecorded_nested_class", "a", "[a[b]]", found("a")),

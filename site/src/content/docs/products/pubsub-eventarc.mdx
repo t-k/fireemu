@@ -13,6 +13,10 @@ Topics, subscriptions, publish, pull and acknowledgement, push delivery, filters
 
 `fireemu exec` sets `PUBSUB_EMULATOR_HOST`, which the Google Cloud client libraries read.
 
+### Topic message storage policy
+
+A topic's `messageStoragePolicy` (`allowedPersistenceRegions` and `enforceInTransit`) is stored, returned by get and list, and changed by `UpdateTopic` (REST `PATCH` with `updateMask`, masks `messageStoragePolicy` and its two members) under `profile = "emulator"`, exactly as sent, as the official emulator does: an unknown, repeated or empty region list, and an empty policy, are all kept. A mask that names the policy but sends none removes it. Nothing is enforced: messages are not routed by region. The `strict` profile refuses the field with `UNIMPLEMENTED` (REST 501) and an explanation, because production checks every region against Google Cloud's Pub/Sub region list (it answered `INVALID_ARGUMENT` for `no-such-region1` and accepted `us-central1`) and Fireemu has no cited copy of that list to check against. Leave the field out under `strict`, or select the emulator profile to keep it.
+
 ### Dead-letter topics
 
 Under `strict` a message that exhausts `maxDeliveryAttempts` is forwarded to the dead-letter topic with no project number and no IAM grants, with the metadata attributes production adds. Production forwards only after the Pub/Sub service agent holds `roles/pubsub.subscriber` on the subscription and `roles/pubsub.publisher` on the dead-letter topic; set `pubsub.deadLetterAuthorization` to `"iam"` (or `productionExact`, or name `pubsub.projectNumbers`) to require the same grants through `SetIamPolicy`. The start banner then names the service agent to grant.

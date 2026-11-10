@@ -1281,3 +1281,19 @@ fn a_deleted_tenants_token_of_a_non_default_project_makes_the_tenant_in_that_pro
     assert!(registry.tenant_store("worker-alpha", "gone").is_some());
     assert!(registry.tenant_store("demo-app", "gone").is_none());
 }
+
+#[test]
+fn keyless_client_does_not_create_a_missing_tenant() {
+    let (state, registry) = emulator();
+    let response = handle(
+        &state,
+        "POST",
+        &format!("{V1}/accounts:signUp"),
+        &json!({"tenantId": "keyless-missing"}),
+    );
+    assert_eq!(response.status, 400, "{}", response.body);
+    assert_eq!(response.body["error"]["message"], "INVALID_TENANT_ID");
+    assert!(registry
+        .tenant_store("demo-app", "keyless-missing")
+        .is_none());
+}

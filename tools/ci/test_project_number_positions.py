@@ -1,13 +1,17 @@
-"""No project number of a real project may be written into a tracked text file.
+"""No project number of a real project may be written into a tracked text file (a backstop, not the exact check).
 
 Owner decision 2026-11-10 (ledger 2409): the project number of the retired oracle project is masked as
-`<project-number>` (record: spec/compatibility/oracle-number-mask-2026-11-10.json). This guard does not know any
-number. It looks at the places where a project number is written and fails on a run of 10 to 13 digits there, unless
-the run is on the list of made-up numbers below (test data). The places are the `projects/<digits>` path segments,
-the `<digits>-compute@` and `service-<digits>@` service accounts, the `gcf-sources-`/`gcf-v2-uploads-` bucket names,
-`NUMBER = <digits>` constants, and `projectNumber`, `project_number`, `project_id` and `user-project` fields. A new made-up number for a test goes
-into ALLOWED_MADE_UP_NUMBERS in the same commit, which is a visible edit. Encoded forms (a base64 protobuf varint)
-are not found here; run `docs.local/tools/scan-encoded-numbers` before a push.
+`<project-number>` (record: spec/compatibility/oracle-number-mask-2026-11-10.json). This guard knows no number. It
+looks at the places where a project number is written and fails on a run of 10 to 13 digits there, unless the run is
+on the list of made-up numbers below (test data). The places are `projects/<digits>` path segments, `<digits>-compute@`
+and `service-<digits>@` service accounts, `gcf-sources-`/`gcf-v2-uploads-` bucket names, `acat.p2-<digits>` operation
+names, `NUMBER = <digits>` constants, `projectNumber`/`project number`, `project_id`/`project id`, `project <digits>`
+and `user-project` forms, and a project id followed by a number (`fireemu-35fe6 / <digits>`, `{"id": "<digits>"}`).
+A number written in any other way passes this guard. Exact-match detection is done by the local pre-commit and pre-push
+hooks, which read the real numbers from the untracked local sources, and by `docs.local/tools/scan-encoded-numbers`
+(plain and base64 forms). A new made-up number for a test goes into ALLOWED_MADE_UP_NUMBERS in the same commit, which
+is a visible edit; `test_no_made_up_number_is_near_a_real_local_project_number` keeps every entry at least 3 digits
+away from the real numbers wherever the local sources exist.
 """
 
 import random
@@ -29,6 +33,7 @@ ALLOWED_MADE_UP_NUMBERS = frozenset(
     637500000000
     555500000001
     111222333444
+    444455556666
     123456789013
     333333333333
     12345678901
@@ -41,7 +46,6 @@ ALLOWED_MADE_UP_NUMBERS = frozenset(
     5555555555
     2222222222
     0123456789
-    592603257416
     210987654321
     9999999999
     """.split()
@@ -51,9 +55,14 @@ POSITIONS = {
     "compute service account": re.compile(r"(?<!\d)(\d{10,13})-compute@"),
     "service agent": re.compile(r"(?<!\d)(?:service-)?(\d{10,13})@[a-z0-9.-]*(?:gserviceaccount|gcp-sa)"),
     "gcf bucket": re.compile(r"gcf-(?:v2-)?(?:sources|uploads)-(\d{10,13})(?!\d)"),
+    "operation name": re.compile(r"acat\.p2-(\d{10,13})(?!\d)"),
     "number constant": re.compile(r"(?<![A-Za-z0-9])(?:[A-Z]+_)*NUMBER[ \t]*=[ \t]*[\"']?(\d{10,13})(?!\d)"),
-    "project number field": re.compile(r"(?i)project[_-]?number\W{0,8}(\d{10,13})(?!\d)"),
-    "project id field": re.compile(r"(?i)project[_-]?id\W{0,8}(\d{10,13})(?!\d)"),
+    "project number field": re.compile(r"(?i)project[ _-]?number\W{0,8}(?:is\s*)?(\d{10,13})(?!\d)"),
+    "project id field": re.compile(r"(?i)project[ _-]?id\W{0,8}(?:is\s*)?(\d{10,13})(?!\d)"),
+    "project in prose": re.compile(r"(?i)\bproject(?:\s|\\[nrt])*(\d{10,13})(?![0-9A-Za-z])"),
+    "id and number pair": re.compile(
+        r"(?i)(?<![a-z0-9])[a-z][a-z0-9]*(?:-[a-z0-9]+)+[\"'`]?\s*(?:[/:]|\bto\b)\s*(?:number\s*)?[\"'`]?(\d{10,13})(?![0-9A-Za-z])"
+    ),
     "user project header": re.compile(r"(?i)user-project\W{0,4}(\d{10,13})(?!\d)"),
 }
 
@@ -68,22 +77,72 @@ def numbers_in_positions(text, allowed=ALLOWED_MADE_UP_NUMBERS):
     ]
 
 
+def too_close(candidate, real):
+    """A made-up number must not reveal a real one: at most 2 digits apart (same length), or sharing 8 leading digits."""
+    if len(candidate) == len(real) and sum(a != b for a, b in zip(candidate, real)) <= 2:
+        return True
+    return len(real) >= 8 and candidate[:8] == real[:8]
+
+
+def local_real_numbers(root=ROOT):
+    """Every 10 to 13 digit number in the local, untracked sources of the real project numbers, or None when absent."""
+    sources = []
+    for base in (root, *root.parents):
+        for relative in ("CLAUDE.local.md", "docs.local/sandbox-oracles.md"):
+            if (base / relative).is_file():
+                sources.append(base / relative)
+    if not sources:
+        return None
+    return {
+        number
+        for source in sources
+        for number in re.findall(r"(?<!\d)(\d{10,13})(?!\d)", source.read_text(encoding="utf-8", errors="replace"))
+    }
+
+
+# One or more written forms per position, as they appeared in the files (made-up values are put in by the tests).
 SAMPLES = {
-    "projects path": "name: projects/%s/config",
-    "compute service account": "%s-compute@developer.gserviceaccount.com",
-    "service agent": "service-%s@gcp-sa-pubsub.iam.gserviceaccount.com",
-    "gcf bucket": "gcf-v2-uploads-%s.us-central1.cloudfunctions.appspot.com",
-    "number constant": 'NUMBER = "%s"',
-    "project number field": '"projectNumber": "%s"',
-    "project id field": "project_id = '%s'",
-    "user project header": "x-goog-user-project: %s",
+    "projects path": ["name: projects/%s/config"],
+    "compute service account": ["%s-compute@developer.gserviceaccount.com"],
+    "service agent": ["service-%s@gcp-sa-pubsub.iam.gserviceaccount.com"],
+    "gcf bucket": ["gcf-v2-uploads-%s.us-central1.cloudfunctions.appspot.com"],
+    "operation name": ["operations/acat.p2-%s-0123abcd-4567"],
+    "number constant": ['NUMBER = "%s"'],
+    "project number field": ['"projectNumber": "%s"', "project number `%s`;", "bound to project number %s."],
+    "project id field": ["project_id = '%s'", "Production project_id is %s, local", "project_id is%s,"],
+    "project in prose": ["API-key ownership in project %s", "ownership in project\\n%s"],
+    "id and number pair": [
+        'authorized fireemu-35fe6 / %s project',
+        'fixed to `fireemu-35fe6` / `%s`.',
+        '{"fireemu-35fe6": "%s"}',
+        "fireemu-35fe6/number `%s`, database",
+        "`fireemu-35fe6` to number`%s`.",
+    ],
+    "user project header": ["x-goog-user-project: %s"],
 }
 
 
+def found_in(text, allowed=ALLOWED_MADE_UP_NUMBERS):
+    return {(name, number) for name, number in numbers_in_positions(text, allowed)}
+
+
 class ProjectNumberPositionsTest(unittest.TestCase):
-    def test_a_number_in_every_position_is_found(self):
-        for name, sample in SAMPLES.items():
-            self.assertEqual(numbers_in_positions(sample % "987654321098"), [(name, "987654321098")], name)
+    def test_a_number_in_every_written_form_of_every_position_is_found(self):
+        for name, samples in SAMPLES.items():
+            for sample in samples:
+                self.assertIn((name, "987654321098"), found_in(sample % "987654321098"), sample)
+
+    def test_the_six_prose_and_map_shapes_the_first_guard_missed_are_each_found(self):
+        planted = "987654321098"
+        for text in (
+            "project number `%s`",  # a space, not an underscore
+            "fireemu-35fe6 / %s",  # id slash number
+            '{"fireemu-35fe6": "%s"}',  # the map form
+            "ownership in project %s",
+            "Production project_id is %s",
+            "operations/acat.p2-%s-eef3de6",
+        ):
+            self.assertTrue(found_in(text % planted), text)
 
     def test_a_thirteen_and_a_ten_digit_number_are_found_too(self):
         for number in ("9876543210987", "9876543210"):
@@ -111,21 +170,56 @@ class ProjectNumberPositionsTest(unittest.TestCase):
         self.assertEqual(numbers_in_positions('PHONENUMBER = "%s"' % number), [])
         self.assertEqual(numbers_in_positions('PROJECT_NUMBER = "%s"' % number)[0][0], "number constant")
 
+    def test_the_distance_rule_catches_a_near_miss_and_a_shared_prefix(self):
+        real = "246813579024"  # made up
+        # 1 or 2 digits apart, changed within the first eight so that only the distance rule can catch them
+        for near in ("146813579024", "156813579024", "246813579025", "256813579024", "246813578024"):
+            self.assertTrue(too_close(near, real), near)
+        self.assertTrue(too_close("246813578999", real))  # exactly eight shared leading digits, far apart otherwise
+        for far in ("157813579024", "246803579134", "987654321098", "14681357902", "246813589999"):
+            self.assertFalse(too_close(far, real), far)  # 3 apart, unrelated, shorter, seven shared digits
+
+    def test_local_sources_are_found_in_an_ancestor_of_the_checkout(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            top = Path(tmp)
+            checkout = top / ".worktree" / "x"
+            checkout.mkdir(parents=True)
+            self.assertIsNone(local_real_numbers(checkout))
+            first, second = "123456789000", "1234567890123"
+            (top / "CLAUDE.local.md").write_text("owner note: %s and 12345" % first)
+            (top / "docs.local").mkdir()
+            (top / "docs.local" / "sandbox-oracles.md").write_text("note %s, phone 5" % second)
+            self.assertEqual(local_real_numbers(checkout), {first, second})
+
+    def test_no_made_up_number_is_near_a_real_local_project_number(self):
+        real_numbers = local_real_numbers()
+        if real_numbers is None:
+            self.skipTest("CLAUDE.local.md and docs.local/sandbox-oracles.md are not present (CI); the pre-commit run checks this")
+        close = sorted(a for a in ALLOWED_MADE_UP_NUMBERS for r in real_numbers if too_close(a, r))
+        self.assertEqual(close, [], "made-up numbers within 2 digits of, or sharing a prefix with, a real number")
+
     def test_the_list_holds_only_digit_runs(self):
         self.assertTrue(all(re.fullmatch(r"\d{10,13}", number) for number in ALLOWED_MADE_UP_NUMBERS))
 
+    def test_a_hex_identifier_that_starts_with_digits_is_not_a_number(self):
+        for text in ("FS-LISTEN-SDK/8171997312777ab0d3a88fe1bc6699dd", "o6/FS-LISTEN-SDK/8171997312777ab0", "project 8171997312777ab0"):
+            self.assertEqual(found_in(text), set(), text)
+
     def test_property_a_planted_number_is_found_in_random_surroundings(self):
         rng = random.Random(20261110)
-        names = list(SAMPLES)
-        for _ in range(300):
+        shapes = [(name, sample) for name, samples in SAMPLES.items() for sample in samples]
+        for _ in range(400):
             number = str(rng.randrange(10**11, 10**12))
             if number in ALLOWED_MADE_UP_NUMBERS:
                 continue
-            name = rng.choice(names)
+            name, sample = rng.choice(shapes)
             around = "".join(rng.choice(" /=\"\n,-") for _ in range(rng.randrange(0, 6)))
-            text = around + SAMPLES[name] % number + around
-            self.assertEqual(numbers_in_positions(text), [(name, number)], text)
-            self.assertEqual(numbers_in_positions(text, frozenset({number})), [], text)
+            text = around + sample % number + around
+            self.assertIn((name, number), found_in(text), text)
+            self.assertEqual({n for _, n in found_in(text)}, {number}, text)
+            self.assertEqual(found_in(text, frozenset({number})), set(), text)
 
     def test_no_tracked_text_file_writes_a_real_project_number(self):
         names = subprocess.run(["git", "ls-files", "-z"], cwd=ROOT, capture_output=True, check=True).stdout.split(b"\0")

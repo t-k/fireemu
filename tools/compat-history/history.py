@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[2]
 # digest pairs that followed. The record is pinned here by its own sha256, and a frozen file may differ from the
 # anchor only by exactly those substitutions (see `rebuild`); the record's postSha256 is never trusted.
 REBIND_RECORD = "spec/compatibility/oracle-number-mask-2026-11-10.json"
-REBIND_RECORD_SHA256 = "1078f70f6fea7c3616b6e3d964d1ffaee263b8c6ee951226591185ebc1068b9c"
+REBIND_RECORD_SHA256 = "f11b42d12b06d46f890d102de5b9ba019064b8628388189c3d1f9a5c8d33ff28"
 PLACEHOLDER = b"<project-number>"
 NUMBER_LENGTH = 12
 HEX64 = re.compile(r"[0-9a-f]{64}")

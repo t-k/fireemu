@@ -5455,13 +5455,14 @@
       "preSha256": "39a7215a70ea545cd96feb6790939f64dcfed8232288f21e9b0ba5036243e354"
     },
     "tools/compat-broad/auth-action-codes/test_action_codes_remote_transport.py": {
+      "editedAfterCascade": true,
       "maskedOccurrences": 3,
       "maskedOffsets": [
         7267,
         7330,
         8219
       ],
-      "postSha256": "d7c3c193270de72df060aef7d12467a32d0e5835c57aecf8d7bf5de328fd63e6",
+      "postSha256": "ba8dab76dc4994e00fa955cc1b24cc8af785b89b1aca8550bd0573fc7fd78f99",
       "preSha256": "2be08d4e00ff4332ecedb95d11f5855ac89772f71625a82a610904f587aebdfc"
     },
     "tools/compat-broad/auth-credential-tokens/credential_bootstrap.py": {
@@ -6172,6 +6173,7 @@
   "handEdits": {
     "conformance/src/securetoken-body-judge.test.mjs": "The 'another project' near miss uses 123456789012: the placeholder would equal the masked fixture's project_id and no longer be another project.",
     "tools/auth-pending-lifetime-boundary/test_boundary_publication.py": "The faked recording takes its recorder digests from git at the recording commit, as the publisher verifies them.",
+    "tools/compat-broad/auth-action-codes/test_action_codes_remote_transport.py": "The foreign-project row of the config-refusal table used a made-up number one digit away from the retired number; it now uses 111222333444, a number on the guard's made-up list.",
     "tools/compat-broad/batch_contract.py": "Adds LOCAL_NUMBER, the stand-in number the owned local daemon runs with (it takes only decimal strings).",
     "tools/compat-broad/batch_local.py": "The daemon configuration uses LOCAL_NUMBER.",
     "tools/compat-broad/campaign_explain.py": "Imports LOCAL_NUMBER and uses it in the expected daemon configuration.",
@@ -6200,6 +6202,6 @@
     "Rebuilding a file: take the bytes at parentCommit; at each maskedOffsets entry (a byte position in those bytes, ascending, each the start of a whole 12-digit run) put the placeholder in place of the 12 digits; then replace every old digest of digestRewrites by its new one at the same time (each old digest is present in the masked bytes, each pair is two 64-hex strings). The result must equal the file byte for byte. Entries marked editedAfterCascade also carry a hand edit (see handEdits) and cannot be rebuilt this way.",
     "Restoring the old bytes: put every new digest back to its old one, then put the old number back at each offset in ascending order (an offset is the position in the restored bytes). The result has sha256 preSha256. Only someone who holds the number can do the last step.",
     "tools/compat-history/history.py pins this record by sha256 (REBIND_RECORD_SHA256) and compares a frozen corpus with its anchor by rebuilding each named file as described above. A frozen file may differ from the anchor only by those substitutions. postSha256 is not used there. Entries for files outside the frozen sets are inert.",
-    "tools/ci/test_project_number_positions.py fails if a project number appears in a project-number position of a tracked text file (projects/<digits>, <digits>-compute@, gcf bucket names, projectNumber fields) unless it is the placeholder or a listed made-up number."
+    "tools/ci/test_project_number_positions.py is a backstop, not the exact check: it fails if a 10 to 13 digit number is written in a project-number position of a tracked text file (projects/<digits>, <digits>-compute@, service-<digits>@, gcf bucket names, acat.p2-<digits>, NUMBER constants, projectNumber / project number, project_id, project <digits>, user-project, or a project id followed by a number) unless it is the placeholder or a listed made-up number. A number written in another way passes it. Exact-match detection is done by the local pre-commit and pre-push hooks (which read the real numbers from untracked local sources) and by docs.local/tools/scan-encoded-numbers. The guard also keeps every listed made-up number at least 3 digits away from the real numbers wherever those local sources exist."
   ]
 }

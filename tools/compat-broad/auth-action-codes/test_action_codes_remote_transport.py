@@ -259,7 +259,7 @@ def test_management_receipt_accepts_official_config_resource_name(monkeypatch, b
             "name": "projects/<project-number>/config",
             "projectId": "other-project",
         },
-        {"name": "projects/592603257416/config"},
+        {"name": "projects/111222333444/config"},
         {"projectId": "fireemu-35fe6", "unexpected": True},
         {"name": 42},
     ],

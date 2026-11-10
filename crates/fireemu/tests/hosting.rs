@@ -214,6 +214,26 @@ fn start_with_config(
     only: &str,
     config: Option<&serde_json::Value>,
 ) -> (OwnedChild, String) {
+    let (child, descriptor) = start_descriptor(dir, firebase, only, config, &[]);
+    let address = descriptor["hostingUrl"]
+        .as_str()
+        .map(|url| {
+            url.trim_start_matches("http://")
+                .trim_end_matches('/')
+                .to_owned()
+        })
+        .unwrap_or_default();
+    (child, address)
+}
+
+/// Starts the daemon and returns it with the readiness descriptor it published.
+fn start_descriptor(
+    dir: &std::path::Path,
+    firebase: &serde_json::Value,
+    only: &str,
+    config: Option<&serde_json::Value>,
+    extra_args: &[&str],
+) -> (OwnedChild, serde_json::Value) {
     std::fs::write(dir.join("firebase.json"), firebase.to_string()).unwrap();
     let ready = dir.join("ready.json");
     let mut command = Command::new(env!("CARGO_BIN_EXE_fireemu"));
@@ -235,6 +255,7 @@ fn start_with_config(
             .arg("--ready-file")
             .arg(&ready)
             .args(["--owner-stdin", "--log-verbosity", "quiet"])
+            .args(extra_args)
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
@@ -260,15 +281,7 @@ fn start_with_config(
         assert!(Instant::now() < deadline, "readiness deadline");
         std::thread::sleep(Duration::from_millis(20));
     };
-    let address = descriptor["hostingUrl"]
-        .as_str()
-        .map(|url| {
-            url.trim_start_matches("http://")
-                .trim_end_matches('/')
-                .to_owned()
-        })
-        .unwrap_or_default();
-    (child, address)
+    (child, descriptor)
 }
 
 fn emulators() -> serde_json::Value {
@@ -704,4 +717,205 @@ fn every_slash_spelling_of_the_i18n_root_serves_the_same_files() {
             );
         }
     }
+}
+
+/// One authenticated GET of the UI API: the status line's code and the JSON body.
+fn ui_get(descriptor: &serde_json::Value, path: &str) -> (u16, serde_json::Value) {
+    let ui = descriptor["uiUrl"].as_str().expect("the UI is bound");
+    let address = ui.trim_start_matches("http://").trim_end_matches("/ui/");
+    let token = descriptor["controlToken"].as_str().unwrap();
+    let reply = raw_request(
+        address,
+        "GET",
+        path,
+        &[("Authorization", &format!("Bearer {token}"))],
+    );
+    let status = reply
+        .split_whitespace()
+        .nth(1)
+        .and_then(|code| code.parse().ok())
+        .unwrap();
+    (
+        status,
+        serde_json::from_str(body(&reply)).unwrap_or_default(),
+    )
+}
+
+#[test]
+fn the_ui_reports_the_served_site_and_the_host_names_in_effect() {
+    let dir = Scratch::new("hosting", "ui-report");
+    std::fs::create_dir_all(dir.join("dist")).unwrap();
+    let mut emulators = emulators();
+    emulators.as_object_mut().unwrap().remove("ui");
+    let firebase = serde_json::json!({
+        "hosting": {
+            "public": "dist",
+            "cleanUrls": true,
+            "rewrites": [{"source": "**", "destination": "/index.html"}],
+            "headers": [{"source": "**", "headers": [{"key": "X-Test", "value": "1"}]}],
+            "predeploy": ["echo not-for-the-page"],
+        },
+        "emulators": emulators,
+    });
+    let config = serde_json::json!({
+        "schemaVersion": 1,
+        "network": {"allowedHosts": ["Ci.Example"], "allowNonLoopbackHosts": true},
+        "daemon": {"clock": "frozen"},
+    });
+    let (_child, descriptor) = start_descriptor(
+        &dir,
+        &firebase,
+        "hosting",
+        Some(&config),
+        &["--ui-port", "auto"],
+    );
+    let (status, site) = ui_get(&descriptor, "/ui/api/hosting");
+    assert_eq!(status, 200, "{site}");
+    assert_eq!(site["served"], true);
+    assert_eq!(site["url"], descriptor["hostingUrl"]);
+    assert_eq!(site["publicExists"], true);
+    let root = site["publicRoot"].as_str().unwrap();
+    assert!(root.ends_with("/dist"), "{root}");
+    assert_eq!(site["site"]["cleanUrls"], true);
+    assert_eq!(site["site"]["rewrites"][0]["destination"], "/index.html");
+    assert_eq!(site["site"]["headers"][0]["headers"][0]["key"], "X-Test");
+    assert!(site["site"].get("predeploy").is_none(), "{site}");
+    let (_, config) = ui_get(&descriptor, "/ui/api/config");
+    assert_eq!(
+        config["hosts"]["allowed"],
+        serde_json::json!(["ci.example"])
+    );
+    assert_eq!(config["hosts"]["allowNonLoopbackHosts"], true);
+    assert!(config["hosts"]["defaultNames"]
+        .as_array()
+        .unwrap()
+        .contains(&serde_json::json!("localhost")));
+    assert!(config["hosts"]["defaultSuffixes"]
+        .as_array()
+        .unwrap()
+        .contains(&serde_json::json!(".internal")));
+    assert_eq!(config["clockMode"], "frozen");
+}
+
+#[test]
+fn the_ui_says_no_site_is_served_when_hosting_is_not_selected() {
+    let dir = Scratch::new("hosting", "ui-not-served");
+    let emulators = serde_json::json!({"auth":{"port":0},"hub":{"port":0},"logging":{"port":0}});
+    let firebase = serde_json::json!({"hosting":{"public":"public"},"emulators":emulators});
+    let (_child, descriptor) =
+        start_descriptor(&dir, &firebase, "auth", None, &["--ui-port", "auto"]);
+    let (status, site) = ui_get(&descriptor, "/ui/api/hosting");
+    assert_eq!(status, 200, "{site}");
+    assert_eq!(site, serde_json::json!({"served": false}));
+    let (_, config) = ui_get(&descriptor, "/ui/api/config");
+    assert_eq!(config["clockMode"], "realtime");
+}
+
+#[test]
+fn the_ui_flags_a_public_directory_that_did_not_exist_at_start() {
+    let dir = Scratch::new("hosting", "ui-missing-public");
+    let mut emulators = emulators();
+    emulators.as_object_mut().unwrap().remove("ui");
+    let firebase = serde_json::json!({"hosting":{"public":"not-created"},"emulators":emulators});
+    let (_child, descriptor) =
+        start_descriptor(&dir, &firebase, "hosting", None, &["--ui-port", "auto"]);
+    let (status, site) = ui_get(&descriptor, "/ui/api/hosting");
+    assert_eq!(status, 200, "{site}");
+    assert_eq!(site["served"], true);
+    assert_eq!(site["publicExists"], false);
+    assert!(site["publicRoot"]
+        .as_str()
+        .unwrap()
+        .ends_with("/not-created"));
+}
+
+/// A runner that speaks the fireemu protocol and exports one scheduled function.
+#[cfg(unix)]
+const SCHEDULE_RUNNER: &str = r#"
+import json, sys
+
+def send(m):
+    p = json.dumps(m).encode()
+    sys.stdout.buffer.write(f"{len(p)}\n".encode())
+    sys.stdout.buffer.write(p)
+    sys.stdout.buffer.flush()
+
+send({"type": "hello", "runner": "ui-runtime-test", "manifest": {"functions": [
+    {"name": "tick", "trigger": {"type": "schedule", "schedule": "every 5 minutes"}}
+]}})
+while True:
+    line = sys.stdin.buffer.readline()
+    if not line:
+        break
+    msg = json.loads(sys.stdin.buffer.read(int(line.strip())))
+    if msg.get("type") == "shutdown":
+        break
+    if msg.get("type") == "invoke":
+        send({"type": "result", "invocationId": msg["invocationId"], "ok": True})
+"#;
+
+/// The runtime of each function in the UI follows the codebase's declared `runtime`, or the
+/// loader picked when it declares none (the runner override skips the Python preflight).
+#[cfg(unix)]
+fn function_runtime_in_ui(declared: Option<&str>, name: &str) -> serde_json::Value {
+    let dir = Scratch::new("hosting", name);
+    std::fs::create_dir_all(dir.join("functions")).unwrap();
+    std::fs::write(dir.join("runner.py"), SCHEDULE_RUNNER).unwrap();
+    let mut codebase = serde_json::json!({"codebase": "app", "source": "functions"});
+    if let Some(runtime) = declared {
+        codebase["runtime"] = runtime.into();
+    }
+    let mut emulators = emulators();
+    emulators.as_object_mut().unwrap().remove("ui");
+    let firebase = serde_json::json!({"functions": [codebase], "emulators": emulators});
+    let config = serde_json::json!({
+        "schemaVersion": 1,
+        "functions": {"runner": ["python3", dir.join("runner.py").to_str().unwrap()]},
+    });
+    let (_child, descriptor) = start_descriptor(
+        &dir,
+        &firebase,
+        "functions",
+        Some(&config),
+        &["--ui-port", "auto"],
+    );
+    let (status, overview) = ui_get(&descriptor, "/ui/api/functions");
+    assert_eq!(status, 200, "{overview}");
+    let tick = overview["functions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["name"] == "tick")
+        .unwrap_or_else(|| panic!("tick is listed: {overview}"))
+        .clone();
+    assert_eq!(tick["codebase"], "app");
+    // The codebase list carries the same runtime.
+    let listed = overview["codebases"].as_array().unwrap();
+    assert_eq!(listed.len(), 1, "{overview}");
+    assert_eq!(listed[0]["codebase"], "app");
+    assert_eq!(
+        (listed[0]["language"].clone(), listed[0]["declared"].clone()),
+        (
+            tick["runtime"]["language"].clone(),
+            tick["runtime"]["declared"].clone()
+        )
+    );
+    tick["runtime"].clone()
+}
+
+#[cfg(unix)]
+#[test]
+fn the_ui_names_the_runtime_a_codebase_declares_or_the_loader_picked() {
+    assert_eq!(
+        function_runtime_in_ui(Some("python312"), "ui-runtime-python"),
+        serde_json::json!({"language": "python", "declared": "python312"})
+    );
+    assert_eq!(
+        function_runtime_in_ui(Some("nodejs22"), "ui-runtime-node"),
+        serde_json::json!({"language": "node", "declared": "nodejs22"})
+    );
+    assert_eq!(
+        function_runtime_in_ui(None, "ui-runtime-bare"),
+        serde_json::json!({"language": "node", "declared": null})
+    );
 }

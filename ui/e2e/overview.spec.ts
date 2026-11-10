@@ -11,6 +11,14 @@ test.describe("Overview", () => {
     await expect(page.getByText(`127.0.0.1:${PORTS.firestore}`).first()).toBeVisible();
   });
 
+  test("lists the Host names the emulators answer and how the clock moves", async ({ page }) => {
+    await gotoApp(page, "/");
+    await expect(page.getByTestId("host-names")).toContainText("localhost");
+    await expect(page.getByTestId("host-names")).toContainText("any IP address");
+    await expect(page.getByTestId("host-names-single-label")).toHaveText("no");
+    await expect(page.getByTestId("overview-clock-mode")).toContainText("frozen");
+  });
+
   test("navigates between the panels", async ({ page }) => {
     await gotoApp(page, "/");
     await page.getByRole("link", { name: "Runtime" }).click();

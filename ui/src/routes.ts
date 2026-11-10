@@ -8,6 +8,7 @@ export const routes: RouteDefinition[] = [
   { path: "/auth", component: lazy(() => import("./pages/Auth")) },
   { path: "/storage/*path", component: lazy(() => import("./pages/Storage")) },
   { path: "/functions", component: lazy(() => import("./pages/Functions")) },
+  { path: "/hosting", component: lazy(() => import("./pages/Hosting")) },
   { path: "/alerts", component: lazy(() => import("./pages/Alerts")) },
   { path: "/rules", component: lazy(() => import("./pages/Rules")) },
   { path: "/appcheck", component: lazy(() => import("./pages/AppCheck")) },

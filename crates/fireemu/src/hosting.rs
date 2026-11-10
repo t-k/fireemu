@@ -36,6 +36,12 @@ pub struct Config {
     public: PathBuf,
 }
 impl Config {
+    /// The `hosting` object as written in `firebase.json`.
+    #[must_use]
+    pub fn data(&self) -> &Value {
+        &self.data
+    }
+
     /// Loads one configured site without reading its public files or any credentials.
     pub fn parse(data: &Value, base: &Path) -> Result<Self, String> {
         let object = data
@@ -780,6 +786,20 @@ fn redirect_destination(rule: &Value, path: &str) -> Option<(String, String)> {
 
 /// A site whose configured root has been acquired before readiness publication.
 pub struct PreparedSite(Arc<Site>);
+
+impl PreparedSite {
+    /// The absolute public directory, normalized the way requests resolve it.
+    #[must_use]
+    pub fn public_root(&self) -> &str {
+        &self.0.public_root
+    }
+
+    /// Whether the public directory existed when the site was prepared.
+    #[must_use]
+    pub fn public_exists(&self) -> bool {
+        self.0.root.is_some()
+    }
+}
 
 /// Acquires the public-root capability before publishing a ready endpoint.
 pub fn prepare(

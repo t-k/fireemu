@@ -35,6 +35,9 @@ pub async fn route(state: &Arc<UiState>, rest: &str, req: &UiRequest) -> UiRespo
     if rest == "functions" {
         return functions(state);
     }
+    if rest == "hosting" {
+        return hosting(state, req);
+    }
     if rest == "functions/logs" {
         return sse::functions_logs(state, req);
     }
@@ -400,8 +403,61 @@ fn record_json(r: &fireemu_adapter_functions::runtime::InvocationRecord) -> Valu
     json!({"eventId": r.event_id.to_string(), "function": r.function, "attempt": r.attempt, "outcome": r.outcome})
 }
 
+/// The `hosting` keys of `firebase.json` that decide what the site answers; every other key
+/// (hooks, targets, anything the site never reads) stays on the server.
+const HOSTING_ROUTING_KEYS: [&str; 9] = [
+    "public",
+    "cleanUrls",
+    "trailingSlash",
+    "rewrites",
+    "redirects",
+    "headers",
+    "i18n",
+    "ignore",
+    "appAssociation",
+];
+
+/// `GET hosting`: the served site, its local URL, its public directory and the rewrites,
+/// redirects and headers in effect. Read-only; Hosting records no requests, so there are none
+/// to report.
+fn hosting(state: &UiState, req: &UiRequest) -> UiResponse {
+    if req.method != "GET" {
+        return UiResponse::error(405, "METHOD_NOT_ALLOWED");
+    }
+    let Some(site) = &state.info.hosting else {
+        return UiResponse::json(200, &json!({"served": false}));
+    };
+    let mut config = serde_json::Map::new();
+    for key in HOSTING_ROUTING_KEYS {
+        if let Some(value) = site.config.get(key) {
+            config.insert(key.to_owned(), value.clone());
+        }
+    }
+    UiResponse::json(
+        200,
+        &json!({
+            "served": true,
+            "url": format!("http://{}/", site.addr),
+            "publicRoot": site.public_root,
+            "publicExists": site.public_exists,
+            "site": config,
+        }),
+    )
+}
+
 /// The most waiting tasks the overview lists per queue; the count is always exact.
 const MAX_LISTED_PENDING_TASKS: usize = 50;
+
+/// The runtime of every loaded codebase, also one that registered no function (it may hold
+/// only exports the runner could not serve).
+fn codebases_json(state: &UiState) -> Vec<Value> {
+    state
+        .info
+        .codebases
+        .iter()
+        .map(|c| json!({"codebase": c.name, "language": c.language, "declared": c.declared}))
+        .collect()
+}
 
 /// `GET functions`: the manifest with trigger details, the runtime status, the invocation
 /// history and dead letters.
@@ -430,6 +486,14 @@ fn functions(state: &UiState) -> UiResponse {
                 "concurrency": f.effective_concurrency(),
                 "configuredConcurrency": f.concurrency,
             });
+            // The codebase that exports it, and the runtime that codebase runs on.
+            if let Some(codebase) = runtime.codebase_of(&f.name) {
+                entry["codebase"] = json!(codebase);
+                if let Some(info) = state.info.codebases.iter().find(|c| c.name == codebase) {
+                    entry["runtime"] =
+                        json!({"language": info.language, "declared": info.declared});
+                }
+            }
             if matches!(f.trigger, Trigger::TaskQueue { .. }) {
                 let waiting: Vec<&fireemu_adapter_functions::runtime::PendingTaskInfo> = pending
                     .iter()
@@ -502,6 +566,7 @@ fn functions(state: &UiState) -> UiResponse {
             // to the Functions port, which is only bound when a codebase is loaded.
             "functionsAddr": state.info.functions_addr,
             "functions": functions,
+            "codebases": codebases_json(state),
             "status": runtime.status(),
             "history": runtime.history().iter().map(record_json).collect::<Vec<_>>(),
             "deadLetters": runtime.dead_letters().iter().map(record_json).collect::<Vec<_>>(),

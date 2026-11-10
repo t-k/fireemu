@@ -24,6 +24,12 @@ export type TriggerInfo =
   | { kind: "storage"; event: string; bucket: string | null }
   | { kind: "schedule"; schedule: string; timeZone: string | null };
 
+/** The loader that runs a codebase and the `runtime` its `firebase.json` declared, if any. */
+export type FunctionRuntime = { language: "node" | "python"; declared: string | null };
+
+/** One loaded codebase and its runtime, also when it registered no function. */
+export type CodebaseRuntime = { codebase: string } & FunctionRuntime;
+
 export type FunctionInfo = {
   name: string;
   region: string;
@@ -32,6 +38,10 @@ export type FunctionInfo = {
   timeoutSeconds: number;
   retry: boolean;
   concurrency: number;
+  /** The codebase that exports it (absent on an older daemon). */
+  codebase?: string;
+  /** The runtime of that codebase; absent when the daemon does not know it. */
+  runtime?: FunctionRuntime | undefined;
   /** When a scheduled function next runs on the virtual clock (RFC 3339), if reachable. */
   nextRun?: string;
   /** For a task queue: how many tasks wait, and the first of them (the count is exact). */
@@ -125,6 +135,8 @@ export type FunctionsOverview = {
   /** The Functions port address, or null when no codebase is loaded (no invocation). */
   functionsAddr?: string | null;
   functions: FunctionInfo[];
+  /** The runtime of each loaded codebase (absent on an older daemon). */
+  codebases?: CodebaseRuntime[];
   status?: FunctionsDiagnosticStatus;
   history: InvocationInfo[];
   deadLetters: InvocationInfo[];

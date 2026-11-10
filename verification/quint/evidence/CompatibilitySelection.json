@@ -604,7 +604,7 @@
     "crates/fireemu-adapter-support/src/secret.rs": "d70a424aea6125227fc8c95c70ac0d91b4c29971064c3fc00e23a1d2daab5065",
     "crates/fireemu-adapter-ui/Cargo.toml": "9d21560f6e154ae98c3d692a052f9c9e8caaaacc2f7509cb9c9a84b7fc9b1e43",
     "crates/fireemu-adapter-ui/build.rs": "36dd3904f6ffce35691aff66ee004ae0e8547674a14920e2664302ab85094c2c",
-    "crates/fireemu-adapter-ui/src/api.rs": "822bbd006cda52676bd56584c6281ef793a0fecc42195926d9a69cbd61f73ba0",
+    "crates/fireemu-adapter-ui/src/api.rs": "2c5213d4a0f3a6e851531cba71689e7d4359576102df3542e5c7dbddb4ca6a61",
     "crates/fireemu-adapter-ui/src/assets.rs": "65e6bc9da1adbc1eabb28ee8b33d73a514d65f13f4e253c67b00f0e6d0bda572",
     "crates/fireemu-adapter-ui/src/database.rs": "5acf2725c3c39cea12f6e4c01cfc8740e9d20210fd31ad1afbc92780e613621a",
     "crates/fireemu-adapter-ui/src/functions_actions.rs": "98bfc571d52c4f1ca8b0f8a9f5123d67bf1309648d317b67ee37508323111392",

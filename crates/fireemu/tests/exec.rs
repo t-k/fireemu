@@ -897,8 +897,9 @@ fn run_selection(name: &str, ports: [u16; 3], extra: &[&str]) -> BTreeMap<String
 
 #[test]
 fn an_unselected_service_binds_no_listener_at_all() {
-    // Fixed ports: whatever `--only` leaves out has to stay free while the daemon serves,
-    // which is what "the service is not started" has to mean.
+    // Whatever `--only` leaves out must not be bound by the daemon while it serves, which is what
+    // "the service is not started" means. The check reads the daemon's own listeners (lsof on the
+    // parent of the command), so a parallel test that reuses a freed port cannot fail it.
     for (label, only, want) in [
         ("firestore-only", "firestore", [true, false, false]),
         ("auth-only", "auth", [false, true, false]),
@@ -913,9 +914,9 @@ fn an_unselected_service_binds_no_listener_at_all() {
         let ports = [free_port(), free_port(), free_port()];
         let dir = scratch(&format!("lifecycle-{label}"));
         let probe = dir.join("probe.txt");
-        // The command probes each port from inside the run, while the daemon is serving.
+        // The command is a direct child of the daemon and runs while it is serving.
         let script = format!(
-            "for p in {} {} {}; do (exec 3<>/dev/tcp/127.0.0.1/$p) 2>/dev/null && echo \"$p open\" || echo \"$p closed\"; done > {}",
+            "listeners=$(lsof -nP -a -p \"$PPID\" -iTCP -sTCP:LISTEN -Fn) || exit 1; for p in {} {} {}; do echo \"$listeners\" | grep -E \":$p$\" >/dev/null && echo \"$p open\" || echo \"$p closed\"; done > {}",
             ports[0],
             ports[1],
             ports[2],

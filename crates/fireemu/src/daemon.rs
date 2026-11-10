@@ -1542,10 +1542,18 @@ async fn serve_suite(
     if let Some(listener) = hub_listener {
         spawn_server!("Emulator Hub", hub::serve(listener, hub_state.clone()));
     }
+    let mut hosting_info = None;
     if let (Some(listener), Some(config)) = (hosting_listener, cfg.hosting.clone()) {
+        let site_config = config.data().clone();
         let emulators = serde_json::Value::Object(hub_emulators(&addrs).into_iter().filter(|entry| matches!(entry.name, "auth"|"firestore"|"functions"|"storage"|"database")).map(|entry| (entry.name.to_owned(), serde_json::json!({"host":entry.addr.ip().to_string(),"port":entry.addr.port(),"hostAndPort":entry.addr.to_string()}))).collect());
         let prepared =
             crate::hosting::prepare(config, cfg.auth_project.clone(), addrs.functions, emulators)?;
+        hosting_info = addrs.hosting.map(|addr| fireemu_adapter_ui::HostingInfo {
+            addr: addr.to_string(),
+            public_root: prepared.public_root().to_owned(),
+            public_exists: prepared.public_exists(),
+            config: site_config,
+        });
         spawn_server!("Hosting", crate::hosting::serve(listener, prepared));
     }
     let functions_http_admission = fireemu_adapter_functions::http::HttpAdmission::new();
@@ -1727,6 +1735,7 @@ async fn serve_suite(
             storage: storage.clone(),
             control: control.clone(),
             functions: functions_runtime.clone(),
+            hosting: hosting_info,
             app_check,
             addrs: (
                 addrs.firestore.unwrap_or(addrs.control),

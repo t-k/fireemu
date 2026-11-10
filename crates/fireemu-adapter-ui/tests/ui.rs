@@ -11,7 +11,10 @@ use fireemu_adapter_http::app_check::AppCheckState;
 use fireemu_adapter_http::control::ControlState;
 use fireemu_adapter_http::identity_toolkit::AuthState;
 use fireemu_adapter_http::storage::StorageState;
-use fireemu_adapter_ui::{handle, AppCheckInfo, RuntimeInfo, UiBody, UiRequest, UiState};
+use fireemu_adapter_ui::{
+    handle, AppCheckInfo, CodebaseInfo, HostingInfo, HostsInfo, RuntimeInfo, UiBody, UiRequest,
+    UiState,
+};
 use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_auth::store::AuthStore;
 use fireemu_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningContext};
@@ -128,6 +131,10 @@ fn state_with(app_check: Option<Arc<AppCheckState>>) -> Arc<UiState> {
             ui_addr: "127.0.0.1:4000".to_owned(),
             rules_enforced: true,
             clock_pinned: true,
+            clock_frozen: true,
+            hosts: HostsInfo::default(),
+            hosting: None,
+            codebases: Vec::new(),
             app_check: app_check.as_ref().map(|_| AppCheckInfo {
                 modes: vec![
                     ("auth".to_owned(), "unenforced".to_owned()),
@@ -2244,4 +2251,156 @@ async fn database_front_rejects_stale_scope_and_credential_injection_before_conn
         .await;
         assert_eq!(response.status, expected, "{target}");
     }
+}
+
+/// The state with `edit` applied to its runtime description.
+fn state_with_info(edit: impl FnOnce(&mut RuntimeInfo)) -> Arc<UiState> {
+    let mut state = Arc::try_unwrap(state())
+        .ok()
+        .expect("the state is unshared");
+    edit(&mut state.info);
+    Arc::new(state)
+}
+
+fn served_site() -> HostingInfo {
+    HostingInfo {
+        addr: "127.0.0.1:5000".to_owned(),
+        public_root: "/work/app/dist".to_owned(),
+        public_exists: true,
+        config: json!({
+            "public": "dist",
+            "cleanUrls": true,
+            "trailingSlash": false,
+            "rewrites": [{"source": "/api/**", "function": "api"}],
+            "redirects": [{"source": "/old", "destination": "/new", "type": 301}],
+            "headers": [{"source": "**", "headers": [{"key": "X-A", "value": "1"}]}],
+            "i18n": {"root": "/locales"},
+            "ignore": ["**/.*"],
+            "appAssociation": "AUTO",
+            // Keys the site never reads must not be echoed to the page.
+            "predeploy": ["echo hello"],
+            "secret": "do-not-show",
+        }),
+    }
+}
+
+#[tokio::test]
+async fn the_hosting_front_describes_the_served_site_and_only_its_routing_keys() {
+    let s = state_with_info(|info| info.hosting = Some(served_site()));
+    let (status, body) = call(&s, request("GET", "/ui/api/hosting", &Value::Null)).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["served"], true);
+    assert_eq!(body["url"], "http://127.0.0.1:5000/");
+    assert_eq!(body["publicRoot"], "/work/app/dist");
+    assert_eq!(body["publicExists"], true);
+    let site = body["site"].as_object().unwrap();
+    assert_eq!(site["public"], "dist");
+    assert_eq!(site["cleanUrls"], true);
+    assert_eq!(site["trailingSlash"], false);
+    assert_eq!(site["rewrites"][0]["function"], "api");
+    assert_eq!(site["redirects"][0]["type"], 301);
+    assert_eq!(site["headers"][0]["headers"][0]["key"], "X-A");
+    assert_eq!(site["i18n"]["root"], "/locales");
+    assert_eq!(site["ignore"][0], "**/.*");
+    assert_eq!(site["appAssociation"], "AUTO");
+    assert!(!site.contains_key("predeploy"), "{site:?}");
+    assert!(!site.contains_key("secret"), "{site:?}");
+}
+
+#[tokio::test]
+async fn the_hosting_front_says_when_no_site_is_served_and_is_read_only_and_token_gated() {
+    let s = state();
+    let (status, body) = call(&s, request("GET", "/ui/api/hosting", &Value::Null)).await;
+    assert_eq!(status, 200);
+    assert_eq!(body, json!({"served": false}));
+    let s = state_with_info(|info| info.hosting = Some(served_site()));
+    for method in ["POST", "PUT", "PATCH", "DELETE"] {
+        let (status, _) = call(&s, request(method, "/ui/api/hosting", &json!({}))).await;
+        assert_eq!(status, 405, "{method}");
+    }
+    let (status, _) = call(
+        &s,
+        browser(request("GET", "/ui/api/hosting", &Value::Null), None),
+    )
+    .await;
+    assert_eq!(status, 403);
+    let mut foreign = request("GET", "/ui/api/hosting", &Value::Null);
+    foreign
+        .headers
+        .insert("host".to_owned(), "evil.example:4000".to_owned());
+    let (status, _) = call(&s, foreign).await;
+    assert_eq!(status, 403);
+}
+
+#[tokio::test]
+async fn the_config_names_the_clock_mode_and_the_host_names_in_effect() {
+    let s = state_with_info(|info| {
+        info.clock_frozen = false;
+        info.hosts = HostsInfo {
+            allowed: vec!["ci.example".to_owned(), ".svc.cluster.local".to_owned()],
+            allow_non_loopback_hosts: true,
+            default_names: vec!["localhost".to_owned()],
+            default_suffixes: vec![".localhost".to_owned(), ".internal".to_owned()],
+        };
+    });
+    let (_, body) = call(&s, request("GET", "/ui/api/config", &Value::Null)).await;
+    assert_eq!(body["clockMode"], "realtime");
+    assert_eq!(body["clockPinned"], true);
+    assert_eq!(body["hosts"]["allowed"], json!(["ci.example", ".svc.cluster.local"]));
+    assert_eq!(body["hosts"]["allowNonLoopbackHosts"], true);
+    assert_eq!(body["hosts"]["defaultNames"], json!(["localhost"]));
+    assert_eq!(body["hosts"]["defaultSuffixes"], json!([".localhost", ".internal"]));
+    let frozen = state();
+    let (_, body) = call(&frozen, request("GET", "/ui/api/config", &Value::Null)).await;
+    assert_eq!(body["clockMode"], "frozen");
+}
+
+#[tokio::test]
+async fn each_function_names_its_codebase_and_the_runtime_that_runs_it() {
+    let (s, runtime) = state_with_functions().await;
+    let mut state = Arc::try_unwrap(s).ok().expect("the state is unshared");
+    state.info.codebases = vec![CodebaseInfo {
+        name: "default".to_owned(),
+        language: "python".to_owned(),
+        declared: Some("python312".to_owned()),
+    }];
+    let s = Arc::new(state);
+    let (status, body) = call(&s, request("GET", "/ui/api/functions", &Value::Null)).await;
+    assert_eq!(status, 200);
+    let functions = body["functions"].as_array().unwrap();
+    assert!(!functions.is_empty());
+    for function in functions {
+        assert_eq!(function["codebase"], "default", "{function}");
+        assert_eq!(
+            function["runtime"],
+            json!({"language": "python", "declared": "python312"}),
+            "{function}"
+        );
+    }
+    runtime.runner().shutdown().await;
+}
+
+#[tokio::test]
+async fn a_function_of_an_undeclared_runtime_reports_the_language_alone_and_an_unknown_codebase_none() {
+    let (s, runtime) = state_with_functions().await;
+    let mut state = Arc::try_unwrap(s).ok().expect("the state is unshared");
+    state.info.codebases = vec![CodebaseInfo {
+        name: "default".to_owned(),
+        language: "node".to_owned(),
+        declared: None,
+    }];
+    let (status, body) = call(
+        &Arc::new(state),
+        request("GET", "/ui/api/functions", &Value::Null),
+    )
+    .await;
+    assert_eq!(status, 200);
+    let function = &body["functions"][0];
+    assert_eq!(function["runtime"], json!({"language": "node", "declared": null}));
+    // No codebase information at all (a state built without it): the field is absent.
+    let (s2, runtime2) = state_with_functions().await;
+    let (_, body) = call(&s2, request("GET", "/ui/api/functions", &Value::Null)).await;
+    assert!(body["functions"][0].get("runtime").is_none(), "{body}");
+    runtime.runner().shutdown().await;
+    runtime2.runner().shutdown().await;
 }

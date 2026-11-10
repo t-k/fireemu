@@ -8,7 +8,9 @@ use fireemu_adapter_grpc::rest::RestState;
 use fireemu_adapter_http::control::ControlState;
 use fireemu_adapter_http::identity_toolkit::AuthState;
 use fireemu_adapter_http::storage::StorageState;
-use fireemu_adapter_ui::{AppCheckInfo, RuntimeInfo, UiState};
+use fireemu_adapter_ui::{
+    AppCheckInfo, CodebaseInfo, HostingInfo, HostsInfo, RuntimeInfo, UiState,
+};
 
 use crate::config::{AppCheckService, RuntimeConfig, Selection};
 
@@ -81,6 +83,8 @@ pub struct Parts<'a> {
     pub control: Arc<ControlState>,
     /// Functions runtime, when configured.
     pub functions: Option<Arc<FunctionsRuntime>>,
+    /// The served Hosting site, when Hosting runs.
+    pub hosting: Option<HostingInfo>,
     /// App Check, when enabled: the UI fronts its privileged debug-token management.
     pub app_check: Option<Arc<fireemu_adapter_http::app_check::AppCheckState>>,
     /// Bound addresses: Firestore, HTTP (Auth + control), Storage, Functions, UI.
@@ -131,6 +135,10 @@ pub fn state(parts: Parts<'_>) -> Arc<UiState> {
             ui_addr: ui.to_string(),
             rules_enforced: parts.cfg.rules_enforced,
             clock_pinned: parts.cfg.clock_start_pinned,
+            clock_frozen: parts.cfg.clock_frozen(),
+            hosts: hosts_info(parts.cfg),
+            hosting: parts.hosting,
+            codebases: codebases_info(parts.cfg),
             app_check: app_check_info,
         },
         rest: parts.rest,
@@ -141,4 +149,116 @@ pub fn state(parts: Parts<'_>) -> Arc<UiState> {
         functions: parts.functions,
         app_check: parts.app_check,
     })
+}
+
+/// The `Host` names the product listeners answer, as configured and by default.
+fn hosts_info(cfg: &RuntimeConfig) -> HostsInfo {
+    HostsInfo {
+        allowed: cfg.allowed_host_entries(),
+        allow_non_loopback_hosts: cfg.allow_non_loopback_hosts,
+        default_names: fireemu_core_session::host_guard::default_names()
+            .iter()
+            .map(|name| (*name).to_owned())
+            .collect(),
+        default_suffixes: fireemu_core_session::host_guard::default_suffixes()
+            .iter()
+            .map(|suffix| (*suffix).to_owned())
+            .collect(),
+    }
+}
+
+/// The loader of each codebase this run loads, as the launcher chose it.
+fn codebases_info(cfg: &RuntimeConfig) -> Vec<CodebaseInfo> {
+    cfg.functions_to_load()
+        .iter()
+        .map(|codebase| CodebaseInfo {
+            name: codebase.codebase.clone(),
+            language: match crate::python_functions::codebase_language(codebase) {
+                crate::config::RuntimeLanguage::Node => "node",
+                crate::config::RuntimeLanguage::Python => "python",
+            }
+            .to_owned(),
+            declared: codebase.runtime.clone(),
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{codebases_info, hosts_info};
+    use crate::config::{FunctionsCodebase, RuntimeConfig};
+    use fireemu_core_session::host_guard::AllowedHost;
+
+    fn codebase(name: &str, source: &str, runtime: Option<&str>) -> FunctionsCodebase {
+        FunctionsCodebase {
+            codebase: name.to_owned(),
+            source: source.to_owned(),
+            runtime: runtime.map(str::to_owned),
+            ignore: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn each_loaded_codebase_reports_the_loader_the_launcher_picks_in_load_order() {
+        let scratch =
+            std::env::temp_dir().join(format!("fireemu-ui-codebases-{}", std::process::id()));
+        let python_only = scratch.join("python-only");
+        let both = scratch.join("both");
+        std::fs::create_dir_all(&python_only).unwrap();
+        std::fs::create_dir_all(&both).unwrap();
+        std::fs::write(python_only.join("requirements.txt"), "firebase-functions\n").unwrap();
+        std::fs::write(both.join("requirements.txt"), "firebase-functions\n").unwrap();
+        std::fs::write(both.join("package.json"), "{}").unwrap();
+        let cfg = RuntimeConfig {
+            functions_loaded: vec![
+                codebase("declared-py", "/nonexistent/a", Some("python312")),
+                codebase("declared-js", "/nonexistent/b", Some("nodejs22")),
+                codebase("sniffed-py", python_only.to_str().unwrap(), None),
+                codebase("sniffed-js", both.to_str().unwrap(), None),
+                codebase("bare", "/nonexistent/c", None),
+            ],
+            ..RuntimeConfig::default()
+        };
+        let seen: Vec<(String, String, Option<String>)> = codebases_info(&cfg)
+            .into_iter()
+            .map(|c| (c.name, c.language, c.declared))
+            .collect();
+        let _ = std::fs::remove_dir_all(&scratch);
+        let expected = |name: &str, language: &str, declared: Option<&str>| {
+            (
+                name.to_owned(),
+                language.to_owned(),
+                declared.map(str::to_owned),
+            )
+        };
+        assert_eq!(
+            seen,
+            vec![
+                expected("declared-py", "python", Some("python312")),
+                expected("declared-js", "node", Some("nodejs22")),
+                expected("sniffed-py", "python", None),
+                expected("sniffed-js", "node", None),
+                expected("bare", "node", None),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_host_names_are_the_configured_entries_the_flag_and_the_guards_defaults() {
+        let cfg = RuntimeConfig {
+            allowed_hosts: vec![
+                AllowedHost::parse("CI.example").unwrap(),
+                AllowedHost::parse(".svc.cluster.local").unwrap(),
+            ],
+            allow_non_loopback_hosts: true,
+            ..RuntimeConfig::default()
+        };
+        let info = hosts_info(&cfg);
+        assert_eq!(info.allowed, ["ci.example", ".svc.cluster.local"]);
+        assert!(info.allow_non_loopback_hosts);
+        assert!(info.default_names.iter().any(|n| n == "localhost"));
+        assert!(info.default_suffixes.iter().any(|s| s == ".internal"));
+        let plain = hosts_info(&RuntimeConfig::default());
+        assert!(plain.allowed.is_empty() && !plain.allow_non_loopback_hosts);
+    }
 }

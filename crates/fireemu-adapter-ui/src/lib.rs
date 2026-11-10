@@ -16,7 +16,8 @@
 //! ANY  /ui/api/auth/...                Identity Toolkit admin + emulator routes, as owner
 //! GET  /ui/api/storage/buckets         the buckets of every session project
 //! ANY  /ui/api/storage/...             Storage JSON API, as owner
-//! GET  /ui/api/functions               manifest (with schedule nextRun), status, history
+//! GET  /ui/api/functions               manifest (with schedule nextRun and runtime), status, history
+//! GET  /ui/api/hosting                 the served Hosting site and the rules in effect (read-only)
 //! POST /ui/api/functions/{name}:invoke invoke an HTTP / callable function through the port
 //! POST /ui/api/functions/{name}:enqueue enqueue a Cloud Task onto an onTaskDispatched queue
 //! GET  /ui/api/functions/logs          SSE: runner log lines and invocation outcomes
@@ -64,6 +65,44 @@ pub struct AppCheckInfo {
     pub modes: Vec<(String, String)>,
 }
 
+/// The language and declared runtime of one loaded Functions codebase.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodebaseInfo {
+    /// `codebase` from `firebase.json`, `default` when the project names none.
+    pub name: String,
+    /// The loader that runs it: `node` or `python`.
+    pub language: String,
+    /// The `runtime` the project declared (`nodejs22`, `python312`), when it declared one.
+    pub declared: Option<String>,
+}
+
+/// The `Host` names the product listeners answer (`network.allowedHosts` and the built-in
+/// defaults), fixed at start. IP addresses are always admitted and are not listed.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HostsInfo {
+    /// The configured `network.allowedHosts` entries, normalized.
+    pub allowed: Vec<String>,
+    /// `network.allowNonLoopbackHosts`: single-label names are admitted too.
+    pub allow_non_loopback_hosts: bool,
+    /// Names admitted under every policy.
+    pub default_names: Vec<String>,
+    /// Domains whose subdomains are admitted under every policy.
+    pub default_suffixes: Vec<String>,
+}
+
+/// The served Hosting site (fixed at start).
+#[derive(Debug, Clone, PartialEq)]
+pub struct HostingInfo {
+    /// The Hosting listener.
+    pub addr: String,
+    /// The public directory as the server resolved it (absolute).
+    pub public_root: String,
+    /// Whether the public directory existed when Hosting started.
+    pub public_exists: bool,
+    /// The `hosting` object of `firebase.json`; only the routing keys are ever returned.
+    pub config: Value,
+}
+
 /// What the UI shows about this runtime (fixed at start).
 #[derive(Debug, Clone, Default)]
 pub struct RuntimeInfo {
@@ -89,6 +128,14 @@ pub struct RuntimeInfo {
     pub rules_enforced: bool,
     /// Whether the clock start was pinned by `daemon.clockStart`.
     pub clock_pinned: bool,
+    /// Whether the clock stands still (`daemon.clock` is `frozen`) or follows real time.
+    pub clock_frozen: bool,
+    /// The `Host` names the product listeners answer.
+    pub hosts: HostsInfo,
+    /// The served Hosting site, when Hosting runs.
+    pub hosting: Option<HostingInfo>,
+    /// The loaded Functions codebases.
+    pub codebases: Vec<CodebaseInfo>,
     /// App Check, when the runtime enabled it.
     pub app_check: Option<AppCheckInfo>,
 }
@@ -291,6 +338,13 @@ pub fn config_json(state: &UiState) -> Value {
         "uiAddr": info.ui_addr,
         "rulesEnforced": info.rules_enforced,
         "clockPinned": info.clock_pinned,
+        "clockMode": if info.clock_frozen { "frozen" } else { "realtime" },
+        "hosts": {
+            "allowed": info.hosts.allowed,
+            "allowNonLoopbackHosts": info.hosts.allow_non_loopback_hosts,
+            "defaultNames": info.hosts.default_names,
+            "defaultSuffixes": info.hosts.default_suffixes,
+        },
         "functionsConfigured": state.functions.is_some(),
         "appCheckEnabled": state.app_check.is_some(),
         "uiBundled": assets::bundled(),

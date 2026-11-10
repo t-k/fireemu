@@ -64,6 +64,18 @@ const DEFAULT_SUFFIXES: &[&str] = &[
     ".app.github.dev",
 ];
 
+/// The names every policy admits, for a page that tells a developer what the guard answers.
+#[must_use]
+pub const fn default_names() -> &'static [&'static str] {
+    DEFAULT_NAMES
+}
+
+/// The domains whose subdomains every policy admits (the domain itself is not admitted).
+#[must_use]
+pub const fn default_suffixes() -> &'static [&'static str] {
+    DEFAULT_SUFFIXES
+}
+
 /// Where the refusal and the warnings send a user: the site page that documents the setting.
 pub const DOCS_URL: &str =
     "https://fireemu.github.io/fireemu/guides/ci-and-containers/#host-names-the-emulators-answer";

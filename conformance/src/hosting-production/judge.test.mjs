@@ -386,3 +386,86 @@ test("property: reflexive, symmetric in class, volatile-blind, and any compared 
     }
   }
 });
+
+test("near misses: a lone quote is not quoted, unclassified headers are not compared, several ETags are counted", () => {
+  assert.equal(etagShape('"').quoted, false);
+  assert.equal(etagShape('""').quoted, true);
+  const base = row();
+  const noisy = row({}, { headers: [...answer().headers, ["X-Surprise", "1"]] });
+  assert.equal(compareRows(base, noisy).status, "MATCH");
+  assert.equal(compareRows(noisy, base).status, "MATCH");
+  const two = row({}, { headers: [...answer().headers, ["ETag", '"zzz999"']] });
+  const result = compareRows(base, two);
+  assert.equal(result.status, "MISMATCH");
+  assert.equal(result.differences[0].field, "header:etag");
+});
+
+test("near misses: encoded bodies of equal length differ by digest; the body kind and the encoding side matter", () => {
+  const encoded = (body) =>
+    row(
+      { target: "/compress/big.txt" },
+      {
+        headers: [
+          ["Content-Encoding", "gzip"],
+          ["Content-Type", "text/plain"],
+        ],
+        body: gzipSync(Buffer.from(body)),
+      },
+    );
+  const a = encoded("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+  const b = encoded("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+  assert.equal(a.decodedBytes, b.decodedBytes);
+  const diff = compareRows(a, b);
+  assert.deepEqual(
+    diff.differences.map((d) => d.field),
+    ["decodedSha256"],
+  );
+  const plain = row(
+    { target: "/compress/big.txt" },
+    {
+      headers: [["Content-Type", "text/plain"]],
+      body: Buffer.from("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+    },
+  );
+  const fields = compareRows(a, plain).differences.map((d) => d.field);
+  assert.ok(fields.includes("decodedBytes"));
+  const init = row(
+    { target: "/__/firebase/init.json" },
+    {
+      headers: [["Content-Type", "application/json"]],
+      body: Buffer.from('{"a":"b"}'),
+    },
+  );
+  const text = row(
+    { target: "/__/firebase/init.json" },
+    {
+      headers: [["Content-Type", "application/json"]],
+      body: Buffer.from('{"a":"b"}'),
+      status: 404,
+    },
+  );
+  const kinds = compareRows(init, text).differences.map((d) => d.field);
+  assert.ok(kinds.includes("status") && kinds.includes("bodyKind"));
+});
+
+test("shaping: a target with a query is still an init body; text is kept up to 8192 bytes; binary is not text; infoOnly travels", () => {
+  const withQuery = row(
+    { target: "/__/firebase/init.js?useEmulator=true" },
+    {
+      headers: [["Content-Type", "application/javascript"]],
+      body: Buffer.from("a\nb\n"),
+    },
+  );
+  assert.equal(withQuery.bodyKind, "init-js");
+  const exact = row({}, { body: Buffer.alloc(8192, 0x61) });
+  assert.equal(exact.bodyText.length, 8192);
+  const over = row({}, { body: Buffer.alloc(8193, 0x61) });
+  assert.equal(over.bodyText, undefined);
+  assert.equal(over.bodyKind, "text");
+  const binary = row({}, { body: Buffer.from([0xff, 0xfe, 0xfd]) });
+  assert.equal(binary.bodyKind, "binary");
+  assert.equal(binary.bodyText, undefined);
+  assert.equal(row({ infoOnly: true }).infoOnly, true);
+  assert.equal(row().infoOnly, undefined);
+  assert.equal(row({}, { body: Buffer.alloc(0) }).bodyKind, "none");
+});

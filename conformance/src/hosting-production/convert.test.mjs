@@ -45,3 +45,17 @@ test("trailingSlash maps to ADD and REMOVE and absent keys stay absent", () => {
   assert.deepEqual(servingConfig({ trailingSlash: false }), { trailingSlashBehavior: "REMOVE" });
   assert.deepEqual(servingConfig({}), {});
 });
+
+test("a rule with both source and glob uses the glob as firebase-tools does; a redirect without a type has no status", async () => {
+  const hosting = {
+    redirects: [{ source: "/from", glob: "/glob", destination: "/to" }],
+    headers: [{ source: "/s", glob: "/g", headers: [{ key: "A", value: "1" }] }],
+  };
+  const expected = await real.convertConfig({}, noFunctions, {
+    config: { site: "s", public: "p", ...hosting },
+    version: "sites/s/versions/v",
+  });
+  const actual = servingConfig(hosting);
+  assert.deepEqual(actual, JSON.parse(JSON.stringify(expected)));
+  assert.deepEqual(actual.redirects[0], { glob: "/glob", location: "/to" });
+});

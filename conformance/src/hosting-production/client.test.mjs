@@ -139,3 +139,19 @@ test("a refused connection is unknown", async () => {
   assert.equal(answer.outcome, "unknown");
   assert.equal(answer.reason, "ECONNREFUSED");
 });
+
+test("a body of exactly the bound is an answer; one byte more is unknown", async () => {
+  await withServer(
+    (req, res) => res.end(Buffer.alloc(req.url === "/exact" ? 1000 : 1001)),
+    async (port) => {
+      assert.equal(
+        (await ask(port, { target: "/exact" }, { maxBodyBytes: 1000 })).outcome,
+        "answered",
+      );
+      assert.equal(
+        (await ask(port, { target: "/over" }, { maxBodyBytes: 1000 })).reason,
+        "body-too-large",
+      );
+    },
+  );
+});

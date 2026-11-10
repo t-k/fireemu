@@ -3,7 +3,8 @@
 // (`lib/deploy/hosting/convertConfig.js`, `convertConfig`) minus the function and Cloud Run paths,
 // which this parent does not cover; convert.test.mjs runs the real function and compares.
 function pattern(type, rule) {
-  const glob = rule.source ?? rule.glob;
+  // As firebase-tools: a `glob` key wins over `source` when both are present.
+  const glob = rule.glob ?? rule.source;
   if (glob !== undefined && rule.regex !== undefined) {
     throw new Error(`Cannot specify a ${type} pattern with both a glob and regex.`);
   }

@@ -159,6 +159,7 @@ strict = release.dig("jobs", "strict-production")
 assert(strict, "release must compare the strict profile of the installed artifact with the committed production recordings")
 assert(strict.fetch("needs").include?("build"), "strict-production must test the built platform package")
 assert(strict["continue-on-error"].nil?, "strict-production must block publication")
+assert(strict.dig("strategy", "fail-fast") == false && strict.dig("strategy", "matrix", "group") == %w[eventarc transaction rtdb rest], "strict-production must run every group without fail-fast")
 assert(release.dig("jobs", "publish", "needs").include?("strict-production"), "release publish must depend on the strict production comparison")
 assert(release.dig("jobs", "publish", "needs").include?("verify-artifact"), "release publish must depend on verify-artifact")
 strict_timeout = strict["timeout-minutes"]
@@ -180,6 +181,9 @@ assert(strict_runs.include?("conformance/src/rtdb-release-replay.test.mjs"), "st
 assert(strict_runs.include?("unshare --net --pid --fork --mount-proc --kill-child"), "strict-production must isolate the network and all descendant processes")
 assert(strict_runs.include?("node conformance/src/rtdb-namespace-probe.mjs --out strict-namespace-probe"), "strict-production must prove detached timeout cleanup in a real PID namespace")
 assert(strict_runs.include?("node conformance/src/release-strict-regression.mjs"), "strict-production must run the committed comparison script")
+strict_replay = strict.fetch("steps").find { |step| step["run"]&.include?("node conformance/src/release-strict-regression.mjs --out") }
+assert(strict_replay&.dig("env", "GROUP") == '${{ matrix.group }}' && strict_replay["run"].include?('GROUP="$GROUP"') && strict_replay["run"].include?('--group "$GROUP"'), "strict-production must pass the matrix group to the replay")
+assert(strict.fetch("steps").any? { |step| step["uses"]&.start_with?("actions/upload-artifact@") && step.dig("with", "name") == 'strict-regression-${{ matrix.group }}' }, "strict-production must upload one artifact per group")
 assert(!strict_runs.match?(/record-production|record-|preflight/), "strict-production must never record against production")
 assert(release.dig("jobs", "reproducible", "continue-on-error").nil?, "release reproducible job must block publication")
 assert(release.dig("jobs", "publish", "needs").include?("reproducible"), "release publish must depend on the reproducible job")
@@ -202,7 +206,9 @@ assert(release["env"].keys.sort == %w[CARGO_TERM_COLOR RUSTFLAGS SOURCE_DATE_EPO
 every_use = release.fetch("jobs").values.flat_map { |definition| definition.fetch("steps", []).map { |step| step["uses"] }.compact }
 assert(every_use.group_by { |use| use.split("@").first }.values.all? { |uses| uses.uniq.length == 1 }, "an action is pinned to one commit across the release workflow")
 release.fetch("jobs").each do |job, definition|
-  extra = definition.keys - %w[needs if runs-on outputs steps strategy timeout-minutes permissions environment]
+  allowed = %w[needs if runs-on outputs steps strategy timeout-minutes permissions environment]
+  allowed << "name" if job == "strict-production" && definition["name"] == 'strict-production (${{ matrix.group }})'
+  extra = definition.keys - allowed
   assert(extra.empty?, "release #{job} sets #{extra.join(', ')}: no job-level env, defaults, container, services or continue-on-error")
 end
 assert(every_use.all? { |use| use.match?(/\A[\w.-]+\/[\w.-]+(\/[\w.\/-]+)?@[0-9a-f]{40}\z/) }, "every action in the release workflow is pinned to a 40-hex commit, never a branch or a tag")

@@ -437,6 +437,13 @@ fn parse_index_field(f: &Value, checks: IndexFileChecks) -> Result<Option<IndexF
         (Some("DESCENDING"), None, None) => IndexFieldMode::Descending,
         (None, Some("CONTAINS"), None) => IndexFieldMode::Contains,
         (None, None, Some(config)) => {
+            if checks == IndexFileChecks::Emulator
+                && !config.get("dimension").is_some_and(Value::is_number)
+            {
+                return Err(format!(
+                    "index field {path}: vectorConfig.dimension must be a number"
+                ));
+            }
             let dimension = config
                 .get("dimension")
                 .and_then(|value| value.as_u64().or_else(|| value.as_str()?.parse().ok()))
@@ -641,6 +648,7 @@ fn override_ttl(ov: &Value, field: &str) -> Result<bool, String> {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn parse_field_overrides(
     file: &str,
     json: &Value,
@@ -693,6 +701,25 @@ fn parse_field_overrides(
                     scope => return Err(format!("unsupported queryScope {scope}")),
                 };
                 // Deploy drops searchConfig when the override has an order or array mode.
+                if checks == IndexFileChecks::Emulator
+                    && index
+                        .get("searchConfig")
+                        .is_some_and(|config| !config.is_null())
+                    && ["order", "arrayConfig"].iter().any(|key| {
+                        index.get(*key).is_some_and(|value| match value {
+                            Value::Bool(value) => *value,
+                            Value::Number(value) => {
+                                value.as_f64().is_some_and(|value| value != 0.0)
+                            }
+                            Value::Array(_) | Value::Object(_) => true,
+                            _ => false,
+                        })
+                    })
+                {
+                    return Err(format!(
+                        "field override {path}: invalid order or arrayConfig"
+                    ));
+                }
                 if index
                     .get("searchConfig")
                     .is_some_and(|config| !config.is_null())
@@ -1997,6 +2024,64 @@ mod tests {
     }
 
     const MODE_KEYS: [&str; 4] = ["order", "arrayConfig", "searchConfig", "vectorConfig"];
+
+    #[test]
+    fn selected_vector_dimension_must_be_a_number_in_emulator() {
+        let field = json!({"fieldPath": "b", "vectorConfig": {"dimension": "2", "flat": {}}, "searchConfig": {}});
+        let file = json!({"indexes": [entry(&json!([asc("a"), field]))]});
+        for checks in both_checks() {
+            assert!(
+                parse_indexes("f", &file.to_string(), checks).is_err(),
+                "{checks:?}"
+            );
+            let valid = json!({"indexes": [entry(&json!([asc("a"), {"fieldPath": "b", "vectorConfig": {"dimension": 2, "flat": {}}}]))]});
+            assert!(
+                parse_indexes("f", &valid.to_string(), checks).is_ok(),
+                "{checks:?}"
+            );
+        }
+        let valid = json!({"fieldPath": "b", "vectorConfig": {"dimension": 2, "flat": {}}, "searchConfig": {}});
+        assert_eq!(
+            parse_index_field(&valid, IndexFileChecks::Emulator)
+                .unwrap()
+                .unwrap()
+                .mode,
+            IndexFieldMode::Vector { dimension: 2 }
+        );
+        assert!(parse_index_field(&valid, IndexFileChecks::Deploy).is_err());
+        let strict_legacy =
+            json!({"fieldPath": "b", "vectorConfig": {"dimension": "2", "flat": {}}});
+        assert!(parse_index_field(&strict_legacy, IndexFileChecks::Deploy).is_ok());
+    }
+
+    #[test]
+    fn override_search_is_suppressed_only_for_valid_modes() {
+        for index in [
+            json!({"order": true, "arrayConfig": "CONTAINS", "searchConfig": {}}),
+            json!({"arrayConfig": "INVALID", "searchConfig": {}}),
+            json!({"order": "ASCENDING", "arrayConfig": true, "searchConfig": {}}),
+        ] {
+            let file = json!({"indexes": [], "fieldOverrides": [{"collectionGroup": "posts", "fieldPath": "body", "indexes": [index]}]});
+            for checks in both_checks() {
+                assert!(
+                    parse_indexes("f", &file.to_string(), checks).is_err(),
+                    "{checks:?}: {file}"
+                );
+            }
+        }
+        for index in [
+            json!({"order": "ASCENDING"}),
+            json!({"arrayConfig": "CONTAINS"}),
+        ] {
+            let file = json!({"indexes": [], "fieldOverrides": [{"collectionGroup": "posts", "fieldPath": "body", "indexes": [index]}]});
+            for checks in both_checks() {
+                assert!(
+                    parse_indexes("f", &file.to_string(), checks).is_ok(),
+                    "{checks:?}: {file}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn emulator_uses_deploy_field_mode_precedence() {

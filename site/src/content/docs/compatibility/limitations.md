@@ -75,4 +75,4 @@ Some limits exist only in Fireemu, to bound memory use: the [Firestore history l
 
 ## Changes between versions
 
-Configuration and behavior may change between releases. See the [CHANGELOG](https://github.com/t-k/fireemu/blob/main/CHANGELOG.md).
+Configuration and behavior may change between releases. See the [CHANGELOG](https://github.com/fireemu/fireemu/blob/main/CHANGELOG.md).

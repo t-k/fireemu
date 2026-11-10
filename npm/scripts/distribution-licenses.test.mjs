@@ -352,7 +352,7 @@ test("the launcher package includes the canonical third-party license file", () 
     writeFileSync(join(root, "README.md"), "launcher readme\n");
     writeFileSync(
       join(root, "npm", "fireemu", "package.json"),
-      JSON.stringify({ version: "0.0.0-dev", repository: { url: "git+https://github.com/t-k/fireemu.git" } }),
+      JSON.stringify({ version: "0.0.0-dev", repository: { url: "git+https://github.com/fireemu/fireemu.git" } }),
     );
     writeFileSync(join(root, "LICENSE"), "project license\n");
     writeFileSync(join(root, "THIRD_PARTY_LICENSES.txt"), "third-party notices\n");

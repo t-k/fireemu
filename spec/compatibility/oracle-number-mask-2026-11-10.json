@@ -5482,16 +5482,6 @@
       "postSha256": "1ea7b061658e527f3b4f5d72d25a074b250fea89490a87940886b58c02e58840",
       "preSha256": "8fbe1ef30660515a99c2a2ecaabb135a537d8b646703b7e1a4e71ea9c1ae5790"
     },
-    "tools/compat-broad/auth-credential-tokens/credential_source_refusal.py": {
-      "digestRewrites": [
-        [
-          "8fbe1ef30660515a99c2a2ecaabb135a537d8b646703b7e1a4e71ea9c1ae5790",
-          "1ea7b061658e527f3b4f5d72d25a074b250fea89490a87940886b58c02e58840"
-        ]
-      ],
-      "postSha256": "3a822af1b3478b1bd50c11a4f2cf1df84d22adfe62b32de0adfaf0c0073feefd",
-      "preSha256": "2d95d50bd4a4b1298759caee1d245a5ea21719f424ac7d4d2387acec548e7309"
-    },
     "tools/compat-broad/auth-credential-tokens/test_credential_admission.py": {
       "maskedOccurrences": 2,
       "maskedOffsets": [

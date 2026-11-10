@@ -45,7 +45,7 @@ LAUNCHER = f"{LANE}/credential_bootstrap.py"
 PINNED = {
     WORKER: "337bb2a07c3d0d6bbc69a49f5c99faadc7534178b89e1ecf57b24d6614b1f3eb",
     TRANSPORT: "509d6a95bc41daf55d30860b4c4e0bb7c40a24289caa928f227eaceef4143515",
-    LAUNCHER: "1ea7b061658e527f3b4f5d72d25a074b250fea89490a87940886b58c02e58840",
+    LAUNCHER: "8fbe1ef30660515a99c2a2ecaabb135a537d8b646703b7e1a4e71ea9c1ae5790",
 }
 CAMPAIGN = "AUTH-CREDENTIAL-TOKENS-01"
 ROUTE = "identitytoolkit.googleapis.com/v1/accounts:signUp"

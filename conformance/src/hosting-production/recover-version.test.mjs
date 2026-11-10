@@ -338,3 +338,19 @@ test("arguments are validated and a project number in a returned name is never k
     }).includes("name"),
   );
 });
+
+test("another version of the same run in the list does not stop the settlement of this one", async () => {
+  const other = {
+    name: `sites/${PROJECT}/versions/0000000000000099`,
+    status: "CREATED",
+    labels: { "fireemu-run": RUN },
+  };
+  const s = await setup({
+    overrides: [
+      { match: "GET /versions\\?pageSize=100/", answer: reply(200, { versions: [other] }) },
+    ],
+  });
+  const result = await go(s);
+  assert.equal(result.listLeft, false);
+  assert.equal(result.outcome, "recovery-read-clean");
+});

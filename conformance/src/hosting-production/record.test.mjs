@@ -1105,6 +1105,8 @@ test("the version name production returned (the project number in front) is acce
   assert.match(deployOf(r).v01.version, /^projects\/#{12}\/sites\/fireemu-oracle-idp\/versions\//);
   const projectId = await run({ world: { versionNameForm: "projectId" } });
   assert.equal(terminal(projectId).closureReady, true);
+  assert.equal(deployOf(projectId).v01.failure, undefined, "the project-id form is accepted too");
+  assert.equal(projectId.result.outcome, "observed-unknown");
 });
 
 test("a version create that succeeded and then fails the name check is deleted before the run ends", async () => {

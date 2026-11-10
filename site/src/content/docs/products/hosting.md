@@ -3,7 +3,7 @@ title: Firebase Hosting
 description: Serve one Firebase Hosting site locally from firebase.json, with redirects, rewrites, headers, clean URLs, localization and rewrites to local functions.
 ---
 
-Fireemu serves one Firebase Hosting site from the `hosting` entry of `firebase.json`: static files, redirects, rewrites, custom headers, clean URLs, trailing-slash handling and localized content. A rewrite can send a request to a function of a Functions codebase in the same run. Hosting is served **without a production parity claim**: the behaviour is compared offline with `firebase-tools` 15.28.2 on a finite set of cases, and production observations are still pending (see [Verification status](#verification-status)).
+Fireemu serves one Firebase Hosting site from the `hosting` entry of `firebase.json`: static files, redirects, rewrites, custom headers, clean URLs, trailing-slash handling and localized content. A rewrite can send a request to a function of a Functions codebase in the same run. Hosting is served **without a completed production parity claim**: the `emulator` profile is compared offline with `firebase-tools` 15.28.2 on a finite set of cases, and the `strict` profile is compared with two production recordings whose review is pending (see [Profiles](#profiles) and [Verification status](#verification-status)).
 
 Hosting is available since v0.45.0. Behaviour that changed in a later release is listed under [Changes in v0.47.0](#changes-in-v0470) below.
 
@@ -45,7 +45,7 @@ These keys of the `hosting` object are honored:
 
 Behaviour of a request, in order:
 
-1. Requests for `/__/firebase/init.json` and `/__/firebase/init.js` are answered first: `init.json` holds the project ID and a non-secret local API key (`fireemu-local-only`), and `init.js?useEmulator=true` also points the Firebase SDKs at the emulators of this run (Authentication, Firestore, Functions, Storage and the Realtime Database, when they run). They take precedence over a catch-all redirect, as Firebase Hosting's published priority says; the official emulator applies redirects first.
+1. Requests for `/__/firebase/init.json` and `/__/firebase/init.js` are answered first: `init.json` holds the project ID and a non-secret local API key (`fireemu-local-only`), and `init.js?useEmulator=true` also points the Firebase SDKs at the emulators of this run (Authentication, Firestore, Functions, Storage and the Realtime Database, when they run). Under `emulator` they take precedence over a catch-all redirect; under `strict` they are answered after the redirects, as production answered (see [Profiles](#profiles)).
 2. A matching entry of `redirects` answers with its status and a `Location`.
 3. A file is served when one matches, including `index.html` for a directory; `HEAD` is answered with the headers only. Responses carry `ETag`, `Last-Modified` and `Content-Length`, and the body is streamed from the open file. The `Content-Type` comes from the extension (compared without regard to case) in the table of `mime-types` 2.1.35 over `mime-db` 1.52.0, which is what the `firebase-tools` emulator uses, including its charsets (`application/javascript; charset=utf-8`, `text/css; charset=utf-8`, `image/svg+xml` without one). A compressible type also gets `Vary: Accept-Encoding`, as the emulator's compression does.
 4. A matching entry of `rewrites` answers: a `destination` file is served with 200 (a rewrite to `/404.html` answers 404), and a `function` or `run` rule is forwarded to the local Functions runtime.
@@ -78,14 +78,29 @@ A rewrite with a `function` or `run` target is forwarded to the Functions emulat
 
 ## Profiles
 
-Hosting behaves the same under `strict` and `emulator`, and `productionExact` changes nothing for it: there is no development default to turn off, and Hosting does not depend on the compatibility profile. See [Profiles and productionExact](../../guides/profiles/).
+Hosting answers differently under the two compatibility profiles, and `productionExact` changes nothing for it. The `emulator` profile answers as the `firebase-tools` 15.28.2 emulator does. The `strict` profile, the default, answers as Firebase Hosting answered the 201 requests of the production corpus (two recordings on disposable preview channels, listed in [Verification status](#verification-status)). Where `strict` differs from the `emulator` profile:
+
+| Area | `strict` | `emulator` |
+|---|---|---|
+| Response headers | Files carry `Cache-Control: max-age=3600` (unless a `headers` rule sets one), `Accept-Ranges: bytes`, `Vary: x-fh-requested-host, accept-encoding` and a quoted SHA-256 `ETag`. The `Vary` of an `i18n` site's files begins with `accept-language, x-country-code`. Redirects carry the headers your rules set. | `ETag` and `Last-Modified` only, and `Vary: Accept-Encoding` for compressible types. |
+| `Content-Type` | JSON types without a charset (`application/json`, `application/manifest+json`), `.js` and `.mjs` as `text/javascript; charset=utf-8`, `.ico` as `image/x-icon`, an unknown extension or none as `text/plain; charset=utf-8`. | The `mime-types` table of the emulator; an unknown extension is `application/octet-stream`. |
+| Conditional and range requests | `If-None-Match` and `If-Modified-Since` answer 304 (with the `Cache-Control` of the file only); a single `Range` answers 206 with `Content-Range`. `OPTIONS` on a file answers an empty 200 with `Allow: GET, HEAD, OPTIONS`. | The whole file. |
+| `/404.html` | A request for `/404.html` serves the file with 200; any other missing path serves it with 404. | Both answer 404. |
+| Redirects | The body is `text/plain`. Each captured path part is percent-decoded before it is put in the `Location` (`%2f` becomes `/`, then runs of slashes fold), and the query string is appended as sent. A parameter name is letters and `_`: `:id2` is the parameter `id` followed by a `2`. | `text/html` body, captured parts stay encoded (`%2f` becomes `%252f`), the query is re-encoded, and `:id2` is a parameter name. |
+| Reserved paths | `/__/auth/handler` answers 200 outside the redirects; `/__/firebase/init.json` and `init.js` are subject to them, and are cacheable files (`ETag`, `Last-Modified`, the headers your rules set). | `init.json` and `init.js` come before the redirects; `/__/auth/handler` is not served. |
+| `appAssociation: "AUTO"` | `/.well-known/assetlinks.json` and `/.well-known/apple-app-site-association` are generated (`[]` and an empty `applinks` document). | Not served. |
+| `i18n` | The country comes from the request's origin in production, so the `X-Country-Code` header and the `firebase-country-override` cookie are **ignored**; `Accept-Language` is read with its quality values (`de;q=0.9, fr;q=0.8` finds `fr` when there is no `de`); the `firebase-language-override` cookie is honored. | The country header and cookie are honored; quality values are not read. |
+| Globs of `headers`, `rewrites` and `redirects` | A dot file matches `*` and `**`, and the empty part after a trailing slash matches `*` and the patterns that can match nothing. | Dot files and the empty part do not match, as in the pinned `superstatic`. |
+| Malformed percent escape | `400` with the plain text `400 Bad Request`, sent chunked. | `400` with `Malformed URL`. |
+
+Known differences that `strict` does not reproduce are listed in the [closure record](https://github.com/fireemu/fireemu/blob/main/conformance/src/hosting-production/known-differences.json): gzip and Brotli content encoding, the body of production's own 404 page (a longer HTML page), the hosted SDK files under `/__/firebase/<version>/`, the `init.json` keys beyond `apiKey` and `projectId`, the `Strict-Transport-Security` header of https and the preview channel's `X-Robots-Tag`, and production's 302 to an internal origin for a request for a parent directory (`strict` refuses with 404 and never leaves `public`).
 
 ## Not supported
 
 - More than one site: a `hosting` list, `site` and `target`. A list is refused with `hosting must be one site object; multiple sites are not implemented` when Hosting is named in `--only`.
 - `hosting.source` (web frameworks) and any site without `public`.
 - App Hosting. `--only apphosting` is refused as deferred; see [Limitations](../../compatibility/limitations/).
-- Keys other than those in the table above are not acted on, for example `appAssociation`: Fireemu serves no `/.well-known/` association files for it, and a file you place in `public` is served like any other.
+- Keys other than those in the table above are not acted on. `appAssociation: "AUTO"` generates the two association documents under `strict` only; a file you place in `public` is served like any other.
 - The hosted SDK scripts under `/__/firebase/<version>/`, deployed Cloud Run services and deployed functions (no live fallback).
 - A file with no extension, or an extension that `mime-types` does not know, is served as `application/octet-stream`. The `firebase-tools` emulator sends the literal text `false` as its `Content-Type` there, and production's behaviour was not recorded. The `Content-Type` of a custom header rule replaces the one Fireemu chooses.
 
@@ -101,4 +116,4 @@ These changes are in v0.47.0 and later; v0.45.0 and v0.46.0 behaved differently 
 
 ## Verification status
 
-The `HOSTING` area of the [compatibility tables](../../compatibility/#production-verification) is **In progress**: every condition is unverified because no production observation has been recorded yet. The offline conformance suite compares Fireemu with `firebase-tools` 15.28.2 on a finite corpus (static files, redirects, rewrites, glob matching, headers, clean URLs, trailing slashes, localization and ignore patterns), including over 3,000 generated rows of the real file listing used for `ignore`. It makes no production request. Where that corpus and production could differ, the compatibility tables and [Limitations](../../compatibility/limitations/) say so; treat a Hosting test that passes here as a check of your `firebase.json` and routing, not as proof of production behaviour.
+The `HOSTING` area of the [compatibility tables](../../compatibility/#production-verification) is **In progress**: production was observed twice with the same 201 requests (static files, redirects, rewrites, glob matching, headers and caching, clean URLs, trailing slashes, localization, reserved paths, content types, compression, app association), on preview channels of a disposable site, never on a live channel. The two recordings agree with each other on every request except a production-internal redirect host, and the `strict` profile agrees with both on every request except the known differences above; the review that promotes the area has not run. `emulator` makes no production claim. The offline conformance suite still compares Fireemu with `firebase-tools` 15.28.2 on a finite corpus, including over 3,000 generated rows of the real file listing used for `ignore`. Treat a Hosting test that passes here as a check of your `firebase.json` and routing: preview channel answers are not the live channel's.

@@ -51,7 +51,9 @@ export function compareFiles({
     comparison: kind,
     corpusSha256: digest,
     inputs: { a: left.sha256, b: right.sha256 },
-    knownDifferences: known.map((entry) => ({ id: entry.id, rows: entry.rows.length })),
+    knownDifferences: known
+      .filter((entry) => entry.appliesTo.includes(kind))
+      .map((entry) => ({ id: entry.id, rows: entry.rows.length })),
     summary: results.summary,
     unclassifiedHeaders: results.unclassifiedHeaders,
     conditions: conditionVerdicts(requests, results),

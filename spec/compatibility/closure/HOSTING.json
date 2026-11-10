@@ -25,12 +25,23 @@
     {
       "conditionId": "HOSTING/static-files",
       "description": "Static files and directory indexes",
-      "status": "UNVERIFIED",
+      "status": "VERIFIED",
       "recipeIds": [
         "hosting/static-files"
       ],
       "fixture": "conformance/hosting-fixtures/cases.json",
-      "productionEvidence": [],
+      "productionEvidence": [
+        {
+          "alias": "pass-1",
+          "fixturePath": "conformance/hosting-production-pass-1.json",
+          "fixtureSha256": "56739920bd499ac72d85ccd262838da25e81528c5183bc340535b40ece8039cc"
+        },
+        {
+          "alias": "pass-2",
+          "fixturePath": "conformance/hosting-production-pass-2.json",
+          "fixtureSha256": "5574d57144bd47fd96d261f18ab673571489f43f169839d0d6b53153ca896bfc"
+        }
+      ],
       "fixtureCaseIds": [
         "root",
         "static",
@@ -46,17 +57,67 @@
           "v01"
         ],
         "requests": 23
+      },
+      "observedPasses": 2,
+      "passComparison": "MATCH",
+      "comparisons": {
+        "runVsRun": {
+          "rows": 23,
+          "counts": {
+            "MATCH": 5,
+            "MATCH_LAYOUT": 18,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        },
+        "strictVsPass1": {
+          "rows": 23,
+          "counts": {
+            "MATCH": 2,
+            "MATCH_LAYOUT": 21,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        },
+        "strictVsPass2": {
+          "rows": 23,
+          "counts": {
+            "MATCH": 2,
+            "MATCH_LAYOUT": 21,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        }
+      },
+      "knownDifferences": [],
+      "profiles": {
+        "strict": "MATCHES_RECORDED_CASES",
+        "emulator": "NO_PRODUCTION_CLAIM"
       }
     },
     {
       "conditionId": "HOSTING/redirects",
       "description": "First-match redirects, captures and query preservation",
-      "status": "UNVERIFIED",
+      "status": "VERIFIED",
       "recipeIds": [
         "hosting/redirects"
       ],
       "fixture": "conformance/hosting-fixtures/cases.json",
-      "productionEvidence": [],
+      "productionEvidence": [
+        {
+          "alias": "pass-1",
+          "fixturePath": "conformance/hosting-production-pass-1.json",
+          "fixtureSha256": "56739920bd499ac72d85ccd262838da25e81528c5183bc340535b40ece8039cc"
+        },
+        {
+          "alias": "pass-2",
+          "fixturePath": "conformance/hosting-production-pass-2.json",
+          "fixtureSha256": "5574d57144bd47fd96d261f18ab673571489f43f169839d0d6b53153ca896bfc"
+        }
+      ],
       "fixtureCaseIds": [
         "redirect-first",
         "redirect-capture",
@@ -71,17 +132,67 @@
           "v09"
         ],
         "requests": 46
+      },
+      "observedPasses": 2,
+      "passComparison": "MATCH",
+      "comparisons": {
+        "runVsRun": {
+          "rows": 46,
+          "counts": {
+            "MATCH": 41,
+            "MATCH_LAYOUT": 5,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        },
+        "strictVsPass1": {
+          "rows": 46,
+          "counts": {
+            "MATCH": 41,
+            "MATCH_LAYOUT": 5,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        },
+        "strictVsPass2": {
+          "rows": 46,
+          "counts": {
+            "MATCH": 41,
+            "MATCH_LAYOUT": 5,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        }
+      },
+      "knownDifferences": [],
+      "profiles": {
+        "strict": "MATCHES_RECORDED_CASES",
+        "emulator": "NO_PRODUCTION_CLAIM"
       }
     },
     {
       "conditionId": "HOSTING/rewrites",
       "description": "Static precedence and first-match rewrites",
-      "status": "UNVERIFIED",
+      "status": "VERIFIED",
       "recipeIds": [
         "hosting/rewrites"
       ],
       "fixture": "conformance/hosting-fixtures/cases.json",
-      "productionEvidence": [],
+      "productionEvidence": [
+        {
+          "alias": "pass-1",
+          "fixturePath": "conformance/hosting-production-pass-1.json",
+          "fixtureSha256": "56739920bd499ac72d85ccd262838da25e81528c5183bc340535b40ece8039cc"
+        },
+        {
+          "alias": "pass-2",
+          "fixturePath": "conformance/hosting-production-pass-2.json",
+          "fixtureSha256": "5574d57144bd47fd96d261f18ab673571489f43f169839d0d6b53153ca896bfc"
+        }
+      ],
       "fixtureCaseIds": [
         "rewrite-first",
         "static"
@@ -93,17 +204,67 @@
           "v10"
         ],
         "requests": 3
+      },
+      "observedPasses": 2,
+      "passComparison": "MATCH",
+      "comparisons": {
+        "runVsRun": {
+          "rows": 3,
+          "counts": {
+            "MATCH": 0,
+            "MATCH_LAYOUT": 3,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        },
+        "strictVsPass1": {
+          "rows": 3,
+          "counts": {
+            "MATCH": 0,
+            "MATCH_LAYOUT": 3,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        },
+        "strictVsPass2": {
+          "rows": 3,
+          "counts": {
+            "MATCH": 0,
+            "MATCH_LAYOUT": 3,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        }
+      },
+      "knownDifferences": [],
+      "profiles": {
+        "strict": "MATCHES_RECORDED_CASES",
+        "emulator": "NO_PRODUCTION_CLAIM"
       }
     },
     {
       "conditionId": "HOSTING/glob-matching",
       "description": "Glob matching and ordered overlapping rules",
-      "status": "UNVERIFIED",
+      "status": "VERIFIED",
       "recipeIds": [
         "hosting/glob-matching"
       ],
       "fixture": "conformance/hosting-fixtures/glob-cases.json",
-      "productionEvidence": [],
+      "productionEvidence": [
+        {
+          "alias": "pass-1",
+          "fixturePath": "conformance/hosting-production-pass-1.json",
+          "fixtureSha256": "56739920bd499ac72d85ccd262838da25e81528c5183bc340535b40ece8039cc"
+        },
+        {
+          "alias": "pass-2",
+          "fixturePath": "conformance/hosting-production-pass-2.json",
+          "fixtureSha256": "5574d57144bd47fd96d261f18ab673571489f43f169839d0d6b53153ca896bfc"
+        }
+      ],
       "officialFixture": "conformance/hosting-fixtures/official-globs.json",
       "fixtureSelection": "All 138 pattern/path pairs",
       "productionCorpus": {
@@ -111,17 +272,67 @@
           "v10"
         ],
         "requests": 11
+      },
+      "observedPasses": 2,
+      "passComparison": "MATCH",
+      "comparisons": {
+        "runVsRun": {
+          "rows": 11,
+          "counts": {
+            "MATCH": 0,
+            "MATCH_LAYOUT": 11,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        },
+        "strictVsPass1": {
+          "rows": 11,
+          "counts": {
+            "MATCH": 0,
+            "MATCH_LAYOUT": 11,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        },
+        "strictVsPass2": {
+          "rows": 11,
+          "counts": {
+            "MATCH": 0,
+            "MATCH_LAYOUT": 11,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        }
+      },
+      "knownDifferences": [],
+      "profiles": {
+        "strict": "MATCHES_RECORDED_CASES",
+        "emulator": "NO_PRODUCTION_CLAIM"
       }
     },
     {
       "conditionId": "HOSTING/headers-cache",
       "description": "Custom headers and cache metadata",
-      "status": "UNVERIFIED",
+      "status": "VERIFIED",
       "recipeIds": [
         "hosting/headers-cache"
       ],
       "fixture": "conformance/hosting-fixtures/cases.json",
-      "productionEvidence": [],
+      "productionEvidence": [
+        {
+          "alias": "pass-1",
+          "fixturePath": "conformance/hosting-production-pass-1.json",
+          "fixtureSha256": "56739920bd499ac72d85ccd262838da25e81528c5183bc340535b40ece8039cc"
+        },
+        {
+          "alias": "pass-2",
+          "fixturePath": "conformance/hosting-production-pass-2.json",
+          "fixtureSha256": "5574d57144bd47fd96d261f18ab673571489f43f169839d0d6b53153ca896bfc"
+        }
+      ],
       "fixtureCaseIds": [
         "static",
         "conditional-static",
@@ -135,17 +346,67 @@
           "v01"
         ],
         "requests": 6
+      },
+      "observedPasses": 2,
+      "passComparison": "MATCH",
+      "comparisons": {
+        "runVsRun": {
+          "rows": 6,
+          "counts": {
+            "MATCH": 1,
+            "MATCH_LAYOUT": 5,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        },
+        "strictVsPass1": {
+          "rows": 6,
+          "counts": {
+            "MATCH": 1,
+            "MATCH_LAYOUT": 5,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        },
+        "strictVsPass2": {
+          "rows": 6,
+          "counts": {
+            "MATCH": 1,
+            "MATCH_LAYOUT": 5,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        }
+      },
+      "knownDifferences": [],
+      "profiles": {
+        "strict": "MATCHES_RECORDED_CASES",
+        "emulator": "NO_PRODUCTION_CLAIM"
       }
     },
     {
       "conditionId": "HOSTING/clean-urls",
       "description": "cleanUrls path selection",
-      "status": "UNVERIFIED",
+      "status": "VERIFIED",
       "recipeIds": [
         "hosting/clean-urls"
       ],
       "fixture": "conformance/hosting-fixtures/cases.json",
-      "productionEvidence": [],
+      "productionEvidence": [
+        {
+          "alias": "pass-1",
+          "fixturePath": "conformance/hosting-production-pass-1.json",
+          "fixtureSha256": "56739920bd499ac72d85ccd262838da25e81528c5183bc340535b40ece8039cc"
+        },
+        {
+          "alias": "pass-2",
+          "fixturePath": "conformance/hosting-production-pass-2.json",
+          "fixtureSha256": "5574d57144bd47fd96d261f18ab673571489f43f169839d0d6b53153ca896bfc"
+        }
+      ],
       "fixtureCaseIds": [
         "clean-_page",
         "clean-_page_",
@@ -172,17 +433,69 @@
           "v02"
         ],
         "requests": 7
+      },
+      "observedPasses": 2,
+      "passComparison": "MATCH",
+      "comparisons": {
+        "runVsRun": {
+          "rows": 7,
+          "counts": {
+            "MATCH": 3,
+            "MATCH_LAYOUT": 4,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        },
+        "strictVsPass1": {
+          "rows": 7,
+          "counts": {
+            "MATCH": 3,
+            "MATCH_LAYOUT": 4,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 1
+        },
+        "strictVsPass2": {
+          "rows": 7,
+          "counts": {
+            "MATCH": 3,
+            "MATCH_LAYOUT": 4,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 1
+        }
+      },
+      "knownDifferences": [
+        "KD-DEFAULT-404-BODY"
+      ],
+      "profiles": {
+        "strict": "MATCHES_RECORDED_CASES",
+        "emulator": "NO_PRODUCTION_CLAIM"
       }
     },
     {
       "conditionId": "HOSTING/trailing-slash",
       "description": "trailingSlash path canonicalization",
-      "status": "UNVERIFIED",
+      "status": "VERIFIED",
       "recipeIds": [
         "hosting/trailing-slash"
       ],
       "fixture": "conformance/hosting-fixtures/cases.json",
-      "productionEvidence": [],
+      "productionEvidence": [
+        {
+          "alias": "pass-1",
+          "fixturePath": "conformance/hosting-production-pass-1.json",
+          "fixtureSha256": "56739920bd499ac72d85ccd262838da25e81528c5183bc340535b40ece8039cc"
+        },
+        {
+          "alias": "pass-2",
+          "fixturePath": "conformance/hosting-production-pass-2.json",
+          "fixtureSha256": "5574d57144bd47fd96d261f18ab673571489f43f169839d0d6b53153ca896bfc"
+        }
+      ],
       "fixtureCaseIds": [
         "slash-_page",
         "slash-_page_",
@@ -220,17 +533,69 @@
           "v08"
         ],
         "requests": 30
+      },
+      "observedPasses": 2,
+      "passComparison": "MATCH",
+      "comparisons": {
+        "runVsRun": {
+          "rows": 30,
+          "counts": {
+            "MATCH": 15,
+            "MATCH_LAYOUT": 15,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        },
+        "strictVsPass1": {
+          "rows": 30,
+          "counts": {
+            "MATCH": 15,
+            "MATCH_LAYOUT": 15,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 4
+        },
+        "strictVsPass2": {
+          "rows": 30,
+          "counts": {
+            "MATCH": 15,
+            "MATCH_LAYOUT": 15,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 4
+        }
+      },
+      "knownDifferences": [
+        "KD-DEFAULT-404-BODY"
+      ],
+      "profiles": {
+        "strict": "MATCHES_RECORDED_CASES",
+        "emulator": "NO_PRODUCTION_CLAIM"
       }
     },
     {
       "conditionId": "HOSTING/i18n",
       "description": "Language, country, cookie and fallback selection",
-      "status": "UNVERIFIED",
+      "status": "VERIFIED",
       "recipeIds": [
         "hosting/i18n"
       ],
       "fixture": "conformance/hosting-fixtures/cases.json",
-      "productionEvidence": [],
+      "productionEvidence": [
+        {
+          "alias": "pass-1",
+          "fixturePath": "conformance/hosting-production-pass-1.json",
+          "fixtureSha256": "56739920bd499ac72d85ccd262838da25e81528c5183bc340535b40ece8039cc"
+        },
+        {
+          "alias": "pass-2",
+          "fixturePath": "conformance/hosting-production-pass-2.json",
+          "fixtureSha256": "5574d57144bd47fd96d261f18ab673571489f43f169839d0d6b53153ca896bfc"
+        }
+      ],
       "fixtureCaseIds": [
         "i18n-language",
         "i18n-country",
@@ -245,17 +610,67 @@
           "v08"
         ],
         "requests": 17
+      },
+      "observedPasses": 2,
+      "passComparison": "MATCH",
+      "comparisons": {
+        "runVsRun": {
+          "rows": 17,
+          "counts": {
+            "MATCH": 2,
+            "MATCH_LAYOUT": 15,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        },
+        "strictVsPass1": {
+          "rows": 17,
+          "counts": {
+            "MATCH": 2,
+            "MATCH_LAYOUT": 15,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        },
+        "strictVsPass2": {
+          "rows": 17,
+          "counts": {
+            "MATCH": 2,
+            "MATCH_LAYOUT": 15,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        }
+      },
+      "knownDifferences": [],
+      "profiles": {
+        "strict": "MATCHES_RECORDED_CASES",
+        "emulator": "NO_PRODUCTION_CLAIM"
       }
     },
     {
       "conditionId": "HOSTING/reserved-paths",
       "description": "Reserved initialization paths",
-      "status": "UNVERIFIED",
+      "status": "VERIFIED",
       "recipeIds": [
         "hosting/reserved-paths"
       ],
       "fixture": "conformance/hosting-fixtures/cases.json",
-      "productionEvidence": [],
+      "productionEvidence": [
+        {
+          "alias": "pass-1",
+          "fixturePath": "conformance/hosting-production-pass-1.json",
+          "fixtureSha256": "56739920bd499ac72d85ccd262838da25e81528c5183bc340535b40ece8039cc"
+        },
+        {
+          "alias": "pass-2",
+          "fixturePath": "conformance/hosting-production-pass-2.json",
+          "fixtureSha256": "5574d57144bd47fd96d261f18ab673571489f43f169839d0d6b53153ca896bfc"
+        }
+      ],
       "fixtureCaseIds": [
         "reserved-json",
         "reserved-js",
@@ -269,17 +684,71 @@
           "v09"
         ],
         "requests": 11
+      },
+      "observedPasses": 2,
+      "passComparison": "MATCH",
+      "comparisons": {
+        "runVsRun": {
+          "rows": 11,
+          "counts": {
+            "MATCH": 7,
+            "MATCH_LAYOUT": 4,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        },
+        "strictVsPass1": {
+          "rows": 11,
+          "counts": {
+            "MATCH": 7,
+            "MATCH_LAYOUT": 4,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 7
+        },
+        "strictVsPass2": {
+          "rows": 11,
+          "counts": {
+            "MATCH": 7,
+            "MATCH_LAYOUT": 4,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 7
+        }
+      },
+      "knownDifferences": [
+        "KD-AUTH-HANDLER-PAGE",
+        "KD-INIT-KEYS",
+        "KD-SDK-FILES"
+      ],
+      "profiles": {
+        "strict": "MATCHES_RECORDED_CASES",
+        "emulator": "NO_PRODUCTION_CLAIM"
       }
     },
     {
       "conditionId": "HOSTING/not-found",
       "description": "404 handling",
-      "status": "UNVERIFIED",
+      "status": "VERIFIED",
       "recipeIds": [
         "hosting/not-found"
       ],
       "fixture": "conformance/hosting-fixtures/cases.json",
-      "productionEvidence": [],
+      "productionEvidence": [
+        {
+          "alias": "pass-1",
+          "fixturePath": "conformance/hosting-production-pass-1.json",
+          "fixtureSha256": "56739920bd499ac72d85ccd262838da25e81528c5183bc340535b40ece8039cc"
+        },
+        {
+          "alias": "pass-2",
+          "fixturePath": "conformance/hosting-production-pass-2.json",
+          "fixtureSha256": "5574d57144bd47fd96d261f18ab673571489f43f169839d0d6b53153ca896bfc"
+        }
+      ],
       "fixtureCaseIds": [
         "missing",
         "404-direct",
@@ -291,54 +760,245 @@
           "v01"
         ],
         "requests": 4
+      },
+      "observedPasses": 2,
+      "passComparison": "MATCH",
+      "comparisons": {
+        "runVsRun": {
+          "rows": 4,
+          "counts": {
+            "MATCH": 0,
+            "MATCH_LAYOUT": 4,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        },
+        "strictVsPass1": {
+          "rows": 4,
+          "counts": {
+            "MATCH": 0,
+            "MATCH_LAYOUT": 4,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        },
+        "strictVsPass2": {
+          "rows": 4,
+          "counts": {
+            "MATCH": 0,
+            "MATCH_LAYOUT": 4,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        }
+      },
+      "knownDifferences": [],
+      "profiles": {
+        "strict": "MATCHES_RECORDED_CASES",
+        "emulator": "NO_PRODUCTION_CLAIM"
       }
     },
     {
       "conditionId": "HOSTING/content-types",
       "description": "Content-Type per extension, including charset, no extension and unknown extension",
-      "status": "UNVERIFIED",
+      "status": "VERIFIED",
       "recipeIds": [
         "hosting/content-types"
       ],
       "fixture": "conformance/hosting-fixtures/cases.json",
-      "productionEvidence": [],
+      "productionEvidence": [
+        {
+          "alias": "pass-1",
+          "fixturePath": "conformance/hosting-production-pass-1.json",
+          "fixtureSha256": "56739920bd499ac72d85ccd262838da25e81528c5183bc340535b40ece8039cc"
+        },
+        {
+          "alias": "pass-2",
+          "fixturePath": "conformance/hosting-production-pass-2.json",
+          "fixtureSha256": "5574d57144bd47fd96d261f18ab673571489f43f169839d0d6b53153ca896bfc"
+        }
+      ],
       "productionCorpus": {
         "versions": [
           "v01"
         ],
         "requests": 32
+      },
+      "observedPasses": 2,
+      "passComparison": "MATCH",
+      "comparisons": {
+        "runVsRun": {
+          "rows": 32,
+          "counts": {
+            "MATCH": 0,
+            "MATCH_LAYOUT": 32,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        },
+        "strictVsPass1": {
+          "rows": 32,
+          "counts": {
+            "MATCH": 0,
+            "MATCH_LAYOUT": 32,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        },
+        "strictVsPass2": {
+          "rows": 32,
+          "counts": {
+            "MATCH": 0,
+            "MATCH_LAYOUT": 32,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        }
+      },
+      "knownDifferences": [],
+      "profiles": {
+        "strict": "MATCHES_RECORDED_CASES",
+        "emulator": "NO_PRODUCTION_CLAIM"
       }
     },
     {
       "conditionId": "HOSTING/compression-vary",
       "description": "Content-Encoding and Vary for compressible and incompressible types",
-      "status": "UNVERIFIED",
+      "status": "VERIFIED",
       "recipeIds": [
         "hosting/compression-vary"
       ],
       "fixture": "conformance/hosting-fixtures/cases.json",
-      "productionEvidence": [],
+      "productionEvidence": [
+        {
+          "alias": "pass-1",
+          "fixturePath": "conformance/hosting-production-pass-1.json",
+          "fixtureSha256": "56739920bd499ac72d85ccd262838da25e81528c5183bc340535b40ece8039cc"
+        },
+        {
+          "alias": "pass-2",
+          "fixturePath": "conformance/hosting-production-pass-2.json",
+          "fixtureSha256": "5574d57144bd47fd96d261f18ab673571489f43f169839d0d6b53153ca896bfc"
+        }
+      ],
       "productionCorpus": {
         "versions": [
           "v01"
         ],
         "requests": 10
+      },
+      "observedPasses": 2,
+      "passComparison": "MATCH",
+      "comparisons": {
+        "runVsRun": {
+          "rows": 10,
+          "counts": {
+            "MATCH": 0,
+            "MATCH_LAYOUT": 10,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        },
+        "strictVsPass1": {
+          "rows": 10,
+          "counts": {
+            "MATCH": 0,
+            "MATCH_LAYOUT": 10,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 7
+        },
+        "strictVsPass2": {
+          "rows": 10,
+          "counts": {
+            "MATCH": 0,
+            "MATCH_LAYOUT": 10,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 7
+        }
+      },
+      "knownDifferences": [
+        "KD-COMPRESSION"
+      ],
+      "profiles": {
+        "strict": "MATCHES_RECORDED_CASES",
+        "emulator": "NO_PRODUCTION_CLAIM"
       }
     },
     {
       "conditionId": "HOSTING/app-association",
       "description": "appAssociation: AUTO and the /.well-known association files",
-      "status": "UNVERIFIED",
+      "status": "VERIFIED",
       "recipeIds": [
         "hosting/app-association"
       ],
       "fixture": "conformance/hosting-fixtures/cases.json",
-      "productionEvidence": [],
+      "productionEvidence": [
+        {
+          "alias": "pass-1",
+          "fixturePath": "conformance/hosting-production-pass-1.json",
+          "fixtureSha256": "56739920bd499ac72d85ccd262838da25e81528c5183bc340535b40ece8039cc"
+        },
+        {
+          "alias": "pass-2",
+          "fixturePath": "conformance/hosting-production-pass-2.json",
+          "fixtureSha256": "5574d57144bd47fd96d261f18ab673571489f43f169839d0d6b53153ca896bfc"
+        }
+      ],
       "productionCorpus": {
         "versions": [
           "v02"
         ],
         "requests": 2
+      },
+      "observedPasses": 2,
+      "passComparison": "MATCH",
+      "comparisons": {
+        "runVsRun": {
+          "rows": 2,
+          "counts": {
+            "MATCH": 2,
+            "MATCH_LAYOUT": 0,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        },
+        "strictVsPass1": {
+          "rows": 2,
+          "counts": {
+            "MATCH": 2,
+            "MATCH_LAYOUT": 0,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        },
+        "strictVsPass2": {
+          "rows": 2,
+          "counts": {
+            "MATCH": 2,
+            "MATCH_LAYOUT": 0,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        }
+      },
+      "knownDifferences": [],
+      "profiles": {
+        "strict": "MATCHES_RECORDED_CASES",
+        "emulator": "NO_PRODUCTION_CLAIM"
       }
     }
   ],
@@ -346,11 +1006,16 @@
     "status": "OFFLINE_PASS",
     "suite": "conformance/src/hosting/run.mjs",
     "matrix": "conformance/HOSTING-MATRIX.md",
-    "scope": "82 HTTP cases and 138 glob pairs; no production evidence"
+    "scope": "82 HTTP cases and 138 glob pairs against the official emulator (emulator profile)",
+    "strictReplay": {
+      "test": "conformance/src/hosting-production/strict-replay.test.mjs",
+      "command": "FIREEMU_BIN=<fireemu> node --test conformance/src/hosting-production/strict-replay.test.mjs",
+      "requires": "the committed comparisons equal the ones recomputed on the binary"
+    }
   },
   "productionProposal": "spec/compatibility/hosting-production-packet.md",
   "recordingPolicy": {
-    "observedPasses": 0,
+    "observedPasses": 2,
     "requiredPasses": 2,
     "waiver": null
   },
@@ -401,16 +1066,107 @@
   "corpusContentSha256": "fa57f2b080426de0ea30e5b9758f117481a770561e625903974c4672fca43150",
   "recorder": "conformance/src/hosting-production/record.mjs",
   "judge": "conformance/src/hosting-production/judge.mjs",
-  "recordings": [],
+  "recordings": [
+    {
+      "alias": "pass-1",
+      "run": "658bb2",
+      "envelope": "HOSTING-PRODUCTION-V4-20261111",
+      "fixturePath": "conformance/hosting-production-pass-1.json",
+      "fixtureSha256": "56739920bd499ac72d85ccd262838da25e81528c5183bc340535b40ece8039cc",
+      "corpusSha256": "fa57f2b080426de0ea30e5b9758f117481a770561e625903974c4672fca43150"
+    },
+    {
+      "alias": "pass-2",
+      "run": "9a8d57",
+      "envelope": "HOSTING-PRODUCTION-V5-20261111",
+      "fixturePath": "conformance/hosting-production-pass-2.json",
+      "fixtureSha256": "5574d57144bd47fd96d261f18ab673571489f43f169839d0d6b53153ca896bfc",
+      "corpusSha256": "fa57f2b080426de0ea30e5b9758f117481a770561e625903974c4672fca43150"
+    }
+  ],
   "limitations": [
     "Observations come from preview channels only; the live channel is never touched.",
     "Edge-set headers (date, age, via, x-cache*, x-served-by, x-timer, server, alt-svc) are recorded and never compared; any other header that is neither compared nor volatile must be named by the review.",
     "The reserved initialization bodies keep byte count, line count and, for JSON, key order with value types and byte lengths; no value is retained.",
     "ETag and Last-Modified are compared by form, not by value.",
-    "The redirect `type` default of the CLI is not observable through the REST API, which requires a status code."
+    "The redirect `type` default of the CLI is not observable through the REST API, which requires a status code.",
+    "The strict profile matches the recorded cases; a request outside the corpus is answered by the same rules, not by an observation.",
+    "Compression (gzip, br), the 21,376-byte default 404 page body, the hosted SDK files, the init.json key set beyond apiKey and projectId and the parent-directory 302 are known differences (known-differences.json)."
   ],
   "outOfScope": [
     "Production deployment of functions and live upstream routing are not executed (owner ledger 2435).",
     "No condition is promoted from official-emulator behavior or documentation alone; the NOT_COMPARED entries are excluded from the parent claim, not verified."
+  ],
+  "comparisons": {
+    "runVsRun": {
+      "path": "conformance/hosting-production-run-comparison.json",
+      "sha256": "ecc0caaa2bd2fc32e833eedf014233c355ac2784dbb9f8b03094cdc2ef52c062",
+      "summary": {
+        "MATCH": 78,
+        "MATCH_LAYOUT": 123,
+        "MISMATCH": 0,
+        "UNKNOWN": 0
+      }
+    },
+    "strictVsPass1": {
+      "path": "conformance/hosting-production-strict-vs-pass-1.json",
+      "sha256": "410621b6122a45b0a40ffa11f9baedc2062a1063bdaeef0466c07db538408da1",
+      "summary": {
+        "MATCH": 75,
+        "MATCH_LAYOUT": 126,
+        "MISMATCH": 0,
+        "UNKNOWN": 0
+      }
+    },
+    "strictVsPass2": {
+      "path": "conformance/hosting-production-strict-vs-pass-2.json",
+      "sha256": "5575fc7a212c88c18a3e681c7c739b5799c98c9f04c143a01490f00c172365c2",
+      "summary": {
+        "MATCH": 75,
+        "MATCH_LAYOUT": 126,
+        "MISMATCH": 0,
+        "UNKNOWN": 0
+      }
+    }
+  },
+  "knownDifferences": {
+    "path": "conformance/src/hosting-production/known-differences.json",
+    "sha256": "1d06de482d2ff8fb6568410484505873362dbf138cc43143af88c52d342626dc",
+    "entries": [
+      "KD-COMPRESSION",
+      "KD-DEFAULT-404-BODY",
+      "KD-SAFETY-ORIGIN-REDIRECT",
+      "KD-SDK-FILES",
+      "KD-INIT-KEYS",
+      "KD-AUTH-HANDLER-PAGE"
+    ]
+  },
+  "headerExclusions": [
+    {
+      "headers": [
+        "strict-transport-security"
+      ],
+      "reason": "Production sends it on every https answer; a local http listener does not. Recorded, never compared.",
+      "authority": "coordinator ruling 17 (2026-11-11)"
+    },
+    {
+      "headers": [
+        "x-robots-tag"
+      ],
+      "reason": "The preview channel adds noindex to every answer (195 of 201 rows); the live site does not and a local listener has no channel. Recorded, never compared.",
+      "authority": "coordinator ruling 17 (2026-11-11)"
+    },
+    {
+      "headers": [
+        "content-security-policy-report-only",
+        "cross-origin-opener-policy",
+        "cross-origin-resource-policy",
+        "expires",
+        "report-to",
+        "x-xss-protection"
+      ],
+      "reason": "Carried only by the two production-served SDK file rows, which are a known difference (KD-SDK-FILES). Recorded, never compared.",
+      "authority": "coordinator ruling 17 (2026-11-11)"
+    }
   ]
 }

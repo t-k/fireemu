@@ -1,7 +1,7 @@
 //! Tests of `analyze` (the pattern rewrite and validation) and of the ASCII-class rewrite against
 //! an oracle written as plain character predicates, checked against the recorded rows first.
 
-use super::analysis::analyze;
+use super::analysis::{analyze, apply_edits, MAX_PATTERN_BYTES, MAX_REWRITTEN_BYTES};
 use super::replay::{outcome, rows};
 use fireemu_core_firestore::pipeline_exec::{RegexError, Unrecorded};
 use proptest::prelude::*;
@@ -82,6 +82,7 @@ fn inline_flags_are_resolved_into_ascii_semantics() {
         ("(?i)[a-c]", "[a-cA-C]"),
         ("(?i)[^k]", "[^kK]"),
         ("(?i)[x-z0]", "[x-zX-Z0]"),
+        ("(?i)[a-z]", "[a-zA-Z]"),
         ("(?i)[Z-a]", "[Z-aAz]"),
     ] {
         assert_eq!(rewritten(pattern, EMULATOR), expected, "{pattern}");
@@ -128,6 +129,8 @@ fn posix_classes_and_multiline_are_syntax_errors_in_both_profiles() {
             "(?m:a)",
             "(?im:a)",
             "a(?m)b",
+            "(?i:(?m)a)",
+            "((?m)a)",
         ] {
             assert_eq!(
                 analyze(pattern, mode).map(|_| ()),
@@ -515,4 +518,154 @@ fn the_unicode_property_classes_stay_unicode() {
             strings(&["\u{661}".to_owned(), "1".to_owned()])
         );
     }
+}
+
+// Preprocessing is linear in the pattern and bounded before it runs.
+
+/// The patterns of every recorded row and some more, with what `analyze` answered before the
+/// edits were applied in one pass (generated from the repeated-`replace_range` implementation).
+#[test]
+fn the_single_pass_rewrite_gives_the_output_of_the_previous_rewrite_on_every_fixture_pattern() {
+    let golden: serde_json::Value =
+        serde_json::from_str(include_str!("rewritten_golden.json")).unwrap();
+    let mut checked = 0;
+    for (key, mode) in [("strict", STRICT), ("emulator", EMULATOR)] {
+        for entry in golden[key].as_array().unwrap() {
+            let pattern = entry["pattern"].as_str().unwrap();
+            match analyze(pattern, mode) {
+                Ok(analysis) => {
+                    assert_eq!(entry["ok"], analysis.pattern.as_str(), "{key} {pattern:?}");
+                    assert_eq!(
+                        entry["groups"], analysis.capture_groups,
+                        "{key} {pattern:?}"
+                    );
+                }
+                Err(error) => assert_eq!(entry["err"], format!("{error:?}"), "{key} {pattern:?}"),
+            }
+            checked += 1;
+        }
+    }
+    assert!(checked >= 2 * 68, "{checked}");
+    // Every recorded pattern is in the golden table.
+    for row in rows() {
+        assert!(
+            golden["strict"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|entry| entry["pattern"] == row.pattern.as_str()),
+            "{}",
+            row.label
+        );
+    }
+}
+
+/// The edits applied from the end with `replace_range`, the way the first version did it.
+fn apply_edits_by_replace_range(pattern: &str, edits: &[(usize, usize, String)]) -> String {
+    let mut result = pattern.to_owned();
+    for (start, end, replacement) in edits.iter().rev() {
+        result.replace_range(*start..*end, replacement);
+    }
+    result
+}
+
+fn edit_case() -> impl Strategy<Value = (String, Vec<(usize, usize, String)>)> {
+    (
+        prop::collection::vec(
+            prop::sample::select(vec!['a', 'b', '\\', '[', 'é', '☃', '😀']),
+            0..24,
+        ),
+        prop::collection::vec(
+            (
+                any::<prop::sample::Index>(),
+                any::<prop::sample::Index>(),
+                "[a-z\\[\\]^0-9é]{0,8}",
+            ),
+            0..6,
+        ),
+    )
+        .prop_map(|(chars, picks)| {
+            let text: String = chars.iter().collect();
+            let mut bounds: Vec<usize> = text.char_indices().map(|(i, _)| i).collect();
+            bounds.push(text.len());
+            let mut points: Vec<usize> = picks
+                .iter()
+                .flat_map(|(a, b, _)| {
+                    [bounds[a.index(bounds.len())], bounds[b.index(bounds.len())]]
+                })
+                .collect();
+            points.sort_unstable();
+            let edits = picks
+                .iter()
+                .zip(points.chunks(2))
+                .map(|((_, _, replacement), pair)| (pair[0], pair[1], replacement.clone()))
+                .collect();
+            (text, edits)
+        })
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(256))]
+
+    #[test]
+    fn applying_edits_in_one_pass_equals_applying_them_one_by_one(case in edit_case()) {
+        let (text, edits) = case;
+        // The edits are ordered and do not overlap (points are sorted and paired).
+        prop_assert!(edits.windows(2).all(|pair| pair[0].1 <= pair[1].0));
+        prop_assert_eq!(
+            apply_edits(&text, &edits),
+            apply_edits_by_replace_range(&text, &edits)
+        );
+    }
+}
+
+#[test]
+fn ten_thousand_consecutive_shorthand_tokens_rewrite_quickly() {
+    let pattern = r"\w".repeat(10_000);
+    let started = std::time::Instant::now();
+    for mode in BOTH {
+        let analysis = analyze(&pattern, mode).unwrap();
+        assert_eq!(analysis.pattern, "[0-9A-Za-z_]".repeat(10_000));
+    }
+    // The rewrite itself takes a few milliseconds; the bound only catches a quadratic blow-up.
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(5),
+        "{:?}",
+        started.elapsed()
+    );
+    for mode in BOTH {
+        assert_eq!(
+            outcome("regex_match", &"a".repeat(10_000), &pattern, mode),
+            json!({"kind": "bool", "value": true})
+        );
+    }
+}
+
+#[test]
+fn a_pattern_over_the_length_limit_or_expanding_past_the_rewritten_limit_is_a_resource_limit() {
+    for mode in BOTH {
+        assert!(analyze(&"a".repeat(MAX_PATTERN_BYTES), mode).is_ok());
+        assert_eq!(
+            analyze(&"a".repeat(MAX_PATTERN_BYTES + 1), mode).map(|_| ()),
+            Err(RegexError::ResourceLimit)
+        );
+        // An over-long pattern is refused before it is parsed, so an invalid one is no different.
+        assert_eq!(
+            analyze(&"(".repeat(MAX_PATTERN_BYTES + 1), mode).map(|_| ()),
+            Err(RegexError::ResourceLimit)
+        );
+        // `\S` is two bytes and becomes 21: this pattern is within the length limit and its
+        // rewrite is not.
+        let wide = r"\S".repeat(MAX_PATTERN_BYTES / 2);
+        assert!(wide.len() <= MAX_PATTERN_BYTES);
+        assert_eq!(
+            analyze(&wide, mode).map(|_| ()),
+            Err(RegexError::ResourceLimit)
+        );
+        // Just under the rewritten limit is accepted.
+        let fits = r"\S".repeat(MAX_REWRITTEN_BYTES / 21);
+        let analysis = analyze(&fits, mode).unwrap();
+        assert!(analysis.pattern.len() <= MAX_REWRITTEN_BYTES);
+    }
+    assert!(MAX_PATTERN_BYTES < MAX_REWRITTEN_BYTES);
 }

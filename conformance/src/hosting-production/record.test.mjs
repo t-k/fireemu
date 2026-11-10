@@ -589,6 +589,7 @@ test("an unknown create stays open through a recovery that lists nothing; admiss
   const row = lastRow(r);
   assert.equal(row.event, "recovery-read");
   assert.deepEqual(row.openUnknownCreates, ["channel:hst-abc123-v01"]);
+  assert.equal(row.outcome, "needs-recovery");
   assert.throws(() => admitFor(r), /does not close its run/);
   // A second recovery reads the same open create from the first.
   assert.deepEqual((await recoverHosting({}, r.deps)).openUnknownCreates, [
@@ -607,15 +608,20 @@ test("a create that an own read shows and a 2xx delete removes is settled; one n
     JSON.stringify(startedRow),
     JSON.stringify(
       endedRow({
-        openUnknownCreates: ["channel:hst-abc123-v01", "version:v01", "channel:hst-abc123-v09"],
+        openUnknownCreates: [
+          "channel:hst-abc123-v01",
+          "version:v01",
+          "channel:hst-abc123-v09",
+          "version:v05",
+        ],
       }),
     ),
   );
   const recovered = await recoverHosting({}, r.deps);
   assert.deepEqual(
     recovered.openUnknownCreates,
-    ["channel:hst-abc123-v09"],
-    "v09 was never listed",
+    ["channel:hst-abc123-v09", "version:v05"],
+    "v09 and v05 were never listed",
   );
   assert.equal(recovered.outcome, "needs-recovery");
 });
@@ -954,6 +960,7 @@ test("a version create that was never applied is still unknown: absence does not
     assert.equal(r.result.outcome, "needs-recovery");
     assert.equal(terminal(r).closureReady, false);
     assert.ok(resultOf(r).needsRecovery.some((entry) => /version create unknown/.test(entry)));
+    assert.deepEqual(terminal(r).openUnknownCreates, ["version:v01"]);
   }
 });
 
@@ -1068,4 +1075,13 @@ test("a site whose version list already runs past two pages stops the run before
     if (refused) await assert.rejects(attempt, /runs past 2 pages/);
     else assert.equal((await attempt).result.closureReady, true, `${pages} pages`);
   }
+});
+
+test("an unknown delete is carried in the terminal row for the recovery and the coordinator", async () => {
+  const r = await run({ overrides: [fault(channelDelete, reply(500))] });
+  assert.equal(r.result.outcome, "needs-recovery");
+  assert.ok(
+    terminal(r).residualEntries.some((entry) => /channel delete unknown \(500\)/.test(entry)),
+  );
+  assert.deepEqual(terminal(r).openUnknownCreates, []);
 });

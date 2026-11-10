@@ -8,11 +8,18 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+## [0.48.0] - 2026-11-10
+
 ### Fixed
 
 - Emulator profile: an ID token firebase-tools 15.28.2 accepts is no longer refused for its time claims, and the profile now follows its `parseIdToken` (`operations.js:1727`) for revocation. The only time claim compared is `iat`, and only for an account that has a `validSince`: `iat` is read as JavaScript's `Number(iat)` reads it (a numeric string, a fraction, `Infinity`, a one-element array, `null` and `false` compare as the numbers they are), a value that is no number fails the comparison with `TOKEN_EXPIRED`, and a usable `auth_time` never stands in for it. `auth_time` is never read, and `iat` is not read for an account without a `validSince`, so a token with neither is accepted for an anonymous, custom-token, federated or passwordless Admin-created account. The accounts with a `validSince` are those firebase-tools gives one: a password was set (also a removed one), tokens were revoked (an email change through `accounts:update` and a disable revoke too), or the account was imported. `exp` is still checked when it is a number after `Number(exp)` (`false`, `null` and `[1]` are 0 and 1, `"-Infinity"` is expired; 300 s allowance on Identity Toolkit, 30 s on Firestore), and only an `exp` that is missing or `NaN` is none. This applies to Identity Toolkit, Firestore Rules and Storage Rules. The `strict` profile still requires an integer `iat`, `auth_time` and `exp`. Known difference: a fireemu-issued token refreshed from an older sign-in carries the old `auth_time`; the emulator profile now judges it by its `iat`, as firebase-tools does.
 - Functions: a request that sends the `Origin` header twice (or more) is passed to the function in both profiles, as the SDK and production do, instead of being refused with a 403 `forbidden origin`; every field is forwarded in wire order and Node joins them with `, ` as for any repeated header. A browser never sends two, the function's own CORS settings decide what it answers, and the `Host` check against DNS rebinding is unchanged and still runs first. The Eventarc and Cloud Tasks listeners keep refusing a repeated `Origin`.
 - Strict profile: the client project configuration (`GET /v1/projects`) of a request that names a tenant now reports the parent project's live `authorizedDomains`, the list tenant action links are checked against, instead of the tenant store's own default list. The Firebase JS SDK sends no tenant on this call and production's request has no tenant field, so the answer is the project's. A tenant cannot change what the configuration reports. The emulator profile is unchanged; the official emulator reads no tenant there. Production's answer to a `tenantId` query on this route was not recorded.
+
+### Changed
+
+- The repository moved to https://github.com/fireemu/fireemu and the documentation site to https://fireemu.github.io/fireemu/. The old repository URL redirects; the old site URL (t-k.github.io/fireemu) no longer serves the site. Package metadata (`repository`, `homepage`, `bugs`) names the new locations.
+- Pub/Sub: the emulator profile accepts topic `kmsKeyName` and `tags`, stores them as sent, and returns them over REST and gRPC (measured on the official emulator, pubsub-emulator 0.8.35, 2026-11-10: it stores any key name and any tags, including empty keys and values, unvalidated, and refuses every `UpdateTopic` mask). `UpdateTopic` applies the `kms_key_name` mask (a mask that names it while the topic carries none clears it); a mask that names `tags` is answered `INVALID_ARGUMENT` because tags are immutable. Nothing is enforced or validated. Before, both profiles refused both fields with `UNIMPLEMENTED`. The strict profile still refuses them, now with a message that says why (production's answer is not recorded and Fireemu has no Cloud KMS or tag inventory to check against) and how to proceed (leave the field out, or use `profile = "emulator"`).
 
 ## [0.47.0] - 2026-11-10
 
@@ -1258,7 +1265,8 @@ Security Rules (FS-RULES): behavior below was measured against a real Firestore 
 - The `strict` and `firebase` compatibility profiles, the Capability Manifest, and the Compatibility Contract pinned to firebase-tools 15.28.2.
 - `fireemu init`, `up`, `exec`, `emulators:export`, `doctor`, and `capabilities` commands, with the official `emulators:start` and `emulators:exec` spellings as aliases.
 
-[Unreleased]: https://github.com/t-k/fireemu/compare/v0.47.0...HEAD
+[Unreleased]: https://github.com/fireemu/fireemu/compare/v0.48.0...HEAD
+[0.48.0]: https://github.com/fireemu/fireemu/compare/v0.47.0...v0.48.0
 [0.47.0]: https://github.com/t-k/fireemu/compare/v0.46.0...v0.47.0
 [0.46.0]: https://github.com/t-k/fireemu/compare/v0.45.0...v0.46.0
 [0.45.0]: https://github.com/t-k/fireemu/compare/v0.44.0...v0.45.0

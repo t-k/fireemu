@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 import { npmReadme, prepareLauncher, readmeRef, repositoryWebUrl } from "./prepare-launcher.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const REPO = "https://github.com/t-k/fireemu";
+const REPO = "https://github.com/fireemu/fireemu";
 const directories = new Set(["tools/bench", "docs"]);
 const pathKind = (path) =>
   path === "missing.md" ? undefined : directories.has(path.replace(/\/$/, "")) ? "directory" : "file";
@@ -53,7 +53,7 @@ test("absolute URLs, in-page anchors and mailto links are left unchanged", () =>
 test("relative images point at the raw file at the release tag", () => {
   assert.equal(
     body("![logo](docs/logo.png)"),
-    "![logo](https://raw.githubusercontent.com/t-k/fireemu/v1.2.3/docs/logo.png)",
+    "![logo](https://raw.githubusercontent.com/fireemu/fireemu/v1.2.3/docs/logo.png)",
   );
 });
 
@@ -136,8 +136,8 @@ test("the ref is the release tag, or main for an unstamped development package",
 });
 
 test("the repository URL comes from the package manifest", () => {
-  assert.equal(repositoryWebUrl({ repository: { url: "git+https://github.com/t-k/fireemu.git" } }), REPO);
-  assert.equal(repositoryWebUrl({ repository: "https://github.com/t-k/fireemu" }), REPO);
+  assert.equal(repositoryWebUrl({ repository: { url: "git+https://github.com/fireemu/fireemu.git" } }), REPO);
+  assert.equal(repositoryWebUrl({ repository: "https://github.com/fireemu/fireemu" }), REPO);
   assert.throws(() => repositoryWebUrl({}), /repository/);
 });
 
@@ -151,14 +151,14 @@ test("prepareLauncher writes the generated page, the license and the notices", (
     writeFileSync(join(root, "THIRD_PARTY_LICENSES.txt"), "third-party notices\n");
     writeFileSync(
       join(root, "npm", "fireemu", "package.json"),
-      JSON.stringify({ version: "2.0.0", repository: { url: "git+https://github.com/t-k/fireemu.git" } }),
+      JSON.stringify({ version: "2.0.0", repository: { url: "git+https://github.com/fireemu/fireemu.git" } }),
     );
 
     prepareLauncher(root);
 
     const page = readFileSync(join(root, "npm", "fireemu", "README.md"), "utf8");
-    assert.match(page, /See \[docs\]\(https:\/\/github\.com\/t-k\/fireemu\/tree\/v2\.0\.0\/docs\)/);
-    assert.match(page, /\[license\]\(https:\/\/github\.com\/t-k\/fireemu\/blob\/v2\.0\.0\/LICENSE\)/);
+    assert.match(page, /See \[docs\]\(https:\/\/github\.com\/fireemu\/fireemu\/tree\/v2\.0\.0\/docs\)/);
+    assert.match(page, /\[license\]\(https:\/\/github\.com\/fireemu\/fireemu\/blob\/v2\.0\.0\/LICENSE\)/);
     assert.equal(readFileSync(join(root, "npm", "fireemu", "LICENSE"), "utf8"), "project license\n");
   } finally {
     rmSync(root, { recursive: true, force: true });

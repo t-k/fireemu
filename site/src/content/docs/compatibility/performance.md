@@ -16,7 +16,7 @@ The following results come from one `standard` run at commit `f3b942c`. Ratios a
 
 The 95% confidence interval for the startup-time ratio is [21.4, 21.8]. For the peak-memory ratio (official emulator divided by Fireemu) it is [10.2, 11.1].
 
-See [benchmark.yml](https://github.com/t-k/fireemu/blob/main/.github/workflows/benchmark.yml) for the workflow and [`tools/bench/`](https://github.com/t-k/fireemu/tree/main/tools/bench) for the benchmark.
+See [benchmark.yml](https://github.com/fireemu/fireemu/blob/main/.github/workflows/benchmark.yml) for the workflow and [`tools/bench/`](https://github.com/fireemu/fireemu/tree/main/tools/bench) for the benchmark.
 
 ## Applying results to a test suite
 

@@ -11,4 +11,4 @@ pnpm -C site preview   # serves site/dist locally
 
 The compatibility pages are generated at build time from `spec/compatibility/contract.json`, `spec/compatibility/closure/*.json` and `crates/fireemu/src/capabilities.json`. A new production area, surface state or capability prefix fails the build until `src/data/compat.mjs` describes it.
 
-`FIREEMU_SITE_URL` and `FIREEMU_SITE_BASE` override the deployment URL (default `https://t-k.github.io` and `/fireemu`).
+`FIREEMU_SITE_URL` and `FIREEMU_SITE_BASE` override the deployment URL (default `https://fireemu.github.io` and `/fireemu`).

@@ -13,7 +13,7 @@ use fireemu_core_types::determinism::{DeterministicRng, SplitMix64};
 use fireemu_core_types::resources::{Gauge, RetentionRoot, RootBudget, ServiceResources, Unit};
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 
-use crate::configuration::{MessageStoragePolicy, TopicUpdate};
+use crate::configuration::{MessageStoragePolicy, TopicOptions, TopicUpdate};
 use crate::error::{PubSubError, Result};
 use crate::message::{PubsubMessage, StoredMessage};
 use crate::name::{
@@ -116,6 +116,8 @@ struct TopicEntry {
     incarnation: u64,
     message_retention_duration: Option<LogicalDuration>,
     message_storage_policy: Option<MessageStoragePolicy>,
+    kms_key_name: String,
+    tags: BTreeMap<String, String>,
 }
 
 /// Mailbox-only observers; callbacks must never acquire broker or clock locks.
@@ -661,17 +663,29 @@ impl PubSubState {
         labels: BTreeMap<String, String>,
         message_retention_duration: Option<LogicalDuration>,
     ) -> Result<()> {
-        self.create_topic_with_storage_policy(name, labels, message_retention_duration, None)
+        self.create_topic_with_options(
+            name,
+            labels,
+            TopicOptions {
+                message_retention_duration,
+                ..Default::default()
+            },
+        )
     }
 
-    /// Creates a topic with its retention and message storage policy; neither is enforced.
-    pub fn create_topic_with_storage_policy(
+    /// Creates a topic with options kept as sent.
+    pub fn create_topic_with_options(
         &mut self,
         name: TopicName,
         labels: BTreeMap<String, String>,
-        message_retention_duration: Option<LogicalDuration>,
-        message_storage_policy: Option<MessageStoragePolicy>,
+        options: TopicOptions,
     ) -> Result<()> {
+        let TopicOptions {
+            message_retention_duration,
+            message_storage_policy,
+            kms_key_name,
+            tags,
+        } = options;
         let _changed = self.delivery_change();
         if let Some(duration) = message_retention_duration {
             crate::configuration::validate_retention(duration)?;
@@ -701,6 +715,8 @@ impl PubSubState {
                 incarnation: self.topic_counter,
                 message_retention_duration,
                 message_storage_policy,
+                kms_key_name,
+                tags,
             },
         );
         Ok(())
@@ -731,7 +747,7 @@ impl PubSubState {
             name,
             TopicUpdate {
                 labels: Some(labels),
-                message_storage_policy: None,
+                ..Default::default()
             },
             strict,
         )
@@ -761,6 +777,9 @@ impl PubSubState {
         if let Some(policy) = update.message_storage_policy {
             topic.message_storage_policy = policy;
         }
+        if let Some(kms) = update.kms_key_name {
+            topic.kms_key_name = kms;
+        }
         Ok(())
     }
 
@@ -769,6 +788,22 @@ impl PubSubState {
         self.topics
             .get(&name.to_full())
             .map(|topic| topic.message_storage_policy.as_ref())
+            .ok_or_else(|| PubSubError::not_found(format!("topic {} not found", name.to_full())))
+    }
+
+    /// The key name stored with a topic, or `NOT_FOUND`.
+    pub fn topic_kms_key_name(&self, name: &TopicName) -> Result<&str> {
+        self.topics
+            .get(&name.to_full())
+            .map(|topic| topic.kms_key_name.as_str())
+            .ok_or_else(|| PubSubError::not_found(format!("topic {} not found", name.to_full())))
+    }
+
+    /// The tags stored with a topic, or `NOT_FOUND`.
+    pub fn topic_tags(&self, name: &TopicName) -> Result<&BTreeMap<String, String>> {
+        self.topics
+            .get(&name.to_full())
+            .map(|topic| &topic.tags)
             .ok_or_else(|| PubSubError::not_found(format!("topic {} not found", name.to_full())))
     }
 
@@ -2075,6 +2110,25 @@ mod tests {
 
     proptest::proptest! {
         #![proptest_config(proptest::test_runner::Config::with_cases(48))]
+        #[test]
+        fn topic_key_and_tags_round_trip_and_are_removed_on_delete(
+            kms in ".{0,12}",
+            tags in proptest::collection::btree_map(".{0,6}", ".{0,6}", 0..5),
+        ) {
+            let mut state = PubSubState::new(5);
+            let name = topic("demo-app", "roundtrip");
+            let missing = topic("demo-app", "missing");
+            state.create_topic_with_options(name.clone(), BTreeMap::new(), TopicOptions { kms_key_name: kms.clone(), tags: tags.clone(), ..Default::default() }).unwrap();
+            proptest::prop_assert_eq!(state.topic_kms_key_name(&name).unwrap(), kms.as_str());
+            proptest::prop_assert_eq!(state.topic_tags(&name).unwrap(), &tags);
+            proptest::prop_assert_eq!(state.topic_kms_key_name(&missing).unwrap_err().code(), crate::Code::NotFound);
+            proptest::prop_assert_eq!(state.topic_tags(&missing).unwrap_err().code(), crate::Code::NotFound);
+            state.delete_topic(&name).unwrap();
+            state.create_topic(name.clone(), BTreeMap::new()).unwrap();
+            proptest::prop_assert_eq!(state.topic_kms_key_name(&name).unwrap(), "");
+            proptest::prop_assert!(state.topic_tags(&name).unwrap().is_empty());
+        }
+
         /// A sequence of updates behaves like a plain record with two optional replacements, a
         /// strict label failure changes nothing, and neighbours, identity and retention never move.
         #[test]
@@ -2084,6 +2138,7 @@ mod tests {
                 (
                     proptest::option::of(proptest::collection::btree_map("[a-z]{1,4}", "[a-z0-9]{0,4}", 0..3)),
                     proptest::option::of(policy_strategy()),
+                    proptest::option::of(".{0,12}"),
                     proptest::bool::ANY,
                     proptest::bool::ANY,
                 ),
@@ -2094,21 +2149,23 @@ mod tests {
             let name = topic("demo-app", "policy");
             let other = topic("demo-app", "neighbour");
             let retained = Some(LogicalDuration::from_seconds(3600));
+            let tags = BTreeMap::from([(String::from("tag"), String::from("value"))]);
             state
-                .create_topic_with_storage_policy(name.clone(), BTreeMap::new(), retained, initial_policy.clone())
+                .create_topic_with_options(name.clone(), BTreeMap::new(), TopicOptions { message_retention_duration: retained, message_storage_policy: initial_policy.clone(), tags: tags.clone(), ..Default::default() })
                 .unwrap();
             let other_policy = Some(MessageStoragePolicy {
                 allowed_persistence_regions: vec!["us-central1".to_owned()],
                 enforce_in_transit: true,
             });
             state
-                .create_topic_with_storage_policy(other.clone(), BTreeMap::new(), None, other_policy.clone())
+                .create_topic_with_options(other.clone(), BTreeMap::new(), TopicOptions { message_storage_policy: other_policy.clone(), kms_key_name: "neighbour".to_owned(), tags: tags.clone(), ..Default::default() })
                 .unwrap();
             let incarnation = state.topics[&name.to_full()].incarnation;
+            let mut model_kms = String::new();
             let mut model_labels = BTreeMap::new();
             let mut model_policy = initial_policy;
             proptest::prop_assert_eq!(state.topic_storage_policy(&name).unwrap(), model_policy.as_ref());
-            for (labels, policy, poison, strict) in steps {
+            for (labels, policy, kms, poison, strict) in steps {
                 let mut labels = labels;
                 if poison {
                     if let Some(labels) = labels.as_mut() {
@@ -2117,7 +2174,7 @@ mod tests {
                 }
                 let result = state.update_topic(
                     &name,
-                    TopicUpdate { labels: labels.clone(), message_storage_policy: policy.clone() },
+                    TopicUpdate { labels: labels.clone(), message_storage_policy: policy.clone(), kms_key_name: kms.clone() },
                     strict,
                 );
                 let refused = strict && labels.as_ref().is_some_and(|labels| labels.contains_key("Bad"));
@@ -2129,9 +2186,14 @@ mod tests {
                     if let Some(policy) = policy {
                         model_policy = policy;
                     }
+                    if let Some(kms) = kms { model_kms = kms; }
                 }
                 proptest::prop_assert_eq!(state.topic_labels(&name).unwrap(), &model_labels);
                 proptest::prop_assert_eq!(state.topic_storage_policy(&name).unwrap(), model_policy.as_ref());
+                proptest::prop_assert_eq!(state.topic_kms_key_name(&name).unwrap(), model_kms.as_str());
+                proptest::prop_assert_eq!(state.topic_tags(&name).unwrap(), &tags);
+                proptest::prop_assert_eq!(state.topic_kms_key_name(&other).unwrap(), "neighbour");
+                proptest::prop_assert_eq!(state.topic_tags(&other).unwrap(), &tags);
                 proptest::prop_assert_eq!(state.topic_retention(&name).unwrap(), retained);
                 proptest::prop_assert_eq!(state.topics[&name.to_full()].incarnation, incarnation);
                 proptest::prop_assert_eq!(state.topic_storage_policy(&other).unwrap(), other_policy.as_ref());

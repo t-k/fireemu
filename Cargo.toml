@@ -39,11 +39,11 @@ members = [
 ]
 
 [workspace.package]
-version = "0.47.0"
+version = "0.48.0"
 edition = "2021"
 rust-version = "1.85"
 license = "Apache-2.0"
-repository = "https://github.com/t-k/fireemu"
+repository = "https://github.com/fireemu/fireemu"
 publish = false
 
 [workspace.lints.rust]

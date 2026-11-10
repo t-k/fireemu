@@ -2400,6 +2400,7 @@ fn fake_regex(
     subject: &str,
     pattern: &str,
     operation: RegexOperation,
+    _: Unrecorded,
 ) -> Result<RegexResult, RegexError> {
     assert_eq!((subject, pattern), ("abc", "b"));
     Ok(match operation {
@@ -2464,8 +2465,13 @@ fn regex_port_pict_generated_cases() {
 }
 
 #[test]
-fn regex_invalid_inputs_and_unobserved_grammar_never_call_the_resolver() {
-    fn unexpected(_: &str, _: &str, _: RegexOperation) -> Result<RegexResult, RegexError> {
+fn regex_invalid_inputs_never_call_the_resolver() {
+    fn unexpected(
+        _: &str,
+        _: &str,
+        _: RegexOperation,
+        _: Unrecorded,
+    ) -> Result<RegexResult, RegexError> {
         panic!("invalid input reached the resolver");
     }
     let cx = Context {
@@ -2482,7 +2488,6 @@ fn regex_invalid_inputs_and_unobserved_grammar_never_call_the_resolver() {
         evaluate(&[int(1), text("b")]),
         wrong("regex_contains", "String", "LONG")
     );
-    assert!(is_unobserved(&evaluate(&[text("1"), text(r"\d")])));
 }
 
 #[test]
@@ -2566,14 +2571,29 @@ fn regex_resolver_reaches_nested_and_blocking_stages() {
 
 #[test]
 fn regex_port_maps_syntax_resource_and_incompatible_results() {
-    fn invalid_syntax(_: &str, _: &str, _: RegexOperation) -> Result<RegexResult, RegexError> {
+    fn invalid_syntax(
+        _: &str,
+        _: &str,
+        _: RegexOperation,
+        _: Unrecorded,
+    ) -> Result<RegexResult, RegexError> {
         Err(RegexError::InvalidSyntax)
     }
-    fn exhausted(_: &str, _: &str, _: RegexOperation) -> Result<RegexResult, RegexError> {
+    fn exhausted(
+        _: &str,
+        _: &str,
+        _: RegexOperation,
+        _: Unrecorded,
+    ) -> Result<RegexResult, RegexError> {
         Err(RegexError::ResourceLimit)
     }
     #[allow(clippy::unnecessary_wraps)]
-    fn wrong_result(_: &str, _: &str, _: RegexOperation) -> Result<RegexResult, RegexError> {
+    fn wrong_result(
+        _: &str,
+        _: &str,
+        _: RegexOperation,
+        _: Unrecorded,
+    ) -> Result<RegexResult, RegexError> {
         Ok(RegexResult::Match(None))
     }
     let call = |resolver: RegexResolver, mode| {
@@ -2595,6 +2615,97 @@ fn regex_port_maps_syntax_resource_and_incompatible_results() {
         assert!(is_unobserved(&call(exhausted, mode)));
         assert!(is_unobserved(&call(wrong_result, mode)));
     }
+}
+
+#[test]
+fn regex_resolver_receives_profile_and_maps_recorded_errors() {
+    fn profile(
+        _: &str,
+        _: &str,
+        _: RegexOperation,
+        mode: Unrecorded,
+    ) -> Result<RegexResult, RegexError> {
+        match mode {
+            Unrecorded::Refuse => Err(RegexError::Unobserved),
+            Unrecorded::OfficialEmulator => Ok(RegexResult::Boolean(true)),
+        }
+    }
+    fn too_many(
+        _: &str,
+        _: &str,
+        _: RegexOperation,
+        _: Unrecorded,
+    ) -> Result<RegexResult, RegexError> {
+        Err(RegexError::TooManyCaptureGroups)
+    }
+    let call = |name: &'static str, resolver: RegexResolver, mode| {
+        let runtime = RuntimeContext {
+            regex_resolver: Some(resolver),
+            ..RuntimeContext::default()
+        };
+        let cx = Context {
+            unrecorded: mode,
+            condition: false,
+            runtime: &runtime,
+        };
+        (function(name).unwrap().eval)(&[text("abc"), text("b")], cx)
+    };
+    for name in [
+        "regex_contains",
+        "regex_match",
+        "regex_find",
+        "regex_find_all",
+    ] {
+        assert_eq!(
+            call(name, profile, Unrecorded::Refuse),
+            Eval::Error(EvalError::Unobserved {
+                function: name,
+                reason: "a regex construct no production row records"
+            })
+        );
+        let expected = if matches!(name, "regex_contains" | "regex_match") {
+            Eval::Value(Value::Boolean(true))
+        } else {
+            Eval::Error(EvalError::Unobserved {
+                function: name,
+                reason: "the regex resolver returned an incompatible result",
+            })
+        };
+        assert_eq!(call(name, profile, Unrecorded::OfficialEmulator), expected);
+    }
+    for name in ["regex_find", "regex_find_all"] {
+        assert_eq!(
+            call(name, too_many, Unrecorded::Refuse),
+            invalid("At most one capture group is supported.")
+        );
+    }
+}
+
+#[test]
+fn like_resolver_receives_emulator_profile_in_strict_mode() {
+    #[allow(clippy::unnecessary_wraps)]
+    fn profile(
+        _: &str,
+        _: &str,
+        _: RegexOperation,
+        mode: Unrecorded,
+    ) -> Result<RegexResult, RegexError> {
+        assert_eq!(mode, Unrecorded::OfficialEmulator);
+        Ok(RegexResult::Boolean(true))
+    }
+    let runtime = RuntimeContext {
+        regex_resolver: Some(profile),
+        ..RuntimeContext::default()
+    };
+    let cx = Context {
+        unrecorded: Unrecorded::Refuse,
+        condition: false,
+        runtime: &runtime,
+    };
+    assert_eq!(
+        (function("like").unwrap().eval)(&[text("abc"), text("a%")], cx),
+        Eval::Value(Value::Boolean(true))
+    );
 }
 
 #[test]

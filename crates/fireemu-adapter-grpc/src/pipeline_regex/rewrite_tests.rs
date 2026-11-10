@@ -381,7 +381,10 @@ fn boundaries(subject: &str) -> usize {
         .count()
 }
 
-const CLASSES: [(&str, fn(char) -> bool, bool); 6] = [
+/// A shorthand class, its oracle predicate and whether the class is the negated form.
+type ClassOracle = (&'static str, fn(char) -> bool, bool);
+
+const CLASSES: [ClassOracle; 6] = [
     (r"\d", is_digit, false),
     (r"\D", is_digit, true),
     (r"\w", is_word, false),

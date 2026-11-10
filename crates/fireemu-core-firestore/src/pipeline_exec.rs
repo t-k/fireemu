@@ -251,12 +251,17 @@ pub enum RegexResult {
 pub enum RegexError {
     /// The pattern has invalid syntax.
     InvalidSyntax,
+    /// The pattern contains a construct not recorded in production.
+    Unobserved,
+    /// Find operations support at most one capture group.
+    TooManyCaptureGroups,
     /// Compilation exceeded the adapter's resource limits.
     ResourceLimit,
 }
 
 /// Adapter-provided regular-expression evaluation.
-pub type RegexResolver = fn(&str, &str, RegexOperation) -> Result<RegexResult, RegexError>;
+pub type RegexResolver =
+    fn(&str, &str, RegexOperation, Unrecorded) -> Result<RegexResult, RegexError>;
 
 /// Request-scoped runtime values for pipeline expression evaluation.
 #[derive(Debug, Clone, Default)]

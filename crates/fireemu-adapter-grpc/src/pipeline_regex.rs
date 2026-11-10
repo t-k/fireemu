@@ -1,6 +1,6 @@
 //! Bounded regular-expression evaluation for pipeline expressions.
 
-use fireemu_core_firestore::pipeline_exec::{RegexError, RegexOperation, RegexResult};
+use fireemu_core_firestore::pipeline_exec::{RegexError, RegexOperation, RegexResult, Unrecorded};
 
 mod analysis;
 #[cfg(test)]
@@ -14,11 +14,19 @@ pub(crate) fn resolve(
     subject: &str,
     pattern: &str,
     operation: RegexOperation,
+    mode: Unrecorded,
 ) -> Result<RegexResult, RegexError> {
+    let analysis = analysis::analyze(pattern, mode)?;
+    if matches!(operation, RegexOperation::Find | RegexOperation::FindAll)
+        && analysis.capture_groups > 1
+    {
+        return Err(RegexError::TooManyCaptureGroups);
+    }
+    let pattern = analysis.pattern;
     let pattern = if operation == RegexOperation::Match {
         format!(r"\A(?:{pattern})\z")
     } else {
-        pattern.to_owned()
+        pattern
     };
     let compiled = regex::RegexBuilder::new(&pattern)
         .size_limit(10 * 1024 * 1024)
@@ -376,22 +384,11 @@ mod tests {
     #[test]
     fn regex_strict_guards_known_re2_differences() {
         for (subject, pattern) in [
-            ("١", r"\d"),
-            ("١", r"\D"),
-            ("é", r"\w"),
-            ("é", r"\W"),
-            (" ", r"\s"),
-            (" ", r"\S"),
-            ("é", r"\bé\b"),
-            ("é", r"\B"),
-            ("\u{000b}", r"\s"),
             ("ab", "(?x)a b"),
             ("a", "[a&&b]"),
             ("α", r"\p{Greek}"),
-            ("a", r"[\d]"),
             ("a", r"\Qabc\E"),
             ("a", r"\C"),
-            ("a", "(?u)a"),
             ("a", "(?R)^a$"),
             ("a", "[a--b]"),
             ("a", "[a~~b]"),
@@ -403,18 +400,6 @@ mod tests {
                 "{subject:?} {pattern:?}"
             );
         }
-        for name in [
-            "regex_contains",
-            "regex_match",
-            "regex_find",
-            "regex_find_all",
-        ] {
-            assert!(is_unobserved(&strict(name, &[text("١"), text(r"\d")])));
-        }
-        assert_eq!(
-            emulator("regex_contains", &[text("١"), text(r"\d")]),
-            Eval::Value(Value::Boolean(true))
-        );
         assert_eq!(
             strict("regex_contains", &[text("☃"), text("☃")]),
             Eval::Value(Value::Boolean(true))
@@ -429,7 +414,6 @@ mod tests {
             ("?", r"\?"),
             ("a", "[a-z]"),
             ("z", "[^a]"),
-            ("foo", "(?im:foo)"),
             ("a&&b", "a&&b"),
             (r"\s", r"\\s"),
         ] {

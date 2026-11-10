@@ -1,0 +1,184 @@
+// The judge of the Hosting observation: compares two shaped rows (production against local
+// fireemu, or one production run against the other) and aggregates per condition. Pure.
+//
+// Rules, fixed before the first send:
+//  - Only recorded shapes are judged. A row that is not an answer on either side is UNKNOWN, never
+//    a match and never a mismatch; a request that is absent from one side is UNKNOWN.
+//  - Compared: status, every header in COMPARED_HEADERS (and x-g<nn>), body size and digest (the
+//    decoded body when either side has a Content-Encoding), the layout of the reserved
+//    initialization JSON. ETag and Last-Modified are compared by form (weak flag, quotes, length,
+//    character class; IMF-fixdate form), not by value; a form that agrees with different values is
+//    MATCH_LAYOUT.
+//  - Volatile edge headers (date, age, via, x-cache, ...) are never compared. Any other header that
+//    is present is listed as unclassified; the review has to name each one before closure.
+//  - A mask hides a value, never a format: nothing here normalizes a length, a precision or an order.
+import { COMPARED_HEADERS, SHAPE_ONLY, VOLATILE_HEADERS, isComparedHeader } from "./rows.mjs";
+
+export const STATUSES = ["MATCH", "MATCH_LAYOUT", "MISMATCH", "UNKNOWN"];
+
+/** The form of an ETag value: weak flag, quotes, length of the opaque tag and its character class. */
+export function etagShape(value) {
+  const weak = value.startsWith("W/");
+  const rest = weak ? value.slice(2) : value;
+  const quoted = rest.length >= 2 && rest.startsWith('"') && rest.endsWith('"');
+  const tag = quoted ? rest.slice(1, -1) : rest;
+  const charset = /^[0-9a-f]*$/.test(tag)
+    ? "hex"
+    : /^[0-9A-Za-z+/=_-]*$/.test(tag)
+      ? "base64"
+      : "other";
+  return { weak, quoted, length: tag.length, charset };
+}
+
+const IMF_FIXDATE =
+  /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT$/;
+
+/** The form of a Last-Modified value. */
+export const lastModifiedShape = (value) => ({ imfFixdate: IMF_FIXDATE.test(value) });
+
+const shapeOf = (name, value) => (name === "etag" ? etagShape(value) : lastModifiedShape(value));
+
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
+function headerDifferences(a, b) {
+  const differences = [];
+  let layoutOnly = false;
+  const names = new Set(
+    [...Object.keys(a.headers ?? {}), ...Object.keys(b.headers ?? {})].filter(
+      (name) => isComparedHeader(name) && !VOLATILE_HEADERS.has(name),
+    ),
+  );
+  for (const name of [...names].toSorted()) {
+    const left = a.headers?.[name];
+    const right = b.headers?.[name];
+    if (left === undefined || right === undefined) {
+      differences.push({ field: `header:${name}`, a: left, b: right });
+    } else if (SHAPE_ONLY.has(name)) {
+      if (left.length !== right.length) {
+        differences.push({ field: `header:${name}`, a: left, b: right });
+        continue;
+      }
+      const shapes = left.map((v) => shapeOf(name, v));
+      const others = right.map((v) => shapeOf(name, v));
+      if (!same(shapes, others)) {
+        differences.push({ field: `header:${name}`, a: shapes, b: others, reason: "form" });
+      } else if (!same(left, right)) layoutOnly = true;
+    } else if (!same(left, right)) {
+      differences.push({ field: `header:${name}`, a: left, b: right });
+    }
+  }
+  return { differences, layoutOnly };
+}
+
+function bodyDifferences(a, b, options) {
+  const differences = [];
+  if (a.bodyKind?.startsWith("init-") || b.bodyKind?.startsWith("init-")) {
+    if (a.bodyKind !== b.bodyKind) {
+      differences.push({ field: "bodyKind", a: a.bodyKind, b: b.bodyKind });
+    } else if (a.bodyKind === "init-json" || options.compareInitJs) {
+      if (!same(a.layout, b.layout))
+        differences.push({ field: "layout", a: a.layout, b: b.layout });
+    }
+    return differences;
+  }
+  const encoded =
+    a.headers?.["content-encoding"] !== undefined || b.headers?.["content-encoding"] !== undefined;
+  if (encoded) {
+    for (const field of ["decodedBytes", "decodedSha256"]) {
+      if (a[field] !== b[field]) differences.push({ field, a: a[field], b: b[field] });
+    }
+    return differences;
+  }
+  if (a.bodyBytes !== b.bodyBytes) {
+    differences.push({ field: "bodyBytes", a: a.bodyBytes, b: b.bodyBytes });
+  } else if (a.bodySha256 !== b.bodySha256) {
+    differences.push({ field: "bodySha256", a: a.bodySha256, b: b.bodySha256 });
+  }
+  return differences;
+}
+
+/**
+ * Compares two shaped rows of the same request.
+ * @returns {{ status: string, differences: object[], reason?: string }}
+ */
+export function compareRows(a, b, options = {}) {
+  if (a === undefined || b === undefined) {
+    return { status: "UNKNOWN", differences: [], reason: "missing-row" };
+  }
+  if (a.id !== b.id) throw new Error(`rows of different requests: ${a.id} / ${b.id}`);
+  if (a.outcome !== "answered" || b.outcome !== "answered") {
+    return {
+      status: "UNKNOWN",
+      differences: [],
+      reason: a.outcome !== "answered" ? `a:${a.reason}` : `b:${b.reason}`,
+    };
+  }
+  const differences = [];
+  if (a.status !== b.status) differences.push({ field: "status", a: a.status, b: b.status });
+  const headers = headerDifferences(a, b);
+  differences.push(...headers.differences, ...bodyDifferences(a, b, options));
+  if (differences.length) return { status: "MISMATCH", differences };
+  return { status: headers.layoutOnly ? "MATCH_LAYOUT" : "MATCH", differences };
+}
+
+/** Header names present on answered rows that are neither compared nor volatile. */
+export function unclassifiedHeaderNames(rows) {
+  const names = new Set();
+  for (const row of rows) {
+    if (row?.outcome !== "answered") continue;
+    for (const name of row.headerNames ?? []) {
+      if (!COMPARED_HEADERS.has(name) && !isComparedHeader(name) && !VOLATILE_HEADERS.has(name)) {
+        names.add(name);
+      }
+    }
+  }
+  return [...names].toSorted();
+}
+
+/**
+ * Compares two row lists by request id. `ids` (the corpus order) fixes the rows reported.
+ */
+export function compareRuns(ids, rowsA, rowsB, options = {}) {
+  const byId = (rows) => new Map(rows.map((row) => [row.id, row]));
+  const left = byId(rowsA);
+  const right = byId(rowsB);
+  const rows = ids.map((id) => ({ id, ...compareRows(left.get(id), right.get(id), options) }));
+  const summary = Object.fromEntries(STATUSES.map((s) => [s, 0]));
+  for (const row of rows) summary[row.status] += 1;
+  return {
+    rows,
+    summary,
+    unclassifiedHeaders: {
+      a: unclassifiedHeaderNames(rowsA),
+      b: unclassifiedHeaderNames(rowsB),
+    },
+  };
+}
+
+/**
+ * Per condition: the rows that belong to it (primary or `also`, never information-only), their
+ * status counts and whether the condition is closable on this comparison: every row is MATCH or
+ * MATCH_LAYOUT.
+ */
+export function conditionVerdicts(requests, results) {
+  const status = new Map(results.rows.map((row) => [row.id, row.status]));
+  const verdicts = {};
+  for (const request of requests) {
+    if (request.infoOnly) continue;
+    for (const condition of [request.condition, ...(request.also ?? [])]) {
+      const verdict = (verdicts[condition] ??= {
+        rows: 0,
+        counts: Object.fromEntries(STATUSES.map((s) => [s, 0])),
+        mismatched: [],
+      });
+      const s = status.get(request.id) ?? "UNKNOWN";
+      verdict.rows += 1;
+      verdict.counts[s] += 1;
+      if (s === "MISMATCH") verdict.mismatched.push(request.id);
+    }
+  }
+  for (const verdict of Object.values(verdicts)) {
+    verdict.closable = verdict.counts.MISMATCH === 0 && verdict.counts.UNKNOWN === 0;
+  }
+  return verdicts;
+}

@@ -3,6 +3,11 @@
 // baseline (bearer-observation.baseline.json), and says whether production answered the malformed Bearer
 // with the provisional page fireemu strict returns today.
 //
+// Recorded answer (FUNCTIONS-HTTP-BEARER-20261110-01, conformance/functions-http-bearer-production.json):
+// `different`. Production passed the malformed Bearer to the public onRequest function, which answered
+// its 200 echo, byte-equal to the control. The provisional page is not production's answer for a real
+// onRequest function; it stays fireemu strict's answer only for a callable's code served as onRequest.
+//
 //   same-as-provisional  status, content-type, byte count and SHA-256 of the body equal the stage 3
 //                        recorded 401 page (functions-http/callable/auth-refusal#malformed-bearer)
 //   different            every capture is a complete, readable 2xx or 4xx answer, both passes agree,

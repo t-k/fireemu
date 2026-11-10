@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
@@ -22,6 +23,7 @@ import { FAKE_RECEIPT_SCRIPT, UPLOAD_OBJECT, deployWorld } from "./production.fa
 const json = (name) => JSON.parse(readFileSync(new URL(name, import.meta.url), "utf8"));
 const CORPUS = json("./bearer-observation.corpus.json");
 const BASELINE = json("./bearer-observation.baseline.json");
+const SOURCE_PINS_CORPUS = "ee831856d3b54a6d53d6f4081dd872d28023ac3803370661ce6e348a8d0e308f";
 const sha = (text) => createHash("sha256").update(text).digest("hex");
 const REQUEST_BODY = JSON.stringify({ data: { op: "auth" } });
 const PROVISIONAL = BASELINE.provisional.body;
@@ -1128,5 +1130,105 @@ test("fake world: more builds than deploys since the start keeps the run open", 
     assert.match(ledger[1].reason, /more builds/);
   } finally {
     await rm(world.dir, { recursive: true, force: true });
+  }
+});
+
+// ---- the production recording (FUNCTIONS-HTTP-BEARER-20261110-01) ------------------------------
+
+const RECORDED = JSON.parse(
+  readFileSync(new URL("../functions-http-bearer-production.json", import.meta.url), "utf8"),
+);
+
+test("replay: the recorded production answers are judged different, served by the function", () => {
+  const result = judgeObservation(RECORDED.captures, BASELINE);
+  assert.equal(result.verdict, "different");
+  assert.equal(result.servedByFunction, true);
+  assert.deepEqual(result, RECORDED.judgement, "the judge reads the recording as the run did");
+  assert.deepEqual(
+    result.differences.map((d) => [d.field, d.observed]),
+    [
+      ["status", 200],
+      ["contentType", "application/json; charset=utf-8"],
+      ["bodyBytes", 328],
+      ["bodySha256", "288da076ec757b37d34dc97ae87c6d52a15ae1ed4d5367c229f5e8f51532465a"],
+    ],
+  );
+});
+
+test("replay: every recorded answer is the fixture's echo, its bytes match content-length and its digest", () => {
+  for (const answer of RECORDED.captures) {
+    assert.equal(answer.status, 200);
+    assert.equal(Number(answer.headers["content-length"]), answer.bodyBytes);
+    assert.equal(Buffer.byteLength(answer.bodyText), answer.bodyBytes);
+    assert.equal(sha(answer.bodyText), answer.bodySha256);
+    assert.equal(answer.error, null);
+  }
+  // The malformed Bearer reached the function: its answer is byte-equal to the control's.
+  assert.equal(RECORDED.captures[1].bodySha256, RECORDED.captures[0].bodySha256);
+  assert.deepEqual(
+    RECORDED.captures.map((c) => c.authorization),
+    [null, "Bearer malformed", null, "Bearer malformed"],
+  );
+});
+
+test("replay: a recorded answer changed in any compared field is no longer the recorded verdict", () => {
+  const changed = structuredClone(RECORDED.captures);
+  changed[3].bodySha256 = sha("other");
+  assert.equal(judgeObservation(changed, BASELINE).verdict, "unknown", "passes disagree");
+  const same = structuredClone(RECORDED.captures);
+  for (const index of [1, 3]) {
+    Object.assign(same[index], {
+      status: 401,
+      headers: { "content-type": "text/html; charset=UTF-8" },
+      bodyBytes: 294,
+      bodySha256: BASELINE.provisional.bodySha256,
+      bodyText: PROVISIONAL,
+    });
+  }
+  assert.equal(judgeObservation(same, BASELINE).verdict, "same-as-provisional");
+});
+
+test("the recording names no project, number or bucket", () => {
+  const text = readFileSync(
+    new URL("../functions-http-bearer-production.json", import.meta.url),
+    "utf8",
+  );
+  for (const forbidden of ["fireemu-oracle", "gcf-v2-uploads", "appspot", "run.app", "/Users/"]) {
+    assert.ok(!text.includes(forbidden), forbidden);
+  }
+  assert.equal(RECORDED.corpusDigest, SOURCE_PINS_CORPUS);
+});
+
+// ---- the real write path (presend review S3) -------------------------------------------------------
+
+test("productionDeps writes run files and ledger lines of production size byte-equal, and never overwrites", async () => {
+  const { productionDeps } = await import("./bearer-observation.mjs");
+  const root = await mkdtemp(join(tmpdir(), "bearer-write-"));
+  try {
+    const ledger = join(root, "sandbox-ledger.jsonl");
+    const deps = productionDeps({ ledger, privateRoot: root });
+    await mkdir(join(root, "runs"));
+    const runDir = await deps.makeRunDir("onrequest-bearer-obs-test");
+    assert.equal(runDir, join(root, "runs", "onrequest-bearer-obs-test"));
+    await assert.rejects(deps.makeRunDir("onrequest-bearer-obs-test"), /EEXIST/);
+    const capturesText = `${JSON.stringify(RECORDED.captures, null, 2)}\n`;
+    const judgement = `${JSON.stringify(RECORDED.judgement, null, 2)}\n`;
+    assert.ok(Buffer.byteLength(capturesText) > 3500, "production-sized");
+    await deps.writeRunFile(runDir, "captures.json", capturesText);
+    await deps.writeRunFile(runDir, "judgement.json", judgement);
+    assert.equal(await readFile(join(runDir, "captures.json"), "utf8"), capturesText);
+    assert.equal(await readFile(join(runDir, "judgement.json"), "utf8"), judgement);
+    assert.equal((await stat(join(runDir, "captures.json"))).mode & 0o777, 0o600);
+    await assert.rejects(deps.writeRunFile(runDir, "captures.json", "x"), /EEXIST/);
+    assert.equal(await readFile(join(runDir, "captures.json"), "utf8"), capturesText);
+    const started = `${JSON.stringify({ event: "started", taskId: TASK_ID, captures: RECORDED.captures })}\n`;
+    const terminal = `${JSON.stringify({ event: "finished", taskId: TASK_ID, ...RECORDED.judgement, requests: RECORDED.requests })}\n`;
+    await writeFile(ledger, '{"existing":1}\n');
+    await deps.appendLedger(started);
+    await deps.appendLedger(terminal);
+    assert.equal(await readFile(ledger, "utf8"), `{"existing":1}\n${started}${terminal}`);
+    assert.equal(await deps.readLedger(), `{"existing":1}\n${started}${terminal}`);
+  } finally {
+    await rm(root, { recursive: true, force: true });
   }
 });

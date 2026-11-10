@@ -450,8 +450,11 @@ async function readSources() {
   };
 }
 
-function productionDeps() {
-  const ledger = join(PRIVATE_ROOT, "runs/sandbox-ledger.jsonl");
+/** The real effects. `ledger` and `privateRoot` are the private sandbox ledger and directory (a test points them elsewhere). */
+export function productionDeps({
+  ledger = join(PRIVATE_ROOT, "runs/sandbox-ledger.jsonl"),
+  privateRoot = PRIVATE_ROOT,
+} = {}) {
   const git = (args) => execFileAsync("git", args, { cwd: CONFORMANCE });
   return {
     now: Date.now,
@@ -466,7 +469,7 @@ function productionDeps() {
     ownerAdc,
     projectNumber: () => readPrivateProjectIdentity(PROJECT_IDENTITY_FILE, PROJECT_IDENTITY_SHA),
     async makeRunDir(name) {
-      const dir = join(PRIVATE_ROOT, "runs", name);
+      const dir = join(privateRoot, "runs", name);
       await mkdir(dir, { recursive: false, mode: 0o700 });
       return dir;
     },

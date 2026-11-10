@@ -2296,3 +2296,39 @@ test("check keeps spawned ports free", async (t) => {
   await check({ ...fixture, runSession: stub.runSession });
   assert.deepEqual(errors, []);
 });
+test("check keeps the first error when several sessions fail", async (t) => {
+  const fixture = checkFixture(t),
+    stub = checkStub({
+      onStart: async (s) => {
+        if (s.phase === "raw" && s.label === "B") {
+          await delay(5);
+          throw new Error("first error");
+        }
+        if (s.phase === "facets" && s.label === "D") {
+          await delay(80);
+          throw new Error("second error");
+        }
+      },
+    });
+  await assert.rejects(check({ ...fixture, runSession: stub.runSession }), /first error/);
+});
+test("check defaults to the real session runner and keeps a verified receipt per child", async (t) => {
+  const fixture = checkFixture(t);
+  writeFileSync(fixture.binary, "#!/bin/sh\nsleep 1\n");
+  chmodSync(fixture.binary, 0o755);
+  const evidence = await check(fixture);
+  assert.equal(evidence.complete, false);
+  assert.deepEqual(sessionNames(evidence), checkOrder);
+  const pids = new Set();
+  for (const entry of evidence.sessions) {
+    assert.equal(entry.report.failure.message, "missing session report");
+    const receipt = JSON.parse(
+      readFileSync(join(fixture.out, entry.id, "process-receipt.json"), "utf8"),
+    );
+    assert.equal(receipt.identity.status, "VERIFIED");
+    assert.equal(receipt.exitCode, 0);
+    assert.equal(receipt.processGroupAbsent, true);
+    pids.add(receipt.pid);
+  }
+  assert.equal(pids.size, 8);
+});

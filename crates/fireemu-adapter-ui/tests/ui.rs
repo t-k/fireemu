@@ -2305,6 +2305,17 @@ async fn the_hosting_front_describes_the_served_site_and_only_its_routing_keys()
     assert_eq!(site["appAssociation"], "AUTO");
     assert!(!site.contains_key("predeploy"), "{site:?}");
     assert!(!site.contains_key("secret"), "{site:?}");
+    // A site whose public directory is missing says so, and a key it never set stays absent.
+    let missing = state_with_info(|info| {
+        info.hosting = Some(HostingInfo {
+            public_exists: false,
+            config: json!({"public": "gone"}),
+            ..served_site()
+        });
+    });
+    let (_, body) = call(&missing, request("GET", "/ui/api/hosting", &Value::Null)).await;
+    assert_eq!(body["publicExists"], false);
+    assert_eq!(body["site"], json!({"public": "gone"}));
 }
 
 #[tokio::test]
@@ -2346,10 +2357,16 @@ async fn the_config_names_the_clock_mode_and_the_host_names_in_effect() {
     let (_, body) = call(&s, request("GET", "/ui/api/config", &Value::Null)).await;
     assert_eq!(body["clockMode"], "realtime");
     assert_eq!(body["clockPinned"], true);
-    assert_eq!(body["hosts"]["allowed"], json!(["ci.example", ".svc.cluster.local"]));
+    assert_eq!(
+        body["hosts"]["allowed"],
+        json!(["ci.example", ".svc.cluster.local"])
+    );
     assert_eq!(body["hosts"]["allowNonLoopbackHosts"], true);
     assert_eq!(body["hosts"]["defaultNames"], json!(["localhost"]));
-    assert_eq!(body["hosts"]["defaultSuffixes"], json!([".localhost", ".internal"]));
+    assert_eq!(
+        body["hosts"]["defaultSuffixes"],
+        json!([".localhost", ".internal"])
+    );
     let frozen = state();
     let (_, body) = call(&frozen, request("GET", "/ui/api/config", &Value::Null)).await;
     assert_eq!(body["clockMode"], "frozen");
@@ -2381,7 +2398,8 @@ async fn each_function_names_its_codebase_and_the_runtime_that_runs_it() {
 }
 
 #[tokio::test]
-async fn a_function_of_an_undeclared_runtime_reports_the_language_alone_and_an_unknown_codebase_none() {
+async fn a_function_of_an_undeclared_runtime_reports_the_language_alone_and_an_unknown_codebase_none(
+) {
     let (s, runtime) = state_with_functions().await;
     let mut state = Arc::try_unwrap(s).ok().expect("the state is unshared");
     state.info.codebases = vec![CodebaseInfo {
@@ -2396,7 +2414,10 @@ async fn a_function_of_an_undeclared_runtime_reports_the_language_alone_and_an_u
     .await;
     assert_eq!(status, 200);
     let function = &body["functions"][0];
-    assert_eq!(function["runtime"], json!({"language": "node", "declared": null}));
+    assert_eq!(
+        function["runtime"],
+        json!({"language": "node", "declared": null})
+    );
     // No codebase information at all (a state built without it): the field is absent.
     let (s2, runtime2) = state_with_functions().await;
     let (_, body) = call(&s2, request("GET", "/ui/api/functions", &Value::Null)).await;

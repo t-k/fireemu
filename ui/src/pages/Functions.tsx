@@ -962,7 +962,7 @@ const Functions: Component = () => {
                         <dd data-testid="status-overlap-rejected">{st().overlapRejected}</dd>
                       </dl>
                       <Show when={(st().codebases?.length ?? 0) > 0}>
-                        <ul class="mt-3 text-sm">
+                        <ul class="mt-3 text-sm" data-testid="codebase-list">
                           <For each={st().codebases}>
                             {(codebase) => {
                               const runtime = () =>

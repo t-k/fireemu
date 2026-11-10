@@ -810,3 +810,21 @@ fn the_ui_says_no_site_is_served_when_hosting_is_not_selected() {
     let (_, config) = ui_get(&descriptor, "/ui/api/config");
     assert_eq!(config["clockMode"], "realtime");
 }
+
+#[test]
+fn the_ui_flags_a_public_directory_that_did_not_exist_at_start() {
+    let dir = Scratch::new("hosting", "ui-missing-public");
+    let mut emulators = emulators();
+    emulators.as_object_mut().unwrap().remove("ui");
+    let firebase = serde_json::json!({"hosting":{"public":"not-created"},"emulators":emulators});
+    let (_child, descriptor) =
+        start_descriptor(&dir, &firebase, "hosting", None, &["--ui-port", "auto"]);
+    let (status, site) = ui_get(&descriptor, "/ui/api/hosting");
+    assert_eq!(status, 200, "{site}");
+    assert_eq!(site["served"], true);
+    assert_eq!(site["publicExists"], false);
+    assert!(site["publicRoot"]
+        .as_str()
+        .unwrap()
+        .ends_with("/not-created"));
+}

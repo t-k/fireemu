@@ -125,6 +125,27 @@ describe("Hosting", () => {
     expect(ui.queryByTestId("fetch-error")).toBeNull();
   });
 
+  it("numbers the rules from one and shows a dash for a rule with no matcher or no target", async () => {
+    vi.mocked(hosting.hostingInfo).mockReturnValue(
+      okAsync({
+        ...served,
+        site: {
+          public: "dist",
+          rewrites: [{ source: "/a", destination: "/a.html" }, { dynamicLinks: true }],
+        },
+      } as HostingInfo),
+    );
+    const ui = render(() => <Hosting />);
+    await waitFor(() => expect(ui.getByTestId("hosting-rewrites")).toBeTruthy());
+    const rows = [...ui.getByTestId("hosting-rewrites").querySelectorAll("tbody tr")].map((row) =>
+      [...row.querySelectorAll("td")].map((cell) => cell.textContent),
+    );
+    expect(rows).toEqual([
+      ["1", "glob", "/a", "/a.html"],
+      ["2", "-", "-", "-"],
+    ]);
+  });
+
   it("lists redirects with the status (301 when unset) and headers with their pairs", async () => {
     const ui = render(() => <Hosting />);
     await waitFor(() => expect(ui.getByTestId("hosting-redirects")).toBeTruthy());

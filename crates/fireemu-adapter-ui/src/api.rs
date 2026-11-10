@@ -479,7 +479,8 @@ fn functions(state: &UiState) -> UiResponse {
             if let Some(codebase) = runtime.codebase_of(&f.name) {
                 entry["codebase"] = json!(codebase);
                 if let Some(info) = state.info.codebases.iter().find(|c| c.name == codebase) {
-                    entry["runtime"] = json!({"language": info.language, "declared": info.declared});
+                    entry["runtime"] =
+                        json!({"language": info.language, "declared": info.declared});
                 }
             }
             if matches!(f.trigger, Trigger::TaskQueue { .. }) {

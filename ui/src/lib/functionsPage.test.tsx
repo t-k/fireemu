@@ -376,4 +376,5 @@ it("shows zero for counters an older daemon does not send and hides the empty se
   expect(ui.getByTestId("status-catch-up-pending").textContent).toBe("no");
   expect(ui.queryByTestId("ignored-exports")).toBeNull();
   expect(ui.container.querySelector("[data-testid^='codebase-status-']")).toBeNull();
+  expect(ui.queryByTestId("codebase-list")).toBeNull();
 });

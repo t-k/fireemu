@@ -894,6 +894,30 @@ export function localSetupDifferences(actual) {
   return differences;
 }
 
+export const EVENTARC_REBIND_PATHS = ["conformance/src/eventarc-production/run.mjs"];
+
+export function eventarcSourceRebinds(readBytes) {
+  const path = "spec/compatibility/closure/evidence/EVENTARC-adjudication.json";
+  try {
+    const bytes = readBytes(path);
+    const digest = sha256Bytes(bytes);
+    const records = JSON.parse(readBytes("spec/compatibility/closure/record-digests.json"));
+    const closure = JSON.parse(readBytes("spec/compatibility/closure/EVENTARC.json"));
+    if (digest !== records.records[path] || digest !== closure.retrospectiveAdjudication.sha256) {
+      throw new Error("digest mismatch");
+    }
+    const rebinds = JSON.parse(bytes).sourceRebinds ?? [];
+    for (const rebind of rebinds) {
+      if (!EVENTARC_REBIND_PATHS.includes(rebind.path)) {
+        throw new Error(`rebind for ${rebind.path} is not allowed`);
+      }
+    }
+    return rebinds;
+  } catch (error) {
+    throw new Error(`EVENTARC adjudication: ${error.message}`, { cause: error });
+  }
+}
+
 /** Differences between a lane export and the committed comparison file. */
 export function compareLaneExport(expected, actual, binarySha256, { sourceRebinds = [] } = {}) {
   if (!actual || typeof actual !== "object" || !Array.isArray(actual.rows)) {
@@ -919,6 +943,10 @@ export function compareLaneExport(expected, actual, binarySha256, { sourceRebind
   const sourcePins = { ...expected.sourcePins };
   if (expected.kind === "eventarc-production-comparison-v1") {
     for (const rebind of sourceRebinds) {
+      if (!EVENTARC_REBIND_PATHS.includes(rebind.path)) {
+        differences.push(`sourcePins: rebind for ${rebind.path} is not allowed`);
+        continue;
+      }
       if (expected.sourcePins[rebind.path] === rebind.previousSha256) {
         sourcePins[rebind.path] = rebind.sha256;
       }
@@ -1667,14 +1695,18 @@ export function judge(comparison, observations, context) {
   }
   const observed = observations[comparison.runIds[0]];
   const run = RUNS.find((r) => r.id === comparison.runIds[0]);
+  let sourceRebinds = [];
+  let rebindRefusal;
+  if (comparison.kind === "eventarc-production-comparison-v1") {
+    try {
+      sourceRebinds = eventarcSourceRebinds(context.readBytes);
+    } catch (error) {
+      rebindRefusal = `EVENTARC source rebinds refused: ${error.message}`;
+    }
+  }
   return [
-    ...compareLaneExport(expected, observed, context.binarySha256, {
-      sourceRebinds:
-        expected.kind === "eventarc-production-comparison-v1"
-          ? (context.readJson("spec/compatibility/closure/evidence/EVENTARC-adjudication.json")
-              .sourceRebinds ?? [])
-          : [],
-    }),
+    ...compareLaneExport(expected, observed, context.binarySha256, { sourceRebinds }),
+    ...(rebindRefusal ? [rebindRefusal] : []),
     ...(run?.localSetup ? localSetupDifferences(observed) : []),
   ];
 }
@@ -1802,6 +1834,7 @@ async function main() {
     functionsNode,
     out,
     readJson,
+    readBytes: (path) => readFileSync(join(ROOT, path)),
     env: { ...process.env, FIREEMU_BIN: binary, FIREEMU_NODE: functionsNode },
   };
   const summary = {

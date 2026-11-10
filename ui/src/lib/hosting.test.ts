@@ -43,6 +43,10 @@ describe("rewriteTarget", () => {
     ],
     [{ function: {} }, { kind: "function", id: "", region: "us-central1" }],
     [{ function: 3 }, { kind: "function", id: "", region: "us-central1" }],
+    [
+      { function: 3, region: "europe-west1" },
+      { kind: "function", id: "", region: "europe-west1" },
+    ],
     [{ function: null }, { kind: "function", id: "", region: "us-central1" }],
     [{ run: null }, { kind: "run", id: "", region: "us-central1" }],
     [

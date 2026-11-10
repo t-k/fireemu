@@ -60,16 +60,18 @@ impl fmt::Debug for Credentials {
 }
 
 impl Credentials {
-    /// The `auth` of an ID token presented to `namespace`, if it names a user.
+    /// The `auth` of an ID token presented to `namespace`, if its claims name a user.
     pub(crate) fn user(&self, token: &str, namespace: &str, now: i64) -> Option<Json> {
-        let claims = match &self.id_tokens {
-            Some(verify) => crate::json_parse::parse(&verify(token, namespace, now)?).ok()?,
-            None => crate::realtime::jwt_claims(token)?,
+        let (claims, iat_is_number) = match &self.id_tokens {
+            Some(verify) => {
+                crate::json_parse::parse_claims(&verify(token, namespace, now)?).ok()?
+            }
+            None => crate::realtime::jwt_claims_with_iat(token)?,
         };
         let Json::Object(claims) = claims else {
             return None;
         };
-        auth_from_claims(&claims).ok()
+        auth_from_claims(&claims, iat_is_number, self.strict).ok()
     }
 }
 
@@ -236,12 +238,24 @@ const RESERVED_CLAIMS: [&str; 10] = [
 /// Builds `auth` from token claims, as the official emulator does: `provider` from
 /// `firebase.sign_in_provider` (else `anonymous`) and `token` the claims, then every other
 /// claim as a member of its own (so a `provider` or `token` claim replaces those), then `uid`
-/// from `sub`. The error names the missing claim.
-pub(crate) fn auth_from_claims(claims: &BTreeMap<String, Json>) -> Result<Json, &'static str> {
+/// from `sub`. `iat_is_number` says whether the claims' `iat` is a number as the official
+/// emulator reads one (the claims cannot tell: see [`crate::json_parse::parse_claims`]).
+/// Strict keeps the reading it had before the emulator profile followed the official emulator:
+/// `sub` first, then an `iat` that parsed as a number (so `1e400`, read as a string, is none and an
+/// integer beyond the i64 range, read as a double, is one). The strict daemon reaches this with
+/// the SDK mock token, which is admitted without reading its time claims.
+pub(crate) fn auth_from_claims(
+    claims: &BTreeMap<String, Json>,
+    iat_is_number: bool,
+    strict: bool,
+) -> Result<Json, &'static str> {
+    if !strict && !iat_is_number {
+        return Err("iat");
+    }
     let Some(Json::String(subject)) = claims.get("sub") else {
         return Err("sub");
     };
-    if !matches!(claims.get("iat"), Some(Json::Number(_))) {
+    if strict && !matches!(claims.get("iat"), Some(Json::Number(_))) {
         return Err("iat");
     }
     let provider = match claims.get("firebase") {
@@ -795,6 +809,77 @@ mod credential_answer_properties {
             prop_assert!(!Access::is_unauthorized_token(header.as_deref(), &params, &lax));
             // A bare `auth=` credential is never one.
             prop_assert!(!Access::is_unauthorized_token(None, &auth(&token), &strict));
+        }
+    }
+}
+
+#[cfg(test)]
+mod issue_time_properties {
+    use super::*;
+    use proptest::prelude::*;
+
+    fn b64(text: &str) -> String {
+        const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+        let mut out = String::new();
+        for chunk in text.as_bytes().chunks(3) {
+            let n = chunk
+                .iter()
+                .enumerate()
+                .fold(0u32, |n, (i, b)| n | (u32::from(*b) << (16 - 8 * i)));
+            for i in 0..=chunk.len() {
+                out.push(char::from(ALPHABET[((n >> (18 - 6 * i)) & 63) as usize]));
+            }
+        }
+        out
+    }
+
+    /// Whether the official emulator (firebase-database-emulator v4.11.2, probed in
+    /// docs.local/runs/rtdb-token-iat) reads the number literal as an `iat`: an integer
+    /// literal that fits an i64, or any literal with a fraction or an exponent.
+    fn official_iat(literal: &str) -> bool {
+        if literal.contains(['.', 'e', 'E']) {
+            true
+        } else {
+            literal.parse::<i64>().is_ok()
+        }
+    }
+
+    proptest! {
+        // Without a verifier the claims of the token are read as they stand; with one, the
+        // claims text it answers is. Either way a literal is an `iat` exactly when the
+        // official emulator reads it as one in the emulator profile; strict reads it as it did.
+        #[test]
+        fn a_number_literal_is_an_issue_time_as_the_official_emulator_reads_it(
+            literal in "-?(0|[1-9][0-9]{0,22})(\\.[0-9]{1,3})?([eE][+-]?[0-9]{1,3})?",
+            strict in any::<bool>(),
+        ) {
+            let claims = format!(r#"{{"sub":"u1","iat":{literal}}}"#);
+            let token = format!("{}.{}.", b64(r#"{"alg":"none"}"#), b64(&claims));
+            // Strict keeps its reading from before the profile followed the jar: a finite
+            // number, whatever its spelling (an integer beyond the i64 range is a double; a
+            // literal beyond the double range reads as a string, nobody).
+            let expected = if strict {
+                literal.parse::<f64>().is_ok_and(f64::is_finite)
+            } else {
+                official_iat(&literal)
+            };
+            let unverified = Credentials { strict, id_tokens: None };
+            prop_assert_eq!(unverified.user(&token, "ns", 0).is_some(), expected, "{}", literal);
+            let text = claims.clone();
+            let verified = Credentials {
+                strict,
+                id_tokens: Some(Arc::new(move |_, _, _| Some(text.clone()))),
+            };
+            prop_assert_eq!(verified.user(&token, "ns", 0).is_some(), expected, "{}", literal);
+        }
+
+        // A value that is not a number is never an `iat`, whatever it spells.
+        #[test]
+        fn a_string_is_never_an_issue_time(text in "[ -~]{0,12}") {
+            prop_assume!(!text.contains(['"', '\\']));
+            let claims = format!(r#"{{"sub":"u1","iat":"{text}"}}"#);
+            let token = format!("{}.{}.", b64(r#"{"alg":"none"}"#), b64(&claims));
+            prop_assert!(Credentials::default().user(&token, "ns", 0).is_none());
         }
     }
 }

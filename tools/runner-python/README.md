@@ -42,3 +42,7 @@ in a hang, 21 survived. The survivors are equivalent or immaterial (a codec alia
 stream that is flushed after each frame, the digit counter of the frame header whose bound the length cap
 already enforces, the case of a header name) or are killed by a process-level test that mutmut's test
 selection does not see (the two `_QuietHandler` mutants: `test_the_http_server_logs_no_request_lines_on_stderr`).
+
+### Auth blocking tokens
+
+When `FIREEMU_AUTH_BLOCKING_JWKS` contains the daemon's public JWKS, the runner replaces the Functions SDK's token verifier and its local Auth utility view so that the SDK performs production verification using those keys without a network request. The variable is removed before user code loads. When it is present and verification cannot be installed, the runner exits with status 1 instead of serving unverified. Without it, verification retains the SDK's emulator behavior. For SDK version 0.6.0, the runner prints a diagnostic when a blocking function uses that default behavior.

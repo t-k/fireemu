@@ -43,6 +43,8 @@ describe("rewriteTarget", () => {
     ],
     [{ function: {} }, { kind: "function", id: "", region: null }],
     [{ function: 3 }, { kind: "function", id: "", region: null }],
+    [{ function: null }, { kind: "function", id: "", region: null }],
+    [{ run: null }, { kind: "run", id: "", region: null }],
     [
       { run: { serviceId: "web", region: "us-central1" } },
       { kind: "run", id: "web", region: "us-central1" },

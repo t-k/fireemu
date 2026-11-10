@@ -1,5 +1,13 @@
-import { createResource, For, Show, type Component, type JSX } from "solid-js";
-import { hostingInfo, type HostingRule } from "../api/hosting";
+import {
+  createEffect,
+  createResource,
+  createSignal,
+  For,
+  Show,
+  type Component,
+  type JSX,
+} from "solid-js";
+import { hostingInfo, type HostingInfo, type HostingRule } from "../api/hosting";
 import { errorOf, settle } from "../api/client";
 import { AsyncButton, FetchState, Field, Section } from "../components/common";
 import { t, type MessageKey } from "../i18n";
@@ -94,7 +102,10 @@ const Hosting: Component = () => {
     await refetch();
   };
   // The last successful read, so a failed refresh keeps showing it (with the error).
-  const current = () => info.latest?.unwrapOr(undefined);
+  const [current, setCurrent] = createSignal<HostingInfo>();
+  createEffect(() => {
+    info()?.match(setCurrent, () => {});
+  });
   const site = () => {
     const value = current();
     return value?.served ? value : undefined;

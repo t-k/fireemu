@@ -57,6 +57,7 @@ describe("Hosting", () => {
     expect(link.getAttribute("href")).toBe("http://127.0.0.1:5000/");
     expect(link.textContent).toBe("http://127.0.0.1:5000/");
     expect(link.getAttribute("rel")).toContain("noopener");
+    expect(link.getAttribute("target")).toBe("_blank");
     expect(ui.getByTestId("hosting-public").textContent).toBe("dist");
     expect(ui.getByTestId("hosting-public-root").textContent).toBe("/work/app/dist");
     expect(ui.queryByTestId("hosting-public-missing")).toBeNull();
@@ -77,6 +78,7 @@ describe("Hosting", () => {
     expect(ui.getByTestId("hosting-clean-urls").textContent).toBe("no");
     expect(ui.queryByTestId("hosting-i18n-root")).toBeNull();
     expect(ui.queryByTestId("hosting-app-association")).toBeNull();
+    expect(ui.queryByTestId("hosting-ignore")).toBeNull();
     cleanup();
     vi.mocked(hosting.hostingInfo).mockReturnValue(
       okAsync({ ...served, site: { public: "dist" } } as HostingInfo),
@@ -98,6 +100,29 @@ describe("Hosting", () => {
     expect(rows[1]!.textContent).toContain("regex");
     expect(rows[1]!.textContent).toContain("Cloud Run web (us-central1)");
     expect(rows[2]!.textContent).toContain("/index.html");
+  });
+
+  it("tells the order rules apply in for rewrites and redirects, not for headers", async () => {
+    const ui = render(() => <Hosting />);
+    await waitFor(() => expect(ui.getByTestId("hosting-headers")).toBeTruthy());
+    const hint = "Rules apply in the order listed.";
+    const sections = ["rewrites", "redirects", "headers"].map(
+      (kind) => ui.getByTestId(`hosting-${kind}`).closest("section")!.textContent ?? "",
+    );
+    expect(sections[0]).toContain(hint);
+    expect(sections[1]).toContain(hint);
+    expect(sections[2]).not.toContain(hint);
+  });
+
+  it("keeps the last read on screen with a stale notice when a refresh fails", async () => {
+    const ui = render(() => <Hosting />);
+    await waitFor(() => expect(ui.getByTestId("hosting-url")).toBeTruthy());
+    vi.mocked(hosting.hostingInfo).mockReturnValue(errAsync({ status: 503, message: "hub down" }));
+    fireEvent.click(ui.getByTestId("hosting-refresh"));
+    await waitFor(() => expect(ui.container.textContent).toContain("hub down"));
+    expect(ui.getByTestId("hosting-url")).toBeTruthy();
+    expect(ui.container.textContent).toContain("Showing the last successful read");
+    expect(ui.queryByTestId("fetch-error")).toBeNull();
   });
 
   it("lists redirects with the status (301 when unset) and headers with their pairs", async () => {

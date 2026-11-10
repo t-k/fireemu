@@ -235,3 +235,40 @@ def test_snapshot_applies_the_rebind_record_to_the_working_tree_only(repository)
         # The anchor's own copy stays byte-exact.
         assert (archived / "frozen/receipt.json").read_text() == '{"sourceCommit":"untrusted"}'
     assert h.load_rebound(root / "frozen") == {}
+
+
+def write_record(root, h, name, before, after):
+    import json
+
+    record = root / h.REBIND_RECORD
+    record.parent.mkdir(parents=True, exist_ok=True)
+    record.write_text(
+        json.dumps({"files": {name: {"preSha256": before, "postSha256": after}}})
+    )
+
+
+def test_verify_frozen_reads_the_record_of_its_root_when_none_is_passed(repository):
+    h = module()
+    root, anchor = repository
+    receipt = root / "frozen/receipt.json"
+    before = sha(receipt.read_bytes())
+    receipt.write_text("masked")
+    with pytest.raises(ValueError):
+        h.verify_frozen(root, anchor, ("frozen",))
+    write_record(root, h, "frozen/receipt.json", before, sha(b"masked"))
+    h.verify_frozen(root, anchor, ("frozen",))
+
+
+def test_an_archived_anchor_checkout_is_always_byte_exact(repository):
+    h = module()
+    root, _ = repository
+    receipt = root / "frozen/receipt.json"
+    before = sha(receipt.read_bytes())
+    # The anchor commit itself carries a record naming the file; the archived copy must still not use it.
+    write_record(root, h, "frozen/receipt.json", before, sha(b"masked"))
+    git(root, "add", ".")
+    git(root, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "anchor with record")
+    anchor = git(root, "rev-parse", "HEAD")
+    receipt.write_text("masked")
+    with h.snapshot(root, anchor, ("frozen",)) as archived:
+        assert (archived / "frozen/receipt.json").read_text() == '{"sourceCommit":"untrusted"}'

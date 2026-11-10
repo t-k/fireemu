@@ -32634,7 +32634,7 @@
             },
             {
               "path": "tools/auth-password-maximum/maximum_recorder.py",
-              "sha256": "0926b4c1f39afd25162ed45dab902c175ad3297f7a906083afb4e80971517d1d"
+              "sha256": "deacabae79e0ed6ef2084c58d761e25d20f77c6def6d1fe756c231824289c63b"
             },
             {
               "path": "tools/auth-pending-revocation/revocation_contract.py",
@@ -32686,7 +32686,7 @@
             },
             {
               "path": "tools/auth-password-maximum/maximum_recorder.py",
-              "sha256": "0926b4c1f39afd25162ed45dab902c175ad3297f7a906083afb4e80971517d1d"
+              "sha256": "deacabae79e0ed6ef2084c58d761e25d20f77c6def6d1fe756c231824289c63b"
             },
             {
               "path": "tools/auth-pending-revocation/revocation_contract.py",

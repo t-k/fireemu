@@ -5,7 +5,7 @@
   "denominator": {
     "path": "spec/compatibility/denominators/ip-fs-standard-2026-09-14.v2-auth-time-listcollectionids.v1.json",
     "version": "ip-fs-standard-2026-09-14.v2-auth-time-listcollectionids.v1",
-    "sha256": "798e2f668d3dc9fbc52d63fd0bfbef207ea6a0d1124a19cb95a1379f02479453"
+    "sha256": "a8153c2063791083ed7bbf59bf6ed55f4d2505c4093771669cc6a8d6583d9a47"
   },
   "purpose": "Close a smallest-operation production-observation slice: bounded Secure Token refresh authTime comparison and REST listCollectionIds request/response coverage.",
   "adapter": {

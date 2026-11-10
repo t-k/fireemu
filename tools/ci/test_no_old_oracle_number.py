@@ -8,6 +8,7 @@ example) cannot be found from a hash; `docs.local/tools/scan-encoded-numbers` co
 """
 
 import hashlib
+import random
 import re
 import subprocess
 import unittest
@@ -42,6 +43,27 @@ class RetiredOracleNumberTest(unittest.TestCase):
         wanted = salted(b"123456789012", "test-salt")
         for text in (b"123456789013", b"12345678901 2", b"12345678901", b"abc", b""):
             self.assertFalse(finds_number(text, wanted, "test-salt"), text)
+
+    def test_detector_property_over_random_surroundings(self):
+        rng = random.Random(20261110)
+        for _ in range(300):
+            number = str(rng.randrange(10**11, 10**12)).encode()
+            wanted = salted(number, "p")
+            head = bytes(rng.choice(b"abc/=\"- \n") for _ in range(rng.randrange(0, 6))) + bytes(
+                rng.choice(b"0123456789") for _ in range(rng.randrange(0, 4))
+            )
+            tail = bytes(rng.choice(b"0123456789") for _ in range(rng.randrange(0, 4))) + bytes(
+                rng.choice(b"xyz/,\"- \n") for _ in range(rng.randrange(0, 6))
+            )
+            self.assertTrue(finds_number(head + number + tail, wanted, "p"), (head, number, tail))
+            other = bytes(number[:-1]) + bytes([ord("0") + (number[-1] - ord("0") + 1) % 10])
+            self.assertFalse(finds_number(head + other + tail, wanted, "p"), (head, other, tail))
+
+    def test_the_hash_is_salt_colon_number(self):
+        # Pins the construction: the guard's stored hash was made this way, so a different
+        # construction would compare against nothing and pass silently.
+        self.assertEqual(salted(b"123456789012", "test-salt"), "cdabbd99cc8e65e631ccdafe205939506ee6a534ebaf9e6eb7c0c6ca1391892e")
+        self.assertRegex(RETIRED_NUMBER_SHA256, r"^[0-9a-f]{64}$")
 
     def test_salt_matters(self):
         self.assertFalse(finds_number(b"123456789012", salted(b"123456789012", "a"), "b"))

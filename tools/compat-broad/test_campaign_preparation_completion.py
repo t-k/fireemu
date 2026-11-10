@@ -12,10 +12,10 @@ from campaign_explain import binding, manifest, validate_manifest
 
 ROOT = Path(__file__).resolve().parents[2]
 HISTORICAL = {
-    "prod-campaign-explain-01-v7.json": "b540c9dae2a8998604e17f5163bb6ecb9add8e4e42ffde3b01cda5c74114f871",
-    "prod-campaign-explain-01-v7-binding.json": "8617178de84e19a2e3d958dce40507182fa3bc2e5bb26f1ae4dab853dadd46da",
-    "prod-campaign-explain-01-v8.json": "9c7355d031dc692c80ed068ea1cedfbaf7906e894adcc5baf38d518bf839a18b",
-    "prod-campaign-explain-01-v8-binding.json": "924a84b6616845c749cd2a5a25d8a2f4bac89b8a459d19f64ea06febdfa68566",
+    "prod-campaign-explain-01-v7.json": "f4d96c4783b6d8895fbd3de1f4c2e4a4562f1904ab89b3943fc86ecad92af151",
+    "prod-campaign-explain-01-v7-binding.json": "5ec3c303f5170df2f4a1e29606a695939d9da40a9376ea3f5f2ef511e4e94c14",
+    "prod-campaign-explain-01-v8.json": "a62e87f34a49324a5c8af0f149850687b4cf6f3f09f3b2d597aba899bd8d811b",
+    "prod-campaign-explain-01-v8-binding.json": "87307e902b2d272adc8fdde93b4fee9a6bb8e1571b635718f8bdc39b8596e528",
 }
 
 

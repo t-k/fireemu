@@ -59,7 +59,7 @@
     "observerSha256": "11681a270d37b64631b94dce76a16aec044af138e5a9ead2658fb77151cab64f",
     "manifestDigest": "f6a58269703ca0e1bf17ea9615cbe47af8a55efecbe4a5cc9c48eb6b03a68feb",
     "comparisonContractDigest": "a504ce1025925e6296bf1d6be194b164fa7f3d86575bbd258bad19b781b02bf7",
-    "configurationDigest": "cf2b716aa3ecc5bbb5dfc248980d05d05401f49897d39ffb3d0159ad8a63db80"
+    "configurationDigest": "e3bc85b3786ec8d44969b59cd49e8fd1181d9722eabf53d8d7977729cb89bb37"
   },
   "repairedValidation": {
     "collectionComplete": true,
@@ -67,9 +67,9 @@
       "collectorCommit": "aad1a41de926fae244b42ac1bd2baa57bf2bcdde",
       "collectorSourceSha256": "9be7b9318790245af53dc07527cd5304bd22ab83fd038a84c9dc35e9efade4bb",
       "observerSha256": "5c19995f167474442356e4bbe381c5f823f101ebe83557982ea12666c0a9a571",
-      "manifestDigest": "9e39bf548dd79a19e8c09931968effe7650ac81341a27201cad3ae8826c65675",
+      "manifestDigest": "ff8e3a7abd81fba8cb616a62cb924d1ec27175ba5b3bbc9668f059af541c8958",
       "comparisonContractDigest": "dfe6aea6a18c7eedf33a439fcd72b347064d800ab966111c44f4ccc1974b4e94",
-      "configurationDigest": "cf2b716aa3ecc5bbb5dfc248980d05d05401f49897d39ffb3d0159ad8a63db80"
+      "configurationDigest": "e3bc85b3786ec8d44969b59cd49e8fd1181d9722eabf53d8d7977729cb89bb37"
     },
     "artifactSha256": "a372d74aa99c319019bca992ac9248cc48cfd0a27b04f337353a56b70a34e657",
     "runtimeInputsDigest": "4ed1b06233d69d4e33489daa34534016962c9ab623508c27c64e44cefb53491c",

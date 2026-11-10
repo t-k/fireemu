@@ -54,6 +54,12 @@ def test_execution_commit_hashes_are_checked_against_real_git(publisher):
 def publishable_report(tmp_path, monkeypatch):
     _, _, report = run(tmp_path, monkeypatch, ttl=3901, delay={"signInWithPassword": 3})
     report["probeSourceCommit"] = COMMIT
+    # The fake run digests the working tree. A recorded receipt holds the digests the recorder files had
+    # at the recording commit, and the publisher checks them against git. The oracle project number was
+    # masked in these files afterwards (spec/compatibility/oracle-number-mask-2026-11-10.json), so the
+    # working tree no longer equals that commit.
+    for path in production.RECORDER_FILES:
+        report["probeInputs"][path] = production.git_blob_sha256(COMMIT, path)
     report["configRestoredReadback"]["phoneNumber"] = {}
     report["configReadback"] = {
         key: "0" * 64 if key == "sha256" else True

@@ -15,7 +15,7 @@ VERSION = "ip-fs-standard-2026-09-14.v2-auth-time-listcollectionids.v1"
 OUTPUT_PATH = "spec/compatibility/denominators/ip-fs-standard-2026-09-14.v2-auth-time-listcollectionids.v1.json"
 MAPPING_PATH = "spec/compatibility/denominators/ip-fs-standard-2026-09-14.v2-auth-time-listcollectionids.v1.mapping.json"
 DOCUMENT_PATH = "docs/compatibility/production-denominator-v2-auth-time-listcollectionids.md"
-PARENT_SHA256 = "29ee683b33cb401571b4a5fce36155d5d4605405a57d6073e7e377c0ab573b26"
+PARENT_SHA256 = "01c5c05fd30c843403f5ae94d5021b9420e32fcddd47ad2c45a851f8e3c3145a"
 AUTH_TIME_TARGETS = {
     "securetoken-v1:method:REST:securetoken.token",
     "securetoken-v1:request:REST:securetoken.token/request",

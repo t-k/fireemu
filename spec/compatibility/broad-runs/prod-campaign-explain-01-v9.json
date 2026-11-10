@@ -118,11 +118,11 @@
   ],
   "collector": "existing-batch-adapter-shared-v1",
   "environment": {
-    "configurationDigest": "cf2b716aa3ecc5bbb5dfc248980d05d05401f49897d39ffb3d0159ad8a63db80",
+    "configurationDigest": "e3bc85b3786ec8d44969b59cd49e8fd1181d9722eabf53d8d7977729cb89bb37",
     "database": "(default)",
     "databaseProjectionContractDigest": "24b4847314fe67940a1e0e8eb53e34e2bd007ef2e1d942639b51564677d30f18",
     "edition": "STANDARD",
-    "observerSha256": "d47fb7b26aed49807dac33832cb4fc4ca59d8abe2917883953fd0f8b02dc01a4",
+    "observerSha256": "7df79d1458f5487b4850d71aca29fc34fffa1a8ba04e2edbd055d4af49bbc46a",
     "project": "fireemu-35fe6",
     "projectNumber": "<project-number>"
   },
@@ -147,7 +147,7 @@
     "accounts": 0,
     "collector": "existing-batch-adapter-shared-v1",
     "configurationChanges": 0,
-    "configurationDigest": "cf2b716aa3ecc5bbb5dfc248980d05d05401f49897d39ffb3d0159ad8a63db80",
+    "configurationDigest": "e3bc85b3786ec8d44969b59cd49e8fd1181d9722eabf53d8d7977729cb89bb37",
     "contract": "shared-local-v1",
     "coordinatorRequests": 0,
     "costMicrousd": 10000,
@@ -504,7 +504,7 @@
     "metadataRequests": 0,
     "nonce": "{freshNonce}",
     "observationRequests": 18,
-    "observerSha256": "d47fb7b26aed49807dac33832cb4fc4ca59d8abe2917883953fd0f8b02dc01a4",
+    "observerSha256": "7df79d1458f5487b4850d71aca29fc34fffa1a8ba04e2edbd055d4af49bbc46a",
     "recoveryRequestIds": [
       "recovery:access-command",
       "recovery:tokeninfo",

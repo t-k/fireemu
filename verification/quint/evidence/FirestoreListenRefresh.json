@@ -312,7 +312,7 @@
     "crates/fireemu-core-auth/src/claims.rs": "ce62a2950fdb805be891cf4f84f6b93de99416d1ecafedf4818b243a45f73238",
     "crates/fireemu-core-auth/src/config_members.rs": "5abd1f45d964fdeeded7dac0aaa871406ed472e02acd7fb5f026cb7f4c3d0fa8",
     "crates/fireemu-core-auth/src/federation.rs": "f20a1041867425ba9ccba7efff5b10eae20c0d22bccda0f6c1a0f765aad9be52",
-    "crates/fireemu-core-auth/src/jwt.rs": "e135fb107e1b2ef95559821e7c46e299582d7b8ba1d56a133a9764750f8937c0",
+    "crates/fireemu-core-auth/src/jwt.rs": "d6dd38127743bfa31e1eec792a2533f02df6e8a0743a163214e4a0aa13d774c8",
     "crates/fireemu-core-auth/src/lib.rs": "4348efda90cac167294cbe3181d8f0d9eb1ecc289aa728e6c86609b38b5a4dc8",
     "crates/fireemu-core-auth/src/mfa.rs": "a49ba6183efddeebbbaa80f129ded0c21e2e5a1b72aaa44130a50773454707c7",
     "crates/fireemu-core-auth/src/mfa_config.rs": "a5957e1c03a1b2a6e419f518bb7c93e6c35390750bca58a0291a00efb790443a",

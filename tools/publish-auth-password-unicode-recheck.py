@@ -11,7 +11,7 @@ spec = importlib.util.spec_from_file_location(
 )
 old = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(old)
-PREVIOUS_SUBJECT = "9c0364b6cabdf9497c243db1956655e9d455a08578b0ce1f58bd39d5aa9dcfbf"
+PREVIOUS_SUBJECT = "5317fcb66c7ab93bdae0e8583e4af11d8bc76b5974465e080d3fb8a80f0ef8f9"
 BUNDLE = ROOT / "spec/compatibility/evidence/auth-password-unicode-recheck/receipt.json"
 PAGE = ROOT / "docs/compatibility/auth-password-unicode-recheck.md"
 

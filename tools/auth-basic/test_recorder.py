@@ -42,7 +42,7 @@ def test_routes_separate_production_and_local_credentials():
 def test_config_fails_closed_and_returns_only_safe_projection():
     r = recorder()
     config = {
-        "name": "projects/592603257417/config",
+        "name": "projects/<project-number>/config",
         "signIn": {"email": {"enabled": True, "passwordRequired": True}},
         "emailPrivacyConfig": {"enableImprovedEmailPrivacy": True},
         "secret": "SECRET",

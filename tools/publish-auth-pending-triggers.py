@@ -158,7 +158,7 @@ def project(report, trigger, recorder_commit):
         and report["target"] == "production"
         and report["trigger"] == trigger
         and report["project"] == "fireemu-35fe6"
-        and report["projectNumber"] == "592603257417"
+        and report["projectNumber"] == "<project-number>"
         and digest(report["corpus"]) == digest(corpus(trigger))
         and complete(report)
     )

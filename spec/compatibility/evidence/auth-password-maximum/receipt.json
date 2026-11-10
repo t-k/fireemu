@@ -1019,7 +1019,7 @@
     "recordedAt": "2026-09-10T13:08:47.480279+00:00",
     "target": "production"
   },
-  "publicationContractSha256": "cfd8324d4b2ba5ab7a0407773fdac8964ba735047bd0181b1ee25725aef34306",
+  "publicationContractSha256": "c702c5a6c082c0fc06004ff825801e2bc3af514d74049fc40f175ae67d4940d0",
   "schemaVersion": 2,
   "scope": "Maximum 4096 / oversize 4097 URL-safe ASCII password REST observation under recorded schema 1 ENFORCE min 6/max 4096 policy, no tenant, owned strict artifact and recorded production auth settings. Includes last-character and 4095-prefix signin controls, fixed credentials after oversize update and recorded cleanup. auth-password-maximum revision 1, 21 cases; candidate only, not all strings, Unicode, custom policies, SDK/Rules or expiry/revocation/fault-recovery guarantees.",
   "sourceReviewSha256": "29d327728a9807963338e1c85b927df2c7fec09d6435afe12bbab0ec472352a3"

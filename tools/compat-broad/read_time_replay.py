@@ -26,7 +26,7 @@ from broad import (
 )
 
 SAVED_PROGRAM_SHA256 = (
-    "613376ceac1ae5126803efe55f32f01ae8fcf27b20f8ded3d5cbbf23d102add9"
+    "9435cdf396913e29f79633b2aed19720ae028108828228cf7143f6e7dcf9c7f4"
 )
 PROGRAM_DIGEST = "adf956497d20db3a8bb48f036886b169b033a3883b4d2e3371152accf111100a"
 POSTSTATE_DOCUMENT = f"projects/{PROJECT}/databases/(default)/documents/rt/a"

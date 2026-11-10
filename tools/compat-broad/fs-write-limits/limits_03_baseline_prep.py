@@ -296,7 +296,7 @@ def _permission(permission: dict, nonce: str) -> None:
         raise ValueError("baseline preparation identity differs")
     if (
         permission["project"] != "fireemu-35fe6"
-        or permission["projectNumber"] != "592603257417"
+        or permission["projectNumber"] != "<project-number>"
     ):
         raise ValueError("baseline preparation project differs")
     if permission["database"] != "(default)":

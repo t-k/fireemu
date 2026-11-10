@@ -1160,7 +1160,7 @@
     "recordedAt": "2026-09-10T14:58:45.001575+00:00",
     "target": "production"
   },
-  "publicationContractSha256": "a37e0e8e4e2493fb80ed27c25179cf2b23ceea965e2cb9d780653b1ca1511dce",
+  "publicationContractSha256": "9bec68a4b26959f4def58ea3acc568f8de6ea0e9dd8938fd70c84af43a229c2d",
   "schemaVersion": 2,
   "scope": "Three generated password upper-bound inputs, each with a distinct dedicated account, under the recorded minimum 6 / maximum 4096 policy. End-user REST, no tenant, owned strict artifact versus production. Redacted observations of acceptance/refusal plus branch-specific credential/state controls; no human approval, no universal Unicode rule or SDK/Rules/expiry claim.",
   "sourceReviewSha256": "1d038c58417324cc6041cb9448d1879af78706cb9cf001c41afc88c81253aa06"

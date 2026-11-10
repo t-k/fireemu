@@ -4,7 +4,7 @@
 
 Nine production-only observations projected without secrets from the saved 2026-09-12 run of auth-refusal-precedence revision 1, recorded from a committed checkout with the recorder at 7d6d6431. The verification code is checked before the account state (a disabled account's held SMS session is refused INVALID_CODE with a wrong code and USER_DISABLED with the correct code); the same held pending credentials and sessions complete after re-enablement, so neither refusal consumes them; a client accounts:update carrying a tampered ID token and an administrator-only field is refused INVALID_ID_TOKEN with nothing applied on readback. Fresh completions for A and B bound the run, the configuration was restored with a matching whole-configuration digest, and both accounts were deleted with UID/email absence. The approval does not extend to a production/local comparison of this corpus, to INVALID_ID_TOKEN always winning for any invalid-token condition, to INVALID_CODE always winning for any MFA refusal, to a valid active token with an administrator-only field, to mfaSignIn:start on a disabled account, to an expired pending credential, to TOTP, tenants, SDK or Rules.
 
-Subject: `6c76f862a7b7a2d9ad557ae43d03d3787221089a76e999ae03478e20069fe3c4`. Recomputed from the complete receipt; this approval cannot transfer to a changed subject.
+Subject: `52da79dbcfd40cb43baca7f0dcf4dacc90d7d5a421a7a5e5f2616ce9a044417c`. Recomputed from the complete receipt; this approval cannot transfer to a changed subject.
 
 Reviewed commit: `ae4ec3cdca687e1bb780916957005e6bcb67778d`. Reviewer: `github:t-k (id:426779)`. Approval date: 2026-09-12.
 

@@ -4,7 +4,7 @@ Twelve scoped cases verified and approved as redacted semantic observations matc
 
 Display name setting, replacement and deletion through REST using end-user tokens; no tenant; local strict profile and recorded production configuration; only the recorded artifact, configuration and auth-display-name corpus revision 1 twelve cases; approved as redacted semantic observations matching the published checks.
 
-Subject: `f6e31fd28a7c05651df454843fe5c40c48b4e70552617b796f1398c702b0d2ec`. Recomputed from the complete receipt during offline validation; approval cannot transfer to a changed subject.
+Subject: `b51f1d7773da6c08f2d7e098f99c76d5f4f817d3e6c555bca7c94aae4b541023`. Recomputed from the complete receipt during offline validation; approval cannot transfer to a changed subject.
 
 Reviewed commit: `f54ce460f2b743354400cddd56554a3164f30b7b`. Reviewer: `github:t-k (id:426779)`. Approval date: 2026-09-10.
 

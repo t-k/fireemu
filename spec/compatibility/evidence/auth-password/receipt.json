@@ -790,7 +790,7 @@
     "recordedAt": "2026-09-10T05:46:03.907588+00:00",
     "target": "production"
   },
-  "publicationContractSha256": "7bb1af9629fe7133c00658d091a4ad2c5b725ee0c8a5b716db47c01c454b484b",
+  "publicationContractSha256": "c77df21ce9a6f92d45bafec4b025ba3d9b738d5784e3ab1100f24b6757d9be80",
   "schemaVersion": 2,
   "scope": "Password change REST using fresh end-user tokens; no tenant; strict owned local artifact and recorded production configuration; auth-password corpus revision 1 only. Production requires improved email privacy, omitted admin passwordPolicyConfig and explicit client policy schema 1 / ENFORCE / length 6-4096. Redacted semantic observations, not independent JWT verification, revocation timing, expired-token enforcement, recent-login boundaries, password-policy boundaries, SDK, MFA, Rules or public npm compatibility.",
   "sourceReviewSha256": "127bda837476ba8b5891d13774c011fb0f365daab6c56ff627e960fb162290ac"

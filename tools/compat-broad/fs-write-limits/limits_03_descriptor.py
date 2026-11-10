@@ -52,7 +52,7 @@ from o8_admission import authorize_transport
 from o8_campaign import CAMPAIGN_APPROVAL_FIELDS, CampaignDescriptor
 
 PROJECT = "fireemu-35fe6"
-NUMBER = "592603257417"
+NUMBER = "<project-number>"
 DATABASE = "(default)"
 FROZEN_INPUTS_KIND = "limits-03-frozen-inputs-v1"
 PERMISSION_KIND = "limits-03-owner-execution-permission-v1"

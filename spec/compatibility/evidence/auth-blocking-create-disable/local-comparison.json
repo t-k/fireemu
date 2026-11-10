@@ -645,7 +645,7 @@
     "target": "local",
     "targetRecordExists": true
   },
-  "productionSubjectSha256": "206490130d5191df9a25a80634315a2b2c0ba190860cc91f7455931a9c25b362",
+  "productionSubjectSha256": "b6e1ad0224e1464f80d6c2c728550e5099b397d5982c6890895714210f5b97c5",
   "publicationContractSha256": "ace7062d8b94e513a8c02d9dab84dd28efb1517c7e542975b71007b0952bb812",
   "schemaVersion": 1,
   "scope": "Row-by-row comparison of the production candidate record of auth-blocking-create-disable revision 2 with one run of the same corpus on an owned local fireemu artifact (strict profile, --only auth,functions, the local fixture in tools/auth-blocking-create-disable/function-local served by the repository's Functions runner). Semantic projections exclude elapsed milliseconds. This is a comparison record, not a new production run, not an approval, and not a claim beyond these ten cases. Production used the recorded first-generation blocking function; the owned local run used the equivalent second-generation Identity fixture supported by fireemu's Functions runner, installed with npm ci from the committed lockfile. This comparison covers the resulting Auth behavior, not first- versus second-generation Functions SDK parity."

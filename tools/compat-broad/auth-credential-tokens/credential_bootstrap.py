@@ -28,7 +28,7 @@ import credential_remote_transport as remote
 from broad_contract import digest
 
 PROJECT = "fireemu-35fe6"
-PROJECT_NUMBER = "592603257417"
+PROJECT_NUMBER = "<project-number>"
 SERVICE_ACCOUNT = "fireemu-oracle@fireemu-35fe6.iam.gserviceaccount.com"
 SCOPE = "https://www.googleapis.com/auth/cloud-platform"
 PERMISSION_KIND = "auth-credential-bootstrap-permission-v1"
@@ -569,7 +569,7 @@ def prepare(
     }
     if (
         not isinstance(auth.get("name"), str)
-        or auth.get("name") != "projects/592603257417/config"
+        or auth.get("name") != "projects/<project-number>/config"
     ):
         raise ValueError("Auth config project binding differs")
     if gate is not None:

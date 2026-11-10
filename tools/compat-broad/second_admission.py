@@ -26,7 +26,7 @@ def manifest():
         "kind": KIND,
         "seed": 20260913,
         "project": PROJECT,
-        "projectNumber": "592603257417",
+        "projectNumber": "<project-number>",
         "authCases": auth_cases(),
         "firestorePrograms": [p for p in firestore_cases() if p["id"] in FS_IDS],
         "diagnosticRows": 45,

@@ -5,7 +5,7 @@
     "kind": "second45-production-admission-v1",
     "seed": 20260913,
     "project": "fireemu-35fe6",
-    "projectNumber": "592603257417",
+    "projectNumber": "<project-number>",
     "authCases": [
       {
         "id": "second/auth/01",
@@ -588,7 +588,7 @@
     "productionApproval": null,
     "transport": "second45-bounded-production-http-v1",
     "mode": "mapped",
-    "localAdmissionDigest": "ff2ae95690a72a54b4e39ffc4077e3c39dd86564a8adc530ab144b5e0d086bab",
+    "localAdmissionDigest": "d2936b35d642e5d4a3a40ee1e2930de1a93cfb0cb376f87b9628f3c3d22fd412",
     "resources": {
       "ownedAccounts": 2,
       "concurrentDocuments": 1,
@@ -609,18 +609,18 @@
       "ownerMustConfirmStorageAndNetwork": true
     }
   },
-  "manifestSha256": "6f275645a8a0c7fb957bd37242a28eacf81af3734444912770edc3f28a494d98",
+  "manifestSha256": "0af45e517ff2f7e97d977a699a69fb01b9fe0bd3a6e44b9cb28ed9b17dda115d",
   "observerSha256": "2bbf234fd2b1543902b9d3c66720b5fb0d9b86d7a83f5675ae5e544b57f0b313",
   "comparisonContract": {
     "kind": "second45-production-local-comparison-v2",
-    "manifestDigest": "6f275645a8a0c7fb957bd37242a28eacf81af3734444912770edc3f28a494d98",
-    "localAdmissionDigest": "ff2ae95690a72a54b4e39ffc4077e3c39dd86564a8adc530ab144b5e0d086bab",
+    "manifestDigest": "0af45e517ff2f7e97d977a699a69fb01b9fe0bd3a6e44b9cb28ed9b17dda115d",
+    "localAdmissionDigest": "d2936b35d642e5d4a3a40ee1e2930de1a93cfb0cb376f87b9628f3c3d22fd412",
     "normalization": "second45-scoped-values-original-version-json-media-v2",
     "contentTypeEquivalence": "application/json with optional single UTF-8 charset; ASCII case, SP/HTAB and quoted charset; all other values exact",
     "independentRecipes": "second45-local-admission-v1",
     "receipt": "bounded-http-v1"
   },
-  "comparisonContractDigest": "0625bd76c028de64ff0ae9ae595b1c5f44bd48cc5475c63e806a8060cbf742cb",
+  "comparisonContractDigest": "616eb11a38f9b1f8e6d8ddb58843c798211d087b447edeb2a46af5309600f61a",
   "databaseProjectionContract": {
     "version": "database-settings-v2",
     "excludedResponseFields": [
@@ -639,7 +639,7 @@
   },
   "databaseProjectionContractDigest": "24b4847314fe67940a1e0e8eb53e34e2bd007ef2e1d942639b51564677d30f18",
   "project": "fireemu-35fe6",
-  "projectNumber": "592603257417",
+  "projectNumber": "<project-number>",
   "quotaProject": "fireemu-35fe6",
   "ownerIdentity": null,
   "permissionReference": null,
@@ -700,7 +700,7 @@
     "requestedScope": "One authorized read preflight; only on exact approved conditions one mapped45 batch; owned cleanup and postflight; comparison against bound local record. No retry.",
     "baselineSource": {
       "path": "spec/compatibility/broad-runs/bc38f392-execution-result.json",
-      "sha256": "5997e5ecc9f3da0addeed6b88c290cfc97c496e317c7625a9175232105953b88",
+      "sha256": "de9d0e64f024f7e98a1d18633f1dff82e14d8133d4474c53ec9c135152e84691",
       "basis": "Historical saved evidence, not current acquisition or inherited approval"
     },
     "proposedDatabaseProjection": {
@@ -724,9 +724,9 @@
     "proposedAuthConfigDigest": "7878eb2600c66f48c82ef55fb8c2443ab15689ea7542a77fbda206da06f817c2",
     "preflightCondition": "Owner must accept these exact baseline values/digests or supply another reviewed baseline before execution. Preflight must match Database projectionv2 including UID/name/location/edition/all unknown fields and Auth digest. No automatic adoption, retry, or settings change.",
     "independentChecks": [
-      "project fireemu-35fe6 / number592603257417",
+      "project fireemu-35fe6 / number<project-number>",
       "database(default) / STANDARD / FIRESTORE_NATIVE / us-central1",
-      "existing API-key ownership in project592603257417",
+      "existing API-key ownership in project<project-number>",
       "quota header fireemu-35fe6 for privileged management calls",
       "valid ADC token expiry; explicit unexpired permission and unused nonce"
     ],

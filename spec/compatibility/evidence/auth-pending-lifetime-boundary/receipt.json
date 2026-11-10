@@ -1001,7 +1001,7 @@
     "target": "production",
     "wallElapsedSeconds": 3970.3716924169566
   },
-  "publicationContractSha256": "ebdedcbf7493aa608b3816e1570f9fd0f0f065547aafa23b327612a3d4210d94",
+  "publicationContractSha256": "eb3aa976e28000ac8b2f5137db043b199eeb3d76788d6eb30d635080b6ee0b76",
   "schemaVersion": 1,
   "scope": "Ten sequential REST observations in production: fresh phone MFA completion controls surround independent pending credentials held untouched for 600, 1800, 3300 and 3900 seconds, each followed by start and, if accepted, finalize with a fresh SMS session. Six owned accounts, one test phone number, no tenant or blocking function, one recorded configuration and one run. The largest fully verified success is an observed survival lower bound. Refusals retain measured pending-age intervals and separate start/finalize stages; any boundary candidate assumes equivalent account conditions and monotonic usability and does not prove age-caused expiry. No lifetime upper bound, exact TTL, error precedence, universal account guarantee or result approval is asserted. Configuration recovery and account absence are verified. Refresh-token presence is not a refresh exchange. The expired-pending/independently-valid-code residual remains unobserved.",
   "sourceReviewSha256": "9afbbf733fe1a160cade47d7c781dc6a51ac9c4aa80a6b3354f67eb960d192ad"

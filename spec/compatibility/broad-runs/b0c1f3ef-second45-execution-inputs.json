@@ -5,7 +5,7 @@
     "kind": "second45-production-admission-v1",
     "seed": 20260913,
     "project": "fireemu-35fe6",
-    "projectNumber": "592603257417",
+    "projectNumber": "<project-number>",
     "authCases": [
       {
         "id": "second/auth/01",
@@ -588,7 +588,7 @@
     "productionApproval": null,
     "transport": "second45-bounded-production-http-v1",
     "mode": "mapped",
-    "localAdmissionDigest": "ff2ae95690a72a54b4e39ffc4077e3c39dd86564a8adc530ab144b5e0d086bab",
+    "localAdmissionDigest": "d2936b35d642e5d4a3a40ee1e2930de1a93cfb0cb376f87b9628f3c3d22fd412",
     "resources": {
       "ownedAccounts": 2,
       "concurrentDocuments": 1,
@@ -609,17 +609,17 @@
       "ownerMustConfirmStorageAndNetwork": true
     }
   },
-  "manifestSha256": "6f275645a8a0c7fb957bd37242a28eacf81af3734444912770edc3f28a494d98",
+  "manifestSha256": "0af45e517ff2f7e97d977a699a69fb01b9fe0bd3a6e44b9cb28ed9b17dda115d",
   "observerSha256": "8774e7c20cc7a21f718a7624506f9f8d05aafa2a07959b1922dad2580aeeb526",
   "comparisonContract": {
     "kind": "second45-production-local-comparison-v1",
-    "manifestDigest": "6f275645a8a0c7fb957bd37242a28eacf81af3734444912770edc3f28a494d98",
-    "localAdmissionDigest": "ff2ae95690a72a54b4e39ffc4077e3c39dd86564a8adc530ab144b5e0d086bab",
+    "manifestDigest": "0af45e517ff2f7e97d977a699a69fb01b9fe0bd3a6e44b9cb28ed9b17dda115d",
+    "localAdmissionDigest": "d2936b35d642e5d4a3a40ee1e2930de1a93cfb0cb376f87b9628f3c3d22fd412",
     "normalization": "second45-scoped-values-original-version-v1",
     "independentRecipes": "second45-local-admission-v1",
     "receipt": "bounded-http-v1"
   },
-  "comparisonContractDigest": "99fa75e87625e9af687a9be9c19819406475d784180e411fd85e91a72d4ee29d",
+  "comparisonContractDigest": "8f50911528cf22231d4a568a86c023f74f14a5c5cf7fb385e7d59b91bcf84833",
   "databaseProjectionContract": {
     "version": "database-settings-v2",
     "excludedResponseFields": [
@@ -638,7 +638,7 @@
   },
   "databaseProjectionContractDigest": "24b4847314fe67940a1e0e8eb53e34e2bd007ef2e1d942639b51564677d30f18",
   "project": "fireemu-35fe6",
-  "projectNumber": "592603257417",
+  "projectNumber": "<project-number>",
   "quotaProject": "fireemu-35fe6",
   "ownerIdentity": null,
   "permissionReference": null,

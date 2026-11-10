@@ -5,7 +5,7 @@
   "productionExecuted": false,
   "sourceCommit": "cfaebaefe1604cd01502213cd99c139f1fb1b516",
   "artifactSha256": "019cf6fea913cfdb38984d8dda72a0de5b99d8392d7c336528390a00d399e7ee",
-  "manifestSha256": "abffa5671e5dad221750e95d31d2c7226f42da2daa2f77d40a412a7a59ce8ee1",
+  "manifestSha256": "651bda8af9926f8eb9999a43089aea0b62279998d5e147bf208e27c7f3c0109d",
   "execution": {
     "runner": "existing shared_gate.py with the current Rust gRPC and REST integration harnesses",
     "commands": [

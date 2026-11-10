@@ -233,7 +233,7 @@
     "target": "production",
     "targetRecordExists": true
   },
-  "publicationContractSha256": "e6c3f2aea44bff9d99d0706d7d0669d1b003ccf2819c1315452396d93382e69b",
+  "publicationContractSha256": "a7885aae78bb0aa0defc0d22f8c36c62f49791295e6d59ab1a2971459a0e8dfb",
   "schemaVersion": 1,
   "scope": "Ten sequential REST observations in production only with a first-generation beforeSignIn function deployed for the run that answers disabled: true for a sign-up photo URL selector. Revision 1 of the corpus: production did not persist the sign-up photo URL (the control readback shows it absent), so the selector never matched and the target was created, signed in and refreshed like the control; the created-then-disabled case itself was therefore not observed by this revision. The function was removed and the trigger registration restored with a digest comparison; both accounts were deleted with absence confirmation. No MFA, phone or SMS configuration was touched. No human approval and no local artifact comparison.",
   "sourceReviewSha256": "c1cb52905b8467199c2caa71acb6d296b8fa72c14a3fca70f741b78fb068893d"

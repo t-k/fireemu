@@ -321,7 +321,7 @@
     "target": "production",
     "wallElapsedSeconds": 366.833954666974
   },
-  "publicationContractSha256": "c3b6b05f8337bab381f8121545a25ee2ab4534d827735ad6d5bf76243c2b50b9",
+  "publicationContractSha256": "8bd1cba3a400452e6d63809af21e41666efba7f57186334c8ef5b131b2618694",
   "schemaVersion": 1,
   "scope": "Eight sequential REST observations in production only: a fresh phone MFA completion (control); then, for each of three pending credentials held untouched from a common origin and aged by real waiting to about 2, 120 and 300 seconds, mfaSignIn:start with a freshly opened SMS session (so only the pending age is large) and, on an acceptance, a finalize of that fresh session; a fresh completion (control) closes the run. One independent account per age, phone MFA with one test phone number, no tenant, no blocking function, one run. The oracle configuration was changed for the run and restored with a digest comparison. This establishes a lower bound on the pending lifetime; a refused age records its error but does not, in this revision, establish an upper bound, because the corpus does not prove a refusal is due to expiry; it pins no exact TTL and no error precedence. No human approval, no local artifact comparison, no claim about tenants, SDK or Rules, and no separation of pending-versus-session expiry.",
   "sourceReviewSha256": "1e796e157e67515c696c636146f8f889fdb5137199a377820976d0d528190262"

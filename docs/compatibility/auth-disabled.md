@@ -25,7 +25,7 @@ Eighteen sequential REST route observations across baseline, disabled and re-ena
 | reenabled-b-id | accepted / none | accepted / none | True | 29 / 2041 |
 | reenabled-b-refresh | accepted / none | accepted / none | True | 33 / 2342 |
 
-Review subject (unapproved): `ff502af7fc37542347394d0f28e8df1b9b1566b64a5acb496a41402f040cf3de`.
+Review subject (unapproved): `2cbaf584ef6568167ea496c998b6cc421488081ac1be190be2b81b5553fcee85`.
 
 Each phase begins after sequential Admin readback of target and control (baseline after setup). Elapsed milliseconds measure request start since phase start, not server-side propagation. Requests are sequential, not simultaneous or a long-term observation schedule. Timing is retained and bounded to 120 seconds but deliberately excluded from semantic equality.
 

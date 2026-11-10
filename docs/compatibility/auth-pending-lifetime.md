@@ -17,7 +17,7 @@ Eight sequential REST observations in production only: a fresh phone MFA complet
 
 Sampled ages: 2, 120, 300 s. Verified usable: [2, 120, 300]. Refused: none. Indeterminate (accepted without a verified token): none. This establishes a lower bound of **300 s** on the pending lifetime (not an infinite lifetime). A refused age records its error, but this revision does not prove a refusal is due to expiry, so it asserts no lifetime upper bound.
 
-Review subject (unapproved): `5f2c4fa33a377302901d659cd5e9d9fd588fb893d140dc10eb6baf7a2d489698`.
+Review subject (unapproved): `14883bcf368b89e4bb7f39e3f5cdb9bb26495026d3d77bc988005d76e5124b9d`.
 
 Each pending credential was obtained near a common origin and left untouched until its own diagnostic, so no intermediate access could extend it; the SMS session was opened fresh at the diagnostic, so its age at finalize is recorded as an interval near zero while only the pending age grows. A sampled age is counted usable only when its start returned a session and its finalize both succeeded and passed every identity check; an accepted finalize with a missing or unverifiable token is recorded but counts as indeterminate, not usable. A refused start records its error and skips its finalize. The pending age at start and the session age at finalize are kept in a separate timing region on each row, saved on refusal too, and excluded from semantic equality along with the elapsed milliseconds, since they vary across runs and clocks.
 

@@ -19,7 +19,7 @@ Exactly six-character URL-safe ASCII password change via fresh end-user REST tok
 | delete | Matched | Matched | — / — |
 | deleted-account-absent | Matched | Matched | — / — |
 
-Review subject (no approval granted): `b7ad987bdd466784b379a8281a3137e1d1dc259513df426cc9774a68efad7bb4`.
+Review subject (no approval granted): `e65faa189f5322362f0c4af1df8f5ef8044ea233e95a9ba062937fe9473c0594`.
 
 The original random password is proven by baseline signin before accounts:update changes it to a distinct exactly six-character URL-safe ASCII password with returnSecureToken=true. The update response ID token is used for lookup; its refresh token is used for refresh and a further lookup. The old password is expected to fail with HTTP400 INVALID_LOGIN_CREDENTIALS under the recorded improved-email-privacy setting. The new password must sign in as the same UID and its ID token must retrieve that account.
 

@@ -6,7 +6,7 @@ The [single decision draft](../../spec/compatibility/broad-runs/a32fa8a7-owner-d
 
 On 2026-09-12 at 13:57:52–13:57:54 UTC, one ADC acquisition and four HTTP requests were performed: tokeninfo 200, project 200, Database 200, Auth configuration 403. No automatic retry followed. API-key ownership was not requested because the Auth read failed and no approved key was available in the environment. No data or configuration mutation occurred. The acquisition stopped in 5.18 seconds, below the authorized 180-second bound.
 
-Database identity was confirmed as project fireemu-35fe6/number 592603257417, database (default), us-central1, Standard Native. The draft contains its UID, full settings projection, acquisition timestamp, exact response-byte SHA256 and canonical parsed-response digest. The unchanged database-settings-v1 contract produced projection digest `1a067449eec406349580f171ae760ac33f5bc6ff0e0a53e00d26096da75e8fe8`. Auth's 403 response digest is refusal evidence, never an Auth configuration digest. Raw responses, especially tokeninfo, remain private.
+Database identity was confirmed as project fireemu-35fe6/number <project-number>, database (default), us-central1, Standard Native. The draft contains its UID, full settings projection, acquisition timestamp, exact response-byte SHA256 and canonical parsed-response digest. The unchanged database-settings-v1 contract produced projection digest `1a067449eec406349580f171ae760ac33f5bc6ff0e0a53e00d26096da75e8fe8`. Auth's 403 response digest is refusal evidence, never an Auth configuration digest. Raw responses, especially tokeninfo, remain private.
 
 ## Pricing conditions
 
@@ -34,7 +34,7 @@ No production-batch recording, cleanup or compatibility verdict exists for this 
 
 A separate 180-second window was explicitly authorized with `x-goog-user-project: fireemu-35fe6` on management requests. At 2026-09-12T14:07:48 UTC, one existing-ADC command and two direct HTTP requests ran: tokeninfo 200 and Auth configuration 200. The collector exited after 2.37 seconds. Project and Database were not reread. ADC's internal network traffic was not separately instrumented; the report distinguishes command invocations from directly issued HTTP requests. No persistent ADC/gcloud settings, IAM or oracle data were changed.
 
-The helper incorrectly required `projects/fireemu-35fe6/config`; the valid response used `projects/592603257417/config`. This is a collection-side validation defect, not an Auth refusal or runtime compatibility gap. Execution stopped before the API-key lookup. No automatic retry or additional oracle request followed. Offline examination matched the response number to the already verified project and confirmed the successful response's canonical Auth digest as `7878eb2600c66f48c82ef55fb8c2443ab15689ea7542a77fbda206da06f817c2`. Its raw-byte digest is `b6e081a061371ee0b1bf4068f417a4274fce7650e768ae36dabf169acb3cae27`. This digest is from HTTP 200, not the earlier 403 response.
+The helper incorrectly required `projects/fireemu-35fe6/config`; the valid response used `projects/<project-number>/config`. This is a collection-side validation defect, not an Auth refusal or runtime compatibility gap. Execution stopped before the API-key lookup. No automatic retry or additional oracle request followed. Offline examination matched the response number to the already verified project and confirmed the successful response's canonical Auth digest as `7878eb2600c66f48c82ef55fb8c2443ab15689ea7542a77fbda206da06f817c2`. Its raw-byte digest is `b6e081a061371ee0b1bf4068f417a4274fce7650e768ae36dabf169acb3cae27`. This digest is from HTTP 200, not the earlier 403 response.
 
 The retrieved configuration enables email/password and anonymous sign-in and lists no blocking triggers. Its existing API key is available in the private response, but independent key ownership is still unconfirmed. No token, key value, full Auth configuration or other private response was added to public evidence. The original acquisition report remains unchanged; a separate offline-validation record explains why the Auth body is valid despite the helper's stopped status.
 
@@ -53,7 +53,7 @@ The [single decision draft](../../spec/compatibility/broad-runs/a32fa8a7-owner-d
 
 ## Owner-authorized API enablement
 
-The owner subsequently asked the assistant to enable the required API. Using the same ADC principal and request-level quota project fireemu-35fe6, one `services.enable` request enabled only `projects/592603257417/services/apikeys.googleapis.com`. One operation poll reported completion and an exact-service readback confirmed `ENABLED`. The operation followed the documented [Service Usage enable method](https://docs.cloud.google.com/service-usage/docs/reference/rest/v1/services/enable); no IAM grants or global credential/quota changes were made.
+The owner subsequently asked the assistant to enable the required API. Using the same ADC principal and request-level quota project fireemu-35fe6, one `services.enable` request enabled only `projects/<project-number>/services/apikeys.googleapis.com`. One operation poll reported completion and an exact-service readback confirmed `ENABLED`. The operation followed the documented [Service Usage enable method](https://docs.cloud.google.com/service-usage/docs/reference/rest/v1/services/enable); no IAM grants or global credential/quota changes were made.
 
 The action ran at 2026-09-12T14:20:41–14:20:47 UTC and stopped after 8.4051 seconds: one ADC command and five directly issued HTTP requests (tokeninfo, enable, operation poll, service-state readback, key lookup). The private response hashes and per-request quota project are in the single decision draft. Persistent ADC/gcloud configuration hashes were unchanged and the ADC principal matched the prior authorized reads. A narrow independent security review of this enablement scope had no Must Fix or Should Fix findings; it was not a repeated 46-row technical review.
 
@@ -62,7 +62,7 @@ The immediate API-key lookup still returned 403 with the prior API-not-used-or-d
 
 ## Post-enablement ownership confirmation
 
-Following the owner's new execution instruction, one bounded key-ownership read completed successfully at 2026-09-12T14:23:29 UTC. The window took 2.8001 seconds, with one existing-ADC acquisition and two direct HTTP requests: tokeninfo 200 and API-key lookup 200. The lookup explicitly used quota project fireemu-35fe6 and confirmed the existing key belongs to project number 592603257417. Its raw-response SHA256 is `882e81125f2cd679a7cac6d30b27449dea81a209b81febbf549b492772568771`. No retries, additional API enablement, persistent credential changes or data mutations occurred. Earlier failures remain historical records; this success does not rewrite them.
+Following the owner's new execution instruction, one bounded key-ownership read completed successfully at 2026-09-12T14:23:29 UTC. The window took 2.8001 seconds, with one existing-ADC acquisition and two direct HTTP requests: tokeninfo 200 and API-key lookup 200. The lookup explicitly used quota project fireemu-35fe6 and confirmed the existing key belongs to project number <project-number>. Its raw-response SHA256 is `882e81125f2cd679a7cac6d30b27449dea81a209b81febbf549b492772568771`. No retries, additional API enablement, persistent credential changes or data mutations occurred. Earlier failures remain historical records; this success does not rewrite them.
 
 Project, Database, Auth configuration and independent API-key ownership are now available in the single decision JSON. The original a32fa8a7 execution package remains immutable. A minimal replacement candidate is being prepared solely to supply and bind the explicit quota header required by the current ADC. Production permission is still absent; the ownership read is not a 46-row batch execution.
 
@@ -115,8 +115,8 @@ The [new execution inputs](../../spec/compatibility/broad-runs/bc38f392-executio
 | --- | --- |
 | Execution commit | `bc38f392077784509f7fbb8993d5be66c1a8be14` |
 | Observer SHA256 | `1501aea61749d79d32238b9329f3d75370d9d500322ffab331ec0c8b3505342f` |
-| Manifest SHA256, unchanged | `4b6d42bc5acd1a697622b25325ba67620af272d5c44f5d00982dbffe8bb8cc3f` |
-| Comparison contract digest | `ec0ef13fc77b6edf0f4940f472267b91b117707b36aac15a00c0a6aea96e89dc` |
+| Manifest SHA256, unchanged | `854aa3d3446158f89da7cd69665cee759dea8dc4ed7fe0e5bd842977923e7811` |
+| Comparison contract digest | `f061cb4eaa9df8ee367a6f64f3a4f2d0522841ee30389b1150c340f1b329e53e` |
 | Projection contract digest | `24b4847314fe67940a1e0e8eb53e34e2bd007ef2e1d942639b51564677d30f18` |
 | Approved-response v2 settings candidate digest | `31957f98b7ec76e9c2e7a04803772f7270763a8ed62037fbdefa74c2c8f71d33` |
 | Proposed unused nonce | `377db86cda534573b00d4422bd81db77` |

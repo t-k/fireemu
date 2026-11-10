@@ -756,7 +756,7 @@
     "recordedAt": "2026-09-10T03:08:04.933082+00:00",
     "target": "production"
   },
-  "publicationContractSha256": "e63cfe55acdff8a9bc891b596efcb9d8a8815f155d0eaf5ba2ae0f436d0058b9",
+  "publicationContractSha256": "997840628ebebf463ecd54eb8eaca8b6073c82eb607fd74ad2a11588896f81a7",
   "schemaVersion": 2,
   "scope": "Email/password REST; default project; strict local artifact and recorded production configuration; corpus revision 2; twelve cases only; redacted semantic observations, not raw responses or independent JWT signature/expiry enforcement proof. No SDK, Rules, MFA, OOB, tenant, public npm or complete Auth claim.",
   "sourceReviewSha256": "de08725e523943d178cf92f5325e9ec1a864de28eb13710dcb04d2e484fc8d73"

@@ -20,7 +20,7 @@ Eleven sequential REST observations in production only with the disabling before
 
 Disabled flag as read back: x-readback-before: False at Nones; x-readback-immediate: False at 0s; x-readback-after-5s: False at 5s; x-readback-after-30s: False at 31s; y-readback-after-30s-unread: False at 30s.
 
-Review subject (unapproved): `81dae6d26f525a31e121abb87669e875026696f50ce44a223fc9c396c9806b9b`.
+Review subject (unapproved): `096d16ab0e6b95394847f5dd5fe46ce2ee40b1d717f99c4bbdf11d7cfb7e536e`.
 
 The seconds are measured by the recorder between the refused sign-in's response and the readback request; they are not server-side propagation measurements. A readback that reads false is a fact about that moment on that account, not a rule; the gap ledger (GAP-AUTH-001) names what follows from the pattern across the five points.
 

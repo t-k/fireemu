@@ -15,7 +15,7 @@ from second_mapping import comparable, expected_ids, validate_rows, validate_tra
 
 
 PINNED_PRODUCTION_CANDIDATE_SHA256 = (
-    "8938a0c31909a85753916dfeed095d102dfaa9cc4b1f6ebd6b93060b1c9d4d73"
+    "fa07360bf6deb1567f43eaeed0c2b0256b58ef11bb0c2f24c7c6827897607b96"
 )
 PARENT_RUNTIME_ANCHOR = (
     "spec/compatibility/broad-runs/second45-parent-runtime-anchor-v4.json"

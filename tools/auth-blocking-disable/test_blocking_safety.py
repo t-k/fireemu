@@ -9,7 +9,7 @@ import blocking_recorder as recorder
 from blocking_contract import DISABLING_CLAIM, TEST_CODE
 
 CONFIG_INITIAL = {
-    "name": "projects/592603257417/config",
+    "name": "projects/<project-number>/config",
     "signIn": {"email": {"enabled": True, "passwordRequired": True}},
     "emailPrivacyConfig": {"enableImprovedEmailPrivacy": True},
     "mfa": {"state": "DISABLED"},

@@ -226,9 +226,9 @@ def _management_receipt(monkeypatch, body, *, status=200):
     "body",
     [
         {"name": "projects/fireemu-35fe6/config"},
-        {"name": "projects/592603257417/config"},
+        {"name": "projects/<project-number>/config"},
         {
-            "name": "projects/592603257417/config",
+            "name": "projects/<project-number>/config",
             "projectId": "fireemu-35fe6",
         },
         {
@@ -256,10 +256,10 @@ def test_management_receipt_accepts_official_config_resource_name(monkeypatch, b
             "projectId": "other-project",
         },
         {
-            "name": "projects/592603257417/config",
+            "name": "projects/<project-number>/config",
             "projectId": "other-project",
         },
-        {"name": "projects/592603257416/config"},
+        {"name": "projects/111222333444/config"},
         {"projectId": "fireemu-35fe6", "unexpected": True},
         {"name": 42},
     ],

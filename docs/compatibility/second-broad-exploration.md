@@ -72,7 +72,7 @@ The broad offline suite passed70 tests; Ruff and ty passed. Existing CI discover
 
 Rules used the existing `conformance/src/rules-probe/session-programs.mjs` with the six selected inputs in the receipt and `tools/compat-broad/local-guard.mjs`. SDK used `tools/sdk-smoke/rules-unit-testing-explicit-rules.mjs` and `tools/sdk-smoke/listener-replacement.mjs` under the owned executable. The private wrappers only supplied ports, profiles, rules, cleanup and environment. Early wrapper failures preceded SDK execution: control-URL validation, dropped emulator variables and a disabled Hub (`--hub-port 0`). A reserved positive Hub port and explicit validated child environment resolved them. Both SDK scripts and all registered listeners then terminated successfully. These wrapper failures are retained privately and are not counted as runtime failures.
 
-Auth local execution explicitly configures project`fireemu-35fe6` to number`592603257417`. Historical Firestore uses`demo-firestore-probe`. Rules uses`demo-rules-matrix`; SDK uses`demo-app` and a local worker project. These demo projects have an explicit empty `authProjectNumbers` map and retain the project-ID fallback; no oracle number is silently assigned to them.
+Auth local execution explicitly configures project`fireemu-35fe6` to number`<project-number>`. Historical Firestore uses`demo-firestore-probe`. Rules uses`demo-rules-matrix`; SDK uses`demo-app` and a local worker project. These demo projects have an explicit empty `authProjectNumbers` map and retain the project-ID fallback; no oracle number is silently assigned to them.
 
 ## Review and next production candidate
 

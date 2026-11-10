@@ -18,7 +18,7 @@ Row-by-row comparison of the approved production record of auth-refusal-preceden
 
 Differing rows: none.
 
-Comparison subject (unapproved): `81b71859a84bb7aa08dc8312b1fbf59c94d62e6a1e3eb8d1c71609b2f4e5f2f1`. Production subject compared: `6c76f862a7b7a2d9ad557ae43d03d3787221089a76e999ae03478e20069fe3c4`.
+Comparison subject (unapproved): `580b1694232d6f2bdbff27cccaad8d4a6a61478673b53ffea234316e95246546`. Production subject compared: `52da79dbcfd40cb43baca7f0dcf4dacc90d7d5a421a7a5e5f2616ce9a044417c`.
 
 Local artifact `0.7.0` built from the tree at `c3a7973b31274311ac64835aec761e0bb2a4c1e9` (repository HEAD `c3a7973b31274311ac64835aec761e0bb2a4c1e9` at run time) with recorder files at `c3a7973b31274311ac64835aec761e0bb2a4c1e9`; strict profile. Owned process exit 0 with listeners closed; both accounts were deleted with absence confirmation. The tampered-token update was refused on the corrected artifact with A unchanged on readback (True).
 

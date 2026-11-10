@@ -19,7 +19,7 @@ Ten sequential REST observations in production only: password sign-ins of target
 
 Administrative password replacement of the disabled account: **accepted** (no error), tokens returned: False. Administrative photo update: **accepted** (no error), tokens returned: False. The disabled account's own sign-in with the new password: refused / USER_DISABLED; after re-enablement: accepted.
 
-Review subject (unapproved): `c5edbe9850fc52c66c666ca0c62961af3c4ad214fc074a950380c592960560fd`.
+Review subject (unapproved): `dc566656b98026aad05bccc1e55388ae90b24271902a8149979ffd7f2a08e570`.
 
 The two administrative updates carry `readbackApplied`, which requires the update to be visible through privileged lookup with the account still disabled and (for the password update) the selected non-photo fields unchanged. `tokensReturned` records whether the update response carried an ID token; the token rows run exactly when it did. Elapsed milliseconds are cumulative time from the recorder's measurement origin (set before account setup), sampled when each row is recorded after its checks; they are neither request latency nor time since the disable, and are excluded from semantic equality.
 

@@ -2,7 +2,7 @@
 
 Candidate only: eight generated inputs have identical redacted public results on the new local artifact and the retained production observation. No human approval is granted or inherited.
 
-Review subject (unapproved): `5f13dcc611017940756158cbf225cc2efd85ffeed4d40fca4445039d7088a885`.
+Review subject (unapproved): `e660bd99da8c990aaa708c17926eff424044a0912450f3c1baead3b3e351f1fe`.
 Local runtime source: `ed7156fd720145871cc3e11f9aca64449d11a005`; artifact SHA-256: `93abc07e5bbc43623a6859acfadda37d8a361b28777bc3f50909184cf0560fd3`.
 Local capture: `2026-09-10T14:31:25.646604+00:00`. Production capture: `2026-09-10T14:22:14.663890+00:00` (reused unchanged; not a new production run).
 

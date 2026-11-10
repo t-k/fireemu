@@ -16,7 +16,7 @@ Seven sequential REST observations in production only for the password-reset tri
 
 Transition (`trigger`): **accepted / none**. Held credential after the transition: start accepted / none, finalize accepted / none. Provider linked as a precondition: False.
 
-Review subject (unapproved): `962e5d44b5ace414a8ad3743b2db3441d2757f151c3087ee26b8c825c5d76b6b`.
+Review subject (unapproved): `9e855872b7e9bdb6e2cfc7c67ea90a7c429c3ad4367caa0b57e1a2d7e89c4975`.
 
 The held credential and SMS session were created before the transition and presented afterwards on the same session, so the held rows show the transition's effect on the pre-existing credential. The held rows are diagnostic: accepted and refused are both valid observations, and lookup and refresh run only when the held finalize was accepted. Elapsed milliseconds are cumulative from the recorder's measurement origin, sampled when each row is recorded; they are excluded from semantic equality.
 

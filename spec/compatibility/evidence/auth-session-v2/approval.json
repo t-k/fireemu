@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "subjectSha256": "2650710c03f4ea3fce3e066ef14be16be801b63af14916666b7d7a5bfb24e4f1",
+  "subjectSha256": "87d06ec14e58712a0188b4b7578afc656ac26fec0df1471421551bc3aa59fd92",
   "sourceCommit": "e7360c5be399a4657dc33c1cdb7b49d47857347c",
   "scope": "The 34 auth-session-v2 revision 2 observations, limited to the recorded artifact, configuration and corpus; end-user REST routes, no tenant, local strict profile and recorded production authentication/password-policy settings. Approved as redacted observations matching the published comparison conditions: fixed pre-change A/B ID and refresh tokens, changed-response token controls, finite target offsets 0/10/30 seconds, and two fixed invalid-refresh input controls.",
   "cases": [

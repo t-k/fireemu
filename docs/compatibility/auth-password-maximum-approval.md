@@ -4,7 +4,7 @@
 
 The 21 auth-password-maximum revision 1 cases, limited to the recorded artifact, configuration and corpus; end-user token REST routes, no tenant, local strict profile and recorded production minimum 6 / maximum 4096 password policy. Approved as redacted observations of a generated 4096-character password update and signin, last-character and prefix signin rejection, 4097-character update refusal, subsequent fixed-credential use, selected account-field preservation and recorded deletion/process termination. This does not approve administrator-only field authorization.
 
-Subject: `ed7acb486dc950697ef562d645a8091396669812f2d5556001c86121ba87bd6f`. Recomputed from the complete receipt during offline validation; this approval cannot transfer to a changed subject.
+Subject: `4dd86d75211845629e9c1082e9da50a67fb5f112ff784b0af45c9b61e79e28b1`. Recomputed from the complete receipt during offline validation; this approval cannot transfer to a changed subject.
 
 Reviewed commit: `1ac61055283018857864efc877d9d7021e255832`. Reviewer: `github:t-k (id:426779)`. Approval date: 2026-09-10.
 

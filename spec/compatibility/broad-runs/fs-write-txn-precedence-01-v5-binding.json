@@ -5,7 +5,7 @@
   "productionExecuted": false,
   "manifest": {
     "path": "spec/compatibility/broad-runs/fs-write-txn-precedence-01-v5.json",
-    "sha256": "16128caadec4998510a66a8f2a4761fe6dc65492a2454fb7581bb1c608db574d"
+    "sha256": "fce5f69ad72d49c1b2557b52ce99b96973d95f6edba868b6d6fb55ae192b0537"
   },
   "source": {
     "commit": "dcd58cea79b1571da082c9d3cceb06afb91b1865",
@@ -39,7 +39,7 @@
     "ownerIdentity": null,
     "permissionReference": null,
     "projectId": "fireemu-35fe6",
-    "projectNumber": "592603257417",
+    "projectNumber": "<project-number>",
     "database": "(default)",
     "tenant": null,
     "executionWindow": {

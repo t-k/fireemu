@@ -21,7 +21,7 @@ Twelve sequential REST observations in production only with a first-generation b
 
 Hook outcomes: password sign-in of the claimed account **refused** (USER_DISABLED), phone MFA finalize of the claimed account **refused** (USER_DISABLED). Disabled flag read back through Admin immediately afterwards: C False, A True. Second sign-ins: C refused, A refused.
 
-Review subject (unapproved): `81e74c75576f91b3cf889cae905e4eb21437a8f6a86846082b160dc1e4e6db0d`.
+Review subject (unapproved): `815f37bf9d5682446c26386c5b3fbca1e5b8a763649baf1ceb63bda00cb8eae3`.
 
 The function was deployed from the checked-in source in `tools/auth-blocking-disable/function` (first-generation API, because Identity Platform registers and signs for the cloudfunctions.net URI that the second-generation identity handler rejects). It disables only accounts carrying the claim set on A and C through privileged accounts:update; B never carries it. The trigger registration was read back before the observations and is absent in the restore readback. Elapsed milliseconds are cumulative time from the recorder's measurement origin (set before account setup), sampled when each row is recorded after its checks; they are neither request latency nor hook latency, and are excluded from semantic equality.
 

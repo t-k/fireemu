@@ -41,7 +41,7 @@ No-password-change REST continuity control for fixed A/B ID and refresh tokens p
 | delete | accepted | accepted | Same observed result | 35219–35222 / 52540–52959 |
 | deleted-account-absent | accepted | accepted | Same observed result | 35227–35227 / 53613–53613 |
 
-Review subject (no approval granted): `8d8214f936b5061bf584e164f55a4a41c8a0a346354b0cb955c04973e29ee0b2`.
+Review subject (no approval granted): `920fe1a0b28d95d89ca06f34d711d020aa8039fbded777f281ba7a5610dd0029`.
 
 One dedicated account supplies two separated signin credential sets A/B. Their original ID and refresh bytes are frozen, and each original refresh token works twice before observation. After at least three seconds, reference-refresh exchanges A's original refresh token and performs lookup with the issued ID token. Sampling starts after this complete reference operation. Reference refresh bytes may equal A's original refresh token: this is not a third independent session, physical device or newly rotated lineage.
 

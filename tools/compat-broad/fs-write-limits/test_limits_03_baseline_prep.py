@@ -623,7 +623,7 @@ def _permission(nonce="b" * 32):
         "ownerIdentity": "owner",
         "recoveryOwner": "recovery",
         "project": "fireemu-35fe6",
-        "projectNumber": "592603257417",
+        "projectNumber": "<project-number>",
         "database": "(default)",
     }
 
@@ -700,7 +700,7 @@ def test_metadata_packet_rejects_malformed_api_key_readback(tmp_path):
         {
             "id": "observation:project",
             "status": 200,
-            "value": {"projectId": "fireemu-35fe6", "projectNumber": "592603257417"},
+            "value": {"projectId": "fireemu-35fe6", "projectNumber": "<project-number>"},
         },
         {
             "id": "observation:database",
@@ -746,7 +746,7 @@ def test_metadata_packet_rejects_tampered_project_readback():
         {
             "id": "observation:project",
             "status": 200,
-            "value": {"projectId": "tampered", "projectNumber": "592603257417"},
+            "value": {"projectId": "tampered", "projectNumber": "<project-number>"},
         },
         {
             "id": "observation:database",
@@ -769,7 +769,7 @@ def test_metadata_packet_rejects_tampered_project_readback():
         {
             "id": "observation:key",
             "status": 200,
-            "value": {"parent": "projects/592603257417/locations/global", "name": "x"},
+            "value": {"parent": "projects/<project-number>/locations/global", "name": "x"},
         },
     ]
     with pytest.raises(ValueError):
@@ -901,8 +901,8 @@ def test_capture_uses_real_loopback_worker_for_all_four_metadata_reads(
                     time.sleep(13)
                     return
                 body = {
-                    "parent": "projects/592603257417/locations/global",
-                    "name": "projects/592603257417/locations/global/keys/test",
+                    "parent": "projects/<project-number>/locations/global",
+                    "name": "projects/<project-number>/locations/global/keys/test",
                 }
                 if fault == "key":
                     body["name"] = "projects/other/locations/global/keys/test"
@@ -910,15 +910,15 @@ def test_capture_uses_real_loopback_worker_for_all_four_metadata_reads(
                 body = {
                     "name": "projects/wrong/config"
                     if fault == "auth"
-                    else "projects/592603257417/config",
+                    else "projects/<project-number>/config",
                     "signIn": {},
                 }
             elif path.startswith("/v1/projects/fireemu-35fe6"):
-                body = {"projectId": "fireemu-35fe6", "projectNumber": "592603257417"}
+                body = {"projectId": "fireemu-35fe6", "projectNumber": "<project-number>"}
                 if fault == "project":
                     body["projectNumber"] = "1"
             else:
-                body = {"name": "projects/592603257417/config", "signIn": {}}
+                body = {"name": "projects/<project-number>/config", "signIn": {}}
             if path != "/token" and "tokeninfo" not in path:
                 endpoint = (
                     "database"

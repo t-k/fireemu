@@ -79,7 +79,7 @@ def _synthetic_o7(tmp_path):
             "requiredScopes": ["https://www.googleapis.com/auth/cloud-platform"],
             "requiredRole": "roles/firebaseauth.admin",
         },
-        api_key_project_number="592603257417",
+        api_key_project_number="<project-number>",
     )
     inputs = freeze_inputs(
         descriptor,
@@ -307,5 +307,5 @@ def test_rev3_permission_requires_owner_principal_and_bound_api_project(tmp_path
             fixture["inputs"]["sourceInputs"],
             "z" * 64,
             credential_principal=principal,
-            api_key_project_number="592603257417",
+            api_key_project_number="<project-number>",
         )

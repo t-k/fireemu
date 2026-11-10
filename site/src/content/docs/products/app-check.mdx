@@ -23,21 +23,31 @@ To enforce App Check for Authentication, Firestore or Storage, or to require reg
 <TabItem label="TOML">
 
 ```toml
+# Configuration schema version: 1.
 schemaVersion = 1
+# Compatibility profile: "strict" or "emulator".
 profile = "strict"
 
 [appCheck]
+# Enable the App Check product baseline: true or false.
 enabled = true
 
 [[appCheck.apps]]
+# App project ID: starts with a lowercase letter; up to 63 lowercase letters, digits, or hyphens.
 projectId = "demo-app"
+# App project number: a positive decimal string of up to 32 digits.
 projectNumber = "1234567890"
+# App ID: a string of 1 to 256 characters.
 appId = "1:1234567890:web:local-test-app"
+# Registered debug token digests: up to 128 unique lowercase SHA-256 hex strings.
 debugTokenSha256 = ["<sha256 of your debug token>"]
 
 [appCheck.services]
+# Auth App Check mode: "off", "unenforced", or "enforced".
 auth = "unenforced"
+# Firestore App Check mode: "off", "unenforced", or "enforced".
 firestore = "enforced"
+# Storage App Check mode: "off", "unenforced", or "enforced".
 storage = "enforced"
 ```
 
@@ -89,13 +99,17 @@ Without Storage enforcement `STORAGE_EMULATOR_HOST` is always the plain `http://
 <TabItem label="TOML">
 
 ```toml
+# Configuration schema version: 1.
 schemaVersion = 1
 
 [appCheck]
+# Enable the App Check product baseline: true or false.
 enabled = true
+# Storage server request admission: "loopback" or "capability".
 storageServerRequests = "capability"
 
 [appCheck.services]
+# Storage App Check mode: "off", "unenforced", or "enforced".
 storage = "enforced"
 ```
 

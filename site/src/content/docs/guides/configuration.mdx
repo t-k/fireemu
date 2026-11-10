@@ -17,8 +17,11 @@ Keep Fireemu-specific settings in `fireemu.toml` rather than in `firebase.json`.
 
 ```toml
 #:schema https://raw.githubusercontent.com/fireemu/fireemu/main/spec/config/fireemu.schema.json
+# Configuration schema version: 1.
 schemaVersion = 1
+# Compatibility profile: "strict" or "emulator".
 profile = "strict"
+# Path to Firebase project configuration, relative to this file; a non-empty string.
 firebaseJson = "firebase.json"
 ```
 

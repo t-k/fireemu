@@ -42,40 +42,57 @@ This example enables email/password and phone sign-in, disables anonymous sign-i
 
 ```toml
 #:schema https://raw.githubusercontent.com/fireemu/fireemu/main/spec/config/fireemu.schema.json
+# Configuration schema version: 1.
 schemaVersion = 1
+# Compatibility profile: "strict" or "emulator".
 profile = "strict"
 
 [auth]
+# Enable email enumeration protection: true or false.
 improvedEmailPrivacy = true
 
 [auth.signIn]
+# Allow duplicate sign-in emails: true or false.
 allowDuplicateEmails = false
 
 [auth.signIn.email]
+# Enable email sign-in: true or false.
 enabled = true
+# Require a password for email sign-in: true or false.
 passwordRequired = true
 
 [auth.signIn.anonymous]
+# Enable anonymous sign-in: true or false.
 enabled = false
 
 [auth.signIn.phoneNumber]
+# Enable phone number sign-in: true or false.
 enabled = true
 
 [auth.signIn.phoneNumber.testPhoneNumbers]
+# Map a test phone number in E.164 format to a verification code string.
 "+16505550101" = "123456"
 
 [auth.passwordPolicy]
+# Password policy enforcement: "OFF" or "ENFORCE".
 enforcementState = "ENFORCE"
+# Require policy upgrades on sign-in: true or false.
 forceUpgradeOnSignin = true
 
 [auth.passwordPolicy.constraints]
+# Minimum password length: 6 to 30.
 minLength = 12
+# Require an uppercase character: true or false.
 requireUppercase = true
+# Require a lowercase character: true or false.
 requireLowercase = true
+# Require a numeric character: true or false.
 requireNumeric = true
 
 [auth.client.permissions]
+# Disable client user sign-up: true or false.
 disabledUserSignup = false
+# Disable client user deletion: true or false.
 disabledUserDeletion = true
 ```
 
@@ -169,16 +186,21 @@ Under `strict`, TOTP is enabled only through the project's MFA configuration, as
 <TabItem label="TOML">
 
 ```toml
+# Configuration schema version: 1.
 schemaVersion = 1
+# Compatibility profile: "strict" or "emulator".
 profile = "strict"
 
 [auth.mfa]
+# Project MFA state: "STATE_UNSPECIFIED", "DISABLED", "ENABLED", or "MANDATORY".
 state = "ENABLED"
 
 [[auth.mfa.providerConfigs]]
+# Provider state: "STATE_UNSPECIFIED", "DISABLED", "ENABLED", or "MANDATORY".
 state = "ENABLED"
 
 [auth.mfa.providerConfigs.totpProviderConfig]
+# Accepted adjacent TOTP intervals: 0 to 10.
 adjacentIntervals = 1
 ```
 
@@ -224,19 +246,27 @@ Multi-tenancy is on by default, so the Admin API creates tenants and `auth.tenan
 <TabItem label="TOML">
 
 ```toml
+# Configuration schema version: 1.
 schemaVersion = 1
+# Compatibility profile: "strict" or "emulator".
 profile = "strict"
 
 [auth.multiTenant]
+# Allow tenants in the project: true or false.
 allowTenants = true
 
 [[auth.tenants]]
+# Tenant ID: starts with a letter; up to 63 letters, digits, or hyphens.
 tenantId = "tenant-a"
+# Tenant display name: 4 to 20 letters, digits, or hyphens, starting with a letter.
 displayName = "acme"
+# Allow password sign-up for this tenant.
 allowPasswordSignup = true
 
 [auth.tenants.mfaConfig]
+# Tenant multi-factor state.
 state = "ENABLED"
+# Multi-factor providers enabled for the tenant.
 enabledProviders = ["PHONE_SMS"]
 ```
 
@@ -329,7 +359,9 @@ To test sign-up quota errors, set `auth.quotaSimulation`:
 
 ```toml
 [auth.quotaSimulation]
+# Sign-up quota simulation: "off", "observe", or "enforce".
 mode = "enforce"
+# Default hourly sign-up quota: 0 to 1,000,000.
 defaultQuotaPerHour = 5
 ```
 

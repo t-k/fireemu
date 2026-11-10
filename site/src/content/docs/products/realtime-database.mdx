@@ -130,10 +130,13 @@ An instance with no rules file follows `database.defaultAccess`:
 <TabItem label="TOML">
 
 ```toml
+# Configuration schema version: 1.
 schemaVersion = 1
+# Compatibility profile: "strict" or "emulator".
 profile = "strict"
 
 [database]
+# Access without a rules file: "open" or "locked"; "locked" requires strict.
 defaultAccess = "locked"
 ```
 

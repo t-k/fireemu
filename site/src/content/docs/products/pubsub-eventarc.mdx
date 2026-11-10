@@ -35,9 +35,11 @@ For tests that need a credential, set a local fixture bearer token. The endpoint
 <TabItem label="TOML">
 
 ```toml
+# Configuration schema version: 1.
 schemaVersion = 1
 
 [pubsub.authentication]
+# Require this non-empty local bearer token for strict-profile Pub/Sub requests.
 localBearerToken = "fixture-token"
 ```
 

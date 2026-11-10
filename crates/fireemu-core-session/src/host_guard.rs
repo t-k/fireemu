@@ -66,7 +66,7 @@ const DEFAULT_SUFFIXES: &[&str] = &[
 
 /// Where the refusal and the warnings send a user: the site page that documents the setting.
 pub const DOCS_URL: &str =
-    "https://t-k.github.io/fireemu/guides/ci-and-containers/#host-names-the-emulators-answer";
+    "https://fireemu.github.io/fireemu/guides/ci-and-containers/#host-names-the-emulators-answer";
 
 /// How the refusal names the setting: its file, section and key in both formats.
 const SETTING: &str = "network.allowedHosts (allowedHosts in the [network] section of fireemu.toml, or \"network\": {\"allowedHosts\": [...]} in fireemu.json)";

@@ -96,7 +96,7 @@ flunk() {
 validate() {
   : > "$work/output"
   PATH="$work/bin:$PATH" EVENT_NAME=${EVENT_NAME_UNDER_TEST-workflow_dispatch} EVENT_SCHEDULE=${EVENT_SCHEDULE_UNDER_TEST-} GITHUB_SHA=${GITHUB_SHA_UNDER_TEST-$main_sha} \
-    REPOSITORY=t-k/fireemu \
+    REPOSITORY=fireemu/fireemu \
     GITHUB_REF=${GITHUB_REF_UNDER_TEST-refs/heads/ci/heavy} DEFAULT_BRANCH=${DEFAULT_BRANCH_UNDER_TEST-main} REPO_URL="file://$work/origin.git" \
     RUNNER_TEMP="$work/tmp" INPUT_JOB=$1 INPUT_REF=$2 INPUT_PACKAGE=$3 INPUT_BASE=$4 INPUT_SHARDS=$5 INPUT_SCRIPT=$6 \
     INPUT_TAG=${7-} GITHUB_OUTPUT="$work/output" bash "$work/validate.sh" > "$work/log" 2>&1

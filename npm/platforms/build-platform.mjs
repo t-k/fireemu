@@ -91,10 +91,10 @@ export function platformManifest(platform, version) {
     name: packageName(platform),
     version,
     description: `The fireemu daemon for ${platform.name}`,
-    homepage: "https://t-k.github.io/fireemu/",
+    homepage: "https://fireemu.github.io/fireemu/",
     repository: {
       type: "git",
-      url: "git+https://github.com/t-k/fireemu.git",
+      url: "git+https://github.com/fireemu/fireemu.git",
     },
     license: "Apache-2.0",
     // npm installs an optional dependency only when both match, so exactly one of these

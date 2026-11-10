@@ -508,25 +508,13 @@ async fn malformed_policy_bodies_are_invalid_arguments_and_create_nothing() {
 #[tokio::test]
 async fn the_other_unsupported_topic_fields_are_still_refused_in_the_emulator_profile() {
     let h = Harness::new(PagingPolicy::Emulator).await;
-    for (id, body, field) in [
-        (
-            "kms",
-            json!({"kmsKeyName": "projects/p/locations/l/keyRings/r/cryptoKeys/k"}),
-            "kms_key_name",
-        ),
-        ("tags", json!({"tags": {"env": "test"}}), "tags"),
-        ("schema", json!({"schemaSettings": {}}), "schema_settings"),
-        (
-            "mixed",
-            json!({"messageStoragePolicy": {}, "tags": {"env": "test"}}),
-            "tags",
-        ),
-    ] {
-        let (status, error) = h.rest_create(id, body).await;
-        assert_eq!(status, 501, "{id}: {error}");
-        assert!(error["error"]["message"].as_str().unwrap().contains(field));
-        assert_eq!(h.rest_get(id).await.0, 404, "{id} was created");
-    }
+    let (status, error) = h.rest_create("schema", json!({"schemaSettings": {}})).await;
+    assert_eq!(status, 501, "{error}");
+    assert!(error["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("schema_settings"));
+    assert_eq!(h.rest_get("schema").await.0, 404);
 }
 
 // --- Emulator profile: UpdateTopic ---------------------------------------------------------
@@ -720,7 +708,7 @@ async fn rest_patch_refusals_leave_the_policy_untouched() {
     .await;
     for (mask, topic, expected) in [
         // A mask path the emulator cannot apply refuses the whole update.
-        ("messageStoragePolicy,kmsKeyName", json!({}), 501),
+        ("messageStoragePolicy,schemaSettings", json!({}), 501),
         (
             "messageStoragePolicy,messageRetentionDuration",
             json!({}),
@@ -860,7 +848,7 @@ async fn grpc_update_topic_refusals_keep_their_codes_and_change_nothing() {
         .await;
     for (paths, code) in [
         (
-            vec!["message_storage_policy", "kms_key_name"],
+            vec!["message_storage_policy", "schema_settings"],
             tonic::Code::Unimplemented,
         ),
         (
@@ -1351,7 +1339,7 @@ async fn a_refused_mixed_update_changes_neither_labels_nor_policy() {
     let before_grpc = h.grpc_get("mixed").await;
     let body = json!({"labels": {"k": "v"}, "messageStoragePolicy": {"allowedPersistenceRegions": ["asia-east1"]}});
     for (mask, expected) in [
-        ("labels,messageStoragePolicy,kmsKeyName", 501),
+        ("labels,messageStoragePolicy,schemaSettings", 501),
         ("labels,messageStoragePolicy,messageRetentionDuration", 501),
         ("labels,messageStoragePolicy,state", 501),
         ("labels,messageStoragePolicy,notAField", 400),
@@ -1376,7 +1364,7 @@ async fn a_refused_mixed_update_changes_neither_labels_nor_policy() {
 
     for (paths, code) in [
         (
-            vec!["labels", "message_storage_policy", "kms_key_name"],
+            vec!["labels", "message_storage_policy", "schema_settings"],
             tonic::Code::Unimplemented,
         ),
         (

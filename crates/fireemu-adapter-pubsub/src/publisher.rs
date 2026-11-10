@@ -47,6 +47,10 @@ fn stored_topic(
     topic.message_storage_policy = state
         .topic_storage_policy(name)?
         .map(crate::convert::storage_policy_to_proto);
+    state
+        .topic_kms_key_name(name)?
+        .clone_into(&mut topic.kms_key_name);
+    topic.tags = state.topic_tags(name)?.clone().into_iter().collect();
     Ok(topic)
 }
 
@@ -66,19 +70,23 @@ impl Publisher for PublisherService {
         }
         self.handle
             .state()
-            .create_topic_with_storage_policy(
+            .create_topic_with_options(
                 name.clone(),
                 labels,
-                topic
-                    .message_retention_duration
-                    .as_ref()
-                    .map(crate::convert::duration_from_proto)
-                    .transpose()
-                    .map_err(|error| status(&error))?,
-                topic
-                    .message_storage_policy
-                    .as_ref()
-                    .map(storage_policy_from_proto),
+                fireemu_core_pubsub::TopicOptions {
+                    message_retention_duration: topic
+                        .message_retention_duration
+                        .as_ref()
+                        .map(crate::convert::duration_from_proto)
+                        .transpose()
+                        .map_err(|error| status(&error))?,
+                    message_storage_policy: topic
+                        .message_storage_policy
+                        .as_ref()
+                        .map(storage_policy_from_proto),
+                    kms_key_name: topic.kms_key_name,
+                    tags: topic.tags.into_iter().collect(),
+                },
             )
             .map_err(|e| status(&e))?;
         self.handle.retry_pending_dead_letters();

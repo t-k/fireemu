@@ -4112,7 +4112,7 @@ pub(crate) const KNOWN_TOP_LEVEL: &[&str] = &[
 ];
 
 pub const CANONICAL_SCHEMA_URL: &str =
-    "https://raw.githubusercontent.com/t-k/fireemu/main/spec/config/fireemu.schema.json";
+    "https://raw.githubusercontent.com/fireemu/fireemu/main/spec/config/fireemu.schema.json";
 const LEGACY_SCHEMA_URL: &str = "https://fireemu.dev/spec/config/fireemu.schema.json";
 
 /// The Firebase project configuration composed by a canonical fireemu configuration.

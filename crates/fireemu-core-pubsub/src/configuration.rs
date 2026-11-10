@@ -43,11 +43,26 @@ pub struct MessageStoragePolicy {
     pub enforce_in_transit: bool,
 }
 
+/// Topic options kept as sent and not enforced.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TopicOptions {
+    /// Requested retention duration.
+    pub message_retention_duration: Option<LogicalDuration>,
+    /// Requested storage policy.
+    pub message_storage_policy: Option<MessageStoragePolicy>,
+    /// Requested key name.
+    pub kms_key_name: String,
+    /// Requested tags.
+    pub tags: std::collections::BTreeMap<String, String>,
+}
+
 /// The topic fields one `UpdateTopic` call replaces; a field left `None` keeps its stored value.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TopicUpdate {
     /// The complete new labels map.
     pub labels: Option<std::collections::BTreeMap<String, String>>,
+    /// The key name; `Some("")` clears it.
+    pub kms_key_name: Option<String>,
     /// The new policy; `Some(None)` removes it.
     pub message_storage_policy: Option<Option<MessageStoragePolicy>>,
 }

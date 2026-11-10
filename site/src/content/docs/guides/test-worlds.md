@@ -26,7 +26,7 @@ await withTestWorld(
 );
 ```
 
-Separate worlds isolate their clocks, Rules, Functions and service state. The `fireemu/control` client also works in `fireemu exec` commands and shares URL resolution and authentication with `world.control()`, so callers do not need to concatenate control URLs (see the [test worlds guide](https://github.com/t-k/fireemu/blob/main/docs/test-worlds.md)).
+Separate worlds isolate their clocks, Rules, Functions and service state. The `fireemu/control` client also works in `fireemu exec` commands and shares URL resolution and authentication with `world.control()`, so callers do not need to concatenate control URLs (see the [test worlds guide](https://github.com/fireemu/fireemu/blob/main/docs/test-worlds.md)).
 
 - `world.run` launches a command with the world's project and emulator hosts.
 - `world.reset()` starts the world again from its creation snapshot.
@@ -34,7 +34,7 @@ Separate worlds isolate their clocks, Rules, Functions and service state. The `f
 
 ## Inspect a world in the UI
 
-To inspect the same world in the debug UI, pass `ui: true` to `createTestWorld()` and open `world.uiUrl`. The UI is disabled by default. Each enabled world receives its own loopback port and shares its live Firestore, Auth, Storage and Functions state. Keep the world alive while inspecting it; `dispose()` also stops its UI. After `reset()`, read `world.uiUrl` again and reopen the page. See [test worlds](https://github.com/t-k/fireemu/blob/main/docs/test-worlds.md#inspect-a-world-in-the-ui) for an interactive example.
+To inspect the same world in the debug UI, pass `ui: true` to `createTestWorld()` and open `world.uiUrl`. The UI is disabled by default. Each enabled world receives its own loopback port and shares its live Firestore, Auth, Storage and Functions state. Keep the world alive while inspecting it; `dispose()` also stops its UI. After `reset()`, read `world.uiUrl` again and reopen the page. See [test worlds](https://github.com/fireemu/fireemu/blob/main/docs/test-worlds.md#inspect-a-world-in-the-ui) for an interactive example.
 
 ## Export and import
 
@@ -57,7 +57,7 @@ Functions worlds snapshot local sources and dependencies so caller edits do not 
 - `nodePathExcludes` omits exact unused package names, including scoped names, before following their links. Required dependency failures are still errors.
 - Before v0.27.0, worlds also copied inherited `NODE_PATH` directories, including linked global development repositories, so an unused linked repository could slow startup or fail copying before tests began. On those versions, pass `env: { ...process.env, NODE_PATH: '' }` for local-only dependencies.
 
-See [dependency snapshot limits](https://github.com/t-k/fireemu/blob/main/docs/test-worlds.md#create-parallel-worlds).
+See [dependency snapshot limits](https://github.com/fireemu/fireemu/blob/main/docs/test-worlds.md#create-parallel-worlds).
 
 ## Wait for runnable work
 
@@ -67,4 +67,4 @@ See [dependency snapshot limits](https://github.com/t-k/fireemu/blob/main/docs/t
 await world.control('POST', 'sessions/default:awaitIdle', { scope: 'runnable' });
 ```
 
-This excludes future task schedules and future retry backoff from the wait. The default scope still waits for all work. Due tasks blocked by rate or concurrency limits and active HTTP requests remain pending. Advance the applicable clock or wait for the active work; diagnostics identify the waiting phase and deadline. This does not wait for arbitrary user-created JavaScript timers. See [idle scopes and task clocks](https://github.com/t-k/fireemu/blob/main/docs/tasks-idle.md).
+This excludes future task schedules and future retry backoff from the wait. The default scope still waits for all work. Due tasks blocked by rate or concurrency limits and active HTTP requests remain pending. Advance the applicable clock or wait for the active work; diagnostics identify the waiting phase and deadline. This does not wait for arbitrary user-created JavaScript timers. See [idle scopes and task clocks](https://github.com/fireemu/fireemu/blob/main/docs/tasks-idle.md).

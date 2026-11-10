@@ -501,23 +501,8 @@ export const RUNS = [
 export const GROUPS = {
   eventarc: ["R20"],
   transaction: ["R19"],
-  rtdb: [
-    "R22",
-    "R23",
-    "R24",
-    "R25",
-    "R26",
-    "R27",
-    "R28",
-    "R29",
-    "R30",
-    "R31",
-    "R32",
-    "R33",
-    "R34",
-    "R35",
-    "R36",
-  ],
+  "rtdb-a": ["R22", "R24", "R25", "R28", "R30", "R31", "R32", "R33", "R34", "R35"],
+  "rtdb-b": ["R23", "R26", "R27", "R29", "R36"],
 };
 GROUPS.rest = RUNS.map(({ id }) => id).filter(
   (id) => !Object.values(GROUPS).some((ids) => ids.includes(id)),

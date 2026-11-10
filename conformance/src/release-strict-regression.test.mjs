@@ -673,7 +673,7 @@ test("the arguments name an output directory and accept nothing else", () => {
     out: "dir",
     dist: "npm/dist",
   });
-  assert.equal(parseArguments(["--out", "dir", "--group", "rtdb"]).group, "rtdb");
+  assert.equal(parseArguments(["--out", "dir", "--group", "rtdb-a"]).group, "rtdb-a");
   assert.throws(() => parseArguments(["--out", "dir", "--group", "unknown"]), /unknown group/);
   assert.throws(() => parseArguments([]), /--out/);
   assert.throws(() => parseArguments(["--out"]), /--out/);
@@ -1147,6 +1147,17 @@ test("groups partition runs and keep each comparison together", () => {
     matrix[1].split(",").map((name) => name.trim()),
     Object.keys(GROUPS),
   );
+});
+
+test("rtdb is split in two groups covering R22 to R36 once", () => {
+  assert.deepEqual(Object.keys(GROUPS), ["eventarc", "transaction", "rtdb-a", "rtdb-b", "rest"]);
+  assert.deepEqual(
+    [...GROUPS["rtdb-a"], ...GROUPS["rtdb-b"]].sort(),
+    Array.from({ length: 15 }, (_, index) => `R${index + 22}`),
+  );
+  assert.ok(GROUPS["rtdb-a"].length > 0);
+  assert.ok(GROUPS["rtdb-b"].length > 0);
+  assert.equal(Object.hasOwn(GROUPS, "rtdb"), false);
 });
 
 test("group selection filters runs, comparisons, exports and the R10 report", () => {

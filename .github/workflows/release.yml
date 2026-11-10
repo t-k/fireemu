@@ -350,7 +350,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        group: [eventarc, transaction, rtdb, rest]
+        group: [eventarc, transaction, rtdb-a, rtdb-b, rest]
     needs: [plan, build]
     runs-on: ubuntu-latest
     timeout-minutes: 180

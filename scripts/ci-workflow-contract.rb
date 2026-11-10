@@ -162,7 +162,7 @@ assert(strict, "release must compare the strict profile of the installed artifac
 assert(strict["name"].to_s.start_with?("strict-production"), "strict-production must retain the strict-production name prefix")
 assert(strict.fetch("needs").include?("build"), "strict-production must test the built platform package")
 assert(strict["continue-on-error"].nil?, "strict-production must block publication")
-assert(strict.dig("strategy", "fail-fast") == false && strict.dig("strategy", "matrix", "group") == %w[eventarc transaction rtdb rest], "strict-production must run every group without fail-fast")
+assert(strict.dig("strategy", "fail-fast") == false && strict.dig("strategy", "matrix", "group") == %w[eventarc transaction rtdb-a rtdb-b rest], "strict-production must run every group without fail-fast")
 assert(release.dig("jobs", "publish", "needs").include?("strict-production"), "release publish must depend on the strict production comparison")
 assert(release.dig("jobs", "publish", "needs").include?("verify-artifact"), "release publish must depend on verify-artifact")
 strict_timeout = strict["timeout-minutes"]

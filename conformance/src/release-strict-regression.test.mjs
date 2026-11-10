@@ -289,6 +289,42 @@ test("EVENTARC source rebind refuses a path outside the allowed driver", () => {
   assert.deepEqual(eventarcJudge(eventarcDisk(), driverExport), []);
 });
 
+test("EVENTARC adjudication pins are each required", () => {
+  // A harmless change keeps every rebind path allowed, so only the digest checks can refuse it.
+  const altered = () => {
+    const disk = eventarcDisk();
+    const adjudication = JSON.parse(disk.get(adjudicationPath));
+    adjudication.note = "changed";
+    writeDiskJson(disk, adjudicationPath, adjudication);
+    return disk;
+  };
+  const pin = (disk, which) => {
+    const digest = diskDigest(disk);
+    if (which.includes("records")) {
+      const records = JSON.parse(disk.get(recordsPath));
+      records.records[adjudicationPath] = digest;
+      writeDiskJson(disk, recordsPath, records);
+    }
+    if (which.includes("closure")) {
+      const closure = JSON.parse(disk.get(closurePath));
+      closure.retrospectiveAdjudication.sha256 = digest;
+      writeDiskJson(disk, closurePath, closure);
+    }
+    return disk;
+  };
+  for (const which of [[], ["records"], ["closure"]]) {
+    assert.throws(
+      () => eventarcSourceRebinds(diskRead(pin(altered(), which))),
+      /EVENTARC adjudication: digest mismatch/,
+      which.join(","),
+    );
+  }
+  assert.deepEqual(
+    eventarcSourceRebinds(diskRead(pin(altered(), ["records", "closure"]))),
+    readJson(adjudicationPath).sourceRebinds,
+  );
+});
+
 test("judge reads EVENTARC adjudication only for the EVENTARC comparison", () => {
   const reads = [];
   const disk = eventarcDisk();

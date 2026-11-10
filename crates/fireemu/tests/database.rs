@@ -833,6 +833,115 @@ fn mock_token_with(uid: &str, extra: &str) -> String {
 /// A token whose claims hold a lone surrogate (`"x":"\ud83d"`, or as a claim name) is not read, as before 2286 (owner
 /// ledger line 2291, a declared difference: the official emulator keeps the surrogate): the strict profile refuses
 /// it (401) and the emulator profile judges the request as an anonymous one, through the daemon's own token verifier.
+/// A hand-made token is a user when its `iat` is a number as the official emulator reads one
+/// (docs.local/runs/rtdb-token-iat): an integer literal in the i64 range, or a literal with a
+/// fraction or an exponent (`1e400` too). Any other `iat`, an integer literal beyond the i64
+/// range included, leaves the token nobody (anonymous). Auth's emulator profile admits more
+/// hand-made tokens (a string or missing `iat`), but the official RTDB emulator does not read
+/// those, so neither does the emulator profile here. Strict never admits a hand-made token.
+#[test]
+#[allow(clippy::too_many_lines)] // one matrix: profile x token kind x iat
+fn a_hand_made_token_is_a_user_when_its_iat_is_a_number_the_official_emulator_reads() {
+    let dir = Scratch::new("database", "token-iat");
+    let firebase_json = dir.join("firebase.json");
+    std::fs::write(
+        &firebase_json,
+        r#"{"database":[{"instance":"demo-rtdb-default-rtdb","rules":"database.rules.json"}]}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("database.rules.json"),
+        r#"{"rules":{"users":{"$uid":{".read":"auth != null && auth.uid === $uid"}},
+            "anon":{".read":"auth == null"}}}"#,
+    )
+    .unwrap();
+    let issue_times = [
+        ("1", true),
+        ("-1", true),
+        ("1.5", true),
+        ("1e3", true),
+        ("1e30", true),
+        ("1e400", true),
+        ("-1e400", true),
+        ("9223372036854775807", true),
+        ("9223372036854775808", false),
+        ("-9223372036854775809", false),
+        ("12345678901234567890", false),
+        (r#""1""#, false),
+        (r#""Infinity""#, false),
+        ("null", false),
+        ("true", false),
+    ];
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    for (name, config) in [
+        ("emulator", r#"{"schemaVersion":1,"profile":"emulator"}"#),
+        ("strict", r#"{"schemaVersion":1,"profile":"strict"}"#),
+    ] {
+        let path = dir.join(format!("{name}.json"));
+        std::fs::write(&path, config).unwrap();
+        let daemon = Daemon::start(&[
+            "--firebase-json",
+            firebase_json.to_str().unwrap(),
+            "--config",
+            path.to_str().unwrap(),
+            "--only",
+            "database,auth",
+            "--database-port",
+            "0",
+        ]);
+        let read = |path: &str, token: &str| {
+            let target = format!("{path}.json?ns=demo-rtdb-default-rtdb&auth={token}");
+            request(daemon.database_port(), "GET", &target, &[], "").0
+        };
+        let unsigned = |claims: &str| {
+            format!(
+                "{}.{}.",
+                segment(r#"{"alg":"none","typ":"JWT"}"#).trim_end_matches('.'),
+                segment(claims).trim_end_matches('.')
+            )
+        };
+        let mut tokens = Vec::new();
+        for (iat, number) in issue_times {
+            // Without `aud` (the claims are read unverified), and a mock token of the project.
+            tokens.push((
+                format!("no aud, iat {iat}"),
+                unsigned(&format!(r#"{{"sub":"u1","iat":{iat}}}"#)),
+                number,
+            ));
+            tokens.push((
+                format!("mock, iat {iat}"),
+                unsigned(&format!(
+                    r#"{{"aud":"{PROJECT}","sub":"u1","iat":{iat},"exp":{}}}"#,
+                    now + 3600
+                )),
+                number,
+            ));
+        }
+        for (what, token, number) in tokens {
+            if name == "strict" {
+                // Near miss: strict reads no hand-made token, whatever its `iat` is.
+                assert_eq!(read("/users/u1", &token), 401, "{name}: {what}");
+                assert_eq!(read("/anon", &token), 401, "{name}: {what}");
+            } else if number {
+                assert_eq!(read("/users/u1", &token), 200, "{name}: {what}");
+                assert_eq!(read("/anon", &token), 401, "{name}: {what}");
+            } else {
+                assert_eq!(read("/users/u1", &token), 401, "{name}: {what}");
+                assert_eq!(read("/anon", &token), 200, "{name}: {what}");
+            }
+        }
+        // A missing `iat` leaves the token nobody too.
+        let missing = unsigned(r#"{"sub":"u1"}"#);
+        if name != "strict" {
+            assert_eq!(read("/users/u1", &missing), 401, "{name}");
+            assert_eq!(read("/anon", &missing), 200, "{name}");
+        }
+    }
+}
+
 /// A pair and a plain claim are read as always.
 #[test]
 fn a_claim_with_a_lone_surrogate_is_not_read_on_either_profile() {

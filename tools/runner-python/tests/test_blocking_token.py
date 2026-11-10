@@ -100,24 +100,27 @@ def tampered():
     return ".".join(parts)
 
 
-@pytest.mark.parametrize("label,make", [
-    ("other key", lambda: token(key=OTHER)),
-    ("unknown kid", lambda: token(kid="unknown")),
-    ("missing kid", lambda: token(kid=None)),
-    ("unsigned", lambda: token(key=None, algorithm="none")),
-    ("algorithm confusion", confused),
-    ("expired", lambda: token(claims={"exp": int(time.time()) - 300})),
-    ("future iat", lambda: token(claims={"iat": int(time.time()) + 300})),
-    ("wrong issuer", lambda: token(claims={"iss": "wrong"})),
-    ("missing subject", lambda: token(drop=("sub",))),
-    ("tampered payload", tampered),
-    ("empty", lambda: ""),
-    ("audience list", lambda: token(aud=["run.app"])),
-    ("long audience", lambda: token(aud="x" * 5000)),
+@pytest.mark.parametrize("label,make,error", [
+    ("other key", lambda: token(key=OTHER), token_verifier.InvalidAuthBlockingTokenError),
+    ("unknown kid", lambda: token(kid="unknown"), token_verifier.InvalidAuthBlockingTokenError),
+    ("missing kid", lambda: token(kid=None), token_verifier.InvalidAuthBlockingTokenError),
+    ("unsigned", lambda: token(key=None, algorithm="none"), token_verifier.InvalidAuthBlockingTokenError),
+    ("algorithm confusion", confused, token_verifier.InvalidAuthBlockingTokenError),
+    ("expired", lambda: token(claims={"exp": int(time.time()) - 300}), token_verifier.ExpiredAuthBlockingTokenError),
+    ("future iat", lambda: token(claims={"iat": int(time.time()) + 300}), token_verifier.InvalidAuthBlockingTokenError),
+    ("wrong issuer", lambda: token(claims={"iss": "wrong"}), token_verifier.InvalidAuthBlockingTokenError),
+    ("missing subject", lambda: token(drop=("sub",)), token_verifier.InvalidAuthBlockingTokenError),
+    ("tampered payload", tampered, token_verifier.InvalidAuthBlockingTokenError),
+    ("audience list", lambda: token(aud=["run.app"]), token_verifier.InvalidAuthBlockingTokenError),
+    ("long audience", lambda: token(aud="x" * 5000), token_verifier.InvalidAuthBlockingTokenError),
 ])
-def test_refusals(hooked, label, make):
-    with pytest.raises(Exception):
+def test_refusals(hooked, label, make, error):
+    with pytest.raises(error):
         token_verifier.verify_auth_blocking_token(make())
+
+def test_empty_token_refused_by_sdk(hooked):
+    with pytest.raises(ValueError):
+        token_verifier.verify_auth_blocking_token("")
 
 
 @pytest.mark.parametrize("value", ["{", "[]", '{"keys":[]}', '{"keys":[{"kty":"EC"}]}', json.dumps({"keys": [{**jwk(), "kid": ""}]}), json.dumps({"keys": [{**jwk(), "n": "!"}]})])
@@ -131,14 +134,38 @@ def test_two_keys_and_skipped_entry():
     assert all(value.startswith("-----BEGIN PUBLIC KEY-----") for value in result.values())
 
 
-def test_invalid_install_removes_value_and_announces(monkeypatch, capsys):
+@pytest.mark.parametrize("value", ["", "{", "[]", '{"keys":[]}', '{"keys":[{"kty":"EC"}]}', json.dumps({"keys": [{k: v for k, v in jwk().items() if k != "kid"}]})])
+def test_invalid_install_fails_closed(value):
     old = token_verifier._JWTVerifier, token_verifier._auth_utils
-    env = {blocking.ENVIRONMENT_VARIABLE: "invalid"}
-    assert not blocking.install_from_environment(env)
+    env = {blocking.ENVIRONMENT_VARIABLE: value}
+    with pytest.raises(blocking.VerificationUnavailable):
+        blocking.install_from_environment(env)
     assert not env
     assert (token_verifier._JWTVerifier, token_verifier._auth_utils) == old
-    lines = capsys.readouterr().err.splitlines()
-    assert len(lines) == 1 and lines[0].startswith("[functions] note: ")
+
+
+def test_failed_install_leaves_stock_emulated_verifier(monkeypatch, discovered):
+    monkeypatch.setenv("FIREBASE_AUTH_EMULATOR_HOST", "127.0.0.1:9")
+    with pytest.raises(blocking.VerificationUnavailable):
+        blocking.install_from_environment({blocking.ENVIRONMENT_VARIABLE: '{"keys":[]}'})
+    assert token_verifier.verify_auth_blocking_token(token(key=None, algorithm="none"))["uid"] == "user-1"
+
+
+def test_a_run_app_audience_signed_by_the_key_verifies_end_to_end(monkeypatch, discovered):
+    monkeypatch.setenv("FIREBASE_AUTH_EMULATOR_HOST", "127.0.0.1:9")
+    monkeypatch.setattr(token_verifier, "_JWTVerifier", token_verifier._JWTVerifier)
+    monkeypatch.setattr(token_verifier, "_auth_utils", token_verifier._auth_utils)
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    assert blocking.install_from_environment({blocking.ENVIRONMENT_VARIABLE: json.dumps({"keys": [jwk(key)]})})
+    value = token(key=key, claims={"event_id": "event-1", "event_type": "beforeCreate", "ip_address": "127.0.0.1", "user_agent": "Google-Firebase", "locale": "und", "sign_in_method": "password", "user_record": {"uid": "user-1"}})
+    claims = token_verifier.verify_auth_blocking_token(value)
+    assert claims["uid"] == claims["sub"] == "user-1"
+    parts = value.split(".")
+    payload = bytearray(base64.urlsafe_b64decode(parts[1] + "=="))
+    payload[payload.index(b"user-1")] ^= 1
+    parts[1] = base64.urlsafe_b64encode(payload).decode().rstrip("=")
+    with pytest.raises(token_verifier.InvalidAuthBlockingTokenError):
+        token_verifier.verify_auth_blocking_token(".".join(parts))
 
 
 def test_seeded_audiences(hooked):
@@ -151,7 +178,7 @@ def test_seeded_audiences(hooked):
         if "run.app" in audience:
             assert token_verifier.verify_auth_blocking_token(value)["uid"] == "user-1"
         else:
-            with pytest.raises(Exception):
+            with pytest.raises(token_verifier.InvalidAuthBlockingTokenError):
                 token_verifier.verify_auth_blocking_token(value)
 
 
@@ -179,29 +206,51 @@ def test_serve_diagnostic_installed_version(discovered, monkeypatch, capsys):
 
 
 @pytest.mark.parametrize("attribute", ["_JWTVerifier", "_auth_utils", "_token_gen"])
-def test_unsupported_sdk_refuses_install(monkeypatch, capsys, attribute):
-    monkeypatch.delattr(token_verifier, attribute)
+def test_unsupported_sdk_refuses_install(monkeypatch, attribute):
+    monkeypatch.delattr(token_verifier, attribute, raising=True)
+    old = {name: getattr(token_verifier, name, None) for name in ("_JWTVerifier", "_auth_utils", "_token_gen")}
     env = {blocking.ENVIRONMENT_VARIABLE: json.dumps({"keys": [jwk()]})}
-    assert not blocking.install_from_environment(env)
+    with pytest.raises(blocking.VerificationUnavailable):
+        blocking.install_from_environment(env)
     assert not env
-    lines = capsys.readouterr().err.splitlines()
-    assert len(lines) == 1 and lines[0].startswith("[functions] note: ")
+    assert {name: getattr(token_verifier, name, None) for name in old} == old
 
 
 def test_emulation_view_restored_after_verification_and_refusal(hooked):
     assert token_verifier._auth_utils.is_emulated()
     token_verifier.verify_auth_blocking_token(token())
     assert token_verifier._auth_utils.is_emulated()
-    with pytest.raises(Exception):
+    with pytest.raises(token_verifier.InvalidAuthBlockingTokenError):
         token_verifier.verify_auth_blocking_token(token(aud=PRODUCTION_AUD))
     assert token_verifier._auth_utils.is_emulated()
 
 
-def test_empty_jwks_leaves_sdk_unpatched_and_is_silent(capsys):
-    old = token_verifier._JWTVerifier, token_verifier._auth_utils
-    assert not blocking.install_from_environment({blocking.ENVIRONMENT_VARIABLE: ""})
-    assert (token_verifier._JWTVerifier, token_verifier._auth_utils) == old
-    assert capsys.readouterr().err == ""
+def test_runner_fails_before_loading_user_code_or_hello(tmp_path):
+    from harness import Runner
+
+    marker = tmp_path / "loaded"
+    (tmp_path / "main.py").write_text("from pathlib import Path\nPath(__file__).with_name('loaded').touch()\n")
+    process = Runner(source=tmp_path, extra_env={blocking.ENVIRONMENT_VARIABLE: '{"keys":[]}'})
+    try:
+        assert process.process.wait(timeout=10) != 0
+        for reader in process._readers:
+            reader.join(timeout=5)
+        assert "not serving" in process.stderr
+        assert not process.frames
+        assert not marker.exists()
+    finally:
+        process.kill()
+
+
+def test_run_fails_before_loading_user_code(monkeypatch, tmp_path, capsys):
+    from test_run import Wiring
+
+    wiring = Wiring(monkeypatch)
+    monkeypatch.setenv(blocking.ENVIRONMENT_VARIABLE, '{"keys":[]}')
+    monkeypatch.setattr(main, "load_codebase", lambda source: pytest.fail("user code loaded"))
+    assert main.run(["--source", str(tmp_path)]) == 1
+    assert "not serving" in capsys.readouterr().err
+    assert wiring.frames() == []
 
 
 def test_runner_rejects_production_audience_with_jwks():

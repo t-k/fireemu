@@ -86,7 +86,11 @@ def run(argv) -> int:
         return 1
     # Before any user code runs, so the Admin SDK's App Check service is built against the emulator's keys.
     app_check_verified = appcheck.install_from_environment(os.environ)
-    blocking_verified = blocking.install_from_environment(os.environ)
+    try:
+        blocking_verified = blocking.install_from_environment(os.environ)
+    except blocking.VerificationUnavailable as error:
+        sys.stderr.write(f"[functions] error: Auth blocking token verification was requested but is unavailable ({error}); not serving\n")
+        return 1
     try:
         functions = load_codebase(args.source)
     except BaseException:  # a failing import in user code is reported with its traceback

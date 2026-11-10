@@ -8,10 +8,13 @@ without the environment variable the SDK's emulator behavior is unchanged.
 import contextvars
 import importlib.metadata
 import json
-import sys
 
 ENVIRONMENT_VARIABLE = "FIREEMU_AUTH_BLOCKING_JWKS"
 NOTE_VERSION = "0.6.0"
+
+
+class VerificationUnavailable(Exception):
+    pass
 
 
 def parse_keys(text) -> dict[str, str] | None:
@@ -39,19 +42,20 @@ def parse_keys(text) -> dict[str, str] | None:
 
 def install_from_environment(environ) -> bool:
     """Install the SDK-only verification hook when the daemon provides usable public keys."""
+    if ENVIRONMENT_VARIABLE not in environ:
+        return False
+    value = environ.pop(ENVIRONMENT_VARIABLE)
     try:
-        value = environ.get(ENVIRONMENT_VARIABLE)
-        if not value:
-            return False
-        del environ[ENVIRONMENT_VARIABLE]
         keys = parse_keys(value)
+        if not keys:
+            raise VerificationUnavailable("no usable public keys")
         from firebase_admin import _auth_utils
         from firebase_functions.private import token_verifier
         from google.auth.exceptions import TransportError
 
         stock = token_verifier._JWTVerifier
-        if not keys or not isinstance(stock, type) or not callable(token_verifier._auth_utils.is_emulated) or not token_verifier._token_gen.ID_TOKEN_CERT_URI:
-            raise ValueError("unsupported SDK or keys")
+        if not isinstance(stock, type) or not callable(token_verifier._auth_utils.is_emulated) or not token_verifier._token_gen.ID_TOKEN_CERT_URI:
+            raise VerificationUnavailable("unsupported SDK")
         cert_url = token_verifier._token_gen.ID_TOKEN_CERT_URI
         data = json.dumps(keys).encode()
         active = contextvars.ContextVar("fireemu_auth_blocking_verification", default=False)
@@ -80,12 +84,14 @@ def install_from_environment(environ) -> bool:
                 finally:
                     active.reset(marker)
 
+        auth_utils_view = AuthUtilsView()
         token_verifier._JWTVerifier = Verifier
-        token_verifier._auth_utils = AuthUtilsView()
+        token_verifier._auth_utils = auth_utils_view
         return True
-    except Exception:
-        sys.stderr.write("[functions] note: production Auth blocking token verification is unavailable; the SDK keeps skipping it\n")
-        return False
+    except VerificationUnavailable:
+        raise
+    except Exception as error:
+        raise VerificationUnavailable("SDK hook installation failed") from error
 
 
 def default_note(functions_version) -> str | None:

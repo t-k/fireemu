@@ -1440,6 +1440,18 @@
             {
               "behaviour": "the strict profile answers a retryable 409 BLOCKING_FUNCTION_CONFIGURATION_CHANGED when the blocking configuration (a function deployed, removed or reselected) changes between a request's admission and its commit, 409 AUTH_STATE_CHANGED when a mail request's commit would send a different mail from the one beforeEmailSent was shown, 409 BLOCKING_FUNCTION_CONFIGURATION_CHANGED when an Admin link request's mail function changed after admission, and 409 AUTH_STATE_RESET when the accounts were cleared while a request's blocking function ran. They arise only when state changes while the request runs, a race production has no counterpart for, and keep a request from committing under a configuration its functions did not see. The emulator profile answers none of them: like the official emulator it serves the request with the configuration it finds, and commits a request whose function ran across an account wipe into the cleared state",
               "precision": "documented-divergence"
+            },
+            {
+              "behaviour": "in both profiles, when an authentication's identity at commit differs from the identity seen by its blocking hook, crates/fireemu-adapter-http/src/identity_toolkit.rs dispatch_with_blocking_hook answers 400 BLOCKING_FUNCTION_ERROR_RESPONSE : identity changed while the hook was running, preventing a hook's results from being applied to a different account",
+              "precision": "documented-divergence"
+            },
+            {
+              "behaviour": "in both profiles, when the blocking Auth request concurrency slots are full, crates/fireemu-adapter-http/src/server.rs respond refuses a request that may invoke a blocking hook with 503 using crates/fireemu-adapter-http/src/identity_toolkit.rs blocking_auth_overload_response; server.rs serve_inner sets the slot count from request_concurrency_limit clamped to the server's task limit. This local bound protects the process from unbounded concurrent blocking work",
+              "precision": "resource-safety-divergence"
+            },
+            {
+              "behaviour": "in both profiles, crates/fireemu/src/functions.rs blocking_auth_read_response limits a blocking function's response to MAX_BLOCKING_AUTH_RESPONSE_BYTES (64 KiB); a response exceeding that size is an unhandled failure answered with 503. This local bound protects the process from unbounded response buffering",
+              "precision": "resource-safety-divergence"
             }
           ],
           "productionOnly": [],

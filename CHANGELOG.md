@@ -23,6 +23,9 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 - Realtime Database: an `auth` token's `iat` is read as the official emulator (firebase-database-emulator 4.11.2) reads it, in the emulator profile, over REST `auth=` and the WebSocket `auth` action. `iat` is a number when it is an integer literal that fits an i64 or any literal with a fraction or an exponent, so `1e400` and `-1e400` (infinite doubles) now make the token a user, and an integer literal beyond the i64 range (`9223372036854775808`, `12345678901234567890`) no longer does. A missing, string, `null` or boolean `iat` still leaves the token anonymous, as on the official emulator, whatever Auth's emulator profile accepts. The strict profile is unchanged.
 
 ## [0.48.0] - 2026-11-10
+### Changed
+
+- Auth: the compatibility contract now records three existing blocking function safety bounds in both profiles: refusal when the identity changes during a hook, when blocking request slots are full, or when a function response exceeds 64 KiB.
 
 ### Fixed
 

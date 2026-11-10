@@ -150,11 +150,16 @@ export function judgeOperation(answer, operation) {
   return { verdict: answer.body.done === true ? "done" : "pending" };
 }
 
-const NOT_FOUND = "Requested database was not found.";
+// The two texts production gave for this deleted database: right after the delete, and ten
+// minutes later (entpipe1's retirement, 2026-10-27, first and second read-back).
+const NOT_FOUND = new Set([
+  "Requested database was not found.",
+  `Project '${PROJECT}' or database '${DATABASE}' does not exist.`,
+]);
 const gone = (answer) =>
   answer?.status === 404 &&
   answer.body?.error?.status === "NOT_FOUND" &&
-  answer.body.error.message === NOT_FOUND;
+  NOT_FOUND.has(answer.body.error.message);
 
 /**
  * The read-back, at least ten minutes after the delete: the list equals the S0 list without this

@@ -2,6 +2,14 @@
 
 use fireemu_core_firestore::pipeline_exec::{RegexError, RegexOperation, RegexResult};
 
+mod analysis;
+#[cfg(test)]
+mod matrix;
+#[cfg(test)]
+mod replay;
+#[cfg(test)]
+mod rewrite_tests;
+
 pub(crate) fn resolve(
     subject: &str,
     pattern: &str,

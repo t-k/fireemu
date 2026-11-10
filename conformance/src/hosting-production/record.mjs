@@ -49,6 +49,13 @@ const ESTIMATED_USD = 0.05;
 const WAIT_MS = 30 * 60_000;
 export const READINESS_ATTEMPTS = 12;
 export const READINESS_GAP_MS = 10_000;
+/**
+ * The wait between the release and the first readiness probe. Run bba4c0: four releases were dark for
+ * the 20 s of three probes; run ab8b85: a probe sent early was answered "Site Not Found" and cached
+ * (X-Cache: HIT), and 12 later probes of the same URL got the cached answer. Every probe now has its
+ * own query, and the first one waits 30 s, longer than the 20 s a release was seen dark.
+ */
+export const READINESS_FIRST_WAIT_MS = 30_000;
 const REQUEST_GAP_MS = 150;
 const MAX_RESPONSE_BYTES = 1 << 20;
 const RUN_TAG = /^[0-9a-f]{6}$/;
@@ -132,6 +139,13 @@ export function admit({ ledgerText, now, env }) {
   if (attempt > MAX_ATTEMPTS) {
     throw new Error(
       `attempt ${attempt} exceeds ${MAX_ATTEMPTS} attempts of the envelope ${envelope}`,
+    );
+  }
+  // The launch names the attempt it believes it starts; the count of the envelope decides.
+  const named = env.FIREEMU_HOSTING_ATTEMPT;
+  if (named !== undefined && named !== String(attempt)) {
+    throw new Error(
+      `FIREEMU_HOSTING_ATTEMPT ${JSON.stringify(named)} is not attempt ${attempt} of the envelope ${envelope}`,
     );
   }
   const cumulativeReservedUsd = (started.length + 1) * RESERVED_USD_PER_ATTEMPT;
@@ -447,16 +461,27 @@ async function precheck(api) {
 const shortVersionName = (name) => String(name ?? "").replace(/^projects\/[^/]+\//, "");
 
 /** What a readiness probe that was not the expected answer showed (kept in the deploy record). */
-function probeShape(answer) {
-  const header = (name) => answer.headers?.find(([key]) => String(key).toLowerCase() === name)?.[1];
+const probeHeader = (answer, name) =>
+  answer.headers?.find(([key]) => String(key).toLowerCase() === name)?.[1];
+
+/** The cache state a probe was answered with, kept per probe (null when it was not answered). */
+const probeXCache = (answer) =>
+  answer.outcome === "answered"
+    ? String(probeHeader(answer, "x-cache") ?? "").slice(0, 64) || null
+    : null;
+
+function probeShape(answer, secrets) {
   const body = answer.body ?? Buffer.alloc(0);
+  // The private values are masked in the whole body before it is cut, so that a value that straddles
+  // the cut leaves no prefix of itself.
+  const text = maskSecrets(body.toString("utf8"), secrets);
   return {
     status: answer.status,
-    contentType: header("content-type"),
-    xCache: header("x-cache"),
-    xServedBy: header("x-served-by"),
+    contentType: probeHeader(answer, "content-type"),
+    xCache: probeHeader(answer, "x-cache"),
+    xServedBy: probeHeader(answer, "x-served-by"),
     bodyBytes: body.length,
-    bodyHead: body.subarray(0, 200).toString("utf8"),
+    bodyHead: Buffer.from(text).subarray(0, 200).toString("utf8"),
   };
 }
 
@@ -668,13 +693,18 @@ async function deployAndServe({ version, record, run, api, deps, secrets, number
     });
   };
   record.readiness = [];
+  record.readinessXCache = [];
   let ready = false;
   let last;
   for (let attempt = 0; attempt < READINESS_ATTEMPTS && !ready; attempt += 1) {
     if (state.stop) break;
-    if (attempt > 0) await deps.sleep(READINESS_GAP_MS);
-    const answer = await edge({ method: "GET", target: version.readiness.path }, {});
+    await deps.sleep(attempt === 0 ? READINESS_FIRST_WAIT_MS : READINESS_GAP_MS);
+    if (state.stop) break;
+    // Every probe has a query of its own (the CDN keeps a negative answer per URL, run ab8b85).
+    const target = `${version.readiness.path}?fireemu-ready=${run}-${attempt + 1}`;
+    const answer = await edge({ method: "GET", target }, {});
     record.readiness.push(answer.outcome === "answered" ? answer.status : answer.reason);
+    record.readinessXCache.push(probeXCache(answer));
     ready = answer.outcome === "answered" && version.readiness.accept.includes(answer.status);
     last = answer;
   }
@@ -682,14 +712,23 @@ async function deployAndServe({ version, record, run, api, deps, secrets, number
     // Run bba4c0 gave up on four releases after 20 s with no body kept. Keep what the last probe
     // showed and whether the API still holds this version as the channel's release, so that a
     // release that never goes live differs from one that is only slow.
-    if (last?.outcome === "answered") record.lastProbe = probeShape(last);
+    if (last?.outcome === "answered") record.lastProbe = probeShape(last, secrets);
     fail(state.stop ? "stopped" : "not-ready", { halt: false });
     if (!state.stop) {
       const channel = await api.call("control", "GET", `${channelsUrl}/${record.channelId}`);
-      record.releaseOnChannel =
-        channel.kind !== "ok"
-          ? "unread"
-          : shortVersionName(channel.value?.release?.version?.name) === shortVersionName(name);
+      if (channel.kind !== "ok") record.releaseOnChannel = "unread";
+      else {
+        // "absent": the channel names no release version (a field no production answer has shown
+        // yet may be nested differently); the keys of `release` are kept to show its shape.
+        const release = channel.value?.release;
+        const seen = release?.version?.name;
+        record.releaseOnChannel =
+          typeof seen === "string" && seen
+            ? shortVersionName(seen) === shortVersionName(name)
+            : "absent";
+        if (release && typeof release === "object")
+          record.releaseKeys = Object.keys(release).sort();
+      }
     }
     return;
   }

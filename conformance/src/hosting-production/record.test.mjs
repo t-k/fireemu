@@ -94,6 +94,7 @@ import {
   classify,
   PROJECT,
   READINESS_ATTEMPTS,
+  READINESS_FIRST_WAIT_MS,
   READINESS_GAP_MS,
   recordHosting,
   recoverHosting,
@@ -103,7 +104,7 @@ import {
 
 const now = Date.parse("2026-11-10T12:00:00Z");
 const fakeSecrets = { apiKey: "AIzaFAKEFAKEFAKEFAKEFAKEFAKE12345", projectNumber: "123456789012" };
-const ENVELOPE = "HOSTING-PRODUCTION-V4-20261111";
+const ENVELOPE = "HOSTING-PRODUCTION-V5-20261111";
 const closed = {
   ts: "2026-11-10T00:00:00Z",
   project: PROJECT,
@@ -578,7 +579,8 @@ test("stop during the second version leaves later rows unknown and cleans up", a
       };
       deps.edge = async (call) => {
         const value = await world.edge(call);
-        if (call.host.includes("-v02-") && call.target !== "/ready.txt") stop();
+        if (call.host.includes("-v02-") && !call.target.startsWith("/ready.txt?fireemu-ready="))
+          stop();
         return value;
       };
     },
@@ -640,11 +642,11 @@ test("a new envelope counts its own attempts from 1 and the reserved money from 
   assert.deepEqual(check(two), { attempt: 3, cumulativeReservedUsd: 5 });
   assert.throws(() => check([...two, ...v4Attempt(3)]), /attempt 4 exceeds 3 attempts/);
   // another envelope's rows do not use this envelope's three launches
-  const other = [...old, ...v4Attempt(1, { envelopeId: "HOSTING-PRODUCTION-V5-20261111" })];
+  const other = [...old, ...v4Attempt(1, { envelopeId: "HOSTING-PRODUCTION-V6-20261111" })];
   assert.equal(check(other).attempt, 1);
   // the envelope is the one named by the caller, not the latest one in the ledger
   assert.equal(
-    check(one, { FIREEMU_HOSTING_ENVELOPE: "HOSTING-PRODUCTION-V5-20261111" }).attempt,
+    check(one, { FIREEMU_HOSTING_ENVELOPE: "HOSTING-PRODUCTION-V6-20261111" }).attempt,
     1,
   );
 });
@@ -1143,7 +1145,8 @@ test("a stop during a version's requests ends its serving at once", async () => 
       };
       deps.edge = async (call) => {
         const value = await world.edge(call);
-        if (call.host.includes("-v02-") && call.target !== "/ready.txt") stop();
+        if (call.host.includes("-v02-") && !call.target.startsWith("/ready.txt?fireemu-ready="))
+          stop();
         return value;
       };
     },
@@ -1459,4 +1462,195 @@ test("a stop during the readiness window reads no channel and keeps no release v
     ).length,
     0,
   );
+});
+
+// ---- V5: run ab8b85 (V4 launch 2): v02, v03 and v07 answered the "Site Not Found" page, X-Cache: HIT, to
+// all 12 probes of the same URL while the channel held the release: the CDN had cached a negative
+// answer from an early probe, so more probes of the same URL could not help. Run 658bb2 (launch 1)
+// had every version ready on the first probe.
+
+/** The log of the world with the waits in it, in order. */
+const withSleepsInLog = (world, deps) => {
+  deps.sleep = async (ms) => {
+    world.log.push({ kind: "sleep", ms });
+  };
+};
+
+test("the first readiness probe comes only after a wait that follows the release", async () => {
+  const r = await run({ setup: (world, deps) => withSleepsInLog(world, deps) });
+  for (const id of ["v01", "v05", "v10"]) {
+    const host = `-${id}-`;
+    const log = r.world.log;
+    const release = log.findIndex(
+      (c) => c.method === "POST" && c.url?.includes(`hst-abc123-${id}/releases`),
+    );
+    const first = log.findIndex((c) => c.kind === "edge" && c.host.includes(host));
+    const wait = log.findIndex(
+      (c, i) => c.kind === "sleep" && c.ms === READINESS_FIRST_WAIT_MS && i > release,
+    );
+    assert.ok(release >= 0 && wait > release && first > wait, id);
+  }
+  assert.equal(
+    r.world.log.filter((c) => c.kind === "sleep" && c.ms === READINESS_FIRST_WAIT_MS).length,
+    10,
+  );
+  assert.ok(READINESS_FIRST_WAIT_MS >= 30_000);
+});
+
+test("a stop during the first wait sends no probe", async () => {
+  let stop;
+  const r = await run({
+    setup: (_world, deps) => {
+      deps.installSignals = (handler) => {
+        stop = handler;
+      };
+      deps.sleep = async (ms) => {
+        if (ms === READINESS_FIRST_WAIT_MS) stop();
+      };
+    },
+  });
+  assert.equal(edgeCalls(r).length, 0);
+  assert.equal(deployOf(r).v01.failure, "stopped");
+});
+
+test("every readiness probe has its own cache-busting query and no recorded request is changed", async () => {
+  const r = await run({ overrides: [slowRelease(READINESS_ATTEMPTS - 1)] });
+  const corpus = buildCorpus();
+  const probes = edgeCalls(r).filter((call) => call.target.includes("fireemu-ready"));
+  const others = edgeCalls(r).filter((call) => !call.target.includes("fireemu-ready"));
+  // a version that is ready on the first probe is probed once; the slow ones 12 times
+  assert.equal(probes.length, 6 + 4 * READINESS_ATTEMPTS);
+  assert.equal(new Set(probes.map((call) => `${call.host}${call.target}`)).size, probes.length);
+  for (const version of corpus.versions) {
+    const mine = probes.filter((call) => call.host.includes(`-${version.id}-`));
+    mine.forEach((call, index) =>
+      assert.equal(call.target, `${version.readiness.path}?fireemu-ready=abc123-${index + 1}`),
+    );
+  }
+  // the recorded requests go out exactly as the corpus has them
+  assert.deepEqual(
+    others.map((call) => `${call.method} ${call.target}`),
+    corpus.versions.flatMap((version) =>
+      version.requests
+        .filter((spec) => spec.id !== "v01.cond-etag-rewrite")
+        .map((spec) => `${spec.method} ${spec.target}`),
+    ),
+  );
+  assert.ok(others.every((call) => !call.target.startsWith("/ready.txt?fireemu-ready=")));
+});
+
+test("a probe is judged by its status, whatever the query", async () => {
+  // v09 expects 302: a `**` redirect answers the probe with its query too
+  const r = await run();
+  assert.equal(deployOf(r).v09.readiness.at(-1), 302);
+  assert.equal(deployOf(r).v09.failure, undefined);
+});
+
+test("the x-cache of every probe is kept next to its status", async () => {
+  let seen = 0;
+  const r = await run({
+    overrides: [
+      {
+        match: "GET /ready.txt/",
+        answer: (call) => {
+          if (!call.host.includes("-v01-")) return undefined;
+          seen += 1;
+          if (seen === 1) return { ...answer(404, [["X-Cache", "HIT"]]) };
+          if (seen === 2) return answer(404);
+          if (seen === 3) return { status: 0 };
+          return { ...answer(200, [["x-cache", "MISS, MISS"]]), body: Buffer.from("ready") };
+        },
+      },
+    ],
+  });
+  assert.deepEqual(deployOf(r).v01.readiness, [404, 404, "network-error", 200]);
+  assert.deepEqual(deployOf(r).v01.readinessXCache, ["HIT", null, null, "MISS, MISS"]);
+});
+
+test("a secret that straddles the cut of the kept body head never reaches a file, even in part", async () => {
+  const secret = fakeSecrets.apiKey;
+  const body = Buffer.from(`${"x".repeat(200 - 10)}${secret}${"y".repeat(50)}`);
+  const r = await run({
+    overrides: [
+      {
+        match: "GET /ready.txt/",
+        answer: (call) => (call.host.includes("-v01-") ? { ...answer(404), body } : undefined),
+      },
+    ],
+  });
+  const head = deployOf(r).v01.lastProbe.bodyHead;
+  assert.equal(head.length, 200);
+  assert.equal(head.startsWith("x".repeat(190)), true);
+  assert.equal(head.slice(190), "#".repeat(10));
+  assert.equal(deployOf(r).v01.lastProbe.bodyBytes, body.length);
+  const retained = JSON.stringify([r.files, r.ledger]);
+  for (let i = 0; i + 6 <= secret.length; i += 1)
+    assert.equal(retained.includes(secret.slice(i, i + 6)), false, String(i));
+});
+
+test("the channel's release is true, false for another version, absent when there is none, or unread", async () => {
+  const dark = {
+    match: "GET /ready.txt/",
+    answer: (call) => (call.host.includes("-v01-") ? answer(404) : undefined),
+  };
+  const channelRead = (value) => fault("GET /channels/hst-abc123-v01$/", value);
+  const withRelease = (release) => (_call, state) =>
+    reply(200, { ...state.channels.get("hst-abc123-v01"), ...(release ? { release } : {}) });
+  const cases = [
+    [undefined, "absent", undefined],
+    [{ version: { name: "sites/x/versions/other" }, type: "DEPLOY" }, false, ["type", "version"]],
+    [{ type: "DEPLOY" }, "absent", ["type"]],
+    [{ version: {} }, "absent", ["version"]],
+    ["oops", "absent", undefined],
+  ];
+  for (const [release, expected, keys] of cases) {
+    const r = await run({ overrides: [dark, channelRead(withRelease(release))] });
+    assert.equal(deployOf(r).v01.releaseOnChannel, expected, JSON.stringify(release));
+    assert.deepEqual(deployOf(r).v01.releaseKeys, keys);
+  }
+  const ok = await run({ overrides: [dark] });
+  assert.equal(deployOf(ok).v01.releaseOnChannel, true);
+  assert.deepEqual(deployOf(ok).v01.releaseKeys, ["version"]);
+  const unread = await run({ overrides: [dark, channelRead(reply(500))] });
+  assert.equal(deployOf(unread).v01.releaseOnChannel, "unread");
+  assert.equal("releaseKeys" in deployOf(unread).v01, false);
+});
+
+test("the launch's attempt number must be the recorder's count; two launches fit under US$6.00", () => {
+  const four = [
+    ...priorAttempt(1),
+    ...priorAttempt(2),
+    ...v4Attempt(1, { envelopeId: "HOSTING-PRODUCTION-V4-20261111" }),
+    ...v4Attempt(2, { envelopeId: "HOSTING-PRODUCTION-V4-20261111" }),
+  ];
+  const check = (lines, env = {}) =>
+    admit({
+      ledgerText: lines.map((line) => JSON.stringify(line)).join("\n"),
+      now,
+      env: { FIREEMU_HOSTING_ENVELOPE: ENVELOPE, ...env },
+    });
+  assert.deepEqual(check(four, { FIREEMU_HOSTING_ATTEMPT: "1" }), {
+    attempt: 1,
+    cumulativeReservedUsd: 5,
+  });
+  const five = [...four, ...v4Attempt(1)];
+  assert.deepEqual(check(five, { FIREEMU_HOSTING_ATTEMPT: "2" }), {
+    attempt: 2,
+    cumulativeReservedUsd: 6,
+  });
+  assert.throws(
+    () => check([...five, ...v4Attempt(2)], { FIREEMU_HOSTING_ATTEMPT: "3" }),
+    /US\$6\.00/,
+  );
+  // a number that is not the count of the envelope is refused, before anything is sent
+  assert.throws(() => check(four, { FIREEMU_HOSTING_ATTEMPT: "2" }), /FIREEMU_HOSTING_ATTEMPT/);
+  assert.throws(() => check(five, { FIREEMU_HOSTING_ATTEMPT: "1" }), /FIREEMU_HOSTING_ATTEMPT/);
+  assert.throws(() => check(four, { FIREEMU_HOSTING_ATTEMPT: "1.0" }), /FIREEMU_HOSTING_ATTEMPT/);
+  assert.throws(() => check(four, { FIREEMU_HOSTING_ATTEMPT: "" }), /FIREEMU_HOSTING_ATTEMPT/);
+  // not set: the count alone decides (the older callers)
+  assert.equal(check(four).attempt, 1);
+});
+
+test("a run whose launch names the wrong attempt sends nothing", async () => {
+  await assert.rejects(run({ env: { FIREEMU_HOSTING_ATTEMPT: "2" } }), /FIREEMU_HOSTING_ATTEMPT/);
 });

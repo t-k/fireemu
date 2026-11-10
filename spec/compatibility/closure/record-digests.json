@@ -49,7 +49,7 @@
     "conformance/src/functions-python-replay.test.mjs": "cbcc02cb8ac4d53bdbb5a43ba5a98e5d8f6bfdd149050513904c545994192e1f",
     "conformance/src/hosting-production/corpus.manifest.json": "9c86405766440def7b565417de145b01cfed2395b7819fdba2596f6183b355ab",
     "conformance/src/hosting-production/judge.mjs": "c35018577caaacf7a7eb5637fefad8d33aa1245003cfdd71e898c2a1ac975af5",
-    "conformance/src/hosting-production/record.mjs": "3caa60e0ece990034ab65d6f0db642754c9bf01f87dd9f8be8588687678d9bbd",
+    "conformance/src/hosting-production/record.mjs": "9c56635779c7c879dd87e10f34c2d208e494236658f4e550ecf41b1a3667872d",
     "conformance/src/hosting/run.mjs": "60f51e78ed905dadf5fa8f8e2098d9717abdf845ac3d5e5618e72e3a430490a8",
     "conformance/src/release-strict-regression.test.mjs": "33938307deea400dc712c59e848a185a26aab08c5b8a50b65e79b9dcccbd3bd2",
     "conformance/src/rtdb-finite-families-closure.test.mjs": "0fb70d489213edca6b71670ffe20fc92138cd0cdf0a07f7e3dff93aaa2303303",
@@ -270,7 +270,7 @@
     "spec/compatibility/fs-listen-sdk-browser-local-shadow.json": "41b2adb3265f6120291f48ea72532fb6927c4fda93f3893ace16a207d7122797",
     "spec/compatibility/fs-listen-sdk-local-shadow.json": "aea62689faa5e52ca96e1b3af9c6bc971cd72101ee588b371dd04f2121a56c95",
     "spec/compatibility/gaps.json": "d20fe030f9e2bdff1a587421ffae216c73b30fb7ff7468e7383be5bccbd3df9d",
-    "spec/compatibility/hosting-production-packet.md": "daa3822b590b43452df51d9a39f5b9c2d0394df2e1f9a66ea7dc88d3f40049de",
+    "spec/compatibility/hosting-production-packet.md": "024b9c30cb6e30e234f8fed0d509866063cc5d554e718706e6bb8d7351ed6cbe",
     "spec/limits/firestore-standard-2026-08-25.json": "a5c9da71bd74c7341da1cb3d25542db3aecb935b2387d4a61c8cb43857055fa4"
   }
 }

@@ -1634,6 +1634,16 @@
         "reviewedCommit": "234f8c208760339cc7d4da3fc903df8db6552fa4",
         "outcome": "MERGE-AFTER-FIXES",
         "scope": "strict gzip (owner ledger 2458, ruling 26): KD-COMPRESSION narrowed to the four Brotli rows, judge compares the decoded body of an encoded answer with the plain body of an unencoded one, counts 64/119/18/0/0 per strict comparison, limitations and gzip probe follow-up"
+      },
+      {
+        "reviewer": "independent delta reviewer",
+        "reportPath": "docs.local/reviews/2026-11-12-hosting-followup-align-delta-review.md",
+        "reportSha256": "2b187e62589a9d51bdf404c41daaa56b818a940bedb64693ec77b829446922b5",
+        "reviewedCommit": "c88d59ae2242bff8053f2a8ffcecc147253ae0aa",
+        "outcome": "MERGE-AFTER-FIXES",
+        "scope": "strict alignment to the follow-up recordings (runs 11ae6c and 1c6a4c): the fireemu-authored 404 and auth-handler pages (owner decision 2483/2485), Host validation for the dot-segment redirect, the send guard and hermetic mutation harness, the six comparison files, KD-GZIP-LENGTH (ruling 27); Must Fix M1 (page bytes in the branch history, ruling 28) and M2 (ruling 27 citation), Should Fix S1 to S4",
+        "carriedInto": "e543a92e67ba085f41418d8337896221a367305c",
+        "carriedIntoNote": "the fixes for M1 (clean rebuild), M2, S1, S2 and S3 followed in e543a92e6; S4 is noted in the lane status file"
       }
     ]
   },

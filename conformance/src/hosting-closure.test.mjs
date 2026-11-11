@@ -30,7 +30,23 @@ test("the record is the verified Hosting parent with its review, and the corpus 
   assert.match(review.decidedOn, /^\d{4}-\d{2}-\d{2}$/);
   assert.match(review.decisionRef, /owner ledger 2435, 2458; coordinator rulings 11-26/);
   assert.match(review.reviewedCommit, /^[0-9a-f]{40}$/);
-  assert.equal(review.reviews.length, 4);
+  assert.equal(review.reviews.length, 5);
+  assert.equal(review.reviews[3].outcome, "MERGE-AFTER-FIXES");
+  // the follow-up delta review read c88d59ae2; the fixes it asked for followed in the carried-into head
+  const followup = review.reviews[4];
+  assert.equal(
+    followup.reportPath,
+    "docs.local/reviews/2026-11-12-hosting-followup-align-delta-review.md",
+  );
+  assert.match(
+    followup.reportSha256,
+    /^2b187e62589a9d51bdf404c41daaa56b818a940bedb64693ec77b829446922b5$/,
+  );
+  assert.equal(followup.reviewedCommit, "c88d59ae2242bff8053f2a8ffcecc147253ae0aa");
+  assert.equal(followup.outcome, "MERGE-AFTER-FIXES");
+  assert.match(followup.carriedInto, /^[0-9a-f]{40}$/);
+  assert.notEqual(followup.carriedInto, followup.reviewedCommit);
+  assert.match(followup.carriedIntoNote, /M1.*M2.*S1.*S3/);
   for (const entry of review.reviews.slice(0, 2)) {
     assert.match(entry.reportPath, /^docs\.local\/reviews\/2026-11-11-hosting-parent-closure-/);
     assert.match(entry.reportSha256, /^[0-9a-f]{64}$/);

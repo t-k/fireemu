@@ -1,43 +1,21 @@
 //! Node executable selection happens before a Functions codebase is imported.
 
+#![cfg(unix)]
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
+#[cfg(unix)]
+#[path = "../../../tests/support/real_node.rs"]
+mod real_node;
+
+/// The real Node (never the Volta shim; see `tests/support/real_node.rs`) and its major version.
 fn current_node() -> Option<(PathBuf, u32)> {
-    let path = std::env::var_os("PATH")?;
-    for directory in std::env::split_paths(&path) {
-        let candidate = directory.join("node");
-        if !candidate.is_file() {
-            continue;
-        }
-        let resolved = Command::new(&candidate)
-            .args(["-p", "process.execPath"])
-            .output()
-            .ok()?;
-        if !resolved.status.success() {
-            return None;
-        }
-        let program = PathBuf::from(String::from_utf8(resolved.stdout).ok()?.trim());
-        if !program.is_absolute() || !program.is_file() {
-            return None;
-        }
-        let output = Command::new(&program).arg("--version").output().ok()?;
-        if !output.status.success() {
-            return None;
-        }
-        let major = String::from_utf8_lossy(&output.stdout)
-            .trim()
-            .trim_start_matches('v')
-            .split('.')
-            .next()?
-            .parse()
-            .ok()?;
-        return Some((program, major));
-    }
-    None
+    let node = real_node::try_real_node().ok()?;
+    Some((node.path, node.major))
 }
 
 fn fixture() -> PathBuf {
@@ -84,7 +62,12 @@ fn write_node_wrapper(
 #[cfg(unix)]
 #[test]
 fn an_explicit_node_override_is_not_replaced_by_an_automatic_fallback() {
-    let (actual_node, _) = current_node().expect("Node is required for runtime selection tests");
+    let (actual_node, _) = current_node().unwrap_or_else(|| {
+        panic!(
+            "a real Node is required for runtime selection tests: {:?}",
+            real_node::try_real_node().err()
+        )
+    });
     let feature = Command::new(&actual_node)
         .args(["-p", "String(process.features.require_module)"])
         .output()
@@ -162,7 +145,12 @@ fn an_explicit_node_override_is_not_replaced_by_an_automatic_fallback() {
 #[cfg(unix)]
 #[test]
 fn a_compatible_absolute_path_candidate_is_selected() {
-    let (actual_node, _) = current_node().expect("Node is required for runtime selection tests");
+    let (actual_node, _) = current_node().unwrap_or_else(|| {
+        panic!(
+            "a real Node is required for runtime selection tests: {:?}",
+            real_node::try_real_node().err()
+        )
+    });
     let root =
         std::env::temp_dir().join(format!("fireemu-runtime-fallback-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
@@ -237,7 +225,12 @@ fn a_compatible_absolute_path_candidate_is_selected() {
 #[cfg(unix)]
 #[test]
 fn a_loader_capable_node_is_selected_before_user_code_is_loaded() {
-    let (actual_node, _) = current_node().expect("Node is required for runtime selection tests");
+    let (actual_node, _) = current_node().unwrap_or_else(|| {
+        panic!(
+            "a real Node is required for runtime selection tests: {:?}",
+            real_node::try_real_node().err()
+        )
+    });
     let feature = Command::new(&actual_node)
         .args(["-p", "String(process.features.require_module)"])
         .output()

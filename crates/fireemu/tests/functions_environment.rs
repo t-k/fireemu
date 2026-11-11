@@ -17,6 +17,10 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
+#[cfg(unix)]
+#[path = "../../../tests/support/real_node.rs"]
+mod real_node;
+
 fn sdk_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/sdk-smoke")
 }
@@ -50,6 +54,8 @@ fn write(dir: &Path, name: &str, body: &str) {
 
 fn fireemu_exec(source: &Path, project: &str) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_fireemu"));
+    #[cfg(unix)]
+    real_node::use_real_node(&mut command);
     command.args([
         "exec",
         "--firestore-port",
@@ -566,11 +572,7 @@ fn a_reload_reuses_the_daemons_node_probe_results() {
         have_sdk(),
         "install tools/sdk-smoke dependencies before running this test"
     );
-    let actual_node = std::env::split_paths(&std::env::var_os("PATH").expect("Node requires PATH"))
-        .filter(|directory| directory.is_absolute())
-        .map(|directory| directory.join("node"))
-        .find(|program| program.is_file())
-        .expect("Node must be installed for the SDK workflow");
+    let actual_node = real_node::real_node().path;
     let dir = scratch_codebase("node-probe-reload");
     write(
         &dir,
@@ -1509,7 +1511,7 @@ fs.writeFileSync = (file, value, ...options) => {
         "publishMarkerJson(target, { marker: 'complete' });",
     );
     let mut child = ReloadMarkerProbeChild(
-        Command::new("node")
+        Command::new(real_node::real_node().path)
             .args(["--eval", &script])
             .arg(&target)
             .arg(&paused)

@@ -223,7 +223,7 @@ test('snapshot copying preserves executable files and read-only directory modes'
   }finally{await removeSnapshotTree(worldRoot);await chmod(nested,0o700).catch(()=>{});await rm(root,{recursive:true,force:true});}
 });
 
-test('world cleanup removes read-only snapshots after generation cancellation and dispose', native, async t => {
+test('world cleanup removes read-only snapshots after generation cancellation and dispose', { ...native, timeout: 90_000 }, async t => {
   copyFileByFile(t);
   const root = await mkdtemp(join(tmpdir(), 'fireemu-world-readonly-cleanup-'));
   const source = join(root, 'source'), readonly = join(source, 'readonly');

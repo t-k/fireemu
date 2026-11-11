@@ -2184,9 +2184,14 @@ test("check keeps invalid concurrency from starting any session", async (t) => {
   assert.deepEqual(readdirSync(fixture.out), []);
 });
 
+// The scripted ports sit below 1024. reservePorts keeps one claimed-port set for the whole process, and
+// the real reservations of the other tests in this file (the concurrent `check` sessions) land in the
+// operating system's ephemeral range: 32768-60999 on Linux, which includes 41001-41314, and 49152 and up on
+// macOS. A scripted port in that range was sometimes already claimed by a real one (CI, ubuntu: 41003), so the
+// reservation skipped it and the expected list shifted. No real listener is ever given a port below 1024 here.
 test("reservePorts scripted duplicates are skipped, held and closed on release", async () => {
   const closed = [],
-    firstPorts = [41001, 41002, 41003, 41004, 41005, 41006, 41007];
+    firstPorts = [1001, 1002, 1003, 1004, 1005, 1006, 1007];
   const makeFactory = (script) => () => {
     const port = script.shift();
     return {
@@ -2206,12 +2211,12 @@ test("reservePorts scripted duplicates are skipped, held and closed on release",
   const first = await reservePorts(7, { makeServer: makeFactory([...firstPorts]) });
   assert.deepEqual(first.ports, firstPorts);
   const second = await reservePorts(7, {
-    makeServer: makeFactory([41001, 41008, 41001, 41009, 41010, 41011, 41012, 41013, 41014]),
+    makeServer: makeFactory([1001, 1008, 1001, 1009, 1010, 1011, 1012, 1013, 1014]),
   });
-  assert.deepEqual(second.ports, [41008, 41009, 41010, 41011, 41012, 41013, 41014]);
+  assert.deepEqual(second.ports, [1008, 1009, 1010, 1011, 1012, 1013, 1014]);
   assert.deepEqual(closed, []);
   await second.release();
-  assert.deepEqual(closed, [41001, 41008, 41001, 41009, 41010, 41011, 41012, 41013, 41014]);
+  assert.deepEqual(closed, [1001, 1008, 1001, 1009, 1010, 1011, 1012, 1013, 1014]);
   await second.release();
   assert.equal(closed.length, 9);
   await first.release();
@@ -2227,10 +2232,10 @@ test("reservePorts scripted exhaustion rejects after the retry bound and closes 
         queueMicrotask(done);
       },
       address() {
-        return { port: 41200 };
+        return { port: 1200 };
       },
       close(done) {
-        closed.push(41200);
+        closed.push(1200);
         done();
       },
     };
@@ -2239,7 +2244,7 @@ test("reservePorts scripted exhaustion rejects after the retry bound and closes 
   calls = 0;
   await assert.rejects(reservePorts(1, { makeServer }), /retries exhausted/);
   assert.equal(calls, 65);
-  assert.deepEqual(closed, Array(65).fill(41200));
+  assert.deepEqual(closed, Array(65).fill(1200));
   await first.release();
 });
 test("reservePorts scripted listen failure closes the servers already opened", async () => {
@@ -2247,14 +2252,14 @@ test("reservePorts scripted listen failure closes the servers already opened", a
   const closed = [],
     failure = new Error("listen failed");
   const makeServer = () => {
-    const port = 41300 + ++calls;
+    const port = 1300 + ++calls;
     let onError;
     return {
       once(_event, fn) {
         onError = fn;
       },
       listen(_port, _host, done) {
-        queueMicrotask(() => (port === 41303 ? onError(failure) : done()));
+        queueMicrotask(() => (port === 1303 ? onError(failure) : done()));
       },
       address() {
         return { port };
@@ -2266,7 +2271,7 @@ test("reservePorts scripted listen failure closes the servers already opened", a
     };
   };
   await assert.rejects(reservePorts(3, { makeServer }), (error) => error === failure);
-  assert.deepEqual(closed, [41301, 41302]);
+  assert.deepEqual(closed, [1301, 1302]);
 });
 test("check keeps nothing new starting after an unexpected session error", async (t) => {
   const fixture = checkFixture(t),

@@ -31,21 +31,29 @@ const liteRest = {
   async run(ctx) {
     const db = ctx.shared.liteFirestore();
 
-    await ctx.step("set-and-get", async () => {
-      await setDoc(doc(db, "conf_values/lite"), {
-        n: 1,
-        s: "x",
-        nested: { k: [1, "two", null] },
-        at: serverTimestamp(),
-      });
-      const snap = await getDoc(doc(db, "conf_values/lite"));
-      return { exists: snap.exists(), data: snap.data() };
-    });
+    await ctx.step(
+      "set-and-get",
+      async () => {
+        await setDoc(doc(db, "conf_values/lite"), {
+          n: 1,
+          s: "x",
+          nested: { k: [1, "two", null] },
+          at: serverTimestamp(),
+        });
+        const snap = await getDoc(doc(db, "conf_values/lite"));
+        return { exists: snap.exists(), data: snap.data() };
+      },
+      { generated: { "data.at": "timestamp" } },
+    );
 
-    await ctx.step("update-with-a-transform-and-a-nested-path", async () => {
-      await updateDoc(doc(db, "conf_values/lite"), { n: increment(4), "nested.k": [9] });
-      return (await getDoc(doc(db, "conf_values/lite"))).data();
-    });
+    await ctx.step(
+      "update-with-a-transform-and-a-nested-path",
+      async () => {
+        await updateDoc(doc(db, "conf_values/lite"), { n: increment(4), "nested.k": [9] });
+        return (await getDoc(doc(db, "conf_values/lite"))).data();
+      },
+      { generated: { at: "timestamp" } },
+    );
 
     await ctx.step("query-with-filter-order-and-limit", async () => {
       await setDoc(doc(db, "conf_values/lite-b"), { n: 7 });

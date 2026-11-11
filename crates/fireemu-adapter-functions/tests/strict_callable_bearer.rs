@@ -223,13 +223,19 @@ async fn a_token_carrying_a_real_users_claims_with_a_forged_signature_is_refused
 }
 
 #[tokio::test]
-async fn a_single_credential_that_is_not_a_bearer_is_left_to_the_wrapper() {
-    // The wrapper itself refuses these (a missing `Bearer ` prefix, an empty token): unchanged.
+async fn a_single_credential_that_is_not_a_verified_bearer_gets_the_wrappers_envelope() {
+    // Production's wrapper refuses these itself, with its own 401 envelope, and the handler never
+    // runs (FUNCTIONS-HTTP-CALLABLE-INGRESS: another scheme, a scheme without a token; the
+    // re-recordings: a token of the project with a bad signature or past its expiry).
     let h = start().await;
-    for value in ["Basic dXNlcjpwYXNz", "Bearer ", "AAAA"] {
+    for value in ["Basic dXNlcjpwYXNz", "Bearer ", "AAAA", "Bearer malformed"] {
         let answer = h.call(&[("authorization", value)]).await;
-        assert_eq!(answer.status, 200, "{value}");
-        assert!(reached_the_handler(&answer), "{value}");
+        assert_eq!(answer.status, 401, "{value}");
+        assert!(!reached_the_handler(&answer), "{value}");
+        assert_eq!(
+            answer.body, br#"{"error":{"message":"Unauthenticated","status":"UNAUTHENTICATED"}}"#,
+            "{value}"
+        );
     }
     h.stop().await;
 }

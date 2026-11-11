@@ -2236,6 +2236,14 @@ pub const NOT_SECRET_CONFIG_KEYS: &[(&str, &str)] = &[
         "functions.authBlockingToken",
         "mode name, not a token value",
     ),
+    (
+        "auth.blockingFunctions.forwardInboundCredentials",
+        "booleans: which inbound credentials a blocking function receives",
+    ),
+    (
+        "auth.idpSigners",
+        "public verification keys (JWKS) of an IdP, not secrets",
+    ),
 ];
 
 /// Replaces the secret values of one `config show` row (see [`SECRET_CONFIG_KEYS`]).
@@ -13238,8 +13246,71 @@ mod secret_redaction_tests {
         assert!(row["value"].is_null());
     }
 
-    #[test]
-    fn every_secret_like_schema_leaf_is_listed() {
+    /// Every key the schema can reach, as dotted paths: `properties` names, `items` (`[]`),
+    /// map values (`*`), `$ref` targets and the `anyOf`/`oneOf`/`allOf` alternatives.
+    fn schema_reachable_keys(root: &Value) -> Vec<String> {
+        fn walk(
+            node: &Value,
+            root: &Value,
+            path: &str,
+            refs: &mut Vec<String>,
+            out: &mut Vec<String>,
+        ) {
+            if let Some(target) = node.get("$ref").and_then(Value::as_str) {
+                if let Some(pointer) = target.strip_prefix('#') {
+                    // A reference cycle is cut at the first repeat, not followed forever.
+                    if !refs.iter().any(|seen| seen == target) {
+                        if let Some(resolved) = root.pointer(pointer) {
+                            refs.push(target.to_owned());
+                            walk(resolved, root, path, refs, out);
+                            refs.pop();
+                        }
+                    }
+                }
+            }
+            for combinator in ["anyOf", "oneOf", "allOf"] {
+                for alternative in node
+                    .get(combinator)
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                {
+                    walk(alternative, root, path, refs, out);
+                }
+            }
+            if let Some(properties) = node.get("properties").and_then(Value::as_object) {
+                for (name, child) in properties {
+                    let child_path = if path.is_empty() {
+                        name.clone()
+                    } else {
+                        format!("{path}.{name}")
+                    };
+                    out.push(child_path.clone());
+                    walk(child, root, &child_path, refs, out);
+                }
+            }
+            if let Some(items) = node.get("items") {
+                let schemas: Vec<&Value> = match items {
+                    Value::Array(list) => list.iter().collect(),
+                    single => vec![single],
+                };
+                for item in schemas {
+                    walk(item, root, &format!("{path}[]"), refs, out);
+                }
+            }
+            if let Some(values) = node.get("additionalProperties").filter(|v| v.is_object()) {
+                walk(values, root, &format!("{path}.*"), refs, out);
+            }
+        }
+        let mut out = Vec::new();
+        walk(root, root, "", &mut Vec::new(), &mut out);
+        out
+    }
+
+    /// The reachable schema paths whose names look secret-like and are not covered: a path is
+    /// covered when it is a listed secret key, sits under one (`key.`, `key[]`, `key.*`), or is
+    /// a reasoned not-secret key.
+    fn unlisted_secret_like(names: &[String]) -> Vec<String> {
         let pattern = [
             "token",
             "secret",
@@ -13248,20 +13319,70 @@ mod secret_redaction_tests {
             "credential",
             "private",
         ];
-        for (key, _) in config_schema() {
-            let lower = key.to_ascii_lowercase();
-            if !pattern.iter().any(|p| lower.contains(p)) {
-                continue;
-            }
-            let listed = SECRET_CONFIG_KEYS.contains(&key.as_str())
-                || NOT_SECRET_CONFIG_KEYS
-                    .iter()
-                    .any(|(k, reason)| *k == key && !reason.is_empty());
+        names
+            .iter()
+            .filter(|name| {
+                let lower = name.to_ascii_lowercase();
+                pattern.iter().any(|p| lower.contains(p))
+            })
+            .filter(|name| {
+                let covered_by_secret = SECRET_CONFIG_KEYS.iter().any(|key| {
+                    name.as_str() == *key
+                        || [".", "[]", ".*"]
+                            .iter()
+                            .any(|suffix| name.starts_with(&format!("{key}{suffix}")))
+                });
+                let reasoned = NOT_SECRET_CONFIG_KEYS.iter().any(|(key, reason)| {
+                    !reason.is_empty()
+                        && [".", "[]", ".*"]
+                            .iter()
+                            .any(|suffix| name.starts_with(&format!("{key}{suffix}")))
+                        || name.as_str() == *key && !reason.is_empty()
+                });
+                !(covered_by_secret || reasoned)
+            })
+            .cloned()
+            .collect()
+    }
+
+    #[test]
+    fn every_secret_like_schema_path_is_listed() {
+        let root: Value =
+            serde_json::from_str(include_str!("../../../spec/config/fireemu.schema.json"))
+                .expect("schema");
+        let names = schema_reachable_keys(&root);
+        assert!(
+            names.len() > 50,
+            "the walk reached only {} paths",
+            names.len()
+        );
+        let unlisted = unlisted_secret_like(&names);
+        assert!(
+            unlisted.is_empty(),
+            "secret-like schema paths not covered (add to SECRET_CONFIG_KEYS or NOT_SECRET_CONFIG_KEYS with a reason): {unlisted:?}"
+        );
+    }
+
+    #[test]
+    fn the_schema_guard_fails_for_secret_like_leaves_under_items_refs_and_maps() {
+        let root = json!({
+            "properties": {
+                "list": {"type": "array", "items": {"properties": {"apiToken": {"type": "string"}}}},
+                "linked": {"$ref": "#/$defs/creds"},
+                "map": {"type": "object", "additionalProperties": {"properties": {"clientSecret": {"type": "string"}}}}
+            },
+            "$defs": {"creds": {"properties": {"privateKey": {"type": "string"}}}}
+        });
+        let unlisted = unlisted_secret_like(&schema_reachable_keys(&root));
+        for expected in ["list[].apiToken", "linked.privateKey", "map.*.clientSecret"] {
             assert!(
-                listed,
-                "{key} looks secret-like: add it to SECRET_CONFIG_KEYS or NOT_SECRET_CONFIG_KEYS with a reason"
+                unlisted.iter().any(|path| path == expected),
+                "{expected} not reported: {unlisted:?}"
             );
         }
+        // A covered path under a listed secret key is not reported.
+        let covered = json!({"properties": {"auth": {"properties": {"apiKeys": {"items": {"type": "string"}}}}}});
+        assert!(unlisted_secret_like(&schema_reachable_keys(&covered)).is_empty());
     }
 
     #[test]

@@ -1,0 +1,941 @@
+{
+  "schemaVersion": 1,
+  "corpusId": "hosting-followup-v1",
+  "versions": [
+    {
+      "id": "v11",
+      "name": "pages-and-paths",
+      "hosting": {},
+      "optionalConfig": [],
+      "readiness": {
+        "path": "/ready.txt",
+        "accept": [200]
+      },
+      "files": {
+        "a/b": {
+          "bytes": 7,
+          "sha256": "a633061912d317e70ff3eb38a61c53b2a7588feed1a01c60c84019f9b6db4986"
+        },
+        "a/c.txt": {
+          "bytes": 7,
+          "sha256": "18f60d84c76ea02e5eeb3681c490cdc801f8bee8d4eff42376a2b319e4e67997"
+        },
+        "a/index.html": {
+          "bytes": 11,
+          "sha256": "32baabe220d585cd33d69d5da7815bdc71f05f97688a73270dc6bdab0e3fbbc2"
+        },
+        "index.html": {
+          "bytes": 14,
+          "sha256": "25bd9226c1514c5b63d541ca4f280ab769a4dab6f9e0c510669713d16d686065"
+        },
+        "ready.txt": {
+          "bytes": 6,
+          "sha256": "ed1a545bb85e55816bbf9566b028b2a0bc456b88f49f6f266c0401048824194b"
+        }
+      },
+      "requests": [
+        {
+          "id": "v11.default-404",
+          "condition": "default-404",
+          "method": "GET",
+          "target": "/missing",
+          "headers": {},
+          "keepBody": true
+        },
+        {
+          "id": "v11.default-404-json",
+          "condition": "default-404",
+          "method": "GET",
+          "target": "/missing.json",
+          "headers": {}
+        },
+        {
+          "id": "v11.default-404-nested",
+          "condition": "default-404",
+          "method": "GET",
+          "target": "/a/missing/deeper",
+          "headers": {}
+        },
+        {
+          "id": "v11.auth-handler",
+          "condition": "auth-handler",
+          "method": "GET",
+          "target": "/__/auth/handler",
+          "headers": {},
+          "keepBody": true
+        },
+        {
+          "id": "v11.auth-handler-query",
+          "condition": "auth-handler",
+          "method": "GET",
+          "target": "/__/auth/handler?mode=signIn",
+          "headers": {}
+        },
+        {
+          "id": "v11.dot-end-parent",
+          "condition": "dot-segments",
+          "method": "GET",
+          "target": "/a/b/..",
+          "headers": {}
+        },
+        {
+          "id": "v11.dot-mid-current",
+          "condition": "dot-segments",
+          "method": "GET",
+          "target": "/a/./b",
+          "headers": {}
+        },
+        {
+          "id": "v11.dot-end-current",
+          "condition": "dot-segments",
+          "method": "GET",
+          "target": "/a/b/.",
+          "headers": {}
+        },
+        {
+          "id": "v11.dot-dir-current",
+          "condition": "dot-segments",
+          "method": "GET",
+          "target": "/a/.",
+          "headers": {}
+        },
+        {
+          "id": "v11.dot-dir-parent",
+          "condition": "dot-segments",
+          "method": "GET",
+          "target": "/a/..",
+          "headers": {}
+        },
+        {
+          "id": "v11.dot-mid-parent",
+          "condition": "dot-segments",
+          "method": "GET",
+          "target": "/a/../a/b",
+          "headers": {}
+        },
+        {
+          "id": "v11.dot-lead-current",
+          "condition": "dot-segments",
+          "method": "GET",
+          "target": "/./a/b",
+          "headers": {}
+        },
+        {
+          "id": "v11.dot-encoded-current",
+          "condition": "dot-segments",
+          "method": "GET",
+          "target": "/a/%2e/b",
+          "headers": {}
+        },
+        {
+          "id": "v11.dot-encoded-end",
+          "condition": "dot-segments",
+          "method": "GET",
+          "target": "/a/b/%2e%2e",
+          "headers": {}
+        },
+        {
+          "id": "v11.backslash-mid",
+          "condition": "dot-segments",
+          "method": "GET",
+          "target": "/a\\b",
+          "headers": {}
+        },
+        {
+          "id": "v11.backslash-after-dot",
+          "condition": "dot-segments",
+          "method": "GET",
+          "target": "/a/./\\evil.example",
+          "headers": {}
+        },
+        {
+          "id": "v11.backslash-dot-first",
+          "condition": "dot-segments",
+          "method": "GET",
+          "target": "/.\\b",
+          "headers": {}
+        },
+        {
+          "id": "v11.backslash-lead",
+          "condition": "dot-segments",
+          "method": "GET",
+          "target": "/./\\evil",
+          "headers": {}
+        },
+        {
+          "id": "v11.backslash-encoded-after-dot",
+          "condition": "dot-segments",
+          "method": "GET",
+          "target": "/a/./%5cevil.example",
+          "headers": {}
+        },
+        {
+          "id": "v11.backslash-in-name",
+          "condition": "dot-segments",
+          "method": "GET",
+          "target": "/a/\\b",
+          "headers": {}
+        },
+        {
+          "id": "v11.dot-end-parent-slash",
+          "condition": "dot-segments",
+          "method": "GET",
+          "target": "/a/b/../",
+          "headers": {}
+        },
+        {
+          "id": "v11.dot-mid-current-slash",
+          "condition": "dot-segments",
+          "method": "GET",
+          "target": "/a/./b/",
+          "headers": {}
+        }
+      ]
+    },
+    {
+      "id": "v12",
+      "name": "redirect-digit-names",
+      "hosting": {
+        "redirects": [
+          {
+            "source": "/capture/:id/:id2",
+            "destination": "/new/:id2/:id",
+            "type": 301
+          },
+          {
+            "source": "/p/:a1",
+            "destination": "/to-p/:a1",
+            "type": 302
+          },
+          {
+            "source": "/s/:a1/x",
+            "destination": "/to-s/:a1",
+            "type": 302
+          },
+          {
+            "source": "/t/:a1/:a2",
+            "destination": "/to-t/:a2/:a1",
+            "type": 302
+          }
+        ]
+      },
+      "optionalConfig": [],
+      "readiness": {
+        "path": "/ready.txt",
+        "accept": [200]
+      },
+      "files": {
+        "index.html": {
+          "bytes": 14,
+          "sha256": "25bd9226c1514c5b63d541ca4f280ab769a4dab6f9e0c510669713d16d686065"
+        },
+        "ready.txt": {
+          "bytes": 6,
+          "sha256": "ed1a545bb85e55816bbf9566b028b2a0bc456b88f49f6f266c0401048824194b"
+        }
+      },
+      "requests": [
+        {
+          "id": "v12.cap-two2",
+          "condition": "redirect-names",
+          "method": "GET",
+          "target": "/capture/one/two2",
+          "headers": {}
+        },
+        {
+          "id": "v12.cap-two",
+          "condition": "redirect-names",
+          "method": "GET",
+          "target": "/capture/one/two",
+          "headers": {}
+        },
+        {
+          "id": "v12.cap-literal-id2",
+          "condition": "redirect-names",
+          "method": "GET",
+          "target": "/capture/x/:id2",
+          "headers": {}
+        },
+        {
+          "id": "v12.cap-literal-first",
+          "condition": "redirect-names",
+          "method": "GET",
+          "target": "/capture/:id2/two",
+          "headers": {}
+        },
+        {
+          "id": "v12.p-x",
+          "condition": "redirect-names",
+          "method": "GET",
+          "target": "/p/x",
+          "headers": {}
+        },
+        {
+          "id": "v12.p-x1",
+          "condition": "redirect-names",
+          "method": "GET",
+          "target": "/p/x1",
+          "headers": {}
+        },
+        {
+          "id": "v12.p-literal",
+          "condition": "redirect-names",
+          "method": "GET",
+          "target": "/p/:a1",
+          "headers": {}
+        },
+        {
+          "id": "v12.s-v",
+          "condition": "redirect-names",
+          "method": "GET",
+          "target": "/s/v/x",
+          "headers": {}
+        },
+        {
+          "id": "v12.s-literal",
+          "condition": "redirect-names",
+          "method": "GET",
+          "target": "/s/:a1/x",
+          "headers": {}
+        },
+        {
+          "id": "v12.t-pair",
+          "condition": "redirect-names",
+          "method": "GET",
+          "target": "/t/u/v",
+          "headers": {}
+        },
+        {
+          "id": "v12.t-digits",
+          "condition": "redirect-names",
+          "method": "GET",
+          "target": "/t/1/2",
+          "headers": {}
+        }
+      ]
+    },
+    {
+      "id": "v13",
+      "name": "redirect-repeated-name",
+      "hosting": {
+        "redirects": [
+          {
+            "source": "/q/:id/:id",
+            "destination": "/to-q/:id",
+            "type": 302
+          }
+        ]
+      },
+      "optionalConfig": [],
+      "mayRefuse": true,
+      "readiness": {
+        "path": "/ready.txt",
+        "accept": [200]
+      },
+      "files": {
+        "index.html": {
+          "bytes": 14,
+          "sha256": "25bd9226c1514c5b63d541ca4f280ab769a4dab6f9e0c510669713d16d686065"
+        },
+        "ready.txt": {
+          "bytes": 6,
+          "sha256": "ed1a545bb85e55816bbf9566b028b2a0bc456b88f49f6f266c0401048824194b"
+        }
+      },
+      "requests": [
+        {
+          "id": "v13.q-distinct",
+          "condition": "redirect-names",
+          "method": "GET",
+          "target": "/q/a/b",
+          "headers": {}
+        },
+        {
+          "id": "v13.q-same",
+          "condition": "redirect-names",
+          "method": "GET",
+          "target": "/q/a/a",
+          "headers": {}
+        },
+        {
+          "id": "v13.q-short",
+          "condition": "redirect-names",
+          "method": "GET",
+          "target": "/q/a",
+          "headers": {}
+        }
+      ]
+    },
+    {
+      "id": "v14",
+      "name": "precompressed-files",
+      "hosting": {
+        "headers": [
+          {
+            "source": "/pre/*.br",
+            "headers": [
+              {
+                "key": "Content-Encoding",
+                "value": "br"
+              }
+            ]
+          },
+          {
+            "source": "/pre/*.gz",
+            "headers": [
+              {
+                "key": "Content-Encoding",
+                "value": "gzip"
+              }
+            ]
+          },
+          {
+            "source": "/pre/script.js",
+            "headers": [
+              {
+                "key": "Content-Encoding",
+                "value": "gzip"
+              }
+            ]
+          },
+          {
+            "source": "/pre/plain.txt",
+            "headers": [
+              {
+                "key": "Content-Encoding",
+                "value": "identity"
+              }
+            ]
+          }
+        ]
+      },
+      "optionalConfig": [],
+      "mayRefuse": true,
+      "readiness": {
+        "path": "/ready.txt",
+        "accept": [200]
+      },
+      "files": {
+        "index.html": {
+          "bytes": 14,
+          "sha256": "25bd9226c1514c5b63d541ca4f280ab769a4dab6f9e0c510669713d16d686065"
+        },
+        "pre/big.txt.br": {
+          "bytes": 61,
+          "sha256": "2bd3c8d3760587ff1ec1f977251b27ff4d1877438fb6d6402d8bd6d2e488af2c"
+        },
+        "pre/big.txt.gz": {
+          "bytes": 93,
+          "sha256": "53f61b8e6e0b9699519a5c02cf72250810b1405a94c5665150431ad756469971"
+        },
+        "pre/free.txt": {
+          "bytes": 4500,
+          "sha256": "9e3e864092648eea2d4b5cb3ad75e87719960e576b479e734bca38da27ce7c3a"
+        },
+        "pre/plain.txt": {
+          "bytes": 4500,
+          "sha256": "9e3e864092648eea2d4b5cb3ad75e87719960e576b479e734bca38da27ce7c3a"
+        },
+        "pre/script.js": {
+          "bytes": 93,
+          "sha256": "53f61b8e6e0b9699519a5c02cf72250810b1405a94c5665150431ad756469971"
+        },
+        "ready.txt": {
+          "bytes": 6,
+          "sha256": "ed1a545bb85e55816bbf9566b028b2a0bc456b88f49f6f266c0401048824194b"
+        }
+      },
+      "requests": [
+        {
+          "id": "v14.br-browser",
+          "condition": "precompressed",
+          "method": "GET",
+          "target": "/pre/big.txt.br",
+          "headers": {
+            "accept-encoding": "gzip, deflate, br"
+          }
+        },
+        {
+          "id": "v14.br-gzip-only",
+          "condition": "precompressed",
+          "method": "GET",
+          "target": "/pre/big.txt.br",
+          "headers": {
+            "accept-encoding": "gzip"
+          }
+        },
+        {
+          "id": "v14.br-none",
+          "condition": "precompressed",
+          "method": "GET",
+          "target": "/pre/big.txt.br",
+          "headers": {}
+        },
+        {
+          "id": "v14.gz-browser",
+          "condition": "precompressed",
+          "method": "GET",
+          "target": "/pre/big.txt.gz",
+          "headers": {
+            "accept-encoding": "gzip, deflate, br"
+          }
+        },
+        {
+          "id": "v14.gz-none",
+          "condition": "precompressed",
+          "method": "GET",
+          "target": "/pre/big.txt.gz",
+          "headers": {}
+        },
+        {
+          "id": "v14.js-browser",
+          "condition": "precompressed",
+          "method": "GET",
+          "target": "/pre/script.js",
+          "headers": {
+            "accept-encoding": "gzip, deflate, br"
+          }
+        },
+        {
+          "id": "v14.js-none",
+          "condition": "precompressed",
+          "method": "GET",
+          "target": "/pre/script.js",
+          "headers": {}
+        },
+        {
+          "id": "v14.identity-browser",
+          "condition": "precompressed",
+          "method": "GET",
+          "target": "/pre/plain.txt",
+          "headers": {
+            "accept-encoding": "gzip, deflate, br"
+          }
+        },
+        {
+          "id": "v14.free-browser",
+          "condition": "precompressed",
+          "method": "GET",
+          "target": "/pre/free.txt",
+          "headers": {
+            "accept-encoding": "gzip, deflate, br"
+          }
+        },
+        {
+          "id": "v14.br-head",
+          "condition": "precompressed",
+          "method": "HEAD",
+          "target": "/pre/big.txt.br",
+          "headers": {
+            "accept-encoding": "gzip"
+          }
+        }
+      ]
+    },
+    {
+      "id": "v15",
+      "name": "gzip-matrix",
+      "hosting": {},
+      "optionalConfig": [],
+      "readiness": {
+        "path": "/ready.txt",
+        "accept": [200]
+      },
+      "files": {
+        "index.html": {
+          "bytes": 14,
+          "sha256": "25bd9226c1514c5b63d541ca4f280ab769a4dab6f9e0c510669713d16d686065"
+        },
+        "ready.txt": {
+          "bytes": 6,
+          "sha256": "ed1a545bb85e55816bbf9566b028b2a0bc456b88f49f6f266c0401048824194b"
+        },
+        "sz/s0001.txt": {
+          "bytes": 1,
+          "sha256": "e632b7095b0bf32c260fa4c539e9fd7b852d0de454e9be26f24d0d6f91d069d3"
+        },
+        "sz/s0010.txt": {
+          "bytes": 10,
+          "sha256": "1a90011d5a17cbd702ea49cddd28190439dfeec1710e0efe52315e034ef449bc"
+        },
+        "sz/s0100.txt": {
+          "bytes": 100,
+          "sha256": "438838369cb563889c0e9d4c36d9e5f96530b1def3d1a09c99fa22c8f53f2933"
+        },
+        "sz/s0500.txt": {
+          "bytes": 500,
+          "sha256": "92ec2685a246941332d3650d1993dbaf3331590b98729de7596c66e4643cfa05"
+        },
+        "sz/s1000.txt": {
+          "bytes": 1000,
+          "sha256": "9d1c67d92dea8a796a8100ce64599c242af4a0f43a2f69e29018d70a9104bf05"
+        },
+        "sz/s1024.txt": {
+          "bytes": 1024,
+          "sha256": "b7715a82b34c859b0de37dc450c0db421146d41d9bbc409187e32d7e3c956666"
+        },
+        "sz/s1500.txt": {
+          "bytes": 1500,
+          "sha256": "a4b0b817a11ee4ab8455b57a99d592b59d559744d303a040193927e2068a6398"
+        },
+        "sz/s2048.txt": {
+          "bytes": 2048,
+          "sha256": "a2d5f822d55002cad24594098f0c9b8d2660757eaf085248dfac6c2764b024fe"
+        },
+        "sz/s4500.txt": {
+          "bytes": 4500,
+          "sha256": "9e3e864092648eea2d4b5cb3ad75e87719960e576b479e734bca38da27ce7c3a"
+        },
+        "t/app.js": {
+          "bytes": 4500,
+          "sha256": "9e3e864092648eea2d4b5cb3ad75e87719960e576b479e734bca38da27ce7c3a"
+        },
+        "t/archive.zip": {
+          "bytes": 4500,
+          "sha256": "9e3e864092648eea2d4b5cb3ad75e87719960e576b479e734bca38da27ce7c3a"
+        },
+        "t/data.csv": {
+          "bytes": 4500,
+          "sha256": "9e3e864092648eea2d4b5cb3ad75e87719960e576b479e734bca38da27ce7c3a"
+        },
+        "t/data.xml": {
+          "bytes": 4500,
+          "sha256": "9e3e864092648eea2d4b5cb3ad75e87719960e576b479e734bca38da27ce7c3a"
+        },
+        "t/file.unknownext": {
+          "bytes": 4500,
+          "sha256": "9e3e864092648eea2d4b5cb3ad75e87719960e576b479e734bca38da27ce7c3a"
+        },
+        "t/font.woff2": {
+          "bytes": 4500,
+          "sha256": "9e3e864092648eea2d4b5cb3ad75e87719960e576b479e734bca38da27ce7c3a"
+        },
+        "t/image.png": {
+          "bytes": 4500,
+          "sha256": "9e3e864092648eea2d4b5cb3ad75e87719960e576b479e734bca38da27ce7c3a"
+        },
+        "t/image.svg": {
+          "bytes": 4500,
+          "sha256": "9e3e864092648eea2d4b5cb3ad75e87719960e576b479e734bca38da27ce7c3a"
+        },
+        "t/module.wasm": {
+          "bytes": 4500,
+          "sha256": "9e3e864092648eea2d4b5cb3ad75e87719960e576b479e734bca38da27ce7c3a"
+        },
+        "t/noext": {
+          "bytes": 4500,
+          "sha256": "9e3e864092648eea2d4b5cb3ad75e87719960e576b479e734bca38da27ce7c3a"
+        },
+        "t/page.html": {
+          "bytes": 4500,
+          "sha256": "9e3e864092648eea2d4b5cb3ad75e87719960e576b479e734bca38da27ce7c3a"
+        },
+        "t/readme.md": {
+          "bytes": 4500,
+          "sha256": "9e3e864092648eea2d4b5cb3ad75e87719960e576b479e734bca38da27ce7c3a"
+        },
+        "t/style.css": {
+          "bytes": 4500,
+          "sha256": "9e3e864092648eea2d4b5cb3ad75e87719960e576b479e734bca38da27ce7c3a"
+        }
+      },
+      "requests": [
+        {
+          "id": "v15.size-0001",
+          "condition": "gzip-sizes",
+          "method": "GET",
+          "target": "/sz/s0001.txt",
+          "headers": {
+            "accept-encoding": "gzip"
+          }
+        },
+        {
+          "id": "v15.size-0010",
+          "condition": "gzip-sizes",
+          "method": "GET",
+          "target": "/sz/s0010.txt",
+          "headers": {
+            "accept-encoding": "gzip"
+          }
+        },
+        {
+          "id": "v15.size-0100",
+          "condition": "gzip-sizes",
+          "method": "GET",
+          "target": "/sz/s0100.txt",
+          "headers": {
+            "accept-encoding": "gzip"
+          }
+        },
+        {
+          "id": "v15.size-0500",
+          "condition": "gzip-sizes",
+          "method": "GET",
+          "target": "/sz/s0500.txt",
+          "headers": {
+            "accept-encoding": "gzip"
+          }
+        },
+        {
+          "id": "v15.size-1000",
+          "condition": "gzip-sizes",
+          "method": "GET",
+          "target": "/sz/s1000.txt",
+          "headers": {
+            "accept-encoding": "gzip"
+          }
+        },
+        {
+          "id": "v15.size-1024",
+          "condition": "gzip-sizes",
+          "method": "GET",
+          "target": "/sz/s1024.txt",
+          "headers": {
+            "accept-encoding": "gzip"
+          }
+        },
+        {
+          "id": "v15.size-1500",
+          "condition": "gzip-sizes",
+          "method": "GET",
+          "target": "/sz/s1500.txt",
+          "headers": {
+            "accept-encoding": "gzip"
+          }
+        },
+        {
+          "id": "v15.size-2048",
+          "condition": "gzip-sizes",
+          "method": "GET",
+          "target": "/sz/s2048.txt",
+          "headers": {
+            "accept-encoding": "gzip"
+          }
+        },
+        {
+          "id": "v15.size-4500",
+          "condition": "gzip-sizes",
+          "method": "GET",
+          "target": "/sz/s4500.txt",
+          "headers": {
+            "accept-encoding": "gzip"
+          }
+        },
+        {
+          "id": "v15.type-html",
+          "condition": "gzip-types",
+          "method": "GET",
+          "target": "/t/page.html",
+          "headers": {
+            "accept-encoding": "gzip"
+          }
+        },
+        {
+          "id": "v15.type-css",
+          "condition": "gzip-types",
+          "method": "GET",
+          "target": "/t/style.css",
+          "headers": {
+            "accept-encoding": "gzip"
+          }
+        },
+        {
+          "id": "v15.type-js",
+          "condition": "gzip-types",
+          "method": "GET",
+          "target": "/t/app.js",
+          "headers": {
+            "accept-encoding": "gzip"
+          }
+        },
+        {
+          "id": "v15.type-svg",
+          "condition": "gzip-types",
+          "method": "GET",
+          "target": "/t/image.svg",
+          "headers": {
+            "accept-encoding": "gzip"
+          }
+        },
+        {
+          "id": "v15.type-xml",
+          "condition": "gzip-types",
+          "method": "GET",
+          "target": "/t/data.xml",
+          "headers": {
+            "accept-encoding": "gzip"
+          }
+        },
+        {
+          "id": "v15.type-wasm",
+          "condition": "gzip-types",
+          "method": "GET",
+          "target": "/t/module.wasm",
+          "headers": {
+            "accept-encoding": "gzip"
+          }
+        },
+        {
+          "id": "v15.type-noext",
+          "condition": "gzip-types",
+          "method": "GET",
+          "target": "/t/noext",
+          "headers": {
+            "accept-encoding": "gzip"
+          }
+        },
+        {
+          "id": "v15.type-unknownext",
+          "condition": "gzip-types",
+          "method": "GET",
+          "target": "/t/file.unknownext",
+          "headers": {
+            "accept-encoding": "gzip"
+          }
+        },
+        {
+          "id": "v15.type-png",
+          "condition": "gzip-types",
+          "method": "GET",
+          "target": "/t/image.png",
+          "headers": {
+            "accept-encoding": "gzip"
+          }
+        },
+        {
+          "id": "v15.type-zip",
+          "condition": "gzip-types",
+          "method": "GET",
+          "target": "/t/archive.zip",
+          "headers": {
+            "accept-encoding": "gzip"
+          }
+        },
+        {
+          "id": "v15.type-woff2",
+          "condition": "gzip-types",
+          "method": "GET",
+          "target": "/t/font.woff2",
+          "headers": {
+            "accept-encoding": "gzip"
+          }
+        },
+        {
+          "id": "v15.type-csv",
+          "condition": "gzip-types",
+          "method": "GET",
+          "target": "/t/data.csv",
+          "headers": {
+            "accept-encoding": "gzip"
+          }
+        },
+        {
+          "id": "v15.type-md",
+          "condition": "gzip-types",
+          "method": "GET",
+          "target": "/t/readme.md",
+          "headers": {
+            "accept-encoding": "gzip"
+          }
+        },
+        {
+          "id": "v15.ae-plain",
+          "condition": "gzip-negotiation",
+          "method": "GET",
+          "target": "/sz/s4500.txt",
+          "headers": {}
+        },
+        {
+          "id": "v15.ae-star",
+          "condition": "gzip-negotiation",
+          "method": "GET",
+          "target": "/sz/s4500.txt",
+          "headers": {
+            "accept-encoding": "*"
+          }
+        },
+        {
+          "id": "v15.ae-xgzip",
+          "condition": "gzip-negotiation",
+          "method": "GET",
+          "target": "/sz/s4500.txt",
+          "headers": {
+            "accept-encoding": "x-gzip"
+          }
+        },
+        {
+          "id": "v15.ae-gzip-q0",
+          "condition": "gzip-negotiation",
+          "method": "GET",
+          "target": "/sz/s4500.txt",
+          "headers": {
+            "accept-encoding": "gzip;q=0"
+          }
+        },
+        {
+          "id": "v15.ae-identity",
+          "condition": "gzip-negotiation",
+          "method": "GET",
+          "target": "/sz/s4500.txt",
+          "headers": {
+            "accept-encoding": "identity"
+          }
+        },
+        {
+          "id": "v15.ae-deflate",
+          "condition": "gzip-negotiation",
+          "method": "GET",
+          "target": "/sz/s4500.txt",
+          "headers": {
+            "accept-encoding": "deflate"
+          }
+        },
+        {
+          "id": "v15.ae-upper",
+          "condition": "gzip-negotiation",
+          "method": "GET",
+          "target": "/sz/s4500.txt",
+          "headers": {
+            "accept-encoding": "GZIP"
+          }
+        },
+        {
+          "id": "v15.ae-browser",
+          "condition": "gzip-negotiation",
+          "method": "GET",
+          "target": "/sz/s4500.txt",
+          "headers": {
+            "accept-encoding": "gzip, deflate, br"
+          }
+        },
+        {
+          "id": "v15.ae-range",
+          "condition": "gzip-negotiation",
+          "method": "GET",
+          "target": "/sz/s4500.txt",
+          "headers": {
+            "accept-encoding": "gzip",
+            "range": "bytes=0-9"
+          }
+        },
+        {
+          "id": "v15.ae-cond",
+          "condition": "gzip-negotiation",
+          "method": "GET",
+          "target": "/sz/s4500.txt",
+          "headers": {
+            "accept-encoding": "gzip"
+          },
+          "headersFrom": [
+            {
+              "header": "if-none-match",
+              "fromRequest": "v15.ae-plain",
+              "fromHeader": "etag"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "corpusSha256": "32906eba4ceafd2a3d20041f3d6a55aef116c60b0e4cfd13d356bf473d7db8ac"
+}

@@ -1,0 +1,83 @@
+{
+  "schemaVersion": 1,
+  "note": "Differences between the follow-up production recordings (runs 11ae6c and 1c6a4c, corpus followup.mjs) and strict fireemu that are known and not aligned. Each entry names its rows and fields; a difference outside an entry is a MISMATCH.",
+  "entries": [
+    {
+      "id": "KD-SAFETY-ORIGIN-REDIRECT",
+      "rows": [
+        "v11.dot-end-parent",
+        "v11.dot-mid-current",
+        "v11.dot-end-current",
+        "v11.dot-dir-current",
+        "v11.dot-dir-parent",
+        "v11.dot-mid-parent",
+        "v11.dot-lead-current",
+        "v11.dot-encoded-current",
+        "v11.dot-encoded-end",
+        "v11.backslash-after-dot",
+        "v11.backslash-dot-first",
+        "v11.backslash-lead",
+        "v11.backslash-encoded-after-dot",
+        "v11.dot-end-parent-slash",
+        "v11.dot-mid-current-slash"
+      ],
+      "fields": [],
+      "locationHost": "content-(?:prod[0-9]{2}-)?firebasehosting-origin\\.googleapis\\.com",
+      "appliesTo": ["production-vs-local", "run-vs-run"],
+      "reason": "Production answers a request with dot segments with a 302 whose Location is an absolute URL on an internal origin host (content-prodNN-firebasehosting-origin.googleapis.com, or content-firebasehosting-origin.googleapis.com) that differs from one request to the next, in the same run and across the two runs. Strict answers the same 302 (status, Cache-Control: private, Content-Type text/html; charset=UTF-8, an empty body, Accept-Ranges) with the same normalized path after the host the request came to. Only the host is not compared: the Location is compared with the host replaced by the origin placeholder, so the path (a raw backslash read as a slash, escapes in upper case, empty segments kept) is compared.",
+      "authority": "coordinator rulings 17 and 21 (2026-11-11), narrowed to the host by the follow-up recordings"
+    },
+    {
+      "id": "KD-DEFAULT-404-BODY",
+      "rows": [
+        "v11.default-404",
+        "v11.default-404-json",
+        "v11.default-404-nested",
+        "v11.backslash-mid",
+        "v11.backslash-in-name",
+        "v12.cap-two2",
+        "v12.cap-two",
+        "v12.cap-literal-id2",
+        "v12.cap-literal-first",
+        "v12.p-x",
+        "v12.p-x1",
+        "v12.p-literal",
+        "v12.s-v",
+        "v12.s-literal",
+        "v12.t-pair",
+        "v12.t-digits",
+        "v13.q-short"
+      ],
+      "fields": ["header:content-length", "bodyBytes"],
+      "appliesTo": ["production-vs-local"],
+      "reason": "Production answers a path nothing matches with its own 21,376-byte Page Not Found page, the same for every path. Its bytes are not shipped (owner decision, 2026-11-11), so strict answers with a short page written for fireemu (same status, content type, Cache-Control and Vary). The 17 rows are the follow-up requests that production answered with that page: the default 404 probes, the two backslash paths without a dot segment, the digit-bearing redirect names (a source with a digit in a name matches nothing) and the short repeated-name path. Status, content type and the other headers are compared; the body size is not.",
+      "authority": "owner decision of 2026-11-11 (owner-decisions.md, relayed by the coordinator): no Google page bytes in the repository; earlier coordinator ruling 16"
+    },
+    {
+      "id": "KD-AUTH-HANDLER-PAGE",
+      "rows": ["v11.auth-handler", "v11.auth-handler-query"],
+      "fields": ["header:content-length", "bodyBytes"],
+      "appliesTo": ["production-vs-local"],
+      "reason": "The hosted /__/auth/handler page (462 bytes) is served by Firebase, not from the site's files. Its bytes are not shipped (owner decision, 2026-11-11), so strict answers with a stand-in page written for fireemu, of another length. Status, content type, Cache-Control and the other headers are compared; the body size is not.",
+      "authority": "owner decision of 2026-11-11 (owner-decisions.md, relayed by the coordinator): no Google page bytes in the repository; earlier coordinator ruling 20"
+    },
+    {
+      "id": "KD-BROTLI",
+      "rows": ["v14.identity-browser", "v14.free-browser", "v15.ae-browser"],
+      "fields": ["header:content-encoding", "header:content-length"],
+      "appliesTo": ["production-vs-local"],
+      "reason": "A request whose Accept-Encoding holds the text br (`gzip, deflate, br`) is answered by production with a Brotli body (Content-Encoding: br, an ETag ending in -br, 62 bytes for the 4,500-byte corpus text); strict has no Brotli encoder and answers gzip (93 bytes). The decoded body is compared with the file, the ETag by form once the -br suffix is removed (etagSuffix). Status, content type and the other headers of these rows are compared.",
+      "authority": "coordinator ruling 15 (2026-11-11), narrowed to Brotli by ruling 26 and owner ledger 2458",
+      "etagSuffix": "-br"
+    },
+    {
+      "id": "KD-GZIP-LENGTH",
+      "rows": ["v15.size-0100", "v15.size-0500", "v15.size-1000", "v15.size-1024", "v15.size-1500"],
+      "fields": ["header:content-length"],
+      "appliesTo": ["production-vs-local"],
+      "reason": "The gzip body strict sends for a file of 100 to 1,500 bytes is 1 to 5 bytes longer than production's (production 68, 71, 75, 75, 79 bytes; strict 73, 76, 79, 79, 82): another deflate encoder. The excuse is bounded (ruling 27): both answers carry Content-Encoding gzip, their decoded digests are equal and their content-lengths differ by at most 8 bytes; anything else on these rows, an identity body, a different body or a much longer one, is a MISMATCH. The lengths agree at 2,048 and 4,500 bytes (83 and 93).",
+      "authority": "coordinator ruling 27 (2026-11-12); owner ledger 2458 approved flate2 for gzip",
+      "gzipLengthBound": 8
+    }
+  ]
+}

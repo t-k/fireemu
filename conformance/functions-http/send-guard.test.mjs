@@ -421,7 +421,7 @@ test("a private path outside the mutation work copy is refused while the harness
 });
 
 function homedirOf() {
-  return process.env.HOME || "/home/nobody";
+  return process.env.HOME || tmpdir();
 }
 
 test("the work copy is judged by its real path, and a work copy that does not exist yet by where it would be", () => {

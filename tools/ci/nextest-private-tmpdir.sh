@@ -20,6 +20,13 @@
 # for a pid of another user or sandbox) keeps it, and the age covers a live wrapper in another
 # pid namespace that shares this TMPDIR.
 #
+# A Volta shim (`~/.volta/bin/node`, a link to `volta-shim`) that has no Volta install to
+# redirect to re-executes itself without limit: on 2026-11-12 tests run with an emptied HOME or a
+# VOLTA_HOME in a temporary directory started about 9,500 processes. This wrapper therefore
+# removes such a shim's directory from the test's PATH, without ever running it, so `node` is
+# either a real Node or not found (a test that needs one then fails by name instead of forking).
+# The install is `${VOLTA_HOME:-$HOME/.volta}/tools/image/node`.
+#
 # Not covered: a process the test started and left running can write into the directory after
 # it is removed (nextest's leak detection reports such processes when they keep the test's
 # output open). Cleanup waits for the test process only.
@@ -96,6 +103,48 @@ for stale in "$root"/run-*; do
 done
 
 dir=$(mktemp -d "$root/run-$$.XXXXXX") || refuse "cannot create a directory in $root"
+
+# Drop the PATH entries whose `node` is a Volta shim when there is no Volta install to run.
+volta_root=${VOLTA_HOME:-${HOME:-}/.volta}
+volta_installed=no
+for image in "$volta_root"/tools/image/node/*/bin/node; do
+    [ -f "$image" ] && volta_installed=yes
+done
+if [ "$volta_installed" = no ]; then
+    safe_path=
+    dropped=
+    old_ifs=$IFS
+    IFS=:
+    set -f
+    # The list is rebuilt entry by entry; a trailing colon (an empty entry, the current
+    # directory) is restored below.
+    for entry in $PATH; do
+        shim=no
+        if [ -n "$entry" ] && [ -e "$entry/node" ]; then
+            target=$(readlink "$entry/node" 2>/dev/null || true)
+            case ${target##*/} in volta-shim) shim=yes ;; esac
+            case $entry in */.volta/bin | */.volta/bin/) shim=yes ;; esac
+            if [ -n "${VOLTA_HOME:-}" ]; then
+                case $entry in "$VOLTA_HOME"/bin | "$VOLTA_HOME"/bin/) shim=yes ;; esac
+            fi
+        fi
+        if [ "$shim" = yes ]; then
+            dropped="$dropped $entry"
+        elif [ -z "$safe_path" ]; then
+            safe_path=$entry
+        else
+            safe_path=$safe_path:$entry
+        fi
+    done
+    set +f
+    IFS=$old_ifs
+    case $PATH in *:) safe_path=$safe_path: ;; esac
+    if [ -n "$dropped" ]; then
+        PATH=$safe_path
+        export PATH
+        printf 'nextest-private-tmpdir: removed a Volta shim without a Volta install from PATH:%s\n' "$dropped" >&2
+    fi
+fi
 
 # A terminating signal reaches the test too (nextest signals the process group); the wrapper
 # waits for the test to exit and then cleans up.

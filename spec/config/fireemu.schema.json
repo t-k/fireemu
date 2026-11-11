@@ -955,7 +955,8 @@
         "source": { "type": "string", "description": "Functions codebase directory loaded by the runner (discovery)." },
         "runner": { "type": "array", "items": { "type": "string" }, "minItems": 1, "description": "Runner command; default: node tools/runner-node/index.mjs" },
         "maxGlobalConcurrency": { "type": "integer", "minimum": 1 },
-        "unservedTriggers": { "enum": ["refuse", "report"], "description": "An exported trigger whose product fireemu does not serve: refuse discovery (default) or report each one and carry on." }
+        "unservedTriggers": { "enum": ["refuse", "report"], "description": "An exported trigger whose product fireemu does not serve: refuse discovery (default) or report each one and carry on." },
+        "isolation": { "enum": ["codebase", "function"], "default": "codebase", "description": "Which processes serve a codebase. codebase: one runner process serves every function of the codebase (low startup cost; the functions share one module graph and one process environment, and FUNCTION_TARGET, FUNCTION_SIGNATURE_TYPE and K_SERVICE name the call that started last). function: one dedicated runner process per function, started with that function's identity and secrets in its environment, as a production instance serves one function. Not available together with functions.runner or a fixed --inspect-functions port." }
       }
     },
     "trace": {

@@ -696,6 +696,7 @@ fn config_show_defaults_cover_every_schema_leaf_without_loading_the_reference() 
         ("events.maxAttempts", serde_json::json!(4)),
         ("functions.maxGlobalConcurrency", serde_json::json!(8)),
         ("functions.unservedTriggers", serde_json::json!("refuse")),
+        ("functions.isolation", serde_json::json!("codebase")),
         ("scheduler.catchUp", serde_json::json!("all")),
         ("scheduler.maxCatchUpRuns", serde_json::json!(1000)),
         ("appCheck.services.auth", serde_json::json!("off")),

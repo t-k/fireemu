@@ -1096,6 +1096,10 @@ struct Held {
 pub struct CodebaseSpec {
     /// `codebase` from `firebase.json`, `default` when the project names none.
     pub name: String,
+    /// The one function this runner is dedicated to (`functions.isolation = "function"`), else `None`
+    /// for a runner that serves the whole codebase. A function-isolated codebase is several specs
+    /// that share `name`, one per function, each with its own runner and a manifest of that function.
+    pub function: Option<String>,
     /// What this codebase's runner discovered.
     pub manifest: FunctionManifest,
     /// The runner process serving it.
@@ -1106,9 +1110,32 @@ pub struct CodebaseSpec {
     pub cleanup_dir: Option<std::path::PathBuf>,
 }
 
+/// One live runner and what it serves: the whole codebase, or one function of it.
+pub struct RunnerUnit {
+    /// The codebase.
+    pub codebase: String,
+    /// The function the runner is dedicated to, when the codebase is function-isolated.
+    pub function: Option<String>,
+    /// The current runner.
+    pub runner: Arc<Runner>,
+}
+
+impl RunnerUnit {
+    /// A key unique to this unit within a runtime: the codebase name, and for a dedicated runner
+    /// `codebase/function` (a codebase name cannot contain a slash).
+    #[must_use]
+    pub fn key(&self) -> String {
+        match &self.function {
+            Some(function) => format!("{}/{function}", self.codebase),
+            None => self.codebase.clone(),
+        }
+    }
+}
+
 /// A loaded codebase and its live runner.
 struct Codebase {
     name: String,
+    function: Option<String>,
     manifest: FunctionManifest,
     generation: std::sync::RwLock<CodebaseGeneration>,
     restart_gate: Arc<AsyncMutex<()>>,
@@ -1155,6 +1182,7 @@ impl Codebase {
     fn from_spec(spec: CodebaseSpec) -> Self {
         Self {
             name: spec.name,
+            function: spec.function,
             manifest: spec.manifest,
             restart_gate: Arc::new(AsyncMutex::new(())),
             restart_budget: Mutex::new(RestartBudget::default()),
@@ -1214,9 +1242,30 @@ enum RunnerGoneDisposition {
     FaultInterrupted,
 }
 
-struct CleanupDir(std::path::PathBuf, Mutex<bool>);
+/// A source snapshot directory. The units of a function-isolated codebase run from one snapshot, so
+/// it is shared: every generation that uses it counts as a member, and `release` removes the
+/// directory when the last member lets go, never earlier (a sibling may still be draining a call).
+struct CleanupDir(
+    std::path::PathBuf,
+    Mutex<bool>,
+    std::sync::atomic::AtomicUsize,
+);
 
 impl CleanupDir {
+    fn release(&self) {
+        let previous = self
+            .2
+            .fetch_update(
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+                |members| Some(members.saturating_sub(1)),
+            )
+            .unwrap_or(0);
+        if previous <= 1 {
+            self.remove();
+        }
+    }
+
     fn remove(&self) {
         let mut armed = self
             .1
@@ -1272,7 +1321,30 @@ impl Codebase {
 
 impl CodebaseGeneration {
     fn cleanup(path: Option<std::path::PathBuf>) -> Option<Arc<CleanupDir>> {
-        path.map(|path| Arc::new(CleanupDir(path, Mutex::new(true))))
+        path.map(|path| {
+            Arc::new(CleanupDir(
+                path,
+                Mutex::new(true),
+                std::sync::atomic::AtomicUsize::new(1),
+            ))
+        })
+    }
+
+    /// The directory of a unit of a group: one `CleanupDir` per path, one more member for each unit.
+    fn cleanup_shared(
+        path: Option<std::path::PathBuf>,
+        group: &mut BTreeMap<std::path::PathBuf, Arc<CleanupDir>>,
+    ) -> Option<Arc<CleanupDir>> {
+        let path = path?;
+        let shared = group.entry(path.clone()).or_insert_with(|| {
+            Arc::new(CleanupDir(
+                path,
+                Mutex::new(true),
+                std::sync::atomic::AtomicUsize::new(0),
+            ))
+        });
+        shared.2.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Some(shared.clone())
     }
 }
 
@@ -1442,6 +1514,7 @@ impl FunctionsRuntime {
     ) -> Arc<Self> {
         Self::with_codebases(
             vec![CodebaseSpec {
+                function: None,
                 name: "default".to_owned(),
                 manifest,
                 runner,
@@ -1827,7 +1900,12 @@ impl FunctionsRuntime {
         let mut reports = Vec::new();
         for codebase in &self.codebases {
             let runner = codebase.generation().runner.clone();
-            reports.push(json!({"codebase":codebase.name,"timers":runner.run_due(budget).await?}));
+            let mut report =
+                json!({"codebase":codebase.name,"timers":runner.run_due(budget).await?});
+            if let Some(function) = &codebase.function {
+                report["function"] = json!(function);
+            }
+            reports.push(report);
         }
         Ok(json!({"codebases":reports}))
     }
@@ -1876,7 +1954,28 @@ impl FunctionsRuntime {
     /// The codebase names, in configuration order.
     #[must_use]
     pub fn codebase_names(&self) -> Vec<&str> {
-        self.codebases.iter().map(|c| c.name.as_str()).collect()
+        let mut names: Vec<&str> = Vec::new();
+        for codebase in &self.codebases {
+            if !names.contains(&codebase.name.as_str()) {
+                names.push(codebase.name.as_str());
+            }
+        }
+        names
+    }
+
+    /// The current runner of every unit, in configuration order. A function-isolated codebase has
+    /// one unit per function; any other has one. Per-runner state such as a log cursor is keyed by
+    /// [`RunnerUnit::key`], because several units share a codebase name.
+    #[must_use]
+    pub fn current_runner_units(&self) -> Vec<RunnerUnit> {
+        self.codebases
+            .iter()
+            .map(|codebase| RunnerUnit {
+                codebase: codebase.name.clone(),
+                function: codebase.function.clone(),
+                runner: codebase.generation().runner.clone(),
+            })
+            .collect()
     }
 
     /// The current runner generation for every codebase, in configuration order.
@@ -2013,41 +2112,72 @@ impl FunctionsRuntime {
     /// to stay identical. Handler code and environment change atomically with the runner;
     /// adding or removing triggers keeps the last-known-good generation rather than exposing
     /// a new Node export behind stale Rust routing.
-    #[allow(clippy::too_many_lines)]
     pub fn reload_codebase(&self, spec: CodebaseSpec) -> Result<u64, String> {
-        if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
-            spec.runner.kill_now();
-            if let Some(path) = spec.cleanup_dir {
-                let _ = std::fs::remove_dir_all(path);
+        self.reload_codebase_units(vec![spec])
+    }
+
+    /// Replaces every runner of one codebase as a group: one spec for a codebase served by one
+    /// runner, one spec per function for a function-isolated codebase. All or none is installed:
+    /// the group must name exactly the codebase's units, each with an unchanged manifest, or the
+    /// last-known-good generation of every unit stays and the offered runners are stopped.
+    #[allow(clippy::too_many_lines)]
+    pub fn reload_codebase_units(&self, specs: Vec<CodebaseSpec>) -> Result<u64, String> {
+        let discard = |specs: Vec<CodebaseSpec>| {
+            for spec in specs {
+                spec.runner.kill_now();
+                if let Some(path) = spec.cleanup_dir {
+                    let _ = std::fs::remove_dir_all(path);
+                }
             }
+        };
+        let Some(name) = specs.first().map(|spec| spec.name.clone()) else {
+            return Err("a reload needs at least one Functions codebase runner".to_owned());
+        };
+        if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+            discard(specs);
             return Err("the Functions runtime is shutting down".to_owned());
         }
-        let Some(codebase) = self
+        if specs.iter().any(|spec| spec.name != name) {
+            discard(specs);
+            return Err("a reload group names more than one Functions codebase".to_owned());
+        }
+        let units: Vec<usize> = self
             .codebases
             .iter()
-            .find(|codebase| codebase.name == spec.name)
-        else {
-            spec.runner.kill_now();
-            if let Some(path) = spec.cleanup_dir {
-                let _ = std::fs::remove_dir_all(path);
-            }
-            return Err(format!("unknown Functions codebase {:?}", spec.name));
-        };
-        if codebase.manifest != spec.manifest {
-            spec.runner.kill_now();
-            if let Some(path) = spec.cleanup_dir {
-                let _ = std::fs::remove_dir_all(path);
-            }
-            return Err(format!(
-                "Functions codebase {:?} changed its trigger manifest; the last-known-good generation remains active",
-                spec.name
-            ));
+            .enumerate()
+            .filter(|(_, codebase)| codebase.name == name)
+            .map(|(index, _)| index)
+            .collect();
+        if units.is_empty() {
+            discard(specs);
+            return Err(format!("unknown Functions codebase {name:?}"));
         }
+        let matched: Option<Vec<usize>> = specs
+            .iter()
+            .map(|spec| {
+                units
+                    .iter()
+                    .copied()
+                    .find(|index| self.codebases[*index].function == spec.function)
+            })
+            .collect();
+        let unchanged = matched.as_ref().is_some_and(|matched| {
+            let distinct: BTreeSet<usize> = matched.iter().copied().collect();
+            distinct.len() == units.len()
+                && matched.len() == units.len()
+                && matched
+                    .iter()
+                    .zip(&specs)
+                    .all(|(index, spec)| self.codebases[*index].manifest == spec.manifest)
+        });
+        let Some(matched) = matched.filter(|_| unchanged) else {
+            discard(specs);
+            return Err(format!(
+                "Functions codebase {name:?} changed its trigger manifest; the last-known-good generation remains active"
+            ));
+        };
         let Ok(mut eventarc_registry) = self.eventarc_registry.lock() else {
-            spec.runner.kill_now();
-            if let Some(path) = &spec.cleanup_dir {
-                let _ = std::fs::remove_dir_all(path);
-            }
+            discard(specs);
             return Err("the Eventarc trigger registry is unavailable".to_owned());
         };
         let generation = self
@@ -2061,10 +2191,7 @@ impl FunctionsRuntime {
         ) {
             Ok(registry) => registry,
             Err(error) => {
-                spec.runner.kill_now();
-                if let Some(path) = &spec.cleanup_dir {
-                    let _ = std::fs::remove_dir_all(path);
-                }
+                discard(specs);
                 return Err(error);
             }
         };
@@ -2072,49 +2199,57 @@ impl FunctionsRuntime {
             .inner
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let old = {
-            let mut generation = codebase.generation_mut();
-            if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
-                spec.runner.kill_now();
-                if let Some(path) = spec.cleanup_dir {
-                    let _ = std::fs::remove_dir_all(path);
-                }
-                return Err("the Functions runtime is shutting down".to_owned());
-            }
-            let revision = generation.revision.saturating_add(1);
-            std::mem::replace(
-                &mut *generation,
+        if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+            discard(specs);
+            return Err("the Functions runtime is shutting down".to_owned());
+        }
+        let mut shared_sources = BTreeMap::new();
+        let mut replaced = Vec::with_capacity(specs.len());
+        for (index, spec) in matched.iter().copied().zip(specs) {
+            let mut current = self.codebases[index].generation_mut();
+            let revision = current.revision.saturating_add(1);
+            let old = std::mem::replace(
+                &mut *current,
                 CodebaseGeneration {
                     revision,
                     runner: spec.runner,
                     spawn: spec.spawn,
-                    cleanup_dir: CodebaseGeneration::cleanup(spec.cleanup_dir),
+                    cleanup_dir: CodebaseGeneration::cleanup_shared(
+                        spec.cleanup_dir,
+                        &mut shared_sources,
+                    ),
                     blocking_restart_ticket: None,
                 },
-            )
-        };
+            );
+            drop(current);
+            replaced.push((index, old));
+        }
         self.trigger_generation
             .store(generation, std::sync::atomic::Ordering::SeqCst);
-        if let Ok(mut budget) = codebase.restart_budget.lock() {
-            *budget = RestartBudget::default();
+        for (index, _) in &replaced {
+            if let Ok(mut budget) = self.codebases[*index].restart_budget.lock() {
+                *budget = RestartBudget::default();
+            }
         }
         *eventarc_registry = next_eventarc_registry;
         drop(eventarc_registry);
         // Admission and publication share `inner`: only keys admitted before this swap
         // can still be using the old runner. Later requests cannot prolong its lifetime.
-        let pending: BTreeSet<String> = inner
-            .running_runners
-            .iter()
-            .filter(|(_, runner)| **runner == old.runner.diagnostic_id())
-            .map(|(key, _)| key.clone())
-            .collect();
-        if pending.is_empty() {
-            old.runner.kill_now();
-            if let Some(cleanup) = &old.cleanup_dir {
-                cleanup.remove();
+        for (_, old) in replaced {
+            let pending: BTreeSet<String> = inner
+                .running_runners
+                .iter()
+                .filter(|(_, runner)| **runner == old.runner.diagnostic_id())
+                .map(|(key, _)| key.clone())
+                .collect();
+            if pending.is_empty() {
+                old.runner.kill_now();
+                if let Some(cleanup) = &old.cleanup_dir {
+                    cleanup.release();
+                }
+            } else {
+                inner.draining.push((old, pending));
             }
-        } else {
-            inner.draining.push((old, pending));
         }
         drop(inner);
         self.wake.notify_one();
@@ -5380,13 +5515,19 @@ impl FunctionsRuntime {
             "functions": self.manifest.functions.iter().map(|f| f.name.clone()).collect::<Vec<_>>(),
             // One entry per loaded codebase, so a multi-codebase project can see which runner
             // is down and which functions went with it.
-            "codebases": (0..self.codebases.len()).map(|i| json!({
-                "codebase": self.codebases[i].name,
-                "runnerAlive": self.runner_at(i).is_alive(),
-                "functions": self.manifest.functions.iter()
-                    .filter(|f| self.owner.get(&f.name).copied() == Some(i))
-                    .map(|f| f.name.clone()).collect::<Vec<_>>(),
-            })).collect::<Vec<_>>(),
+            "codebases": (0..self.codebases.len()).map(|i| {
+                let mut entry = json!({
+                    "codebase": self.codebases[i].name,
+                    "runnerAlive": self.runner_at(i).is_alive(),
+                    "functions": self.manifest.functions.iter()
+                        .filter(|f| self.owner.get(&f.name).copied() == Some(i))
+                        .map(|f| f.name.clone()).collect::<Vec<_>>(),
+                });
+                if let Some(function) = &self.codebases[i].function {
+                    entry["function"] = json!(function);
+                }
+                entry
+            }).collect::<Vec<_>>(),
             // Every export the runners discovered and could not serve, so nothing a codebase
             // declared is invisible from here either.
             "ignored": self.manifest.ignored.iter().map(|f| json!({
@@ -6430,7 +6571,7 @@ impl FunctionsRuntime {
                         inner.running_deadlines.remove(&key);
                     }
                     if let Some(cleanup) = &generation.cleanup_dir {
-                        cleanup.remove();
+                        cleanup.release();
                     }
                     self.idle.notify_waiters();
                 }
@@ -6939,7 +7080,7 @@ impl FunctionsRuntime {
                 if keys.is_empty() {
                     generation.runner.kill_now();
                     if let Some(cleanup) = &generation.cleanup_dir {
-                        cleanup.remove();
+                        cleanup.release();
                     }
                     false
                 } else {
@@ -7316,6 +7457,7 @@ mod task_completion_tests {
             .collect();
         let runtime = FunctionsRuntime::with_codebases(
             vec![super::CodebaseSpec {
+                function: None,
                 name: "default".into(),
                 manifest,
                 runner: base.runner(),
@@ -7413,6 +7555,7 @@ mod task_completion_tests {
             .collect();
         FunctionsRuntime::with_codebases(
             vec![super::CodebaseSpec {
+                function: None,
                 name: "default".into(),
                 manifest,
                 runner: base.runner(),
@@ -8477,6 +8620,7 @@ mod task_completion_tests {
         manifest.functions = vec![function];
         let runtime = FunctionsRuntime::with_codebases(
             vec![super::CodebaseSpec {
+                function: None,
                 name: "default".into(),
                 manifest,
                 runner: base.runner(),
@@ -8591,6 +8735,7 @@ mod task_completion_tests {
         for profile in [FunctionsHttpProfile::Strict, FunctionsHttpProfile::Emulator] {
             let runtime = FunctionsRuntime::with_codebases(
                 vec![CodebaseSpec {
+                    function: None,
                     name: "default".to_owned(),
                     manifest: base.manifest.clone(),
                     runner: base.runner(),
@@ -8668,6 +8813,7 @@ mod task_completion_tests {
         for profile in [FunctionsHttpProfile::Strict, FunctionsHttpProfile::Emulator] {
             let runtime = FunctionsRuntime::with_codebases(
                 vec![CodebaseSpec {
+                    function: None,
                     name: "default".to_owned(),
                     manifest: base.manifest.clone(),
                     runner: base.runner(),
@@ -8797,6 +8943,7 @@ mod task_completion_tests {
             ]})).unwrap();
             let runtime = FunctionsRuntime::with_codebases(
                 vec![CodebaseSpec {
+                    function: None,
                     name: "default".into(),
                     manifest,
                     runner: base.runner(),
@@ -9251,6 +9398,7 @@ mod task_completion_tests {
                 .collect();
             let runtime = FunctionsRuntime::with_codebases(
                 vec![super::CodebaseSpec {
+                    function: None,
                     name: "default".into(),
                     manifest,
                     runner: base.runner(),
@@ -10081,6 +10229,7 @@ for (const [name, topic, timeout] of [['hang', 'jobs', 1], ['longHang', 'long-jo
             let manifest = parse_manifest(first.hello().manifest.as_ref().unwrap()).unwrap();
             let runtime = FunctionsRuntime::with_codebases(
                 vec![super::CodebaseSpec {
+                    function: None,
                     name: "default".into(),
                     manifest: manifest.clone(),
                     runner: first.clone(),
@@ -10164,6 +10313,7 @@ for (const [name, topic, timeout] of [['hang', 'jobs', 1], ['longHang', 'long-jo
                 let replacement = Arc::new(Runner::spawn_spec(&replacement_spawn).await.unwrap());
                 runtime
                     .reload_codebase(super::CodebaseSpec {
+                        function: None,
                         name: "default".into(),
                         manifest: manifest.clone(),
                         runner: replacement.clone(),
@@ -10303,6 +10453,7 @@ process.stdin.on('data', () => process.exit(0));
             let replacement = Arc::new(Runner::spawn_spec(&spawn).await.unwrap());
             runtime
                 .reload_codebase(super::CodebaseSpec {
+                    function: None,
                     name: "default".into(),
                     manifest: manifest.clone(),
                     runner: replacement.clone(),
@@ -10397,6 +10548,7 @@ process.stdin.on('data', () => process.exit(0));
         let manifest = runtime.manifest().clone();
         runtime
             .reload_codebase(super::CodebaseSpec {
+                function: None,
                 name: "default".to_owned(),
                 manifest,
                 runner: replacement,
@@ -11240,6 +11392,7 @@ mod schedule_capacity_tests {
                         let clock = Arc::new(Mutex::new(VirtualClock::new(created)));
                         let runtime = FunctionsRuntime::with_codebases(
                             vec![CodebaseSpec {
+                                function: None,
                                 name: "default".to_owned(),
                                 manifest,
                                 runner: runner.clone(),
@@ -11324,6 +11477,7 @@ mod schedule_capacity_tests {
         .unwrap();
         let runtime = FunctionsRuntime::with_codebases(
             vec![CodebaseSpec {
+                function: None,
                 name: "default".to_owned(),
                 manifest,
                 runner: base.current_runners()[0].1.clone(),
@@ -11900,6 +12054,7 @@ mod schedule_capacity_tests {
         )));
         let runtime = FunctionsRuntime::with_codebases(
             vec![super::CodebaseSpec {
+                function: None,
                 name: "default".into(),
                 manifest,
                 runner,
@@ -11999,6 +12154,7 @@ mod schedule_capacity_tests {
         )));
         let runtime = FunctionsRuntime::with_codebases(
             vec![super::CodebaseSpec {
+                function: None,
                 name: "default".into(),
                 manifest,
                 runner,
@@ -12078,7 +12234,7 @@ mod schedule_capacity_tests {
                 ]})).unwrap();
                 let clock = Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::from_unix_seconds(START))));
                 let runtime = FunctionsRuntime::with_codebases(
-                    vec![super::CodebaseSpec { name: "default".into(), manifest, runner, spawn: Some(spec), cleanup_dir: None }],
+                    vec![super::CodebaseSpec { function: None, name: "default".into(), manifest, runner, spawn: Some(spec), cleanup_dir: None }],
                     FunctionsConfig {
                         clock_policy: crate::application_clock::ApplicationClockPolicy { date_virtual: true, ..Default::default() },
                         ..FunctionsConfig::for_tests(5, "s".into())
@@ -12723,6 +12879,7 @@ mod schedule_capacity_tests {
         let replacement = Arc::new(Runner::spawn_spec(&spec).await.unwrap());
         runtime
             .reload_codebase(CodebaseSpec {
+                function: None,
                 name: "default".to_owned(),
                 manifest: runtime.manifest().clone(),
                 runner: replacement,

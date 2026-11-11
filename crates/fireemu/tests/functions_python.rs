@@ -582,3 +582,66 @@ fn the_blocking_key_is_not_the_id_token_key() {
     assert_ne!(id_kid, blocking_kid, "{stdout}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `functions.isolation = "function"`: each Python function is served by its own runner process, with
+/// its own identity from the start (the shared runner names the call that started last).
+#[test]
+#[ignore = "requires the fixture virtual environment; CI creates it"]
+fn function_isolation_gives_each_python_function_its_own_process_and_identity() {
+    let dir = scratch("isolation");
+    let source = dir.join("code");
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::write(source.join("requirements.txt"), "firebase-functions\n").unwrap();
+    std::os::unix::fs::symlink(fixture().join("venv"), source.join("venv")).unwrap();
+    std::fs::write(
+        source.join("main.py"),
+        "import os\n\
+         from firebase_admin import initialize_app\n\
+         from firebase_functions import https_fn\n\
+         initialize_app()\n\
+         CACHE = {}\n\
+         def answer(name, request):\n    \
+             CACHE[name] = True\n    \
+             return {'service': os.environ.get('K_SERVICE'), 'target': os.environ.get('FUNCTION_TARGET'), \
+         'signature': os.environ.get('FUNCTION_SIGNATURE_TYPE'), 'pid': os.getpid(), 'cached': sorted(CACHE)}\n\
+         @https_fn.on_request()\n\
+         def one(request):\n    return answer('one', request)\n\
+         @https_fn.on_request()\n\
+         def two(request):\n    return answer('two', request)\n",
+    )
+    .unwrap();
+    let firebase = firebase_json(&dir, &source, None);
+    let config = dir.join("fireemu.json");
+    std::fs::write(
+        &config,
+        r#"{"schemaVersion":1,"functions":{"isolation":"function"}}"#,
+    )
+    .unwrap();
+    let out = exec(
+        &firebase,
+        &["--config", &config.display().to_string()],
+        &[
+            "/bin/sh",
+            "-c",
+            "curl -sS http://$FIREEMU_FUNCTIONS_HOST/demo-py/us-central1/one; echo; \
+             curl -sS http://$FIREEMU_FUNCTIONS_HOST/demo-py/us-central1/two; echo",
+        ],
+    );
+    let err = String::from_utf8_lossy(&out.stderr).into_owned();
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(out.status.code(), Some(0), "{err}");
+    let answers: Vec<serde_json::Value> = stdout
+        .lines()
+        .filter_map(|line| serde_json::from_str(line.trim()).ok())
+        .collect();
+    assert_eq!(answers.len(), 2, "stdout was:\n{stdout}\nstderr:\n{err}");
+    for (answer, name) in answers.iter().zip(["one", "two"]) {
+        assert_eq!(answer["service"], name);
+        assert_eq!(answer["target"], name);
+        assert_eq!(answer["signature"], "http");
+        // Module state is per process: the other function's call left nothing here.
+        assert_eq!(answer["cached"], serde_json::json!([name]));
+    }
+    assert_ne!(answers[0]["pid"], answers[1]["pid"]);
+    let _ = std::fs::remove_dir_all(&dir);
+}

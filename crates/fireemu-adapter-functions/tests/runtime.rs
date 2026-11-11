@@ -408,6 +408,7 @@ async fn fixed_inspector_reload_holds_recovery_until_the_new_runner_is_published
     let replacement = Arc::new(Runner::spawn_spec(&spec).await.unwrap());
     runtime
         .reload_codebase(CodebaseSpec {
+            function: None,
             name: "default".to_owned(),
             manifest: runtime.manifest().clone(),
             runner: replacement.clone(),
@@ -458,6 +459,7 @@ async fn fixed_inspector_reload_wakes_queued_background_work() {
     let replacement = Arc::new(Runner::spawn_spec(&spec).await.unwrap());
     runtime
         .reload_codebase(CodebaseSpec {
+            function: None,
             name: "default".to_owned(),
             manifest: runtime.manifest().clone(),
             runner: replacement,
@@ -1155,6 +1157,7 @@ async fn multi_codebase_runtime_exposes_and_stops_every_current_runner() {
     let runtime = FunctionsRuntime::with_codebases(
         vec![
             CodebaseSpec {
+                function: None,
                 name: "primary".to_owned(),
                 manifest: first_manifest,
                 runner: first.clone(),
@@ -1162,6 +1165,7 @@ async fn multi_codebase_runtime_exposes_and_stops_every_current_runner() {
                 cleanup_dir: None,
             },
             CodebaseSpec {
+                function: None,
                 name: "secondary".to_owned(),
                 manifest: second_manifest,
                 runner: second.clone(),
@@ -1218,6 +1222,7 @@ async fn shutdown_rejects_late_reload_and_reset_runner_installation() {
     let replacement = Arc::new(Runner::spawn_spec(&spec).await.unwrap());
     let error = runtime
         .reload_codebase(CodebaseSpec {
+            function: None,
             name: "default".to_owned(),
             manifest,
             runner: replacement.clone(),
@@ -1255,6 +1260,7 @@ async fn rejected_manifest_reload_keeps_the_eventarc_generation_and_table() {
         .retain(|function| function.name != "customEvent");
     let error = runtime
         .reload_codebase(CodebaseSpec {
+            function: None,
             name: "default".to_owned(),
             manifest: changed,
             runner: replacement.clone(),
@@ -1310,6 +1316,7 @@ async fn hot_reload_rejects_a_policy_only_blocking_auth_manifest_change() {
 
     let error = runtime
         .reload_codebase(CodebaseSpec {
+            function: None,
             name: "default".to_owned(),
             manifest: changed,
             runner: replacement.clone(),
@@ -1807,6 +1814,7 @@ async fn a_blocking_restart_cannot_replace_a_newer_hot_reload_generation() {
     let expected = replacement.clone();
     runtime
         .reload_codebase(CodebaseSpec {
+            function: None,
             name: "default".to_owned(),
             manifest,
             runner: replacement,
@@ -1901,6 +1909,7 @@ async fn strict_second_gen_retry_deliveries_renew_both_trace_ids_at_the_runner()
     let clock = Arc::new(Mutex::new(VirtualClock::new(START)));
     let runtime = FunctionsRuntime::with_codebases(
         vec![CodebaseSpec {
+            function: None,
             name: "default".to_owned(),
             manifest,
             runner,
@@ -2417,6 +2426,7 @@ async fn a_spontaneous_recovery_cannot_replace_a_newer_reload() {
     let replacement = Arc::new(Runner::spawn_spec(&fast).await.unwrap());
     runtime
         .reload_codebase(CodebaseSpec {
+            function: None,
             name: "default".to_owned(),
             manifest,
             runner: replacement.clone(),
@@ -2482,6 +2492,7 @@ async fn reload_wakes_background_work_after_superseding_recovery() {
     let replacement = Arc::new(Runner::spawn_spec(&fast).await.unwrap());
     runtime
         .reload_codebase(CodebaseSpec {
+            function: None,
             name: "default".to_owned(),
             manifest: runtime.manifest().clone(),
             runner: replacement,
@@ -2528,6 +2539,7 @@ async fn reload_generation_wins_over_an_older_reset_respawn() {
     let expected = replacement.clone();
     runtime
         .reload_codebase(CodebaseSpec {
+            function: None,
             name: "default".to_owned(),
             manifest,
             runner: replacement,
@@ -6044,6 +6056,7 @@ async fn a_schedule_run_queued_while_the_runner_is_stopped_survives_a_reload_and
     let replacement = Arc::new(Runner::spawn_spec(&spec).await.unwrap());
     runtime
         .reload_codebase(CodebaseSpec {
+            function: None,
             name: "default".to_owned(),
             manifest: runtime.manifest().clone(),
             runner: replacement,
@@ -6479,4 +6492,257 @@ async fn explicit_clock_change_hook_notifies_idle_waiters() {
         observed,
         "explicit clock hook must recheck scoped quiescence"
     );
+}
+
+// ---- functions.isolation = "function": one dedicated runner per function of a codebase ----
+
+fn fake_spawn_spec() -> SpawnSpec {
+    SpawnSpec {
+        command: vec![
+            "python3".to_owned(),
+            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py").to_owned(),
+        ],
+        cwd: None,
+        env: Vec::new(),
+        hello_timeout: RUNNER_HELLO_TIMEOUT,
+    }
+}
+
+/// One unit of codebase `api` per function name: its own runner and a manifest of that function only.
+async fn function_units(names: &[&str], cleanup_dir: Option<&Path>) -> Vec<CodebaseSpec> {
+    let spec = fake_spawn_spec();
+    let mut units = Vec::new();
+    for name in names {
+        let runner = Arc::new(Runner::spawn_spec(&spec).await.unwrap());
+        let mut manifest = parse_manifest(runner.hello().manifest.as_ref().unwrap()).unwrap();
+        manifest.functions.retain(|function| function.name == *name);
+        assert_eq!(manifest.functions.len(), 1, "{name}");
+        units.push(CodebaseSpec {
+            name: "api".to_owned(),
+            function: Some((*name).to_owned()),
+            manifest,
+            runner,
+            spawn: Some(spec.clone()),
+            cleanup_dir: cleanup_dir.map(Path::to_path_buf),
+        });
+    }
+    units
+}
+
+fn runtime_of_units(units: Vec<CodebaseSpec>) -> Arc<FunctionsRuntime> {
+    let runtime = FunctionsRuntime::with_codebases(
+        units,
+        FunctionsConfig {
+            retry_attempts: 1,
+            ..FunctionsConfig::for_tests(1000, "s".into())
+        },
+        Arc::new(Mutex::new(VirtualClock::new(START))),
+        fireemu_adapter_functions::http::FunctionsHttpProfile::Emulator,
+    )
+    .unwrap();
+    tokio::spawn(runtime.clone().dispatch_loop());
+    runtime
+}
+
+#[tokio::test]
+async fn function_units_of_one_codebase_keep_one_runner_each_and_route_by_function() {
+    let runtime = runtime_of_units(function_units(&["echo", "onJob"], None).await);
+    assert_eq!(runtime.codebase_names(), vec!["api"]);
+    assert_eq!(runtime.codebase_of("echo"), Some("api"));
+    assert_eq!(runtime.codebase_of("onJob"), Some("api"));
+    let echo = runtime.runner_for("echo");
+    let job = runtime.runner_for("onJob");
+    assert!(!Arc::ptr_eq(&echo, &job));
+    let units = runtime.current_runner_units();
+    assert_eq!(
+        units
+            .iter()
+            .map(|unit| (unit.codebase.as_str(), unit.function.as_deref()))
+            .collect::<Vec<_>>(),
+        vec![("api", Some("echo")), ("api", Some("onJob"))]
+    );
+    assert_eq!(
+        units
+            .iter()
+            .map(fireemu_adapter_functions::runtime::RunnerUnit::key)
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        2,
+        "every runner has its own key, so per-runner log cursors cannot collide"
+    );
+    let target = runtime
+        .http_target("demo-app", "us-central1", "echo")
+        .unwrap();
+    assert_eq!(
+        runtime
+            .invoke_http(&target, "GET", "/x", &[], &[])
+            .await
+            .unwrap()
+            .status,
+        200
+    );
+    let status = runtime.status();
+    let reported = status["codebases"].as_array().unwrap();
+    assert_eq!(reported.len(), 2);
+    assert_eq!(reported[0]["function"], "echo");
+    assert_eq!(reported[0]["functions"], json!(["echo"]));
+    assert_eq!(reported[1]["function"], "onJob");
+    runtime.shutdown().await;
+    assert!(!echo.is_alive());
+    assert!(!job.is_alive());
+}
+
+#[tokio::test]
+async fn one_function_runner_dying_restarts_that_function_alone() {
+    let runtime = runtime_of_units(function_units(&["echo", "onJob"], None).await);
+    let echo = runtime.runner_for("echo");
+    let job = runtime.runner_for("onJob");
+    echo.kill_now();
+    assert!(!echo.is_alive());
+    assert!(job.is_alive(), "the other function's process is untouched");
+    let target = runtime
+        .http_target("demo-app", "us-central1", "echo")
+        .unwrap();
+    assert_eq!(
+        runtime
+            .invoke_http(&target, "GET", "/again", &[], &[])
+            .await
+            .unwrap()
+            .status,
+        200
+    );
+    assert!(
+        !Arc::ptr_eq(&runtime.runner_for("echo"), &echo),
+        "echo got a new process"
+    );
+    assert!(runtime.runner_for("echo").is_alive());
+    assert!(
+        Arc::ptr_eq(&runtime.runner_for("onJob"), &job),
+        "onJob kept its process"
+    );
+    assert!(job.is_alive());
+    runtime.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_group_reload_replaces_every_unit_or_none() {
+    let runtime = runtime_of_units(function_units(&["echo", "onJob"], None).await);
+    let old = [runtime.runner_for("echo"), runtime.runner_for("onJob")];
+    // A different set of functions is a changed manifest: the last-known-good units stay.
+    let mismatched = function_units(&["echo", "hold"], None).await;
+    let spare: Vec<Arc<Runner>> = mismatched.iter().map(|unit| unit.runner.clone()).collect();
+    let error = runtime.reload_codebase_units(mismatched).unwrap_err();
+    assert!(error.contains("changed its trigger manifest"), "{error}");
+    assert!(Arc::ptr_eq(&runtime.runner_for("echo"), &old[0]));
+    assert!(Arc::ptr_eq(&runtime.runner_for("onJob"), &old[1]));
+    assert!(old.iter().all(|runner| runner.is_alive()));
+    assert!(
+        spare.iter().all(|runner| !runner.is_alive()),
+        "refused replacements are not left running"
+    );
+    // Fewer units than the codebase has is a changed manifest too.
+    let partial = function_units(&["echo"], None).await;
+    assert!(runtime.reload_codebase_units(partial).is_err());
+    assert!(Arc::ptr_eq(&runtime.runner_for("onJob"), &old[1]));
+    // The same set installs as a group.
+    let fresh = function_units(&["onJob", "echo"], None).await;
+    let generation = runtime.reload_codebase_units(fresh).unwrap();
+    assert!(generation >= 1);
+    assert!(!Arc::ptr_eq(&runtime.runner_for("echo"), &old[0]));
+    assert!(!Arc::ptr_eq(&runtime.runner_for("onJob"), &old[1]));
+    runtime.await_idle(Duration::from_secs(3)).await.unwrap();
+    for runner in &old {
+        assert!(!runner.is_alive(), "a replaced idle runner is stopped");
+    }
+    runtime.shutdown().await;
+}
+
+#[tokio::test]
+async fn the_source_snapshot_of_a_group_outlives_every_unit_still_draining() {
+    let root = std::env::temp_dir().join(format!("fireemu-unit-snapshot-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let (first, second) = (root.join("0"), root.join("1"));
+    std::fs::create_dir_all(&first).unwrap();
+    std::fs::create_dir_all(&second).unwrap();
+    let runtime = runtime_of_units(function_units(&["hold", "echo"], None).await);
+    runtime
+        .reload_codebase_units(function_units(&["hold", "echo"], Some(&first)).await)
+        .unwrap();
+    // `hold` is mid-call on the generation that uses `first`; `echo` of that generation is idle.
+    let hold = runtime
+        .http_target("demo-app", "us-central1", "hold")
+        .unwrap();
+    let pending = {
+        let runtime = runtime.clone();
+        tokio::spawn(async move { runtime.invoke_http(&hold, "POST", "/hold", &[], &[]).await })
+    };
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    runtime
+        .reload_codebase_units(function_units(&["hold", "echo"], Some(&second)).await)
+        .unwrap();
+    assert!(
+        first.exists(),
+        "the idle unit's release must not delete the directory its draining sibling still runs from"
+    );
+    assert_eq!(pending.await.unwrap().unwrap().status, 204);
+    runtime.await_idle(Duration::from_secs(3)).await.unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while first.exists() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the drained generation's directory was not removed"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(second.exists());
+    runtime.shutdown().await;
+    assert!(!second.exists());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn an_event_reaches_only_the_runner_dedicated_to_its_function() {
+    let dir = std::env::temp_dir().join(format!("fireemu-unit-frames-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let frames: Vec<std::path::PathBuf> = ["echo", "onJob"].iter().map(|n| dir.join(n)).collect();
+    let mut units = Vec::new();
+    for (name, log) in ["echo", "onJob"].iter().zip(&frames) {
+        let mut spec = fake_spawn_spec();
+        spec.env = vec![(
+            "FIREEMU_FAKE_FRAME_LOG".to_owned(),
+            log.display().to_string(),
+        )];
+        let runner = Arc::new(Runner::spawn_spec(&spec).await.unwrap());
+        let mut manifest = parse_manifest(runner.hello().manifest.as_ref().unwrap()).unwrap();
+        manifest.functions.retain(|function| function.name == *name);
+        units.push(CodebaseSpec {
+            name: "api".to_owned(),
+            function: Some((*name).to_owned()),
+            manifest,
+            runner,
+            spawn: Some(spec),
+            cleanup_dir: None,
+        });
+    }
+    let runtime = runtime_of_units(units);
+    runtime.publish("jobs", &[json!({"data": "YQ=="})]).unwrap();
+    runtime.await_idle(Duration::from_secs(5)).await.unwrap();
+    assert!(runtime
+        .history()
+        .iter()
+        .any(|record| record.function == "onJob" && record.outcome == "ok"));
+    let seen = |log: &std::path::PathBuf| std::fs::read_to_string(log).unwrap_or_default();
+    assert!(
+        seen(&frames[1]).contains("\"function\": \"onJob\""),
+        "{}",
+        seen(&frames[1])
+    );
+    assert!(
+        seen(&frames[0]).is_empty(),
+        "the other function's runner saw {}",
+        seen(&frames[0])
+    );
+    runtime.shutdown().await;
+    let _ = std::fs::remove_dir_all(dir);
 }

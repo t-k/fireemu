@@ -342,10 +342,11 @@ const invocationLogger = createInvocationLogger((entry) =>
 invocationLogger.install();
 
 function parseArgs(argv) {
-  const out = { source: process.cwd(), codebase: "default" };
+  const out = { source: process.cwd(), codebase: "default", function: undefined };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--source" && argv[i + 1]) out.source = argv[++i];
     else if (argv[i] === "--codebase" && argv[i + 1]) out.codebase = argv[++i];
+    else if (argv[i] === "--function" && argv[i + 1]) out.function = argv[++i];
   }
   return out;
 }
@@ -382,7 +383,16 @@ function setFunctionIdentity(spec) {
   process.env.K_SERVICE = spec?.name ?? "";
 }
 
+// A runner started with `--function <name>` (`functions.isolation = "function"`) is one function's instance,
+// as a production instance is: the daemon put FUNCTION_TARGET, FUNCTION_SIGNATURE_TYPE, K_SERVICE and the
+// function's own secrets into its environment at spawn, before any user code loaded, so nothing is rewritten,
+// hidden or queued per call.
+const dedicatedFunction = () => args.function !== undefined;
+
 function withFunctionEnvironment(spec, task, invocationId) {
+  if (dedicatedFunction()) {
+    return invocationLogger.run({ functionName: spec?.name, invocationId }, task);
+  }
   const shared = localSecrets.size > 0 && activeInspectorPort === undefined &&
     !(spec?.platformOptions?.secrets || []).some(name => localSecrets.has(name));
   const run = async () => {
@@ -1826,6 +1836,15 @@ async function main() {
         reason: d.ignored.reason,
       })),
   };
+  if (dedicatedFunction()) {
+    // One function's instance serves one function. Another export stays in the module graph, as in a
+    // production instance, but is neither announced nor routable here.
+    if (!manifest.functions.some((f) => f.name === args.function)) {
+      process.stderr.write(`the function ${args.function} is not exported by the codebase at ${sourceDir}\n`);
+      process.exit(1);
+    }
+    manifest = { ...manifest, functions: manifest.functions.filter((f) => f.name === args.function) };
+  }
   startupTrace('function discovery complete');
   let httpPort;
   if (

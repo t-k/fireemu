@@ -144,6 +144,23 @@ Node codebases reload source changes automatically. Already-admitted invocations
 
 On Windows, reload snapshots are created with a protected DACL before source or local secret files are copied. Fireemu checks the snapshot directory, temporary parent and ancestors for unsafe permissions or reparse points, and refuses the snapshot if it cannot verify them. This requires Windows PowerShell; see [Troubleshooting](../../guides/troubleshooting/).
 
+## Process isolation (`functions.isolation`)
+
+Production runs every function in its own instance: the function's identity (`FUNCTION_TARGET`, `FUNCTION_SIGNATURE_TYPE`, `K_SERVICE`) and the secrets it declares are in its environment from the start, it has its own module graph, and a second-generation instance serves up to `concurrency` calls of that one function at a time (the first generation serves one). `functions.isolation` chooses how closely a run follows that.
+
+| `functions.isolation` | Processes | What it means |
+|---|---|---|
+| `"codebase"` (the default) | One runner process per codebase | Cheapest to start. The functions share one module graph: module-level state, caches and singletons are visible to every function. They share one process environment too: `FUNCTION_TARGET`, `FUNCTION_SIGNATURE_TYPE` and `K_SERVICE` name the call that started most recently, so a function that reads one after an `await` while another function was called sees the other function. A call that uses a local secret from `.secret.local` runs alone, so it also hides concurrency a deployed function would have. Secrets are hidden from every function that does not declare them, while user code loads and while a call runs. |
+| `"function"` | One runner process per function of each codebase | The shape of production. Each process loads the codebase on its own, starts with its function's identity and with the local secrets that function declares already in its environment (so module-level code that reads them sees them), and serves only that function, at the concurrency the function is configured for. Nothing is rewritten, hidden or queued per call. One function's process crashing or restarting does not touch the others. |
+
+```json
+{ "schemaVersion": 1, "functions": { "isolation": "function" } }
+```
+
+With `"function"`, Fireemu first starts a discovery process to read the codebase's exports, then starts one process per served function and stops the discovery process. A codebase with more than 64 served functions is refused (a Node or Python process each); keep `"codebase"` for it. A function whose process exits is restarted on its next use, the same way a codebase process is, and a source reload replaces every process of the codebase together: if the reload changes which functions the codebase serves, it is rejected and the previous processes keep running. The log lines of every process are forwarded as for the codebase process, and the status of the control API lists one entry per process with its `function`.
+
+`"function"` costs one process (and one copy of the loaded codebase) per function: more start-up time and memory than `"codebase"`, growing with the number of functions. It cannot be combined with `functions.runner` (a custom runner command is started once per codebase) or with a fixed `--inspect-functions <port>` (processes cannot share a port; `--inspect-functions` without a port gives each process its own). It applies to Python codebases too.
+
 ## Debugging
 
 Run the Functions runner under the Node inspector with `--inspect-functions`:

@@ -1300,6 +1300,9 @@ pub struct RuntimeConfig {
     /// What to do with an exported trigger that belongs to a product fireemu does not serve
     /// (`functions.unservedTriggers`): `refuse` (default) or `report`.
     pub functions_unserved_triggers: String,
+    /// Which processes serve a codebase (`functions.isolation`): one runner for the whole codebase,
+    /// or one dedicated runner per function, as a production instance serves one function.
+    pub functions_isolation: FunctionsIsolation,
     /// The `.firebaserc` alias `--project` resolved through, when the project was named by an
     /// alias. It is the only reason a codebase may carry a `.env.<alias>` file, and having
     /// both that and `.env.<projectId>` is refused, as `loadUserEnvs` refuses it.
@@ -1560,6 +1563,44 @@ impl AuthBlockingToken {
         match self {
             Self::Emulated => "emulated",
             Self::Production => "production",
+        }
+    }
+}
+
+/// `functions.isolation`: how many runner processes serve one codebase.
+///
+/// Production gives every function its own instance, with its own environment, secrets and module
+/// graph, and an instance serves `concurrency` requests of that one function at a time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FunctionsIsolation {
+    /// One runner process serves every function of the codebase, which keeps startup cheap. The
+    /// functions share one module graph and one process environment: `FUNCTION_TARGET`,
+    /// `FUNCTION_SIGNATURE_TYPE` and `K_SERVICE` name the call that started last, and a call that
+    /// uses a local secret runs alone.
+    #[default]
+    Codebase,
+    /// One dedicated runner process per function, started with that function's identity and
+    /// secrets in its environment. The functions share nothing.
+    Function,
+}
+
+impl FunctionsIsolation {
+    /// Parses the configuration spelling.
+    #[must_use]
+    pub fn parse_config(text: &str) -> Option<Self> {
+        match text {
+            "codebase" => Some(Self::Codebase),
+            "function" => Some(Self::Function),
+            _ => None,
+        }
+    }
+
+    /// The configuration spelling.
+    #[must_use]
+    pub const fn as_config_str(self) -> &'static str {
+        match self {
+            Self::Codebase => "codebase",
+            Self::Function => "function",
         }
     }
 }
@@ -1890,6 +1931,7 @@ impl Default for RuntimeConfig {
             functions_manifest: None,
             functions_max_running: 8,
             functions_unserved_triggers: "refuse".to_owned(),
+            functions_isolation: FunctionsIsolation::Codebase,
             functions_project_alias: None,
             events_max_attempts: 4,
             pubsub_project_numbers: BTreeMap::new(),
@@ -2268,6 +2310,7 @@ impl RuntimeConfig {
             "functions.runner" => Some(json!(self.functions_runner)),
             "functions.maxGlobalConcurrency" => Some(json!(self.functions_max_running)),
             "functions.unservedTriggers" => Some(json!(self.functions_unserved_triggers)),
+            "functions.isolation" => Some(json!(self.functions_isolation.as_config_str())),
             "functions.clock.date" => Some(json!(if self.functions_clock.date_virtual { "virtual" } else { "real" })),
             "functions.clock.timers" => Some(json!(if self.functions_clock.timers_virtual { "virtual" } else { "real" })),
             "functions.clock.tasks" => Some(json!(if self.functions_clock.tasks_virtual { "virtual" } else { "real" })),
@@ -2376,12 +2419,13 @@ pub(crate) const SCHEDULER_KEYS: [&str; 5] = [
 ];
 
 /// The keys of the `functions` section.
-pub(crate) const FUNCTIONS_KEYS: [&str; 7] = [
+pub(crate) const FUNCTIONS_KEYS: [&str; 8] = [
     "manifest",
     "source",
     "runner",
     "maxGlobalConcurrency",
     "unservedTriggers",
+    "isolation",
     "authBlockingToken",
     "clock",
 ];
@@ -4077,7 +4121,16 @@ impl RuntimeConfig {
         // `functions.source` stays the first codebase's directory, which is what every
         // single-codebase project has and what the banner prints.
         self.functions_source = chosen.first().map(|c| c.source.clone());
-        if chosen.len() > 1 {
+        if self.functions_isolation == FunctionsIsolation::Function {
+            report.notices.push(format!(
+                "functions: functions.isolation is \"function\": every function of {} runs in its own runner process",
+                chosen
+                    .iter()
+                    .map(|c| c.codebase.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        } else if chosen.len() > 1 {
             report.notices.push(format!(
                 "functions: {} codebases are loaded ({}), one runner process each",
                 chosen.len(),
@@ -5147,6 +5200,30 @@ impl RuntimeConfig {
         Ok(())
     }
 
+    /// `functions.isolation`: which processes serve a codebase.
+    fn parse_functions_isolation(
+        f: &serde_json::Map<String, Value>,
+        cfg: &mut Self,
+    ) -> Result<(), ConfigError> {
+        if let Some(v) = f.get("isolation") {
+            cfg.functions_isolation = v
+                .as_str()
+                .and_then(FunctionsIsolation::parse_config)
+                .ok_or_else(|| {
+                    ConfigError("functions.isolation must be \"codebase\" or \"function\"".into())
+                })?;
+            if cfg.functions_isolation == FunctionsIsolation::Function
+                && cfg.functions_runner.is_some()
+            {
+                return Err(ConfigError(
+                    "functions.isolation \"function\" cannot be combined with functions.runner: a custom runner command is started once per codebase"
+                        .into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
     fn parse_functions(
         f: &serde_json::Map<String, Value>,
         cfg: &mut Self,
@@ -5237,6 +5314,7 @@ impl RuntimeConfig {
             }
             text.clone_into(&mut cfg.functions_unserved_triggers);
         }
+        Self::parse_functions_isolation(f, cfg)?;
         Ok(())
     }
 
@@ -6562,6 +6640,7 @@ mod tests {
             ("functions.runner", json!(null), "unset"),
             ("functions.maxGlobalConcurrency", json!(8), "default"),
             ("functions.unservedTriggers", json!("refuse"), "default"),
+            ("functions.isolation", json!("codebase"), "default"),
         ];
         for (key, expected, source) in cases {
             let row = rows.iter().find(|row| row["key"] == key).unwrap();
@@ -7053,6 +7132,10 @@ mod tests {
                 (
                     "functions.authBlockingToken",
                     json!(cfg.functions_auth_blocking_token.as_config_str()),
+                ),
+                (
+                    "functions.isolation",
+                    json!(cfg.functions_isolation.as_config_str()),
                 ),
                 (
                     "functions.clock.date",
@@ -10032,6 +10115,61 @@ mod tests {
     }
 
     #[test]
+    fn the_start_up_notice_says_how_many_processes_serve_a_codebase_under_each_isolation() {
+        let two = json!({
+            "functions": [
+                {"source": "fn/api", "codebase": "api"},
+                {"source": "fn/workers", "codebase": "workers"}
+            ]
+        });
+        let one = json!({"functions": {"source": "fn/api", "codebase": "api"}});
+        let base = std::path::Path::new("/proj");
+        let notices = |isolation: FunctionsIsolation, json: &Value| {
+            let mut cfg = RuntimeConfig {
+                functions_isolation: isolation,
+                ..RuntimeConfig::default()
+            };
+            cfg.apply_firebase_json(json, base, &Selection::default())
+                .unwrap()
+                .notices
+        };
+        let shared_two = notices(FunctionsIsolation::Codebase, &two);
+        assert!(
+            shared_two
+                .iter()
+                .any(|n| n
+                    .contains("2 codebases are loaded (api, workers), one runner process each")),
+            "{shared_two:?}"
+        );
+        assert!(
+            !shared_two.iter().any(|n| n.contains("functions.isolation")),
+            "{shared_two:?}"
+        );
+        // One codebase served by one process needs no notice.
+        assert!(notices(FunctionsIsolation::Codebase, &one).is_empty());
+        // One dedicated process per function says so, for one codebase and for several, once.
+        for (json, named) in [(&one, "api"), (&two, "api, workers")] {
+            let dedicated = notices(FunctionsIsolation::Function, json);
+            assert_eq!(
+                dedicated
+                    .iter()
+                    .filter(|n| n.contains(&format!(
+                        "functions.isolation is \"function\": every function of {named} runs in its own runner process"
+                    )))
+                    .count(),
+                1,
+                "{dedicated:?}"
+            );
+            assert!(
+                !dedicated
+                    .iter()
+                    .any(|n| n.contains("one runner process each")),
+                "{dedicated:?}"
+            );
+        }
+    }
+
+    #[test]
     fn every_declared_codebase_is_loaded_and_only_functions_picks_one() {
         let json = json!({
             "functions": [
@@ -10806,6 +10944,51 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn functions_isolation_defaults_to_the_shared_codebase_runner_and_parses_both_spellings() {
+        let cfg = RuntimeConfig::from_json(&json!({"schemaVersion": 1})).unwrap();
+        assert_eq!(cfg.functions_isolation, FunctionsIsolation::Codebase);
+        for (text, expected) in [
+            ("codebase", FunctionsIsolation::Codebase),
+            ("function", FunctionsIsolation::Function),
+        ] {
+            let input = json!({"schemaVersion": 1, "functions": {"isolation": text}});
+            let cfg = RuntimeConfig::from_json(&input).unwrap();
+            assert_eq!(cfg.functions_isolation, expected, "{text}");
+            assert_eq!(expected.as_config_str(), text);
+            assert_eq!(
+                cfg.effective_value("functions.isolation", &input),
+                Some(json!(text))
+            );
+        }
+    }
+
+    #[test]
+    fn functions_isolation_rejects_other_values_and_a_custom_runner() {
+        for value in [
+            json!("Function"),
+            json!("process"),
+            json!(""),
+            json!(1),
+            json!(null),
+            json!(true),
+        ] {
+            let input = json!({"schemaVersion": 1, "functions": {"isolation": value}});
+            assert_eq!(
+                RuntimeConfig::from_json(&input).unwrap_err().0,
+                "functions.isolation must be \"codebase\" or \"function\""
+            );
+        }
+        let input = json!({"schemaVersion": 1, "functions": {"isolation": "function", "runner": ["node", "x.mjs"]}});
+        assert!(RuntimeConfig::from_json(&input)
+            .unwrap_err()
+            .0
+            .contains("cannot be combined with functions.runner"));
+        // The shared runner keeps accepting a custom command.
+        let input = json!({"schemaVersion": 1, "functions": {"isolation": "codebase", "runner": ["node", "x.mjs"]}});
+        assert!(RuntimeConfig::from_json(&input).is_ok());
     }
 
     #[test]

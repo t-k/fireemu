@@ -100,6 +100,7 @@ async fn start_with_context(
         parse_manifest(runner.hello().manifest.as_ref().expect("a manifest")).expect("it parses");
     let runtime = FunctionsRuntime::with_codebases(
         vec![CodebaseSpec {
+            function: None,
             name: "default".to_owned(),
             manifest,
             runner: Arc::new(runner),
@@ -895,6 +896,7 @@ async fn strict_pinned_channel_clock_refuses_unrepresentable_instants_and_keeps_
     let manifest = parse_manifest(&json!({"functions": []})).unwrap();
     let runtime = FunctionsRuntime::with_codebases(
         vec![CodebaseSpec {
+            function: None,
             name: "default".into(),
             manifest,
             runner,

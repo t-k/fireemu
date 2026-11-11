@@ -1675,9 +1675,15 @@ async fn serve_suite(
             let mut poll = tokio::time::interval(std::time::Duration::from_millis(250));
             loop {
                 poll.tick().await;
-                let runners = runtime.current_runners();
-                cursors.retain(|name, _| runners.iter().any(|(current, _)| current == name));
-                for (codebase, runner) in runners {
+                let runners = runtime.current_runner_units();
+                let current: Vec<String> = runners
+                    .iter()
+                    .map(fireemu_adapter_functions::runtime::RunnerUnit::key)
+                    .collect();
+                crate::functions::retain_current_cursors(&mut cursors, &current);
+                for unit in runners {
+                    let codebase = unit.key();
+                    let runner = unit.runner;
                     let state = cursors
                         .entry(codebase.clone())
                         .or_insert_with(|| (runner.clone(), None));

@@ -69,6 +69,7 @@ async fn start_with(name: &str, profile: FunctionsHttpProfile, virtual_tasks: bo
     let clock = Arc::new(Mutex::new(VirtualClock::new(START)));
     let runtime = FunctionsRuntime::with_codebases(
         vec![CodebaseSpec {
+            function: None,
             name: "default".to_owned(),
             manifest,
             runner: Arc::new(runner),

@@ -88,8 +88,17 @@ class _HeldBody:
 class RunnerRouter:
     """Admission and routing in front of the Flask app."""
 
-    def __init__(self, functions: dict, manifest: dict, project: str, secret: str, gate: EnvironmentGate | None = None):
+    def __init__(
+        self,
+        functions: dict,
+        manifest: dict,
+        project: str,
+        secret: str,
+        gate: EnvironmentGate | None = None,
+        fixed_identity: bool = False,
+    ):
         self._app = _flask_app()
+        self._fixed_identity = fixed_identity
         self._gate = gate if gate is not None else EnvironmentGate({})
         self._project = project
         self._secret = secret.encode()
@@ -137,11 +146,13 @@ class RunnerRouter:
         held = contextlib.ExitStack()
         held.enter_context(self._gate.hold(route[3]))
         try:
-            # The variables a production instance has from its start name the function it serves. One process
-            # serves the whole codebase here, so they name the call that started most recently, as for events.
-            os.environ["FUNCTION_TARGET"] = route[2]
-            os.environ["FUNCTION_SIGNATURE_TYPE"] = "http"
-            os.environ["K_SERVICE"] = name
+            if not self._fixed_identity:
+                # The variables a production instance has from its start name the function it serves. One process
+                # serves the whole codebase here, so they name the call that started most recently, as for events.
+                # A dedicated runner has them from its spawn.
+                os.environ["FUNCTION_TARGET"] = route[2]
+                os.environ["FUNCTION_SIGNATURE_TYPE"] = "http"
+                os.environ["K_SERVICE"] = name
             body = self._app(environ, start_response)
         except BaseException as error:
             _log_failure(name, error)
@@ -155,9 +166,9 @@ class _QuietHandler(WSGIRequestHandler):
         pass
 
 
-def start_server(functions: dict, manifest: dict, secret: str, gate: EnvironmentGate | None = None):
+def start_server(functions: dict, manifest: dict, secret: str, gate: EnvironmentGate | None = None, fixed_identity: bool = False):
     """Starts the server on a free loopback port; returns `(server, port)`."""
-    router = RunnerRouter(functions, manifest, os.environ.get("GCLOUD_PROJECT", ""), secret, gate)
+    router = RunnerRouter(functions, manifest, os.environ.get("GCLOUD_PROJECT", ""), secret, gate, fixed_identity)
     server = make_server("127.0.0.1", 0, router, threaded=True, request_handler=_QuietHandler)
     import threading
 

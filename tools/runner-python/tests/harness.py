@@ -35,7 +35,7 @@ def read_runner_frame(stream):
 class Runner:
     """A runner process on a codebase; frames it sends are collected, and `stderr` is kept."""
 
-    def __init__(self, source=FIXTURE, extra_env=None, name="default"):
+    def __init__(self, source=FIXTURE, extra_env=None, name="default", function=None):
         env = {
             "PATH": os.environ.get("PATH", ""),
             "HOME": os.environ.get("HOME", ""),
@@ -56,7 +56,7 @@ class Runner:
             env["MUTANT_UNDER_TEST"] = "" if mutant == "stats" else mutant
         env.update(extra_env or {})
         self.process = subprocess.Popen(
-            [sys.executable, str(SCRIPT), "--source", str(source), "--codebase", name],
+            [sys.executable, str(SCRIPT), "--source", str(source), "--codebase", name, *(["--function", function] if function else [])],
             cwd=str(source),
             env=env,
             stdin=subprocess.PIPE,

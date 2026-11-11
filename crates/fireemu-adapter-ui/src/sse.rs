@@ -199,13 +199,17 @@ pub(crate) fn function_logs_since(
         changed_scope: false,
         entries: Vec::new(),
     };
-    let runners = runtime.current_runners();
+    let runners = runtime.current_runner_units();
     cursors
         .0
-        .retain(|name, _| runners.iter().any(|(current, _)| name == current));
-    for (codebase, runner) in runners {
+        .retain(|name, _| runners.iter().any(|unit| &unit.key() == name));
+    for unit in runners {
+        let key = unit.key();
+        let codebase = unit.codebase;
+        let function = unit.function;
+        let runner = unit.runner;
         let identity = runner.diagnostic_id();
-        let previous = cursors.0.get(&codebase).copied();
+        let previous = cursors.0.get(&key).copied();
         let replaced = previous.is_some_and(|(old, _)| old != identity);
         let cursor = previous
             .filter(|(old, _)| *old == identity)
@@ -222,7 +226,7 @@ pub(crate) fn function_logs_since(
         for (offset, line) in snapshot.lines.iter().enumerate() {
             let sequence = first.saturating_add(u64::try_from(offset).unwrap_or(u64::MAX));
             batch.lines.push(line.display().to_owned());
-            let record = json!({
+            let mut record = json!({
                 "project": runtime.project(),
                 "codebase": codebase,
                 "runner": identity.to_string(),
@@ -232,19 +236,26 @@ pub(crate) fn function_logs_since(
                 "function": line.function(),
                 "truncated": line.is_truncated(),
             });
+            if let Some(function) = &function {
+                record["runnerFunction"] = json!(function);
+            }
             batch.records.push(record.clone());
             batch
                 .entries
                 .push((line.display().to_owned(), Some(record)));
         }
-        batch.scopes.push(json!({
+        let mut scope = json!({
             "codebase": codebase,
             "runner": identity.to_string(),
             "nextCursor": snapshot.next_seq.to_string(),
             "truncated": snapshot.truncated,
             "replaced": replaced,
-        }));
-        cursors.0.insert(codebase, (identity, snapshot.next_seq));
+        });
+        if let Some(function) = &function {
+            scope["runnerFunction"] = json!(function);
+        }
+        batch.scopes.push(scope);
+        cursors.0.insert(key, (identity, snapshot.next_seq));
     }
     batch
 }

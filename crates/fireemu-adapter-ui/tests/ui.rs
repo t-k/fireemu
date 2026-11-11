@@ -1552,6 +1552,7 @@ async fn function_logs_cover_all_codebases_and_report_replacement_without_reusin
         )
         .unwrap();
         codebases.push(CodebaseSpec {
+            function: None,
             name: name.to_owned(),
             manifest,
             runner,

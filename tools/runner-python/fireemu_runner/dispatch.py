@@ -51,8 +51,16 @@ def _bound(text: str, limit: int) -> str:
 class Dispatcher:
     """Runs `invoke` frames against the functions the manifest serves."""
 
-    def __init__(self, functions: dict, manifest: dict, writer: FrameWriter, gate: EnvironmentGate | None = None):
+    def __init__(
+        self,
+        functions: dict,
+        manifest: dict,
+        writer: FrameWriter,
+        gate: EnvironmentGate | None = None,
+        fixed_identity: bool = False,
+    ):
         self._gate = gate if gate is not None else EnvironmentGate({})
+        self._fixed_identity = fixed_identity
         self._functions = functions
         self._specs = {spec["name"]: spec for spec in manifest["functions"]}
         self._writer = writer
@@ -98,11 +106,13 @@ class Dispatcher:
             return ASYNC_HANDLER, ASYNC_HANDLER
         with self._gate.hold(spec.get("platformOptions", {}).get("secrets")):
             try:
-                # One process serves the whole codebase, so these name the invocation that started most
-                # recently, not a fixed target (the design memo, section 5).
-                os.environ["FUNCTION_TARGET"] = spec["entryPoint"]
-                os.environ["FUNCTION_SIGNATURE_TYPE"] = _SIGNATURE_TYPES.get(message["trigger"], "cloudevent")
-                os.environ["K_SERVICE"] = spec["name"]
+                if not self._fixed_identity:
+                    # One process serves the whole codebase, so these name the invocation that started most
+                    # recently, not a fixed target (the design memo, section 5). A dedicated runner has them from
+                    # its spawn.
+                    os.environ["FUNCTION_TARGET"] = spec["entryPoint"]
+                    os.environ["FUNCTION_SIGNATURE_TYPE"] = _SIGNATURE_TYPES.get(message["trigger"], "cloudevent")
+                    os.environ["K_SERVICE"] = spec["name"]
                 _deliver(message["trigger"], function, message["event"], message.get("rawEventData"))
             except BaseException as error:  # a SystemExit in user code must still answer the daemon
                 diagnostic, text = describe(error)

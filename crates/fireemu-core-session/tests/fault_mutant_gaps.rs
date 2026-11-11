@@ -56,9 +56,10 @@ fn retained_bytes_counts_action_and_string_capacity() {
     let with_code = empty.retained_bytes();
     let mut no_code = FaultState::default();
     no_code.install(plan(FaultAction::Timeout));
+    let code = "long-error-code".to_owned();
     assert_eq!(
         with_code - no_code.retained_bytes(),
-        u64::try_from("long-error-code".len()).unwrap()
+        u64::try_from(code.capacity()).unwrap()
     );
     let mut longer_operation = FaultState::default();
     let mut longer_plan = plan(FaultAction::Timeout);

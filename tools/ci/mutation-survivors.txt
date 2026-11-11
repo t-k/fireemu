@@ -10,3 +10,7 @@ crates/fireemu-core-auth/src/totp.rs: replace | with ^ in hotp
 # Equivalent: in base64url_decode the buffer is shifted left by 6 before `|` joins a 6-bit value, so its low six bits
 # are zero and `^` gives the same value. Found by the second critical run (43087932670), 2026-11-12.
 crates/fireemu-core-auth/src/jwt.rs: replace | with ^ in base64url_decode
+# Accepted equivalent-for-testing (owner decision, 2026-11-12): the zeroing of the secret in Drop cannot be observed
+# from a safe test. A test hook inside a type that holds a TOTP secret would be worse than the gap, and the workspace
+# forbids unsafe code, so the cleared bytes cannot be read back. The mutant is accepted for testing only.
+crates/fireemu-core-auth/src/mfa.rs: replace <impl Drop for TotpSecret>::drop with ()

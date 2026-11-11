@@ -88,6 +88,7 @@ class HeavyVerificationContractTest < Minitest::Test
     assert_violation(REAL.sub("          - critical\n", ''), "critical dispatch")
     assert_violation(REAL.sub('if [[ $MODE == critical ]]; then', 'if [[ $MODE == never ]]; then'), "critical selection")
     assert_violation(REAL.sub('args+=(--re "$REGEX")', 'args+=(--file "$REGEX")'), "critical selection")
+    assert_violation(REAL.sub('args+=(-p "$PACKAGE" --re "$REGEX")', 'args+=(-p "$PACKAGE" --file "$PACKAGE")'), "weekly selection")
     assert_violation(REAL.sub('for package in $PACKAGES; do args+=(-p "$package"); done', 'true'), "critical selection")
     assert_violation(REAL.sub("      - name: check the critical list against the tree\n        if: needs.plan.outputs.mode == 'critical'\n        run: python3 tools/ci/critical-selection.py --check tools/ci/mutation-critical.txt .\n", ""), "check the critical list")
     assert_violation(REAL.sub('INPUT_JOB=critical INPUT_SHARDS=16', 'INPUT_JOB=critical INPUT_SHARDS=8'), "schedule mapping")

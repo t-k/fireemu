@@ -241,11 +241,19 @@ jobs:
               read -r -a tokens <<< "$entry"
               package=${tokens[0]}
               [[ $package =~ ^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$ ]] || fail "the rotation names a bad package"
+              selection=()
               for token in "${tokens[@]:1}"; do
                 [[ $token =~ ^!?[A-Za-z0-9_./*-]{1,200}$ && $token != *..* && $token != *//* ]] || fail "the rotation names a bad file"
                 files="$files $token"
+                selection+=("$token")
               done
               files=${files# }
+              # The line's files, selected by name within its package (--file did not filter; see
+              # tools/ci/rotation-selection.py). The package's files come from the commit under test.
+              git -C "$RUNNER_TEMP/repo.git" show "$ref_sha:tools/ci/rotation-selection.py" > "$RUNNER_TEMP/rotation-selection.py"
+              git -C "$RUNNER_TEMP/repo.git" ls-tree -r --name-only "$ref_sha" -- "crates/$package" > "$RUNNER_TEMP/package-files.txt"
+              regex=$(python3 "$RUNNER_TEMP/rotation-selection.py" "$package" "${selection[@]}" < "$RUNNER_TEMP/package-files.txt") || fail "the rotation line selects no file of $package"
+              [[ -n $regex && $regex != *[[:space:]]* ]] || fail "the rotation selection must be one regex without spaces"
               ;;
             critical)
               # The list and the helper that turns it into one regex come from the commit under test. The
@@ -344,14 +352,8 @@ jobs:
             for package in $PACKAGES; do args+=(-p "$package"); done
             args+=(--re "$REGEX")
           elif [[ $MODE == weekly ]]; then
-            args+=(-p "$PACKAGE")
-            for file in $FILES; do
-              if [[ $file == '!'* ]]; then
-                args+=(--exclude "${file#!}")
-              else
-                args+=(--file "$file")
-              fi
-            done
+            # The line's files by name within its package (see tools/ci/rotation-selection.py).
+            args+=(-p "$PACKAGE" --re "$REGEX")
           else
             git fetch --no-tags origin "$BASE"
             git diff -U0 FETCH_HEAD...HEAD > "$RUNNER_TEMP/changes.diff"

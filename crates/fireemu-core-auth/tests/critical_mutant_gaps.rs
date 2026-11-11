@@ -89,6 +89,9 @@ fn removed_tenant_epoch_depends_on_matching_project_epoch() {
         project: None,
         tenant: Some("tenant-epoch".into()),
     };
+    // A store without a lifecycle epoch has no project epoch to match, so the removed-tenant epochs
+    // are not applied to it: this case pins that a project mismatch never widens acceptance. The
+    // case that pins the tenant epoch itself is `wrong` below.
     let mismatching = RemovedTenantEpochs {
         project: Some("old-project".into()),
         tenant: Some("different".into()),
@@ -141,7 +144,10 @@ fn factor_limit_rebinding_and_replay_reset() {
         state.import_factors(too_many, vec![]),
         Err(ImportedFactorError::TooMany)
     );
-    assert!(!ImportedFactorError::TooMany.to_string().is_empty());
+    assert_eq!(
+        ImportedFactorError::TooMany.to_string(),
+        "an imported account has more than 5 second factors"
+    );
     let live = state.clone();
     state.detach_totp_secrets();
     assert_eq!(state.rebind_totp_secrets(&live), 0);

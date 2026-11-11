@@ -63,6 +63,26 @@ fn redactions_are_counted_once_each_across_sections() {
 }
 
 #[test]
+fn redactions_inside_object_keys_are_counted() {
+    let mut b = input(0, vec![], vec![]);
+    b.functions.events = vec![serde_json::json!({ format!("{}{}", "Author", "ization: k"): 1, "plain": 2 })];
+    let bundle = Bundle::from_input(b, Limits::default());
+    assert_eq!(bundle.redactions, 1);
+}
+
+#[test]
+fn true_booleans_round_trip_as_true() {
+    let mut b = input(0, vec![], vec![]);
+    b.rules.history_enabled = true;
+    b.functions.log_gaps = true;
+    let bundle = Bundle::from_input(b, Limits::default());
+    let back = from_value(&to_value(&bundle)).expect("round trip");
+    assert!(back.rules.history_enabled);
+    assert!(back.functions.log_gaps);
+    assert_eq!(back, bundle);
+}
+
+#[test]
 fn every_configuration_value_kind_and_scalar_round_trips_through_from_value() {
     let config = vec![
         ("a".to_owned(), ConfigValue::Null),
@@ -94,6 +114,6 @@ fn credential_scan_accepts_underscore_and_hyphen_in_each_position() {
     assert_eq!(scrub(&dashed).1, 1);
     let jwt = format!("{}.{}.{}", "eyJ_".to_owned() + &"a".repeat(8), "b-".repeat(5), "c".repeat(10));
     assert_eq!(scrub(&jwt).1, 1, "jwt with _ and - segments");
-    let key = format!("{}{}", "id AIza", "a".repeat(35));
-    assert_eq!(scrub(&key).1, 1, "key after a prefix");
+    let key = format!("{} {}{}", "x".repeat(20), "AIza", "a".repeat(35));
+    assert_eq!(scrub(&key).1, 1, "key after a long prefix");
 }

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { compareFiles, loadKnownDifferences } from "./compare.mjs";
+import { buildFollowupCorpus } from "./followup.mjs";
 import { buildCorpus, corpusManifest } from "./corpus.mjs";
 import { shapeRow } from "./rows.mjs";
 
@@ -87,12 +88,14 @@ test("the known differences name corpus rows, a reason, an authority and the com
   assert.equal(new Set(entries.map((entry) => entry.id)).size, entries.length);
   for (const entry of entries) {
     assert.ok(entry.rows.length > 0 && entry.rows.every((id) => ids.has(id)), entry.id);
+    // fields name what is left out; an entry that only replaces a Location host (locationHost) leaves out none
     assert.ok(
-      entry.fields === "*" || (Array.isArray(entry.fields) && entry.fields.length > 0),
+      entry.fields === "*" ||
+        (Array.isArray(entry.fields) && (entry.fields.length > 0 || entry.locationHost)),
       entry.id,
     );
     assert.ok(entry.reason.length > 60, `${entry.id} has a reason`);
-    assert.match(entry.authority, /coordinator rulings? (1[5-7]|2[01])/, entry.id);
+    assert.match(entry.authority, /coordinator rulings? (1[5-7]|2[0167])/, entry.id);
     assert.ok(
       entry.appliesTo.length > 0 &&
         entry.appliesTo.every((kind) => ["production-vs-local", "run-vs-run"].includes(kind)),
@@ -139,4 +142,34 @@ test("a known difference is reported by the comparison and a covered row is not 
     known,
   });
   assert.equal(runs.summary.MISMATCH, 1);
+});
+
+test("the follow-up known differences name follow-up rows, a reason and an authority; a row of the other corpus is refused", () => {
+  const followup = buildFollowupCorpus();
+  const entries = loadKnownDifferences(followup, "followup-known-differences.json");
+  const ids = new Set(followup.versions.flatMap((v) => v.requests.map((r) => r.id)));
+  assert.deepEqual(
+    entries.map((entry) => entry.id),
+    [
+      "KD-SAFETY-ORIGIN-REDIRECT",
+      "KD-DEFAULT-404-BODY",
+      "KD-AUTH-HANDLER-PAGE",
+      "KD-BROTLI",
+      "KD-GZIP-LENGTH",
+    ],
+  );
+  for (const entry of entries) {
+    assert.ok(entry.rows.length > 0 && entry.rows.every((id) => ids.has(id)), entry.id);
+    assert.ok(entry.reason.length > 60, entry.id);
+    assert.match(entry.authority, /coordinator rulings? (1[5-7]|2[0167])/, entry.id);
+    assert.ok(entry.appliesTo.length > 0, entry.id);
+    // a known difference lists fields, a Location host to replace, or both
+    assert.ok(entry.fields.length > 0 || entry.locationHost, entry.id);
+  }
+  // the parent's file names rows of the parent's corpus only
+  assert.throws(() => loadKnownDifferences(followup), /not a corpus request/);
+  assert.throws(
+    () => loadKnownDifferences(corpus, "followup-known-differences.json"),
+    /not a corpus request/,
+  );
 });

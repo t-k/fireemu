@@ -466,6 +466,24 @@ fn configuration_help_describes_show_and_reference() {
     for flag in ["--config", "--firebase-json", "--json"] {
         assert!(text.contains(flag), "{flag}");
     }
+    // The same page documents `config lint`: its synopsis, its flags and what it does.
+    for phrase in [
+        "fireemu config lint [--config <path>]",
+        "--deny-ineffective",
+        "--allow <key>",
+        "--allow-file",
+        "accepts but does not read",
+        "exits 1",
+    ] {
+        assert!(text.contains(phrase), "{phrase}: {text}");
+    }
+    let overall = stdout(&run(&["--help"]));
+    assert!(
+        overall
+            .lines()
+            .any(|line| line.contains("config ") && line.contains("lint")),
+        "{overall}"
+    );
     // It reflects the configuration files and defaults, not the command-line overrides of `up`.
     assert!(!text.contains("exactly as up does"), "{text}");
     assert!(

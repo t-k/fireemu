@@ -28,7 +28,7 @@ test("the record is the verified Hosting parent with its review, and the corpus 
   assert.match(review.decidedOn, /^\d{4}-\d{2}-\d{2}$/);
   assert.match(review.decisionRef, /owner ledger 2435, 2458; coordinator rulings 11-26/);
   assert.match(review.reviewedCommit, /^[0-9a-f]{40}$/);
-  assert.equal(review.reviews.length, 3);
+  assert.equal(review.reviews.length, 4);
   for (const entry of review.reviews.slice(0, 2)) {
     assert.match(entry.reportPath, /^docs\.local\/reviews\/2026-11-11-hosting-parent-closure-/);
     assert.match(entry.reportSha256, /^[0-9a-f]{64}$/);
@@ -43,10 +43,23 @@ test("the record is the verified Hosting parent with its review, and the corpus 
   assert.equal(review.reviews[2].outcome, "APPROVED");
   // strict gzip is built (owner ledger 2458): no follow-up asks for flate2 any more, and the
   // gzip probes are named for the next idp packet (the only follow-up that names gzip)
+  // the fourth review read the gzip branch; the commit it names is the one it read
+  const gzipReview = review.reviews[3];
+  assert.equal(gzipReview.reportPath, "docs.local/reviews/2026-11-11-hosting-gzip-delta-review.md");
+  assert.match(gzipReview.reportSha256, /^[0-9a-f]{64}$/);
+  assert.equal(gzipReview.reviewedCommit, "234f8c208760339cc7d4da3fc903df8db6552fa4");
+  assert.equal(gzipReview.outcome, "MERGE-AFTER-FIXES");
+  assert.match(gzipReview.scope, /KD-COMPRESSION narrowed to the four Brotli rows/);
+  assert.equal(
+    review.reviewedCommit,
+    "7c1a191fc5e40ff172f3c27bc16403a3c8a1ad6e",
+    "the promotion review commit stays",
+  );
+  assert.equal(review.decision, "APPROVED");
   assert.deepEqual(
     record.followUps.filter((text) => /gzip|flate2/.test(text)),
     [
-      "Next idp packet: probe gzip beyond the corpus file: a small text file (the size below which production does not compress), text/html and image/svg+xml, a file with no known extension, a Range request with Accept-Encoding: gzip, Accept-Encoding: * and x-gzip, so that the types and sizes strict compresses are observed (strict gzip itself is built, owner ledger 2458; Brotli stays a declared difference).",
+      "Next idp packet: probe gzip beyond the corpus file: a small text file (the size below which production does not compress), text/html and image/svg+xml, a file with no known extension, a Range request with Accept-Encoding: gzip, Accept-Encoding: * and x-gzip, a precompressed file (a `*.br` or `*.gz` file with a headers rule that sets Content-Encoding), so that the types and sizes strict compresses are observed (strict gzip itself is built, owner ledger 2458; Brotli stays a declared difference).",
     ],
   );
   assert.deepEqual(record.recordingPolicy, { observedPasses: 2, requiredPasses: 2, waiver: null });
@@ -280,7 +293,15 @@ test("KD-COMPRESSION is Brotli only: the gzip rows are compared, match in both s
     }
   }
   const limits = record.limitations.join("\n");
-  for (const text of ["Gzip: strict answers", "miniz_oxide", "32 MiB", "x-gzip"]) {
+  for (const text of [
+    "Gzip: strict answers",
+    "miniz_oxide",
+    "32 MiB",
+    "x-gzip",
+    "headers rule sets Content-Encoding",
+    "precompressed `*.br` file",
+    "every Accept-Encoding line",
+  ]) {
     assert.ok(limits.includes(text), text);
   }
 });

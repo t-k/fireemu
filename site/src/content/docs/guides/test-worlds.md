@@ -54,7 +54,7 @@ Two shapes to know about:
 - `bundle.json` is the parsed answer of the control endpoint, written back out with `JSON.stringify(…, null, 2)`. It is the same data, not the raw response bytes; the test world's control client does not expose the raw bytes.
 - The control endpoint answers the HTML page inside a JSON object, `{"html": "…"}`, because the control client parses only JSON answers. `bundle.html` is that `html` field written as a file.
 
-The bundle contains no secrets: configuration values that carry them are redacted, and the scanner masks credential shapes such as bearer tokens and private-key blocks. The config section of the bundle is filled by the command-line dump, which is not part of this release yet; `world.dump` leaves it empty.
+The bundle contains no secrets: configuration values that carry them are redacted, and the scanner masks credential shapes such as bearer tokens and private-key blocks. The config section of the bundle is filled by the command-line dump (`fireemu dump`, and `fireemu exec --dump-on-failure`); `world.dump` leaves it empty.
 
 ## Export and import
 

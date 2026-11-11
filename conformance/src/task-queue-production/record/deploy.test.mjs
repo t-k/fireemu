@@ -15,6 +15,7 @@ import {
   inventoryDifferences,
   nonePresent,
   prepareSource,
+  repositoryDifferences,
   sdkVersionProblems,
   sourceProblems,
   summarize,
@@ -355,4 +356,20 @@ test("a function is active only with its Cloud Run service, and only a build of 
       [],
       role,
     );
+});
+
+test("the repository policy is compared as read: a change, an unread side and no change", () => {
+  const policy = { cleanupPolicies: { keep: { id: "keep" } }, cleanupPolicyDryRun: null };
+  assert.deepEqual(repositoryDifferences(policy, structuredClone(policy)), {
+    complete: true,
+    differences: [],
+  });
+  const changed = { ...policy, cleanupPolicies: { keep: { id: "keep" }, extra: { id: "extra" } } };
+  assert.deepEqual(repositoryDifferences(policy, changed), {
+    complete: true,
+    differences: [{ kind: "repository", before: policy, after: changed }],
+  });
+  assert.equal(repositoryDifferences(policy, null).complete, false);
+  assert.equal(repositoryDifferences(undefined, policy).complete, false);
+  assert.equal(repositoryDifferences(null, null).complete, false);
 });

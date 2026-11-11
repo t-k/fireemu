@@ -230,6 +230,10 @@ test("record needs --send and the approved digest; with both it runs once and ex
   });
   assert.equal(code, 0);
   assert.equal(calls.filter((c) => c[0] === "record").length, 1);
+  // The summary says whether the observation is complete, not only whether the run may close.
+  const summary = JSON.parse(io.lines.out.at(-1));
+  assert.equal(summary.closureReady, true);
+  assert.ok("observationComplete" in summary && "findings" in summary);
   const runId = calls.find((c) => c[0] === "record")[1];
   assert.equal(
     calls.find((c) => c[0] === "prepareSource")[1].runId,
@@ -449,6 +453,150 @@ test("a journal write that makes no progress is an error, and a short write is c
     return n;
   });
   assert.equal(written.join(""), "abcdef");
-  assert.throws(() => writeAll(1, "abc", () => 0), /no progress/);
+  let calls = 0;
+  assert.throws(
+    () =>
+      writeAll(1, "abc", () => {
+        // A loop that never ends would hang the run: the stand-in gives up after a hundred calls and says so.
+        if (++calls > 100) throw new Error("looped");
+        return 0;
+      }),
+    /no progress/,
+  );
+  assert.equal(calls, 1);
   mkdirSync(tempDir("tq-x-"), { recursive: true });
+});
+
+test("the packet is these files in this order: a reordered list is another packet", () => {
+  assert.deepEqual(PACKET_FILES, [
+    "src/task-queue-production/plan.mjs",
+    "src/task-queue-production/corpus.mjs",
+    "src/task-queue-production/record/guard.mjs",
+    "src/task-queue-production/record/logs.mjs",
+    "src/task-queue-production/record/judge.mjs",
+    "src/task-queue-production/record/deploy.mjs",
+    "src/task-queue-production/record/run.mjs",
+    "src/task-queue-production/record/readback.mjs",
+    "src/task-queue-production/record/main.mjs",
+    "src/task-queue-production/record/bin.mjs",
+    "scheduled-delivery/capture.mjs",
+    "scheduled-delivery/record/deploy.mjs",
+    "scheduled-delivery/record/plan.mjs",
+    "scheduled-delivery/record/token.mjs",
+    "task-queue-functions/functions/index.js",
+    "task-queue-functions/functions/package.json",
+    "task-queue-functions/functions/suffix.json",
+    "task-queue-functions/firebase.json",
+  ]);
+});
+
+test("a read-back with a wrong digest or no --send sends nothing, even when its run is ready to be read", async () => {
+  const dir = tempDir("tq-main-");
+  const runId = "0123456789abcdef";
+  const world = createWorld({ runId });
+  const stamp = Date.parse("2026-11-11T01:00:00Z");
+  writeFileSync(
+    join(dir, `journal-${runId}.jsonl`),
+    JSON.stringify({ dispatchAt: new Date(stamp).toISOString() }) + "\n",
+  );
+  writeFileSync(join(dir, `result-${runId}.json`), JSON.stringify({ unconfirmedCreates: [] }));
+  const base = ["readback", "--run-dir", dir, "--project-number", NUMBER, "--run-id", runId];
+  for (const extra of [
+    ["--send"],
+    ["--send", "--expect-digest", "wrong"],
+    ["--expect-digest", "d"],
+  ]) {
+    const io = capture();
+    const code = await main([...base, ...extra], {
+      env: { HOME: "/h" },
+      deps: { ...okDeps(world), now: () => stamp + 3_600_000 },
+      out: io.out,
+      err: io.err,
+      digest: "d",
+    });
+    assert.equal(code, 2, extra.join(" "));
+    assert.match(io.lines.err.at(-1), /readback needs --send and the approved --expect-digest/);
+  }
+  assert.deepEqual(world.calls, []);
+  const bad = await main(
+    [
+      "readback",
+      "--run-dir",
+      dir,
+      "--project-number",
+      "12",
+      "--run-id",
+      runId,
+      "--send",
+      "--expect-digest",
+      "d",
+    ],
+    { env: { HOME: "/h" }, deps: okDeps(world), out: () => {}, err: () => {}, digest: "d" },
+  );
+  assert.equal(bad, 2, "the project number is twelve or thirteen digits");
+});
+
+test("a read-back that finds a name still there exits 3, and one that finds none exits 0", async () => {
+  const dir = tempDir("tq-main-");
+  const runId = "0123456789abcdef";
+  const stamp = Date.parse("2026-11-11T01:00:00Z");
+  writeFileSync(
+    join(dir, `journal-${runId}.jsonl`),
+    JSON.stringify({ dispatchAt: new Date(stamp).toISOString() }) + "\n",
+  );
+  writeFileSync(
+    join(dir, `result-${runId}.json`),
+    JSON.stringify({ unconfirmedCreates: [], inventory: { before: {} }, cleanup: {} }),
+  );
+  const args = [
+    "readback",
+    "--run-dir",
+    dir,
+    "--project-number",
+    NUMBER,
+    "--run-id",
+    runId,
+    "--send",
+    "--expect-digest",
+    "d",
+  ];
+  let n = 0;
+  const run = async (readback) => {
+    const io = capture();
+    const code = await main(args, {
+      env: { HOME: "/h" },
+      deps: { ...okDeps(), readback, now: () => stamp + 3_600_000 + ++n },
+      out: io.out,
+      err: io.err,
+      digest: "d",
+    });
+    return code;
+  };
+  assert.equal(
+    await run(async () => ({ allAbsent: false, attempted: 1, unknown: 0, inventory: null })),
+    3,
+  );
+  assert.equal(
+    await run(async () => ({ allAbsent: true, attempted: 1, unknown: 0, inventory: null })),
+    0,
+  );
+});
+
+test("the first signal asks for a stop at the next request and the second only reminds", async () => {
+  const dir = tempDir("tq-main-");
+  const io = capture();
+  let handler;
+  const deps = { ...okDeps(), signals: (h) => (handler = h) };
+  await main(argv("record", dir, ["--send", "--expect-digest", "d"]), {
+    env: { HOME: "/h" },
+    deps,
+    out: io.out,
+    err: io.err,
+    digest: "d",
+  });
+  io.lines.err.length = 0;
+  handler("SIGINT");
+  handler("SIGTERM");
+  assert.match(io.lines.err[0], /SIGINT: stopping at the next request/);
+  assert.match(io.lines.err[1], /SIGTERM: a stop is already under way/);
 });

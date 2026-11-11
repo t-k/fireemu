@@ -15,6 +15,7 @@ import {
   sourceBuckets,
 } from "../plan.mjs";
 import { RUN, count, go } from "./harness.mjs";
+import { readbackRun } from "./readback.mjs";
 import { NUMBER, reply } from "./world.mjs";
 
 const error = (code, status, message = "x") => reply(code, { error: { code, message, status } });
@@ -258,4 +259,235 @@ test("the readiness polls of a failed deploy are two, and of a good deploy up to
   );
   assert.equal(polls.length, 2);
   assert.equal(queueName("x").length > 0, true);
+});
+
+// ---- the cleanup's checks that each stand alone ----------------------------------------------------------------
+
+test("a function that is still in the list after its delete, though a direct read says 404, is not verified", async () => {
+  const left = functionOfRole(RUN, "tqlimit");
+  const path = `cloudfunctions.googleapis.com/v2/${functionName(left)}`;
+  const { result } = await go({
+    leaveOnDelete: [left],
+    hooks: {
+      [`DELETE ${path}`]: () =>
+        reply(200, { name: `projects/${PROJECT}/locations/${REGION}/operations/x`, done: true }),
+      [`GET ${path}`]: ({ w }) =>
+        w.cliRuns.includes("delete") ? error(404, "NOT_FOUND") : undefined,
+    },
+  });
+  assert.equal(result.cleanup.readBack["function-" + left], true, "the direct read says absent");
+  assert.equal(result.cleanup.functionsGone, false);
+  assert.equal(result.cleanup.listsEmpty, false);
+  assert.equal(result.cleanup.verified, false);
+});
+
+test("a queue that reads 200 after the cleanup is not verified even when the lists show it gone", async () => {
+  const victim = functionOfRole(RUN, "tqrate");
+  const { result } = await go({
+    hooks: {
+      [`GET ${queueUrl("tqrate")}`]: ({ w }) =>
+        w.cliRuns.includes("delete") ? reply(200, { name: queueName(victim) }) : undefined,
+    },
+  });
+  assert.equal(result.cleanup.listsEmpty, true);
+  assert.equal(result.cleanup.readBack["queue-" + victim], false);
+  assert.equal(result.cleanup.verified, false);
+});
+
+test("a function this run deleted through REST is not reported as vanished, the others the CLI delete did not vouch for are", async () => {
+  const left = functionOfRole(RUN, "tqlimit");
+  const { result } = await go({ leaveOnDelete: [left] }, {}, undefined, (runCli) => async (o) => {
+    const out = await runCli(o);
+    return o.action === "delete" ? { ...out, timedOut: true } : out;
+  });
+  const labels = result.vanishedAfterCreate.map((v) => v.label);
+  assert.ok(!labels.includes("function-" + left), "its own 2xx delete explains it");
+  assert.ok(labels.includes("function-" + functionOfRole(RUN, "tqdef")));
+});
+
+test("the answers of the program are kept in the judged record with their bodies", async () => {
+  const { result } = await go();
+  const answer = result.judged.cases["env-named"].answer;
+  assert.equal(answer.status, 200);
+  assert.match(answer.json.name, /\/tasks\/tqrun-/);
+  assert.ok(answer.bodyBytes > 0);
+  assert.equal(result.program["env-named"].answer.json.name, answer.json.name);
+});
+
+test("a delivery seen late keeps the wait going: a start counts, an end frame does not", async () => {
+  let logPosts = 0;
+  const { journal } = await go({}, {}, (send) => async (request) => {
+    const answer = await send(request);
+    if (request.url.includes("logging.googleapis.com")) {
+      logPosts += 1;
+      // The third log request is the first poll of the observation (the preflight made two): the last three attempts of the
+      // ladder are not in it yet.
+      if (logPosts === 3) {
+        const json = await answer.json();
+        json.entries = (json.entries ?? []).filter(
+          (e) =>
+            !(
+              e.textPayload.includes('"case":"retry-ladder"') &&
+              /"retryCount":[345]/.test(e.textPayload)
+            ),
+        );
+        return reply(200, json);
+      }
+    }
+    return answer;
+  });
+  const polls = journal.filter(
+    (r) => /^logs-observe-\d+-frames$/.test(r.id) && r.state === "before-send",
+  );
+  assert.ok(polls.length >= 2, "polled again for the missing attempts");
+});
+
+// ---- the read-back ---------------------------------------------------------------------------------------------
+
+const readback = async (world, result, extra = {}) =>
+  readbackRun({
+    runId: RUN,
+    projectNumber: NUMBER,
+    accessToken: "test-token-abcdefgh",
+    save: async () => {},
+    send: world.send,
+    clock: () => world.now,
+    baseline: result.inventory.before,
+    uploadObjects: result.cleanup.uploadObjectsDeleted,
+    ...extra,
+  });
+
+test("a read-back finds a queue in the list though its direct read says 404: not all absent", async () => {
+  const { world, result } = await go();
+  const fn = functionOfRole(RUN, "tqdef");
+  world.queues.set(fn, { name: queueName(fn) });
+  const wrapped = {
+    ...world,
+    send: async (request) =>
+      request.method === "GET" && request.url.endsWith("/queues/" + fn)
+        ? error(404, "NOT_FOUND")
+        : world.send(request),
+  };
+  const out = await readback(wrapped, result);
+  assert.deepEqual(out.lists.queues, [fn]);
+  assert.equal(out.names["queue-" + fn].absent, true);
+  assert.equal(out.allAbsent, false);
+});
+
+test("a read-back finds a queue that is not the run's and was not there before: the inventory differs", async () => {
+  const { world, result } = await go();
+  world.queues.set("somebody-elses-queue", { name: queueName("somebody-elses-queue") });
+  const out = await readback(world, result);
+  assert.deepEqual(out.lists.queues, []);
+  assert.ok(out.inventory.differences.some((d) => d.kind === "queues" && d.added.length === 1));
+  assert.equal(out.allAbsent, false);
+});
+
+// ---- what the preflight and the repository check each stand for -------------------------------------------------
+
+test("a Cloud Run service of the fixture with no function behind it stops the run, and so does an unlabelled function with a fixture id", async () => {
+  const service = await go({ seedServices: ["tqdef999999"] });
+  assert.equal(service.result.stoppedBecause, "codebase-not-empty");
+  assert.ok(service.result.strayFixture.includes("service:tqdef999999"));
+  const unlabelled = await go({ seedUnlabeledFunctions: ["tqrate999999"] });
+  assert.equal(unlabelled.result.stoppedBecause, "codebase-not-empty");
+  assert.ok(unlabelled.result.strayFixture.includes("function:tqrate999999"));
+});
+
+test("an image repository with an empty policy map has no policy, and one that cannot be read stops the run as a list", async () => {
+  const empty = await go({ repositoryPolicies: {} });
+  assert.equal(empty.result.stoppedBecause, "artifact-cleanup-policy");
+  const repo = `GET artifactregistry.googleapis.com/v1/projects/${PROJECT}/locations/${REGION}/repositories/gcf-artifacts`;
+  const unreadable = await go({ hooks: { [repo]: () => error(500, "INTERNAL") } });
+  assert.equal(unreadable.result.stoppedBecause, "lists");
+  assert.deepEqual(unreadable.world.cliRuns, []);
+});
+
+test("an image repository that cannot be read after the run leaves the inventory incomplete and the cleanup unverified", async () => {
+  const repo = `GET artifactregistry.googleapis.com/v1/projects/${PROJECT}/locations/${REGION}/repositories/gcf-artifacts`;
+  const { result } = await go({
+    hooks: {
+      [repo]: ({ w }) => (w.cliRuns.includes("delete") ? error(404, "NOT_FOUND") : undefined),
+    },
+  });
+  assert.equal(result.inventory.complete, false);
+  assert.equal(result.cleanup.verified, false);
+});
+
+test("a read that gets no answer in a step that does not stand in the cleanup's checks still blocks the closure", async () => {
+  const { result } = await go({
+    hooks: {
+      "POST logging.googleapis.com/v2/entries:list": ({ w }) =>
+        w.cliRuns.includes("delete") ? error(500, "INTERNAL") : undefined,
+    },
+  });
+  assert.equal(
+    result.cleanup.verified,
+    true,
+    "the final log read is not part of the cleanup's verification",
+  );
+  assert.ok(result.incompleteReads.length > 0);
+  assert.equal(result.closureReady, false);
+});
+
+test("an unknown answer to a read of a task does not stop the later steps on that id; an unknown answer to a write does", async () => {
+  let hit = false;
+  const { result } = await go({
+    hooks: {
+      [`GET ${queueUrl("tqdef")}/tasks/tqrun-${RUN}-dup-sched`]: () => {
+        if (hit) return undefined;
+        hit = true;
+        return error(503, "UNAVAILABLE");
+      },
+    },
+  });
+  assert.equal(result.program["get-dup-sched"].class, "unknown-status");
+  assert.equal(result.program["del-dup-sched"].sent, true, "a read does not block the id");
+});
+
+test("a CLI action that times out is an unknown mutation of its own class", async () => {
+  const { result } = await go({}, {}, undefined, (runCli) => async (o) => {
+    const out = await runCli(o);
+    return o.action === "deploy" ? { ...out, timedOut: true } : out;
+  });
+  assert.ok(
+    result.unknownMutationList.some((m) => m.id === "cli-deploy" && m.class === "cli-timeout"),
+  );
+  assert.equal(result.closureReady, false);
+});
+
+test("a deploy PUT that was answered 5xx leaves an object unconfirmed: it is an open create", async () => {
+  const { result } = await go({ uploadLines: "unanswered" });
+  assert.ok(result.cleanup.uploadReasons.some((r) => r.startsWith("receipt-unconfirmed:")));
+  assert.ok(
+    result.unconfirmedCreates.some(
+      (c) => c.label === "upload-object" && c.class === "receipt-unconfirmed",
+    ),
+  );
+  assert.equal(result.closureReady, false);
+});
+
+test("a read-back finds a name that reads 200 while every list is empty: not all absent", async () => {
+  const { world, result } = await go();
+  const fn = functionOfRole(RUN, "tqdef");
+  const wrapped = {
+    ...world,
+    send: async (request) =>
+      request.method === "GET" && request.url.endsWith("/queues/" + fn)
+        ? reply(200, { name: queueName(fn) })
+        : world.send(request),
+  };
+  const out = await readback(wrapped, result);
+  assert.deepEqual(out.lists.queues, []);
+  assert.equal(out.names["queue-" + fn].absent, false);
+  assert.equal(out.allAbsent, false);
+});
+
+test("a queue that was in the project before the run and still is does not keep the read-back from closing", async () => {
+  const { world, result } = await go({ seedQueues: ["tqother123456"] });
+  assert.ok(result.inventory.before.queues.some((q) => q.endsWith("/tqother123456")));
+  const out = await readback(world, result);
+  assert.deepEqual(out.lists.queues, []);
+  assert.deepEqual(out.inventory.differences, []);
+  assert.equal(out.allAbsent, true);
 });

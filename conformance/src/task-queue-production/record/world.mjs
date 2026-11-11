@@ -114,6 +114,8 @@ export function createWorld({
   seedQueues = [],
   seedChannels = [],
   seedFunctions = [],
+  seedUnlabeledFunctions = [],
+  seedServices = [],
   seedPackages = [],
   repositoryPolicies = { "keep-recent": { id: "keep-recent" } },
   uploadName = null,
@@ -166,6 +168,15 @@ export function createWorld({
     });
     w.runServices.add(id);
   }
+  for (const id of seedUnlabeledFunctions) {
+    w.functions.set(functionName(id), {
+      name: functionName(id),
+      state: "ACTIVE",
+      serviceConfig: { uri: uriOf(id), serviceAccountEmail: SERVICE_ACCOUNT },
+    });
+    w.runServices.add(id);
+  }
+  for (const id of seedServices) w.runServices.add(id);
   for (const id of seedPackages) w.packages.add(id);
   w.repository = { cleanupPolicies: structuredClone(repositoryPolicies) };
   const log = (entry) => w.entries.push({ insertId: "w" + ++w.insert, ...entry });
@@ -308,7 +319,7 @@ export function createWorld({
         w.upload =
           uploadName ??
           "514cacbe-3258-46fd-9a02-54b7485b" + String(++w.insert).padStart(4, "0") + ".zip";
-        if (uploadLines !== "refused") {
+        if (uploadLines !== "refused" && uploadLines !== "unanswered") {
           if (!items.includes(w.upload)) items.push(w.upload);
           w.generations.set(name + "/" + w.upload, String(1760000000000000 + w.insert));
         }
@@ -358,7 +369,7 @@ export function createWorld({
               type: "put-status",
               bucket,
               object: w.upload,
-              status: uploadLines === "refused" ? 403 : 200,
+              status: uploadLines === "refused" ? 403 : uploadLines === "unanswered" ? 503 : 200,
             },
             ...(uploadLines === "extra"
               ? [{ type: "receipt", bucket, object: "99999999-0000-0000-0000-000000000000.zip" }]

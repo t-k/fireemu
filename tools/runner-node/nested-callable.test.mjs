@@ -164,3 +164,15 @@ test("property: the wrapper never sees a Bearer the daemon did not verify", () =
     }
   }
 });
+
+test("a request without headers, or with raw headers that are not a list, is neither refused nor changed", () => {
+  const bare = { method: "POST" };
+  assert.equal(markNonCallableRequest(bare, plain), true);
+  assert.equal(requestForCallableWrapper(bare), bare);
+  assert.equal(markNonCallableRequest({}, { strict: false, nonCallableHttp: true }), false);
+  for (const rawHeaders of ["x-fireemu-credential-verified: 1", { length: 2 }, 7, null]) {
+    const req = { headers: {}, rawHeaders };
+    markNonCallableRequest(req, plain);
+    assert.equal(req.rawHeaders, rawHeaders);
+  }
+});

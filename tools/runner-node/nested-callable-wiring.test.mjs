@@ -24,7 +24,7 @@ function fakeSdk(root) {
   writeFileSync(join(pkg, "index.js"), "module.exports = {};\n");
   writeFileSync(
     join(pkg, "lib/common/providers/https.js"),
-    `exports.onCallHandler = (options, handler, version) => (req, res) => handler(req, res);
+    `exports.onCallHandler = (options, handler, version) => options.notAFunction ?? ((req, res) => handler(req, res));
 exports.unsafeDecodeAppCheckToken = () => ({});
 exports.CALLABLE_AUTH_HEADER = "X-Callable-Context-Auth";
 exports.ORIGINAL_AUTH_HEADER = "X-Original-Auth";
@@ -57,6 +57,8 @@ const onInit = require(join(pkg, "lib/common/onInit.js"));
 const seen = [];
 const handler = (req) => { seen.push(req.header("authorization") ?? null); return "ok"; };
 const built = https.onCallHandler({ enforceAppCheck: true, consumeAppCheckToken: true }, handler, "gcfv2");
+const notAFunction = { marker: 1 };
+const passedThrough = https.onCallHandler({ notAFunction }, handler, "gcfv2");
 const request = (headers) => ({ headers: { ...headers }, rawHeaders: [], header(n) { return this.headers[n.toLowerCase()]; } });
 const plain = { strict: true, nonCallableHttp: true };
 const nested = request({ authorization: "Bearer forged" });
@@ -74,6 +76,7 @@ console.log(JSON.stringify({
   options: status.optionsOf(built) ?? null,
   carried: status.optionsOf(wrapped) ?? null,
   sameFunction: built === wrapped,
+  notAFunctionKept: passedThrough === notAFunction,
 }));
 `;
 
@@ -95,6 +98,7 @@ test("the CommonJS hook hands the guarded wrapper back, keeps its observed optio
     assert.deepEqual(out.options, options);
     assert.deepEqual(out.carried, options);
     assert.equal(out.sameFunction, false);
+    assert.equal(out.notAFunctionKept, true, "a value that is not a function is handed back as it is");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

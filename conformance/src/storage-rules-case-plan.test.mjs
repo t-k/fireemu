@@ -246,3 +246,145 @@ describe("buildPlan keeps the s9 family exactly as it was", () => {
     );
   });
 });
+
+describe("the case family tables in detail", () => {
+  it("names each object by its row: x for a literal row, the character for the others", () => {
+    for (const row of CASE_ROWS) {
+      const leaf = row.kind === "literal" ? "x" : row.objectName;
+      assert.equal(CASE_PLAN.objectName(row.object, P), `${P}/${row.id}/${leaf}`, row.id);
+    }
+    assert.equal(CASE_PLAN.objectName("mkA", P), `${P}/mk/a`);
+  });
+
+  it("gives controls the group ctl and nobody else, and every row one of four relations", () => {
+    for (const row of CASE_ROWS) {
+      assert.equal(row.group === "ctl", row.control, row.id);
+      assert.equal(row.control, row.id.startsWith("ctl-"), row.id);
+      assert.ok(["eq", "size", "same", "differs"].includes(row.rel), `${row.id} ${row.rel}`);
+    }
+    assert.deepEqual(
+      [...new Set(CASE_ROWS.map((r) => r.group))],
+      [
+        "ctl",
+        "acute",
+        "sharp",
+        "capsharp",
+        "dotted",
+        "dotless",
+        "sigma",
+        "alpha",
+        "comb",
+        "emoji",
+        "fullwidth",
+        "rt-lower",
+        "rt-sharp",
+        "rt-res",
+      ],
+    );
+    assert.deepEqual(
+      Object.fromEntries(
+        Object.entries(Object.groupBy(CASE_ROWS, (r) => r.group)).map(([k, v]) => [k, v.length]),
+      ),
+      {
+        ctl: 7,
+        acute: 4,
+        sharp: 2,
+        capsharp: 2,
+        dotted: 3,
+        dotless: 2,
+        sigma: 3,
+        alpha: 2,
+        comb: 2,
+        emoji: 3,
+        fullwidth: 3,
+        "rt-lower": 2,
+        "rt-sharp": 2,
+        "rt-res": 2,
+      },
+    );
+  });
+
+  it("uses the relation of each kind: size for the counted rows, same and differs for resource.name", () => {
+    const rel = Object.fromEntries(CASE_ROWS.map((r) => [r.id, r.rel]));
+    for (const id of [
+      "ctl-size-nonascii",
+      "ctl-size-emoji",
+      "dotted-lower-full",
+      "emoji-lower-size",
+    ])
+      assert.equal(rel[id], "size", id);
+    assert.equal(rel["rt-res-lower-same"], "same");
+    assert.equal(rel["rt-res-lower-differs"], "differs");
+    assert.equal(CASE_ROWS.filter((r) => r.rel === "eq").length, CASE_ROWS.length - 6);
+  });
+
+  it("stores the marker as a, every other object as its row id, and states its price and local bucket", () => {
+    assert.equal(CASE_PLAN.objects.mkA.body, "a");
+    for (const row of CASE_ROWS) assert.equal(CASE_PLAN.objects[row.object].body, row.id);
+    assert.equal(CASE_PLAN.estimatedUsd, 0.05);
+    assert.equal(CASE_PLAN.localBucket, "demo-storage-case.appspot.com");
+  });
+
+  it("predicts a row that applies no function by the text alone, under every candidate", () => {
+    const plain = { kind: "literal", fn: null, input: "abc", rel: "eq", operand: "abc" };
+    const sized = { kind: "literal", fn: null, input: "ab", rel: "size", operand: 2 };
+    for (const candidate of CANDIDATES) {
+      assert.equal(predictRow(plain, candidate), true, candidate);
+      assert.equal(predictRow(sized, candidate), true, candidate);
+    }
+  });
+
+  it("agrees with the reference on a mapping the rows do not reach: every code point, both functions", () => {
+    for (let point = 0; point < 0x2fff; point += 1) {
+      if (point >= 0xd800 && point <= 0xdfff) continue;
+      const text = String.fromCodePoint(point);
+      for (const fn of ["lower", "upper"])
+        for (const candidate of CANDIDATES) {
+          const row = {
+            kind: "literal",
+            fn,
+            input: text,
+            rel: "eq",
+            operand: MAPS[candidate](text, fn),
+          };
+          assert.equal(
+            predictRow(row, candidate),
+            true,
+            `${point.toString(16)} ${fn} ${candidate}`,
+          );
+          const other = { ...row, operand: `${row.operand}.` };
+          assert.equal(predictRow(other, candidate), false);
+        }
+    }
+  });
+
+  it("states the cap of a recovery as the cleanup of a full run plus twenty", () => {
+    assert.equal(CASE_PLAN.recoveryCap(2), CASE_PLAN.staticBounds(2).cleanup + 20);
+    assert.equal(CASE_PLAN.recoveryCap(1), CASE_PLAN.staticBounds(1).cleanup + 20);
+    assert.equal(CASE_PLAN.recoveryCap(), CASE_PLAN.recoveryCap(2));
+    assert.equal(S9_PLAN.recoveryCap(2), S9_PLAN.staticBounds(2).cleanup + 20);
+  });
+});
+
+describe("buildPlan refuses a program whose object does not exist", () => {
+  it("names the object", () => {
+    const base = {
+      id: "t",
+      taskId: "T",
+      prefixRoot: "t",
+      estimatedUsd: 0.01,
+      localBucket: "demo-t.appspot.com",
+      objects: { mk: { name: (p) => `${p}/mk`, body: "m" } },
+      loadOnly: [],
+      rows: [],
+    };
+    assert.throws(
+      () =>
+        buildPlan({
+          ...base,
+          programs: [{ id: "p", marker: "mk", objects: ["mk", "gone"], source: () => "x" }],
+        }),
+      /program p: unknown object gone/,
+    );
+  });
+});

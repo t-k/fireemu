@@ -320,6 +320,9 @@ export function buildPlan({
     return preflight + perRecording * recordings + cleanup;
   }
 
+  /** The cap of a recovery: the cleanup of a run that created everything, with a margin of twenty. */
+  const recoveryCap = (recordings = RECORDINGS) => staticBounds(recordings).cleanup + 20;
+
   /** The cap of the A2 read-back: the two lists, the release and ruleset reads, every name once. */
   const readbackCap = (recordings = RECORDINGS) => objectCount * recordings + 16;
 
@@ -342,6 +345,7 @@ export function buildPlan({
     staticBounds,
     expectedRequests,
     readbackCap,
+    recoveryCap,
   });
 }
 

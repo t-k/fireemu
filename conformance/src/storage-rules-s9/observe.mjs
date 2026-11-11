@@ -71,10 +71,10 @@ export async function observe({
   if (production) validateBaseline(baseline, target.project);
   if (recover !== null && !production) throw new Error("a recovery runs against production only");
   const bounds = plan.staticBounds(recordings);
-  const recoveryCap = bounds.cleanup + 20;
+  const recoveryCap = recover ? plan.recoveryCap(recordings) : null;
   const budget = new RequestBudget(
-    caps?.main ?? (recover ? recoveryCap : bounds.main),
-    caps?.total ?? (recover ? recoveryCap : bounds.total),
+    caps?.main ?? recoveryCap ?? bounds.main,
+    caps?.total ?? recoveryCap ?? bounds.total,
   );
   const reportingErrors = [];
   const noteReportingError = (text) => {

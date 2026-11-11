@@ -9,7 +9,7 @@ import { after, describe, it } from "node:test";
 import { observe } from "./storage-rules-s9/observe.mjs";
 import { BUCKET, PROJECT } from "./storage-rules-s9/plan.mjs";
 import { CASE_PLAN } from "./storage-rules-s9/plan-case.mjs";
-import { newOutDir, ownRulesetsOf, recoverRun } from "./storage-rules-s9/run.mjs";
+import { newOutDir, ownRulesetsOf, recoverOptions, recoverRun } from "./storage-rules-s9/run.mjs";
 import { createWorld } from "./storage-rules-s9/world.fake.mjs";
 
 const scratch = mkdtempSync(join(tmpdir(), "case-recover-"));
@@ -197,6 +197,75 @@ describe("recovering a run that stopped (S9 review SF5)", () => {
   });
 });
 
+describe("the budget and the target of a recovery", () => {
+  it("runs against production only", async () => {
+    const fake = createWorld({
+      plan: CASE_PLAN,
+      project: PROJECT,
+      bucket: BUCKET,
+      baseline: null,
+      lag: 0,
+    });
+    await assert.rejects(
+      observe({
+        plan: CASE_PLAN,
+        target: { name: "local", bucket: CASE_PLAN.localBucket, origin: "http://127.0.0.1:1" },
+        runId,
+        baseline: "local",
+        deps: { net: fake.net, adminHeaders: () => owner, sleep: async () => {} },
+        out: memory(),
+        recover: { entryRulesets: [], ownRulesets: [] },
+      }),
+      /a recovery runs against production only/,
+    );
+    assert.equal(fake.world.calls.length, 0);
+  });
+
+  it("stops at the plan's recovery cap, in the main phase and in the cleanup phase alike", async () => {
+    for (const cap of [1, 4]) {
+      const { fake, entryRulesets, rulesetName } = await deadRun();
+      const small = { ...CASE_PLAN, recoveryCap: () => cap };
+      const before = fake.world.calls.length;
+      const { report } = await observe({
+        plan: small,
+        target,
+        runId,
+        baseline: baselineName,
+        deps: { net: fake.net, adminHeaders: () => owner, sleep: async () => {} },
+        out: memory(),
+        recover: { entryRulesets, ownRulesets: [rulesetName] },
+      });
+      assert.equal(report.requests, cap);
+      assert.equal(fake.world.calls.length - before, cap);
+      assert.equal(report.closureReady, false);
+      assert.ok(
+        report.problems.some((p) => /request budget exhausted/.test(p)),
+        JSON.stringify(report.problems),
+      );
+    }
+  });
+
+  it("records an ordinary run's cap from the plan's bounds, not the recovery's", async () => {
+    const fake = createWorld({
+      plan: CASE_PLAN,
+      project: PROJECT,
+      bucket: BUCKET,
+      baseline: baselineName,
+      lag: 0,
+    });
+    const tight = { ...CASE_PLAN, recoveryCap: () => 1 };
+    const { report } = await observe({
+      plan: tight,
+      target,
+      runId,
+      baseline: baselineName,
+      deps: { net: fake.net, adminHeaders: () => owner, sleep: async () => {} },
+      out: memory(),
+    });
+    assert.equal(report.closureReady, true, JSON.stringify(report.problems));
+  });
+});
+
 describe("the recover command", () => {
   const sourceRun = () => {
     const dir = fresh();
@@ -293,6 +362,84 @@ describe("the recover command", () => {
     assert.equal(seen.locks[0].acquiredAt, "2026-11-12T00:00:00Z");
   });
 
+  it("takes the default lock paths, accepts a clean environment, reads a header without a plan as s9, and passes its collaborators what they need", async () => {
+    const { dir, o } = sourceRun();
+    o.save("run-header.json", { runId, baseline: baselineName });
+    o.save("entry.json", { baseline: baselineName, entryRulesets: [] });
+    const seen = { locks: [], deps: [], observer: [], egress: [], gcloud: 0 };
+    const final = await recoverRun({
+      dir,
+      exec: (cmd, args) => {
+        if (cmd === "gcloud") seen.gcloud += 1;
+        return gitExec(cmd, args);
+      },
+      env: { PATH: "/bin", HOME: "/h" },
+      guardEgress: (hosts) => seen.egress.push(hosts),
+      pid: 9,
+      now: () => new Date("2026-11-12T01:02:03.456Z"),
+      locks: async (opts, use) => {
+        seen.locks.push(opts);
+        await use({ confirmClosed() {} });
+      },
+      makeDeps: (args) => {
+        seen.deps.push(args);
+        return { made: true };
+      },
+      observer: async (args) => {
+        seen.observer.push(args);
+        return { report: { runId, closureReady: true, rows: [], loads: [] } };
+      },
+      log: quiet,
+    });
+    assert.equal(seen.locks[0].lockDir, "docs.local/runs/sandbox-locks");
+    assert.equal(seen.locks[0].legacyLockPath, "docs.local/runs/sandbox-ledger.jsonl.lock");
+    assert.equal(
+      seen.locks[0].taskId,
+      "STORAGE-RULES-S9",
+      "a header with no plan is the first run's family",
+    );
+    assert.equal(seen.locks[0].pid, 9);
+    assert.equal(seen.locks[0].sourceCommit, "a".repeat(40));
+    assert.deepEqual(seen.egress, [
+      ["storage.googleapis.com", "firebasestorage.googleapis.com", "firebaserules.googleapis.com"],
+    ]);
+    assert.equal(seen.gcloud, 1);
+    assert.equal(seen.deps[0].accessToken, "ya29.t");
+    assert.equal(typeof seen.deps[0].token, "function");
+    assert.ok(seen.deps[0].lease);
+    assert.deepEqual(seen.observer[0].target, {
+      name: "production",
+      bucket: BUCKET,
+      project: PROJECT,
+    });
+    assert.deepEqual(seen.observer[0].deps, { made: true });
+    assert.equal(seen.observer[0].runId, runId);
+    assert.match(final.startedAt, /^2026-11-12T01:02:03\.456Z$/);
+    assert.equal(final.gitSha, "a".repeat(40));
+    assert.equal(final.estimatedUsd, 0.05);
+    assert.ok(readdirSync(dir).includes("recover-2026-11-12T010203456Z"));
+  });
+
+  it("refuses a dirty checkout before it touches anything", async () => {
+    const { dir, o } = sourceRun();
+    o.save("entry.json", { baseline: baselineName, entryRulesets: [] });
+    let touched = 0;
+    await assert.rejects(
+      recoverRun({
+        dir,
+        exec: (cmd, args) => (args.includes("rev-parse") ? `${"a".repeat(40)}\n` : " M x\n"),
+        env: {},
+        guardEgress: () => (touched += 1),
+        locks: async () => (touched += 1),
+        now: () => new Date("2026-11-12T02:00:00.000Z"),
+        log: quiet,
+      }),
+      /uncommitted or untracked/,
+    );
+    assert.equal(touched, 0);
+    assert.ok(!readdirSync(dir).some((f) => f.startsWith("recover-")));
+  });
+
   it("keeps the lock when the recovery did not close, and refuses without an entry list or with ambient credentials", async () => {
     const { dir, o } = sourceRun();
     const common = {
@@ -321,5 +468,28 @@ describe("the recover command", () => {
     );
     const final = await recoverRun({ ...common, now: () => new Date("2026-11-12T00:00:02.000Z") });
     assert.equal(final.closureReady, false);
+  });
+});
+
+describe("the recover command line", () => {
+  it("names the run directory, and the lock paths only when they are given", () => {
+    assert.deepEqual(recoverOptions(["--run-dir", "d"]), { dir: "d" });
+    assert.deepEqual(recoverOptions(["--run-dir", "d", "--lock-dir", "/l"]), {
+      dir: "d",
+      lockDir: "/l",
+    });
+    assert.deepEqual(recoverOptions(["--legacy-lock", "/g", "--run-dir", "d"]), {
+      dir: "d",
+      legacyLock: "/g",
+    });
+    assert.deepEqual(
+      recoverOptions(["--run-dir", "d", "--lock-dir", "/l", "--legacy-lock", "/g"]),
+      {
+        dir: "d",
+        lockDir: "/l",
+        legacyLock: "/g",
+      },
+    );
+    assert.throws(() => recoverOptions(["--lock-dir", "/l"]), /--run-dir is required/);
   });
 });

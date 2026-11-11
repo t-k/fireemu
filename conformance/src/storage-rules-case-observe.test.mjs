@@ -48,6 +48,8 @@ describe("the case family in the fake world", () => {
   it("runs both recordings with one ruleset, leaves the sandbox as it found it, and reads the planned class on every row", async () => {
     const { report, world } = await run();
     assert.equal(report.stopped, null);
+    assert.equal(report.mode, "record");
+    assert.equal(report.plan, "case");
     assert.equal(report.complete, true);
     assert.equal(report.closureReady, true, JSON.stringify(report.problems));
     assert.equal(report.requests, CASE_PLAN.expectedRequests(2));

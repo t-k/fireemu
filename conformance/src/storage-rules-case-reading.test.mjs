@@ -186,3 +186,83 @@ describe("reading a case run against the candidates", () => {
     );
   });
 });
+
+describe("reading details", () => {
+  it("reports the controls as failed in the reading, and ok otherwise", () => {
+    assert.equal(readCase(rowsFor("ascii"), CASE_PLAN).controls, "ok");
+    const failed = readCase(flip(rowsFor("ascii"), "ctl-lower-true"), CASE_PLAN);
+    assert.equal(failed.controls, "failed");
+    assert.deepEqual(failed.failedControls, ["ctl-lower-true"]);
+  });
+
+  it("marks a missing row `missing` in the table and keeps the answers of the others", () => {
+    const rows = rowsFor("ascii").filter((r) => !(r.recording === 2 && r.id === "sigma-final"));
+    const reading = readCase(rows, CASE_PLAN);
+    assert.deepEqual(reading.table.find((r) => r.id === "sigma-final").classes, [
+      "deny",
+      "missing",
+    ]);
+    assert.deepEqual(reading.table.find((r) => r.id === "sigma-same").classes, ["allow", "allow"]);
+    assert.equal(reading.table.length, CASE_ROWS.length);
+  });
+
+  it("says ambiguous when two candidates fit every row, which a plan that cannot tell them apart allows", () => {
+    const rows = ["a", "b"].map((id, index) => ({
+      program: "p",
+      id,
+      control: false,
+      group: "g",
+      candidates: { ascii: true, full: true, simple: index === 0 },
+    }));
+    const plan = { rows };
+    const answers = [1, 2].flatMap((recording) =>
+      rows.map((r) => ({ recording, id: r.id, class: "allow" })),
+    );
+    const reading = readCase(answers, plan);
+    assert.equal(reading.verdict, "ambiguous");
+    assert.equal(reading.perCandidate.ascii.consistent, true);
+    assert.equal(reading.perCandidate.full.consistent, true);
+    assert.equal(reading.perCandidate.simple.consistent, false);
+    const none = readCase(
+      answers.map((a) => ({ ...a, class: "deny" })),
+      plan,
+    );
+    assert.equal(none.verdict, "none");
+  });
+
+  it("prints every line of a reading exactly", () => {
+    const rows = ["ctl-upper-true", "acute-lower-same"].length ? rowsFor("ascii") : [];
+    const broken = set(
+      set(
+        flip(flip(rows, "ctl-lower-true", 1), "acute-lower-same", 2),
+        "sharp-upper-full",
+        "other",
+        1,
+      ),
+      "sigma-final",
+      "deny",
+      1,
+    );
+    const lines = renderReading(readCase(broken, CASE_PLAN)).split("\n");
+    assert.equal(lines[0], "verdict: controls-failed");
+    assert.equal(lines[1], "complete: false; controls: failed (ctl-lower-true)");
+    assert.equal(lines[2], "unread: 1/sharp-upper-full");
+    assert.equal(lines[3], "disagreeing: ctl-lower-true, acute-lower-same");
+    assert.equal(lines[4], "ascii: 2 mismatch(es): ctl-lower-true, acute-lower-same");
+    assert.match(lines[5], /^full: \d+ mismatch\(es\): /);
+    assert.match(lines[6], /^simple: \d+ mismatch\(es\): /);
+    assert.equal(lines[7], "");
+    assert.equal(lines[8], "row\tgroup\tanswers\tascii\tfull\tsimple");
+    assert.equal(lines[9], "ctl-upper-true\tcontrol\tallow,allow\tallow\tallow\tallow");
+    assert.ok(lines.includes("acute-lower-same\tacute\tallow,deny\tallow\tdeny\tdeny"));
+    assert.ok(lines.includes("sharp-upper-full\tsharp\tother,deny\tdeny\tallow\tdeny"));
+    assert.equal(lines.length, 9 + CASE_ROWS.length);
+  });
+
+  it("prints no unread, disagreeing or failed-control line for a clean reading, and `none` for no mismatch", () => {
+    const text = renderReading(readCase(rowsFor("full"), CASE_PLAN));
+    assert.ok(text.startsWith("verdict: full\ncomplete: true; controls: ok\nascii: "));
+    assert.ok(!/unread|disagreeing|failed/.test(text.split("\n\n")[0].replace("ascii: ", "")));
+    assert.match(text, /\nfull: 0 mismatch\(es\)\nsimple: /);
+  });
+});

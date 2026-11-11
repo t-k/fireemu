@@ -91,6 +91,48 @@ describe("storage rules case command line", () => {
     }
   });
 
+  it("reads a one-recording run as complete and separates the runs of a table by a blank line", async () => {
+    const fake = createWorld({
+      plan: CASE_PLAN,
+      project: "demo-storage-case",
+      bucket: CASE_PLAN.localBucket,
+      baseline: null,
+      lag: 0,
+    });
+    const { server, origin } = await serve(fake);
+    const out = join(scratch, "one");
+    try {
+      const child = spawn(
+        process.execPath,
+        [
+          run,
+          "record-local",
+          "--plan",
+          "case",
+          "--origin",
+          origin,
+          "--out",
+          out,
+          "--recordings",
+          "1",
+        ],
+        { env: { PATH: process.env.PATH } },
+      );
+      assert.equal(await new Promise((resolve) => child.on("exit", resolve)), 0);
+      const table = cli(["table", "--plan", "case", "--run", `a=${out}`, "--run", `b=${out}`]);
+      assert.equal(table.status, 0, table.stderr);
+      assert.match(table.stdout, /^== a\nverdict: ascii\ncomplete: true; controls: ok\n/);
+      assert.match(table.stdout, /\n\n== b\nverdict: ascii\n/);
+      assert.ok(
+        table.stdout.includes("\tallow\tallow\tallow\n") ||
+          table.stdout.includes("\tallow\tallow\tallow"),
+      );
+      assert.match(table.stdout, /\nacute-lower-same\tacute\tallow\tallow\tdeny\tdeny\n/);
+    } finally {
+      server.close();
+    }
+  });
+
   it("refuses a row the plan does not have, and knows the case rows", () => {
     assert.match(
       cli([

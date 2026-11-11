@@ -161,6 +161,8 @@ describe("a token that outlives its hour (S9 review SF1)", () => {
     assert.equal(source.get(), "t1");
     now = 39 * 60_000;
     assert.equal(source.get(), "t1");
+    now = 40 * 60_000;
+    assert.equal(source.get(), "t1", "exactly forty minutes old is still fresh");
     now = 40 * 60_000 + 1;
     assert.equal(source.get(), "t2");
     now += 10 * 60_000;

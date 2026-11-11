@@ -475,12 +475,17 @@ async function readbackCommand() {
   return readbackRun({ dir: required("run-dir") });
 }
 
+/** The options of a recovery from the command line; the lock paths only when they are named. */
+export function recoverOptions(argv) {
+  return {
+    dir: required("run-dir", argv),
+    ...(argValue("lock-dir", argv) ? { lockDir: argValue("lock-dir", argv) } : {}),
+    ...(argValue("legacy-lock", argv) ? { legacyLock: argValue("legacy-lock", argv) } : {}),
+  };
+}
+
 async function recoverCommand() {
-  return recoverRun({
-    dir: required("run-dir"),
-    ...(argValue("lock-dir") ? { lockDir: argValue("lock-dir") } : {}),
-    ...(argValue("legacy-lock") ? { legacyLock: argValue("legacy-lock") } : {}),
-  });
+  return recoverRun(recoverOptions(process.argv));
 }
 
 function tableCommand() {

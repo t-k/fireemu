@@ -3291,7 +3291,6 @@ pub(crate) fn default_node() -> Result<Option<DefaultNode>, String> {
                     how,
                 }))
             }
-            Err(error) if key.fireemu_node.is_some() => Err(error),
             Err(error) if error.contains("no Node executable was found") => Ok(None),
             Err(error) => Err(error),
         }

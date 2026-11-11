@@ -913,6 +913,215 @@ fn a_configuration_the_daemon_refuses_fails_the_plan_with_the_same_message() {
     assert_ne!(plan.status.code(), Some(0));
 }
 
+#[test]
+fn the_refusal_names_every_stale_variable_and_agrees_in_number() {
+    let dir = project("denial");
+    let one = run(
+        &dir,
+        &[
+            "up",
+            "--plan",
+            "--deny-inherited-emulator-env",
+            "--only",
+            "firestore",
+        ],
+        &[("PUBSUB_EMULATOR_HOST", "localhost:8085")],
+    );
+    let error = stderr(&one);
+    assert!(error.contains("PUBSUB_EMULATOR_HOST is set in the environment for a service this run does not start (pubsub)"), "{error}");
+    assert!(
+        error.contains("unset it, start the service, or keep it with"),
+        "{error}"
+    );
+
+    let two = run(
+        &dir,
+        &[
+            "up",
+            "--plan",
+            "--deny-inherited-emulator-env",
+            "--only",
+            "firestore",
+        ],
+        &[
+            ("PUBSUB_EMULATOR_HOST", "localhost:8085"),
+            ("CLOUD_TASKS_EMULATOR_HOST", "localhost:9499"),
+            ("FIREBASE_DATABASE_EMULATOR_HOST", "localhost:9000"),
+        ],
+    );
+    let error = stderr(&two);
+    assert!(error.contains("CLOUD_TASKS_EMULATOR_HOST, PUBSUB_EMULATOR_HOST, FIREBASE_DATABASE_EMULATOR_HOST are set in the environment"), "{error}");
+    assert!(
+        error.contains("(database, pubsub, tasks)"),
+        "services are listed once, sorted: {error}"
+    );
+    assert!(
+        error.contains("unset them, start the service, or keep them with"),
+        "{error}"
+    );
+}
+
+#[test]
+fn the_named_databases_have_their_own_rows_and_the_default_one_is_not_listed_twice() {
+    let dir = project("databases");
+    write(
+        &dir,
+        "firebase.json",
+        r#"{"firestore": [
+            {"database": "(default)", "rules": "default.rules", "indexes": "default.json"},
+            {"database": "other", "rules": "other.rules", "indexes": "other.json"}
+        ]}"#,
+    );
+    let plan = json_plan(&dir, &["up", "--plan", "--json"], &[]);
+    let settings: Vec<&str> = plan["paths"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["setting"].as_str().unwrap())
+        .collect();
+    assert!(settings.contains(&"rules.source"), "{settings:?}");
+    assert!(settings.contains(&"firestore.indexFile"), "{settings:?}");
+    assert!(settings.contains(&"firestore[other].rules"), "{settings:?}");
+    assert!(
+        settings.contains(&"firestore[other].indexes"),
+        "{settings:?}"
+    );
+    assert!(
+        !settings
+            .iter()
+            .any(|setting| setting.starts_with("firestore[(default)]")),
+        "{settings:?}"
+    );
+}
+
+#[test]
+fn a_python_codebase_is_refused_the_app_check_trust_only_when_the_run_enables_it() {
+    let dir = project("python-app-check");
+    write(
+        &dir,
+        "firebase.json",
+        r#"{"functions": {"source": "py", "runtime": "python312"}}"#,
+    );
+    write(&dir, "py/requirements.txt", "firebase-functions\n");
+    // The development default serves App Check without asking for it: the Python codebase gets
+    // as far as the missing virtual environment.
+    let implicit = json_plan(&dir, &["up", "--plan", "--json", "--hub-port", "0"], &[]);
+    let error = implicit["functions"][0]["error"].as_str().unwrap();
+    assert!(error.contains("Missing virtual environment"), "{error}");
+    assert_eq!(implicit["functions"][0]["language"], "python");
+
+    // An App Check the configuration asks for is refused for Python before anything runs.
+    write(
+        &dir,
+        "fireemu.toml",
+        "schemaVersion = 1\nfirebaseJson = \"firebase.json\"\n[appCheck]\nenabled = true\n",
+    );
+    let explicit = json_plan(&dir, &["up", "--plan", "--json", "--hub-port", "0"], &[]);
+    let error = explicit["functions"][0]["error"].as_str().unwrap();
+    assert!(
+        error.contains("App Check for Python callables is not available yet"),
+        "{error}"
+    );
+    assert!(explicit["functions"][0]["runner"]["command"].is_null());
+}
+
+#[test]
+fn the_text_plan_reports_inherited_variables_paths_defaults_and_ineffective_settings() {
+    let dir = project("text-rich");
+    write(
+        &dir,
+        "firebase.json",
+        r#"{"firestore": {"rules": "fs.rules"}}"#,
+    );
+    write(
+        &dir,
+        "fireemu.toml",
+        "schemaVersion = 1\nprofile = \"strict\"\nproductionExact = true\nfirebaseJson = \"firebase.json\"\n[trace]\nenabled = true\n",
+    );
+    let output = run(
+        &dir,
+        &[
+            "up",
+            "--plan",
+            "--only",
+            "firestore",
+            "--allow-inherited-emulator-env",
+            "PUBSUB_EMULATOR_HOST",
+        ],
+        &[
+            ("FIRESTORE_EMULATOR_HOST", "localhost:1234"),
+            ("PUBSUB_EMULATOR_HOST", "localhost:8085"),
+            ("CLOUD_TASKS_EMULATOR_HOST", "localhost:9499"),
+        ],
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+    let text = stdout(&output);
+    for line in [
+        "fireemu plan (up)",
+        "profile:         strict, productionExact",
+        "  FIRESTORE_EMULATOR_HOST=localhost:1234 (inherited, replaced by this run's value)",
+        "  PUBSUB_EMULATOR_HOST=localhost:8085 (inherited, kept (allowed))",
+        "  CLOUD_TASKS_EMULATOR_HOST=localhost:9499 (inherited, kept: this run does not start the service)",
+        "  inherited emulator variables of services this run does not start: warn",
+        "paths (resolved as the run opens them)",
+        "development defaults in effect (productionExact switches the relaxed ones to production's value)",
+        "  auth.allowUnsignedIdTokens = false (productionExact)",
+        "settings accepted but with no effect",
+        "  trace.enabled is accepted for forward compatibility and currently has no effect",
+        "No port was probed and nothing was started; the run binds its ports when it starts.",
+    ] {
+        assert!(text.lines().any(|candidate| candidate == line), "missing line {line:?} in:\n{text}");
+    }
+    let path_line = text
+        .lines()
+        .find(|line| line.starts_with("  rules.source: "))
+        .expect("a rules.source path");
+    assert!(
+        path_line.contains("(written fs.rules, relative to the firebase.json directory "),
+        "{path_line}"
+    );
+    let reference = text
+        .lines()
+        .find(|line| line.starts_with("  firebaseJson: "))
+        .expect("a firebaseJson path");
+    assert!(
+        reference.contains("relative to the configuration file directory"),
+        "{reference}"
+    );
+    assert!(
+        text.contains("\nwarning: CLOUD_TASKS_EMULATOR_HOST=localhost:9499 is inherited from the environment, but this run does not start tasks;"),
+        "{text}"
+    );
+    assert!(
+        !text.lines().any(|line| line.ends_with(" relaxed")),
+        "productionExact leaves nothing relaxed:\n{text}"
+    );
+
+    // An error of the plan is printed in the text and again on standard error.
+    let denied = run(
+        &dir,
+        &[
+            "up",
+            "--plan",
+            "--only",
+            "firestore",
+            "--deny-inherited-emulator-env",
+        ],
+        &[("CLOUD_TASKS_EMULATOR_HOST", "localhost:9499")],
+    );
+    assert_eq!(denied.status.code(), Some(1));
+    assert!(
+        stdout(&denied).contains("\nerror: CLOUD_TASKS_EMULATOR_HOST is set in the environment"),
+        "{}",
+        stdout(&denied)
+    );
+    assert!(
+        stderr(&denied).contains("\nerror: CLOUD_TASKS_EMULATOR_HOST is set"),
+        "{}",
+        stderr(&denied)
+    );
+}
+
 #[cfg(unix)]
 mod functions {
     use super::*;
@@ -1179,5 +1388,124 @@ mod functions {
         let error = plan["functions"][0]["error"].as_str().unwrap();
         assert!(error.contains("is not a directory"), "{error}");
         assert!(plan["functions"][0]["source"].is_null());
+    }
+
+    #[test]
+    fn the_text_plan_names_the_interpreter_sdk_versions_and_the_error_of_each_codebase() {
+        let dir = project("text-functions");
+        codebase(&dir);
+        let node = dir.join("tools/node/bin/node");
+        fake_node(&node, "v22.11.0");
+        let output = run(
+            &dir,
+            &["up", "--plan", "--hub-port", "0"],
+            &[("FIREEMU_NODE", node.to_str().unwrap())],
+        );
+        assert!(output.status.success(), "{}", stderr(&output));
+        let text = stdout(&output);
+        assert!(text.contains("\nfunctions\n  default: "), "{text}");
+        assert!(
+            text.contains(&format!(" on node 22.11.0 ({})", node.display())),
+            "{text}"
+        );
+        assert!(
+            text.contains("\n      firebase-admin 13.0.1\n      firebase-functions 6.1.0\n"),
+            "{text}"
+        );
+        assert!(text.contains("\n      note: functions[default]: selected Node v22.11.0 as a loader-capable local fallback;") || text.contains("selected Node v22.11.0 for package.json engines.node"), "{text}");
+
+        write(&dir, "fireemu.toml", "schemaVersion = 1\nfirebaseJson = \"firebase.json\"\n[functions]\nrunner = [\"/bin/echo\", \"x\"]\n");
+        let overridden = run(&dir, &["up", "--plan", "--hub-port", "0"], &[]);
+        assert!(
+            stdout(&overridden).contains(" on functions.runner override"),
+            "{}",
+            stdout(&overridden)
+        );
+
+        let missing = project("text-functions-missing");
+        write(
+            &missing,
+            "firebase.json",
+            r#"{"functions": {"source": "nowhere"}}"#,
+        );
+        let output = run(&missing, &["up", "--plan", "--hub-port", "0"], &[]);
+        assert_eq!(output.status.code(), Some(1));
+        assert!(stdout(&output).contains("      cannot start: the Functions codebase \"default\": source \"./nowhere\" is not a directory"), "{}", stdout(&output));
+    }
+
+    fn doctor_node_line(dir: &Path, env: &[(&str, &str)]) -> (String, Option<i32>) {
+        let output = run(dir, &["doctor"], env);
+        let text = stdout(&output);
+        let line = text
+            .lines()
+            .find(|line| line.contains(" node "))
+            .unwrap_or_else(|| panic!("{text}"))
+            .to_owned();
+        (line, output.status.code())
+    }
+
+    #[test]
+    fn doctor_reports_where_the_node_came_from_and_when_there_is_none() {
+        // The first node on PATH.
+        let dir = project("doctor-sources");
+        let on_path = dir.join("tools/path/node");
+        fake_node(&on_path, "v20.19.5");
+        let path = on_path.parent().unwrap().to_str().unwrap().to_owned();
+        let (line, code) = doctor_node_line(&dir, &[("PATH", &path)]);
+        assert!(line.starts_with("ok "), "{line}");
+        assert!(
+            line.contains("v20.19.5") && line.contains("selected by first node on PATH"),
+            "{line}"
+        );
+        assert_eq!(code, Some(0));
+
+        // VOLTA_HOME, when PATH has none.
+        let volta = dir.join("volta");
+        fake_node(&volta.join("tools/image/node/22.11.0/bin/node"), "v22.11.0");
+        let empty = dir.join("empty");
+        std::fs::create_dir_all(&empty).unwrap();
+        let (line, _) = doctor_node_line(
+            &dir,
+            &[
+                ("PATH", empty.to_str().unwrap()),
+                ("VOLTA_HOME", volta.to_str().unwrap()),
+            ],
+        );
+        assert!(
+            line.contains("v22.11.0") && line.contains("selected by VOLTA_HOME"),
+            "{line}"
+        );
+
+        // No Node at all is an absent optional component, not a failure.
+        let (line, code) = doctor_node_line(&dir, &[("PATH", empty.to_str().unwrap())]);
+        assert!(line.starts_with("-- "), "{line}");
+        assert!(line.contains("not found on PATH"), "{line}");
+        assert_eq!(code, Some(0));
+
+        // A node that cannot answer --version is a problem, and the command fails.
+        let broken = dir.join("tools/broken/node");
+        std::fs::create_dir_all(broken.parent().unwrap()).unwrap();
+        std::fs::write(&broken, "#!/bin/sh\nexit 126\n").unwrap();
+        let mut permissions = std::fs::metadata(&broken).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&broken, permissions).unwrap();
+        let (line, code) = doctor_node_line(
+            &dir,
+            &[("PATH", broken.parent().unwrap().to_str().unwrap())],
+        );
+        assert!(line.starts_with("!! "), "{line}");
+        assert!(line.contains("unusable"), "{line}");
+        assert_eq!(code, Some(1));
+
+        // FIREEMU_NODE that cannot run is a problem too, whatever PATH holds.
+        let (line, code) = doctor_node_line(
+            &dir,
+            &[("FIREEMU_NODE", "/nonexistent/node"), ("PATH", &path)],
+        );
+        assert!(
+            line.starts_with("!! ") && line.contains("FIREEMU_NODE"),
+            "{line}"
+        );
+        assert_eq!(code, Some(1));
     }
 }

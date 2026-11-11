@@ -476,7 +476,7 @@ mod tests {
                     Just(".".to_owned()),
                     Just("%2e%2e".to_owned()),
                     Just("%2E".to_owned()),
-                    Just("".to_owned()),
+                    Just(String::new()),
                     Just("%5c".to_owned()),
                     Just("%2f".to_owned()),
                     "[a-z]{1,3}",

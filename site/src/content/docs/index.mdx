@@ -19,45 +19,25 @@ hero:
       variant: minimal
 ---
 
-import { Badge, Card, CardGrid, LinkCard, TabItem, Tabs } from '@astrojs/starlight/components';
-import { Image } from 'astro:assets';
+import { Badge, Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
 import VerifiedAreaCount from '../../components/VerifiedAreaCount.astro';
-import emulatorUi from '../../assets/emulator-ui-overview.webp';
 
 ## Start in one command
 
 Node.js 20 or newer is required. Fireemu is published on npm as [`fireemu`](https://www.npmjs.com/package/fireemu).
 
-<Tabs>
-<TabItem label="Automated tests (CI/local)">
-
 ```sh
 npm install --save-dev fireemu
 npx fireemu init
 
-# Run your tests against the emulators, then stop them
+# Automated tests (CI or local): start the emulators, run your tests, then stop them
 npx fireemu exec -- npm test
-```
 
-`init` creates `fireemu.toml` (see [Install and run](getting-started/install/#create-fireemutoml)). `exec` starts the emulators, sets the Firebase SDK emulator environment variables for your command, stops the emulators when the command ends, and exits with its status.
-
-</TabItem>
-<TabItem label="Local development & UI">
-
-```sh
-npm install --save-dev fireemu
+# Local development: keep the emulators and the Emulator UI (http://127.0.0.1:4000/ui/) running until Ctrl+C
 npx fireemu up
 ```
 
-`up` keeps the emulators running until you press `Ctrl+C`, with the Emulator UI at `http://127.0.0.1:4000/ui/` (port 4000; change it with `--ui-port`, or use `--ui-port 0` for no UI). Without `fireemu.toml`, `up` uses the `firebase.json` it finds in the project, or built-in defaults.
-
-</TabItem>
-</Tabs>
-
-<figure>
-	<Image src={emulatorUi} widths={[800, 1200, 1600]} sizes="(min-width: 50rem) 50rem, 100vw" alt="The Emulator UI overview page for a demo project named demo-shop: the project, edition and version, the Firestore, Authentication and Storage ports, the Security Rules status, and the environment variables for the SDKs." />
-	<figcaption>The Emulator UI overview of a demo project, as <code>fireemu up</code> serves it. See <a href="guides/ui/">Emulator UI</a>.</figcaption>
-</figure>
+`init` creates `fireemu.toml` (see [Install and run](getting-started/install/#create-fireemutoml)). `exec` sets the Firebase SDK emulator environment variables for your command and exits with its status. `up` serves the [Emulator UI](guides/ui/) on port 4000 (change it with `--ui-port`, or use `--ui-port 0` for no UI).
 
 ## Why Fireemu
 
@@ -81,10 +61,10 @@ npx fireemu up
 | Product | Status | What you can test |
 |---|---|---|
 | [Cloud Firestore](products/firestore/) | <Badge text="Supported" variant="success" /> | Standard and Enterprise editions, composite index validation, Security Rules |
-| [Firebase Authentication](products/auth/) (Identity Platform) | <Badge text="Supported" variant="success" /> | Sign-in methods, TOTP and SMS MFA, multi-tenancy, OIDC and SAML providers, blocking functions |
+| [Firebase Authentication (Identity Platform)](products/auth/) | <Badge text="Supported" variant="success" /> | Sign-in methods, TOTP and SMS MFA, multi-tenancy, OIDC and SAML providers, blocking functions |
 | [Cloud Storage for Firebase](products/storage/) | <Badge text="Supported" variant="success" /> | Firebase and JSON APIs, Security Rules |
 | [Cloud Functions for Firebase](products/functions/) | <Badge text="Supported" variant="success" /> | HTTP, callable, event, scheduled, task queue and blocking functions, from Node.js codebases and, on macOS and Linux, [Python codebases](products/functions-python/) |
-| [Cloud Pub/Sub, Eventarc](products/pubsub-eventarc/), Cloud Tasks | <Badge text="Supported" variant="success" /> | Topics, subscriptions, push and pull delivery, custom events, task queues |
+| [Cloud Pub/Sub, Eventarc, Cloud Tasks](products/pubsub-eventarc/) | <Badge text="Supported" variant="success" /> | Topics, subscriptions, push and pull delivery, custom events, task queues |
 | [Firebase App Check](products/app-check/) | <Badge text="Local testing" variant="note" /> | Debug tokens |
 | [Firebase Realtime Database](products/realtime-database/) | <Badge text="Partial" variant="caution" /> | REST, realtime protocol, Security Rules, export and import, Functions triggers |
 | [Firebase Hosting](products/hosting/) | <Badge text="Partial" variant="caution" /> | One `firebase.json` site: static files, redirects, rewrites (including to local functions), headers, clean URLs, localization |

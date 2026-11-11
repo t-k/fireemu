@@ -319,6 +319,12 @@ pub struct FunctionsConfig {
     /// one is refused: Cloud Tasks does both, the official emulator neither. On the virtual task
     /// clock the time always gates dispatch.
     pub honour_task_schedule_time: bool,
+    /// How long the name of a finished or deleted task stays taken: the official emulator keeps it, the strict profile
+    /// frees it at once unless `productionExact` asks for production's tombstone.
+    pub task_name_reuse: crate::tasks_production::NameReuse,
+    /// The dispatch deadline, in seconds, of a task that names none (the strict profile): production's is 600, and the
+    /// default profile keeps the 60 seconds of the official emulator so that a hung handler does not hold a test for ten minutes.
+    pub task_default_deadline_seconds: u64,
     /// Whether service timestamps use the configured daemon clock instead of wall time.
     pub clock_start_pinned: bool,
     /// How the subscription of a Pub/Sub function is named (and which the events name): by profile.
@@ -347,6 +353,8 @@ impl FunctionsConfig {
             functions_host: None,
             clock_policy: crate::application_clock::ApplicationClockPolicy::default(),
             honour_task_schedule_time: false,
+            task_name_reuse: crate::tasks_production::NameReuse::Retained,
+            task_default_deadline_seconds: 60,
             clock_start_pinned: false,
             subscription_naming: crate::events::SubscriptionNaming::default(),
             auth_context: crate::events::AuthContextNaming::default(),
@@ -372,6 +380,11 @@ impl std::fmt::Debug for FunctionsConfig {
             .field("functions_host", &self.functions_host)
             .field("clock_policy", &self.clock_policy)
             .field("honour_task_schedule_time", &self.honour_task_schedule_time)
+            .field("task_name_reuse", &self.task_name_reuse)
+            .field(
+                "task_default_deadline_seconds",
+                &self.task_default_deadline_seconds,
+            )
             .field("clock_start_pinned", &self.clock_start_pinned)
             .field("subscription_naming", &self.subscription_naming)
             .field("auth_context", &self.auth_context)
@@ -1574,8 +1587,9 @@ impl FunctionsRuntime {
         } else {
             std::time::Instant::now().into()
         };
-        let task_scheduler =
+        let mut task_scheduler =
             crate::task_scheduler::TaskScheduler::from_manifest(&manifest, task_start);
+        task_scheduler.set_name_reuse(config.task_name_reuse);
         let (updates, receiver) = tokio::sync::watch::channel(initial);
         let observer: Arc<fireemu_core_session::clock::ClockObserver> = Arc::new(move |snapshot| {
             updates.send_replace(snapshot);
@@ -1836,6 +1850,12 @@ impl FunctionsRuntime {
     #[must_use]
     pub fn manifest(&self) -> &FunctionManifest {
         &self.manifest
+    }
+
+    /// Whether this runtime answers as the strict profile.
+    #[must_use]
+    pub fn is_strict(&self) -> bool {
+        self.profile == FunctionsHttpProfile::Strict
     }
 
     /// The project the functions belong to.
@@ -3546,6 +3566,9 @@ impl FunctionsRuntime {
         if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
             return Err(refuse(503, "the Functions runtime is shutting down"));
         }
+        if self.profile == FunctionsHttpProfile::Strict {
+            return self.enqueue_task_strict(project, location, queue, body);
+        }
         if project != self.config.project {
             return Err(refuse(
                 404,
@@ -3627,6 +3650,203 @@ impl FunctionsRuntime {
         let answer = crate::tasks::accepted_response(&task);
         self.wake.notify_one();
         Ok(answer)
+    }
+
+    /// The strict profile's createTask: production's checks, in production's order, and production's answers (see
+    /// [`crate::tasks_production`]). The refusals are `google.rpc.Status` JSON.
+    #[allow(clippy::too_many_lines)] // One ordered pass over production's admission steps.
+    fn enqueue_task_strict(
+        self: &Arc<Self>,
+        project: &str,
+        location: &str,
+        queue: &str,
+        body: &Value,
+    ) -> Result<Value, crate::tasks::EnqueueRefusal> {
+        use crate::task_scheduler::{AdmissionError, NameState};
+        use crate::tasks::EnqueueRefusal;
+        use crate::tasks_production::{self as production, Refusal};
+        let json = |refusal: Refusal| EnqueueRefusal {
+            status: refusal.http,
+            body: refusal.body().to_string(),
+        };
+        let served = self
+            .manifest
+            .get(queue)
+            .filter(|f| matches!(f.trigger, Trigger::TaskQueue { .. }) && f.region == location);
+        let Some(spec) = served.filter(|_| project == self.config.project) else {
+            return Err(json(Refusal::queue_missing()));
+        };
+        let Trigger::TaskQueue { retry, .. } = spec.trigger else {
+            return Err(json(Refusal::queue_missing()));
+        };
+        let host = self
+            .config
+            .functions_host
+            .as_deref()
+            .ok_or_else(|| EnqueueRefusal {
+                status: 503,
+                body: "the functions listener is not bound, so a task queue has no default URI"
+                    .to_owned(),
+            })?;
+        let default_uri = format!("http://{host}/{project}/{location}/{queue}");
+        let counter = {
+            let Ok(mut inner) = self.inner.lock() else {
+                return Err(EnqueueRefusal {
+                    status: 500,
+                    body: "runtime poisoned".to_owned(),
+                });
+            };
+            inner.next_task += 1;
+            inner.next_task
+        };
+        let now_nanos = self.task_epoch_nanos().unwrap_or_else(|| {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()
+                .and_then(|d| i128::try_from(d.as_nanos()).ok())
+                .unwrap_or(0)
+        });
+        let queue_path = format!("projects/{project}/locations/{location}/queues/{queue}");
+        let request = body.get("task").and_then(|t| t.get("httpRequest"));
+        let encoded = request.and_then(|h| h.get("body")).and_then(Value::as_str);
+        let size = || {
+            let headers: usize = request
+                .and_then(|h| h.get("headers"))
+                .and_then(Value::as_object)
+                .map_or(0, |m| {
+                    m.iter()
+                        .map(|(k, v)| k.len() + v.as_str().map_or(0, str::len))
+                        .sum()
+                });
+            encoded
+                .map_or(0, |text| text.len() / 4 * 3)
+                .saturating_add(headers)
+        };
+        let admitted = production::admit(
+            &queue_path,
+            body,
+            now_nanos,
+            counter,
+            self.config.task_default_deadline_seconds,
+            size,
+        )
+        .map_err(json)?;
+        let mut task = crate::tasks::accept(project, location, queue, &default_uri, body, counter)
+            .map_err(|e| {
+                json(Refusal {
+                    http: e.status,
+                    status: "INVALID_ARGUMENT",
+                    message: e.body,
+                })
+            })?;
+        task.name.clone_from(&admitted.name);
+        task.schedule_time = Some(admitted.schedule_time.clone());
+        task.dispatch_deadline_seconds = admitted.deadline_seconds;
+        if task.url != default_uri {
+            return Err(json(Refusal {
+                http: 400,
+                status: "INVALID_ARGUMENT",
+                message: "a task may only be dispatched to this emulator's own function URL"
+                    .to_owned(),
+            }));
+        }
+        let queue_key_bytes = crate::tasks::queue_key(project, location, queue).len();
+        let retained_bytes = task
+            .retained_bytes()
+            .saturating_add(task.name.len())
+            .saturating_add(queue.len().saturating_mul(3))
+            .saturating_add(project.len())
+            .saturating_add(location.len())
+            .saturating_add(queue_key_bytes);
+        let now_task = self.task_now();
+        {
+            let mut inner = self.inner.lock().map_err(|_| EnqueueRefusal {
+                status: 500,
+                body: "runtime poisoned".to_owned(),
+            })?;
+            match inner.task_scheduler.name_state(queue, &task.name, now_task) {
+                NameState::Live => return Err(json(Refusal::already_exists())),
+                NameState::Finished => return Err(json(Refusal::existed_too_recently())),
+                NameState::Free => {}
+            }
+            match inner.task_scheduler.enqueue_at(
+                queue,
+                task.clone(),
+                retry,
+                retained_bytes,
+                now_task,
+            ) {
+                Ok(()) => {}
+                Err(AdmissionError::Duplicate) => return Err(json(Refusal::already_exists())),
+                Err(AdmissionError::QueueFull) => {
+                    return Err(json(Refusal {
+                        http: 429,
+                        status: "RESOURCE_EXHAUSTED",
+                        message: "the local task queue is full".to_owned(),
+                    }));
+                }
+                Err(AdmissionError::RuntimeFull) => {
+                    return Err(json(Refusal {
+                        http: 429,
+                        status: "RESOURCE_EXHAUSTED",
+                        message: "the local task queue capacity is exhausted".to_owned(),
+                    }));
+                }
+                Err(AdmissionError::Closed) => {
+                    return Err(EnqueueRefusal {
+                        status: 503,
+                        body: "the Functions runtime is shutting down".to_owned(),
+                    });
+                }
+            }
+        }
+        self.wake.notify_one();
+        let empty = serde_json::Map::new();
+        let http = request.and_then(Value::as_object).unwrap_or(&empty);
+        Ok(production::answer(&admitted, &default_uri, http, encoded))
+    }
+
+    /// The strict profile's deleteTask: a task that has not been dispatched yet is removed and its name stays taken as a
+    /// finished one; anything else is production's 404.
+    ///
+    /// # Errors
+    /// The queue does not exist, or no pending task has that name.
+    pub fn delete_task_strict(
+        &self,
+        project: &str,
+        location: &str,
+        queue: &str,
+        id: &str,
+    ) -> Result<(), crate::tasks::EnqueueRefusal> {
+        use crate::tasks::EnqueueRefusal;
+        use crate::tasks_production::Refusal;
+        let json = |refusal: Refusal| EnqueueRefusal {
+            status: refusal.http,
+            body: refusal.body().to_string(),
+        };
+        let served = self.manifest.get(queue).is_some_and(|f| {
+            matches!(f.trigger, Trigger::TaskQueue { .. }) && f.region == location
+        }) && project == self.config.project;
+        if !served {
+            return Err(json(Refusal::queue_missing()));
+        }
+        let name = format!("projects/{project}/locations/{location}/queues/{queue}/tasks/{id}");
+        let now_task = self.task_now();
+        let removed = self
+            .inner
+            .lock()
+            .map_err(|_| EnqueueRefusal {
+                status: 500,
+                body: "runtime poisoned".to_owned(),
+            })?
+            .task_scheduler
+            .delete_pending(queue, &name, now_task);
+        if removed {
+            self.wake.notify_one();
+            Ok(())
+        } else {
+            Err(json(Refusal::task_not_found()))
+        }
     }
 
     /// Validates a task's `scheduleTime` as Cloud Tasks does when the runtime honours it (RFC
@@ -3832,9 +4052,11 @@ impl FunctionsRuntime {
                     }
                     continue;
                 }
-                // A transport failure or an overrun deadline is a retry with no previous
-                // response, exactly as the official `catch` treats an aborted fetch.
-                Ok(Err(_)) | Err(_) => None,
+                // A transport failure is a retry with no previous response, exactly as the
+                // official `catch` treats an aborted fetch. An overrun deadline is a 504 in
+                // production (recorded: the retry carries `X-CloudTasks-TaskPreviousResponse: 504`).
+                Ok(Err(_)) => None,
+                Err(_) => (self.profile == FunctionsHttpProfile::Strict).then_some(504),
             };
             let first_delivery = *started.get_or_insert(attempt_started);
             if let Some(status) = status {
@@ -3853,7 +4075,10 @@ impl FunctionsRuntime {
                 );
                 return true;
             }
-            let backoff = Duration::from_millis(dispatch.retry.backoff_millis(attempt));
+            let backoff = Duration::from_millis(dispatch.retry.backoff_millis(backoff_step(
+                self.profile == FunctionsHttpProfile::Strict,
+                attempt,
+            )));
             let retry_deadline = task_retry_deadline(first_delivery, dispatch.retry, attempt);
             let backoff_deadline = self.task_now() + backoff;
             let deadline =
@@ -7148,6 +7373,17 @@ fn task_retry_deadline(
         .flatten()
         .filter(|millis| *millis > 0)
         .and_then(|millis| first_delivery.checked_add(Duration::from_millis(millis)))
+}
+
+/// The step of the backoff schedule that follows the failure of attempt `attempt - 1`. The official emulator counts the next
+/// attempt (so its first retry waits twice the minimum); production's first retry waits the minimum (recorded: a queue with
+/// `minBackoff` 1 s, `maxDoublings` 2 and `maxBackoff` 6 s retried after 1, 2, 4, 6 and 6 seconds).
+fn backoff_step(strict: bool, attempt: u32) -> u32 {
+    if strict {
+        attempt.saturating_sub(1).max(1)
+    } else {
+        attempt
+    }
 }
 
 fn task_retry_exhausted(
@@ -12375,6 +12611,8 @@ mod schedule_capacity_tests {
                 functions_host: Some("127.0.0.1:5001".to_owned()),
                 clock_policy: crate::application_clock::ApplicationClockPolicy::default(),
                 honour_task_schedule_time: false,
+                task_name_reuse: crate::tasks_production::NameReuse::Retained,
+                task_default_deadline_seconds: 60,
                 clock_start_pinned: false,
                 subscription_naming: crate::events::SubscriptionNaming::default(),
                 auth_context: crate::events::AuthContextNaming::default(),
@@ -13035,5 +13273,38 @@ mod event_frame_member_tests {
             let borrowed = event_frame_member(&event, traceparent.as_ref());
             prop_assert_eq!(borrowed.get(), copied(&event, traceparent.as_ref()));
         }
+    }
+
+    #[test]
+    fn the_strict_profile_backs_off_one_step_earlier_than_the_official_emulator() {
+        use fireemu_core_functions::manifest::TaskRetryConfig;
+        let retry = TaskRetryConfig {
+            max_attempts: 6,
+            max_retry_millis: None,
+            max_backoff_millis: 6000,
+            max_doublings: 2,
+            min_backoff_millis: 1000,
+        };
+        // Attempt 2 is the first retry. Production waited 1, 2, 4, 6 and 6 seconds; the official emulator 2, 4, 6, 6 and 6.
+        let strict: Vec<u64> = (2..=6)
+            .map(|a| retry.backoff_millis(super::backoff_step(true, a)))
+            .collect();
+        let official: Vec<u64> = (2..=6)
+            .map(|a| retry.backoff_millis(super::backoff_step(false, a)))
+            .collect();
+        assert_eq!(strict, [1000, 2000, 4000, 6000, 6000]);
+        assert_eq!(official, [2000, 4000, 6000, 6000, 6000]);
+        let default = TaskRetryConfig {
+            min_backoff_millis: 100,
+            max_backoff_millis: 3_600_000,
+            max_doublings: 16,
+            ..retry
+        };
+        assert_eq!(default.backoff_millis(super::backoff_step(true, 2)), 100);
+        assert_eq!(
+            default.backoff_millis(super::backoff_step(true, 1)),
+            100,
+            "never below the first step"
+        );
     }
 }

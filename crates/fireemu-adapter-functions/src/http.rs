@@ -32,6 +32,10 @@ use crate::runtime::FunctionsRuntime;
 pub const MAX_FUNCTION_BODY_BYTES: usize = 32 * 1024 * 1024;
 /// Express' default JSON limit used by the pinned Cloud Tasks emulator.
 pub const MAX_TASK_BODY_BYTES: usize = 100 * 1024;
+/// What the strict profile reads of a createTask request: Cloud Tasks takes a task of up to 1 MiB (recorded: a body of
+/// 1,000,070 bytes was accepted, which is a request of 1.4 MB once base64 and JSON are counted), so the request is bounded
+/// above that and the task's own size is checked by the admission.
+pub const MAX_STRICT_TASK_BODY_BYTES: usize = 4 * 1024 * 1024;
 /// Maximum raw HTTP response accepted from a function, including framing and headers.
 pub const MAX_FUNCTION_RESPONSE_BYTES: u64 = 64 * 1024 * 1024;
 /// Production's maximum streamed response size for a second-generation function.
@@ -1245,18 +1249,46 @@ fn task_route(
             };
             match runtime.enqueue_task(project, location, queue, &parsed) {
                 Ok(answer) => typed(StatusCode::OK, "application/json", &answer.to_string()),
-                Err(refusal) => typed(
-                    StatusCode::from_u16(refusal.status).unwrap_or(StatusCode::BAD_REQUEST),
-                    "text/plain; charset=utf-8",
-                    &refusal.body,
-                ),
+                Err(refusal) => refusal_response(runtime, &refusal),
             }
         }
-        Route::DeleteTask { .. } => simple(
-            StatusCode::NOT_FOUND,
-            "Tried to remove a task that doesn't exist",
-        ),
+        Route::DeleteTask {
+            project,
+            location,
+            queue,
+            task,
+        } => {
+            if method != hyper::Method::DELETE {
+                return simple(StatusCode::METHOD_NOT_ALLOWED, "Method Not Allowed");
+            }
+            if runtime.is_strict() {
+                return match runtime.delete_task_strict(project, location, queue, task) {
+                    Ok(()) => typed(StatusCode::OK, "application/json", "{}"),
+                    Err(refusal) => refusal_response(runtime, &refusal),
+                };
+            }
+            simple(
+                StatusCode::NOT_FOUND,
+                "Tried to remove a task that doesn't exist",
+            )
+        }
     }
+}
+
+/// A createTask or deleteTask refusal: `google.rpc.Status` JSON in the strict profile (where the runtime built it as JSON),
+/// plain text as the official emulator answers.
+fn refusal_response(
+    runtime: &Arc<FunctionsRuntime>,
+    refusal: &crate::tasks::EnqueueRefusal,
+) -> Response<OutBody> {
+    let status = StatusCode::from_u16(refusal.status).unwrap_or(StatusCode::BAD_REQUEST);
+    if runtime.is_strict()
+        && serde_json::from_str::<serde_json::Value>(&refusal.body)
+            .is_ok_and(|v| v.get("error").is_some())
+    {
+        return typed(status, "application/json; charset=UTF-8", &refusal.body);
+    }
+    typed(status, "text/plain; charset=utf-8", &refusal.body)
 }
 
 /// Reads a request body up to the forwarding limit, or the 413 that replaces it.
@@ -1909,7 +1941,10 @@ async fn serve_surface(
                         drain_refused_body(req.into_body()).await;
                         return Ok(refusal);
                     }
-                    let body_limit = request_body_limit(&surface, req.uri().path());
+                    let mut body_limit = request_body_limit(&surface, req.uri().path());
+                    if body_limit == MAX_TASK_BODY_BYTES && runtime.is_strict() {
+                        body_limit = MAX_STRICT_TASK_BODY_BYTES;
+                    }
                     let reservation = request_body_reservation(&req, body_limit);
                     let _request = request_admission.acquire(reservation).await;
                     respond(

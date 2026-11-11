@@ -380,13 +380,26 @@ pub fn dispatch_headers(
             status.to_string(),
         ));
     }
+    // Production sends an empty retry reason on every retry (recorded on five of the six attempts of one task, and on the
+    // retry after a timeout).
+    if attempt > 1 && matches!(shape, DispatchShape::Production { .. }) {
+        out.push(("X-CloudTasks-TaskRetryReason".to_owned(), String::new()));
+    }
+    let mut forged = Vec::new();
     for (k, v) in &task.headers {
         if matches!(shape, DispatchShape::Production { .. }) && service_owned(k) {
+            // A task's own `X-CloudTasks-*` header reaches the function in front of the service's (recorded: a task that
+            // set `X-CloudTasks-TaskName` was delivered as one header whose value was both, the task's first); the other
+            // service-owned names are dropped or replaced.
+            if k.to_ascii_lowercase().starts_with("x-cloudtasks-") {
+                forged.push((k.clone(), v.clone()));
+            }
             continue;
         }
         out.retain(|(existing, _)| !existing.eq_ignore_ascii_case(k));
         out.push((k.clone(), v.clone()));
     }
+    out.splice(0..0, forged);
     out
 }
 
@@ -806,8 +819,8 @@ mod tests {
     /// `X-AppEngine-*` as ignored or replaced (HttpRequest.headers). Its request-header guide says
     /// the `X-CloudTasks-*` names are replaced by the service's own values. Only the user agent
     /// was recorded (the create answer echoed `Google-Cloud-Tasks`); the `X-CloudTasks-*`
-    /// replacement, the dropped `X-Google-*` and the names without a delivery (`TaskRetryReason`)
-    /// are UNRECORDED and follow the documentation.
+    /// replacement and the dropped `X-Google-*` follow the documentation and the recording of 2026-11-11 (a task's own
+    /// `X-CloudTasks-*` header reaches the function in front of the service's).
     #[test]
     fn the_production_shape_keeps_the_service_headers_whatever_the_task_sets_and_the_official_shape_does_not(
     ) {
@@ -832,15 +845,28 @@ mod tests {
                 1_700_000_000_123,
                 DispatchShape::Production { queue: "q" },
             );
-            assert_eq!(
-                count(&production, name),
-                1,
-                "{name}: one header of that name in production"
-            );
-            assert!(
-                production.iter().all(|(_, v)| v != value),
-                "{name}: the task's value is not delivered in production"
-            );
+            if name.to_ascii_lowercase().starts_with("x-cloudtasks-") {
+                // Recorded: the task's header reaches the function in front of the service's, so the function sees
+                // both (Node joins them as `<task's>, <service's>`).
+                let values: Vec<&str> = production
+                    .iter()
+                    .filter(|(n, _)| n.eq_ignore_ascii_case(name))
+                    .map(|(_, v)| v.as_str())
+                    .collect();
+                assert_eq!(values.len(), 2, "{name}: the task's and the service's");
+                assert_eq!(values[0], value, "{name}: the task's value comes first");
+                assert_ne!(values[1], value, "{name}: the service's value follows");
+            } else {
+                assert_eq!(
+                    count(&production, name),
+                    1,
+                    "{name}: one header of that name in production"
+                );
+                assert!(
+                    production.iter().all(|(_, v)| v != value),
+                    "{name}: the task's value is not delivered in production"
+                );
+            }
             assert_eq!(header(&production, "X-Custom"), Some("kept"), "{name}");
             let official = dispatch_headers(
                 &task,
@@ -881,13 +907,18 @@ mod tests {
             1_700_000_000_123,
             DispatchShape::Production { queue: "q" },
         );
+        // The service's value is the last of the header's lines (a task's own comes in front of it).
+        let last = |name: &str| {
+            headers
+                .iter()
+                .rev()
+                .find(|(n, _)| n.eq_ignore_ascii_case(name))
+                .map(|(_, v)| v.as_str())
+        };
         assert_eq!(header(&headers, "User-Agent"), Some("Google-Cloud-Tasks"));
-        assert_eq!(header(&headers, "X-CloudTasks-QueueName"), Some("q"));
-        assert_eq!(
-            header(&headers, "X-CloudTasks-TaskETA"),
-            Some("1700000000.123000")
-        );
-        assert_eq!(header(&headers, "X-CloudTasks-TaskRetryCount"), Some("2"));
+        assert_eq!(last("X-CloudTasks-QueueName"), Some("q"));
+        assert_eq!(last("X-CloudTasks-TaskETA"), Some("1700000000.123000"));
+        assert_eq!(last("X-CloudTasks-TaskRetryCount"), Some("2"));
     }
 
     /// UNRECORDED: the documentation lists `X-CloudTasks-TaskPreviousResponse` as present only after
@@ -904,7 +935,12 @@ mod tests {
             1,
             DispatchShape::Production { queue: "q" },
         );
-        assert_eq!(header(&first, "X-CloudTasks-TaskPreviousResponse"), None);
+        // Only the task's own header is there (the service sends none on a first delivery).
+        assert_eq!(
+            header(&first, "X-CloudTasks-TaskPreviousResponse"),
+            Some("500")
+        );
+        assert_eq!(count(&first, "X-CloudTasks-TaskPreviousResponse"), 1);
         let retried = dispatch_headers(
             &task,
             "k",
@@ -914,9 +950,15 @@ mod tests {
             1,
             DispatchShape::Production { queue: "q" },
         );
+        let previous: Vec<&str> = retried
+            .iter()
+            .filter(|(n, _)| n.eq_ignore_ascii_case("X-CloudTasks-TaskPreviousResponse"))
+            .map(|(_, v)| v.as_str())
+            .collect();
         assert_eq!(
-            header(&retried, "X-CloudTasks-TaskPreviousResponse"),
-            Some("503")
+            previous,
+            ["500", "503"],
+            "the task's value in front of the service's"
         );
         let official = dispatch_headers(&task, "k", 1, 0, None, 1, DispatchShape::Official);
         assert_eq!(
@@ -972,5 +1014,40 @@ mod tests {
         };
         assert!(!budgeted.exhausted(9, 4_000));
         assert!(budgeted.exhausted(9, 6_000));
+    }
+
+    #[test]
+    fn production_sends_an_empty_retry_reason_from_the_second_delivery_on_and_the_official_emulator_never(
+    ) {
+        let task = accept(
+            "demo",
+            "us-central1",
+            "onJob",
+            "http://127.0.0.1:5001/demo/us-central1/onJob",
+            &enqueue_body(),
+            7,
+        )
+        .expect("accepted");
+        let reason = |attempt: u32, shape: DispatchShape<'_>| {
+            dispatch_headers(
+                &task,
+                "queue:demo-us-central1-onJob",
+                attempt,
+                attempt - 1,
+                None,
+                1_700_000_000_000,
+                shape,
+            )
+            .into_iter()
+            .find(|(k, _)| k == "X-CloudTasks-TaskRetryReason")
+            .map(|(_, v)| v)
+        };
+        let production = || DispatchShape::Production { queue: "onJob" };
+        assert_eq!(reason(1, production()), None);
+        assert_eq!(reason(2, production()), Some(String::new()));
+        assert_eq!(reason(3, production()), Some(String::new()));
+        for attempt in 1..=3 {
+            assert_eq!(reason(attempt, DispatchShape::Official), None, "{attempt}");
+        }
     }
 }

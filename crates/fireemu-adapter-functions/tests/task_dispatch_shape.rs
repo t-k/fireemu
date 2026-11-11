@@ -242,7 +242,8 @@ async fn the_strict_eta_is_the_virtual_task_time_with_six_decimals() {
 async fn the_strict_profile_refuses_a_schedule_time_that_is_not_a_timestamp_and_the_emulator_profile_delivers_it(
 ) {
     let strict = start("schedule-strict", FunctionsHttpProfile::Strict).await;
-    for bad in ["soon", "", "2026-02-01", "2016-12-31T23:59:60Z"] {
+    // A leap second is accepted (recorded: production read 23:59:60 as the next second), so it is not in this list.
+    for bad in ["soon", "", "2026-02-01", "2026-02-30T00:00:00Z"] {
         let refusal = strict
             .runtime
             .enqueue_task(

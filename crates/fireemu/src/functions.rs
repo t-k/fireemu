@@ -3304,6 +3304,27 @@ fn functions_config(
         // Cloud Tasks holds a task until its scheduleTime; the official emulator dispatches at
         // once, so only the strict profile waits.
         honour_task_schedule_time: cfg.profile == CompatibilityProfile::Strict,
+        // The official emulator keeps a finished task's name forever. The strict profile frees it at once (a test that
+        // enqueues the same id again is not refused), and `productionExact` restores production's tombstone, which refuses
+        // the name for about an hour (documented; the refusal inside the window is recorded).
+        task_default_deadline_seconds: if cfg.profile == CompatibilityProfile::Strict
+            && cfg.production_exact
+        {
+            fireemu_adapter_functions::tasks_production::DEFAULT_DEADLINE_SECONDS
+        } else {
+            60
+        },
+        task_name_reuse: match (cfg.profile, cfg.production_exact) {
+            (CompatibilityProfile::Strict, true) => {
+                fireemu_adapter_functions::tasks_production::NameReuse::Window(
+                    std::time::Duration::from_secs(3600),
+                )
+            }
+            (CompatibilityProfile::Strict, false) => {
+                fireemu_adapter_functions::tasks_production::NameReuse::Immediate
+            }
+            _ => fireemu_adapter_functions::tasks_production::NameReuse::Retained,
+        },
         clock_start_pinned: cfg.clock_start_pinned,
         subscription_naming: subscription_naming(cfg.profile),
         auth_context: auth_context_naming(cfg.profile),
@@ -15972,6 +15993,39 @@ exit 0
         }
     }
 
+    /// The development defaults of the Cloud Tasks queue follow the profile, and `productionExact` restores production's.
+    #[test]
+    fn the_task_defaults_follow_the_profile_and_production_exact_restores_production() {
+        use fireemu_adapter_functions::tasks_production::NameReuse;
+        for (json, reuse, deadline) in [
+            (
+                json!({"schemaVersion": 1, "profile": "strict"}),
+                NameReuse::Immediate,
+                60,
+            ),
+            (
+                json!({"schemaVersion": 1, "profile": "strict", "productionExact": false}),
+                NameReuse::Immediate,
+                60,
+            ),
+            (
+                json!({"schemaVersion": 1, "profile": "strict", "productionExact": true}),
+                NameReuse::Window(std::time::Duration::from_secs(3600)),
+                600,
+            ),
+            (
+                json!({"schemaVersion": 1, "profile": "emulator"}),
+                NameReuse::Retained,
+                60,
+            ),
+        ] {
+            let cfg = crate::config::RuntimeConfig::from_json(&json).unwrap();
+            let config = super::functions_config(&cfg, None, "s");
+            assert_eq!(config.task_name_reuse, reuse, "{json}");
+            assert_eq!(config.task_default_deadline_seconds, deadline, "{json}");
+        }
+    }
+
     proptest::proptest! {
         /// E4: a pinned seed ignores the nonce, an unpinned start ignores the seed.
         #[test]
@@ -16257,6 +16311,8 @@ exit 0
                 clock_policy:
                     fireemu_adapter_functions::application_clock::ApplicationClockPolicy::default(),
                 honour_task_schedule_time: false,
+                task_name_reuse: fireemu_adapter_functions::tasks_production::NameReuse::Retained,
+                task_default_deadline_seconds: 60,
                 clock_start_pinned: false,
                 subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(
                 ),

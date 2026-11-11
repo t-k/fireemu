@@ -250,7 +250,7 @@ fieldOverrides[0] (notes.emb): Must contain exactly one of "arrayConfig,order" i
 
 A missing or empty `queryScope` is read as `COLLECTION`, and the older `collectionId` and field `mode` keys are read as `collectionGroup` and `order` / `arrayConfig`, as `firebase deploy` reads them. The limits of at most 200 composite indexes, 100 fields per index and one array field per index apply under both profiles. The Admin API's `indexes.create` applies the same checks, and counts the indexes of the file and the ones created at run time together against the 200.
 
-The `emulator` profile loads the file as before, because the official emulator never reads it.
+The `emulator` profile does not refuse these entries, because the official emulator never reads the file. It reads the composite field modes of an entry with the precedence and truthiness `firebase deploy` uses, and ignores the search configuration of a field override that also sets an order or array mode.
 
 ## Query limits
 

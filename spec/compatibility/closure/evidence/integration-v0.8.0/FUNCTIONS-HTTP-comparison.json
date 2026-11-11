@@ -12,12 +12,12 @@
   "runs": [
     {
       "profile": "strict",
-      "executedBinary": "target/debug/fireemu",
-      "binarySha256Before": "4183f9d896c4718467a46c66b718ea8d03e74bfd7b3dff44f572325aecd1f7bd",
-      "binarySha256After": "4183f9d896c4718467a46c66b718ea8d03e74bfd7b3dff44f572325aecd1f7bd",
+      "executedBinary": "target/release/fireemu",
+      "binarySha256Before": "c9dac4f8f8e676b2ae873edc40203858d7633ba2c575ac46c1453d29b20ec51a",
+      "binarySha256After": "c9dac4f8f8e676b2ae873edc40203858d7633ba2c575ac46c1453d29b20ec51a",
       "exitCode": 0,
       "recordingSha256": "2f354fbcd16be3c6e30190d5f590d32a6dc41039672f06473424da8ee51053f8",
-      "sourceHead": "b3db4b3fc87db7d5c6e660e480426c7088630c17",
+      "sourceHead": "c85ca4704106c34323714cdcac9e9783a327bdd6",
       "supersedes": {
         "executedBinary": "target/release/fireemu",
         "binarySha256": "c258b022c5f452a60a9bc60de68e6de26b3f5aeaf846623cf1bf7e33f28d31df",

@@ -700,10 +700,10 @@
             "pass": 2
           }
         ],
-        "sourceCommit": "b3db4b3fc87db7d5c6e660e480426c7088630c17",
-        "finalArtifactSha256": "4183f9d896c4718467a46c66b718ea8d03e74bfd7b3dff44f572325aecd1f7bd",
+        "sourceCommit": "c85ca4704106c34323714cdcac9e9783a327bdd6",
+        "finalArtifactSha256": "c9dac4f8f8e676b2ae873edc40203858d7633ba2c575ac46c1453d29b20ec51a",
         "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-callable-auth-refusal-rerecord-comparison.json",
-        "comparisonSha256": "51c7624f6f28800dad8408139bfc5d44e08441984109413a644b32af6f4604e0",
+        "comparisonSha256": "89cd7a0fb48d54d5685ef46c0525bb07364d9c18966856f5f1900b2abbd2d7fb",
         "productionRecordingPath": "conformance/functions-http-callable-rerecord-production.json",
         "productionRecordingSha256": "7bee9903295fb1ffae1b4b6cfbdc7574aebf3f5ee19d9a98beb387dce4caf7a9",
         "strictRecordingSha256": "2f354fbcd16be3c6e30190d5f590d32a6dc41039672f06473424da8ee51053f8",
@@ -918,7 +918,7 @@
     "comparisons": [
       {
         "path": "spec/compatibility/closure/evidence/integration-v0.8.0/FUNCTIONS-HTTP-comparison.json",
-        "sha256": "d6f09ac63d14c6d243553045d7006381309e6af61482abaf7a4dec0e3e8bca01",
+        "sha256": "4d0c4ddd739099adaaaa99b12a3537b20013533042f912a589c01c182e6e443b",
         "rows": 68,
         "summary": {
           "MATCH": 68
@@ -941,7 +941,7 @@
       "decider": "project coordinator (ruling 8, 2026-11-12)",
       "strictChange": "crates/fireemu-adapter-functions/src/http.rs: strict_callable_credential answers WrapperRefusal for every single credential it cannot verify",
       "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-callable-auth-refusal-rerecord-comparison.json",
-      "comparisonSha256": "51c7624f6f28800dad8408139bfc5d44e08441984109413a644b32af6f4604e0"
+      "comparisonSha256": "89cd7a0fb48d54d5685ef46c0525bb07364d9c18966856f5f1900b2abbd2d7fb"
     }
   ]
 }

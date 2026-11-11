@@ -292,6 +292,7 @@ test("the FUNCTIONS-HTTP rows come from recorded runs of the release binary, the
   assert.equal(emulator.binarySha256Before, receipt.binarySha256);
   assert.equal(emulator.binarySha256After, receipt.binarySha256);
   for (const run of evidence.runs) {
+    assert.equal(run.executedBinary, "target/release/fireemu", run.profile);
     assert.equal(run.exitCode, 0, run.profile);
     // The checkout head at run time; the binary itself is identified by its digest.
     assert.match(run.sourceHead, /^[0-9a-f]{40}$/, run.profile);
@@ -306,6 +307,19 @@ test("the FUNCTIONS-HTTP rows come from recorded runs of the release binary, the
   assert.equal(strict.binarySha256After, amendment.artifactSha256);
   assert.notEqual(strict.binarySha256Before, receipt.binarySha256);
   assert.equal(strict.recordingSha256, amendment.strictRecordingSha256);
+  // Source-bound custody (release skill): a release build, --locked, no compiler wrapper, a fresh
+  // worktree-local target directory, the private copy hashed to the same digest.
+  assert.match(amendment.artifactKind, /^release build /);
+  assert.equal(
+    amendment.buildCustody.command.startsWith("cargo build --release --locked -p fireemu"),
+    true,
+  );
+  assert.equal(amendment.buildCustody.rustcWrapper, "");
+  assert.equal(amendment.buildCustody.sourceCommit, amendment.sourceCommit);
+  assert.equal(amendment.buildCustody.binarySha256, amendment.artifactSha256);
+  assert.equal(amendment.buildCustody.privateCopySha256, amendment.artifactSha256);
+  assert.equal(amendment.buildCustody.checkLocalRuns, 2);
+  assert.equal(amendment.buildCustody.recordingSha256Both, strict.recordingSha256);
   assert.deepEqual(strict.supersedes, {
     executedBinary: "target/release/fireemu",
     binarySha256: receipt.binarySha256,

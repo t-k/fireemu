@@ -107,7 +107,7 @@
     "conformance/fixtures/firestore/transaction-read-set-abort.json": "d04ff10ca155a770c02b5a2c8ee78b21f44a83aa2c206168e01d13998ce53536",
     "conformance/fixtures/functions/concurrent-conditional-lock.json": "5fab49ede191c66808eccb7c3f46fa616e5db23884c6f4f8e8d1fa0640fb2759",
     "conformance/functions/index.js": "72ae82eb08f58affa6fa756ab7daca6687fa2de3880938a8ef88b8e4fe8e66b7",
-    "conformance/src/corpus/firestore.mjs": "f079f9cb0ccbc7412b7f83f3a02c068428557aa6ea1aece01df35de47e0d12ee",
+    "conformance/src/corpus/firestore.mjs": "51877fb0289ed35385a7a9848718b320feef3f390273826355b3c361953c24b5",
     "conformance/src/corpus/functions.mjs": "4a05876e3edf238c3825f4bb58db96bdfffac90f0cbba9d92eb4c415182da147",
     "crates/fireemu-core-firestore/Cargo.toml": "1637c4cf736de87c69b23ba015a756ac33bfe47b432788414a8efd130a8e1c0f",
     "crates/fireemu-core-firestore/src/field_path.rs": "7521cef0be215af802928c2317c59223a8359abf8f14e60c05b793dc86160dbe",

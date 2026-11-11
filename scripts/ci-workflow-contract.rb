@@ -1,5 +1,6 @@
 #!/usr/bin/env ruby
 
+require "json"
 require "yaml"
 require "rbconfig"
 require_relative "actions-security-contract"
@@ -63,6 +64,29 @@ assert(pnpm_setup_index < node_setup_index && node_setup_index < dependency_inst
 assert(dependency_install_step == { "name" => "install frozen conformance dependencies", "run" => "pnpm -C conformance install --frozen-lockfile" }, "the minimal pr job must install only frozen conformance dependencies")
 assert(selftest_step == { "name" => "conformance selftest", "run" => "pnpm -C conformance selftest" }, "the minimal pr job must run the exact selftest as a required step")
 assert(pr_steps.none? { |step| step["uses"].to_s.match?(%r{\Apnpm/action-setup@}) && step.fetch("with", {}).key?("cache") }, "the minimal pr job must not use a pnpm cache")
+# The selftest verifies every hop of the harness lineage against the history and refuses a shallow clone.
+pr_checkout = pr_steps.find { |step| step["uses"]&.start_with?("actions/checkout@") }
+assert(pr_checkout&.dig("with", "fetch-depth") == 0, "the minimal pr job must fetch the whole history: the selftest's harness lineage check refuses a shallow clone")
+# The selftest script is what the pr job runs, so a test file that no glob in it matches never runs on a pull request.
+# Every conformance test file is either matched by a glob of the script or sits in a directory listed here with the
+# reason it stays out. A new test directory fails this check until it is added to the script or to this list.
+selftest_script = JSON.parse(File.read(File.join(ROOT, "conformance", "package.json"))).dig("scripts", "selftest").to_s
+selftest_globs = selftest_script.split.select { |word| word.end_with?(".test.mjs") }
+%w[src/*.test.mjs src/shared/*.test.mjs scheduled-functions/*.test.mjs].each do |required|
+  assert(selftest_globs.include?(required), "the conformance selftest script must keep running #{required}")
+end
+selftest_not_run = {
+  "functions-http" => "starts real child processes and takes about 100 s on its own",
+  "production-diff/test" => "its process-supervision and G0 session tests need the locked Python 3.12 inventory runtime and real detached children",
+}
+conformance_dir = File.join(ROOT, "conformance")
+test_files = Dir.glob("**/*.test.mjs", base: conformance_dir).reject { |path| path.start_with?("node_modules/") || path.include?("/node_modules/") }
+unrun = test_files.reject do |path|
+  selftest_globs.any? { |glob| File.fnmatch?(glob, path, File::FNM_PATHNAME) } ||
+    selftest_not_run.keys.any? { |dir| path.start_with?("#{dir}/") }
+end
+assert(unrun.empty?, "conformance test files that neither the selftest script nor selftest_not_run in scripts/ci-workflow-contract.rb cover: #{unrun.first(5).join(', ')}")
+assert(selftest_not_run.keys.all? { |dir| File.directory?(File.join(conformance_dir, dir)) }, "selftest_not_run names a directory that does not exist")
 %w[nextest clippy cargo\ doc cargo\ deny proto-gen fireemu-verification-loom].each do |expensive|
   assert(!pr_runs.include?(expensive), "the automatic pr job must not run #{expensive}")
 end

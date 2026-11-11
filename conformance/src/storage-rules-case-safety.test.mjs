@@ -84,16 +84,16 @@ describe("the launch flag", () => {
           /without FIREEMU_STORAGE_RULES_LAUNCH/,
         );
       assert.deepEqual(attempts, []);
-      for (const url of ["http://127.0.0.1:1/x", "http://localhost:1/x"])
+      for (const url of ["http://127.0.0.1:1/x", "http://localhost:1/x", "http://[::1]:1/x"])
         assert.equal((await fetchNet({ method: "GET", url, headers: {} })).status, 200);
-      assert.equal(attempts.length, 2);
+      assert.equal(attempts.length, 3);
       armSending({ [LAUNCH_FLAG]: "case" }, "case");
       assert.equal(
         (await fetchNet({ method: "GET", url: "https://storage.googleapis.com/x", headers: {} }))
           .status,
         200,
       );
-      assert.equal(attempts.length, 3);
+      assert.equal(attempts.length, 4);
     } finally {
       globalThis.fetch = realFetch;
     }

@@ -1125,33 +1125,141 @@ fn marked_callable_in_code(runtime: &FunctionsRuntime, function: &str) -> bool {
         .is_some_and(|entry| entry.platform_options.strict_callable_ingress)
 }
 
-fn strict_callable_bearer_refusal(
+/// The field that tells the runner the one `Authorization` field of a request to a non-callable HTTP
+/// endpoint is a Bearer of a user of the project (tools/runner-node/nested-callable.mjs). Every
+/// caller-supplied copy is removed before the daemon sets its own.
+const VERIFIED_CREDENTIAL_HEADER: &str = "x-fireemu-credential-verified";
+
+fn verified_single_credential(runtime: &FunctionsRuntime, raw: &hyper::HeaderMap) -> bool {
+    matches!(
+        field_values(raw, "authorization").as_slice(),
+        [only] if is_verified_user(runtime, only)
+    )
+}
+
+/// What the strict daemon answers a callable request for the credential it presents.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StrictCallableCredential {
+    /// No credential, or one single Bearer that is a user of the project: the request goes on.
+    Accepted,
+    /// The Google front end's 401 page. Production recorded it for a callable that was sent a
+    /// Firebase ID token it cannot accept (an invalid signature, an expired token:
+    /// FUNCTIONS-HTTP stage 3), and for more than one `Authorization` field.
+    FrontEndPage,
+    /// The callable wrapper's own `401 UNAUTHENTICATED` envelope. Production recorded it for a
+    /// malformed Bearer, a scheme in another case, a scheme without a token, another scheme and
+    /// a three-part token that no Firebase project issued (FUNCTIONS-HTTP-CALLABLE-INGRESS, for
+    /// a real callable and for a callable's code served as `onRequest`): the front end hands the
+    /// request on and the wrapper refuses every credential that is not a verified ID token.
+    WrapperRefusal,
+}
+
+/// Classifies the credential a strict callable request presents; see [`StrictCallableCredential`].
+///
+/// The daemon can verify only the credential it sees, while a runner's HTTP server decides which
+/// one the wrapper gets (Werkzeug joins the values with a comma, Node keeps the first), and the
+/// wrapper accepts any structurally valid ID token under the Auth emulator: `Bearer <forged
+/// token>` next to `AAAA` would have skipped this check and reached the wrapper as a forged
+/// identity. More than one `Authorization` field is therefore refused outright.
+pub(crate) fn strict_callable_credential(
+    runtime: &FunctionsRuntime,
+    presented: &[String],
+) -> StrictCallableCredential {
+    let authorization = match presented {
+        [] => return StrictCallableCredential::Accepted,
+        [single] => single,
+        _ => return StrictCallableCredential::FrontEndPage,
+    };
+    if is_verified_user(runtime, authorization) {
+        StrictCallableCredential::Accepted
+    } else if names_project_id_token(runtime.project(), authorization) {
+        StrictCallableCredential::FrontEndPage
+    } else {
+        StrictCallableCredential::WrapperRefusal
+    }
+}
+
+fn is_verified_user(runtime: &FunctionsRuntime, authorization: &str) -> bool {
+    runtime.callable_auth_verifier().is_some_and(|verifier| {
+        matches!(
+            verifier
+                .principal_from_authorization_for_project(Some(authorization), runtime.project(),),
+            Ok(fireemu_adapter_grpc::rules::Principal::User(_))
+        )
+    })
+}
+
+/// Whether the value is a Bearer whose token is a three-part JWT issued for this project's
+/// Firebase users (its `iss` is `https://securetoken.google.com/<project>`): the shape of the two
+/// ID tokens FUNCTIONS-HTTP stage 3 sent a callable, which the front end refused with its page.
+fn names_project_id_token(project: &str, authorization: &str) -> bool {
+    let Some((scheme, token)) = authorization.split_once(' ') else {
+        return false;
+    };
+    if !scheme.eq_ignore_ascii_case("bearer") {
+        return false;
+    }
+    let parts: Vec<&str> = token.split('.').collect();
+    let [_, payload, _] = parts.as_slice() else {
+        return false;
+    };
+    let Ok(bytes) = fireemu_core_auth::jwt::base64url_decode(payload) else {
+        return false;
+    };
+    serde_json::from_slice::<serde_json::Value>(&bytes)
+        .ok()
+        .and_then(|claims| {
+            claims
+                .get("iss")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
+        .is_some_and(|iss| iss == format!("https://securetoken.google.com/{project}"))
+}
+
+/// The refusal for [`StrictCallableCredential`], or `None` when the request goes on.
+fn strict_callable_credential_refusal(
     runtime: &FunctionsRuntime,
     raw: &hyper::HeaderMap,
+    streaming: bool,
+    origin: Option<&str>,
 ) -> Option<Response<OutBody>> {
     let presented = field_values(raw, "authorization");
-    strict_callable_bearer_unverified(runtime, &presented).then(|| {
-        typed(
+    match strict_callable_credential(runtime, &presented) {
+        StrictCallableCredential::Accepted => None,
+        StrictCallableCredential::FrontEndPage => Some(typed(
             StatusCode::UNAUTHORIZED,
             "text/html; charset=UTF-8",
             UNAUTHORIZED_PAGE,
-        )
-    })
+        )),
+        StrictCallableCredential::WrapperRefusal => {
+            let mut response = callable_credential_refusal(
+                &crate::callable::unauthenticated_response(),
+                streaming,
+                origin,
+            );
+            // The wrapper's CORS middleware sends it whatever the request's Origin.
+            response.headers_mut().insert(
+                hyper::header::VARY,
+                hyper::header::HeaderValue::from_static("Origin"),
+            );
+            Some(response)
+        }
+    }
 }
 
 /// Whether the credential a strict callable request presents is one the daemon cannot verify as
 /// a Bearer of one of the project's users. No credential, a single credential of another scheme
 /// and an empty token are left to the handler (the wrapper refuses them itself).
 ///
-/// More than one `Authorization` header is refused outright. The daemon can verify only the
-/// credential it sees, while a runner's HTTP server decides which one the wrapper gets (Werkzeug
-/// joins the values with a comma, Node keeps the first), and the wrapper accepts any structurally
-/// valid ID token under the Auth emulator: `Bearer <forged token>` next to `AAAA` would have
-/// skipped this check and reached the wrapper as a forged identity.
+/// This is the check a task delivered to a callable passes ([`crate::runtime`]); an HTTP request
+/// is classified by [`strict_callable_credential`], which also answers the credentials this one
+/// leaves to the wrapper, because production's wrapper refuses them with its own envelope.
 ///
+/// More than one `Authorization` header is refused outright (see [`strict_callable_credential`]).
 /// A task delivered to a callable that a configured manifest serves as a queue passes the same
-/// check ([`crate::runtime`]), because the Admin SDK's own verification under the Auth
-/// emulator does not check signatures.
+/// check, because the Admin SDK's own verification under the Auth emulator does not check
+/// signatures.
 pub(crate) fn strict_callable_bearer_unverified(
     runtime: &FunctionsRuntime,
     presented: &[String],
@@ -1167,14 +1275,7 @@ pub(crate) fn strict_callable_bearer_unverified(
     if !scheme.eq_ignore_ascii_case("bearer") || token.is_empty() {
         return false;
     }
-    let verified_user = runtime.callable_auth_verifier().is_some_and(|verifier| {
-        matches!(
-            verifier
-                .principal_from_authorization_for_project(Some(authorization), runtime.project(),),
-            Ok(fireemu_adapter_grpc::rules::Principal::User(_))
-        )
-    });
-    !verified_user
+    !is_verified_user(runtime, authorization)
 }
 
 /// Answers the Cloud Tasks routes, including the emulator diagnostics endpoint.
@@ -1769,7 +1870,7 @@ async fn respond(
         return Ok(refusal);
     }
     let method = req.method().as_str().to_owned();
-    let (callable, _plain_http, streaming_callable) = http_trigger_kinds(&runtime, function);
+    let (callable, plain_http, streaming_callable) = http_trigger_kinds(&runtime, function);
     let callable_preflight = callable && method == "OPTIONS";
     // The SDK's CORS middleware owns every callable OPTIONS response, including
     // explicit cors:false and origin lists. Preflights do not authenticate or invoke
@@ -1785,7 +1886,12 @@ async fn respond(
     if profile == FunctionsHttpProfile::Strict
         && ((callable && !callable_preflight) || (code_callable && method != "OPTIONS"))
     {
-        if let Some(denial) = strict_callable_bearer_refusal(&runtime, req.headers()) {
+        if let Some(denial) = strict_callable_credential_refusal(
+            &runtime,
+            req.headers(),
+            streaming,
+            origin.as_deref(),
+        ) {
             drain_refused_body(req.into_body()).await;
             return Ok(denial);
         }
@@ -1796,6 +1902,7 @@ async fn respond(
         .filter(|(k, _)| {
             !k.as_str()
                 .eq_ignore_ascii_case(crate::invoker::OWNER_TOKEN_HEADER)
+                && !k.as_str().eq_ignore_ascii_case(VERIFIED_CREDENTIAL_HEADER)
         })
         .filter_map(|(k, v)| {
             v.to_str()
@@ -1828,6 +1935,12 @@ async fn respond(
         });
         headers.push(("x-forwarded-for".to_owned(), peer_ip.to_string()));
         headers.push(("x-forwarded-proto".to_owned(), "https".to_owned()));
+        // The runner cannot verify a credential. A callable's wrapper nested in a non-callable
+        // endpoint (invisible to discovery) refuses every credential the daemon did not verify here,
+        // as production's wrapper does; the field is the only way the runner learns it.
+        if plain_http && verified_single_credential(&runtime, req.headers()) {
+            headers.push((VERIFIED_CREDENTIAL_HEADER.to_owned(), "1".to_owned()));
+        }
     }
     let body = match collect_body(req.into_body(), body_limit).await {
         Ok(body) => body,

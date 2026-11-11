@@ -274,3 +274,56 @@ test("a corpus step records generated fields only where it declares them", async
   assert.deepEqual(steps[1].value, { id: other, mine: same });
   assert.equal(steps[2].value.message, `unreachable ${same} at <host>`);
 });
+
+test("a bad declaration fails the step loudly instead of being recorded as a scenario error", async () => {
+  const { ctx, steps } = createContext({
+    side: "testd",
+    variant: "baseline",
+    hosts: {},
+    shared: {},
+  });
+  let ran = false;
+  const fn = async () => {
+    ran = true;
+    return { id: "a".repeat(20) };
+  };
+  await assert.rejects(ctx.step("typo", fn, { generated: { id: "typo" } }), /unknown kind/);
+  await assert.rejects(ctx.step("path", fn, { generated: { "a..b": "auto-id" } }), /bad segment/);
+  await assert.rejects(ctx.step("index", fn, { generated: { "a[0]": "auto-id" } }), /bad segment/);
+  assert.equal(ran, false, "the scenario must not run under a bad declaration");
+  assert.deepEqual(steps, []);
+  // The same message thrown by the scenario itself is still an observation.
+  await ctx.step("thrown", async () => {
+    throw new Error("unknown kind");
+  });
+  assert.equal(steps[0].value.thrown, true);
+});
+
+test("a path names keys and array positions, never a literal dot, bracket or index", () => {
+  const id = "a".repeat(20);
+  // A key that contains a dot is user data: the path `a.b` is key b of key a, not key "a.b".
+  assert.deepEqual(normalize({ "a.b": id }, { generated: { "a.b": "auto-id" } }), { "a.b": id });
+  assert.deepEqual(normalize({ a: { b: id } }, { generated: { "a.b": "auto-id" } }), {
+    a: { b: "<auto-id>" },
+  });
+  // A key that contains brackets is not an array step.
+  assert.deepEqual(normalize({ "a[]": id }, { generated: { "a[]": "auto-id" } }), { "a[]": id });
+  assert.deepEqual(normalize({ "[]": id }, { generated: { "[]": "auto-id" } }), { "[]": id });
+  assert.deepEqual(normalize({ "*": id }, { generated: { "*": "auto-id" } }), {
+    "*": "<auto-id>",
+  });
+  // A numeric map key is a key, not an array index, and the other way round.
+  assert.deepEqual(normalize({ a: { 0: id } }, { generated: { "a[]": "auto-id" } }), {
+    a: { 0: id },
+  });
+  assert.deepEqual(normalize({ a: [id] }, { generated: { "a.0": "auto-id" } }), { a: [id] });
+  assert.deepEqual(normalize({ a: { 0: id } }, { generated: { "a.0": "auto-id" } }), {
+    a: { 0: "<auto-id>" },
+  });
+  assert.deepEqual(normalize({ 0: id }, { generated: { "[]": "auto-id" } }), { 0: id });
+  assert.deepEqual(normalize([id], { generated: { 0: "auto-id" } }), [id]);
+  // An explicit index is not part of the syntax.
+  for (const path of ["[0]", "a[0]", "a[1].b", "a[*]", "a[-1]"]) {
+    assert.throws(() => compileGenerated({ [path]: "auto-id" }), /bad segment/, path);
+  }
+});

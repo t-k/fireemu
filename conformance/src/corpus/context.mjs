@@ -6,7 +6,7 @@
 // control API by fireemu, and only fireemu can mint an App Check token).
 
 import { APP_CHECK, BUCKET, PROJECT, REGION } from "../config.mjs";
-import { normalize, normalizeError } from "../normalize.mjs";
+import { compileGenerated, normalize, normalizeError } from "../normalize.mjs";
 
 /** Hosts the runner was handed by whichever supervisor started it. */
 export function hostsFromEnv() {
@@ -79,6 +79,10 @@ export function createContext({ side, variant, hosts, shared }) {
      */
     async step(id, fn, { generated } = {}) {
       if (steps.some((s) => s.id === id)) throw new Error(`duplicate step id ${id}`);
+      // A bad declaration is a mistake in the corpus, not an observation: refuse it here,
+      // outside the catch below, so it cannot be recorded as a thrown scenario error that
+      // both sides then "agree" on.
+      compileGenerated(generated);
       let value;
       try {
         value = normalize(await fn(), { generated });

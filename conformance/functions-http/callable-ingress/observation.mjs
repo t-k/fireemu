@@ -167,15 +167,15 @@ export const recordCallableIngress = (env, deps, variant) =>
 
 // ---- production effects -------------------------------------------------------------------------
 
-export async function readSources(variant) {
+export async function readSources(variant, { directory = HERE, conformance = CONFORMANCE } = {}) {
   const files = {};
   for (const [file, expected] of Object.entries(sourcePins(variant))) {
-    const bytes = await readFile(join(HERE, file));
+    const bytes = await readFile(join(directory, file));
     if (sha256(bytes) !== expected) throw new Error(`reviewed source changed: ${file}`);
     files[file] = bytes;
   }
   const firebaseTools = JSON.parse(
-    await readFile(join(CONFORMANCE, "node_modules/firebase-tools/package.json"), "utf8"),
+    await readFile(join(conformance, "node_modules/firebase-tools/package.json"), "utf8"),
   );
   if (firebaseTools.version !== "15.28.2")
     throw new Error("pinned Firebase CLI 15.28.2 is required");

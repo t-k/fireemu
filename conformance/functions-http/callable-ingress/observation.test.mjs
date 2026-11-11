@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
 import { forAll, pick, between } from "../../src/fs-ent-pipeline/test-support.mjs";
@@ -16,13 +17,14 @@ import {
   VARIANTS,
   captureHeaders,
   ingressSpec,
+  readSources,
   makeCliRunner,
   productionDeps,
   recordCallableIngress,
   sourcePins,
   validateIngressCorpus,
 } from "./observation.mjs";
-import { admit, captureFetch } from "../bearer-observation.mjs";
+import { BEARER_SPEC, admit, captureFetch } from "../bearer-observation.mjs";
 import { FAKE_RECEIPT_SCRIPT, UPLOAD_OBJECT, deployWorld } from "../production.fake.mjs";
 import { createBudget } from "../harness.mjs";
 
@@ -156,7 +158,11 @@ test("a corpus that changes a request, a case, the order or the target is refuse
   for (const [index, change] of variants.entries()) {
     const copy = structuredClone(CORPUS);
     change(copy);
-    assert.throws(() => validateIngressCorpus(copy), Error, `variant ${index}`);
+    assert.throws(
+      () => validateIngressCorpus(copy),
+      /^Error: callable-ingress corpus: /,
+      `variant ${index}`,
+    );
   }
 });
 
@@ -456,6 +462,117 @@ test("property: passes that agree give the same answers as one pass, and needsRe
       assert.equal(result.needsReview, others.length > 0);
       assert.equal(result.answers.length, CASES.length);
     },
+  );
+});
+
+test("a refused corpus names what is wrong", () => {
+  const refused = (change, pattern) => {
+    const copy = structuredClone(CORPUS);
+    change(copy);
+    assert.throws(() => validateIngressCorpus(copy), pattern);
+  };
+  refused((c) => (c.programs[0].cases[2].id = "other"), /case 3 id/);
+  refused((c) => (c.programs[0].cases[0].id = "malformed-bearer"), /case 1 id/);
+  refused((c) => c.programs[0].cases.push(c.programs[0].cases[0]), /six cases/);
+  refused((c) => c.programs[0].cases.pop(), /six cases/);
+  refused((c) => (c.programs[0].cases[4].target = "callable"), /basic-scheme target/);
+  refused((c) => delete c.programs[0].cases[4].target, /basic-scheme target/);
+  refused((c) => (c.programs[0].cases[4].capture = "other"), /basic-scheme capture/);
+  refused((c) => (c.programs[0].cases[4].request.path = "/x"), /basic-scheme request/);
+  refused((c) => (c.programs[0].cases[4].request.method = "PUT"), /basic-scheme request/);
+  refused((c) => (c.programs[0].cases[4].request.body = {}), /basic-scheme body/);
+  refused(
+    (c) => (c.programs[0].cases[4].request.headers.authorization = "Basic x"),
+    /basic-scheme headers/,
+  );
+  refused(
+    (c) => delete c.programs[0].cases[4].request.headers.authorization,
+    /basic-scheme headers/,
+  );
+  refused((c) => (c.programs[0].id = "x"), /program id/);
+  refused((c) => (c.programs = []), /one program/);
+  refused((c) => (c.functions.callable = "x"), /functions/);
+  refused((c) => (c.project = "other"), /project or region/);
+  refused((c) => (c.region = "other"), /project or region/);
+  refused((c) => (c.schemaVersion = 2), /project or region/);
+  assert.throws(() => validateIngressCorpus(null), /project or region/);
+});
+
+test("single-fault captures are refused for their own reason, not for a disagreement between passes", () => {
+  const both = (index, tweak) => {
+    const list = allRefused(wrapper);
+    tweak(list[index]);
+    tweak(list[index + CASES.length]);
+    return judgeObservation(list, BASELINE);
+  };
+  for (let index = 0; index < CASES.length; index += 1) {
+    for (const status of [100, 199, 300, 399, 500, 599]) {
+      const result = both(index, (c) => (c.status = status));
+      assert.equal(result.verdict, "unknown", `${index}/${status}`);
+      assert.match(result.reasons.join(), /is an unknown answer/);
+    }
+    for (const field of ["bodyBytes", "bodySha256"]) {
+      const result = both(index, (c) => (c[field] = null));
+      assert.equal(result.verdict, "unknown", `${index}/${field}`);
+      assert.match(result.reasons.join(), /body unreadable/);
+    }
+    const result = both(index, (c) => (c.bodySha256 = "not-a-digest"));
+    assert.match(result.reasons.join(), /body unreadable/);
+    const failed = both(index, (c) => (c.error = "TypeError: terminated"));
+    assert.match(failed.reasons.join(), /transport failure/);
+    const disagrees = both(index, (c) => (c.headers["content-length"] = "5"));
+    assert.match(disagrees.reasons.join(), /content-length 5 disagrees/);
+  }
+  for (const [index, field, value] of [
+    [0, "pass", 2],
+    [1, "pass", 2],
+    [7, "pass", 1],
+    [2, "caseId", "malformed-bearer"],
+    [8, "caseId", "no-authorization"],
+  ]) {
+    const list = allRefused(wrapper);
+    list[index][field] = value;
+    const result = judgeObservation(list, BASELINE);
+    assert.equal(result.verdict, "unknown", `${index}/${field}`);
+    assert.match(result.reasons.join(), /capture \d+ is not pass/);
+  }
+  for (const index of [0, 3, 6, 11]) {
+    const list = allRefused(wrapper);
+    list[index].authorization = "Bearer other";
+    assert.match(judgeObservation(list, BASELINE).reasons.join(), /wrong Authorization/);
+  }
+});
+
+test("a null or missing capture is unknown, never an exception", () => {
+  for (const index of [0, 1, 5, 6, 11]) {
+    for (const hole of [null, undefined, {}, 7]) {
+      const list = allRefused(wrapper);
+      list[index] = hole;
+      const result = judgeObservation(list, BASELINE);
+      assert.equal(result.verdict, "unknown", `${index}`);
+      assert.match(result.reasons.join(), /capture \d+ is not pass/);
+    }
+  }
+});
+
+test("a thirteenth capture that is correctly labelled is still too many", () => {
+  const list = [...allRefused(wrapper), capture(12, control)];
+  assert.equal(list[12].pass, 3);
+  const result = judgeObservation(list, BASELINE);
+  assert.equal(result.verdict, "unknown");
+  assert.match(result.reasons.join(), /expected 12 captures, got 13/);
+});
+
+test("a control body of the recorded length but other content is not the recorded control", () => {
+  const sameLength = { ...control, bodyText: '{"result":{"auth":true}}' };
+  assert.equal(Buffer.byteLength(sameLength.bodyText), BASELINE.control.bodyBytes);
+  const result = judgeObservation(passes({ "no-authorization": sameLength }, wrapper), BASELINE);
+  assert.equal(result.verdict, "unknown");
+  assert.match(result.reasons.join(), /body bytes/);
+  const longer = { ...control, bodyText: '{"result":{"auth":null}} ' };
+  assert.match(
+    judgeObservation(passes({ "no-authorization": longer }, wrapper), BASELINE).reasons.join(),
+    /body bytes/,
   );
 });
 
@@ -971,5 +1088,121 @@ test("fixtures: the wrapper variant deploys a plain HTTPS function, the callable
     } else {
       assert.ok(endpoint.callableTrigger && !endpoint.httpsTrigger);
     }
+  }
+});
+
+test("readSources refuses a changed reviewed byte and a Firebase CLI other than 15.28.2", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "callable-ingress-sources-"));
+  try {
+    const { cp } = await import("node:fs/promises");
+    const copy = join(dir, "callable-ingress");
+    await cp(new URL(".", import.meta.url).pathname, copy, {
+      recursive: true,
+      filter: (source) => !source.includes("node_modules"),
+    });
+    await cp(
+      here("../bearer-observation.baseline.json"),
+      join(dir, "bearer-observation.baseline.json"),
+    );
+    const conformance = join(dir, "conformance");
+    await mkdir(join(conformance, "node_modules/firebase-tools"), { recursive: true });
+    const cliPackage = join(conformance, "node_modules/firebase-tools/package.json");
+    await writeFile(cliPackage, JSON.stringify({ version: "15.28.2" }));
+    const good = await readSources("wrapper", { directory: copy, conformance });
+    assert.equal(good.digests.corpus, sourcePins("wrapper")["corpus.json"]);
+    await writeFile(cliPackage, JSON.stringify({ version: "15.28.1" }));
+    await assert.rejects(readSources("wrapper", { directory: copy, conformance }), /15\.28\.2/);
+    await writeFile(cliPackage, JSON.stringify({ version: "15.28.2" }));
+    for (const file of [
+      "corpus.json",
+      "baseline.json",
+      "wrapper/fixtures/index.js",
+      "wrapper/firebase.json",
+    ]) {
+      const path = join(copy, file);
+      const original = await readFile(path);
+      await writeFile(path, Buffer.concat([original, Buffer.from(" ")]));
+      await assert.rejects(
+        readSources("wrapper", { directory: copy, conformance }),
+        /reviewed source changed/,
+        file,
+      );
+      await writeFile(path, original);
+    }
+    // the other variant's fixture is not read for this variant
+    const other = join(copy, "callable/fixtures/index.js");
+    await writeFile(other, "changed");
+    await readSources("wrapper", { directory: copy, conformance });
+    await assert.rejects(
+      readSources("callable", { directory: copy, conformance }),
+      /reviewed source changed/,
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("fake world: the run counts only this task's earlier attempts and keeps the headers it is told to", async () => {
+  const own = (n) => [
+    row({ event: "started", taskId: TASK_ID, attempt: n, ts: "2026-11-10T09:00:00Z" }),
+    row({ event: "finished", outcome: "recorded", taskId: TASK_ID, ts: "2026-11-10T09:30:00Z" }),
+  ];
+  await assert.rejects(
+    fakeRun({ ledgerText: `${[...own(1), ...own(2), ...own(3), ledgerClosed].join("\n")}\n` }),
+    /attempt 4/,
+  );
+  const bearerRows = [1, 2, 3].flatMap(() => [
+    row({ event: "started", taskId: "FUNCTIONS-HTTP-BEARER", ts: "2026-11-10T09:00:00Z" }),
+    row({
+      event: "finished",
+      outcome: "recorded",
+      taskId: "FUNCTIONS-HTTP-BEARER",
+      ts: "2026-11-10T09:30:00Z",
+    }),
+  ]);
+  const { world, ledger, files } = await fakeRun({
+    ledgerText: `${[...bearerRows, ledgerClosed].join("\n")}\n`,
+    answers: {
+      "malformed-bearer": { ...wrapper, headers: { vary: "Origin", "x-powered-by": "Express" } },
+    },
+  });
+  try {
+    assert.equal(ledger[0].attempt, 1);
+    const kept = JSON.parse(files["captures.json"])[1].headers;
+    assert.equal(kept.vary, "Origin");
+    assert.equal(kept["x-powered-by"], "Express");
+  } finally {
+    await rm(world.dir, { recursive: true, force: true });
+  }
+});
+
+test("the stage 3 bearer observation's spec adds no first-row field and the differences to its terminal row", () => {
+  assert.deepEqual(BEARER_SPEC.startFields(), {});
+  assert.deepEqual(BEARER_SPEC.terminalFields({ differences: [{ field: "status" }], x: 1 }), {
+    differences: [{ field: "status" }],
+  });
+});
+
+test("the deploy CLI of each variant starts in that variant's directory", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "callable-ingress-deps-"));
+  try {
+    const out = join(dir, "cwd.txt");
+    const script = join(dir, "fake-cli.mjs");
+    await writeFile(
+      script,
+      `import { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(out)}, process.cwd());\n`,
+    );
+    for (const variant of Object.keys(VARIANTS)) {
+      const deps = productionDeps({ variant, command: [process.execPath, script] });
+      const runDir = join(dir, `run-${variant}`);
+      await mkdir(runDir);
+      await deps.run(["functions:delete", "x"], "/adc", deps.createBudget(), "cliDelete", runDir);
+      assert.equal(
+        await realpath(await readFile(out, "utf8")),
+        await realpath(fileURLToPath(here(`./${variant}`))),
+      );
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
   }
 });

@@ -1,26 +1,25 @@
-//! The Storage Rules `lower()` and `upper()` on letters that are not ASCII: the strict-side tests
-//! of the STORAGE-RULES-CASE observation, written before its recording so that acting on the
-//! answer is one change.
+//! The Storage Rules `lower()` and `upper()` on letters that are not ASCII (STORAGE-RULES-CASE).
 //!
-//! Firestore Rules are recorded (FS-RULES-UNICODE, 2026-11-08): only ASCII letters change, and
-//! this crate already does that for both services. Storage Rules have no row of their own. The
-//! official Storage runtime (firebase-tools 15.23.0, run 2026-11-08) also changes ASCII only. The
-//! observation (`conformance/src/storage-rules-s9/plan-case.mjs`, family `case`) reads each row
-//! under three candidate answers:
+//! Production, recorded on 2026-11-11 (two recordings, two rulesets of 41 rows per recording, 82
+//! observations, none unknown), changes ASCII letters only: `"E-acute".lower()` stays, `"ss".upper()`
+//! of the sharp s stays, the dotted capital I, the dotless i, the Greek letters, the final sigma, a
+//! combining sequence, the capital sharp s and the fullwidth letters keep their case, and nothing is
+//! composed or normalized. The one disagreement between the recordings, the ASCII control
+//! `ctl-lower-i` (403 in recording 1, 200 in recording 2), was a release still being propagated: the
+//! same run measured the old ruleset still served 14 to 20 seconds after a release, and the row was
+//! read 18.6 seconds after it. A stale ruleset can turn an allow into a 403 and never a 403 into a
+//! 200, so a 200 in either recording settles a row. Firestore Rules were recorded the same way on
+//! 2026-11-08, and the shared evaluator already does this for both services.
 //!
-//! - ascii: only A-Z and a-z change (what this crate does now).
-//! - full: the full Unicode default mapping (sharp s to SS, dotted I to i + U+0307, final sigma).
-//! - simple: the one-character mapping (no SS, dotted I to i, sigma always sigma).
+//! Each row of the table gives the answer under three candidates: ascii (only A-Z and a-z change),
+//! full (the full Unicode default mapping) and simple (the one-character mapping). Only ascii is
+//! asserted; the other two columns document what the recording refuted (fifteen rows that full or
+//! simple would allow were refused in both recordings, and rows that ascii allows were answered 200).
 //!
-//! Each candidate is one `#[ignore]`d test over the same rows. When the recording is read:
-//!
-//! - ascii wins: delete the `full` and `simple` tests and drop `#[ignore]` from `ascii`.
-//! - full or simple wins: Storage needs its own mapping in `eval.rs` (the string methods take no
-//!   service today, and Firestore must stay ASCII-only), drop `#[ignore]` from the winner and
-//!   delete the other two.
-//!
-//! The rows are generated from the plan; `conformance/src/storage-rules-case-rust.test.mjs`
-//! compares this table with the plan, row by row, so the two cannot drift apart.
+//! The rows are generated from the plan (`conformance/src/storage-rules-s9/plan-case.mjs`);
+//! `conformance/src/storage-rules-case-rust.test.mjs` compares this table with the plan row by row,
+//! and `conformance/src/storage-rules-case-recorded.test.mjs` reads the published recording
+//! (`conformance/fixtures/storage/rules-case-production.json`) against the same plan.
 
 use std::collections::BTreeMap;
 
@@ -111,17 +110,12 @@ fn allows(row: &Row) -> bool {
     )
 }
 
-fn check(candidate: usize) {
-    let mut wrong = Vec::new();
-    for row in ROWS {
-        if allows(row) != row.allowed[candidate] {
-            wrong.push(row.id);
-        }
-    }
-    assert!(
-        wrong.is_empty(),
-        "rows answered against the candidate: {wrong:?}"
-    );
+/// The rows the evaluator answers differently from the ascii column (none today).
+fn rows_against_ascii() -> Vec<&'static str> {
+    ROWS.iter()
+        .filter(|row| allows(row) != row.allowed[0])
+        .map(|row| row.id)
+        .collect()
 }
 
 #[test]
@@ -138,28 +132,28 @@ fn the_table_holds_every_row_once_with_controls_the_same_under_every_candidate()
 }
 
 #[test]
-fn the_controls_hold_today() {
+fn the_controls_hold() {
     for row in ROWS.iter().filter(|r| r.id.starts_with("ctl-")) {
         assert_eq!(allows(row), row.allowed[0], "{}", row.id);
     }
 }
 
 #[test]
-#[ignore = "the answer of the STORAGE-RULES-CASE recording decides; see the module comment"]
-fn candidate_ascii_only_letters_a_to_z_change() {
-    check(0);
+fn only_ascii_letters_change_under_storage_rules() {
+    assert_eq!(rows_against_ascii(), Vec::<&str>::new());
 }
 
 #[test]
-#[ignore = "the answer of the STORAGE-RULES-CASE recording decides; see the module comment"]
-fn candidate_full_unicode_default_mapping() {
-    check(1);
-}
-
-#[test]
-#[ignore = "the answer of the STORAGE-RULES-CASE recording decides; see the module comment"]
-fn candidate_simple_one_character_mapping() {
-    check(2);
+fn the_rows_that_tell_the_candidates_apart_are_answered_the_ascii_way() {
+    // Rows on which ascii and at least one other candidate differ: the recording refuted the others.
+    let telling: Vec<&Row> = ROWS
+        .iter()
+        .filter(|r| r.allowed[0] != r.allowed[1] || r.allowed[0] != r.allowed[2])
+        .collect();
+    assert_eq!(telling.len(), 27);
+    for row in telling {
+        assert_eq!(allows(row), row.allowed[0], "{}", row.id);
+    }
 }
 
 const ROW_COUNT: usize = 41;

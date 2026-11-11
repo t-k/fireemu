@@ -50,15 +50,19 @@ describe("the Rust strict-side table of the case family", () => {
     });
   });
 
-  it("ignores all three candidate tests and runs the table and the controls", () => {
-    assert.equal((text.match(/#\[ignore = /g) ?? []).length, 3);
+  it("asserts the ascii answer in tests that run, with no ignored test and no candidate tests left", () => {
+    assert.ok(!/#\[ignore/.test(text));
+    assert.ok(!/candidate_/.test(text));
     for (const name of [
-      "candidate_ascii_only_letters_a_to_z_change",
-      "candidate_full_unicode_default_mapping",
-      "candidate_simple_one_character_mapping",
+      "the_table_holds_every_row_once",
+      "the_controls_hold",
+      "only_ascii_letters_change_under_storage_rules",
+      "the_rows_that_tell_the_candidates_apart_are_answered_the_ascii_way",
     ])
-      assert.match(text, new RegExp(`#\\[ignore = [^\\n]*\\]\\nfn ${name}\\(\\)`));
-    assert.match(text, /#\[test\]\nfn the_table_holds_every_row_once/);
-    assert.match(text, /#\[test\]\nfn the_controls_hold_today/);
+      assert.match(text, new RegExp(`#\\[test\\]\\nfn ${name}`));
+    const telling = CASE_ROWS.filter(
+      (r) => r.candidates.ascii !== r.candidates.full || r.candidates.ascii !== r.candidates.simple,
+    ).length;
+    assert.match(text, new RegExp(`assert_eq!\\(telling\\.len\\(\\), ${telling}\\);`));
   });
 });

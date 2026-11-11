@@ -168,10 +168,10 @@ test("a snapshot created again after its own DELETE is a new incarnation: a lost
   assert.ok(ledger.closureReady());
 });
 
-test("a new incarnation answered 2xx, a 409 or a known error is judged on its own", () => {
+test("a new incarnation answered 2xx or a known error is judged on its own, a 409 keeps the earlier one", () => {
   for (const [result, status] of [
     ["ok", "live"],
-    ["conflict", "unconfirmed-create"],
+    ["conflict", "deleted"],
     ["notfound", "never-created"],
   ]) {
     const ledger = createLedger();
@@ -306,4 +306,39 @@ test("an unanswered DELETE of an earlier incarnation stays sticky across a new c
   del(ledger, null);
   create(ledger, "ok");
   assert.equal(ledger.status(N), "delete-unknown");
+});
+
+test("S1: a 409 on re-creating our own name after our own 2xx DELETE keeps the earlier incarnation, which an absence read or A2 can close", () => {
+  const unread = createLedger();
+  create(unread, "ok");
+  del(unread, "ok");
+  create(unread, "conflict");
+  assert.equal(unread.status(N), "delete-unread");
+  unread.read(N, "absent", "list");
+  assert.equal(unread.status(N), "deleted");
+  const present = createLedger();
+  create(present, "ok");
+  del(present, "ok");
+  present.read(N, "present", "list");
+  create(present, "conflict");
+  assert.equal(present.status(N), "delete-present");
+  assert.deepEqual(present.deletable(), [N]);
+  // A2 settles it like any delete whose absence was not read.
+  const a2 = createLedger();
+  create(a2, "ok");
+  del(a2, "ok");
+  create(a2, "conflict");
+  a2.a2Absent(N);
+  assert.equal(a2.status(N), "gone-a2");
+  // A 409 on a fresh name (no earlier incarnation) stays an unconfirmed create: the packet says how it closes.
+  const fresh = createLedger();
+  create(fresh, "conflict");
+  assert.equal(fresh.status(N), "unconfirmed-create");
+  // A 409 after an unknown re-create does not undo it.
+  const lost = createLedger();
+  create(lost, "ok");
+  del(lost, "ok");
+  create(lost, "unknown");
+  create(lost, "conflict");
+  assert.equal(lost.status(N), "unconfirmed-create");
 });

@@ -48,9 +48,11 @@ export function createLedger() {
     /** Records the intent before the request is sent. */
     intent({ name, action, kind }) {
       const r = get(name, kind);
+      let restore = null; // the previous incarnation, put back if this create answers 409
       if (action === "create" && r.deletes.some((d) => d.answer === "ok")) {
         // A create after the run's own successful DELETE: a new incarnation. An unknown DELETE of the
         // old one stays unknown (sticky); everything else starts again.
+        restore = { ...r, history: undefined };
         r.history.push({ creates: r.creates, deletes: r.deletes });
         if (r.deletes.some((d) => d.answer === "unknown" || d.answer === null))
           r.stickyUnknownDelete = true;
@@ -61,7 +63,7 @@ export function createLedger() {
       if (action === "create" && !r.confirmed && !r.createUnknown)
         r.deletes = r.deletes.filter((d) => d.answer === "unknown" || d.answer === null);
       const id = ++seq;
-      const entry = { id, name, action, answer: null };
+      const entry = { id, name, action, answer: null, restore };
       requests.set(id, entry);
       (action === "create" ? r.creates : r.deletes).push(entry);
       if (action === "delete") r.retryAdmitted = false;
@@ -78,6 +80,14 @@ export function createLedger() {
         if (result === "ok") r.confirmed = true;
         else if (result === "unknown") r.createUnknown = true;
         else if (result !== "conflict" && !r.confirmed && !r.createUnknown) r.createRejected = true;
+        else if (result === "conflict" && entry.restore && !r.confirmed && !r.createUnknown) {
+          // A 409 on re-creating our own name after our own 2xx DELETE: this request created nothing, and
+          // what answered is the earlier incarnation (not yet read absent) or something we did not create.
+          // The earlier incarnation's state comes back, so an absence read or A2 can still close it.
+          const { history, ...before } = entry.restore;
+          void history;
+          Object.assign(r, before);
+        }
         // a 409 settles nothing about an earlier unknown create, and nothing about itself either
       }
     },

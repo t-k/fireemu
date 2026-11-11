@@ -9,6 +9,7 @@ import { createLedger } from "./ledger.mjs";
 import { buildRequest, setupRequests, Refusal } from "./requests.mjs";
 import { isOwned } from "./names.mjs";
 import { cleanup } from "./cleanup.mjs";
+import { SEND_REFUSED } from "./guard.mjs";
 
 export const CAPS = Object.freeze({
   requests: 260,
@@ -105,11 +106,33 @@ export function createRecorder({
     // A dedicated cell keeps one keep-alive connection; a fresh cell opens a new one for every request.
     const conn =
       meta.connPolicy === "fresh" ? `fresh:${sent}` : `${meta.connPolicy ?? "pool"}:${meta.cell}`;
-    const raw = await transport.send(request, {
-      conn,
-      connPolicy: meta.connPolicy ?? "pool",
-      timeoutMs: limit,
-    });
+    let raw;
+    try {
+      raw = await transport.send(request, {
+        conn,
+        connPolicy: meta.connPolicy ?? "pool",
+        timeoutMs: limit,
+      });
+    } catch (error) {
+      // A refusal means nothing was sent: the intent is a known non-creation and the run ends.
+      if (error?.code === SEND_REFUSED) {
+        if (intent !== null) ledger.answer(intent, "error");
+        throw error;
+      }
+      // Any other throw from a transport is an answer we never got: unknown, never a crash past the cleanup.
+      const now = clock.now();
+      journal.write({
+        event: "transport-error",
+        cell: meta.cell,
+        step: meta.step,
+        message: String(error?.message ?? error),
+      });
+      raw = {
+        startedAt: now,
+        completedAt: now,
+        failure: `transport-error:${error?.name ?? "Error"}`,
+      };
+    }
     lastActivityAt = Math.max(lastActivityAt, raw.completedAt ?? clock.now());
     // Latency counts from the moment the request went out, not from the connection setup (M3).
     const sentAt = raw.requestedAt ?? raw.startedAt;
@@ -168,7 +191,17 @@ export function createRecorder({
       journal.write({ event: "cell-skipped", cell: cell.id, reason: skipped });
       return out;
     }
-    await beforeCell(cell);
+    try {
+      await beforeCell(cell);
+    } catch (error) {
+      // The old token stays in use (it is still valid) for the cleanup; the cells stop.
+      journal.write({
+        event: "token-refresh-failed",
+        cell: cell.id,
+        message: String(error?.message ?? error),
+      });
+      throw new StopRun("token refresh failed");
+    }
     const cellStart = clock.now();
     const actual = [];
     const deadline = cellStart + Math.max(...planned(cell)) + 120000 + caps.cellOverrunMs;
@@ -209,6 +242,7 @@ export function createRecorder({
           stopped = error instanceof Refusal ? `refused: ${error.message}` : error.message;
           break;
         }
+        out.aborted = `error: ${error?.message ?? error}`;
         throw error;
       }
       // Ages count from the moment each request went out; lateness from its dispatch (M3).
@@ -247,6 +281,15 @@ export function createRecorder({
     return out;
   }
 
+  /** An unexpected error is a stop, never a crash past the cleanup; a send refusal is the one fatal exception. */
+  function stopFrom(error) {
+    if (error?.code === SEND_REFUSED) throw error;
+    if (error instanceof StopRun) return error.message;
+    const message = `error: ${error?.message ?? error}`;
+    journal.write({ event: "unexpected-error", message });
+    return message;
+  }
+
   async function run() {
     for (const request of setupRequests({ runId })) {
       try {
@@ -260,8 +303,7 @@ export function createRecorder({
           break;
         }
       } catch (error) {
-        if (!(error instanceof StopRun)) throw error;
-        stopped = error.message;
+        stopped = stopFrom(error);
         break;
       }
     }
@@ -270,8 +312,7 @@ export function createRecorder({
         try {
           await runCell(cell);
         } catch (error) {
-          if (!(error instanceof StopRun)) throw error;
-          stopped = error.message;
+          stopped = stopFrom(error);
         }
         if (stopped) break;
       }
@@ -288,8 +329,8 @@ export function createRecorder({
         journal,
       });
     } catch (error) {
-      if (!(error instanceof StopRun)) throw error;
-      report = { stopped: error.message };
+      if (error?.code === SEND_REFUSED) throw error;
+      report = { stopped: stopFrom(error) };
     }
     return {
       stopped,

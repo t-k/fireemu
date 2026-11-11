@@ -194,3 +194,50 @@ test("requestedAt: a new connection is ready after the start, a reused one at th
   );
   assert.ok(fresh.startedAt < fresh.requestedAt);
 });
+
+test("S2: the gRPC channel is warmed before the timed call, and an injected call is not warmed", async () => {
+  const order = [];
+  let tick = 0;
+  const clock = { now: () => (order.push("clock"), ++tick) };
+  const transport = createTransport({
+    getToken: () => "t",
+    clock,
+    protocol: "http",
+    host: "127.0.0.1",
+    port: 1,
+    grpcWarm: async (deadlineMs) => order.push(`warm:${deadlineMs}`),
+  });
+  const result = await transport
+    .send({ grpc: true, path: "projects/p/subscriptions/s" }, { timeoutMs: 4000 })
+    .catch((e) => e);
+  // The default call runs against a closed port and fails on its own; what matters is the order.
+  assert.equal(order[0], "warm:4000");
+  assert.ok(order.indexOf("clock") > 0, "the clock is first read after the warm-up");
+  assert.ok(result.failure !== undefined || result.status !== undefined);
+  transport.close();
+  order.length = 0;
+  const injected = createTransport({
+    getToken: () => "t",
+    clock,
+    protocol: "http",
+    host: "127.0.0.1",
+    port: 1,
+    grpcWarm: async () => order.push("warm"),
+    grpcCall: async () => ({ code: "OK" }),
+  });
+  await injected.send({ grpc: true, path: "projects/p/subscriptions/s" }, { timeoutMs: 4000 });
+  assert.ok(!order.includes("warm"));
+  const capped = [];
+  const long = createTransport({
+    getToken: () => "t",
+    clock,
+    protocol: "http",
+    host: "127.0.0.1",
+    port: 1,
+    grpcWarm: async (ms) => capped.push(ms),
+    grpcCall: undefined,
+  });
+  await long.send({ grpc: true, path: "projects/p/subscriptions/s" }, { timeoutMs: 60000 });
+  assert.deepEqual(capped, [10000], "the warm-up never waits longer than 10 s");
+  long.close();
+});

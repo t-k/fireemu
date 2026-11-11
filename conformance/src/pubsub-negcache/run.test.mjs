@@ -562,3 +562,49 @@ test("S7: the refresh is exactly 'older than the limit' at a cell boundary, and 
   assert.ok(expected !== undefined);
   assert.equal(jumped.issued[1], expected);
 });
+
+test("M1: main(record) with a refresh that fails: exit 2, the summary is written, the cleanup ran, the world is empty", async (t) => {
+  const root = fixture(t);
+  const clock = virtualClock(1000000);
+  const world = createWorld({ clock });
+  let calls = 0;
+  let output;
+  const code = await main(
+    ["record", "--run-id", id, "--out", "out", "--lock", "lock", "--packet", "packet"],
+    {
+      root,
+      env: {},
+      clock,
+      transport: world,
+      sourceHead: "h",
+      tokenRefreshMs: 60000,
+      print: (v) => {
+        output = v;
+      },
+      createCredentials: () => async () => {
+        if (++calls > 1) throw new Error("credential retrieval failed");
+        return "token";
+      },
+    },
+  );
+  assert.equal(code, 2);
+  assert.equal(output.stopped, "token refresh failed");
+  assert.ok(output.closureReady);
+  assert.ok(Object.values(world.state).every((m) => m.size === 0));
+  const summary = JSON.parse(fs.readFileSync(path.join(root, "out", `summary-${id}.json`), "utf8"));
+  assert.equal(summary.stopped, "token refresh failed");
+});
+
+test("a2 of a run whose summary is missing says where to rebuild it from", async (t) => {
+  const root = fixture(t);
+  fs.mkdirSync(path.join(root, "original"));
+  await assert.rejects(
+    main(["a2", "--run-id", id, "--from", "original", "--out", "o", "--lock", "lock"], {
+      root,
+      env: {},
+      token: "t",
+      transport: { send: async () => ({}) },
+    }),
+    new RegExp(`summary-${id}.json is missing.*capture-${id}.jsonl`),
+  );
+});

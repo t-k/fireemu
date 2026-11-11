@@ -180,7 +180,12 @@ export async function main(args, deps = {}) {
   let summary, ageMs;
   if (mode === "a2") {
     const from = resolvePath(root, options.from);
-    summary = JSON.parse(io.readFileSync(path.join(from, `summary-${runId}.json`), "utf8"));
+    const summaryPath = path.join(from, `summary-${runId}.json`);
+    if (!io.existsSync(summaryPath))
+      throw new Error(
+        `summary-${runId}.json is missing in ${from}: the run did not finish; rebuild the open list from capture-${runId}.jsonl (every create and DELETE it sent) and write the summary by hand before A2`,
+      );
+    summary = JSON.parse(io.readFileSync(summaryPath, "utf8"));
     if (summary.runId !== runId) throw new Error("summary run id mismatch");
     const rows = io
       .readFileSync(path.join(from, `capture-${runId}.jsonl`), "utf8")

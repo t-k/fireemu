@@ -415,7 +415,15 @@ export function combineRuns(first, second) {
     };
   }
   if (x?.calibration && y?.calibration) out.calibration = { runs: [x.calibration, y.calibration] };
-  return out;
+  // No rule is written unless forwarded GETs classified as slow on both kinds of connection in BOTH
+  // runs: otherwise the latency classes (and every hit and miss) do not hold on this network.
+  const holds = [x?.calibration?.latencyClassesHold, y?.calibration?.latencyClassesHold];
+  if (holds.every((value) => value === true)) return { rulesAllowed: true, answers: out };
+  return {
+    rulesAllowed: false,
+    withheld: `latencyClassesHold is ${JSON.stringify(holds)}, not true in both runs: no rule is written`,
+    answers: out,
+  };
 }
 
 export const cellIds = () => CELLS.map((c) => c.id);

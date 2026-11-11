@@ -1166,3 +1166,96 @@ test("skipped cells keep an explicit null abort and the reason", async () => {
   assert.equal(e1.aborted, null);
   assert.deepEqual(e1.steps, []);
 });
+
+test("M1: an unexpected error in a cell is a stop: the cleanup runs, the summary data is returned and the world ends empty", async () => {
+  let puts = 0;
+  const { run, world, rows } = record({
+    wrap: async (base, req, meta) => {
+      const out = await base(req, meta);
+      // The create executed, but reading its answer throws inside the recorder itself.
+      if (req.method === "PUT" && req.path.includes("-nc-n2a-x") && ++puts === 1)
+        return Object.defineProperty({ ...out }, "status", {
+          enumerable: true,
+          get() {
+            throw new TypeError("boom");
+          },
+        });
+      return out;
+    },
+  });
+  const out = await run();
+  assert.match(out.stopped, /^error: /);
+  assert.ok(rows.some((r) => r.event === "unexpected-error"));
+  assert.ok(out.records.some((r) => r.aborted?.startsWith("error: ")));
+  assert.ok(out.report.rounds >= 1, "the cleanup ran");
+  assert.ok(out.closureReady, JSON.stringify(out.open));
+  assert.ok(empty(world));
+});
+
+test("M1: a transport that throws is an unknown answer, not a crash past the cleanup", async () => {
+  for (const onCreate of [true, false]) {
+    let thrown = 0;
+    const { run, world, rows } = record({
+      wrap: async (base, req, meta) => {
+        const hit = onCreate
+          ? req.method === "PUT" && req.path.includes("-nc-n2a-x")
+          : req.method === "GET" && req.path.includes("-nc-n2a-x");
+        if (hit && ++thrown === 1) {
+          if (onCreate) await base(req, meta);
+          throw new TypeError("socket hang up");
+        }
+        return base(req, meta);
+      },
+    });
+    const out = await run();
+    assert.ok(rows.some((r) => r.event === "transport-error" && /socket hang up/.test(r.message)));
+    assert.equal(out.stopped, onCreate ? "unknown create" : null);
+    assert.ok(out.closureReady, JSON.stringify(out.open));
+    assert.ok(empty(world));
+  }
+});
+
+test("M1: a failed token refresh stops the cells, keeps the cleanup and the summary, and leaves the world empty", async () => {
+  const clock = (await import("./world.mjs")).virtualClock(0);
+  const world = (await import("./world.mjs")).createWorld({ clock });
+  const { createRecorder } = await import("./runner.mjs");
+  const rows = [];
+  let cells = 0;
+  const recorder = createRecorder({
+    runId: RUN_ID,
+    transport: world,
+    clock,
+    journal: { write: (r) => rows.push(r) },
+    beforeCell: async () => {
+      if (++cells === 5) throw new Error("credential retrieval failed");
+    },
+  });
+  const out = await recorder.run();
+  assert.equal(out.stopped, "token refresh failed");
+  assert.equal(out.records.length, 4);
+  assert.ok(
+    rows.some(
+      (r) => r.event === "token-refresh-failed" && /credential retrieval failed/.test(r.message),
+    ),
+  );
+  assert.ok(out.closureReady);
+  assert.ok(empty(world));
+});
+
+test("a send refusal is the one fatal error: it is rethrown and no resource intent stays unanswered as a creation", async () => {
+  const { recorder } = record({
+    wrap: async () => {
+      throw Object.assign(new Error("refusing to send"), { code: "SEND_REFUSED" });
+    },
+  });
+  const name = `projects/fireemu-oracle-idp/subscriptions/fireemu-observe-${RUN_ID}-nc-a1-x`;
+  await assert.rejects(
+    recorder.exec(
+      { method: "PUT", path: `/v1/${name}`, body: { topic: "t" }, targets: [name], create: true },
+      { cell: "a1", step: 0, op: "putSub" },
+    ),
+    /refusing to send/,
+  );
+  assert.equal(recorder.ledger.status(name), "never-created");
+  await assert.rejects(recorder.run(), /refusing to send/);
+});

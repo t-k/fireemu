@@ -26,17 +26,30 @@ export function createTransport({
   host = DEFAULT_ENDPOINT.host,
   port = DEFAULT_ENDPOINT.port,
   grpcCall,
+  grpcWarm,
 }) {
   const net = protocol === "https" ? https : protocol === "http" ? http : null;
   if (!net) throw new Error("unsupported protocol");
   const shared = new net.Agent({ keepAlive: true });
   const dedicated = new Map();
   let client;
+  const grpcClient = () => {
+    client ??= new grpc.Client(`${host}:${port}`, grpc.credentials.createSsl(), {
+      "grpc.enable_retries": 0,
+    });
+    return client;
+  };
+  // The channel is connected before the timed call (DNS, TCP, TLS and HTTP/2 setup stay out of the
+  // latency of the K1 read). A failed warm-up is not an answer: the timed call then fails on its own.
+  const warm =
+    grpcWarm ??
+    ((deadlineMs) =>
+      new Promise((resolve) => {
+        grpcClient().waitForReady(new Date(Date.now() + deadlineMs), () => resolve());
+      }));
   const defaultGrpc = ({ path, deadlineMs }) =>
     new Promise((resolve) => {
-      client ??= new grpc.Client(`${host}:${port}`, grpc.credentials.createSsl(), {
-        "grpc.enable_retries": 0,
-      });
+      grpcClient();
       const metadata = new grpc.Metadata();
       metadata.add("authorization", `Bearer ${getToken()}`);
       const Type = protos.google.pubsub.v1.GetSubscriptionRequest;
@@ -61,6 +74,7 @@ export function createTransport({
   const send = async (request, { conn, connPolicy, timeoutMs } = {}) => {
     assertSendAllowed(host);
     if (request.grpc) {
+      if (!grpcCall) await warm(Math.min(timeoutMs ?? 10000, 10000));
       const startedAt = clock.now();
       try {
         const result = await (grpcCall ?? defaultGrpc)({

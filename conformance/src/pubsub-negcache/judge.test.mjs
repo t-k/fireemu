@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  combineRuns,
+  combineRuns as combineRunsFull,
   EXPECT,
   inWindow,
   judgeRun,
@@ -13,6 +13,9 @@ import {
 } from "./judge.mjs";
 import { CELLS } from "./program.mjs";
 import { record } from "./support.mjs";
+
+// The combined answers; `combineRunsFull` also says whether any rule may be written (S3).
+const combineRuns = (a, b) => combineRunsFull(a, b).answers;
 
 const judged = async (params) => {
   const { run } = record({ params });
@@ -521,4 +524,32 @@ test("calibration: one missing side of the forwarded-GET comparison is no-data, 
   };
   const merged = combineRuns(none, none).ttl;
   assert.ok(merged.lastHitMs === null && merged.firstMissMs === null);
+});
+
+test("S3: no rule is written unless forwarded GETs classified as slow in both runs", async () => {
+  const slowCalib = (v) => ({ answers: { calibration: { latencyClassesHold: v } } });
+  const ok = combineRunsFull(slowCalib(true), slowCalib(true));
+  assert.equal(ok.rulesAllowed, true);
+  assert.equal(ok.withheld, undefined);
+  for (const [a, b] of [
+    [true, false],
+    [false, true],
+    [false, false],
+    [true, "no-data"],
+    ["no-data", true],
+    [true, undefined],
+  ]) {
+    const out = combineRunsFull(slowCalib(a), slowCalib(b));
+    assert.equal(out.rulesAllowed, false, `${a} ${b}`);
+    assert.match(
+      out.withheld,
+      /latencyClassesHold is .* not true in both runs: no rule is written/,
+    );
+  }
+  assert.equal(combineRunsFull({ answers: {} }, { answers: {} }).rulesAllowed, false);
+  // A real pair of runs on the fake production passes the gate.
+  assert.equal(combineRunsFull(base, base).rulesAllowed, true);
+  const slowFresh = recordOf("C0f");
+  slowFresh.steps.forEach((s) => (s.headersMs = 40));
+  assert.equal(combineRunsFull(base, withRecords(slowFresh)).rulesAllowed, false);
 });

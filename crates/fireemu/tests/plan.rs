@@ -255,6 +255,71 @@ fn the_auxiliary_listeners_and_port_notes_follow_the_options() {
 }
 
 #[test]
+fn a_listener_that_is_off_has_a_reason_and_one_that_starts_has_none() {
+    let dir = project("reasons");
+    // Hub off, Logging off; the Hub on a port that was asked for has no best-effort note.
+    let off = json_plan(
+        &dir,
+        &[
+            "up",
+            "--plan",
+            "--json",
+            "--hub-port",
+            "0",
+            "--logging-port",
+            "0",
+        ],
+        &[],
+    );
+    for name in ["hub", "logging"] {
+        assert_eq!(service(&off, name)["start"], false, "{name}");
+        assert!(service(&off, name)["reason"].is_string(), "{name}: {off}");
+        assert!(service(&off, name)["note"].is_null(), "{name}");
+    }
+    let on = json_plan(&dir, &["up", "--plan", "--json", "--hub-port", "4411"], &[]);
+    assert_eq!(service(&on, "hub")["start"], true);
+    assert_eq!(service(&on, "hub")["address"], "127.0.0.1:4411");
+    assert!(
+        service(&on, "hub")["note"].is_null(),
+        "asked for: not best effort"
+    );
+    assert!(service(&on, "hub")["reason"].is_null());
+    assert_eq!(service(&on, "logging")["start"], true);
+    assert!(service(&on, "logging")["reason"].is_null(), "{on}");
+}
+
+#[test]
+fn a_named_database_that_shares_the_default_files_still_has_its_own_rows() {
+    let dir = project("shared-files");
+    write(
+        &dir,
+        "firebase.json",
+        r#"{"firestore": [
+            {"database": "(default)", "rules": "same.rules", "indexes": "same.json"},
+            {"database": "other", "rules": "same.rules", "indexes": "same.json"}
+        ]}"#,
+    );
+    let plan = json_plan(&dir, &["up", "--plan", "--json"], &[]);
+    let settings: Vec<&str> = plan["paths"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["setting"].as_str().unwrap())
+        .collect();
+    assert!(settings.contains(&"firestore[other].rules"), "{settings:?}");
+    assert!(
+        settings.contains(&"firestore[other].indexes"),
+        "{settings:?}"
+    );
+    assert!(
+        !settings
+            .iter()
+            .any(|setting| setting.starts_with("firestore[(default)]")),
+        "{settings:?}"
+    );
+}
+
+#[test]
 fn hosting_and_the_support_emulators_say_when_and_how_they_start() {
     let dir = project("hosting");
     write(

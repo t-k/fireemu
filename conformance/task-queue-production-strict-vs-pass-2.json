@@ -1,0 +1,2078 @@
+{
+  "schemaVersion": 1,
+  "left": {
+    "alias": "pass-2",
+    "corpusSha256": "899fd699884992c7f96f8437d749237f16bbeafcc75ee5d41683373a741579e9"
+  },
+  "right": {
+    "alias": "strict",
+    "corpusSha256": "899fd699884992c7f96f8437d749237f16bbeafcc75ee5d41683373a741579e9"
+  },
+  "tolerance": {
+    "gapMs": 1500,
+    "firstMs": 1500
+  },
+  "layoutRules": [
+    {
+      "id": "volatile-edge-header",
+      "what": "x-client-data is added to some deliveries by the front end and not to others (names set of one delivery, 16 or 17 names)",
+      "rows": 0
+    },
+    {
+      "id": "eta-digits",
+      "what": "X-CloudTasks-TaskETA is a Unix time with three to seven fractional digits (a float printed without trailing zeros)",
+      "rows": 0
+    },
+    {
+      "id": "numeric-id-length",
+      "what": "a generated task id is a decimal number of 19 or 20 digits",
+      "rows": 0
+    },
+    {
+      "id": "attempt-count-jitter",
+      "what": "the number of attempts of a queue whose retry window does not bound them differs by at most {\"window-six\":100}",
+      "rows": 0
+    }
+  ],
+  "knownDifferences": [
+    {
+      "id": "KD-LOCAL-URL",
+      "cases": "*",
+      "part": "admission",
+      "ruling": 3,
+      "what": "The task's httpRequest.url in an answer is the function's own URL: a Cloud Run URL in production, the daemon's route here. The daemon refuses a task that names another URL, so this is the one address it can echo.",
+      "paths": ["/^\\/body\\/httpRequest\\/url$/"],
+      "rows": 54
+    },
+    {
+      "id": "KD-QUEUE-READS",
+      "cases": [
+        "get-dup-sched",
+        "get-dup-first",
+        "queue-tqdef",
+        "queue-tqretry",
+        "queue-tqlimit",
+        "queue-tqwindow",
+        "queue-tqconc1",
+        "queue-tqconc2",
+        "queue-tqrate",
+        "queue-tqdead",
+        "queue-absent"
+      ],
+      "part": "admission",
+      "ruling": 3,
+      "what": "getTask and getQueue are the Cloud Tasks management API, which neither fireemu nor the official emulator serves (405 here); the recordings are read-back evidence of the queue settings and of the task states, not a claim.",
+      "paths": ["/.*/"],
+      "rows": 11
+    },
+    {
+      "id": "KD-OIDC-TOKEN",
+      "cases": "*",
+      "part": "deliveries",
+      "ruling": 3,
+      "what": "Production delivers an OIDC Authorization header (a Bearer with three segments) and the task's own Authorization header is replaced by it; fireemu has no issuer to mint one, so no Authorization arrives and the SDK's auth context is absent (hasAuth).",
+      "paths": [],
+      "rows": 50
+    },
+    {
+      "id": "KD-PLATFORM-HEADERS",
+      "cases": "*",
+      "part": "deliveries",
+      "ruling": 3,
+      "what": "Cloud Run's front end adds forwarded, host, traceparent, x-cloud-trace-context, x-forwarded-for, x-forwarded-proto and accept-encoding to every delivery, and the daemon's own HTTP/1.1 hop adds connection; none has a counterpart on the other side (the platform is outside the claim).",
+      "paths": [],
+      "rows": 50
+    },
+    {
+      "id": "KD-LOCAL-PATH",
+      "cases": "*",
+      "part": "deliveries",
+      "ruling": 3,
+      "what": "A delivery's path is `/` in production; the daemon's runner routes on the function's public path, `/<project>/<region>/<function>`.",
+      "paths": ["/^\\[\\]\\/request\\/path$/"],
+      "rows": 50
+    }
+  ],
+  "properties": [
+    {
+      "id": "conc1-max-overlap",
+      "what": "a queue with maxConcurrentDispatches 1 runs one delivery at a time",
+      "left": 1,
+      "right": 1,
+      "verdict": "MATCH"
+    },
+    {
+      "id": "conc2-max-overlap",
+      "what": "a queue with maxConcurrentDispatches 2 runs two deliveries at a time, and does run two",
+      "left": 2,
+      "right": 2,
+      "verdict": "MATCH"
+    }
+  ],
+  "summary": {
+    "structure": {
+      "KNOWN_DIFFERENCE": 65,
+      "MATCH": 57
+    },
+    "admission": {
+      "KNOWN_DIFFERENCE": 65,
+      "MATCH": 57
+    },
+    "deliveries": {
+      "KNOWN_DIFFERENCE": 50,
+      "MATCH": 72
+    },
+    "timing": {
+      "WITHIN": 104,
+      "NOT_COMPARED": 18
+    }
+  },
+  "rows": [
+    {
+      "case": "retry-ladder",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-URL"]
+        },
+        "deliveries": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "retry-exhaust",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-URL"]
+        },
+        "deliveries": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "limit-two",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-URL"]
+        },
+        "deliveries": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "window-six",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-URL"]
+        },
+        "deliveries": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+        }
+      },
+      "timing": {
+        "verdict": "NOT_COMPARED"
+      }
+    },
+    {
+      "case": "dead-15",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-URL"]
+        },
+        "deliveries": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "conc1-a",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-URL"]
+        },
+        "deliveries": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+        }
+      },
+      "timing": {
+        "verdict": "NOT_COMPARED"
+      }
+    },
+    {
+      "case": "conc1-b",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-URL"]
+        },
+        "deliveries": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+        }
+      },
+      "timing": {
+        "verdict": "NOT_COMPARED"
+      }
+    },
+    {
+      "case": "conc1-c",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-URL"]
+        },
+        "deliveries": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+        }
+      },
+      "timing": {
+        "verdict": "NOT_COMPARED"
+      }
+    },
+    {
+      "case": "conc1-d",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-URL"]
+        },
+        "deliveries": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+        }
+      },
+      "timing": {
+        "verdict": "NOT_COMPARED"
+      }
+    },
+    {
+      "case": "conc2-a",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-URL"]
+        },
+        "deliveries": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+        }
+      },
+      "timing": {
+        "verdict": "NOT_COMPARED"
+      }
+    },
+    {
+      "case": "conc2-b",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-URL"]
+        },
+        "deliveries": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+        }
+      },
+      "timing": {
+        "verdict": "NOT_COMPARED"
+      }
+    },
+    {
+      "case": "conc2-c",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-URL"]
+        },
+        "deliveries": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+        }
+      },
+      "timing": {
+        "verdict": "NOT_COMPARED"
+      }
+    },
+    {
+      "case": "conc2-d",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-URL"]
+        },
+        "deliveries": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+        }
+      },
+      "timing": {
+        "verdict": "NOT_COMPARED"
+      }
+    },
+    {
+      "case": "conc2-e",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-URL"]
+        },
+        "deliveries": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+        }
+      },
+      "timing": {
+        "verdict": "NOT_COMPARED"
+      }
+    },
+    {
+      "case": "rate-a",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-URL"]
+        },
+        "deliveries": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+        }
+      },
+      "timing": {
+        "verdict": "NOT_COMPARED"
+      }
+    },
+    {
+      "case": "rate-b",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-URL"]
+        },
+        "deliveries": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+        }
+      },
+      "timing": {
+        "verdict": "NOT_COMPARED"
+      }
+    },
+    {
+      "case": "rate-c",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-URL"]
+        },
+        "deliveries": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+        }
+      },
+      "timing": {
+        "verdict": "NOT_COMPARED"
+      }
+    },
+    {
+      "case": "rate-d",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-URL"]
+        },
+        "deliveries": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+        }
+      },
+      "timing": {
+        "verdict": "NOT_COMPARED"
+      }
+    },
+    {
+      "case": "rate-e",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-URL"]
+        },
+        "deliveries": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+        }
+      },
+      "timing": {
+        "verdict": "NOT_COMPARED"
+      }
+    },
+    {
+      "case": "rate-f",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-URL"]
+        },
+        "deliveries": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+        }
+      },
+      "timing": {
+        "verdict": "NOT_COMPARED"
+      }
+    },
+    {
+      "case": "rate-g",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-URL"]
+        },
+        "deliveries": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+        }
+      },
+      "timing": {
+        "verdict": "NOT_COMPARED"
+      }
+    },
+    {
+      "case": "rate-h",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-URL"]
+        },
+        "deliveries": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+        }
+      },
+      "timing": {
+        "verdict": "NOT_COMPARED"
+      }
+    },
+    {
+      "case": "env-default",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-URL"]
+        },
+        "deliveries": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "env-named",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-URL"]
+        },
+        "deliveries": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "env-headers",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-URL"]
+        },
+        "deliveries": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "env-utf8",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-URL"]
+        },
+        "deliveries": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "env-unordered",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-URL"]
+        },
+        "deliveries": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "env-minimal",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-URL"]
+        },
+        "deliveries": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "env-large",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-URL"]
+        },
+        "deliveries": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "env-view-full",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-URL"]
+        },
+        "deliveries": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "sch-past",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-URL"]
+        },
+        "deliveries": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "sch-now",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-URL"]
+        },
+        "deliveries": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "sch-20s",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-URL"]
+        },
+        "deliveries": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "sch-nanos",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-URL"]
+        },
+        "deliveries": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "sch-offset",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-URL"]
+        },
+        "deliveries": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "sch-30d-less",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-URL"]
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "sch-30d-more",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "sch-31d",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "sch-year-9999",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "sch-text",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "sch-no-zone",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "sch-leap-second",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "err-no-task",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "err-no-http",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "err-unknown-field",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "err-queue-missing",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "id-space",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "id-slash",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "id-empty",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "id-dot",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "id-punct-ok",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-URL"]
+        },
+        "deliveries": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "id-500",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-URL"]
+        },
+        "deliveries": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "id-501",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "id-other-queue",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "id-other-project",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "dl-14s",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "dl-15s",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-URL"]
+        },
+        "deliveries": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "dl-1800s",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-URL"]
+        },
+        "deliveries": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "dl-1801s",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "dl-fraction",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-URL"]
+        },
+        "deliveries": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "dl-bare",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "dl-negative",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "dl-zero",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-URL"]
+        },
+        "deliveries": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "size-1000k",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-URL"]
+        },
+        "deliveries": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "size-1100k",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-01",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-URL"]
+        },
+        "deliveries": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-02",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-URL"]
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-03",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-04",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-05",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-06",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-07",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-08",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-09",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-URL"]
+        },
+        "deliveries": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-10",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-11",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-12",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-13",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-14",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-15",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-16",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-17",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-18",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-19",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-URL"]
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-20",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-21",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-22",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-URL"]
+        },
+        "deliveries": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-23",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-24",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-25",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-26",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-URL"]
+        },
+        "deliveries": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-27",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-28",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-29",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-30",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-31",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-32",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-33",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-34",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-35",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-URL"]
+        },
+        "deliveries": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-36",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-URL"]
+        },
+        "deliveries": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "dup-first",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-URL"]
+        },
+        "deliveries": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "dup-sched",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-URL"]
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "dup-sched-again",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "get-dup-sched",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-QUEUE-READS"]
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "del-dup-sched",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "del-dup-sched-again",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "dup-sched-after-delete",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "dup-other-queue",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-URL"]
+        },
+        "deliveries": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "del-missing",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "dup-first-after-done",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "get-dup-first",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-QUEUE-READS"]
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "del-dup-first",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "queue-tqdef",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-QUEUE-READS"]
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "queue-tqretry",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-QUEUE-READS"]
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "queue-tqlimit",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-QUEUE-READS"]
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "queue-tqwindow",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-QUEUE-READS"]
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "queue-tqconc1",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-QUEUE-READS"]
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "queue-tqconc2",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-QUEUE-READS"]
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "queue-tqrate",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-QUEUE-READS"]
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "queue-tqdead",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-QUEUE-READS"]
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "queue-absent",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-QUEUE-READS"]
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    }
+  ],
+  "digest": "696f0c9a24b10efa4e927e9b92b34da6e19e7073349f8083988f86144257341d"
+}

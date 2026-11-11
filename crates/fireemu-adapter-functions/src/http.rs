@@ -1838,6 +1838,28 @@ fn rebound_host_refusal(req: &Request<Incoming>) -> Option<Response<OutBody>> {
     })
 }
 
+/// The fields the strict daemon sets on a request to the runner: where the request came from (as the
+/// front end sets them) and whether the one credential of a non-callable HTTP endpoint was verified.
+///
+/// The runner cannot verify a credential. A callable's wrapper nested in a non-callable endpoint
+/// (invisible to discovery) refuses every credential the daemon did not verify here, as production's
+/// wrapper does; the field is the only way the runner learns it.
+fn add_strict_forwarding_headers(
+    headers: &mut Vec<(String, String)>,
+    peer_ip: std::net::IpAddr,
+    credential_verified: bool,
+) {
+    headers.retain(|(name, _)| {
+        !name.eq_ignore_ascii_case("x-forwarded-for")
+            && !name.eq_ignore_ascii_case("x-forwarded-proto")
+    });
+    headers.push(("x-forwarded-for".to_owned(), peer_ip.to_string()));
+    headers.push(("x-forwarded-proto".to_owned(), "https".to_owned()));
+    if credential_verified {
+        headers.push((VERIFIED_CREDENTIAL_HEADER.to_owned(), "1".to_owned()));
+    }
+}
+
 async fn respond(
     runtime: Arc<FunctionsRuntime>,
     channels: Arc<crate::eventarc_channels::ChannelStore>,
@@ -1929,18 +1951,8 @@ async fn respond(
         }
     };
     if profile == FunctionsHttpProfile::Strict {
-        headers.retain(|(name, _)| {
-            !name.eq_ignore_ascii_case("x-forwarded-for")
-                && !name.eq_ignore_ascii_case("x-forwarded-proto")
-        });
-        headers.push(("x-forwarded-for".to_owned(), peer_ip.to_string()));
-        headers.push(("x-forwarded-proto".to_owned(), "https".to_owned()));
-        // The runner cannot verify a credential. A callable's wrapper nested in a non-callable
-        // endpoint (invisible to discovery) refuses every credential the daemon did not verify here,
-        // as production's wrapper does; the field is the only way the runner learns it.
-        if plain_http && verified_single_credential(&runtime, req.headers()) {
-            headers.push((VERIFIED_CREDENTIAL_HEADER.to_owned(), "1".to_owned()));
-        }
+        let verified = plain_http && verified_single_credential(&runtime, req.headers());
+        add_strict_forwarding_headers(&mut headers, peer_ip, verified);
     }
     let body = match collect_body(req.into_body(), body_limit).await {
         Ok(body) => body,

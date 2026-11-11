@@ -1320,6 +1320,8 @@ pub struct RuntimeConfig {
     /// `pubsub.deadLetterAuthorization`: whether strict dead-letter forwarding needs the service
     /// agent's grants. Default: `implicit` unless `productionExact` or the key asks for `iam`.
     pub pubsub_dead_letter_authorization: DeadLetterAuthorization,
+    /// `pubsub.restNegativeCache`: whether REST caches missing subscriptions and snapshots.
+    pub pubsub_rest_negative_cache: RestNegativeCacheMode,
     /// `database.defaultAccess`: what a Realtime Database without rules allows.
     pub database_default_access: DatabaseDefaultAccess,
     /// `functions.authBlockingToken`: the Auth blocking function token mode.
@@ -1643,6 +1645,37 @@ impl DeadLetterAuthorization {
     }
 }
 
+/// `pubsub.restNegativeCache`: whether REST caches missing resources.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RestNegativeCacheMode {
+    /// Do not cache missing resources.
+    #[default]
+    Off,
+    /// Apply the provisional production cache behavior.
+    Production,
+}
+
+impl RestNegativeCacheMode {
+    /// Parses the configuration spelling.
+    #[must_use]
+    pub fn parse_config(text: &str) -> Option<Self> {
+        match text {
+            "off" => Some(Self::Off),
+            "production" => Some(Self::Production),
+            _ => None,
+        }
+    }
+
+    /// The configuration spelling.
+    #[must_use]
+    pub const fn as_config_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Production => "production",
+        }
+    }
+}
+
 /// One `appCheck.apps[]` entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppCheckApp {
@@ -1895,6 +1928,7 @@ impl Default for RuntimeConfig {
             pubsub_project_numbers: BTreeMap::new(),
             pubsub_local_bearer_token: None,
             pubsub_dead_letter_authorization: DeadLetterAuthorization::Implicit,
+            pubsub_rest_negative_cache: RestNegativeCacheMode::Off,
             database_default_access: DatabaseDefaultAccess::Open,
             hosting_cache_control: HostingCacheControl::None,
             hosting_client_country: HostingClientCountry::Honoured,
@@ -2275,6 +2309,7 @@ impl RuntimeConfig {
             "pubsub.projectNumbers" => Some(json!(self.pubsub_project_numbers)),
             "pubsub.authentication.localBearerToken" => Some(json!(self.pubsub_local_bearer_token)),
             "pubsub.pushMinimumRedeliveryIntervalMillis" => Some(json!(self.pubsub_push_minimum_redelivery_interval_millis)),
+            "pubsub.restNegativeCache" => Some(json!(self.pubsub_rest_negative_cache.as_config_str())),
             "scheduler.defaultTimeZone" => Some(json!(self.scheduler_default_time_zone)),
             "scheduler.catchUp" => Some(json!(self.scheduler_catch_up)),
             "scheduler.maxCatchUpRuns" => Some(json!(self.scheduler_max_catch_up_runs)),
@@ -2353,11 +2388,12 @@ pub(crate) const DAEMON_KEYS: [&str; 17] = [
 pub(crate) const EVENTS_KEYS: [&str; 2] = ["delivery", "maxAttempts"];
 
 /// The keys of the `pubsub` section.
-pub(crate) const PUBSUB_KEYS: [&str; 4] = [
+pub(crate) const PUBSUB_KEYS: [&str; 5] = [
     "pushMinimumRedeliveryIntervalMillis",
     "projectNumbers",
     "authentication",
     "deadLetterAuthorization",
+    "restNegativeCache",
 ];
 
 /// The keys of the `database` section.
@@ -4996,6 +5032,30 @@ impl RuntimeConfig {
         Ok(())
     }
 
+    /// `pubsub.restNegativeCache`: `"production"` needs the strict profile.
+    fn parse_rest_negative_cache(
+        p: &serde_json::Map<String, Value>,
+        cfg: &mut Self,
+    ) -> Result<(), ConfigError> {
+        let Some(value) = p.get("restNegativeCache") else {
+            return Ok(());
+        };
+        let mode = value
+            .as_str()
+            .and_then(RestNegativeCacheMode::parse_config)
+            .ok_or_else(|| {
+                ConfigError("pubsub.restNegativeCache must be \"off\" or \"production\"".to_owned())
+            })?;
+        if mode == RestNegativeCacheMode::Production && cfg.profile != CompatibilityProfile::Strict
+        {
+            return Err(ConfigError(
+                "pubsub.restNegativeCache \"production\" requires the strict profile".to_owned(),
+            ));
+        }
+        cfg.pubsub_rest_negative_cache = mode;
+        Ok(())
+    }
+
     fn parse_pubsub(p: &serde_json::Map<String, Value>, cfg: &mut Self) -> Result<(), ConfigError> {
         for key in p.keys() {
             if !PUBSUB_KEYS.contains(&key.as_str()) {
@@ -5041,6 +5101,7 @@ impl RuntimeConfig {
             }
             cfg.pubsub_dead_letter_authorization = mode;
         }
+        Self::parse_rest_negative_cache(p, cfg)?;
         if let Some(value) = p.get("projectNumbers") {
             let numbers = value
                 .as_object()
@@ -7039,6 +7100,10 @@ mod tests {
                     json!(cfg.pubsub_dead_letter_authorization.as_config_str()),
                 ),
                 (
+                    "pubsub.restNegativeCache",
+                    json!(cfg.pubsub_rest_negative_cache.as_config_str()),
+                ),
+                (
                     "database.defaultAccess",
                     json!(cfg.database_default_access.as_config_str()),
                 ),
@@ -7104,11 +7169,13 @@ mod tests {
                     }
                     ("pubsub.deadLetterAuthorization", true) => json!("iam"),
                     ("database.defaultAccess", true) => json!("locked"),
-                    ("hosting.cacheControl", true) => json!("production"),
                     ("hosting.clientCountry", true) => json!("ignored"),
-                    ("functions.authBlockingToken" | "eventarc.authentication", true) => {
-                        json!("production")
-                    }
+                    (
+                        "functions.authBlockingToken"
+                        | "eventarc.authentication"
+                        | "hosting.cacheControl",
+                        true,
+                    ) => json!("production"),
                     // The key only matters to the strict profile; the emulator profile
                     // runs the query (Report is its inert value).
                     ("firestore.missingIndexes", _) if profile == "emulator" => json!("report"),
@@ -10827,6 +10894,48 @@ mod tests {
         assert_eq!(
             RuntimeConfig::from_json(&input).unwrap_err().0,
             "functions.authBlockingToken \"production\" requires the strict profile"
+        );
+    }
+
+    #[test]
+    fn rest_negative_cache_validates_profile_and_values() {
+        for (input, error) in [
+            (
+                json!({"profile": "emulator", "pubsub": {"restNegativeCache": "production"}}),
+                "pubsub.restNegativeCache \"production\" requires the strict profile",
+            ),
+            (
+                json!({"pubsub": {"restNegativeCache": "invalid"}}),
+                "pubsub.restNegativeCache must be \"off\" or \"production\"",
+            ),
+            (
+                json!({"pubsub": {"restNegativeCache": null}}),
+                "pubsub.restNegativeCache must be \"off\" or \"production\"",
+            ),
+        ] {
+            let mut input = input;
+            input["schemaVersion"] = json!(1);
+            assert_eq!(RuntimeConfig::from_json(&input).unwrap_err().0, error);
+        }
+        for profile in ["strict", "emulator"] {
+            let cfg =
+                RuntimeConfig::from_json(&json!({"schemaVersion": 1, "profile": profile})).unwrap();
+            assert_eq!(cfg.pubsub_rest_negative_cache, RestNegativeCacheMode::Off);
+        }
+        // `productionExact` does not turn it on: that link needs an explicit owner decision.
+        for exact in [false, true] {
+            let cfg =
+                RuntimeConfig::from_json(&json!({"schemaVersion": 1, "productionExact": exact}))
+                    .unwrap();
+            assert_eq!(cfg.pubsub_rest_negative_cache, RestNegativeCacheMode::Off);
+        }
+        let cfg = RuntimeConfig::from_json(
+            &json!({"schemaVersion": 1, "productionExact": true, "pubsub": {"restNegativeCache": "production"}}),
+        )
+        .unwrap();
+        assert_eq!(
+            cfg.pubsub_rest_negative_cache,
+            RestNegativeCacheMode::Production
         );
     }
 

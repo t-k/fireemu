@@ -923,6 +923,11 @@
           },
           "description": "Strict-profile admission of Pub/Sub requests."
         },
+        "restNegativeCache": {
+          "enum": ["off", "production"],
+          "default": "off",
+          "description": "Production's REST frontend answers a GET of a subscription or snapshot with a cached 404 for about 9.6 seconds after a real 404 on the same resource, even after the resource exists. Off by default because it makes tests that create a resource right after probing it flaky. The value \"production\" is an explicit opt-in (strict profile only); productionExact does not select it. gRPC and topics are never affected. This rule is provisional until recorded."
+        },
         "deadLetterAuthorization": {
           "enum": ["implicit", "iam"],
           "default": "implicit",

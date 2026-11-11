@@ -35,6 +35,7 @@ use std::sync::{Arc, Mutex};
 
 pub use fireemu_core_pubsub::pagination::PagingPolicy;
 
+use fireemu_core_pubsub::rest_negative_cache::RestNegativeCache;
 use fireemu_core_pubsub::{
     DeadLetterForward, OrderedPullBatching, PubSubError, PubSubState, PubsubMessage,
     ReceivedMessage, StoredMessage, SubscriptionName, TopicName,
@@ -417,6 +418,8 @@ pub trait TopicDelivery: Send + Sync {
 pub struct PubSubHandle {
     paging_policy: PagingPolicy,
     local_bearer_token: Option<String>,
+    /// Production's REST negative cache; `None` (the default) serves the steady state.
+    rest_negative_cache: Option<Arc<Mutex<RestNegativeCache>>>,
     state: Arc<Mutex<PubSubState>>,
     delivery_notify: Arc<Notify>,
     delivery_revision: Arc<AtomicU64>,
@@ -472,6 +475,7 @@ impl PubSubHandle {
         Self {
             paging_policy: PagingPolicy::Emulator,
             local_bearer_token: None,
+            rest_negative_cache: None,
             state,
             delivery_notify,
             delivery_revision,
@@ -513,6 +517,25 @@ impl PubSubHandle {
     pub fn with_dead_letter_grants_required(self, required: bool) -> Self {
         self.state().set_dead_letter_grants_required(required);
         self
+    }
+
+    /// Whether the REST frontend reproduces production's negative cache: a real 404 for a
+    /// subscription or snapshot is repeated for a short window even after the resource exists.
+    /// Off by default, because it makes a test that creates a resource right after probing it
+    /// fail; the `pubsub.restNegativeCache = "production"` setting turns it on. gRPC and topics are never affected. The rule is
+    /// provisional until the observation packet has been recorded.
+    #[must_use]
+    pub fn with_rest_negative_cache(mut self, enabled: bool) -> Self {
+        self.rest_negative_cache =
+            enabled.then(|| Arc::new(Mutex::new(RestNegativeCache::default())));
+        self
+    }
+
+    /// Returns whether the REST negative cache is enabled.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn rest_negative_cache_enabled(&self) -> bool {
+        self.rest_negative_cache.is_some()
     }
 
     /// Configures one exact local fixture Bearer for strict admission; emulator ignores it.

@@ -2603,6 +2603,9 @@ fn configured_pubsub_handle(
                 fireemu_adapter_pubsub::PagingPolicy::Emulator
             }
         })
+        .with_rest_negative_cache(
+            cfg.pubsub_rest_negative_cache == crate::config::RestNegativeCacheMode::Production,
+        )
         .with_local_bearer_token(cfg.pubsub_local_bearer_token.clone())
         .with_dead_letter_grants_required(
             cfg.pubsub_dead_letter_authorization == crate::config::DeadLetterAuthorization::Iam,
@@ -2827,6 +2830,42 @@ mod tests {
             verifier(&cfg, &poisoned).verify("demo-app", &token),
             Reply::Unavailable
         );
+    }
+
+    #[test]
+    fn rest_negative_cache_setting_reaches_the_pubsub_handle() {
+        for (config, enabled) in [
+            (serde_json::json!({}), false),
+            (serde_json::json!({"profile": "emulator"}), false),
+            (serde_json::json!({"productionExact": true}), false),
+            (
+                serde_json::json!({"pubsub": {"restNegativeCache": "production"}}),
+                true,
+            ),
+            (
+                serde_json::json!({"productionExact": true, "pubsub": {"restNegativeCache": "production"}}),
+                true,
+            ),
+        ] {
+            let mut input = config;
+            input["schemaVersion"] = serde_json::json!(1);
+            let cfg = crate::config::RuntimeConfig::from_json(&input).unwrap();
+            let handle = super::configured_pubsub_handle(
+                fireemu_adapter_pubsub::PubSubHandle::new(
+                    std::sync::Arc::new(std::sync::Mutex::new(
+                        fireemu_core_pubsub::PubSubState::new(1),
+                    )),
+                    std::sync::Arc::new(std::sync::Mutex::new(
+                        fireemu_core_session::clock::VirtualClock::new(
+                            fireemu_core_types::time::LogicalInstant::from_unix_seconds(0),
+                        ),
+                    )),
+                    None,
+                ),
+                &cfg,
+            );
+            assert_eq!(handle.rest_negative_cache_enabled(), enabled, "{input}");
+        }
     }
 
     /// PS-01: the configuration decides whether dead-letter forwarding needs production's

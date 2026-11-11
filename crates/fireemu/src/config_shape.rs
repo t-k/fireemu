@@ -905,7 +905,7 @@ mod tests {
                         ("parse_events", "e") => "/events",
                         ("parse_eventarc", "section") => "/eventarc",
                         ("parse_eventarc", "entry") => "/eventarc/oauthCredentials/*",
-                        ("parse_pubsub", "p") => "/pubsub",
+                        ("parse_pubsub" | "parse_rest_negative_cache", "p") => "/pubsub",
                         ("parse_database", "d") => "/database",
                         ("parse_hosting", "h") => "/hosting",
                         ("parse_pubsub", "authentication") => "/pubsub/authentication",

@@ -10,6 +10,9 @@ use axum::http::{Method, Request, StatusCode};
 use axum::response::Response;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
+use fireemu_core_pubsub::rest_negative_cache::{
+    RestNegativeCache, RestOutcome, RestRequest, RestResource,
+};
 use fireemu_core_pubsub::subscription::{
     DeadLetterPolicy, ExpirationPolicy, PushConfig, RetryPolicy, DEFAULT_ACK_DEADLINE_SECONDS,
     DEFAULT_RETRY_MINIMUM_BACKOFF_SECONDS, MAX_RETRY_BACKOFF_SECONDS,
@@ -239,7 +242,28 @@ pub(crate) async fn handle(request: Request<Body>, handle: PubSubHandle) -> Resp
         }
     };
 
-    match dispatch(&method, &path, &query, &value, &body, &handle).await {
+    let negative_cache = negative_cache_probe(&handle, &method, &path, &value);
+    if let Some(probe) = &negative_cache {
+        if probe.serves() {
+            return error_response(
+                RestError::not_found(format!(
+                    "Resource not found (resource={}).",
+                    probe.resource.id()
+                )),
+                handle.paging_policy,
+            );
+        }
+    }
+    let result = dispatch(&method, &path, &query, &value, &body, &handle).await;
+    if let Some(probe) = negative_cache {
+        probe.observe(match &result {
+            // `dispatch` only answers `Ok` for a 2xx.
+            Ok(_) => RestOutcome::Success,
+            Err(error) if error.status == StatusCode::NOT_FOUND => RestOutcome::NotFound,
+            _ => RestOutcome::Other,
+        });
+    }
+    match result {
         Ok((status, response, schema)) => {
             json_response(status, response, handle.paging_policy, schema)
         }
@@ -262,6 +286,62 @@ pub(crate) async fn handle(request: Request<Body>, handle: PubSubHandle) -> Resp
             error_response(error, handle.paging_policy)
         }
     }
+}
+
+/// One request the REST negative cache looks at: the resource its URL names and what the
+/// request is, with the instant it started on the virtual clock.
+struct NegativeCacheProbe {
+    cache: std::sync::Arc<std::sync::Mutex<RestNegativeCache>>,
+    resource: RestResource,
+    request: RestRequest,
+    started: LogicalInstant,
+}
+
+impl NegativeCacheProbe {
+    fn serves(&self) -> bool {
+        self.cache.lock().expect("negative cache lock").serves(
+            &self.resource,
+            &self.request,
+            self.started,
+        )
+    }
+
+    fn observe(self, outcome: RestOutcome) {
+        self.cache.lock().expect("negative cache lock").observe(
+            &self.resource,
+            &self.request,
+            self.started,
+            outcome,
+        );
+    }
+}
+
+/// Reads a request as the negative cache needs it. `None` when the cache is off, or when the
+/// request is not a `GET` or a `PUT` of a plain subscription or snapshot URL (a topic, a
+/// collection, a `:verb`, a delete, ...): those neither arm nor read the cache.
+fn negative_cache_probe(
+    handle: &PubSubHandle,
+    method: &Method,
+    path: &str,
+    body: &Value,
+) -> Option<NegativeCacheProbe> {
+    let cache = handle.rest_negative_cache.clone()?;
+    let request = match *method {
+        Method::GET => RestRequest::Get,
+        Method::PUT => RestRequest::Create {
+            body_name: body
+                .get("name")
+                .and_then(Value::as_str)
+                .and_then(RestResource::parse_full_name),
+        },
+        _ => return None,
+    };
+    Some(NegativeCacheProbe {
+        cache,
+        resource: RestResource::parse_path(path)?,
+        request,
+        started: handle.now(),
+    })
 }
 
 fn filter_error_details(message: &str) -> Option<Value> {

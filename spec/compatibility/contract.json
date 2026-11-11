@@ -134,7 +134,7 @@
     "upgradePolicy": "Bumping the pin in conformance/package.json and re-recording turns every newly detected difference into a debt row in conformance/DEBT.md, because a row can only become a documented divergence once a human writes it into conformance/divergences.json. Any surface the new baseline adds is absent from this contract, so compat-check fails until it is enumerated with a scope; until then the claim sentence names the old version and is therefore false, which is the intended fail-closed behaviour."
   },
   "claim": {
-    "sentence": "Fireemu is compatible with the listed Local Emulator Suite products as shipped by firebase-tools 15.28.2 -- Cloud Firestore, Firebase Authentication, Cloud Storage for Firebase, Cloud Functions, Cloud Pub/Sub and Eventarc, with Security Rules on the Firestore and Storage surfaces -- under the `emulator` compatibility profile and the evidence recorded in `spec/compatibility/contract.json`; it makes no complete-suite and no unqualified superset claim while the Realtime Database is served without a parity claim (an open gap), Firebase Hosting is served as an open gap without a parity claim, App Hosting and Data Connect are deferred and Firebase Extensions is not planned.",
+    "sentence": "Fireemu is compatible with the listed Local Emulator Suite products as shipped by firebase-tools 15.28.2 -- Cloud Firestore, Firebase Authentication, Cloud Storage for Firebase, Cloud Functions, Cloud Pub/Sub and Eventarc, with Security Rules on the Firestore and Storage surfaces -- under the `emulator` compatibility profile and the evidence recorded in `spec/compatibility/contract.json`; it makes no complete-suite and no unqualified superset claim while the Realtime Database and Firebase Hosting are served without a parity claim against the official emulator (an open gap; both are verified against production for recorded cases), App Hosting and Data Connect are deferred and Firebase Extensions is not planned.",
     "documents": [
       "README.md"
     ],
@@ -2870,7 +2870,7 @@
         "service"
       ],
       "state": "gap",
-      "decision": "Served as an open gap with no production parity claim. A single firebase.json Hosting site provides local static routing, headers, URL canonicalization, localization and registered local Functions/Run rewrites. The finite offline corpus is compared against firebase-tools 15.28.2. The HOSTING parent is IMPLEMENTING and every production condition remains unverified.",
+      "decision": "Served. Two separate statuses apply. Against the official emulator (firebase-tools 15.28.2, the parity this contract tracks) the surface is an open gap: the finite offline corpus is compared with it, but no official-emulator parity claim is registered yet. Against production, the HOSTING parent is COMPAT_VERIFIED for the finite recorded cases only, which spec/compatibility/closure/HOSTING.json enumerates: a single firebase.json Hosting site, with static files, redirects, rewrites, glob matching, headers and caching, clean URLs, trailing slashes, localization, reserved paths, content types, compression and app association recorded twice on preview channels, replayed by the strict profile (the default) with the declared known differences. Function and Cloud Run rewrites, `ignore` and the local safety properties are not part of the production claim.",
       "docs": [
         "https://firebase.google.com/docs/emulator-suite/connect_hosting"
       ],
@@ -2882,7 +2882,7 @@
         "External Firebase SDK downloads and live Functions/Cloud Run fallback are never attempted. Missing local upstreams return an explicit local error."
       ],
       "gaps": [
-        "Production observations are pending.",
+        "no official-emulator parity claim is registered for the surface yet (production evidence is separate: the parent is COMPAT_VERIFIED for the finite recorded cases only, as spec/compatibility/closure/HOSTING.json enumerates them)",
         "Multi-site Hosting arrays and deploy target resolution are not implemented.",
         "External reserved SDK resources, complete regex/capture forms and unrecorded routing combinations remain outside the finite comparison."
       ],
@@ -2892,7 +2892,7 @@
       "claims": [
         {
           "id": "HOSTING-CLAIM-LOCAL",
-          "statement": "The IMPLEMENTING Hosting parent serves one local public site with the routing shapes exercised by the pinned offline fixture corpus, through normal CLI and Hub lifecycle integration. Production parity is unverified. Functions and Run rewrites resolve only to registered local Functions targets, without production fallback.",
+          "statement": "The Hosting parent serves one local public site with the routing shapes exercised by the pinned offline fixture corpus, through normal CLI and Hub lifecycle integration. Production verification is limited to the recorded cases of the COMPAT_VERIFIED parent (spec/compatibility/closure/HOSTING.json). Functions and Run rewrites resolve only to registered local Functions targets, without production fallback.",
           "capabilities": [
             {
               "id": "HOSTING-LOCAL-1",

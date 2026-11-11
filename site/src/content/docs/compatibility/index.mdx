@@ -21,8 +21,7 @@ Every product in the Local Emulator Suite of `firebase-tools` 15.28.2, the offic
 
 Fireemu is compatible with the Local Emulator Suite products that firebase-tools 15.28.2 ships and that Fireemu serves with parity (Cloud Firestore, Firebase Authentication, Cloud Storage for Firebase, Cloud Functions, Cloud Pub/Sub and Eventarc, with Security Rules on the Firestore and Storage surfaces), under the `emulator` compatibility profile and the evidence recorded in [`spec/compatibility/contract.json`](https://github.com/fireemu/fireemu/blob/main/spec/compatibility/contract.json). It makes no complete-suite and no unqualified superset claim, because:
 
-- the Realtime Database is served without a parity claim against the official emulator (an open gap);
-- Firebase Hosting is served without a parity claim (an open gap);
+- the Realtime Database and Firebase Hosting are served without a parity claim against the official emulator (an open gap; both are verified against production for recorded cases);
 - App Hosting and Data Connect are deferred;
 - Firebase Extensions is not planned.
 

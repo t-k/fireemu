@@ -18,10 +18,35 @@ const bytesOf = (path) => readFile(new URL(path, root));
 const sha = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const jsonOf = async (path) => JSON.parse(await bytesOf(path));
 
-test("the record is the Hosting parent awaiting review, with the corpus pinned", async () => {
+test("the record is the verified Hosting parent with its review, and the corpus pinned", async () => {
   assert.equal(record.parent, "HOSTING");
-  assert.equal(record.parentStatus, "IMPLEMENTING", "promotion is the coordinator's after review");
-  assert.equal(record.closureReview, undefined, "no review yet");
+  assert.equal(record.parentStatus, "COMPAT_VERIFIED");
+  assert.equal(record.inventoryStatus, "PROPOSED");
+  const review = record.closureReview;
+  assert.equal(review.decision, "APPROVED");
+  assert.equal(review.decider, "project coordinator");
+  assert.match(review.decidedOn, /^\d{4}-\d{2}-\d{2}$/);
+  assert.match(review.decisionRef, /owner ledger 2435, 2458; coordinator rulings 11-26/);
+  assert.match(review.reviewedCommit, /^[0-9a-f]{40}$/);
+  assert.equal(review.reviews.length, 3);
+  for (const entry of review.reviews.slice(0, 2)) {
+    assert.match(entry.reportPath, /^docs\.local\/reviews\/2026-11-11-hosting-parent-closure-/);
+    assert.match(entry.reportSha256, /^[0-9a-f]{64}$/);
+    assert.match(entry.reviewedCommit, /^[0-9a-f]{40}$/);
+  }
+  assert.equal(
+    review.reviews[2].reportPath,
+    undefined,
+    "the coordinator's re-check has no report file",
+  );
+  assert.equal(review.reviews[2].reviewedCommit, review.reviewedCommit);
+  assert.equal(review.reviews[2].outcome, "APPROVED");
+  assert.deepEqual(
+    record.followUps.filter((text) => /flate2/.test(text)),
+    [
+      "flate2 approved (owner ledger 2458, ruling 26): strict gzip is the next branch; Brotli stays a declared difference.",
+    ],
+  );
   assert.deepEqual(record.recordingPolicy, { observedPasses: 2, requiredPasses: 2, waiver: null });
   assert.equal(record.corpusPath, "conformance/src/hosting-production/corpus.manifest.json");
   assert.equal(record.corpusContentSha256, manifest.corpusSha256);
@@ -121,7 +146,7 @@ test("every observed condition cites the recordings and comparisons its rows com
     assert.equal(condition.status, "VERIFIED", key);
     assert.equal(condition.observedPasses, 2, key);
     assert.equal(condition.passComparison, "MATCH", key);
-    assert.equal(condition.reviewRef, undefined, "the review's reference is added at promotion");
+    assert.equal(condition.reviewRef, record.closureReview.reviews[0].reportSha256, key);
     assert.deepEqual(
       condition.productionEvidence.map(({ alias, fixturePath, fixtureSha256 }) => ({
         alias,
@@ -217,7 +242,6 @@ test("the release comparisons are the committed ones, and the limitations name w
   ]) {
     assert.ok(limits.includes(text), text);
   }
-  assert.match(record.followUps.join("\n"), /flate2/);
   assert.match(record.followUps.join("\n"), /404 page/);
   assert.match(record.followUps.join("\n"), /digit-bearing/);
   const compression = record.conditions.find((c) => c.conditionId === "HOSTING/compression-vary");

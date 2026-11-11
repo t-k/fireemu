@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "parent": "HOSTING",
-  "parentStatus": "IMPLEMENTING",
+  "parentStatus": "COMPAT_VERIFIED",
   "inventoryStatus": "PROPOSED",
   "oracleTrack": "preview-channel-observations",
   "scopeDecisions": [
@@ -99,7 +99,8 @@
       "profiles": {
         "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
         "emulator": "NO_PRODUCTION_CLAIM"
-      }
+      },
+      "reviewRef": "3417880952084c9fad3c06945d3847439620d7ff211e05c508f4de4843bc9109"
     },
     {
       "conditionId": "HOSTING/redirects",
@@ -177,7 +178,8 @@
       "profiles": {
         "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
         "emulator": "NO_PRODUCTION_CLAIM"
-      }
+      },
+      "reviewRef": "3417880952084c9fad3c06945d3847439620d7ff211e05c508f4de4843bc9109"
     },
     {
       "conditionId": "HOSTING/rewrites",
@@ -252,7 +254,8 @@
       "profiles": {
         "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
         "emulator": "NO_PRODUCTION_CLAIM"
-      }
+      },
+      "reviewRef": "3417880952084c9fad3c06945d3847439620d7ff211e05c508f4de4843bc9109"
     },
     {
       "conditionId": "HOSTING/glob-matching",
@@ -323,7 +326,8 @@
       "profiles": {
         "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
         "emulator": "NO_PRODUCTION_CLAIM"
-      }
+      },
+      "reviewRef": "3417880952084c9fad3c06945d3847439620d7ff211e05c508f4de4843bc9109"
     },
     {
       "conditionId": "HOSTING/headers-cache",
@@ -400,7 +404,8 @@
       "profiles": {
         "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
         "emulator": "NO_PRODUCTION_CLAIM"
-      }
+      },
+      "reviewRef": "3417880952084c9fad3c06945d3847439620d7ff211e05c508f4de4843bc9109"
     },
     {
       "conditionId": "HOSTING/clean-urls",
@@ -492,7 +497,8 @@
       "profiles": {
         "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
         "emulator": "NO_PRODUCTION_CLAIM"
-      }
+      },
+      "reviewRef": "3417880952084c9fad3c06945d3847439620d7ff211e05c508f4de4843bc9109"
     },
     {
       "conditionId": "HOSTING/trailing-slash",
@@ -595,7 +601,8 @@
       "profiles": {
         "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
         "emulator": "NO_PRODUCTION_CLAIM"
-      }
+      },
+      "reviewRef": "3417880952084c9fad3c06945d3847439620d7ff211e05c508f4de4843bc9109"
     },
     {
       "conditionId": "HOSTING/i18n",
@@ -673,7 +680,8 @@
       "profiles": {
         "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
         "emulator": "NO_PRODUCTION_CLAIM"
-      }
+      },
+      "reviewRef": "3417880952084c9fad3c06945d3847439620d7ff211e05c508f4de4843bc9109"
     },
     {
       "conditionId": "HOSTING/reserved-paths",
@@ -754,7 +762,8 @@
       "profiles": {
         "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
         "emulator": "NO_PRODUCTION_CLAIM"
-      }
+      },
+      "reviewRef": "3417880952084c9fad3c06945d3847439620d7ff211e05c508f4de4843bc9109"
     },
     {
       "conditionId": "HOSTING/not-found",
@@ -829,7 +838,8 @@
       "profiles": {
         "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
         "emulator": "NO_PRODUCTION_CLAIM"
-      }
+      },
+      "reviewRef": "3417880952084c9fad3c06945d3847439620d7ff211e05c508f4de4843bc9109"
     },
     {
       "conditionId": "HOSTING/content-types",
@@ -898,7 +908,8 @@
       "profiles": {
         "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
         "emulator": "NO_PRODUCTION_CLAIM"
-      }
+      },
+      "reviewRef": "3417880952084c9fad3c06945d3847439620d7ff211e05c508f4de4843bc9109"
     },
     {
       "conditionId": "HOSTING/compression-vary",
@@ -969,7 +980,8 @@
       "profiles": {
         "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
         "emulator": "NO_PRODUCTION_CLAIM"
-      }
+      },
+      "reviewRef": "3417880952084c9fad3c06945d3847439620d7ff211e05c508f4de4843bc9109"
     },
     {
       "conditionId": "HOSTING/app-association",
@@ -1038,7 +1050,8 @@
       "profiles": {
         "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
         "emulator": "NO_PRODUCTION_CLAIM"
-      }
+      },
+      "reviewRef": "3417880952084c9fad3c06945d3847439620d7ff211e05c508f4de4843bc9109"
     }
   ],
   "integratedRegression": {
@@ -1256,8 +1269,37 @@
     }
   ],
   "followUps": [
-    "Owner question: add flate2 (gzip) for the strict profile (ruling 15); Brotli stays out unless a crate is approved.",
+    "flate2 approved (owner ledger 2458, ruling 26): strict gzip is the next branch; Brotli stays a declared difference.",
     "Next idp packet: record the body of the default 404 page (ruling 16) and the hosted /__/auth/handler page with a GET (ruling 20), and the answers to dot-segment paths other than a leading parent: /a/b/.. (strict: 302 to /a/), /a/./b (302 to /a/b) and a path with a raw backslash (strict: 404).",
     "Next idp packet: probe redirect sources with digit-bearing parameter names so the `:id2` rule (ruling 24) is observed: /capture/one/two2 against /capture/:id/:id2, /capture/x/:id2, a single-parameter source such as /p/:a1 with /p/x, and a repeated name `/q/:id/:id`. Alternative readings to separate: (1) letters-and-underscore names with a literal suffix (strict today), (2) `:id2` a literal segment, (3) the rule rejected or dropped by production, (4) digit names allowed but a second parameter refused."
-  ]
+  ],
+  "closureReview": {
+    "decision": "APPROVED",
+    "decidedOn": "2026-11-11",
+    "decider": "project coordinator",
+    "decisionRef": "owner ledger 2435, 2458; coordinator rulings 11-26",
+    "reviewedCommit": "7c1a191fc5e40ff172f3c27bc16403a3c8a1ad6e",
+    "reviews": [
+      {
+        "reviewer": "independent promotion reviewer",
+        "reportPath": "docs.local/reviews/2026-11-11-hosting-parent-closure-promotion-review.md",
+        "reportSha256": "3417880952084c9fad3c06945d3847439620d7ff211e05c508f4de4843bc9109",
+        "reviewedCommit": "c56ebcd4a91aa6733e77ac3357e26256da91bca3",
+        "outcome": "PROMOTE-AFTER-FIXES"
+      },
+      {
+        "reviewer": "independent promotion reviewer",
+        "reportPath": "docs.local/reviews/2026-11-11-hosting-parent-closure-delta-review.md",
+        "reportSha256": "6f6e0c6d5653f008c423e033b5eaa99e4798a5580557bd67985407e07a87279b",
+        "reviewedCommit": "2d4b64fe44ba717e69ee208a3114e06544a28a96",
+        "outcome": "PROMOTE-AFTER-FIXES"
+      },
+      {
+        "reviewer": "project coordinator",
+        "reviewedCommit": "7c1a191fc5e40ff172f3c27bc16403a3c8a1ad6e",
+        "outcome": "APPROVED",
+        "scope": "re-check of the delta review's D1 to D4 (the dot-segment 302 refusal of raw backslash, control character and space, the release judge and replay tests, RFC 3986 trailing dot segments, the config.rs test placement) on 7c1a191fc; recorded in the coordinator's message of 2026-11-11, no report file"
+      }
+    ]
+  }
 }

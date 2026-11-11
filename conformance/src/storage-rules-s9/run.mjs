@@ -203,6 +203,16 @@ export function readingOf(plan, report) {
   };
 }
 
+/** The target of a run against production; only a rehearsal (a fake world) is marked as one, which is the only way past the wire's launch check. */
+export function productionTarget(rehearsal) {
+  return {
+    name: "production",
+    bucket: BUCKET,
+    project: PROJECT,
+    ...(rehearsal === true ? { rehearsal: true } : {}),
+  };
+}
+
 /**
  * The collaborators of a command that sends. A real run (the default) takes the real ones and
  * ignores any a caller passes, after checking the launch flag in the process environment. A
@@ -274,12 +284,7 @@ export async function recordProductionRun({
   guardEgress(PRODUCTION_HOSTS);
   const tokens = tokenSource({ mint: () => adcToken(exec), now: clock });
   const accessToken = tokens.get();
-  const target = {
-    name: "production",
-    bucket: BUCKET,
-    project: PROJECT,
-    ...(rehearsal === true ? { rehearsal: true } : {}),
-  };
+  const target = productionTarget(rehearsal);
   out.save("run-header.json", { runId, plan: plan.id, startedAt, baseline, ...pin, target });
   let final;
   await locks(
@@ -416,12 +421,7 @@ export async function recoverRun({
   guardEgress(PRODUCTION_HOSTS);
   const tokens = tokenSource({ mint: () => adcToken(exec), now: clock });
   const accessToken = tokens.get();
-  const target = {
-    name: "production",
-    bucket: BUCKET,
-    project: PROJECT,
-    ...(rehearsal === true ? { rehearsal: true } : {}),
-  };
+  const target = productionTarget(rehearsal);
   out.save("run-header.json", {
     runId: header.runId,
     recoverOf: header.runId,
@@ -565,12 +565,7 @@ export async function readbackRun({
   const report = await reader({
     plan,
     unknowns,
-    target: {
-      name: "production",
-      bucket: BUCKET,
-      project: PROJECT,
-      ...(rehearsal === true ? { rehearsal: true } : {}),
-    },
+    target: productionTarget(rehearsal),
     runId: header.runId,
     baseline: header.baseline,
     entry,

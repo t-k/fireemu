@@ -25,6 +25,7 @@ import { CASE_PLAN } from "./storage-rules-s9/plan-case.mjs";
 import {
   adcToken,
   newOutDir,
+  productionTarget,
   readbackRun,
   recordProductionRun,
   recoverRun,
@@ -93,6 +94,21 @@ describe("the launch flag, read from the real environment at every call", () => 
       probe("nope", { [LAUNCH_FLAG]: "nope" }),
       /^refused/,
       "an unknown family is never allowed",
+    );
+  });
+
+  it("says what it needs, with the family when one is named", () => {
+    assert.throws(
+      () => requireLaunch(),
+      (e) => e.message === `production sending needs ${LAUNCH_FLAG}`,
+    );
+    assert.throws(
+      () => requireLaunch("case"),
+      (e) => e.message === `production sending needs ${LAUNCH_FLAG}=case`,
+    );
+    assert.throws(
+      () => requireLaunch("s9"),
+      (e) => e.message === `production sending needs ${LAUNCH_FLAG}=s9`,
     );
   });
 
@@ -202,6 +218,20 @@ describe("the real clients", () => {
     });
     assert.equal((await rehearsal.wire("x", request, { read: true })).status, 200);
     assert.equal(sent, 1);
+  });
+});
+
+describe("the target of a run", () => {
+  it("is marked as a rehearsal only when the caller says exactly `true`, so a real run passes the wire's launch check", () => {
+    const real = {
+      name: "production",
+      bucket: "fireemu-oracle-query.firebasestorage.app",
+      project: "fireemu-oracle-query",
+    };
+    assert.deepEqual(productionTarget(true), { ...real, rehearsal: true });
+    for (const value of [false, undefined, null, 1, "true", {}, 0, ""])
+      assert.deepEqual(productionTarget(value), real, String(value));
+    assert.ok(!("rehearsal" in productionTarget(false)));
   });
 });
 

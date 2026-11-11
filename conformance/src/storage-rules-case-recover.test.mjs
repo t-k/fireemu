@@ -374,6 +374,23 @@ describe("the recover command", () => {
       ...del(8, "ddd444", { phase: "after", n: 8, status: 403 }),
     ].map((l) => JSON.stringify(l));
     assert.deepEqual(ownRulesetsOf(lines.join("\n"), PROJECT), [name("ccc333"), name("ddd444")]);
+    // A read of a ruleset answered 200 is not a delete: the ruleset stays on the list.
+    const get = (n, id) => [
+      {
+        phase: "before",
+        n,
+        kind: "ruleset-get",
+        url: `https://firebaserules.googleapis.com/v1/${name(id)}`,
+      },
+      { phase: "after", n, status: 200 },
+    ];
+    assert.deepEqual(
+      ownRulesetsOf(
+        [...create(1, "aaa111"), ...get(2, "aaa111")].map((l) => JSON.stringify(l)).join("\n"),
+        PROJECT,
+      ),
+      [name("aaa111")],
+    );
     // A delete of a name the run never created removes nothing.
     assert.deepEqual(
       ownRulesetsOf(

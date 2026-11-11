@@ -1636,7 +1636,7 @@
     },
     "strictVsPass1": {
       "path": "conformance/task-queue-production-strict-vs-pass-1.json",
-      "sha256": "723dfc72867833c7293bc31dd32b3175809f05dffc8ff7764d83b11393477442",
+      "sha256": "0c86d1235538fb623c88c03dc3538655b233652cfb8532d2e8dba0d8622d3314",
       "rows": 122,
       "summary": {
         "MATCH": 57,
@@ -1660,7 +1660,7 @@
     },
     "localStrictReplay": {
       "path": "conformance/task-queue-production-local-strict.json",
-      "sha256": "ed8669e80f4104bff4c9b0ed32b13e97a65f992f7b9dfcd819b0a54c6f48e848"
+      "sha256": "812d4b930e86a652fc4770cc071e8d785b56c95a8537c49f7e62dc3d667d0fb5"
     }
   },
   "knownDifferences": {

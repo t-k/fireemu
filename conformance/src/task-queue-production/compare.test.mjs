@@ -476,3 +476,52 @@ test("a timing known difference is counted in the rows of its allowance", () => 
   });
   assert.equal(quiet.knownDifferences[0].rows, 0);
 });
+
+test("a timing allowance with a bound covers a first delay only while the excess over the tolerance stays inside production's spread", () => {
+  const kd = KNOWN_DIFFERENCES.find((k) => k.id === "KD-SCHEDULE-CLOCK-SKEW");
+  const row = (rightFirst, spread, gaps = []) =>
+    compareProjections(
+      projection({ "pw-26": record({ timing: timing(3700, gaps) }) }),
+      projection({ "pw-26": record({ timing: timing(rightFirst, gaps) }) }),
+      { knownDifferences: [kd], productionSpread: { "pw-26": spread } },
+    ).rows[0];
+  // 1900 ms apart: 400 ms over the 1500 ms tolerance.
+  const covered = row(5600, 1000);
+  assert.equal(covered.timing.verdict, "KNOWN_DIFFERENCE");
+  assert.deepEqual(covered.timing.allowance, {
+    differenceMs: 1900,
+    toleranceMs: TOLERANCE.firstMs,
+    excessMs: 400,
+    productionSpreadMs: 1000,
+  });
+  assert.equal(row(5600, 400).timing.verdict, "KNOWN_DIFFERENCE", "the bound is inclusive");
+  assert.equal(row(5600, 399).timing.verdict, "OUTSIDE");
+  assert.equal(row(5600, 0).timing.verdict, "OUTSIDE", "no spread, no allowance");
+  assert.equal(row(5000, 0).timing.verdict, "WITHIN", "inside the tolerance needs none");
+  assert.equal(row(1700, 5000).timing.verdict, "KNOWN_DIFFERENCE", "either direction");
+  // A gap or an attempt count is not a first delay.
+  assert.equal(row(3700, 5000, [1000]).timing.verdict, "WITHIN");
+  const gap = compareProjections(
+    projection({ "pw-26": record({ timing: timing(3700, [1000]) }) }),
+    projection({ "pw-26": record({ timing: timing(3700, [9000]) }) }),
+    { knownDifferences: [kd], productionSpread: { "pw-26": 99999 } },
+  ).rows[0];
+  assert.equal(gap.timing.verdict, "OUTSIDE");
+  // Another case is not covered.
+  const other = compareProjections(
+    projection({ a: record({ timing: timing(3700) }) }),
+    projection({ a: record({ timing: timing(5600) }) }),
+    { knownDifferences: [kd], productionSpread: { a: 5000 } },
+  ).rows[0];
+  assert.equal(other.timing.verdict, "OUTSIDE");
+});
+
+test("a case with no production spread known gets no allowance", () => {
+  const kd = KNOWN_DIFFERENCES.find((k) => k.id === "KD-SCHEDULE-CLOCK-SKEW");
+  const result = compareProjections(
+    projection({ "pw-26": record({ timing: timing(3700) }) }),
+    projection({ "pw-26": record({ timing: timing(5600) }) }),
+    { knownDifferences: [kd] },
+  );
+  assert.equal(result.rows[0].timing.verdict, "OUTSIDE");
+});

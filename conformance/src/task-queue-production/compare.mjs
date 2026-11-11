@@ -193,6 +193,8 @@ export function compareProjections(
     noTimingClaim = new Set(),
     tolerance = TOLERANCE,
     attemptJitter = ATTEMPT_JITTER,
+    // The first-delay spread between the two production runs of a case, in ms (`{ [case]: ms }`): what a timing allowance may add.
+    productionSpread = {},
   } = {},
 ) {
   for (const kd of knownDifferences)
@@ -293,10 +295,18 @@ export function compareProjections(
     let timing = compareTiming(l.timing, r.timing, { tolerance, claim: !noTimingClaim.has(key) });
     let timingKnown = null;
     if (timing.verdict === "OUTSIDE") {
-      timingKnown = knownDifferences.find(
-        (kd) => kd.part === "timing" && (kd.cases === "*" || kd.cases.includes(key)),
-      );
-      if (timingKnown) timing = { ...timing, verdict: "KNOWN_DIFFERENCE" };
+      // An allowance covers a timing only when its own bound holds: it may add to the tolerance no more than the spread
+      // production showed between its two runs of the same case.
+      const spreadMs = productionSpread[key] ?? 0;
+      for (const kd of knownDifferences.filter(
+        (k) => k.part === "timing" && (k.cases === "*" || k.cases.includes(key)),
+      )) {
+        const bound = kd.allowance ? kd.allowance({ timing, tolerance, spreadMs }) : null;
+        if (kd.allowance && !bound) continue;
+        timingKnown = kd;
+        timing = { ...timing, verdict: "KNOWN_DIFFERENCE", ...(bound ? { allowance: bound } : {}) };
+        break;
+      }
     }
     rows.push({
       case: key,

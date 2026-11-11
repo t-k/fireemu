@@ -1636,7 +1636,7 @@
     },
     "strictVsPass1": {
       "path": "conformance/task-queue-production-strict-vs-pass-1.json",
-      "sha256": "0c86d1235538fb623c88c03dc3538655b233652cfb8532d2e8dba0d8622d3314",
+      "sha256": "1dc521b38d90b0a810af992e3cd42ba27e96d238a29a39aa83ef547e82af9253",
       "rows": 122,
       "summary": {
         "MATCH": 57,
@@ -1648,7 +1648,7 @@
     },
     "strictVsPass2": {
       "path": "conformance/task-queue-production-strict-vs-pass-2.json",
-      "sha256": "d85d16de3a950dd72c21c5e45522961fbba3c382151a208d9e9cc07e5dd89e15",
+      "sha256": "884f0371c8a7f3fa65ae4d773ed651b138213cff07b62b04e7c1a113110e9b3d",
       "rows": 122,
       "summary": {
         "MATCH": 57,
@@ -1660,12 +1660,12 @@
     },
     "localStrictReplay": {
       "path": "conformance/task-queue-production-local-strict.json",
-      "sha256": "812d4b930e86a652fc4770cc071e8d785b56c95a8537c49f7e62dc3d667d0fb5"
+      "sha256": "bf88fb8a5ce465702b095b01e9b6579827c08f4c063038325881b970fc5b5d38"
     }
   },
   "knownDifferences": {
     "path": "conformance/src/task-queue-production/known-differences.mjs",
-    "sha256": "196f75bdd75e3093944bd42e62e965caf8bf75f41476635b5fa93df5f250b58c",
+    "sha256": "3b3a97d374ebd72e4084f255526787cb812ccd7bb16bec3b10837314f6cd744e",
     "entries": [
       "KD-LOCAL-URL",
       "KD-QUEUE-READS",

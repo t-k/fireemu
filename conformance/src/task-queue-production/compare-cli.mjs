@@ -17,15 +17,26 @@ const load = (path) => JSON.parse(readFileSync(path, "utf8"));
 /** Two production runs against each other: only the layouts that vary between runs are hidden, no known difference applies. */
 export const compareRuns = (a, b) => compareProjections(a, b, { noTimingClaim: NO_TIMING_CLAIM });
 
-/** fireemu against a recording: the known differences apply. */
-export const compareStrict = (local, recording, { tolerance } = {}) =>
-  compareProjections(recording, local, {
+/**
+ * fireemu against a recording: the known differences apply. `other` is the other production recording, whose first-delay
+ * difference from `recording` bounds what a timing allowance may add (production's own spread on the same case).
+ */
+export const compareStrict = (local, recording, { tolerance, other } = {}) => {
+  const productionSpread = {};
+  for (const [key, record] of Object.entries(recording.cases)) {
+    const a = record.timing.firstMs;
+    const b = other?.cases[key]?.timing.firstMs;
+    if (typeof a === "number" && typeof b === "number") productionSpread[key] = Math.abs(a - b);
+  }
+  return compareProjections(recording, local, {
     noTimingClaim: NO_TIMING_CLAIM,
     knownDifferences: KNOWN_DIFFERENCES,
     // A queue with maxAttempts 100 keeps retrying until the run ends: the attempts compared are the first ones both sides made.
     attemptJitter: { "window-six": 100 },
+    productionSpread,
     ...(tolerance ? { tolerance } : {}),
   });
+};
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const [command, ...args] = process.argv.slice(2);
@@ -41,7 +52,13 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     const [localPath, pass, out] = args;
     writeFileSync(
       out,
-      JSON.stringify(compareStrict(load(localPath), load(RECORDINGS[pass])), null, 2) + "\n",
+      JSON.stringify(
+        compareStrict(load(localPath), load(RECORDINGS[pass]), {
+          other: load(RECORDINGS[pass === "pass-1" ? "pass-2" : "pass-1"]),
+        }),
+        null,
+        2,
+      ) + "\n",
       { flag: "wx" },
     );
   } else throw new Error("runs <out> | strict <local.json> <pass-1|pass-2> <out>");

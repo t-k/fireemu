@@ -88,7 +88,7 @@
       "cases": ["pw-22", "pw-26"],
       "part": "timing",
       "ruling": 3,
-      "what": "A task scheduled a few seconds ahead of the client's clock is delivered after the delay between the server's create time and that scheduleTime, which holds the skew between the client's clock and Cloud Tasks' (production's two runs differ by 1.1 s on these cases, 3.7 s and 4.8 s for a 5 s schedule); locally both clocks are one. Exact timing is outside the scope (ruling 3).",
+      "what": "A task scheduled a few seconds ahead of the client's clock is delivered after the delay between the server's create time and that scheduleTime, which holds the skew between the client's clock and Cloud Tasks' (production's two runs differ by 0.7 s and 1.1 s on these cases for a 5 s schedule); locally both clocks are one. The allowance covers only a first delivery that is outside the tolerance, and adds to the tolerance no more than the spread production showed between its two runs of the same case. Exact timing is outside the scope (ruling 3).",
       "paths": ["/.*/"],
       "rows": 1
     },
@@ -1598,7 +1598,13 @@
         "verdict": "KNOWN_DIFFERENCE",
         "why": "first",
         "a": 3712,
-        "b": 5592
+        "b": 5444,
+        "allowance": {
+          "differenceMs": 1732,
+          "toleranceMs": 1500,
+          "excessMs": 232,
+          "productionSpreadMs": 1071
+        }
       },
       "timingKnownDifference": "KD-SCHEDULE-CLOCK-SKEW"
     },
@@ -2088,5 +2094,5 @@
       }
     }
   ],
-  "digest": "0fda2c0fddaa92a890bff2ff37668e3362ba083399403a22f62e9626e951a9db"
+  "digest": "ec6e953aaf333cdd8b554106278e104da84d5e518dd36b31eb66521e4e591df8"
 }

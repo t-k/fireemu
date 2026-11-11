@@ -97,3 +97,9 @@ test("the arming steps of the cells are the ones the packet describes", () => {
     [4000, 7000, 13000],
   );
 });
+
+test("the program is frozen: its canonical JSON has the pinned digest", async () => {
+  const { createHash } = await import("node:crypto");
+  const digest = createHash("sha256").update(JSON.stringify(CELLS)).digest("hex");
+  assert.equal(digest, "54f4124c22a5ec1dca70d7b1d363e34eb0a5cf9e143c56c46d097f2a44fc5c45");
+});

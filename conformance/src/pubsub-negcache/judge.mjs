@@ -231,7 +231,10 @@ export function judgeRun(records) {
     }
     if (valid.V4) {
       const list = step(valid.V4, 3);
-      const names = list?.body?.subscriptions?.map((s) => s.name) ?? null;
+      const names =
+        list?.kind === "ok" && list.body
+          ? (list.body.subscriptions ?? []).map((s) => s.name)
+          : null;
       serve.V4present =
         names === null ? "unread" : names.some((n) => n.endsWith("-nc-v4-x")) ? "yes" : "no";
       const rearm = readOutcome(step(valid.V4, 4));

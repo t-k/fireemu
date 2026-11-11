@@ -387,3 +387,324 @@ test("the cleanup LIST rows in a recording never carry a foreign name", async ()
   for (const row of lists) assert.ok(!JSON.stringify(row.body).includes("not-ours"));
   assert.ok(lists.every((row) => row.body.foreign >= 1));
 });
+
+test("the caps and the per-request timeouts are the stated ones", async () => {
+  const { timeoutMs } = await import("./runner.mjs");
+  assert.deepEqual(
+    { ...CAPS },
+    {
+      requests: 260,
+      cleanupRequests: 50,
+      wallMs: 2700000,
+      cleanupReserveMs: 300000,
+      lateMs: 250,
+      cellOverrunMs: 60000,
+    },
+  );
+  assert.equal(timeoutMs({ method: "PUT", path: "/v1/x" }), 19000);
+  assert.equal(timeoutMs({ method: "DELETE", path: "/v1/x" }), 13000);
+  assert.equal(timeoutMs({ method: "POST", path: "/v1/x:pull" }), 25000);
+  assert.equal(timeoutMs({ method: "GET", path: "/v1/x" }), 10000);
+  assert.equal(timeoutMs({ method: "POST", path: "/v1/x:seek" }), 10000);
+  assert.equal(timeoutMs({ method: "PATCH", path: "/v1/x" }), 10000);
+});
+
+test("a body of exactly 4096 characters is journaled and one more is not", () => {
+  const pad = (n) => ({ a: "x".repeat(n) });
+  assert.equal(JSON.stringify(pad(4088)).length, 4096);
+  assert.notEqual(journaledBody({ method: "GET" }, pad(4088), RUN_ID), null);
+  assert.equal(journaledBody({ method: "GET" }, pad(4089), RUN_ID), null);
+});
+
+test("connection keys: dedicated per cell, fresh per request, pool for the cleanup", async () => {
+  const seen = [];
+  const { run } = record({
+    wrap: async (base, req, meta) => {
+      seen.push({ path: req.path, ...meta });
+      return base(req, meta);
+    },
+  });
+  await run();
+  const of = (id) => seen.filter((s) => s.path.includes(`-nc-${id}-`) && s.conn !== "pool:cleanup");
+  assert.ok(of("n2a").every((s) => s.conn === "dedicated:N2a" && s.connPolicy === "dedicated"));
+  const fresh = of("n2b");
+  assert.ok(fresh.every((s) => s.connPolicy === "fresh" && /^fresh:\d+$/.test(s.conn)));
+  assert.equal(new Set(fresh.map((s) => s.conn)).size, fresh.length);
+  assert.ok(seen.at(-1).conn === "pool:cleanup" && seen.at(-1).connPolicy === "pool");
+  assert.ok(seen.slice(0, 2).every((s) => s.conn === "pool:setup"));
+});
+
+test("the answer decides what the ledger learns: 404, 409 and other errors of a create", async () => {
+  const statusFor = { 404: "never-created", 409: "unconfirmed-create", 400: "never-created" };
+  for (const [status, expected] of Object.entries(statusFor)) {
+    const { recorder } = record({
+      wrap: async (base, req, meta, clock) => {
+        const startedAt = clock.now();
+        await clock.sleep(300);
+        const code = { 404: "NOT_FOUND", 409: "ALREADY_EXISTS", 400: "INVALID_ARGUMENT" }[status];
+        return {
+          startedAt,
+          headersAt: clock.now(),
+          completedAt: clock.now(),
+          status: Number(status),
+          bodyText: JSON.stringify({ error: { code: Number(status), message: "m", status: code } }),
+        };
+      },
+    });
+    const name = `projects/fireemu-oracle-idp/subscriptions/fireemu-observe-${RUN_ID}-nc-a1-x`;
+    await recorder.exec(
+      { method: "PUT", path: `/v1/${name}`, body: { topic: "t" }, targets: [name], create: true },
+      { cell: "a1", step: 0, op: "putSub" },
+    );
+    assert.equal(recorder.ledger.status(name), expected, status);
+  }
+});
+
+test("own reads feed the ledger: a slow 404 shows absence, a fast 404 does not, a 200 shows presence", async () => {
+  const name = `projects/fireemu-oracle-idp/subscriptions/fireemu-observe-${RUN_ID}-nc-a1-x`;
+  const get = { method: "GET", path: `/v1/${name}`, targets: [] };
+  const reply = (status, ms, bodyText) => async (base, req, meta, clock) => {
+    const startedAt = clock.now();
+    await clock.sleep(ms);
+    return { startedAt, headersAt: clock.now(), completedAt: clock.now(), status, bodyText };
+  };
+  const nf = JSON.stringify({ error: { code: 404, message: "m", status: "NOT_FOUND" } });
+  const probe = async (wrap, expected) => {
+    const { recorder } = record({ wrap });
+    const id = recorder.ledger.intent({ name, action: "create", kind: "subscription" });
+    recorder.ledger.answer(id, "ok");
+    await recorder.exec(get, { cell: "a1", step: 0, op: "getSub" });
+    assert.equal(recorder.ledger.status(name), expected);
+  };
+  await probe(reply(404, 300, nf), "live-suspect");
+  await probe(reply(404, 20, nf), "live");
+  await probe(reply(200, 300, "{}"), "live");
+  await probe(reply(500, 300, "{}"), "live");
+  await probe(
+    reply(
+      409,
+      300,
+      JSON.stringify({ error: { code: 409, message: "m", status: "ALREADY_EXISTS" } }),
+    ),
+    "live",
+  );
+  // A LIST or a verb URL is not a read of the resource.
+  const { recorder } = record({ wrap: reply(404, 300, nf) });
+  const id = recorder.ledger.intent({ name, action: "create", kind: "subscription" });
+  recorder.ledger.answer(id, "ok");
+  await recorder.exec(
+    { method: "GET", path: `/v1/${name}:getIamPolicy`, targets: [] },
+    { cell: "a1", step: 0, op: "getIamSub" },
+  );
+  await recorder.exec(
+    {
+      method: "GET",
+      path: "/v1/projects/fireemu-oracle-idp/subscriptions?pageSize=100",
+      targets: [],
+      list: "subscription",
+    },
+    { cell: "a1", step: 1, op: "listSub" },
+  );
+  assert.equal(recorder.ledger.status(name), "live");
+});
+
+test("rows carry null for what was not measured", async () => {
+  const { recorder, rows } = record({
+    wrap: async (base, req, meta, clock) => {
+      const startedAt = clock.now();
+      await clock.sleep(5);
+      return { startedAt, completedAt: clock.now(), failure: "timeout" };
+    },
+  });
+  const request = {
+    method: "GET",
+    path: "/v1/projects/fireemu-oracle-idp/subscriptions/x",
+    targets: [],
+  };
+  await recorder.exec(request, { cell: "z", step: 0, op: "getSub" });
+  const failed = rows.at(-1);
+  assert.equal(failed.headersMs, null);
+  assert.equal(failed.completedMs, 5);
+  assert.equal(failed.failure, "timeout");
+  assert.equal(failed.status, null);
+  const ok = record();
+  await ok.recorder.exec(request, { cell: "z", step: 0, op: "getSub" });
+  assert.equal(ok.rows.at(-1).failure, null);
+  const noCompletion = record({
+    wrap: async (base, req, meta, clock) => ({ startedAt: clock.now(), failure: "x" }),
+  });
+  await noCompletion.recorder.exec(request, { cell: "z", step: 0, op: "getSub" });
+  assert.equal(noCompletion.rows.at(-1).completedMs, null);
+});
+
+test("a step starts no earlier than the previous completion plus the minimum gap, and lateness is exact at 250 ms", async () => {
+  const cells = [
+    {
+      id: "G1",
+      question: "q",
+      conn: "dedicated",
+      arm: 5,
+      steps: [
+        { op: "getSub", target: "X", at: 0 },
+        { op: "getSub", target: "X", at: 0 },
+        { op: "getSub", target: "X", at: 0 },
+      ],
+    },
+  ];
+  const delays = [0, 0, 250];
+  let calls = 0;
+  const { run, rows } = record({
+    cells,
+    wrap: async (base, req, meta, clock) => {
+      if (req.path.includes("-nc-g1-")) await clock.sleep(delays[calls++] ?? 0);
+      return base(req, meta);
+    },
+  });
+  const out = await run();
+  const g1 = out.records[0];
+  const list = rows.filter((r) => r.event === "request" && r.cell === "G1");
+  for (let i = 1; i < list.length; i += 1)
+    assert.ok(list[i].startedAt >= list[i - 1].startedAt + list[i - 1].completedMs + 50);
+  assert.deepEqual(
+    g1.steps.map((s) => s.late),
+    [false, false, false],
+  );
+  assert.equal(g1.steps[0].ageMs, null, "the arm step was never executed");
+  const { run: run2 } = record({
+    cells,
+    wrap: async (base, req, meta, clock) => {
+      if (req.path.includes("-nc-g1-")) await clock.sleep(251);
+      return base(req, meta);
+    },
+  });
+  assert.ok((await run2()).records[0].steps.slice(1).every((s) => s.late));
+});
+
+test("a cell that hits the request cap says so, with exactly the cap's worth of cell requests", async () => {
+  const { run, rows } = record({ caps: { ...CAPS, requests: 60, cleanupRequests: 10 } });
+  const out = await run();
+  assert.equal(out.stopped, "request cap");
+  assert.equal(out.records.at(-1).aborted, "request cap");
+  assert.equal(rows.filter((r) => r.event === "request" && r.cell !== "cleanup").length, 50);
+});
+
+test("a stop at setup is reported, not thrown", async () => {
+  const { run } = record({ caps: { ...CAPS, requests: 100, cleanupRequests: 100 } });
+  const out = await run();
+  assert.equal(out.stopped, "request cap");
+  assert.equal(out.records.length, 0);
+});
+
+test("the cleanup waits exactly the quiet time and ends when its last LIST ends", async () => {
+  const { run, rows, clock } = record();
+  const out = await run();
+  const requests = rows.filter((r) => r.event === "request");
+  const lastCell = requests.filter((r) => r.cell !== "cleanup").at(-1);
+  const firstCleanup = requests.find((r) => r.cell === "cleanup");
+  assert.equal(firstCleanup.startedAt - (lastCell.startedAt + lastCell.completedMs), 12000);
+  const last = requests.at(-1);
+  assert.equal(clock.now(), last.startedAt + last.completedMs);
+  assert.equal(out.report.rounds, 1);
+});
+
+test("a second round waits 30 s after the quiet time and keeps listing a resource whose DELETE answers 404", async () => {
+  let lists = 0;
+  const { run, rows } = record({
+    wrap: async (base, req, meta) => {
+      const out = await base(req, meta);
+      if (req.list === "subscription" && ++lists === 2) {
+        const body = JSON.parse(out.bodyText);
+        body.subscriptions = [
+          ...(body.subscriptions ?? []),
+          { name: `projects/fireemu-oracle-idp/subscriptions/fireemu-observe-${RUN_ID}-nc-n2a-x` },
+        ];
+        return { ...out, bodyText: JSON.stringify(body) };
+      }
+      return out;
+    },
+  });
+  const out = await run();
+  assert.equal(out.report.rounds, 2);
+  const cleanup = rows.filter((r) => r.event === "request" && r.cell === "cleanup");
+  const firstList = cleanup.find((r) => r.path.includes("/subscriptions?pageSize"));
+  const secondDelete = cleanup.filter((r) => r.method === "DELETE")[0];
+  assert.ok(secondDelete);
+  const redo = cleanup.filter((r) => r.method === "DELETE" && r.path.includes("-nc-n2a-x"))[1];
+  assert.ok(
+    redo.startedAt - cleanup.filter((r) => r.path.includes("pageSize")).at(-4).startedAt >= 30000 ||
+      redo.startedAt > firstList.startedAt,
+  );
+});
+
+test("a LIST is followed for exactly five pages", async () => {
+  const { run, rows } = record({
+    wrap: async (base, req, meta, clock) => {
+      if (req.list === "subscription") {
+        const startedAt = clock.now();
+        await clock.sleep(300);
+        return {
+          startedAt,
+          headersAt: clock.now(),
+          completedAt: clock.now(),
+          status: 200,
+          bodyText: JSON.stringify({ subscriptions: [], nextPageToken: "more" }),
+        };
+      }
+      return base(req, meta);
+    },
+  });
+  const out = await run();
+  const cleanupLists = rows.filter(
+    (r) =>
+      r.event === "request" && r.cell === "cleanup" && r.path.includes("/subscriptions?pageSize"),
+  );
+  assert.equal(cleanupLists.length, 5);
+  assert.equal(out.report.lists, 7);
+});
+
+test("a DELETE 404 that never clears is listed again in every round", async () => {
+  const { run } = record({
+    wrap: async (base, req, meta, clock) => {
+      if (req.method === "DELETE" && req.path.includes("-nc-n2a-x")) {
+        const startedAt = clock.now();
+        await clock.sleep(30);
+        return {
+          startedAt,
+          headersAt: clock.now(),
+          completedAt: clock.now(),
+          status: 404,
+          bodyText: JSON.stringify({ error: { code: 404, message: "m", status: "NOT_FOUND" } }),
+        };
+      }
+      return base(req, meta);
+    },
+  });
+  const out = await run();
+  assert.equal(out.report.rounds, 3);
+  assert.equal(out.report.lists, 5);
+});
+
+test("cleanup records a refused request and goes on", async () => {
+  const { cleanup } = await import("./cleanup.mjs");
+  const { createLedger } = await import("./ledger.mjs");
+  const ledger = createLedger();
+  const name = `projects/fireemu-oracle-idp/subscriptions/fireemu-observe-${RUN_ID}-nc-a1-x`;
+  ledger.answer(ledger.intent({ name, action: "create", kind: "subscription" }), "ok");
+  const calls = [];
+  const exec = async (request) => {
+    calls.push(request.method);
+    throw new Refusal("not allowed");
+  };
+  const clock = { now: () => 1000, sleepUntil: async () => {} };
+  const report = await cleanup({
+    ledger,
+    exec,
+    clock,
+    runId: RUN_ID,
+    lastActivityAt: () => 0,
+    journal: { write() {} },
+  });
+  assert.deepEqual(report.refused.slice(0, 1), ["not allowed"]);
+  assert.ok(calls.length >= 1);
+  assert.equal(report.rounds, 3);
+});

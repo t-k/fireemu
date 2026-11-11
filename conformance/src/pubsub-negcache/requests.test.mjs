@@ -92,3 +92,27 @@ test("setup creates the run's topic and source subscription, run-level names", (
   assert.equal(resourceId(RUN_ID, "A1", "T"), resourceId(RUN_ID, "P2", "T"));
   assert.notEqual(resourceId(RUN_ID, "A1", "X"), resourceId(RUN_ID, "A2", "X"));
 });
+
+test("the id length bound is 255 and an invalid run id never owns a name", () => {
+  assert.equal(resourceId(RUN_ID, "c".repeat(221), "X").length, 255);
+  assert.throws(() => resourceId(RUN_ID, "c".repeat(222), "X"), /invalid resource id/);
+  assert.ok(!isOwned(`projects/${PROJECT}/subscriptions/fireemu-observe-xyz-nc-a-x`, "xyz"));
+  assert.ok(!isOwned(name("X"), undefined));
+  assert.ok(!isOwned(123, RUN_ID));
+});
+
+test("only creates are marked create and only deletes are marked delete, across the whole program", async () => {
+  const { CELLS } = await import("./program.mjs");
+  for (const cell of CELLS)
+    for (const step of cell.steps) {
+      const request = buildRequest(step, { runId: RUN_ID, cellId: cell.id });
+      assert.equal(Boolean(request.create), step.op.startsWith("put"), `${cell.id} ${step.op}`);
+      assert.equal(Boolean(request.delete), step.op.startsWith("delete"), `${cell.id} ${step.op}`);
+      assert.equal(request.create === true || request.create === false, true);
+      assert.equal(
+        request.targets.length,
+        request.create || request.delete ? 1 : 0,
+        `${cell.id} ${step.op}`,
+      );
+    }
+});

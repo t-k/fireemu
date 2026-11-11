@@ -69,3 +69,30 @@ test("an operation that is not done is unknown", () => {
     "unknown",
   );
 });
+
+test("the latency classes use the recorded boundaries", () => {
+  assert.equal(FAST_MS, 60);
+  assert.equal(SLOW_MS, 120);
+  assert.equal(latencyClass(60), "fast");
+  assert.equal(latencyClass(61), "ambiguous");
+  assert.equal(latencyClass(119), "ambiguous");
+  assert.equal(latencyClass(120), "slow");
+});
+
+test("a 300 is unknown and the unknown answer has null fields", () => {
+  assert.equal(classify({ status: 300, bodyText: "{}", headersMs: 100 }).kind, "unknown");
+  assert.deepEqual(classify({ failure: "x", headersMs: 100 }), {
+    kind: "unknown",
+    status: null,
+    code: null,
+    body: null,
+    latency: "ambiguous",
+  });
+  assert.deepEqual(classify({ status: 500, bodyText: "{}", headersMs: 100 }), {
+    kind: "unknown",
+    status: 500,
+    code: null,
+    body: null,
+    latency: "ambiguous",
+  });
+});

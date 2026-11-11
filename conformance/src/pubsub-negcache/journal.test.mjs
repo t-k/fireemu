@@ -26,3 +26,14 @@ test("journal is exclusive, private, durable and closed", (t) => {
   assert.equal(fs.statSync(summary).mode & 0o777, 0o600);
   assert.throws(() => writeExclusive(summary, "overwrite"));
 });
+
+test("the row limit refuses the next row and a closed journal says so", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "nc-journal-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const journal = createJournal(path.join(root, "c"), "abcdef123456", { limit: 3 });
+  for (let i = 0; i < 3; i += 1) journal.write({ i });
+  assert.throws(() => journal.write({ i: 3 }), /row limit/);
+  journal.close();
+  journal.close();
+  assert.throws(() => journal.write({}), /closed/);
+});

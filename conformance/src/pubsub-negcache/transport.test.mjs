@@ -83,3 +83,53 @@ test("gRPC status mapping", async () => {
   }
   transport.close();
 });
+
+test("the default endpoint is the production Pub/Sub host and an unsupported protocol is refused", () => {
+  const transport = createTransport({ getToken: () => "t", clock: { now: () => 0 } });
+  assert.deepEqual(transport.endpoint, {
+    protocol: "https",
+    host: "pubsub.googleapis.com",
+    port: 443,
+  });
+  transport.close();
+  assert.throws(
+    () => createTransport({ getToken: () => "t", clock: { now: () => 0 }, protocol: "ftp" }),
+    /unsupported protocol/,
+  );
+});
+
+test("pooled requests share a connection; a body brings a content type and a bodyless request does not", async (t) => {
+  let connections = 0;
+  const seen = [];
+  const server = http.createServer((req, res) => {
+    seen.push({
+      method: req.method,
+      type: req.headers["content-type"],
+      accept: req.headers.accept,
+    });
+    res.end(Buffer.alloc(req.url === "/exact" ? 1024 * 1024 : 2));
+  });
+  server.on("connection", () => connections++);
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+  let tick = 0;
+  const transport = createTransport({
+    getToken: () => "t",
+    clock: { now: () => ++tick },
+    protocol: "http",
+    host: "127.0.0.1",
+    port: server.address().port,
+  });
+  t.after(() => transport.close());
+  const meta = { conn: "pool:x", connPolicy: "pool", timeoutMs: 1000 };
+  await transport.send({ method: "GET", path: "/" }, meta);
+  await transport.send({ method: "PUT", path: "/", body: { a: 1 } }, meta);
+  assert.equal(connections, 1);
+  assert.equal(seen[0].type, undefined);
+  assert.equal(seen[1].type, "application/json");
+  assert.ok(seen.every((s) => s.accept === "application/json"));
+  const exact = await transport.send({ method: "GET", path: "/exact" }, meta);
+  assert.equal(exact.status, 200);
+  assert.equal(exact.bodyText.length, 1024 * 1024);
+  assert.equal(exact.failure, undefined);
+});

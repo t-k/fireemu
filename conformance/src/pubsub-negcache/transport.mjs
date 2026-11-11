@@ -133,6 +133,7 @@ export function createTransport({
   };
   return {
     send,
+    endpoint: { protocol, host, port },
     close() {
       shared.destroy();
       for (const agent of dedicated.values()) agent.destroy();

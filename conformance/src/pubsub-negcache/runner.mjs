@@ -201,13 +201,19 @@ export function createRecorder({ runId, transport, clock, journal, cells = CELLS
 
   async function run() {
     for (const request of setupRequests({ runId })) {
-      const { answer } = await exec(
-        request,
-        { cell: "setup", step: request.id, op: request.id },
-        {},
-      );
-      if (answer.kind !== "ok") {
-        stopped = `setup ${request.id} answered ${answer.kind} ${answer.status}`;
+      try {
+        const { answer } = await exec(
+          request,
+          { cell: "setup", step: request.id, op: request.id },
+          {},
+        );
+        if (answer.kind !== "ok") {
+          stopped = `setup ${request.id} answered ${answer.kind} ${answer.status}`;
+          break;
+        }
+      } catch (error) {
+        if (!(error instanceof StopRun)) throw error;
+        stopped = error.message;
         break;
       }
     }

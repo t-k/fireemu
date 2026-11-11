@@ -114,10 +114,12 @@ export interface TestWorld {
   readonly environment: Environment;
   readonly clock: TestWorldClock;
   readonly control: (method: string, path: string, body?: unknown) => Promise<unknown>;
+  dump(directory: string): Promise<{ json: string; html: string }>;
   readonly run: (command: string, args?: readonly string[], options?: RunOptions) => Promise<RunResult>;
   readonly reset: () => Promise<TestWorld>;
   readonly dispose: () => Promise<void>;
 }
 
 export function createTestWorld(options?: TestWorldOptions): Promise<TestWorld>;
+export function dumpPaths(directory: string): { json: string; html: string };
 export function withTestWorld<T>(options: TestWorldOptions, callback: (world: TestWorld) => T): Promise<Awaited<T>>;

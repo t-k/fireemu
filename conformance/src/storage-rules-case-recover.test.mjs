@@ -348,6 +348,93 @@ describe("the recover command", () => {
     assert.deepEqual(ownRulesetsOf("", PROJECT), []);
   });
 
+  it("leaves out the rulesets the journal shows as deleted, and keeps one whose delete was unknown", () => {
+    const name = (id) => `projects/${PROJECT}/rulesets/${id}`;
+    const create = (n, id) => [
+      { phase: "before", n, kind: "ruleset-create" },
+      { phase: "after", n, status: 200, bodyBase64: json({ name: name(id) }).toString("base64") },
+    ];
+    const del = (n, id, answer) => [
+      {
+        phase: "before",
+        n,
+        kind: "ruleset-delete",
+        url: `https://firebaserules.googleapis.com/v1/${name(id)}`,
+      },
+      answer,
+    ];
+    const lines = [
+      ...create(1, "aaa111"),
+      ...create(2, "bbb222"),
+      ...create(3, "ccc333"),
+      ...create(4, "ddd444"),
+      ...del(5, "aaa111", { phase: "after", n: 5, status: 200 }),
+      ...del(6, "bbb222", { phase: "after", n: 6, status: 404 }),
+      ...del(7, "ccc333", { phase: "unknown", n: 7, reason: "transport" }),
+      ...del(8, "ddd444", { phase: "after", n: 8, status: 403 }),
+    ].map((l) => JSON.stringify(l));
+    assert.deepEqual(ownRulesetsOf(lines.join("\n"), PROJECT), [name("ccc333"), name("ddd444")]);
+    // A delete of a name the run never created removes nothing.
+    assert.deepEqual(
+      ownRulesetsOf(
+        [...create(1, "aaa111"), ...del(2, "zzz999", { phase: "after", n: 2, status: 200 })]
+          .map((l) => JSON.stringify(l))
+          .join("\n"),
+        PROJECT,
+      ),
+      [name("aaa111")],
+    );
+  });
+
+  it("hands the recovery only the rulesets still to delete, so it asks for no ruleset already gone", async () => {
+    const { dir, o } = sourceRun();
+    o.save("entry.json", { baseline: baselineName, entryRulesets: [] });
+    const name = (id) => `projects/${PROJECT}/rulesets/${id}`;
+    const lines = [
+      { phase: "before", n: 1, kind: "ruleset-create" },
+      {
+        phase: "after",
+        n: 1,
+        status: 200,
+        bodyBase64: json({ name: name("aaa111") }).toString("base64"),
+      },
+      { phase: "before", n: 2, kind: "ruleset-create" },
+      {
+        phase: "after",
+        n: 2,
+        status: 200,
+        bodyBase64: json({ name: name("bbb222") }).toString("base64"),
+      },
+      {
+        phase: "before",
+        n: 3,
+        kind: "ruleset-delete",
+        url: `https://firebaserules.googleapis.com/v1/${name("aaa111")}`,
+      },
+      { phase: "after", n: 3, status: 200 },
+    ];
+    writeFileSync(
+      join(dir, "journal.jsonl"),
+      `${lines.map((l) => JSON.stringify(l)).join("\n")}\n`,
+    );
+    let seen;
+    await recoverRun({
+      dir,
+      exec: gitExec,
+      env: {},
+      guardEgress() {},
+      now: () => new Date("2026-11-12T03:00:00.000Z"),
+      locks: async (opts, use) => use({ confirmClosed() {} }),
+      makeDeps: () => ({}),
+      observer: async (args) => (
+        (seen = args.recover),
+        { report: { runId, closureReady: true, rows: [], loads: [] } }
+      ),
+      log: quiet,
+    });
+    assert.deepEqual(seen.ownRulesets, [name("bbb222")]);
+  });
+
   it("takes the project lock under the plan's task id, recovers into a new directory and closes the lock only for a closed recovery", async () => {
     const { dir, o } = sourceRun();
     o.save("entry.json", {

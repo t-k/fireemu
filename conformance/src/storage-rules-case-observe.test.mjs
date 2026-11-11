@@ -267,3 +267,85 @@ describe("a recording that cannot put the release back (S9 review SF2)", () => {
     assert.equal(report.rows.filter((r) => r.recording === 2).length, CASE_ROWS.length);
   });
 });
+
+describe("an answer nobody could read, and a release that cannot be put back", () => {
+  it("lists a create answered 200 with an unreadable body as unconfirmed, and still deletes the object it made", async () => {
+    const first = Object.keys(CASE_PLAN.objects)[0];
+    let done = false;
+    const { report, world } = await run({
+      faults: [
+        {
+          match: (r) =>
+            !done && r.method === "POST" && r.path.includes("/upload/") && (done = true),
+          afterReal: true,
+          answer: {
+            status: 200,
+            headers: { "content-type": "application/json" },
+            body: Buffer.from("not json"),
+          },
+        },
+      ],
+    });
+    assert.match(report.stopped, /answered 200 with an unrecorded body/);
+    assert.deepEqual(report.unconfirmed, [`create/${first}`]);
+    assert.equal(report.closureReady, false);
+    assert.equal(world.objects.size, 0, "the cleanup list found and deleted it");
+  });
+
+  it("lists a ruleset create answered 200 with an unreadable name as unconfirmed", async () => {
+    let done = false;
+    const { report } = await run({
+      faults: [
+        {
+          match: (r) =>
+            !done && r.method === "POST" && r.path.endsWith("/rulesets") && (done = true),
+          afterReal: true,
+          answer: {
+            status: 200,
+            headers: { "content-type": "application/json" },
+            body: Buffer.from('{"name":"elsewhere"}'),
+          },
+        },
+      ],
+    });
+    assert.deepEqual(report.unconfirmed, ["rec1/core/ruleset"]);
+    assert.equal(report.closureReady, false);
+  });
+
+  it("reports an empty unconfirmed list for a clean run", async () => {
+    const { report } = await run({ recordings: 1 });
+    assert.deepEqual(report.unconfirmed, []);
+  });
+
+  it("does not delete the ruleset the live release names when the release could not be put back", async () => {
+    const refuse = () => ({
+      match: (r) =>
+        r.method === "PATCH" &&
+        r.path.includes("/releases/") &&
+        Buffer.from(r.body ?? [])
+          .toString("utf8")
+          .includes(baselineName),
+      answer: {
+        status: 400,
+        headers: { "content-type": "application/json" },
+        body: Buffer.from('{"error":{"code":400,"message":"refused","status":"INVALID_ARGUMENT"}}'),
+      },
+    });
+    const { report, world } = await run({ faults: [refuse(), refuse(), refuse(), refuse()] });
+    const live = world.release.rulesetName;
+    assert.notEqual(live, baselineName, "the release is stuck on a run ruleset");
+    assert.ok(world.rulesets.has(live));
+    const deletes = world.calls.filter(
+      (c) => c.method === "DELETE" && c.url.includes("/rulesets/"),
+    );
+    assert.ok(
+      deletes.every((c) => !c.url.endsWith(live.split("/").pop())),
+      "the live ruleset is never deleted",
+    );
+    assert.ok(
+      report.problems.some((p) => /is the live release's ruleset/.test(p)),
+      JSON.stringify(report.problems),
+    );
+    assert.equal(report.closureReady, false);
+  });
+});

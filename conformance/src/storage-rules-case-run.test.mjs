@@ -136,11 +136,13 @@ describe("the run of the case family", () => {
     const final = await recordProductionRun(options);
     assert.equal(final.reading.verdict, "full");
     assert.equal(final.reading.complete, true);
+    assert.deepEqual(final.reading.byProgram, { core: "full", wide: "ambiguous" });
     assert.deepEqual(final.reading.mismatches.full, []);
     assert.ok(final.reading.mismatches.ascii.length > 0);
     assert.ok(final.reading.mismatches.simple.length > 0);
     assert.ok(!("table" in final.reading));
     assert.equal(JSON.parse(lines[0]).reading.verdict, "full");
+    assert.deepEqual(JSON.parse(lines[0]).reading.byProgram, { core: "full", wide: "ambiguous" });
     const saved = JSON.parse(readFileSync(join(options.outPath, "run-report.json"), "utf8"));
     assert.equal(saved.reading.verdict, "full");
     const s9 = setup({ plan: S9_PLAN });
@@ -385,9 +387,29 @@ describe("the A2 read-back does not close what the run left open (S9 review SF3)
     writeFileSync(join(dir, "run-report.json"), JSON.stringify({ unknowns: ["create/x"] }));
     await readbackRun({ ...common, now: () => new Date("2026-11-12T00:00:02.000Z") });
     assert.deepEqual(seen[2].unknowns, ["create/x"]);
+    writeFileSync(
+      join(dir, "run-report.json"),
+      JSON.stringify({
+        unknowns: ["rec1/restore/delete"],
+        unconfirmed: ["create/x", "rec1/core/ruleset"],
+      }),
+    );
+    await readbackRun({ ...common, now: () => new Date("2026-11-12T00:00:02.500Z") });
+    assert.deepEqual(seen.at(-1).unknowns, [
+      "rec1/restore/delete",
+      "create/x",
+      "rec1/core/ruleset",
+    ]);
+    writeFileSync(join(dir, "run-report.json"), JSON.stringify({ unknowns: [] }));
+    await readbackRun({ ...common, now: () => new Date("2026-11-12T00:00:02.750Z") });
+    assert.deepEqual(
+      seen.at(-1).unknowns,
+      [],
+      "an older report with no unconfirmed list is still a report",
+    );
     writeFileSync(join(dir, "run-report.json"), JSON.stringify({ requests: 1 }));
     await readbackRun({ ...common, now: () => new Date("2026-11-12T00:00:03.000Z") });
-    assert.equal(seen[3].unknowns, null, "a report without an unknowns list is not a report");
+    assert.equal(seen.at(-1).unknowns, null, "a report without an unknowns list is not a report");
   });
 
   it("reads a header without a plan as the s9 family, as the first run wrote it", async () => {

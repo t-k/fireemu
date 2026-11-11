@@ -190,6 +190,7 @@ export function readingOf(plan, report) {
   return {
     reading: {
       verdict: reading.verdict,
+      byProgram: reading.byProgram,
       complete: reading.complete,
       controls: reading.controls,
       failedControls: reading.failedControls,
@@ -310,6 +311,7 @@ export async function recordProductionRun({
 export function ownRulesetsOf(journalText, project) {
   const pattern = new RegExp(`^projects/${project}/rulesets/[A-Za-z0-9_-]{1,128}$`);
   const creates = new Set();
+  const deletes = new Map(); // request number -> ruleset name
   const names = [];
   for (const line of journalText.split("\n")) {
     if (line.trim() === "") continue;
@@ -320,7 +322,19 @@ export function ownRulesetsOf(journalText, project) {
       continue;
     }
     if (entry.phase === "before" && entry.kind === "ruleset-create") creates.add(entry.n);
-    if (entry.phase !== "after" || !creates.has(entry.n) || entry.status !== 200) continue;
+    if (entry.phase === "before" && entry.kind === "ruleset-delete") {
+      const name = /\/v1\/(projects\/[^/]+\/rulesets\/[^/?]+)$/.exec(String(entry.url))?.[1];
+      if (name !== undefined) deletes.set(entry.n, name);
+    }
+    if (entry.phase !== "after") continue;
+    // A delete the run saw answered (200) or found already gone (404) leaves nothing to delete again.
+    if ((entry.status === 200 || entry.status === 404) && deletes.has(entry.n)) {
+      const gone = deletes.get(entry.n);
+      const at = names.indexOf(gone);
+      if (at !== -1) names.splice(at, 1);
+      continue;
+    }
+    if (!creates.has(entry.n) || entry.status !== 200) continue;
     try {
       const name = JSON.parse(Buffer.from(entry.bodyBase64, "base64").toString("utf8"))?.name;
       if (typeof name === "string" && pattern.test(name) && !names.includes(name)) names.push(name);
@@ -514,8 +528,13 @@ export async function readbackRun({
   );
   let unknowns = null;
   try {
-    const list = JSON.parse(readFileSync(join(dir, "run-report.json"), "utf8")).unknowns;
-    if (Array.isArray(list)) unknowns = list;
+    const saved = JSON.parse(readFileSync(join(dir, "run-report.json"), "utf8"));
+    // A create answered 200 with a body nobody could read is as open as one with no answer (SF7).
+    if (Array.isArray(saved.unknowns))
+      unknowns = [
+        ...saved.unknowns,
+        ...(Array.isArray(saved.unconfirmed) ? saved.unconfirmed : []),
+      ];
   } catch {
     // Missing or broken: the read-back cannot know what the run left open.
   }

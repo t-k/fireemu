@@ -116,6 +116,10 @@ export async function observe({
 
   const created = new Map(); // name -> generation, from a 2xx create answer
   const unconfirmed = new Set(); // names of creates whose answer was unknown
+  // Labels of creates answered 200 with a body nobody could read: as open as an unknown answer (SF7).
+  const unconfirmedLabels = new Set();
+  // The ruleset the live release named when it was last read.
+  let liveRuleset = null;
   const refusedCreates = new Set(); // names whose create was refused or stored under another name
   const rowsAll = [];
   const loads = [];
@@ -176,6 +180,7 @@ export async function observe({
       const parsed = parseCreated(res);
       if (parsed === null) {
         unconfirmed.add(name);
+        unconfirmedLabels.add(`create/${id}`);
         throw new StopRun(`create of ${id} answered 200 with an unrecorded body`);
       }
       if (parsed.name !== name) {
@@ -265,8 +270,10 @@ export async function observe({
         !new RegExp(`^projects/${target.project}/rulesets/[A-Za-z0-9_-]{1,128}$`).test(
           body?.name ?? "",
         )
-      )
+      ) {
+        unconfirmedLabels.add(label);
         throw new StopRun(`${label}: the created ruleset has an unrecorded name`);
+      }
       ownRulesets.add(body.name);
       return { res, name: body.name };
     }
@@ -284,7 +291,10 @@ export async function observe({
       },
       { admin: true, read },
     );
-    return res.unknown ? null : parseRelease(res, releaseName);
+    const release = res.unknown ? null : parseRelease(res, releaseName);
+    // A release read that is not a recorded shape says nothing about what is live; the next one does.
+    if (release !== null) liveRuleset = release.state === "present" ? release.rulesetName : null;
+    return release;
   }
 
   async function writeRelease(label, rulesetName) {
@@ -606,6 +616,15 @@ export async function observe({
   async function deleteOwnRulesets() {
     for (const name of ownRulesets) {
       if (deletedRulesets.has(name)) continue;
+      // A ruleset a live release points at is never deleted: the model of the recovery (Recover.tla)
+      // deletes only after the release read as the baseline, and production's refusal to delete a
+      // ruleset in use has not been observed here.
+      if (name === liveRuleset) {
+        problem(
+          `cleanup: ${name.split("/").pop()} is the live release's ruleset and is not deleted`,
+        );
+        continue;
+      }
       try {
         await deleteRuleset(`cleanup/ruleset/${name.split("/").pop()}`, name);
       } catch (error) {
@@ -783,6 +802,7 @@ export async function observe({
     closureReady:
       complete && unknowns.length === 0 && problems.length === 0 && reportingErrors.length === 0,
     unknowns,
+    unconfirmed: [...unconfirmedLabels],
     unknownReads: new Set(unknownReads).size,
     problems,
     reportingErrors,

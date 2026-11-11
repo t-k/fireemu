@@ -200,6 +200,14 @@ export function shapeRow(spec, answer, ctx) {
   if (row.bodyKind === "text" && plain.length <= MAX_TEXT_BYTES) {
     row.bodyText = maskSecrets(plain.toString("utf8"), ctx.secrets);
   }
+  // The follow-up corpus keeps the whole wire body of two pages (`keepBody`), so that strict can be
+  // given their bytes: not empty, and withheld when it holds a private value in any form the
+  // masking would change.
+  if (spec.keepBody && body.length > 0) {
+    const text = body.toString("utf8");
+    if (maskSecrets(text, ctx.secrets) === text) row.bodyBase64 = body.toString("base64");
+    else row.bodyWithheld = "private-value";
+  }
   return row;
 }
 

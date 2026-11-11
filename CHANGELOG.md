@@ -10,7 +10,16 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ### Added
 
-- Hosting: the strict profile (the default) answers a compressible file with `Content-Encoding: gzip` when the request accepts `gzip`, as production did in both recordings (the file's own `ETag`, `Vary: x-fh-requested-host, accept-encoding`, and the recorded length for the corpus file; an image is left alone). A request that accepts only `br` gets the file as it is: Brotli stays a declared difference (`KD-COMPRESSION` now names the four Brotli rows only, and 18 of the 201 compared rows carry a known difference, down from 21). Files from one byte to 32 MiB are compressed; ranges, `304`s and generated answers are not, and neither is a file whose `headers` rule sets `Content-Encoding` (a precompressed `*.br` file keeps its bytes and the rule's header). This adds the `flate2` crate (pure-Rust `miniz_oxide` backend, owner decision).
+- `fireemu config lint` lists the settings a configuration sets that are accepted but have no effect, with the same text as the start-up `note:` lines and from the same list of keys. `--deny-ineffective` makes the command exit 1 when any such setting is present, so a CI job can fail on one; `--allow <key>` (repeatable, `prefix.*` allowed) and `--allow-file <path>` name the ones to keep on purpose, and an entry that names no configuration key is a usage error.
+- Hosting: the strict profile (the default) answers a file as `Content-Encoding: gzip` when the request's `Accept-Encoding` holds the text `gzip`, as production did in four recordings: any content type, when the compressed body is smaller than the file (files of 1 and 10 bytes stay as they are, 100 bytes and more are compressed), with the file's own `ETag`, `Vary: x-fh-requested-host, accept-encoding`, production's gzip header and, for a `Range`, the range of the compressed body. A request that asks for `br` gets gzip when it also holds `gzip` and the file as it is when it does not: Brotli stays a declared difference. Files from one byte to 32 MiB are compressed; `304`s and generated answers are not. This adds the `flate2` crate (pure-Rust `miniz_oxide` backend, owner decision).
+
+### Changed
+
+- Hosting, strict profile, as production answered two follow-up recordings (runs 11ae6c and 1c6a4c, 78 requests each): a site without a `404.html` answers an unmatched path, and `/__/auth/handler` answers, with the status and headers production sent and with pages written for fireemu (production's page bytes are not shipped); a request with dot segments is a `302` to the normalized path as an absolute URL on the host the request came to (a raw `\` is read as `/` before the dot segments are looked for, so `/.\b` gives `/b`; escapes that stay are written in upper case; a path with a `\` and no dot segment is not redirected); a redirect whose source has a digit in a `:name` (`/p/:a1`) matches nothing, and a repeated name takes the last value; a `Content-Encoding` header set by a `headers` rule is not served; a `.br` file is `application/octet-stream`. The emulator profile is unchanged. The known differences are Brotli, the gzip length of small files, the host of the dot-segment redirect and the bodies of the two pages (18 of 201 and 42 of 78 compared rows).
+
+### Fixed
+
+- Dependencies: rustix is updated to 1.1.6 for RUSTSEC-2026-0486 (extended-attribute reads with a zero-length buffer).
 
 ### Changed
 

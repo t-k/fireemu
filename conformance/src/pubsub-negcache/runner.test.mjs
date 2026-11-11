@@ -1259,3 +1259,18 @@ test("a send refusal is the one fatal error: it is rethrown and no resource inte
   assert.equal(recorder.ledger.status(name), "never-created");
   await assert.rejects(recorder.run(), /refusing to send/);
 });
+
+test("a send refusal on a request that has no resource intent (a GET) is rethrown as the refusal itself", async () => {
+  const { recorder } = record({
+    wrap: async () => {
+      throw Object.assign(new Error("refusing to send"), { code: "SEND_REFUSED" });
+    },
+  });
+  await assert.rejects(
+    recorder.exec(
+      { method: "GET", path: "/v1/projects/fireemu-oracle-idp/subscriptions/x", targets: [] },
+      { cell: "z", step: 0, op: "getSub" },
+    ),
+    /refusing to send/,
+  );
+});

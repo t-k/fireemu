@@ -241,3 +241,20 @@ test("S2: the gRPC channel is warmed before the timed call, and an injected call
   assert.deepEqual(capped, [10000], "the warm-up never waits longer than 10 s");
   long.close();
 });
+
+test("S2: without a timeout the gRPC warm-up waits at most 10 s", async () => {
+  const seen = [];
+  const transport = createTransport({
+    getToken: () => "t",
+    clock: { now: () => 0 },
+    protocol: "http",
+    host: "127.0.0.1",
+    port: 1,
+    grpcWarm: async (ms) => seen.push(ms),
+    grpcCall: undefined,
+  });
+  await transport.send({ grpc: true, path: "projects/p/subscriptions/s" }, {});
+  await transport.send({ grpc: true, path: "projects/p/subscriptions/s" }, { timeoutMs: 3000 });
+  assert.deepEqual(seen, [10000, 3000]);
+  transport.close();
+});

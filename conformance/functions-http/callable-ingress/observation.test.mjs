@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1204,5 +1204,37 @@ test("the deploy CLI of each variant starts in that variant's directory", async 
     }
   } finally {
     await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("productionDeps writes the run files and ledger lines of twelve answers byte-equal, and never overwrites", async () => {
+  const root = await mkdtemp(join(tmpdir(), "callable-ingress-write-"));
+  try {
+    const ledger = join(root, "sandbox-ledger.jsonl");
+    const deps = productionDeps({ variant: "wrapper", ledger, privateRoot: root });
+    await mkdir(join(root, "runs"));
+    const runDir = await deps.makeRunDir("callable-ingress-obs-wrapper-test");
+    assert.equal(runDir, join(root, "runs", "callable-ingress-obs-wrapper-test"));
+    await assert.rejects(deps.makeRunDir("callable-ingress-obs-wrapper-test"), /EEXIST/);
+    const list = allRefused({ ...wrapper, headers: { vary: "Origin", "x-powered-by": "Express" } });
+    const capturesText = `${JSON.stringify(list, null, 2)}\n`;
+    const judgement = `${JSON.stringify(judgeObservation(list, BASELINE), null, 2)}\n`;
+    assert.ok(Buffer.byteLength(capturesText) > 5000, "production-sized");
+    await deps.writeRunFile(runDir, "captures.json", capturesText);
+    await deps.writeRunFile(runDir, "judgement.json", judgement);
+    assert.equal(await readFile(join(runDir, "captures.json"), "utf8"), capturesText);
+    assert.equal(await readFile(join(runDir, "judgement.json"), "utf8"), judgement);
+    assert.equal((await stat(join(runDir, "captures.json"))).mode & 0o777, 0o600);
+    await assert.rejects(deps.writeRunFile(runDir, "captures.json", "x"), /EEXIST/);
+    assert.equal(await readFile(join(runDir, "captures.json"), "utf8"), capturesText);
+    const started = `${JSON.stringify({ event: "started", taskId: TASK_ID, variant: "wrapper" })}\n`;
+    const terminal = `${JSON.stringify({ event: "finished", taskId: TASK_ID, variant: "wrapper", captures: list })}\n`;
+    await writeFile(ledger, '{"existing":1}\n');
+    await deps.appendLedger(started);
+    await deps.appendLedger(terminal);
+    assert.equal(await readFile(ledger, "utf8"), `{"existing":1}\n${started}${terminal}`);
+    assert.equal(await deps.readLedger(), `{"existing":1}\n${started}${terminal}`);
+  } finally {
+    await rm(root, { recursive: true, force: true });
   }
 });

@@ -224,75 +224,147 @@ export const ROWS = [
   list("lists", "l5-capture-empty", (P) => `${P}/l5/`, "unknown"),
 ];
 
-export const objectsOf = (program) => PROGRAMS.find((p) => p.id === program).objects;
-export const allObjectIds = () => Object.keys(OBJECTS);
-export const rowsOf = (program) => ROWS.filter((row) => row.program === program);
-
-export const objectName = (id, P) => OBJECTS[id].name(P);
-export const unitsAndPoints = (text) => ({ units: unitsOf(text), points: pointsOf(text) });
-
-/** Every object name one recording can create, for the guard and the cleanup. */
-export function plannedNames(runId, recordings = RECORDINGS) {
-  const names = [];
-  for (let recording = 1; recording <= recordings; recording += 1) {
-    const P = recordingPrefix(runId, recording);
-    for (const id of allObjectIds()) names.push(objectName(id, P));
-  }
-  return names;
-}
-
 /**
- * Worst-case request counts for production, used as the caps. Setup of a recording: one create per
- * object, one marker pre-read per program. Per program: a ruleset
- * create, up to a PATCH and a POST of the release, its read-back, the settle polls (two markers each),
- * the rows and the still-in-force reads. Then the load-only rulesets (create and delete), the restore
- * (PATCH or DELETE, read-back, up to the settle polls) and the ruleset deletes. Cleanup after the
- * recordings: two lists, a DELETE and a read-back per object, two final lists, the final ruleset and
- * release reads.
+ * A family of the observation: the tables and the numbers derived from them. Everything the
+ * recorder sends comes from one plan, so the S9 family and later families share one recorder.
  */
-export function staticBounds(recordings = RECORDINGS) {
-  const objects = Object.keys(OBJECTS).length;
-  const preflight = 6;
-  const setup = objects + PROGRAMS.length;
-  const perProgram = (program) =>
-    1 + 2 + 1 + SETTLE_MAX_POLLS * 2 + rowsOf(program.id).length + STILL_IN_FORCE_READS;
-  const programs = PROGRAMS.reduce((sum, program) => sum + perProgram(program), 0);
-  const loadOnly = LOAD_ONLY.length * 2;
-  const restore = 1 + 1 + 1 + SETTLE_MAX_POLLS;
-  const rulesetDeletes = PROGRAMS.length;
-  const perRecording = setup + programs + loadOnly + restore + rulesetDeletes;
-  const main = preflight + perRecording * recordings;
-  const names = objects * recordings;
-  const cleanup = 2 + 2 * names + 2 + 4;
-  return {
-    preflight,
-    setup,
+export function buildPlan({
+  id,
+  taskId,
+  prefixRoot,
+  estimatedUsd,
+  localBucket,
+  objects,
+  programs,
+  loadOnly,
+  rows,
+}) {
+  for (const program of programs) {
+    if (!(program.marker in objects)) throw new Error(`program ${program.id}: unknown marker`);
+    for (const object of program.objects)
+      if (!(object in objects)) throw new Error(`program ${program.id}: unknown object ${object}`);
+  }
+  for (const row of rows) {
+    if (!programs.some((program) => program.id === row.program))
+      throw new Error(`row ${row.id}: unknown program ${row.program}`);
+    if (row.object !== undefined && !(row.object in objects))
+      throw new Error(`row ${row.id}: unknown object ${row.object}`);
+  }
+  const runRoot = (runId) => `${prefixRoot}/${runId}/`;
+  const recordingPrefix = (runId, recording) => `${prefixRoot}/${runId}/rec${recording}`;
+  const objectNameOf = (objectId, P) => objects[objectId].name(P);
+  const rowsOf = (program) => rows.filter((row) => row.program === program);
+  const objectCount = Object.keys(objects).length;
+
+  /** Every object name `recordings` recordings can create, for the guard and the cleanup. */
+  function plannedNames(runId, recordings = RECORDINGS) {
+    const names = [];
+    for (let recording = 1; recording <= recordings; recording += 1) {
+      const P = recordingPrefix(runId, recording);
+      for (const objectId of Object.keys(objects)) names.push(objectNameOf(objectId, P));
+    }
+    return names;
+  }
+
+  /**
+   * Worst-case request counts for production, used as the caps. Setup of a recording: one create per
+   * object, one marker pre-read per program. Per program: a ruleset
+   * create, up to a PATCH and a POST of the release, its read-back, the settle polls (two markers each),
+   * the rows and the still-in-force reads. Then the load-only rulesets (create and delete), the restore
+   * (PATCH or DELETE, read-back, up to the settle polls) and the ruleset deletes. Cleanup after the
+   * recordings: two lists, a DELETE and a read-back per object, two final lists, the final ruleset and
+   * release reads.
+   */
+  function staticBounds(recordings = RECORDINGS) {
+    const preflight = 6;
+    const setup = objectCount + programs.length;
+    const perProgram = (program) =>
+      1 + 2 + 1 + SETTLE_MAX_POLLS * 2 + rowsOf(program.id).length + STILL_IN_FORCE_READS;
+    const programTotal = programs.reduce((sum, program) => sum + perProgram(program), 0);
+    const loadOnlyTotal = loadOnly.length * 2;
+    const restore = 1 + 1 + 1 + SETTLE_MAX_POLLS;
+    const rulesetDeletes = programs.length;
+    const perRecording = setup + programTotal + loadOnlyTotal + restore + rulesetDeletes;
+    const main = preflight + perRecording * recordings;
+    const names = objectCount * recordings;
+    const cleanup = 2 + 2 * names + 2 + 4;
+    return {
+      preflight,
+      setup,
+      programs: programTotal,
+      loadOnly: loadOnlyTotal,
+      restore,
+      perRecording,
+      main,
+      cleanup,
+      total: main + cleanup,
+    };
+  }
+
+  /**
+   * Request count of a production run in which everything behaves as planned: every release settles
+   * at the third poll (two markers except for the first program), every compile succeeds.
+   */
+  function expectedRequests(recordings = RECORDINGS) {
+    const preflight = 6;
+    let perRecording = objectCount + programs.length;
+    programs.forEach((program, index) => {
+      perRecording += 1 + 1 + 1; // create, publish, read-back
+      perRecording += SETTLE_STREAK * (index === 0 ? 1 : 2);
+      perRecording += rowsOf(program.id).length + STILL_IN_FORCE_READS;
+    });
+    perRecording += loadOnly.length * 2;
+    perRecording += 1 + 1 + 1 + SETTLE_STREAK; // restore: read, write, read-back, settle
+    perRecording += programs.length; // ruleset deletes
+    const cleanup = 2 + 2 * objectCount * recordings + 2 + 2;
+    return preflight + perRecording * recordings + cleanup;
+  }
+
+  /** The cap of the A2 read-back: the two lists, the release and ruleset reads, every name once. */
+  const readbackCap = (recordings = RECORDINGS) => objectCount * recordings + 16;
+
+  return Object.freeze({
+    id,
+    taskId,
+    prefixRoot,
+    estimatedUsd,
+    localBucket,
+    objects,
     programs,
     loadOnly,
-    restore,
-    perRecording,
-    main,
-    cleanup,
-    total: main + cleanup,
-  };
+    rows,
+    runRoot,
+    recordingPrefix,
+    objectName: objectNameOf,
+    rowsOf,
+    objectsOf: (program) => programs.find((p) => p.id === program).objects,
+    plannedNames,
+    staticBounds,
+    expectedRequests,
+    readbackCap,
+  });
 }
 
-/**
- * Request count of a production run in which everything behaves as planned: every release settles
- * at the third poll (two markers except for the first program), every compile succeeds.
- */
-export function expectedRequests(recordings = RECORDINGS) {
-  const objects = Object.keys(OBJECTS).length;
-  const preflight = 6;
-  let perRecording = objects + PROGRAMS.length;
-  PROGRAMS.forEach((program, index) => {
-    perRecording += 1 + 1 + 1; // create, publish, read-back
-    perRecording += SETTLE_STREAK * (index === 0 ? 1 : 2);
-    perRecording += rowsOf(program.id).length + STILL_IN_FORCE_READS;
-  });
-  perRecording += LOAD_ONLY.length * 2;
-  perRecording += 1 + 1 + 1 + SETTLE_STREAK; // restore: read, write, read-back, settle
-  perRecording += PROGRAMS.length; // ruleset deletes
-  const cleanup = 2 + 2 * objects * recordings + 2 + 2;
-  return preflight + perRecording * recordings + cleanup;
-}
+/** The family of the 2026-11-08 sibling audit (S1-S4, S7-S10), sent as STORAGE-RULES-S9. */
+export const S9_PLAN = buildPlan({
+  id: "s9",
+  taskId: "STORAGE-RULES-S9",
+  prefixRoot: PREFIX_ROOT,
+  estimatedUsd: ESTIMATED_USD,
+  localBucket: LOCAL_BUCKET,
+  objects: OBJECTS,
+  programs: PROGRAMS,
+  loadOnly: LOAD_ONLY,
+  rows: ROWS,
+});
+
+export const objectsOf = S9_PLAN.objectsOf;
+export const allObjectIds = () => Object.keys(OBJECTS);
+export const rowsOf = S9_PLAN.rowsOf;
+
+export const objectName = S9_PLAN.objectName;
+export const unitsAndPoints = (text) => ({ units: unitsOf(text), points: pointsOf(text) });
+
+export const plannedNames = S9_PLAN.plannedNames;
+export const staticBounds = S9_PLAN.staticBounds;
+export const expectedRequests = S9_PLAN.expectedRequests;

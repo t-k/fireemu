@@ -10,6 +10,9 @@
 
 #![cfg(unix)]
 
+#[path = "../../../tests/support/real_node.rs"]
+mod real_node;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
@@ -22,18 +25,11 @@ fn sdk_root() -> PathBuf {
     )
 }
 
-/// The real Node binary, resolved once from the unmodified environment, so the scenario never runs
-/// through the Volta shim (which forks when its environment is changed).
-fn real_node() -> PathBuf {
-    static NODE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
-    NODE.get_or_init(|| {
-        let out = Command::new("node")
-            .args(["-p", "process.execPath"])
-            .output()
-            .expect("node is on PATH");
-        PathBuf::from(String::from_utf8_lossy(&out.stdout).trim())
-    })
-    .clone()
+/// The daemon, with the real Node (never the Volta shim) first on its PATH.
+fn fireemu_command() -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_fireemu"));
+    real_node::use_real_node(&mut command);
+    command
 }
 
 fn have_sdk() -> bool {
@@ -142,7 +138,7 @@ fn run(dir: &Path, isolation: &str) -> (Output, serde_json::Value) {
         format!(r#"{{"schemaVersion":1,"functions":{{"isolation":"{isolation}"}}}}"#),
     )
     .unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_fireemu"))
+    let output = fireemu_command()
         .args([
             "exec",
             "--project",
@@ -165,7 +161,7 @@ fn run(dir: &Path, isolation: &str) -> (Output, serde_json::Value) {
         .args(["--functions"])
         .arg(dir)
         .arg("--")
-        .arg(real_node())
+        .arg(real_node::real_node().path)
         .args(["-e", SCENARIO])
         .arg(dir)
         .stdin(Stdio::null())
@@ -421,7 +417,7 @@ exports.beta = onRequest((req, res) => res.json({ marker, pid: process.pid }));
         r#"{"functions":{"source":".","ignore":["node_modules",".git","firebase-debug.log","firebase-debug.*.log","*.local"]}}"#,
     )
     .unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_fireemu"))
+    let output = fireemu_command()
         .args([
             "exec",
             "--project",
@@ -444,7 +440,7 @@ exports.beta = onRequest((req, res) => res.json({ marker, pid: process.pid }));
         .arg("--firebase-json")
         .arg(dir.join("firebase.json"))
         .arg("--")
-        .arg(real_node())
+        .arg(real_node::real_node().path)
         .args(["-e", RELOAD_SCENARIO])
         .arg(&dir)
         .stdin(Stdio::null())
@@ -504,7 +500,7 @@ fn exec_with_inspector(dir: &Path, isolation: &str, inspect: &[&str]) -> Output 
         format!(r#"{{"schemaVersion":1,"functions":{{"isolation":"{isolation}"}}}}"#),
     )
     .unwrap();
-    Command::new(env!("CARGO_BIN_EXE_fireemu"))
+    fireemu_command()
         .args([
             "exec",
             "--project",

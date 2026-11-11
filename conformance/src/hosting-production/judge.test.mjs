@@ -8,6 +8,7 @@ import {
   compareRuns,
   conditionVerdicts,
   etagShape,
+  gzipLengthBoundHolds,
   lastModifiedShape,
   unclassifiedHeaderNames,
 } from "./judge.mjs";
@@ -878,4 +879,50 @@ test("a gzip length bound excuses a length difference only while both answers ar
     compareRows(gzipRow(base), gzipRow(padded(9)), unbounded).status,
     "KNOWN_DIFFERENCE",
   );
+});
+
+test("gzipLengthBoundHolds needs both answers gzip, one decoded digest and a Content-Length within the bound", () => {
+  const entry = { id: "KD-LEN", gzipLengthBound: 8 };
+  const side = (length, extra = {}) => ({
+    id: "v01.x",
+    headers: { "content-encoding": ["gzip"], "content-length": [String(length)] },
+    decodedSha256: "d1",
+    ...extra,
+  });
+  const holds = (a, b, bound = entry) => gzipLengthBoundHolds(bound, a, b);
+  assert.equal(holds(side(70), side(70)), true);
+  assert.equal(holds(side(70), side(78)), true);
+  assert.equal(holds(side(78), side(70)), true);
+  assert.equal(holds(side(70), side(79)), false);
+  assert.equal(holds(side(79), side(70)), false);
+  // each of the other conditions fails the bound on its own
+  const identity = { headers: { "content-length": ["70"] }, decodedSha256: "d1" };
+  assert.equal(holds(side(70), { ...side(70), ...identity, id: "v01.x" }), false);
+  assert.equal(holds({ ...side(70), ...identity, id: "v01.x" }, side(70)), false);
+  assert.equal(
+    holds(side(70), side(70, { headers: { ...side(70).headers, "content-encoding": ["br"] } })),
+    false,
+  );
+  assert.equal(
+    holds(side(70, { headers: { ...side(70).headers, "content-encoding": ["br"] } }), side(70)),
+    false,
+  );
+  assert.equal(holds(side(70), side(70, { decodedSha256: "d2" })), false);
+  assert.equal(
+    holds(side(70, { decodedSha256: undefined }), side(70, { decodedSha256: undefined })),
+    false,
+  );
+  assert.equal(holds(side(70), side(70, { decodedSha256: undefined })), false);
+  assert.equal(holds(side(70, { decodedSha256: undefined }), side(70)), false);
+  const noLength = (row) => ({ ...row, headers: { "content-encoding": ["gzip"] } });
+  assert.equal(holds(noLength(side(70)), side(70)), false);
+  assert.equal(holds(side(70), noLength(side(70))), false);
+  const twoLengths = side(70, {
+    headers: { "content-encoding": ["gzip"], "content-length": ["70", "70"] },
+  });
+  assert.equal(holds(twoLengths, side(70)), false);
+  assert.equal(holds(side(70), twoLengths), false);
+  assert.equal(holds(side(70), side("x")), false);
+  // an entry with no bound is not limited here, whatever the rows are
+  assert.equal(holds(identity, side(70), { id: "KD-OTHER" }), true);
 });

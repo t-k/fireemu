@@ -1364,7 +1364,9 @@ export const FUNCTIONS_HTTP_RECORDED_REQUEST_KINDS = {
     "cliDelete",
   ],
   // The current one: the same corpus with the three callable auth-refusal rows answered by the
-  // wrapper's envelope, as the two re-recordings of 2026-11-11 show (closure amendment A1).
+  // wrapper's envelope, as the two re-recordings of 2026-11-11 show (closure amendment A1). It was
+  // recorded by a recorder that already had the token and upload kinds, so all eight are listed: a
+  // later added kind, if unspent, stands in; a recording cut to these eight is the recorded bytes.
   "2f354fbcd16be3c6e30190d5f590d32a6dc41039672f06473424da8ee51053f8": [
     "invocation",
     "control",
@@ -1372,6 +1374,8 @@ export const FUNCTIONS_HTTP_RECORDED_REQUEST_KINDS = {
     "auth",
     "cliDeploy",
     "cliDelete",
+    "token",
+    "upload",
   ],
 };
 

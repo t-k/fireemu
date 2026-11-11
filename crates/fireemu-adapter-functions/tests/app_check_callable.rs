@@ -427,6 +427,45 @@ impl Harness {
             .expect("a well-formed response")
     }
 
+    /// Like [`Harness::request`] with header lines given as raw bytes (a value that is not text).
+    async fn request_raw_headers(
+        &self,
+        method: &str,
+        function: &str,
+        raw_headers: &[u8],
+    ) -> fireemu_adapter_functions::http::ProxiedResponse {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+        let mut request =
+            format!("{method} /{PROJECT}/us-central1/{function} HTTP/1.1\r\n").into_bytes();
+        request.extend_from_slice(raw_headers);
+        let body = br#"{"data":{"a":2,"b":3}}"#.as_slice();
+        request.extend_from_slice(
+            format!(
+                "host: {}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                self.addr,
+                body.len()
+            )
+            .as_bytes(),
+        );
+        request.extend_from_slice(body);
+        let mut stream = tokio::net::TcpStream::connect(self.addr)
+            .await
+            .expect("the functions port accepts");
+        stream
+            .write_all(&request)
+            .await
+            .expect("the request is written");
+        stream.flush().await.expect("flush");
+        let mut raw = Vec::new();
+        stream
+            .read_to_end(&mut raw)
+            .await
+            .expect("the response is read");
+        fireemu_adapter_functions::http::parse_response(&raw, method)
+            .expect("a well-formed response")
+    }
+
     /// A POST whose head is refused at once (two `origin` fields) and whose body arrives only after
     /// the server has answered: `delay` after the head, `body_len` bytes of it. A write that fails
     /// because the server already closed is not an error here; what is under test is whether the
@@ -2316,7 +2355,8 @@ async fn strict_callable_refusals_follow_the_route_and_the_credential() {
             .await,
         "owner",
     );
-    // Two Authorization fields are never accepted; production sent the front end's page for them.
+    // Two Authorization fields are never accepted; they get the front end's page (no recording sends the
+    // wrapper two: this answer is kept from before the re-recordings and is unrecorded).
     let two = h
         .request(
             "POST",
@@ -3186,5 +3226,103 @@ async fn the_functions_and_support_listeners_refuse_a_rebound_host() {
     }
     eventarc_server.abort();
     tasks_server.abort();
+    h.stop().await;
+}
+
+/// An empty `Authorization` value is no credential: the SDK the wrapper runs (firebase-functions
+/// `checkAuthToken`) reads it as missing and runs the handler unauthenticated. No recording covers
+/// the shape; strict follows the installed SDK (inferred, listed as a limitation). A value that is not
+/// text is a credential that cannot be verified and is refused with the envelope.
+#[tokio::test]
+async fn strict_follows_the_sdk_for_an_empty_authorization_value() {
+    use fireemu_adapter_functions::http::FunctionsHttpProfile::Strict;
+    for enforce_app_check in [false, true] {
+        let h = start_with_consume_profile(enforce_app_check, "disabled", Strict).await;
+        // A real callable: the handler runs, and it sees no authenticated identity.
+        for headers in [
+            vec![("authorization", "")],
+            vec![("Authorization", ""), ("x-near-miss", "1")],
+        ] {
+            let response = h.request("POST", "add", &headers).await;
+            assert_eq!(response.status, 200, "{enforce_app_check}: {headers:?}");
+            let body: Value = serde_json::from_slice(&response.body).expect("add body");
+            assert!(
+                echoed(&body, "authorization").iter().all(String::is_empty),
+                "{enforce_app_check}: no credential reaches the handler: {body}"
+            );
+        }
+        // Near misses stay refused with the 66-byte envelope: a scheme without a token, and a value
+        // that is not text. (Whitespace alone is trimmed to the empty value by the HTTP parser; two
+        // fields, one of them empty, are the front end's page.)
+        for (case, authorization) in [
+            ("one-character", "A"),
+            ("scheme-only", "Bearer"),
+            ("empty-token", "Bearer "),
+        ] {
+            assert_wrapper_refusal(
+                &h.request("POST", "add", &[("authorization", authorization)])
+                    .await,
+                case,
+            );
+        }
+        for (case, raw) in [
+            ("non-utf8", &b"authorization: \xff\r\n"[..]),
+            ("non-utf8-bearer", b"authorization: Bearer \xfe\xfe\r\n"),
+            ("latin1", b"authorization: caf\xe9\r\n"),
+        ] {
+            assert_wrapper_refusal(&h.request_raw_headers("POST", "add", raw).await, case);
+        }
+        let two = h
+            .request_raw_headers("POST", "add", b"authorization: \r\nauthorization: \xff\r\n")
+            .await;
+        assert_eq!(two.status, 401);
+        assert_eq!(
+            response_header(&two, "content-type"),
+            Some("text/html; charset=UTF-8")
+        );
+        h.stop().await;
+    }
+
+    // A callable's code served as onRequest runs the same wrapper: the same answers.
+    let h = start_with_env_marking(
+        false,
+        vec![("FIREEMU_FAKE_CONSUME".to_owned(), "disabled".to_owned())],
+        Strict,
+        false,
+        &["echo"],
+    )
+    .await;
+    assert_eq!(
+        h.request("POST", "echo", &[("authorization", "")])
+            .await
+            .status,
+        200
+    );
+    assert_wrapper_refusal(
+        &h.request_raw_headers("POST", "echo", b"authorization: \xff\r\n")
+            .await,
+        "non-utf8",
+    );
+    h.stop().await;
+
+    // The nested path (a plain onRequest function that nests the wrapper): the empty value is not a
+    // verified credential, carries no marker, and reaches the function as it came, where the
+    // wrapper reads it as missing; a value that is not text is dropped from what the runner sees.
+    let h = start_with_consume_profile(false, "disabled", Strict).await;
+    let response = h.request("POST", "echo", &[("authorization", "")]).await;
+    assert_eq!(response.status, 200);
+    let body: Value = serde_json::from_slice(&response.body).expect("echo body");
+    assert!(echoed(&body, VERIFIED_CREDENTIAL_FIELD).is_empty());
+    assert!(echoed(&body, "authorization").iter().all(String::is_empty));
+    let response = h
+        .request_raw_headers("POST", "echo", b"authorization: \xff\r\n")
+        .await;
+    assert_eq!(response.status, 200);
+    let body: Value = serde_json::from_slice(&response.body).expect("echo body");
+    assert!(echoed(&body, VERIFIED_CREDENTIAL_FIELD).is_empty());
+    assert!(
+        echoed(&body, "authorization").is_empty(),
+        "a value that is not text never reaches the runner: {body}"
+    );
     h.stop().await;
 }

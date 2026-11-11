@@ -1140,7 +1140,8 @@ fn verified_single_credential(runtime: &FunctionsRuntime, raw: &hyper::HeaderMap
 /// What the strict daemon answers a callable request for the credential it presents.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum StrictCallableCredential {
-    /// No credential, or one single Bearer that is a user of the project: the request goes on.
+    /// No credential (an empty value is none), or one single Bearer that is a user of the project:
+    /// the request goes on.
     Accepted,
     /// The Google front end's 401 page, for more than one `Authorization` field (a request no
     /// recording sends the wrapper). FUNCTIONS-HTTP stage 3 (2026-09-27) also recorded it for a
@@ -1155,7 +1156,7 @@ pub(crate) enum StrictCallableCredential {
     /// real callable and for a callable's code served as `onRequest`) and, in the re-recordings, an
     /// ID token of the project with an invalid signature or past its expiry: the front end hands
     /// the request on and the wrapper refuses every single credential that is not a verified ID
-    /// token.
+    /// token (an empty value is no credential, and is accepted).
     WrapperRefusal,
 }
 
@@ -1172,6 +1173,11 @@ pub(crate) fn strict_callable_credential(
 ) -> StrictCallableCredential {
     let authorization = match presented {
         [] => return StrictCallableCredential::Accepted,
+        // An empty value is no credential: the SDK the wrapper runs reads it as missing and runs
+        // the handler unauthenticated (firebase-functions `checkAuthToken`). No recording covers
+        // this shape; strict follows the installed SDK. A value that is not text arrives here as
+        // a placeholder (`credential_values`), never as the empty string.
+        [single] if single.is_empty() => return StrictCallableCredential::Accepted,
         [single] => single,
         _ => return StrictCallableCredential::FrontEndPage,
     };
@@ -1199,7 +1205,7 @@ fn strict_callable_credential_refusal(
     streaming: bool,
     origin: Option<&str>,
 ) -> Option<Response<OutBody>> {
-    let presented = field_values(raw, "authorization");
+    let presented = credential_values(raw, "authorization");
     match strict_callable_credential(runtime, &presented) {
         StrictCallableCredential::Accepted => None,
         StrictCallableCredential::FrontEndPage => Some(typed(
@@ -1954,6 +1960,23 @@ async fn respond(
 /// The empty string is not a value anything accepts: it classifies as malformed for App Check
 /// and fails ID token verification. What matters is that it still counts as an instance, so a
 /// second copy cannot hide behind a byte that does not render.
+/// The placeholder a credential field that is not text is presented as: never empty (an empty value
+/// is no credential), never a Bearer, never verified.
+const NON_TEXT_CREDENTIAL: &str = "\u{FFFD}";
+
+/// Like [`field_values`] for a credential: a value that is not renderable as text is a credential
+/// that must be refused, so it is not collapsed into the empty string (which is no credential).
+fn credential_values(headers: &hyper::HeaderMap, name: &str) -> Vec<String> {
+    headers
+        .get_all(name)
+        .iter()
+        .map(|v| {
+            v.to_str()
+                .map_or_else(|_| NON_TEXT_CREDENTIAL.to_owned(), str::to_owned)
+        })
+        .collect()
+}
+
 fn field_values(headers: &hyper::HeaderMap, name: &str) -> Vec<String> {
     headers
         .get_all(name)
@@ -2792,5 +2815,42 @@ mod strict_eventarc_tests {
             // Another test may take a number in between, so "later" rather than "next".
             assert!(pair[1] > pair[0], "the counter only moves forward");
         }
+    }
+}
+
+#[cfg(test)]
+mod credential_values_tests {
+    use super::{credential_values, field_values, NON_TEXT_CREDENTIAL};
+    use hyper::header::{HeaderMap, HeaderValue, AUTHORIZATION};
+
+    fn one(value: &[u8]) -> HeaderMap {
+        let mut map = HeaderMap::new();
+        map.append(AUTHORIZATION, HeaderValue::from_bytes(value).unwrap());
+        map
+    }
+
+    #[test]
+    fn an_empty_credential_stays_empty_and_a_value_that_is_not_text_is_never_empty() {
+        // The empty value is no credential (the SDK reads it as missing).
+        assert_eq!(credential_values(&one(b""), "authorization"), [""]);
+        for value in [&b"\xff"[..], b"\xc3\xa9", b"Bearer \xfe\xfe", b"\x80"] {
+            let presented = credential_values(&one(value), "authorization");
+            assert_eq!(presented, [NON_TEXT_CREDENTIAL], "{value:?}");
+            assert!(!presented[0].is_empty());
+            // The general collection collapses it into the empty string: the reason for the split.
+            assert_eq!(
+                field_values(&one(value), "authorization"),
+                [""],
+                "{value:?}"
+            );
+        }
+        let mut two = one(b"");
+        two.append(AUTHORIZATION, HeaderValue::from_bytes(b"\xff").unwrap());
+        assert_eq!(
+            credential_values(&two, "authorization"),
+            ["", NON_TEXT_CREDENTIAL],
+            "every instance counts"
+        );
+        assert!(credential_values(&HeaderMap::new(), "authorization").is_empty());
     }
 }

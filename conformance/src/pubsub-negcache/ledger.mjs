@@ -83,10 +83,14 @@ export function createLedger() {
         else if (result === "conflict" && entry.restore && !r.confirmed && !r.createUnknown) {
           // A 409 on re-creating our own name after our own 2xx DELETE: this request created nothing, and
           // what answered is the earlier incarnation (not yet read absent) or something we did not create.
-          // The earlier incarnation's state comes back, so an absence read or A2 can still close it.
+          // The earlier incarnation's state comes back, so an absence read or A2 can still close it. But the
+          // 409 is positive evidence that a snapshot of the name exists now, so an absence read of the
+          // earlier incarnation no longer holds: the name is deletable and only a later absence closes it.
           const { history, ...before } = entry.restore;
           void history;
           Object.assign(r, before);
+          r.absenceAfterDelete = false;
+          r.presentAfterDelete = true;
         }
         // a 409 settles nothing about an earlier unknown create, and nothing about itself either
       }

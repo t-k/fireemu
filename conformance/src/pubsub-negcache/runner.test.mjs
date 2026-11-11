@@ -950,6 +950,59 @@ test("M1: a ledger mid-run never reads a re-created snapshot as deleted", async 
   assert.deepEqual(ledger.deletable(), [name]);
 });
 
+for (const cellName of ["p1", "p2", "p3"]) {
+  for (const executed of [true, false]) {
+    for (const params of [{}, { positiveExempt: false, ttl: 12000 }]) {
+      test(`M1 of the v4 delta review: a 409 on the ${cellName} snapshot re-create (${executed ? "a snapshot of the name exists" : "none was made"}, ${JSON.stringify(params)}) never lets the run close with the snapshot still present`, async () => {
+        let puts = 0;
+        const { run, world, rows } = record({
+          params,
+          wrap: async (base, req, meta, clock) => {
+            if (req.method === "PUT" && req.path.includes(`-nc-${cellName}-y`)) {
+              puts += 1;
+              if (puts === 2) {
+                // the re-create after the cell's own DELETE answers 409
+                const sent = executed ? await base(req, meta) : null;
+                if (!executed) await clock.sleep(300);
+                const t = clock.now();
+                return {
+                  startedAt: sent?.startedAt ?? t - 300,
+                  headersAt: t,
+                  completedAt: t,
+                  status: 409,
+                  bodyText: JSON.stringify({
+                    error: {
+                      code: 409,
+                      message: "Resource already exists",
+                      status: "ALREADY_EXISTS",
+                    },
+                  }),
+                };
+              }
+            }
+            return base(req, meta);
+          },
+        });
+        const out = await run();
+        assert.equal(puts >= 2, true, "the re-create was sent");
+        // closureReady must never be claimed while a snapshot is left in the world
+        if (out.closureReady) assert.equal(world.state.snapshot.size, 0, JSON.stringify(out.open));
+        else assert.ok(out.open.length > 0);
+        // the cleanup deleted the snapshot (it is deletable after the 409) and read its absence
+        assert.equal(world.state.snapshot.size, 0);
+        assert.ok(out.closureReady, JSON.stringify(out.open));
+        if (executed) {
+          const last = rows
+            .filter((r) => r.event === "request" && r.path.includes(`-nc-${cellName}-y`))
+            .at(-1);
+          assert.equal(last.method, "DELETE");
+          assert.equal(last.cell, "cleanup");
+        }
+      });
+    }
+  }
+}
+
 for (const [cell, role, op, kind] of [
   ["a2", "x", "subscriptions", "sub"],
   ["a8", "y", "snapshots", "snap"],

@@ -171,7 +171,7 @@ test("a snapshot created again after its own DELETE is a new incarnation: a lost
 test("a new incarnation answered 2xx or a known error is judged on its own, a 409 keeps the earlier one", () => {
   for (const [result, status] of [
     ["ok", "live"],
-    ["conflict", "deleted"],
+    ["conflict", "delete-present"],
     ["notfound", "never-created"],
   ]) {
     const ledger = createLedger();
@@ -313,7 +313,10 @@ test("S1: a 409 on re-creating our own name after our own 2xx DELETE keeps the e
   create(unread, "ok");
   del(unread, "ok");
   create(unread, "conflict");
-  assert.equal(unread.status(N), "delete-unread");
+  // The 409 is positive evidence that something of that name exists: it is deletable and not yet closed.
+  assert.equal(unread.status(N), "delete-present");
+  assert.deepEqual(unread.deletable(), [N]);
+  assert.ok(!unread.closureReady());
   unread.read(N, "absent", "list");
   assert.equal(unread.status(N), "deleted");
   const present = createLedger();
@@ -341,4 +344,18 @@ test("S1: a 409 on re-creating our own name after our own 2xx DELETE keeps the e
   create(lost, "unknown");
   create(lost, "conflict");
   assert.equal(lost.status(N), "unconfirmed-create");
+});
+
+test("M1 of the v4 delta review: a 409 after an absence read never reads deleted", () => {
+  const ledger = createLedger();
+  create(ledger, "ok");
+  del(ledger, "ok");
+  ledger.read(N, "absent", "get"); // the earlier incarnation was read absent
+  create(ledger, "conflict"); // but a snapshot of the name exists now
+  assert.equal(ledger.status(N), "delete-present");
+  assert.deepEqual(ledger.deletable(), [N]);
+  assert.ok(!ledger.closureReady());
+  // only a later absence (a complete LIST) closes it again
+  ledger.read(N, "absent", "list");
+  assert.equal(ledger.status(N), "deleted");
 });

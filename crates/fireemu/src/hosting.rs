@@ -1,6 +1,7 @@
 //! Local Hosting: pinned-oracle routing with capability-confined static assets.
 
 mod content_types;
+mod encoding;
 mod files;
 mod matcher;
 mod mime;
@@ -366,10 +367,47 @@ impl Site {
             })
             .expect("asset headers")
     }
+    /// The whole file as a `200`-style answer (`status` is already on `builder`). With `gzip` a
+    /// file of one byte up to [`encoding::MAX_GZIP_INPUT`] is answered as gzip (rows `v01.gz-*`):
+    /// the answer is built here, the length of a gzip body being known only once it is packed, and
+    /// the file's own `ETag` stays. Anything else streams from the open file.
+    async fn whole_file(
+        builder: hyper::http::response::Builder,
+        asset: files::Asset,
+        head: bool,
+        gzip: bool,
+    ) -> Result<Response<Body>, Response<Body>> {
+        let length = asset.bytes;
+        if gzip && encoding::within_limit(length) {
+            let file = asset.file;
+            let Ok(Ok(packed)) =
+                tokio::task::spawn_blocking(move || encoding::gzip_reader(file, length)).await
+            else {
+                return Err(response(500, "Could not read the file", None));
+            };
+            return Ok(builder
+                .header("content-encoding", "gzip")
+                .header("content-length", packed.len())
+                .body(if head {
+                    full(Bytes::new())
+                } else {
+                    full(Bytes::from(packed))
+                })
+                .expect("asset headers"));
+        }
+        Ok(builder
+            .header("content-length", length)
+            .body(if head {
+                full(Bytes::new())
+            } else {
+                files::FileBody::new(asset.file, length).boxed()
+            })
+            .expect("asset headers"))
+    }
     /// A deployed file as the profile answers it. The emulator profile answers as the pinned oracle
     /// does (`file_response`); strict adds what production adds: a quoted SHA-256 `ETag`, `304`
     /// for a matching `If-None-Match` or a not older `If-Modified-Since`, and single `Range`s.
-    fn serve_asset(
+    async fn serve_asset(
         &self,
         path: &str,
         asset: files::Asset,
@@ -413,14 +451,15 @@ impl Site {
             production::RangeOutcome::Whole
         };
         let result = match outcome {
-            production::RangeOutcome::Whole => builder
-                .status(status)
-                .header("content-length", length)
-                .body(if head {
-                    full(Bytes::new())
-                } else {
-                    files::FileBody::new(asset.file, length).boxed()
-                }),
+            production::RangeOutcome::Whole => {
+                let compressible =
+                    mime::content_type(path).is_none_or(|(_, compressible)| compressible);
+                let gzip = compressible && encoding::accepts_gzip(header("accept-encoding"));
+                match Self::whole_file(builder.status(status), asset, head, gzip).await {
+                    Ok(answer) => Ok(answer),
+                    Err(refusal) => return refusal,
+                }
+            }
             production::RangeOutcome::Unsatisfiable => {
                 let mut refusal = response(416, Bytes::new(), None);
                 if let Ok(value) = hyper::header::HeaderValue::try_from(format!("bytes */{length}"))
@@ -685,18 +724,21 @@ impl Site {
                 target.push_str(query);
                 return Some(self.redirect(&target, 301, head));
             }
-            return Some(self.serve_asset(
-                &file,
-                asset,
-                // Production serves `/404.html` as the file it is (`v01.not-found-direct`).
-                if path == "/404.html" && !self.strict {
-                    404
-                } else {
-                    200
-                },
-                head,
-                headers,
-            ));
+            return Some(
+                self.serve_asset(
+                    &file,
+                    asset,
+                    // Production serves `/404.html` as the file it is (`v01.not-found-direct`).
+                    if path == "/404.html" && !self.strict {
+                        404
+                    } else {
+                        200
+                    },
+                    head,
+                    headers,
+                )
+                .await,
+            );
         }
         let has_slash = path.ends_with('/');
         let index = format!("{}/index.html", path.trim_end_matches('/'));
@@ -711,7 +753,7 @@ impl Site {
                     head,
                 ));
             }
-            return Some(self.serve_asset(&file, asset, 200, head, headers));
+            return Some(self.serve_asset(&file, asset, 200, head, headers).await);
         }
         if clean {
             let appended = if has_slash && slash.is_some() {
@@ -740,7 +782,7 @@ impl Site {
                         head,
                     ));
                 }
-                return Some(self.serve_asset(&file, asset, 200, head, headers));
+                return Some(self.serve_asset(&file, asset, 200, head, headers).await);
             }
         }
         None
@@ -901,13 +943,15 @@ impl Site {
                 if let Some((file, asset)) = self.asset(destination, &hyper::HeaderMap::new()).await
                 {
                     if self.strict {
-                        return self.serve_asset(
-                            &file,
-                            asset,
-                            if destination == "/404.html" { 404 } else { 200 },
-                            head,
-                            request.headers(),
-                        );
+                        return self
+                            .serve_asset(
+                                &file,
+                                asset,
+                                if destination == "/404.html" { 404 } else { 200 },
+                                head,
+                                request.headers(),
+                            )
+                            .await;
                     }
                     let etag_match = request
                         .headers()
@@ -934,7 +978,9 @@ impl Site {
             }
         }
         if let Some((file, asset)) = self.asset("/404.html", request.headers()).await {
-            let mut result = self.serve_asset(&file, asset, 404, head, request.headers());
+            let mut result = self
+                .serve_asset(&file, asset, 404, head, request.headers())
+                .await;
             self.custom_headers("/404.html", &mut result);
             return result;
         }

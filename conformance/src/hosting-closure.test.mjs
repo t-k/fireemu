@@ -41,10 +41,12 @@ test("the record is the verified Hosting parent with its review, and the corpus 
   );
   assert.equal(review.reviews[2].reviewedCommit, review.reviewedCommit);
   assert.equal(review.reviews[2].outcome, "APPROVED");
+  // strict gzip is built (owner ledger 2458): no follow-up asks for flate2 any more, and the
+  // gzip probes are named for the next idp packet (the only follow-up that names gzip)
   assert.deepEqual(
-    record.followUps.filter((text) => /flate2/.test(text)),
+    record.followUps.filter((text) => /gzip|flate2/.test(text)),
     [
-      "flate2 approved (owner ledger 2458, ruling 26): strict gzip is the next branch; Brotli stays a declared difference.",
+      "Next idp packet: probe gzip beyond the corpus file: a small text file (the size below which production does not compress), text/html and image/svg+xml, a file with no known extension, a Range request with Accept-Encoding: gzip, Accept-Encoding: * and x-gzip, so that the types and sizes strict compresses are observed (strict gzip itself is built, owner ledger 2458; Brotli stays a declared difference).",
     ],
   );
   assert.deepEqual(record.recordingPolicy, { observedPasses: 2, requiredPasses: 2, waiver: null });
@@ -105,9 +107,9 @@ test("the committed comparisons are those of the recordings, with no mismatch an
   const total = (summary) => Object.values(summary).reduce((sum, count) => sum + count, 0);
   for (const comparison of Object.values(record.comparisons))
     assert.equal(total(comparison.summary), 201);
-  // a row with a known difference is KNOWN_DIFFERENCE, never MATCH: 21 rows of each strict comparison
-  assert.equal(record.comparisons.strictVsPass1.summary.KNOWN_DIFFERENCE, 21);
-  assert.equal(record.comparisons.strictVsPass2.summary.KNOWN_DIFFERENCE, 21);
+  // a row with a known difference is KNOWN_DIFFERENCE, never MATCH: 18 rows of each strict comparison
+  assert.equal(record.comparisons.strictVsPass1.summary.KNOWN_DIFFERENCE, 18);
+  assert.equal(record.comparisons.strictVsPass2.summary.KNOWN_DIFFERENCE, 18);
   assert.equal(record.comparisons.runVsRun.summary.KNOWN_DIFFERENCE, 2);
   const knownFile = await bytesOf(record.knownDifferences.path);
   assert.equal(record.knownDifferences.sha256, sha(knownFile));
@@ -245,7 +247,42 @@ test("the release comparisons are the committed ones, and the limitations name w
   assert.match(record.followUps.join("\n"), /404 page/);
   assert.match(record.followUps.join("\n"), /digit-bearing/);
   const compression = record.conditions.find((c) => c.conditionId === "HOSTING/compression-vary");
-  assert.match(compression.description, /Content-Encoding itself is not reproduced/);
+  assert.match(compression.description, /gzip Content-Encoding/);
+  assert.match(compression.description, /KD-COMPRESSION: br only/);
+});
+
+test("KD-COMPRESSION is Brotli only: the gzip rows are compared, match in both strict comparisons and keep their decoded body compared", async () => {
+  const entry = JSON.parse(await bytesOf(record.knownDifferences.path)).entries.find(
+    (candidate) => candidate.id === "KD-COMPRESSION",
+  );
+  assert.deepEqual(entry.rows, [
+    "v01.gz-br",
+    "v01.gz-gzip-br",
+    "v01.gz-br-refused",
+    "v01.gz-json-br",
+  ]);
+  assert.deepEqual(entry.fields, ["header:content-encoding", "header:content-length"]);
+  assert.equal(entry.etagSuffix, "-br");
+  for (const name of ["strictVsPass1", "strictVsPass2"]) {
+    const rows = JSON.parse(await bytesOf(record.comparisons[name].path)).rows;
+    const status = Object.fromEntries(rows.map((row) => [row.id, row.status]));
+    for (const id of ["v01.gz-gzip", "v01.gz-head-gzip", "v01.gz-json-gzip", "v01.gz-png-gzip"]) {
+      assert.equal(status[id], "MATCH_LAYOUT", `${name} ${id}`);
+    }
+    for (const id of entry.rows) {
+      assert.equal(status[id], "KNOWN_DIFFERENCE", `${name} ${id}`);
+      const known = rows.find((row) => row.id === id).known.map((k) => k.field);
+      assert.deepEqual(
+        known.toSorted(),
+        ["header:content-encoding", "header:content-length", "header:etag"],
+        `${name} ${id}`,
+      );
+    }
+  }
+  const limits = record.limitations.join("\n");
+  for (const text of ["Gzip: strict answers", "miniz_oxide", "32 MiB", "x-gzip"]) {
+    assert.ok(limits.includes(text), text);
+  }
 });
 
 test("every known-difference field is used by a committed comparison, and a wildcard says why", async () => {

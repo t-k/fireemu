@@ -49,6 +49,7 @@ regex = "=1.13.1"
 md-5 = "=0.10.6"
 sha2.workspace = true
 httpdate = "=1.0.3"
+flate2 = { version = "=1.1.10", default-features = false, features = ["rust_backend"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 fireemu-fd-acl = { path = "../fireemu-fd-acl" }

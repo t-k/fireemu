@@ -123,6 +123,8 @@ struct Reply {
     status: u16,
     head: String,
     body: String,
+    /// The body exactly as it came, before any chunked decoding.
+    bytes: Vec<u8>,
 }
 impl Reply {
     fn header(&self, name: &str) -> Option<&str> {
@@ -154,6 +156,10 @@ fn send(site: &Site, method: &str, target: &str, headers: &[(&str, &str)]) -> Re
     stream.read_to_end(&mut raw).unwrap();
     let text = String::from_utf8_lossy(&raw).into_owned();
     let (head, body) = text.split_once("\r\n\r\n").unwrap_or((&text, ""));
+    let bytes = raw
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .map_or_else(Vec::new, |at| raw[at + 4..].to_vec());
     let status = head.split(' ').nth(1).unwrap().parse().unwrap();
     // a chunked body is decoded
     let body = if head
@@ -178,6 +184,7 @@ fn send(site: &Site, method: &str, target: &str, headers: &[(&str, &str)]) -> Re
         status,
         head: head.to_owned(),
         body,
+        bytes,
     }
 }
 
@@ -1109,4 +1116,250 @@ fn hosting_strict_a_backslash_in_a_climbing_path_is_never_a_redirect_to_another_
             );
         }
     }
+}
+
+const BIG: &str = "The quick brown fox jumps over the lazy dog.\n";
+
+fn gunzip(bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    flate2::read::GzDecoder::new(bytes)
+        .read_to_end(&mut out)
+        .expect("a gzip body");
+    out
+}
+
+/// Rows `v01.gz-*` of the production recording: gzip when the request accepts it, the file's own
+/// `ETag`, the same `Vary`, and no compression for an incompressible type.
+#[test]
+fn hosting_strict_gzip_answers_as_the_recorded_rows() {
+    let big = BIG.repeat(100);
+    for profile in ["strict", "exact"] {
+        let hosting = site(
+            "gzip-rows",
+            profile,
+            &json("{}"),
+            &[
+                ("compress/big.txt", &big),
+                ("compress/big.json", &big),
+                ("ct/file.png", "x\n"),
+                ("index.html", "x"),
+            ],
+        );
+        let plain = get(&hosting, "/compress/big.txt");
+        assert_eq!(plain.header("content-encoding"), None, "{profile} gz-none");
+        assert_eq!(plain.header("content-length"), Some("4500"));
+        let etag = plain.header("etag").unwrap().to_owned();
+        assert!(etag.starts_with('"') && !etag.contains("-gzip"), "{etag}");
+        let identity = send(
+            &hosting,
+            "GET",
+            "/compress/big.txt",
+            &[("Accept-Encoding", "identity")],
+        );
+        assert_eq!(identity.header("content-encoding"), None, "gz-identity");
+        assert_eq!(identity.body, big);
+        for (row, target, accept) in [
+            ("gz-gzip", "/compress/big.txt", "gzip"),
+            ("gz-gzip-br", "/compress/big.txt", "gzip, br"),
+            ("gz-br-refused", "/compress/big.txt", "br;q=0, gzip"),
+            ("gz-json-gzip", "/compress/big.json", "gzip"),
+        ] {
+            let reply = send(&hosting, "GET", target, &[("Accept-Encoding", accept)]);
+            assert_eq!(reply.status, 200, "{profile} {row}");
+            assert_eq!(reply.header("content-encoding"), Some("gzip"), "{row}");
+            assert_eq!(
+                reply.header("vary"),
+                Some("x-fh-requested-host, accept-encoding"),
+                "{row}"
+            );
+            assert_eq!(reply.header("etag"), Some(etag.as_str()), "{row}");
+            assert_eq!(reply.header("accept-ranges"), Some("bytes"), "{row}");
+            // the recorded answer is 93 bytes; the length names the body that follows
+            assert_eq!(reply.header("content-length"), Some("93"), "{row}");
+            assert_eq!(reply.bytes.len(), 93, "{row}");
+            assert_eq!(gunzip(&reply.bytes), big.as_bytes(), "{row}");
+        }
+        assert_eq!(
+            send(
+                &hosting,
+                "GET",
+                "/compress/big.json",
+                &[("Accept-Encoding", "gzip")]
+            )
+            .header("content-type"),
+            Some("application/json")
+        );
+        assert_eq!(
+            get(&hosting, "/compress/big.txt").header("content-type"),
+            Some("text/plain; charset=utf-8")
+        );
+        // gz-head-gzip: the head of the gzip answer, with its length and no body
+        let head = send(
+            &hosting,
+            "HEAD",
+            "/compress/big.txt",
+            &[("Accept-Encoding", "gzip")],
+        );
+        assert_eq!(
+            head.header("content-encoding"),
+            Some("gzip"),
+            "gz-head-gzip"
+        );
+        assert_eq!(head.header("content-length"), Some("93"));
+        assert!(head.bytes.is_empty());
+        // gz-png-gzip: an incompressible type is left alone
+        let png = send(
+            &hosting,
+            "GET",
+            "/ct/file.png",
+            &[("Accept-Encoding", "gzip")],
+        );
+        assert_eq!(png.header("content-encoding"), None, "gz-png-gzip");
+        assert_eq!(png.header("content-length"), Some("2"));
+        assert_eq!(
+            png.header("vary"),
+            Some("x-fh-requested-host, accept-encoding")
+        );
+    }
+}
+
+/// Brotli is not produced (a declared difference): a request that accepts only `br`, a refused or
+/// malformed gzip and `*` are answered as identity.
+#[test]
+fn hosting_strict_gzip_is_only_for_a_request_that_accepts_it() {
+    let big = BIG.repeat(100);
+    let hosting = site(
+        "gzip-refused",
+        "exact",
+        &json("{}"),
+        &[("big.txt", &big), ("index.html", "x")],
+    );
+    for accept in ["br", "gzip;q=0", "gzip;q=abc", "*", "deflate", "x-gzip", ""] {
+        let reply = send(&hosting, "GET", "/big.txt", &[("Accept-Encoding", accept)]);
+        assert_eq!(reply.header("content-encoding"), None, "{accept:?}");
+        assert_eq!(reply.header("content-length"), Some("4500"), "{accept:?}");
+        assert_eq!(reply.body, big, "{accept:?}");
+    }
+}
+
+/// Conditional requests, ranges and error pages with gzip accepted.
+#[test]
+fn hosting_strict_gzip_with_conditions_ranges_and_pages() {
+    let big = BIG.repeat(100);
+    let hosting = site(
+        "gzip-conditions",
+        "exact",
+        &json("{}"),
+        &[("big.txt", &big), ("404.html", &big), ("index.html", "x")],
+    );
+    let gzip = [("Accept-Encoding", "gzip")];
+    let etag = get(&hosting, "/big.txt").header("etag").unwrap().to_owned();
+    // a matching tag is 304 with no encoding and no body: the tag is the file's, whatever the coding
+    let not_modified = send(
+        &hosting,
+        "GET",
+        "/big.txt",
+        &[("Accept-Encoding", "gzip"), ("If-None-Match", &etag)],
+    );
+    assert_eq!(not_modified.status, 304);
+    assert_eq!(not_modified.header("content-encoding"), None);
+    assert!(not_modified.bytes.is_empty());
+    // a range is served from the file as identity
+    let part = send(
+        &hosting,
+        "GET",
+        "/big.txt",
+        &[("Accept-Encoding", "gzip"), ("Range", "bytes=0-9")],
+    );
+    assert_eq!(part.status, 206);
+    assert_eq!(part.header("content-encoding"), None);
+    assert_eq!(part.header("content-range"), Some("bytes 0-9/4500"));
+    assert_eq!(part.body, &big[..10]);
+    // the 404 page is a file and is compressed like any other
+    let missing = send(&hosting, "GET", "/nope", &gzip);
+    assert_eq!(missing.status, 404);
+    assert_eq!(missing.header("content-encoding"), Some("gzip"));
+    assert_eq!(gunzip(&missing.bytes), big.as_bytes());
+    // an answer production generates, not a file, is not compressed
+    let redirect_site = site(
+        "gzip-generated",
+        "exact",
+        &json(r#"{"redirects":[{"source":"/old","destination":"/big.txt","type":301}]}"#),
+        &[("big.txt", &big), ("index.html", "x")],
+    );
+    let redirect = send(&redirect_site, "GET", "/old", &gzip);
+    assert_eq!(redirect.status, 301);
+    assert_eq!(redirect.header("content-encoding"), None);
+}
+
+/// The emulator profile answers as the pinned oracle does and never compresses.
+#[test]
+fn hosting_strict_emulator_profile_never_gzips() {
+    let big = BIG.repeat(100);
+    let hosting = site(
+        "gzip-emulator",
+        "emulator",
+        &json("{}"),
+        &[("big.txt", &big), ("index.html", "x")],
+    );
+    let reply = send(
+        &hosting,
+        "GET",
+        "/big.txt",
+        &[("Accept-Encoding", "gzip, br")],
+    );
+    assert_eq!(reply.header("content-encoding"), None);
+    assert_eq!(reply.header("content-length"), Some("4500"));
+    assert_eq!(reply.body, big);
+}
+
+/// A file above the limit is answered as identity rather than held in memory.
+#[test]
+fn hosting_strict_a_file_above_the_gzip_limit_is_identity() {
+    let hosting = site("gzip-limit", "exact", &json("{}"), &[("index.html", "x")]);
+    let path = hosting.dir.join("public/huge.txt");
+    std::fs::File::create(&path)
+        .unwrap()
+        .set_len(32 * 1024 * 1024 + 1)
+        .unwrap();
+    let head = send(
+        &hosting,
+        "HEAD",
+        "/huge.txt",
+        &[("Accept-Encoding", "gzip")],
+    );
+    assert_eq!(head.header("content-encoding"), None);
+    assert_eq!(head.header("content-length"), Some("33554433"));
+}
+
+/// Shapes the recording does not show, decided by the content type strict sends: an unknown
+/// extension is `text/plain` and compresses, `.html` compresses, a binary type does not, and an
+/// empty file is left alone.
+#[test]
+fn hosting_strict_gzip_follows_the_content_type_sent() {
+    let big = BIG.repeat(100);
+    let hosting = site(
+        "gzip-types",
+        "exact",
+        &json("{}"),
+        &[
+            ("index.html", &big),
+            ("notes", &big),
+            ("data.unknownext", &big),
+            ("image.png", &big),
+            ("archive.zip", &big),
+            ("empty.txt", ""),
+        ],
+    );
+    let encoded = |target: &str| {
+        send(&hosting, "GET", target, &[("Accept-Encoding", "gzip")])
+            .header("content-encoding")
+            .map(str::to_owned)
+    };
+    assert_eq!(encoded("/").as_deref(), Some("gzip"));
+    assert_eq!(encoded("/notes").as_deref(), Some("gzip"));
+    assert_eq!(encoded("/data.unknownext").as_deref(), Some("gzip"));
+    assert_eq!(encoded("/image.png"), None);
+    assert_eq!(encoded("/archive.zip"), None);
+    assert_eq!(encoded("/empty.txt"), None);
 }

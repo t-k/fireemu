@@ -913,7 +913,7 @@
     },
     {
       "conditionId": "HOSTING/compression-vary",
-      "description": "Vary and negotiation headers of compressible and incompressible types; Content-Encoding itself is not reproduced (KD-COMPRESSION: gzip and br)",
+      "description": "Vary and negotiation headers of compressible and incompressible types and gzip Content-Encoding with the file's own ETag and length; Brotli is not reproduced (KD-COMPRESSION: br only)",
       "status": "VERIFIED",
       "recipeIds": [
         "hosting/compression-vary"
@@ -955,23 +955,23 @@
           "rows": 10,
           "counts": {
             "MATCH": 0,
-            "MATCH_LAYOUT": 3,
-            "KNOWN_DIFFERENCE": 7,
+            "MATCH_LAYOUT": 6,
+            "KNOWN_DIFFERENCE": 4,
             "MISMATCH": 0,
             "UNKNOWN": 0
           },
-          "knownDifferenceRows": 7
+          "knownDifferenceRows": 4
         },
         "strictVsPass2": {
           "rows": 10,
           "counts": {
             "MATCH": 0,
-            "MATCH_LAYOUT": 3,
-            "KNOWN_DIFFERENCE": 7,
+            "MATCH_LAYOUT": 6,
+            "KNOWN_DIFFERENCE": 4,
             "MISMATCH": 0,
             "UNKNOWN": 0
           },
-          "knownDifferenceRows": 7
+          "knownDifferenceRows": 4
         }
       },
       "knownDifferences": [
@@ -1074,24 +1074,24 @@
       },
       {
         "path": "conformance/hosting-production-strict-vs-pass-1.json",
-        "sha256": "61c9b4356b478c82dd1e9b67ec4bb2d188b7e229a758d496e4f47b4ee0ed5253",
+        "sha256": "379191373c2d3cc4bac49c2144aa1cd506a2a00f477252314283cd5f9d7b1e82",
         "rows": 201,
         "summary": {
           "MATCH": 64,
-          "MATCH_LAYOUT": 116,
-          "KNOWN_DIFFERENCE": 21,
+          "MATCH_LAYOUT": 119,
+          "KNOWN_DIFFERENCE": 18,
           "MISMATCH": 0,
           "UNKNOWN": 0
         }
       },
       {
         "path": "conformance/hosting-production-strict-vs-pass-2.json",
-        "sha256": "daee009ee231b2c96e275a3cab86d0732bc3bae16ef864647d1677805d5f53d4",
+        "sha256": "7fbd5d7c5e9edd94ef1609acc3629789db470fbf2313195061eef3d9b3e96f70",
         "rows": 201,
         "summary": {
           "MATCH": 64,
-          "MATCH_LAYOUT": 116,
-          "KNOWN_DIFFERENCE": 21,
+          "MATCH_LAYOUT": 119,
+          "KNOWN_DIFFERENCE": 18,
           "MISMATCH": 0,
           "UNKNOWN": 0
         }
@@ -1184,7 +1184,8 @@
     "ETag and Last-Modified are compared by form, not by value.",
     "The redirect `type` default of the CLI is not observable through the REST API, which requires a status code.",
     "The strict profile matches the recorded cases under productionExact. Under the default profile two development defaults differ from production on purpose (hosting.cacheControl \"none\": no default Cache-Control; hosting.clientCountry \"honoured\": X-Country-Code and the country cookie select i18n content); productionExact restores production for both (owner policy 1396/1403, coordinator ruling 23). A request outside the corpus is answered by the same rules, not by an observation.",
-    "Known differences (known-differences.json): gzip and br encoding (KD-COMPRESSION), the 21,376-byte default 404 page body (KD-DEFAULT-404-BODY), the hosted SDK files (KD-SDK-FILES), the init.json layout beyond apiKey and projectId and the init.json and init.js lengths (KD-INIT-KEYS), the length of the hosted /__/auth/handler page (KD-AUTH-HANDLER-PAGE, ruling 20) and the Location host of a parent-directory 302 (KD-SAFETY-ORIGIN-REDIRECT: production answers a 302 to an internal origin host, strict answers the same 302 to the normalized path of this origin; rulings 17 and 21). Strict-transport-security, x-robots-tag and the SDK-row headers are excluded as edge-set. 21 of the 201 rows of each strict comparison carry a known difference and are counted as KNOWN_DIFFERENCE, not MATCH.",
+    "Known differences (known-differences.json): Brotli encoding (KD-COMPRESSION: strict answers a request that accepts only br as identity, and one that also accepts gzip as gzip), the 21,376-byte default 404 page body (KD-DEFAULT-404-BODY), the hosted SDK files (KD-SDK-FILES), the init.json layout beyond apiKey and projectId and the init.json and init.js lengths (KD-INIT-KEYS), the length of the hosted /__/auth/handler page (KD-AUTH-HANDLER-PAGE, ruling 20) and the Location host of a parent-directory 302 (KD-SAFETY-ORIGIN-REDIRECT: production answers a 302 to an internal origin host, strict answers the same 302 to the normalized path of this origin; rulings 17 and 21). Strict-transport-security, x-robots-tag and the SDK-row headers are excluded as edge-set. 18 of the 201 rows of each strict comparison carry a known difference and are counted as KNOWN_DIFFERENCE, not MATCH.",
+    "Gzip: strict answers a compressible file as gzip when the request accepts it, with the file's own ETag, the recorded Vary and the same length as production's 93 bytes for the corpus file, as the recorded rows gz-gzip, gz-head-gzip and gz-json-gzip show (miniz_oxide through flate2 at the default level; the length of another file may differ from production's encoder by a few bytes, and the body is compared decoded). Not recorded: which types and sizes production compresses beyond text/plain and application/json (compressed) and image/png of two bytes (not); strict decides by the content type it sends (the mime-db compressible flag, and text/plain for an unknown extension), compresses a file of 1 byte up to 32 MiB (an empty file and a larger one are answered as identity, the whole answer being built in memory), accepts only an explicit gzip member of Accept-Encoding with a quality above zero (not `*` and not x-gzip), answers a Range request and a 304 without Content-Encoding, and compresses the /404.html answer like any file; a generated answer (redirect, default 404 page, reserved routes) is not compressed. Probing these is a To-Do for the next idp packet.",
     "Not compared: the body of init.js in the production-vs-local comparison (only init.json has a layout compared), and the stand-in /__/auth/handler page body (HEAD only was recorded).",
     "Inferred, not recorded: the redirect parameter name rule. Strict reads a name as letters and underscore only, so `:id2` is the parameter `id` followed by a literal `2`. The recording shows only that GET /capture/one/two and GET /capture/:id2/two do not match the source /capture/:id/:id2; other readings fit both rows (`:id2` a literal segment; production rejecting or dropping the rule; digit names allowed but repeated parameters refused). The rule applies to every user redirect with a digit in a parameter name (ruling 24); probing digit-bearing names is a To-Do for the next idp packet.",
     "Strict answers that no recording covers: 416 with Content-Range: bytes */N for an unsatisfiable range; a multi-range request answered whole; Range on HEAD answering 206 with the part's length and no body; If-Modified-Since on HEAD; OPTIONS on a path that is not a file (answered as any request); the normalized-path 302 for dot segments other than a leading parent (`/a/../b` answers 302 to `/b`, `/a/./b` to `/a/b`, and a path that ends in a dot segment ends in a slash as RFC 3986 says: `/a/b/..` answers 302 to `/a/`); a dot-segment path with a raw backslash, control character or space, which is not redirected (a browser reads `\\` as `/`, so `Location: /\\evil.example` would leave the origin) and answers 404; the stand-in /__/auth/handler page; and the redirect rule for digit-bearing parameter names above."
@@ -1207,22 +1208,22 @@
     },
     "strictVsPass1": {
       "path": "conformance/hosting-production-strict-vs-pass-1.json",
-      "sha256": "61c9b4356b478c82dd1e9b67ec4bb2d188b7e229a758d496e4f47b4ee0ed5253",
+      "sha256": "379191373c2d3cc4bac49c2144aa1cd506a2a00f477252314283cd5f9d7b1e82",
       "summary": {
         "MATCH": 64,
-        "MATCH_LAYOUT": 116,
-        "KNOWN_DIFFERENCE": 21,
+        "MATCH_LAYOUT": 119,
+        "KNOWN_DIFFERENCE": 18,
         "MISMATCH": 0,
         "UNKNOWN": 0
       }
     },
     "strictVsPass2": {
       "path": "conformance/hosting-production-strict-vs-pass-2.json",
-      "sha256": "daee009ee231b2c96e275a3cab86d0732bc3bae16ef864647d1677805d5f53d4",
+      "sha256": "7fbd5d7c5e9edd94ef1609acc3629789db470fbf2313195061eef3d9b3e96f70",
       "summary": {
         "MATCH": 64,
-        "MATCH_LAYOUT": 116,
-        "KNOWN_DIFFERENCE": 21,
+        "MATCH_LAYOUT": 119,
+        "KNOWN_DIFFERENCE": 18,
         "MISMATCH": 0,
         "UNKNOWN": 0
       }
@@ -1230,7 +1231,7 @@
   },
   "knownDifferences": {
     "path": "conformance/src/hosting-production/known-differences.json",
-    "sha256": "ac2cc772ec9a176d01e7c03a0cf7d07befb59885e6387082db2380bc3e48e8c6",
+    "sha256": "bd764258654fa8265c6433421583f1f49b083644a5a5abb7c01d8b694a1035a1",
     "entries": [
       "KD-COMPRESSION",
       "KD-DEFAULT-404-BODY",
@@ -1269,7 +1270,7 @@
     }
   ],
   "followUps": [
-    "flate2 approved (owner ledger 2458, ruling 26): strict gzip is the next branch; Brotli stays a declared difference.",
+    "Next idp packet: probe gzip beyond the corpus file: a small text file (the size below which production does not compress), text/html and image/svg+xml, a file with no known extension, a Range request with Accept-Encoding: gzip, Accept-Encoding: * and x-gzip, so that the types and sizes strict compresses are observed (strict gzip itself is built, owner ledger 2458; Brotli stays a declared difference).",
     "Next idp packet: record the body of the default 404 page (ruling 16) and the hosted /__/auth/handler page with a GET (ruling 20), and the answers to dot-segment paths other than a leading parent: /a/b/.. (strict: 302 to /a/), /a/./b (302 to /a/b) and a path with a raw backslash (strict: 404).",
     "Next idp packet: probe redirect sources with digit-bearing parameter names so the `:id2` rule (ruling 24) is observed: /capture/one/two2 against /capture/:id/:id2, /capture/x/:id2, a single-parameter source such as /p/:a1 with /p/x, and a repeated name `/q/:id/:id`. Alternative readings to separate: (1) letters-and-underscore names with a literal suffix (strict today), (2) `:id2` a literal segment, (3) the rule rejected or dropped by production, (4) digit names allowed but a second parameter refused."
   ],

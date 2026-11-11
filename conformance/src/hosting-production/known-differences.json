@@ -4,24 +4,11 @@
   "entries": [
     {
       "id": "KD-COMPRESSION",
-      "rows": [
-        "v01.gz-gzip",
-        "v01.gz-br",
-        "v01.gz-gzip-br",
-        "v01.gz-br-refused",
-        "v01.gz-head-gzip",
-        "v01.gz-json-gzip",
-        "v01.gz-json-br"
-      ],
-      "fields": [
-        "header:content-encoding",
-        "header:content-length",
-        "decodedBytes",
-        "decodedSha256"
-      ],
+      "rows": ["v01.gz-br", "v01.gz-gzip-br", "v01.gz-br-refused", "v01.gz-json-br"],
+      "fields": ["header:content-encoding", "header:content-length"],
       "appliesTo": ["production-vs-local"],
-      "reason": "Production compresses these answers (gzip and br) and strict does not: fireemu has no compression crate. The decoded body of every row is the file the corpus deployed and its digest is compared; the ETag is compared by form once the -br suffix of a Brotli answer is removed (etagSuffix). Status, content type and the other headers of these rows are compared.",
-      "authority": "coordinator ruling 15 (2026-11-11); whether to add flate2 for gzip is put to the owner",
+      "reason": "Production answers a request that accepts Brotli with a Brotli body (Content-Encoding: br, an ETag ending in -br); strict has no Brotli encoder. A request that accepts only br is answered as identity, one that also accepts gzip is answered as gzip (production answered br to `br;q=0, gzip` as well; that row is a cache hit). The decoded body of every row is the file the corpus deployed and is compared with the plain or decoded body of the strict answer; the ETag is compared by form once the -br suffix is removed (etagSuffix). Status, content type and the other headers of these rows are compared. The gzip rows (gz-gzip, gz-head-gzip, gz-json-gzip) are not differences: strict answers the same encoding, ETag and length.",
+      "authority": "coordinator ruling 15 (2026-11-11), narrowed to Brotli by ruling 26 and owner ledger 2458 (flate2 approved)",
       "etagSuffix": "-br"
     },
     {

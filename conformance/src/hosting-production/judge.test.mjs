@@ -434,8 +434,32 @@ test("near misses: encoded bodies of equal length differ by digest; the body kin
       body: Buffer.from("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
     },
   );
-  const fields = compareRows(a, plain).differences.map((d) => d.field);
-  assert.ok(fields.includes("decodedBytes"));
+  // An encoded answer against the same bytes unencoded differ in the header only: the decoded body
+  // of one is the plain body of the other.
+  assert.deepEqual(
+    compareRows(a, plain).differences.map((d) => d.field),
+    ["header:content-encoding"],
+  );
+  const other = row(
+    { target: "/compress/big.txt" },
+    {
+      headers: [["Content-Type", "text/plain"]],
+      body: Buffer.from("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab"),
+    },
+  );
+  assert.deepEqual(
+    compareRows(a, other).differences.map((d) => d.field),
+    ["header:content-encoding", "decodedSha256"],
+  );
+  const shorter = row(
+    { target: "/compress/big.txt" },
+    { headers: [["Content-Type", "text/plain"]], body: Buffer.from("aaaa") },
+  );
+  assert.ok(
+    compareRows(shorter, a)
+      .differences.map((d) => d.field)
+      .includes("decodedBytes"),
+  );
   const init = row(
     { target: "/__/firebase/init.json" },
     {

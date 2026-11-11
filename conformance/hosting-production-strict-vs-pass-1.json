@@ -9,7 +9,7 @@
   "knownDifferences": [
     {
       "id": "KD-COMPRESSION",
-      "rows": 7
+      "rows": 4
     },
     {
       "id": "KD-DEFAULT-404-BODY",
@@ -34,8 +34,8 @@
   ],
   "summary": {
     "MATCH": 64,
-    "MATCH_LAYOUT": 116,
-    "KNOWN_DIFFERENCE": 21,
+    "MATCH_LAYOUT": 119,
+    "KNOWN_DIFFERENCE": 18,
     "MISMATCH": 0,
     "UNKNOWN": 0
   },
@@ -139,13 +139,13 @@
       "rows": 10,
       "counts": {
         "MATCH": 0,
-        "MATCH_LAYOUT": 3,
-        "KNOWN_DIFFERENCE": 7,
+        "MATCH_LAYOUT": 6,
+        "KNOWN_DIFFERENCE": 4,
         "MISMATCH": 0,
         "UNKNOWN": 0
       },
       "mismatched": [],
-      "knownDifferenceRows": 7,
+      "knownDifferenceRows": 4,
       "closable": true
     },
     "content-types": {
@@ -551,26 +551,8 @@
     },
     {
       "id": "v01.gz-gzip",
-      "status": "KNOWN_DIFFERENCE",
-      "differences": [],
-      "known": [
-        {
-          "field": "header:content-encoding",
-          "entry": "KD-COMPRESSION"
-        },
-        {
-          "field": "header:content-length",
-          "entry": "KD-COMPRESSION"
-        },
-        {
-          "field": "decodedBytes",
-          "entry": "KD-COMPRESSION"
-        },
-        {
-          "field": "decodedSha256",
-          "entry": "KD-COMPRESSION"
-        }
-      ]
+      "status": "MATCH_LAYOUT",
+      "differences": []
     },
     {
       "id": "v01.gz-br",
@@ -583,14 +565,6 @@
         },
         {
           "field": "header:content-length",
-          "entry": "KD-COMPRESSION"
-        },
-        {
-          "field": "decodedBytes",
-          "entry": "KD-COMPRESSION"
-        },
-        {
-          "field": "decodedSha256",
           "entry": "KD-COMPRESSION"
         },
         {
@@ -613,14 +587,6 @@
           "entry": "KD-COMPRESSION"
         },
         {
-          "field": "decodedBytes",
-          "entry": "KD-COMPRESSION"
-        },
-        {
-          "field": "decodedSha256",
-          "entry": "KD-COMPRESSION"
-        },
-        {
           "field": "header:etag",
           "entry": "KD-COMPRESSION"
         }
@@ -640,14 +606,6 @@
           "entry": "KD-COMPRESSION"
         },
         {
-          "field": "decodedBytes",
-          "entry": "KD-COMPRESSION"
-        },
-        {
-          "field": "decodedSha256",
-          "entry": "KD-COMPRESSION"
-        },
-        {
           "field": "header:etag",
           "entry": "KD-COMPRESSION"
         }
@@ -655,41 +613,13 @@
     },
     {
       "id": "v01.gz-head-gzip",
-      "status": "KNOWN_DIFFERENCE",
-      "differences": [],
-      "known": [
-        {
-          "field": "header:content-encoding",
-          "entry": "KD-COMPRESSION"
-        },
-        {
-          "field": "header:content-length",
-          "entry": "KD-COMPRESSION"
-        }
-      ]
+      "status": "MATCH_LAYOUT",
+      "differences": []
     },
     {
       "id": "v01.gz-json-gzip",
-      "status": "KNOWN_DIFFERENCE",
-      "differences": [],
-      "known": [
-        {
-          "field": "header:content-encoding",
-          "entry": "KD-COMPRESSION"
-        },
-        {
-          "field": "header:content-length",
-          "entry": "KD-COMPRESSION"
-        },
-        {
-          "field": "decodedBytes",
-          "entry": "KD-COMPRESSION"
-        },
-        {
-          "field": "decodedSha256",
-          "entry": "KD-COMPRESSION"
-        }
-      ]
+      "status": "MATCH_LAYOUT",
+      "differences": []
     },
     {
       "id": "v01.gz-json-br",
@@ -702,14 +632,6 @@
         },
         {
           "field": "header:content-length",
-          "entry": "KD-COMPRESSION"
-        },
-        {
-          "field": "decodedBytes",
-          "entry": "KD-COMPRESSION"
-        },
-        {
-          "field": "decodedSha256",
           "entry": "KD-COMPRESSION"
         },
         {

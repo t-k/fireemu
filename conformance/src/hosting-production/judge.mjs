@@ -18,7 +18,8 @@
 //    (`etagSuffix`, the `-br` of a Brotli answer) so the rest of the tag is still compared by form.
 //  - What the production-vs-local comparison does not compare: the body of `init.js` (only `init.json`
 //    has a layout compared; `compareInitJs` is set for run-vs-run only), and the Content-Encoding
-//    bodies by bytes (their decoded digest is compared). KD-INIT-KEYS says so.
+//    bodies by bytes (their decoded digest is compared, against the plain body of an unencoded answer).
+//    KD-INIT-KEYS says so.
 import {
   COMPARED_HEADERS,
   SDK_ROW_HEADERS,
@@ -97,8 +98,16 @@ function bodyDifferences(a, b, options) {
   const encoded =
     a.headers?.["content-encoding"] !== undefined || b.headers?.["content-encoding"] !== undefined;
   if (encoded) {
-    for (const field of ["decodedBytes", "decodedSha256"]) {
-      if (a[field] !== b[field]) differences.push({ field, a: a[field], b: b[field] });
+    // The decoded body of an encoded answer against the body of an unencoded one: a row without a
+    // Content-Encoding keeps its plain body's size and digest as bodyBytes and bodySha256.
+    const plain = (row, field, wire) => row[field] ?? row[wire];
+    for (const [field, wire] of [
+      ["decodedBytes", "bodyBytes"],
+      ["decodedSha256", "bodySha256"],
+    ]) {
+      const left = plain(a, field, wire);
+      const right = plain(b, field, wire);
+      if (left !== right) differences.push({ field, a: left, b: right });
     }
     return differences;
   }

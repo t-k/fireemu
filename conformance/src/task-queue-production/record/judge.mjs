@@ -4,7 +4,7 @@
 // of a task whose create was refused, an accepted task that never arrived, a create whose answer is unknown.
 // Times are milliseconds from the moment the createTask request was dispatched, never wall clock.
 import { runMarker } from "../plan.mjs";
-import { NOT_DELIVERED } from "../corpus.mjs";
+import { isNotDelivered } from "../corpus.mjs";
 
 const PLACEHOLDER_NUMBER = "123456789012";
 
@@ -80,7 +80,7 @@ export function judge({ runId, program, frames, errors = [], projectNumber = nul
           atMs(d.endedAt) !== null && dispatched !== null ? atMs(d.endedAt) - dispatched : null,
       }));
       record.deliveries = deliveries;
-      if (step.class === "2xx" && deliveries.length === 0 && !NOT_DELIVERED.has(key))
+      if (step.class === "2xx" && deliveries.length === 0 && !isNotDelivered(key))
         findings.push({ kind: "not-delivered", case: key });
       if (step.class !== "2xx" && step.class !== undefined && deliveries.length > 0)
         findings.push({ kind: "delivered-without-accepted-create", case: key, class: step.class });

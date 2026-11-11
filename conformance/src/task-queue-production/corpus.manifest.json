@@ -624,6 +624,797 @@
       "padBytes": 1100000
     },
     {
+      "key": "pw-01",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "pair": {
+        "id": "none",
+        "schedule": "none",
+        "deadline": "none",
+        "body": "small"
+      }
+    },
+    {
+      "key": "pw-02",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "id": "pw-02",
+      "idPad": 500,
+      "schedule": {
+        "offsetSeconds": 2588400
+      },
+      "deadline": "1800s",
+      "padBytes": 100000,
+      "pair": {
+        "id": "max500",
+        "schedule": "limit29d",
+        "deadline": "d1800",
+        "body": "large100k"
+      }
+    },
+    {
+      "key": "pw-03",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "id": "pw-03",
+      "idPad": 501,
+      "schedule": {
+        "raw": "tomorrow"
+      },
+      "deadline": "30",
+      "pair": {
+        "id": "over501",
+        "schedule": "malformed",
+        "deadline": "malformed",
+        "body": "small"
+      }
+    },
+    {
+      "key": "pw-04",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "id": "pw-04",
+      "schedule": {
+        "offsetSeconds": 2678400
+      },
+      "padBytes": 100000,
+      "pair": {
+        "id": "plain",
+        "schedule": "over31d",
+        "deadline": "none",
+        "body": "large100k"
+      }
+    },
+    {
+      "key": "pw-05",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "name": "${queue}/tasks/${marker}-pw-05 b",
+      "schedule": {
+        "offsetSeconds": 5
+      },
+      "padBytes": 100000,
+      "pair": {
+        "id": "badchar",
+        "schedule": "near",
+        "deadline": "none",
+        "body": "large100k"
+      }
+    },
+    {
+      "key": "pw-06",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "name": "${queue}/tasks/${marker}-pw-06 b",
+      "schedule": {
+        "offsetSeconds": 2678400
+      },
+      "deadline": "15s",
+      "pair": {
+        "id": "badchar",
+        "schedule": "over31d",
+        "deadline": "d15",
+        "body": "small"
+      }
+    },
+    {
+      "key": "pw-07",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "schedule": {
+        "offsetSeconds": -3600
+      },
+      "deadline": "30",
+      "padBytes": 100000,
+      "pair": {
+        "id": "none",
+        "schedule": "past",
+        "deadline": "malformed",
+        "body": "large100k"
+      }
+    },
+    {
+      "key": "pw-08",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "id": "pw-08",
+      "idPad": 501,
+      "deadline": "15s",
+      "padBytes": 100000,
+      "pair": {
+        "id": "over501",
+        "schedule": "none",
+        "deadline": "d15",
+        "body": "large100k"
+      }
+    },
+    {
+      "key": "pw-09",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "id": "pw-09",
+      "schedule": {
+        "offsetSeconds": -3600
+      },
+      "deadline": "1800s",
+      "pair": {
+        "id": "plain",
+        "schedule": "past",
+        "deadline": "d1800",
+        "body": "small"
+      }
+    },
+    {
+      "key": "pw-10",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "id": "pw-10",
+      "idPad": 500,
+      "schedule": {
+        "raw": "tomorrow"
+      },
+      "padBytes": 100000,
+      "pair": {
+        "id": "max500",
+        "schedule": "malformed",
+        "deadline": "none",
+        "body": "large100k"
+      }
+    },
+    {
+      "key": "pw-11",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "id": "pw-11",
+      "idPad": 501,
+      "schedule": {
+        "offsetSeconds": 2678400
+      },
+      "deadline": "1800s",
+      "pair": {
+        "id": "over501",
+        "schedule": "over31d",
+        "deadline": "d1800",
+        "body": "small"
+      }
+    },
+    {
+      "key": "pw-12",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "id": "pw-12",
+      "idPad": 500,
+      "schedule": {
+        "offsetSeconds": 2678400
+      },
+      "deadline": "14s",
+      "pair": {
+        "id": "max500",
+        "schedule": "over31d",
+        "deadline": "d14",
+        "body": "small"
+      }
+    },
+    {
+      "key": "pw-13",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "schedule": {
+        "raw": "tomorrow"
+      },
+      "deadline": "1801s",
+      "padBytes": 100000,
+      "pair": {
+        "id": "none",
+        "schedule": "malformed",
+        "deadline": "d1801",
+        "body": "large100k"
+      }
+    },
+    {
+      "key": "pw-14",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "id": "pw-14",
+      "idPad": 501,
+      "schedule": {
+        "offsetSeconds": 5
+      },
+      "deadline": "1801s",
+      "pair": {
+        "id": "over501",
+        "schedule": "near",
+        "deadline": "d1801",
+        "body": "small"
+      }
+    },
+    {
+      "key": "pw-15",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "id": "pw-15",
+      "schedule": {
+        "raw": "tomorrow"
+      },
+      "deadline": "15s",
+      "padBytes": 100000,
+      "pair": {
+        "id": "plain",
+        "schedule": "malformed",
+        "deadline": "d15",
+        "body": "large100k"
+      }
+    },
+    {
+      "key": "pw-16",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "id": "pw-16",
+      "schedule": {
+        "offsetSeconds": 2588400
+      },
+      "deadline": "30",
+      "pair": {
+        "id": "plain",
+        "schedule": "limit29d",
+        "deadline": "malformed",
+        "body": "small"
+      }
+    },
+    {
+      "key": "pw-17",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "id": "pw-17",
+      "schedule": {
+        "offsetSeconds": 2678400
+      },
+      "deadline": "1801s",
+      "padBytes": 100000,
+      "pair": {
+        "id": "plain",
+        "schedule": "over31d",
+        "deadline": "d1801",
+        "body": "large100k"
+      }
+    },
+    {
+      "key": "pw-18",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "id": "pw-18",
+      "schedule": {
+        "offsetSeconds": 5
+      },
+      "deadline": "14s",
+      "padBytes": 100000,
+      "pair": {
+        "id": "plain",
+        "schedule": "near",
+        "deadline": "d14",
+        "body": "large100k"
+      }
+    },
+    {
+      "key": "pw-19",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "schedule": {
+        "offsetSeconds": 2588400
+      },
+      "deadline": "15s",
+      "padBytes": 100000,
+      "pair": {
+        "id": "none",
+        "schedule": "limit29d",
+        "deadline": "d15",
+        "body": "large100k"
+      }
+    },
+    {
+      "key": "pw-20",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "id": "pw-20",
+      "idPad": 500,
+      "schedule": {
+        "offsetSeconds": 5
+      },
+      "deadline": "30",
+      "padBytes": 100000,
+      "pair": {
+        "id": "max500",
+        "schedule": "near",
+        "deadline": "malformed",
+        "body": "large100k"
+      }
+    },
+    {
+      "key": "pw-21",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "name": "${queue}/tasks/${marker}-pw-21 b",
+      "schedule": {
+        "raw": "tomorrow"
+      },
+      "deadline": "1800s",
+      "pair": {
+        "id": "badchar",
+        "schedule": "malformed",
+        "deadline": "d1800",
+        "body": "small"
+      }
+    },
+    {
+      "key": "pw-22",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "schedule": {
+        "offsetSeconds": 5
+      },
+      "deadline": "1800s",
+      "padBytes": 100000,
+      "pair": {
+        "id": "none",
+        "schedule": "near",
+        "deadline": "d1800",
+        "body": "large100k"
+      }
+    },
+    {
+      "key": "pw-23",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "name": "${queue}/tasks/${marker}-pw-23 b",
+      "schedule": {
+        "offsetSeconds": 2588400
+      },
+      "deadline": "1801s",
+      "padBytes": 100000,
+      "pair": {
+        "id": "badchar",
+        "schedule": "limit29d",
+        "deadline": "d1801",
+        "body": "large100k"
+      }
+    },
+    {
+      "key": "pw-24",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "id": "pw-24",
+      "idPad": 501,
+      "schedule": {
+        "offsetSeconds": 2588400
+      },
+      "padBytes": 100000,
+      "pair": {
+        "id": "over501",
+        "schedule": "limit29d",
+        "deadline": "none",
+        "body": "large100k"
+      }
+    },
+    {
+      "key": "pw-25",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "name": "${queue}/tasks/${marker}-pw-25 b",
+      "deadline": "30",
+      "pair": {
+        "id": "badchar",
+        "schedule": "none",
+        "deadline": "malformed",
+        "body": "small"
+      }
+    },
+    {
+      "key": "pw-26",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "id": "pw-26",
+      "idPad": 500,
+      "schedule": {
+        "offsetSeconds": 5
+      },
+      "deadline": "15s",
+      "padBytes": 100000,
+      "pair": {
+        "id": "max500",
+        "schedule": "near",
+        "deadline": "d15",
+        "body": "large100k"
+      }
+    },
+    {
+      "key": "pw-27",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "name": "${queue}/tasks/${marker}-pw-27 b",
+      "deadline": "14s",
+      "pair": {
+        "id": "badchar",
+        "schedule": "none",
+        "deadline": "d14",
+        "body": "small"
+      }
+    },
+    {
+      "key": "pw-28",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "id": "pw-28",
+      "idPad": 500,
+      "deadline": "1801s",
+      "pair": {
+        "id": "max500",
+        "schedule": "none",
+        "deadline": "d1801",
+        "body": "small"
+      }
+    },
+    {
+      "key": "pw-29",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "schedule": {
+        "offsetSeconds": 2678400
+      },
+      "deadline": "30",
+      "pair": {
+        "id": "none",
+        "schedule": "over31d",
+        "deadline": "malformed",
+        "body": "small"
+      }
+    },
+    {
+      "key": "pw-30",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "id": "pw-30",
+      "idPad": 501,
+      "schedule": {
+        "offsetSeconds": -3600
+      },
+      "deadline": "14s",
+      "pair": {
+        "id": "over501",
+        "schedule": "past",
+        "deadline": "d14",
+        "body": "small"
+      }
+    },
+    {
+      "key": "pw-31",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "name": "${queue}/tasks/${marker}-pw-31 b",
+      "schedule": {
+        "offsetSeconds": -3600
+      },
+      "deadline": "15s",
+      "padBytes": 100000,
+      "pair": {
+        "id": "badchar",
+        "schedule": "past",
+        "deadline": "d15",
+        "body": "large100k"
+      }
+    },
+    {
+      "key": "pw-32",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "schedule": {
+        "offsetSeconds": 2588400
+      },
+      "deadline": "14s",
+      "pair": {
+        "id": "none",
+        "schedule": "limit29d",
+        "deadline": "d14",
+        "body": "small"
+      }
+    },
+    {
+      "key": "pw-33",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "name": "${queue}/tasks/${marker}-pw-33 b",
+      "schedule": {
+        "raw": "tomorrow"
+      },
+      "deadline": "14s",
+      "pair": {
+        "id": "badchar",
+        "schedule": "malformed",
+        "deadline": "d14",
+        "body": "small"
+      }
+    },
+    {
+      "key": "pw-34",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "id": "pw-34",
+      "idPad": 500,
+      "schedule": {
+        "offsetSeconds": -3600
+      },
+      "deadline": "1801s",
+      "pair": {
+        "id": "max500",
+        "schedule": "past",
+        "deadline": "d1801",
+        "body": "small"
+      }
+    },
+    {
+      "key": "pw-35",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "schedule": {
+        "offsetSeconds": -3600
+      },
+      "padBytes": 100000,
+      "pair": {
+        "id": "none",
+        "schedule": "past",
+        "deadline": "none",
+        "body": "large100k"
+      }
+    },
+    {
+      "key": "pw-36",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "id": "pw-36",
+      "deadline": "1800s",
+      "pair": {
+        "id": "plain",
+        "schedule": "none",
+        "deadline": "d1800",
+        "body": "small"
+      }
+    },
+    {
       "key": "dup-first",
       "kind": "create",
       "role": "tqdef",
@@ -797,5 +1588,5 @@
     "TASK-QUEUE-FUNCTIONS/final-artifact-regression",
     "TASK-QUEUE-FUNCTIONS/closure-review"
   ],
-  "corpusSha256": "d9fb891867a1d9f13f151f0b0a43bf8d7f66c74c1a7c2d25ee6deb3b98781e8c"
+  "corpusSha256": "899fd699884992c7f96f8437d749237f16bbeafcc75ee5d41683373a741579e9"
 }

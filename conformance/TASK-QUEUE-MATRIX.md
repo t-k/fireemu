@@ -2,19 +2,19 @@
 
 The TASK-QUEUE-FUNCTIONS parent covers Node.js v2 `onTaskDispatched` functions and the Cloud Tasks queue behind each one: admission by `createTask`, deduplication by task name, `scheduleTime`, `dispatchDeadline`, the HTTP request a function receives, retries and backoff, and the rate and concurrency limits of a queue. Its status is `IMPLEMENTING` (`spec/compatibility/closure/TASK-QUEUE-FUNCTIONS.json`): the program, the recorder and the judge exist, and no production observation has been made, so no condition is verified and no row below claims a match.
 
-The program (`conformance/src/task-queue-production/corpus.manifest.json`) has 86 steps. The recorder deploys eight task queue functions with the pinned firebase-tools to the events sandbox, sends the steps to the queues the deploy made, reads the deliveries from Cloud Logging, and deletes its queues and functions. Queue ids cannot be created again for days after a delete, so each run suffixes its function ids with six hexadecimal digits of its run id.
+The program (`conformance/src/task-queue-production/corpus.manifest.json`) has 122 steps. The recorder deploys eight task queue functions with the pinned firebase-tools to the events sandbox, sends the steps to the queues the deploy made, reads the deliveries from Cloud Logging, and deletes its queues and functions. Queue ids cannot be created again for days after a delete, so each run suffixes its function ids with six hexadecimal digits of its run id.
 
 | Condition | Evidence kind | Program steps | Production |
 | --- | --- | --- | --- |
 | create-answer-shape | Production parity | 3 | Not observed |
-| create-errors-shape | Production parity | 5 | Not observed |
-| task-id-validation | Production parity | 9 | Not observed |
+| create-errors-shape | Production parity | 41 | Not observed |
+| task-id-validation | Production parity | 45 | Not observed |
 | dedup-live | Production parity | 6 | Not observed |
 | dedup-after-completion | Production parity | 4 | Not observed |
 | dedup-window-expiry | Production parity | - | Planned (stage 2) |
-| schedule-time-boundaries | Production parity | 11 | Not observed |
+| schedule-time-boundaries | Production parity | 47 | Not observed |
 | schedule-delay-and-eta | Production parity | 2 | Not observed |
-| dispatch-deadline | Production parity | 9 | Not observed |
+| dispatch-deadline | Production parity | 45 | Not observed |
 | body-and-header-limits | Production parity | 4 | Not observed |
 | dispatch-envelope-headers | Production parity | 4 | Not observed |
 | dispatch-envelope-body | Production parity | 5 | Not observed |

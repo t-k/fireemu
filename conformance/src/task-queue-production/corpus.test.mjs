@@ -9,6 +9,8 @@ import {
   FOREIGN_PROJECT,
   MAY_FORBID,
   NOT_DELIVERED,
+  ADMISSION_PAIRS,
+  isNotDelivered,
   PROGRAM,
   corpusManifest,
   formatTime,
@@ -268,5 +270,48 @@ test("property: no step of any run names a task outside that run's queues, and n
       if (name && !name.includes(FOREIGN_PROJECT) && !name.endsWith("/tasks/"))
         assert.ok(name.includes(marker), spec.key);
     }
+  }
+});
+
+test("the pairwise table covers every pair of values of the four axes, with the three seed rows in it", () => {
+  const axes = [
+    ["none", "plain", "max500", "over501", "badchar"],
+    ["none", "past", "near", "limit29d", "over31d", "malformed"],
+    ["none", "d15", "d1800", "d14", "d1801", "malformed"],
+    ["small", "large100k"],
+  ];
+  for (let a = 0; a < 4; a++)
+    for (let b = a + 1; b < 4; b++)
+      for (const x of axes[a])
+        for (const y of axes[b])
+          assert.ok(
+            ADMISSION_PAIRS.some((row) => row[a] === x && row[b] === y),
+            `${a}:${x} ${b}:${y}`,
+          );
+  for (const seed of [
+    ["none", "none", "none", "small"],
+    ["max500", "limit29d", "d1800", "large100k"],
+    ["over501", "malformed", "malformed", "small"],
+  ])
+    assert.ok(
+      ADMISSION_PAIRS.some((row) => row.join() === seed.join()),
+      seed.join(),
+    );
+  assert.equal(new Set(ADMISSION_PAIRS.map((row) => row.join())).size, ADMISSION_PAIRS.length);
+  // A pair step's request is the one its row says.
+  for (const [index, row] of ADMISSION_PAIRS.entries()) {
+    const spec = PROGRAM.find((s) => s.key === "pw-" + String(index + 1).padStart(2, "0"));
+    const task = materializeCreate(spec, ctx()).json.task;
+    assert.deepEqual(spec.pair, { id: row[0], schedule: row[1], deadline: row[2], body: row[3] });
+    assert.equal(task.name === undefined, row[0] === "none");
+    assert.equal(task.scheduleTime === undefined, row[1] === "none");
+    assert.equal(task.dispatchDeadline === undefined, row[2] === "none");
+    const bytes = Buffer.from(task.httpRequest.body, "base64").length;
+    assert.equal(bytes > 100_000, row[3] === "large100k");
+    const tail = task.name?.slice(task.name.lastIndexOf("/tasks/") + 7);
+    if (row[0] === "max500") assert.equal(tail.length, 500);
+    if (row[0] === "over501") assert.equal(tail.length, 501);
+    if (row[0] === "badchar") assert.ok(tail.includes(" "));
+    assert.equal(isNotDelivered(spec.key), ["limit29d", "over31d"].includes(row[1]));
   }
 });

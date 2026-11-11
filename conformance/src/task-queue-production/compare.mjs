@@ -333,8 +333,10 @@ export function compareProjections(
       ruling,
       what,
       paths: paths.map(String),
-      rows: rows.filter((row) =>
-        Object.values(row.parts).some((p) => p.knownDifferences?.includes(id)),
+      rows: rows.filter(
+        (row) =>
+          row.timingKnownDifference === id ||
+          Object.values(row.parts).some((p) => p.knownDifferences?.includes(id)),
       ).length,
     })),
     properties: compareProperties(left, right),

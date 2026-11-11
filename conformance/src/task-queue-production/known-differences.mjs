@@ -91,6 +91,14 @@ export const KNOWN_DIFFERENCES = Object.freeze([
     },
   },
   {
+    id: "KD-SCHEDULE-CLOCK-SKEW",
+    part: "timing",
+    cases: ["pw-22", "pw-26"],
+    paths: [/.*/],
+    ruling: 3,
+    what: "A task scheduled a few seconds ahead of the client's clock is delivered after the delay between the server's create time and that scheduleTime, which holds the skew between the client's clock and Cloud Tasks' (production's two runs differ by 1.1 s on these cases, 3.7 s and 4.8 s for a 5 s schedule); locally both clocks are one. Exact timing is outside the scope (ruling 3).",
+  },
+  {
     id: "KD-LOCAL-PATH",
     part: "deliveries",
     cases: "*",

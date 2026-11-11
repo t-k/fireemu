@@ -462,3 +462,17 @@ test("the layout rules take exactly the recorded forms: ETA digits 3 to 7 and id
     "MISMATCH",
   );
 });
+
+test("a timing known difference is counted in the rows of its allowance", () => {
+  const kd = { id: "KD-T", part: "timing", cases: ["a"], paths: [/x/], ruling: 3, what: "w" };
+  const slow = record({ timing: timing(100000) });
+  const result = compareProjections(projection({ a: record() }), projection({ a: slow }), {
+    knownDifferences: [kd],
+  });
+  assert.equal(result.rows[0].timingKnownDifference, "KD-T");
+  assert.equal(result.knownDifferences[0].rows, 1);
+  const quiet = compareProjections(projection({ a: record() }), projection({ a: record() }), {
+    knownDifferences: [kd],
+  });
+  assert.equal(quiet.knownDifferences[0].rows, 0);
+});

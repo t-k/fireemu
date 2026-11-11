@@ -118,3 +118,14 @@ test("the counts are per structure verdict", () => {
     { MATCH: 1, MATCH_LAYOUT: 0, KNOWN_DIFFERENCE: 0, MISMATCH: 2, UNKNOWN: 1 },
   );
 });
+
+test("a timing allowance used by a strict row is a known difference of the condition", () => {
+  const docs = ok();
+  docs.strict2 = doc(row("a"), {
+    ...row("b", "MATCH", "KNOWN_DIFFERENCE"),
+    timingKnownDifference: "KD-SKEW",
+  });
+  assert.deepEqual(conditionEvidence(condition(), docs, evidence).knownDifferences, ["KD-SKEW"]);
+  docs.strict2 = doc(row("a"), row("b"));
+  assert.deepEqual(conditionEvidence(condition(), docs, evidence).knownDifferences, []);
+});

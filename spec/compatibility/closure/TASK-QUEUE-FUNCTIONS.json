@@ -213,7 +213,8 @@
         "KD-LOCAL-URL",
         "KD-OIDC-TOKEN",
         "KD-PLATFORM-HEADERS",
-        "KD-QUEUE-READS"
+        "KD-QUEUE-READS",
+        "KD-SCHEDULE-CLOCK-SKEW"
       ],
       "profiles": {
         "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
@@ -325,7 +326,8 @@
         "KD-LOCAL-PATH",
         "KD-LOCAL-URL",
         "KD-OIDC-TOKEN",
-        "KD-PLATFORM-HEADERS"
+        "KD-PLATFORM-HEADERS",
+        "KD-SCHEDULE-CLOCK-SKEW"
       ],
       "profiles": {
         "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
@@ -609,7 +611,8 @@
         "KD-LOCAL-PATH",
         "KD-LOCAL-URL",
         "KD-OIDC-TOKEN",
-        "KD-PLATFORM-HEADERS"
+        "KD-PLATFORM-HEADERS",
+        "KD-SCHEDULE-CLOCK-SKEW"
       ],
       "profiles": {
         "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
@@ -790,7 +793,8 @@
         "KD-LOCAL-PATH",
         "KD-LOCAL-URL",
         "KD-OIDC-TOKEN",
-        "KD-PLATFORM-HEADERS"
+        "KD-PLATFORM-HEADERS",
+        "KD-SCHEDULE-CLOCK-SKEW"
       ],
       "profiles": {
         "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
@@ -1632,7 +1636,7 @@
     },
     "strictVsPass1": {
       "path": "conformance/task-queue-production-strict-vs-pass-1.json",
-      "sha256": "32422527f3af1610a4df5a17a5779632bf29b4c7a045ef1b34bbde084666dfa2",
+      "sha256": "723dfc72867833c7293bc31dd32b3175809f05dffc8ff7764d83b11393477442",
       "rows": 122,
       "summary": {
         "MATCH": 57,
@@ -1644,7 +1648,7 @@
     },
     "strictVsPass2": {
       "path": "conformance/task-queue-production-strict-vs-pass-2.json",
-      "sha256": "cc697e8462aff29f13a89565eba7fb2bc788387ae27f7b9ae42b7ee860d12da4",
+      "sha256": "d85d16de3a950dd72c21c5e45522961fbba3c382151a208d9e9cc07e5dd89e15",
       "rows": 122,
       "summary": {
         "MATCH": 57,
@@ -1656,17 +1660,18 @@
     },
     "localStrictReplay": {
       "path": "conformance/task-queue-production-local-strict.json",
-      "sha256": "c987e80b0c1e58fc2cb9ca4dea1543582bb44a149f64c9499d23490d329c2919"
+      "sha256": "ed8669e80f4104bff4c9b0ed32b13e97a65f992f7b9dfcd819b0a54c6f48e848"
     }
   },
   "knownDifferences": {
     "path": "conformance/src/task-queue-production/known-differences.mjs",
-    "sha256": "773e245e11f824650691b2a4e6cb94519d4c7938e685cec3183e405bb8b9d1f7",
+    "sha256": "196f75bdd75e3093944bd42e62e965caf8bf75f41476635b5fa93df5f250b58c",
     "entries": [
       "KD-LOCAL-URL",
       "KD-QUEUE-READS",
       "KD-OIDC-TOKEN",
       "KD-PLATFORM-HEADERS",
+      "KD-SCHEDULE-CLOCK-SKEW",
       "KD-LOCAL-PATH"
     ]
   }

@@ -88,6 +88,8 @@ export function conditionEvidence(condition, { runs, strict1, strict2 }, product
   for (const row of [...rowsOf(strict1), ...rowsOf(strict2)])
     for (const part of Object.values(row.parts))
       for (const kd of part.knownDifferences ?? []) used.add(kd);
+  for (const row of [...rowsOf(strict1), ...rowsOf(strict2)])
+    if (row.timingKnownDifference) used.add(row.timingKnownDifference);
   return {
     ...base,
     status: "VERIFIED",

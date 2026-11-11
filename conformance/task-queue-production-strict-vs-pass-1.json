@@ -84,6 +84,15 @@
       "rows": 50
     },
     {
+      "id": "KD-SCHEDULE-CLOCK-SKEW",
+      "cases": ["pw-22", "pw-26"],
+      "part": "timing",
+      "ruling": 3,
+      "what": "A task scheduled a few seconds ahead of the client's clock is delivered after the delay between the server's create time and that scheduleTime, which holds the skew between the client's clock and Cloud Tasks' (production's two runs differ by 1.1 s on these cases, 3.7 s and 4.8 s for a 5 s schedule); locally both clocks are one. Exact timing is outside the scope (ruling 3).",
+      "paths": ["/.*/"],
+      "rows": 1
+    },
+    {
       "id": "KD-LOCAL-PATH",
       "cases": "*",
       "part": "deliveries",
@@ -123,8 +132,9 @@
       "MATCH": 72
     },
     "timing": {
-      "WITHIN": 104,
-      "NOT_COMPARED": 18
+      "WITHIN": 103,
+      "NOT_COMPARED": 18,
+      "KNOWN_DIFFERENCE": 1
     }
   },
   "rows": [
@@ -1585,8 +1595,12 @@
         }
       },
       "timing": {
-        "verdict": "WITHIN"
-      }
+        "verdict": "KNOWN_DIFFERENCE",
+        "why": "first",
+        "a": 3712,
+        "b": 5970
+      },
+      "timingKnownDifference": "KD-SCHEDULE-CLOCK-SKEW"
     },
     {
       "case": "pw-27",
@@ -2074,5 +2088,5 @@
       }
     }
   ],
-  "digest": "696f0c9a24b10efa4e927e9b92b34da6e19e7073349f8083988f86144257341d"
+  "digest": "b01e65a68dfb24334addb8ce0eb696c57c49e38b824c8fc705a0d76bbdac8c78"
 }

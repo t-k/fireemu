@@ -66,9 +66,10 @@ test("strict fireemu against each recording: no mismatch outside the known diffe
       committed.properties.every((p) => p.verdict === "MATCH"),
       name,
     );
-    // Each known difference is used, so none is left over after a change of behaviour.
+    // Each known difference is used, so none is left over after a change of behaviour. A timing allowance is used only when
+    // a run's timing falls outside the tolerance, so it may be unused in one of the files.
     for (const kd of committed.knownDifferences)
-      assert.ok(kd.rows > 0, `${name} ${kd.id} is unused`);
+      assert.ok(kd.rows > 0 || kd.part === "timing", `${name} ${kd.id} is unused`);
   }
 });
 

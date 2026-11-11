@@ -926,7 +926,7 @@
         "restNegativeCache": {
           "enum": ["off", "production"],
           "default": "off",
-          "description": "Production's REST frontend answers a GET of a subscription or snapshot with a cached 404 for about 9.6 seconds after a real 404 on the same resource, even after the resource exists. Off by default because it makes tests that create a resource right after probing it flaky. The value \"production\" is an explicit opt-in (strict profile only); productionExact does not select it. gRPC and topics are never affected. This rule is provisional until recorded."
+          "description": "Production's REST frontend answers GET, PATCH and DELETE of a subscription with a cached 404 for about 10.35 seconds, on the same connection, after a real 404 of a GET or PATCH of it, even after the subscription exists. Off by default because it makes tests that create a resource right after probing it flaky. The value \"production\" is production's rule (strict profile only; the default under productionExact, and an explicit \"off\" wins). gRPC, topics, snapshots and requests with a query string are never affected. The window edge is a documented choice between the recorded 10.20 and 10.50 seconds."
         },
         "deadLetterAuthorization": {
           "enum": ["implicit", "iam"],

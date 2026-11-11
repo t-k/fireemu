@@ -11,7 +11,7 @@ use axum::response::Response;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use fireemu_core_pubsub::rest_negative_cache::{
-    RestNegativeCache, RestOutcome, RestRequest, RestResource,
+    ConnectionId, RestNegativeCache, RestOutcome, RestRequest, RestResource,
 };
 use fireemu_core_pubsub::subscription::{
     DeadLetterPolicy, ExpirationPolicy, PushConfig, RetryPolicy, DEFAULT_ACK_DEADLINE_SECONDS,
@@ -215,6 +215,7 @@ pub(crate) async fn handle(request: Request<Body>, handle: PubSubHandle) -> Resp
     let method = request.method().clone();
     let path = request.uri().path().to_owned();
     let query = request.uri().query().unwrap_or_default().to_owned();
+    let connection = connection_of(&request);
     let body_result = if handle.paging_policy == crate::PagingPolicy::Strict {
         strict_body_bytes(request.into_body()).await
     } else {
@@ -242,7 +243,7 @@ pub(crate) async fn handle(request: Request<Body>, handle: PubSubHandle) -> Resp
         }
     };
 
-    let negative_cache = negative_cache_probe(&handle, &method, &path, &value);
+    let negative_cache = negative_cache_probe(&handle, connection, &method, &path, &query);
     if let Some(probe) = &negative_cache {
         if probe.serves() {
             return error_response(
@@ -288,10 +289,21 @@ pub(crate) async fn handle(request: Request<Body>, handle: PubSubHandle) -> Resp
     }
 }
 
-/// One request the REST negative cache looks at: the resource its URL names and what the
-/// request is, with the instant it started on the virtual clock.
+/// The connection a request arrived on, from the peer address tonic records for it. A request
+/// that did not come through a socket (an in-process call) shares one pseudo-connection.
+fn connection_of(request: &Request<Body>) -> ConnectionId {
+    request
+        .extensions()
+        .get::<tonic::transport::server::TcpConnectInfo>()
+        .and_then(tonic::transport::server::TcpConnectInfo::remote_addr)
+        .map_or(ConnectionId::UNATTRIBUTED, ConnectionId::peer)
+}
+
+/// One request the REST negative cache looks at: the connection and the resource its URL names,
+/// what the request is, and the instant it started on the virtual clock.
 struct NegativeCacheProbe {
     cache: std::sync::Arc<std::sync::Mutex<RestNegativeCache>>,
+    connection: ConnectionId,
     resource: RestResource,
     request: RestRequest,
     started: LogicalInstant,
@@ -300,16 +312,18 @@ struct NegativeCacheProbe {
 impl NegativeCacheProbe {
     fn serves(&self) -> bool {
         self.cache.lock().expect("negative cache lock").serves(
+            self.connection,
             &self.resource,
-            &self.request,
+            self.request,
             self.started,
         )
     }
 
     fn observe(self, outcome: RestOutcome) {
         self.cache.lock().expect("negative cache lock").observe(
+            self.connection,
             &self.resource,
-            &self.request,
+            self.request,
             self.started,
             outcome,
         );
@@ -317,27 +331,29 @@ impl NegativeCacheProbe {
 }
 
 /// Reads a request as the negative cache needs it. `None` when the cache is off, or when the
-/// request is not a `GET` or a `PUT` of a plain subscription or snapshot URL (a topic, a
-/// collection, a `:verb`, a delete, ...): those neither arm nor read the cache.
+/// request is not a `GET`, `PATCH` or `DELETE` of a plain subscription URL without a query string
+/// (a topic, a snapshot, a collection, a `:verb`, a create, ...): those neither arm nor read the
+/// cache.
 fn negative_cache_probe(
     handle: &PubSubHandle,
+    connection: ConnectionId,
     method: &Method,
     path: &str,
-    body: &Value,
+    query: &str,
 ) -> Option<NegativeCacheProbe> {
     let cache = handle.rest_negative_cache.clone()?;
+    if !query.is_empty() {
+        return None;
+    }
     let request = match *method {
         Method::GET => RestRequest::Get,
-        Method::PUT => RestRequest::Create {
-            body_name: body
-                .get("name")
-                .and_then(Value::as_str)
-                .and_then(RestResource::parse_full_name),
-        },
+        Method::PATCH => RestRequest::Patch,
+        Method::DELETE => RestRequest::Delete,
         _ => return None,
     };
     Some(NegativeCacheProbe {
         cache,
+        connection,
         resource: RestResource::parse_path(path)?,
         request,
         started: handle.now(),

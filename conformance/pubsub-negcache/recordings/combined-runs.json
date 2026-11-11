@@ -1,0 +1,113 @@
+{
+ "rulesAllowed": true,
+ "answers": {
+  "ttl": {
+   "cells": [
+    "N2a",
+    "N2b"
+   ],
+   "lastHitMs": 10202.139000000003,
+   "firstMissMs": 5928.074833000006,
+   "verdict": "inconsistent"
+  },
+  "arm": {
+   "A1": "does-not-arm",
+   "A2": {
+    "mixed": [
+     "arms",
+     "mixed"
+    ]
+   },
+   "A3": "arms",
+   "A4": "does-not-arm",
+   "A5": "does-not-arm",
+   "A7": "does-not-arm",
+   "A8": {
+    "mixed": [
+     "inconclusive",
+     "does-not-arm"
+    ]
+   },
+   "A9": "does-not-arm",
+   "seek": {
+    "arms": 0,
+    "of": 3,
+    "other": 0
+   }
+  },
+  "absent": {
+   "pureNegative": "mixed",
+   "existingServed": "no-data"
+  },
+  "body": {
+   "urlName": "does-not-clear",
+   "otherName": "no-data"
+  },
+  "serve": {
+   "V1": "reaches-backend",
+   "V2": "reaches-backend",
+   "V3": "answered-from-entry",
+   "V4": "answered-from-entry",
+   "V3applied": "no",
+   "V4present": "yes",
+   "V4rearm": "not-re-armed"
+  },
+  "rearm": {
+   "deleteHit": "not-re-armed",
+   "getHitExtends": "yes-or-window-over-10.5s",
+   "afterSeek": [
+    null,
+    null
+   ]
+  },
+  "exempt": {
+   "4000ms": "exempt",
+   "7000ms": "exempt",
+   "13000ms": "exempt"
+  },
+  "key": {
+   "queryAltJson": "separate",
+   "queryFields": "separate",
+   "snapshotSameId": "separate",
+   "grpc": "mixed",
+   "topic": "mixed"
+  },
+  "conn": {
+   "grid_a_existing": "no-data",
+   "grid_b_existing": "no-data",
+   "base": "differs"
+  },
+  "calibration": {
+   "runs": [
+    {
+     "forwardedGetMs": {
+      "dedicated": 160.88633300000038,
+      "fresh": 216.06287500000326
+     },
+     "freshConnectMs": 19.99737499999901,
+     "latencyClassesHold": true,
+     "emptyPull": {
+      "status": 200,
+      "headersMs": 3386.489374999999
+     },
+     "failedCreateOnExisting": 409,
+     "failedCreateArms": false
+    },
+    {
+     "forwardedGetMs": {
+      "dedicated": 159.7897499999999,
+      "fresh": 224.8902080000007
+     },
+     "freshConnectMs": 21.43854199999987,
+     "latencyClassesHold": true,
+     "emptyPull": {
+      "status": 200,
+      "headersMs": 3528.1900829999995
+     },
+     "failedCreateOnExisting": 409,
+     "failedCreateArms": false
+    }
+   ]
+  }
+ }
+}

@@ -1320,7 +1320,7 @@ pub struct RuntimeConfig {
     /// `pubsub.deadLetterAuthorization`: whether strict dead-letter forwarding needs the service
     /// agent's grants. Default: `implicit` unless `productionExact` or the key asks for `iam`.
     pub pubsub_dead_letter_authorization: DeadLetterAuthorization,
-    /// `pubsub.restNegativeCache`: whether REST caches missing subscriptions and snapshots.
+    /// `pubsub.restNegativeCache`: whether REST repeats a missing subscription's 404 on a connection.
     pub pubsub_rest_negative_cache: RestNegativeCacheMode,
     /// `database.defaultAccess`: what a Realtime Database without rules allows.
     pub database_default_access: DatabaseDefaultAccess,
@@ -1651,7 +1651,7 @@ pub enum RestNegativeCacheMode {
     /// Do not cache missing resources.
     #[default]
     Off,
-    /// Apply the provisional production cache behavior.
+    /// Apply production's recorded REST negative cache (`productionExact` selects it).
     Production,
 }
 
@@ -4455,6 +4455,11 @@ impl RuntimeConfig {
         } else {
             DeadLetterAuthorization::Implicit
         };
+        self.pubsub_rest_negative_cache = if exact {
+            RestNegativeCacheMode::Production
+        } else {
+            RestNegativeCacheMode::Off
+        };
         self.database_default_access = if exact {
             DatabaseDefaultAccess::Locked
         } else {
@@ -4556,6 +4561,10 @@ impl RuntimeConfig {
             (
                 "pubsub.deadLetterAuthorization",
                 self.pubsub_dead_letter_authorization.as_config_str(),
+            ),
+            (
+                "pubsub.restNegativeCache",
+                self.pubsub_rest_negative_cache.as_config_str(),
             ),
             (
                 "appCheck.debugTokens",
@@ -7173,7 +7182,8 @@ mod tests {
                     (
                         "functions.authBlockingToken"
                         | "eventarc.authentication"
-                        | "hosting.cacheControl",
+                        | "hosting.cacheControl"
+                        | "pubsub.restNegativeCache",
                         true,
                     ) => json!("production"),
                     // The key only matters to the strict profile; the emulator profile
@@ -10922,21 +10932,57 @@ mod tests {
                 RuntimeConfig::from_json(&json!({"schemaVersion": 1, "profile": profile})).unwrap();
             assert_eq!(cfg.pubsub_rest_negative_cache, RestNegativeCacheMode::Off);
         }
-        // `productionExact` does not turn it on: that link needs an explicit owner decision.
-        for exact in [false, true] {
-            let cfg =
-                RuntimeConfig::from_json(&json!({"schemaVersion": 1, "productionExact": exact}))
-                    .unwrap();
-            assert_eq!(cfg.pubsub_rest_negative_cache, RestNegativeCacheMode::Off);
+        // `productionExact` turns it on; an explicit value wins in both directions.
+        let source = |cfg: &RuntimeConfig| {
+            cfg.development_defaults
+                .iter()
+                .find(|entry| entry["key"] == "pubsub.restNegativeCache")
+                .unwrap()["source"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+        for (input, mode, expected_source) in [
+            (
+                json!({"schemaVersion": 1, "productionExact": true}),
+                RestNegativeCacheMode::Production,
+                "productionExact",
+            ),
+            (
+                json!({"schemaVersion": 1, "productionExact": false}),
+                RestNegativeCacheMode::Off,
+                "default",
+            ),
+            (
+                json!({"schemaVersion": 1}),
+                RestNegativeCacheMode::Off,
+                "default",
+            ),
+            (
+                json!({"schemaVersion": 1, "productionExact": true, "pubsub": {"restNegativeCache": "off"}}),
+                RestNegativeCacheMode::Off,
+                "explicit",
+            ),
+            (
+                json!({"schemaVersion": 1, "productionExact": false, "pubsub": {"restNegativeCache": "production"}}),
+                RestNegativeCacheMode::Production,
+                "explicit",
+            ),
+            (
+                json!({"schemaVersion": 1, "pubsub": {"restNegativeCache": "production"}}),
+                RestNegativeCacheMode::Production,
+                "explicit",
+            ),
+            (
+                json!({"schemaVersion": 1, "productionExact": true, "pubsub": {"restNegativeCache": "production"}}),
+                RestNegativeCacheMode::Production,
+                "explicit",
+            ),
+        ] {
+            let cfg = RuntimeConfig::from_json(&input).unwrap();
+            assert_eq!(cfg.pubsub_rest_negative_cache, mode, "{input}");
+            assert_eq!(source(&cfg), expected_source, "{input}");
         }
-        let cfg = RuntimeConfig::from_json(
-            &json!({"schemaVersion": 1, "productionExact": true, "pubsub": {"restNegativeCache": "production"}}),
-        )
-        .unwrap();
-        assert_eq!(
-            cfg.pubsub_rest_negative_cache,
-            RestNegativeCacheMode::Production
-        );
     }
 
     #[test]

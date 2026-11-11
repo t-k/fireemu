@@ -383,7 +383,7 @@ fn by_default_a_stale_variable_is_warned_about_kept_and_the_command_runs() {
     let dir = project("warn-run");
     let env = [("PUBSUB_EMULATOR_HOST", "localhost:8085")];
     let mut args = QUICK_EXEC.to_vec();
-    args.extend(["--", "sh", "-c", "echo seen=$PUBSUB_EMULATOR_HOST"]);
+    args.extend(["--", "/bin/sh", "-c", "echo seen=$PUBSUB_EMULATOR_HOST"]);
     let output = run(&dir, &args, &env);
     assert!(output.status.success(), "{}", stderr(&output));
     assert!(
@@ -438,7 +438,7 @@ fn a_started_services_variable_is_replaced_by_the_run_and_never_warned_about() {
     args.extend([
         "--deny-inherited-emulator-env",
         "--",
-        "sh",
+        "/bin/sh",
         "-c",
         "echo seen=$FIRESTORE_EMULATOR_HOST",
     ]);

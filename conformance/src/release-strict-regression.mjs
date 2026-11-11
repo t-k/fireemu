@@ -172,14 +172,18 @@ const rtdbRun = (id, campaign, files) => ({
 });
 
 /**
- * The Hosting comparisons (HOSTING closure): the production corpus served by the strict profile
- * under productionExact on the binary under test and compared with the two committed recordings.
- * One run exports the three comparison documents; each committed file must equal its own.
+ * The Hosting comparisons (HOSTING closure): the production corpus and the follow-up corpus served by
+ * the strict profile under productionExact on the binary under test and compared with the committed
+ * recordings (two of each). One run exports the six comparison documents; each committed file must
+ * equal its own.
  */
 const HOSTING_COMPARISONS = [
   "conformance/hosting-production-run-comparison.json",
   "conformance/hosting-production-strict-vs-pass-1.json",
   "conformance/hosting-production-strict-vs-pass-2.json",
+  "conformance/hosting-followup-run-comparison.json",
+  "conformance/hosting-followup-strict-vs-run-1.json",
+  "conformance/hosting-followup-strict-vs-run-2.json",
 ];
 const hostingRun = (id) => ({
   id,

@@ -1,5 +1,5 @@
-// The Hosting closure record: structure, scope, the two production recordings and the evidence the
-// conditions cite. The record carries no closure review yet: it is the candidate that review reads.
+// The Hosting closure record: structure, scope, the production recordings (the parent corpus and the
+// follow-up corpus, two runs of each) and the evidence the conditions cite.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
@@ -7,6 +7,8 @@ import test from "node:test";
 
 import { CONDITIONS, buildCorpus, corpusManifest } from "./hosting-production/corpus.mjs";
 import { loadKnownDifferences } from "./hosting-production/compare.mjs";
+import { followupComparisons, FOLLOWUP_FILES } from "./hosting-production/closure-evidence.mjs";
+import { buildFollowupCorpus } from "./hosting-production/followup.mjs";
 
 const root = new URL("../../", import.meta.url);
 const record = JSON.parse(
@@ -41,27 +43,11 @@ test("the record is the verified Hosting parent with its review, and the corpus 
   );
   assert.equal(review.reviews[2].reviewedCommit, review.reviewedCommit);
   assert.equal(review.reviews[2].outcome, "APPROVED");
-  // strict gzip is built (owner ledger 2458): no follow-up asks for flate2 any more, and the
-  // gzip probes are named for the next idp packet (the only follow-up that names gzip)
-  // the fourth review read the gzip branch; the commit it names is the one it read
-  const gzipReview = review.reviews[3];
-  assert.equal(gzipReview.reportPath, "docs.local/reviews/2026-11-11-hosting-gzip-delta-review.md");
-  assert.match(gzipReview.reportSha256, /^[0-9a-f]{64}$/);
-  assert.equal(gzipReview.reviewedCommit, "234f8c208760339cc7d4da3fc903df8db6552fa4");
-  assert.equal(gzipReview.outcome, "MERGE-AFTER-FIXES");
-  assert.match(gzipReview.scope, /KD-COMPRESSION narrowed to the four Brotli rows/);
-  assert.equal(
-    review.reviewedCommit,
-    "7c1a191fc5e40ff172f3c27bc16403a3c8a1ad6e",
-    "the promotion review commit stays",
-  );
-  assert.equal(review.decision, "APPROVED");
-  assert.deepEqual(
-    record.followUps.filter((text) => /gzip|flate2/.test(text)),
-    [
-      "Next idp packet: probe gzip beyond the corpus file: a small text file (the size below which production does not compress), text/html and image/svg+xml, a file with no known extension, a Range request with Accept-Encoding: gzip, Accept-Encoding: * and x-gzip, a precompressed file (a `*.br` or `*.gz` file with a headers rule that sets Content-Encoding), so that the types and sizes strict compresses are observed (strict gzip itself is built, owner ledger 2458; Brotli stays a declared difference).",
-    ],
-  );
+  // the follow-up recordings settled the gzip, 404 page, dot-segment and digit-name To-Dos: what is
+  // left is optional, and Brotli stays declared
+  assert.equal(record.followUps.length, 2);
+  assert.match(record.followUps[0], /11 to 99 bytes/);
+  assert.match(record.followUps[1], /Brotli stays a declared difference/);
   assert.deepEqual(record.recordingPolicy, { observedPasses: 2, requiredPasses: 2, waiver: null });
   assert.equal(record.corpusPath, "conformance/src/hosting-production/corpus.manifest.json");
   assert.equal(record.corpusContentSha256, manifest.corpusSha256);
@@ -95,6 +81,7 @@ test("the two recordings are the rows of two runs of the pinned corpus, in corpu
     const text = bytes.toString("utf8");
     assert.doesNotMatch(text, /AIza[0-9A-Za-z_-]{20,}/);
     assert.doesNotMatch(text, /web\.app|firebaseapp\.com|fireemu-oracle/);
+    assert.doesNotMatch(text, /Page Not Found|fireauth|oauthhelper|POST_BODY|bodyBase64/);
   }
   assert.equal(runs.size, 2, "two different runs");
 });
@@ -231,37 +218,57 @@ test("the release comparisons are the committed ones, and the limitations name w
   const regression = record.integratedRegression;
   assert.deepEqual(
     regression.comparisons.map((entry) => entry.path),
-    Object.values(record.comparisons).map((entry) => entry.path),
+    [
+      ...Object.values(record.comparisons).map((entry) => entry.path),
+      ...Object.values(record.followUpComparisons).map((entry) => entry.path),
+    ],
   );
   for (const entry of regression.comparisons) {
     const bytes = await bytesOf(entry.path);
     assert.equal(entry.sha256, sha(bytes), entry.path);
-    assert.equal(entry.rows, 201);
+    assert.equal(entry.rows, entry.path.includes("followup") ? 78 : 201);
     assert.deepEqual(entry.summary, JSON.parse(bytes).summary);
   }
   assert.match(regression.releaseBindingNote, /R37/);
   const limits = record.limitations.join("\n");
   for (const text of [
     "KNOWN_DIFFERENCE",
-    "KD-AUTH-HANDLER-PAGE",
-    "ruling 20",
-    "`:id2`",
-    "Inferred, not recorded",
+    "KD-BROTLI",
+    "KD-GZIP-LENGTH",
+    "KD-SAFETY-ORIGIN-REDIRECT",
+    "Observed (rows v12.*",
+    "matches nothing in production",
     "416",
     "multi-range",
     "Range on HEAD",
     "productionExact",
     "init.js",
     "raw backslash",
+    "reads a raw backslash as a slash",
     "/a/b/..",
   ]) {
     assert.ok(limits.includes(text), text);
   }
-  assert.match(record.followUps.join("\n"), /404 page/);
-  assert.match(record.followUps.join("\n"), /digit-bearing/);
+  // what the recordings settled is no longer called inferred; only the two 416 answers over a
+  // compressed body that no recording asked for are (coordinator ruling 28, S2)
+  assert.equal(limits.split("Inferred, not recorded").length, 2);
+  assert.match(
+    limits,
+    /Inferred, not recorded: a range that starts past the gzip length but inside the file/,
+  );
+  assert.match(limits, /KD-GZIP-LENGTH, coordinator ruling 27/);
+  assert.match(limits, /at most 8 bytes/);
+  assert.match(record.followUps[0], /two inferred 416 answers/);
+  for (const text of [
+    "KD-DEFAULT-404-BODY",
+    "KD-AUTH-HANDLER-PAGE",
+    "owner decision of 2026-11-11",
+  ]) {
+    assert.ok(limits.includes(text), text);
+  }
   const compression = record.conditions.find((c) => c.conditionId === "HOSTING/compression-vary");
-  assert.match(compression.description, /gzip Content-Encoding/);
-  assert.match(compression.description, /KD-COMPRESSION: br only/);
+  assert.match(compression.description, /precompressed files and Content-Encoding header rules/);
+  assert.match(compression.description, /KD-COMPRESSION, KD-BROTLI: br only/);
 });
 
 test("KD-COMPRESSION is Brotli only: the gzip rows are compared, match in both strict comparisons and keep their decoded body compared", async () => {
@@ -294,13 +301,13 @@ test("KD-COMPRESSION is Brotli only: the gzip rows are compared, match in both s
   }
   const limits = record.limitations.join("\n");
   for (const text of [
-    "Gzip: strict answers",
+    "Gzip (rows v01.gz-*, v14.*, v15.*)",
     "miniz_oxide",
     "32 MiB",
     "x-gzip",
-    "headers rule sets Content-Encoding",
-    "precompressed `*.br` file",
-    "every Accept-Encoding line",
+    "A Content-Encoding header that a headers rule sets is not served",
+    "every Accept-Encoding line counts",
+    "the ten bytes production sent",
   ]) {
     assert.ok(limits.includes(text), text);
   }
@@ -325,6 +332,7 @@ test("every known-difference field is used by a committed comparison, and a wild
     }
     const listed = new Set(entry.fields);
     if (entry.etagSuffix) listed.add("header:etag");
+    if (entry.locationHost) listed.add("header:location");
     for (const field of listed) {
       assert.ok(used.get(entry.id).has(field), `${entry.id} lists ${field}, which no row uses`);
     }
@@ -332,4 +340,214 @@ test("every known-difference field is used by a committed comparison, and a wild
       assert.ok(listed.has(field), `${entry.id} covers ${field} without listing it`);
     }
   }
+});
+
+test("the two follow-up recordings are the rows of two runs of the follow-up corpus, answered, with no page body", async () => {
+  const followup = JSON.parse(
+    await bytesOf("conformance/src/hosting-production/followup.manifest.json"),
+  );
+  assert.equal(record.followUpCorpus.corpusSha256, followup.corpusSha256);
+  assert.equal(
+    record.followUpCorpus.sha256,
+    sha(await bytesOf("conformance/src/hosting-production/followup.manifest.json")),
+  );
+  assert.equal(record.followUpCorpus.versions, 5);
+  assert.equal(record.followUpCorpus.requests, 78);
+  assert.deepEqual(
+    record.followUpRecordings.map((r) => [r.alias, r.run, r.envelope]),
+    [
+      ["followup-1", "11ae6c", "HOSTING-FOLLOWUP-V1-20261111"],
+      ["followup-2", "1c6a4c", "HOSTING-FOLLOWUP-V1-20261111"],
+    ],
+  );
+  const ids = buildFollowupCorpus().versions.flatMap((v) => v.requests.map((r) => r.id));
+  for (const recording of record.followUpRecordings) {
+    const bytes = await bytesOf(recording.fixturePath);
+    assert.equal(recording.fixtureSha256, sha(bytes), recording.alias);
+    assert.equal(recording.corpusSha256, followup.corpusSha256);
+    const document = JSON.parse(bytes);
+    assert.equal(document.corpusSha256, followup.corpusSha256);
+    assert.equal(document.run, recording.run);
+    assert.deepEqual(
+      document.rows.map((row) => row.id),
+      ids,
+    );
+    assert.ok(document.rows.every((row) => row.outcome === "answered"));
+    // no page body is published (owner decision, 2026-11-11): the default 404 page and the hosted
+    // auth handler rows keep their length and digest only
+    assert.equal(
+      document.rows.filter((row) => row.bodyBase64 !== undefined || row.bodyWithheld).length,
+      0,
+    );
+    for (const id of ["v11.default-404", "v11.auth-handler", "v11.auth-handler-query"]) {
+      const row = document.rows.find((candidate) => candidate.id === id);
+      assert.equal(row.bodyText, undefined, id);
+      assert.ok(row.bodyBytes > 0 && /^[0-9a-f]{64}$/.test(row.bodySha256), id);
+    }
+    const text = bytes.toString("utf8");
+    assert.doesNotMatch(text, /AIza[0-9A-Za-z_-]{20,}/);
+    assert.doesNotMatch(text, /web\.app|firebaseapp\.com|fireemu-oracle/);
+    assert.doesNotMatch(text, /Page Not Found|fireauth|oauthhelper|POST_BODY|bodyBase64/);
+  }
+  assert.notEqual(record.followUpRecordings[0].run, record.followUpRecordings[1].run);
+});
+
+test("the follow-up comparisons are those of the recordings, with no mismatch and no unknown row, and each condition cites them", async () => {
+  const followup = JSON.parse(
+    await bytesOf("conformance/src/hosting-production/followup.manifest.json"),
+  );
+  const knownFile = await bytesOf(record.followUpKnownDifferences.path);
+  assert.equal(record.followUpKnownDifferences.sha256, sha(knownFile));
+  const entries = JSON.parse(knownFile).entries;
+  assert.deepEqual(
+    record.followUpKnownDifferences.entries,
+    entries.map((entry) => entry.id),
+  );
+  const documents = {};
+  for (const [name, comparison] of Object.entries(record.followUpComparisons)) {
+    const bytes = await bytesOf(comparison.path);
+    assert.equal(comparison.sha256, sha(bytes), name);
+    const document = JSON.parse(bytes);
+    documents[name] = document;
+    assert.deepEqual(document.summary, comparison.summary, name);
+    assert.equal(document.summary.MISMATCH, 0, name);
+    assert.equal(document.summary.UNKNOWN, 0, name);
+    assert.equal(document.corpusSha256, followup.corpusSha256);
+    assert.equal(
+      Object.values(document.summary).reduce((a, b) => a + b, 0),
+      78,
+    );
+  }
+  // 15 rows of the run comparison and 42 of each strict comparison carry a known difference
+  assert.equal(record.followUpComparisons.followUpRunVsRun.summary.KNOWN_DIFFERENCE, 15);
+  assert.equal(record.followUpComparisons.followUpStrictVsRun1.summary.KNOWN_DIFFERENCE, 42);
+  assert.equal(record.followUpComparisons.followUpStrictVsRun2.summary.KNOWN_DIFFERENCE, 42);
+  // the three differences, and the rows each names (the other rows of the corpus match)
+  assert.deepEqual(record.followUpKnownDifferences.entries, [
+    "KD-SAFETY-ORIGIN-REDIRECT",
+    "KD-DEFAULT-404-BODY",
+    "KD-AUTH-HANDLER-PAGE",
+    "KD-BROTLI",
+    "KD-GZIP-LENGTH",
+  ]);
+  const known = Object.fromEntries(entries.map((entry) => [entry.id, entry]));
+  assert.equal(known["KD-SAFETY-ORIGIN-REDIRECT"].rows.length, 15);
+  assert.equal(known["KD-DEFAULT-404-BODY"].rows.length, 17);
+  assert.deepEqual(known["KD-AUTH-HANDLER-PAGE"].rows, [
+    "v11.auth-handler",
+    "v11.auth-handler-query",
+  ]);
+  assert.deepEqual(known["KD-BROTLI"].rows, [
+    "v14.identity-browser",
+    "v14.free-browser",
+    "v15.ae-browser",
+  ]);
+  assert.equal(known["KD-GZIP-LENGTH"].rows.length, 5);
+  assert.equal(known["KD-GZIP-LENGTH"].gzipLengthBound, 8);
+  assert.match(known["KD-GZIP-LENGTH"].authority, /coordinator ruling 27 \(2026-11-12\)/);
+  for (const document of Object.values(documents)) {
+    for (const row of document.rows.filter((r) => r.status === "KNOWN_DIFFERENCE")) {
+      const named = entries.filter((entry) => entry.rows.includes(row.id)).map((entry) => entry.id);
+      assert.deepEqual(
+        row.known.map((k) => k.entry).filter((id) => named.includes(id)).length > 0,
+        true,
+        row.id,
+      );
+    }
+  }
+  // every condition the follow-up rows belong to cites the two recordings and the comparisons
+  const cited = record.conditions.filter((condition) => condition.followUpEvidence);
+  assert.deepEqual(
+    cited.map((condition) => condition.conditionId),
+    [
+      "HOSTING/static-files",
+      "HOSTING/redirects",
+      "HOSTING/reserved-paths",
+      "HOSTING/not-found",
+      "HOSTING/compression-vary",
+    ],
+  );
+  let requests = 0;
+  for (const condition of cited) {
+    const evidence = condition.followUpEvidence;
+    assert.equal(evidence.corpus, followup.corpusId);
+    assert.deepEqual(
+      evidence.productionEvidence.map(({ alias, fixturePath, fixtureSha256 }) => ({
+        alias,
+        fixturePath,
+        fixtureSha256,
+      })),
+      record.followUpRecordings.map(({ alias, fixturePath, fixtureSha256 }) => ({
+        alias,
+        fixturePath,
+        fixtureSha256,
+      })),
+    );
+    requests += evidence.requests;
+    for (const [name, document] of Object.entries(documents)) {
+      const verdicts = evidence.followUpConditions.map((key) => document.conditions[key]);
+      assert.ok(
+        verdicts.every((verdict) => verdict.closable),
+        `${condition.conditionId} ${name}`,
+      );
+      assert.equal(
+        evidence.comparisons[name].rows,
+        verdicts.reduce((sum, verdict) => sum + verdict.rows, 0),
+      );
+      assert.equal(
+        evidence.comparisons[name].knownDifferenceRows,
+        verdicts.reduce((sum, verdict) => sum + verdict.knownDifferenceRows, 0),
+      );
+    }
+    for (const id of evidence.knownDifferences) assert.ok(known[id], id);
+  }
+  assert.equal(requests, 78, "every follow-up row belongs to exactly one condition");
+  const limits = record.limitations.join("\n");
+  for (const text of [
+    "KD-GZIP-LENGTH",
+    "a case-sensitive substring",
+    "11 to 99 bytes",
+    "ten bytes production sent",
+  ]) {
+    assert.ok(limits.includes(text) || record.followUps.join("\n").includes(text), text);
+  }
+});
+
+test("the follow-up comparisons are built from the right recordings: each strict document names its own run, and the known differences apply", async () => {
+  // run 1's rows stand in for a local answer: the host of a Location differs from run 2's, a known difference
+  const { mkdtempSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const directory = mkdtempSync(join(tmpdir(), "followup-evidence-"));
+  const local = join(directory, "local.json");
+  writeFileSync(local, await bytesOf(record.followUpRecordings[0].fixturePath));
+  const documents = await followupComparisons(local);
+  assert.deepEqual(Object.keys(documents), [
+    FOLLOWUP_FILES.runs,
+    FOLLOWUP_FILES.strict1,
+    FOLLOWUP_FILES.strict2,
+  ]);
+  const shaOf = async (path) => sha(await bytesOf(path));
+  const run1 = await shaOf(record.followUpRecordings[0].fixturePath);
+  const run2 = await shaOf(record.followUpRecordings[1].fixturePath);
+  assert.equal(documents[FOLLOWUP_FILES.runs].inputs.a, run1);
+  assert.equal(documents[FOLLOWUP_FILES.runs].inputs.b, run2);
+  assert.equal(documents[FOLLOWUP_FILES.strict1].inputs.a, run1);
+  assert.equal(documents[FOLLOWUP_FILES.strict2].inputs.a, run2);
+  for (const name of [FOLLOWUP_FILES.strict1, FOLLOWUP_FILES.strict2]) {
+    assert.equal(documents[name].inputs.b, null, "the local side names no digest");
+    assert.equal(documents[name].comparison, "production-vs-local");
+  }
+  assert.equal(documents[FOLLOWUP_FILES.runs].comparison, "run-vs-run");
+  // a row whose Location host or ETag suffix is replaced counts as known even when both sides agree:
+  // run 1 against itself has the 15 Location rows and the 3 Brotli rows; run 2 differs in the hosts too
+  assert.equal(documents[FOLLOWUP_FILES.strict1].summary.MISMATCH, 0);
+  assert.equal(documents[FOLLOWUP_FILES.strict2].summary.MISMATCH, 0);
+  assert.equal(documents[FOLLOWUP_FILES.strict2].summary.KNOWN_DIFFERENCE, 18);
+  assert.equal(documents[FOLLOWUP_FILES.runs].summary.KNOWN_DIFFERENCE, 15);
+  assert.equal(documents[FOLLOWUP_FILES.strict1].summary.KNOWN_DIFFERENCE, 18);
+  assert.deepEqual(
+    documents[FOLLOWUP_FILES.runs].knownDifferences.map((entry) => entry.id),
+    ["KD-SAFETY-ORIGIN-REDIRECT"],
+  );
 });

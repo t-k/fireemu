@@ -515,6 +515,8 @@ export function corpusManifest(corpus = buildCorpus()) {
     name: version.name,
     hosting: version.hosting,
     optionalConfig: version.optionalConfig,
+    // only the follow-up corpus sets it (a refused finalize is then an observation): absent keeps the pinned digest
+    ...(version.mayRefuse ? { mayRefuse: true } : {}),
     readiness: version.readiness,
     files: Object.fromEntries(
       Object.entries(version.files)

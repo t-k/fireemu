@@ -16,16 +16,17 @@
       "rows": ["v02.page-slash", "v03.page", "v03.page-slash", "v04.page", "v04.page-slash"],
       "fields": ["bodyBytes", "header:content-length"],
       "appliesTo": ["production-vs-local"],
-      "reason": "Production answers an unmatched path with its own 21,376-byte Page Not Found page; the recording keeps only its digest, not its bytes, so strict answers with its own short page. Status, content type and the other headers of these rows are compared.",
-      "authority": "coordinator ruling 16 (2026-11-11); recording the page body is a To-Do for the next idp packet"
+      "reason": "Production answers an unmatched path with its own 21,376-byte Page Not Found page. Its bytes are not shipped (owner decision, 2026-11-11), so strict answers with a short page written for fireemu (same status, content type, Cache-Control and Vary). Status, content type and the other headers of these rows are compared; the body size is not.",
+      "authority": "owner decision of 2026-11-11 (owner-decisions.md, relayed by the coordinator): no Google page bytes in the repository; earlier coordinator ruling 16"
     },
     {
       "id": "KD-SAFETY-ORIGIN-REDIRECT",
       "rows": ["v01.safety-parent", "v01.safety-encoded-parent"],
-      "fields": ["header:location"],
+      "fields": [],
       "appliesTo": ["production-vs-local", "run-vs-run"],
-      "reason": "Production answers a request for a parent directory (/../outside.txt, /%2e%2e/outside.txt) with a 302 whose Location is an absolute URL on an internal origin host (content-prodNN-firebasehosting-origin.googleapis.com) that differs from one request to the next. Strict answers the same 302 (status, Cache-Control: private, Content-Type text/html; charset=UTF-8, an empty body, Accept-Ranges) with the normalized path on this origin, so only the Location is not compared; the replay asserts the status and the Location path of both rows and that nothing outside public is read.",
-      "authority": "coordinator rulings 17 and 21 (2026-11-11)"
+      "reason": "Production answers a request for a parent directory (/../outside.txt, /%2e%2e/outside.txt) with a 302 whose Location is an absolute URL on an internal origin host (content-prodNN-firebasehosting-origin.googleapis.com) that differs from one request to the next. Strict answers the same 302 (status, Cache-Control: private, Content-Type text/html; charset=UTF-8, an empty body, Accept-Ranges) with the same path after the host the request came to. Only the host is not compared: the Location is compared with the host replaced by the origin placeholder.",
+      "authority": "coordinator rulings 17 and 21 (2026-11-11), narrowed to the host by the follow-up recordings",
+      "locationHost": "content-(?:prod[0-9]{2}-)?firebasehosting-origin\\.googleapis\\.com"
     },
     {
       "id": "KD-SDK-FILES",
@@ -49,8 +50,8 @@
       "rows": ["v01.reserved-auth-handler", "v09.reserved-auth-handler"],
       "fields": ["header:content-length"],
       "appliesTo": ["production-vs-local"],
-      "reason": "The hosted /__/auth/handler page is served by Firebase, not from the site's files. The recorded requests are HEAD and show only its length (462 bytes) and headers; strict answers with a stand-in page of another length. Status and the other headers are compared.",
-      "authority": "coordinator ruling 20 (2026-11-11); recording the page is a To-Do for the next idp packet"
+      "reason": "The hosted /__/auth/handler page is served by Firebase, not from the site's files; the recorded requests are HEAD and show its length (462 bytes). Its bytes are not shipped (owner decision, 2026-11-11), so strict answers with a stand-in page written for fireemu, of another length. Status and the other headers are compared.",
+      "authority": "owner decision of 2026-11-11 (owner-decisions.md, relayed by the coordinator): no Google page bytes in the repository; earlier coordinator ruling 20"
     }
   ]
 }

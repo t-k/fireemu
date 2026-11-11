@@ -2176,7 +2176,107 @@ impl RuntimeConfig {
             };
             rows.push(json!({"key": key, "value": value, "source": source, "description": schema["description"].as_str().unwrap_or("")}));
         }
+        for row in &mut rows {
+            redact_config_row(row);
+        }
         rows
+    }
+}
+
+/// Config keys whose values are secret-bearing. `config show` (text and `--json`) and
+/// `config lint --json` print these through [`redact_config_row`] instead of the value.
+/// An array key redacts only the secret field of each element, so the other fields stay
+/// readable.
+pub const SECRET_CONFIG_KEYS: &[&str] = &[
+    "pubsub.authentication.localBearerToken",
+    "auth.apiKeys",
+    "auth.customTokenSigners",
+    "auth.providers.oidc",
+    "appCheck.apps",
+];
+
+/// Schema leaves whose names look secret-like (`token`, `secret`, `key`, `password`,
+/// `credential`, `private`) but carry a mode, a switch or public material. Each entry says
+/// why. The schema test fails for any other secret-like leaf, so a new one must be added to
+/// [`SECRET_CONFIG_KEYS`] or here with a reason.
+#[cfg(test)]
+pub const NOT_SECRET_CONFIG_KEYS: &[(&str, &str)] = &[
+    ("auth.allowUnsignedCustomTokens", "boolean switch"),
+    ("auth.allowUnsignedIdTokens", "boolean switch"),
+    ("auth.idTokenSigning", "signing mode name"),
+    ("auth.forwardInboundCredentials", "boolean switch"),
+    ("auth.requireClientApiKey", "boolean switch"),
+    (
+        "auth.passwordPolicy",
+        "password policy rules, not a password",
+    ),
+    (
+        "auth.passwordPolicyOverrides",
+        "password policy rules, not a password",
+    ),
+    ("auth.signIn.email.passwordRequired", "boolean switch"),
+    ("auth.secretMaterialization", "materialization mode name"),
+    ("appCheck.tokenSigning", "signing mode name"),
+    ("appCheck.tokenTtlSeconds", "number of seconds"),
+    (
+        "appCheck.debugTokens",
+        "mode name (any or registered), not a token value",
+    ),
+    (
+        "eventarc.oauthCredentials",
+        "digest-keyed scope sets, the digests are not credentials",
+    ),
+    (
+        "functions.authBlockingToken",
+        "mode name, not a token value",
+    ),
+];
+
+/// Replaces the secret values of one `config show` row (see [`SECRET_CONFIG_KEYS`]).
+/// A non-null value becomes the string `"[redacted]"`; null stays null.
+fn mask_secret(value: &mut Value) {
+    if !value.is_null() {
+        *value = serde_json::json!("[redacted]");
+    }
+}
+
+pub fn redact_config_row(row: &mut Value) {
+    let Some(key) = row["key"].as_str().map(str::to_owned) else {
+        return;
+    };
+    if !SECRET_CONFIG_KEYS.contains(&key.as_str()) {
+        return;
+    }
+    let value = &mut row["value"];
+    match key.as_str() {
+        "auth.providers.oidc" => mask_each_field(value, "clientSecret"),
+        "appCheck.apps" => mask_each_field(value, "debugTokenSha256"),
+        "auth.apiKeys" => {
+            if let Some(items) = value.as_array_mut() {
+                items.iter_mut().for_each(mask_secret);
+            }
+        }
+        _ => mask_secret(value),
+    }
+}
+
+/// Masks `field` of every object in an array (for `debugTokenSha256`, the digests inside
+/// the field's array are masked one by one).
+fn mask_each_field(value: &mut Value, field: &str) {
+    let Some(items) = value.as_array_mut() else {
+        return;
+    };
+    for item in items {
+        let Some(secret) = item
+            .as_object_mut()
+            .and_then(|object| object.get_mut(field))
+        else {
+            continue;
+        };
+        match secret.as_array_mut() {
+            Some(digests) => digests.iter_mut().for_each(mask_secret),
+            None => mask_secret(secret),
+        }
     }
 }
 
@@ -6232,6 +6332,14 @@ mod tests {
         }
     }
 
+    /// The row value the test expects for `key`: the given value, with secrets masked the way
+    /// `config show` masks them.
+    fn redacted_expectation(key: &str, value: &Value) -> Value {
+        let mut row = json!({"key": key, "value": value.clone()});
+        redact_config_row(&mut row);
+        row["value"].clone()
+    }
+
     #[test]
     #[allow(clippy::too_many_lines)]
     fn config_show_reports_each_explicit_runtime_value() {
@@ -6374,10 +6482,11 @@ mod tests {
         let without_file = config.config_show(&json!({}));
         for (key, expected) in &cases {
             let row = rows.iter().find(|row| row["key"] == *key).unwrap();
-            assert_eq!(row["value"], *expected, "{key}");
+            let expected = redacted_expectation(key, expected);
+            assert_eq!(row["value"], expected, "{key}");
             assert_eq!(row["source"], "explicit", "{key}");
             let row = without_file.iter().find(|row| row["key"] == *key).unwrap();
-            assert_eq!(row["value"], *expected, "runtime projection: {key}");
+            assert_eq!(row["value"], expected, "runtime projection: {key}");
             // A governed development default records its source when the file is read.
             let governed = ["auth.multiTenant.allowTenants", "auth.mfa.state"].contains(key);
             assert_eq!(
@@ -12948,5 +13057,128 @@ mod hosting_selection_tests {
         result.unwrap();
         assert!(!cfg.hosting_addr_explicit);
         assert!(!RuntimeConfig::default().hosting_addr_explicit);
+    }
+}
+
+#[cfg(test)]
+mod secret_redaction_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// One sentinel per secret field, built at run time so no source line holds a complete
+    /// token-shaped literal.
+    fn sentinel(name: &str) -> String {
+        format!("{}{}", "sentinel-", name)
+    }
+
+    fn planted_input() -> Value {
+        json!({
+            "schemaVersion": 1,
+            "pubsub": {"authentication": {"localBearerToken": sentinel("pubsub-bearer")}},
+            "auth": {
+                "apiKeys": [sentinel("api-key")],
+                "customTokenSigners": {"signer@demo-app.iam.gserviceaccount.com": {"keys": [{"kty": "RSA", "alg": "RS256", "use": "sig", "kid": sentinel("signer-key"), "n": "0lwNtQWMVy0QqgEvrBmoFqwky_dcMx8CgS-o2rTesEV7QbG4cvNigTcDV7b_u0twRkJdonkMPjbUs0b8NKe_0_UOZ5vE_kILFG4TtPdeZWub8xnqhETc7WifXhEfqcB8xFbRyIxU9V0d_epsuNnQ-Nd7NlnFsH-aaq6f1HKp55_BVNxudwmHwT49P6JhNDDh7FWyoYBBBFtQ0St8dky4MFQTd2swZP4pEA8xGp-q-1mxbn0g9gfbq5voYWtOaDW9a2lsC_S_d6DecsrNWn4YYJ7Qc5xcx4pI70a23zftkVBj_I-Eip2hcvNUEsZJA4LlR4BgDLsNWu3ZWQxe08fOew", "e": "AQAB"}]}},
+                "providers": {"oidc": [{
+                    "name": "oidc.fixture",
+                    "enabled": true,
+                    "clientId": "visible-client-id",
+                    "displayName": "Visible display name",
+                    "issuer": "https://issuer.test",
+                    "clientSecret": sentinel("oidc-secret")
+                }]}
+            },
+            "appCheck": {"enabled": true, "apps": [{
+                "projectId": "demo-app",
+                "projectNumber": "1234567890",
+                "appId": "1:1234567890:web:abc",
+                "debugTokenSha256": ["cd".repeat(32)]
+            }]}
+        })
+    }
+
+    fn row<'a>(rows: &'a [Value], key: &str) -> &'a Value {
+        rows.iter().find(|row| row["key"] == key).unwrap()
+    }
+
+    #[test]
+    fn config_show_redacts_every_planted_secret_and_keeps_public_fields() {
+        let input = planted_input();
+        let config = RuntimeConfig::from_json(&input).unwrap();
+        let rows = config.config_show(&input);
+        let text = serde_json::to_string(&rows).unwrap();
+        for name in ["pubsub-bearer", "api-key", "signer-key", "oidc-secret"] {
+            assert!(
+                !text.contains(&sentinel(name)),
+                "{name} leaked into config show"
+            );
+        }
+        assert!(
+            !text.contains(&"cd".repeat(32)),
+            "debug token digest leaked into config show"
+        );
+        assert_eq!(
+            row(&rows, "pubsub.authentication.localBearerToken")["value"],
+            "[redacted]"
+        );
+        assert_eq!(row(&rows, "auth.apiKeys")["value"], json!(["[redacted]"]));
+        assert_eq!(row(&rows, "auth.customTokenSigners")["value"], "[redacted]");
+        let oidc = &row(&rows, "auth.providers.oidc")["value"][0];
+        assert_eq!(oidc["clientSecret"], "[redacted]");
+        assert_eq!(oidc["clientId"], "visible-client-id");
+        assert_eq!(oidc["displayName"], "Visible display name");
+        assert_eq!(
+            row(&rows, "appCheck.apps")["value"][0]["debugTokenSha256"],
+            json!(["[redacted]"])
+        );
+        assert_eq!(
+            row(&rows, "appCheck.apps")["value"][0]["appId"],
+            "1:1234567890:web:abc"
+        );
+    }
+
+    #[test]
+    fn null_secret_values_stay_null() {
+        let mut row = json!({"key": "pubsub.authentication.localBearerToken", "value": null});
+        redact_config_row(&mut row);
+        assert!(row["value"].is_null());
+    }
+
+    #[test]
+    fn every_secret_like_schema_leaf_is_listed() {
+        let pattern = [
+            "token",
+            "secret",
+            "key",
+            "password",
+            "credential",
+            "private",
+        ];
+        for (key, _) in config_schema() {
+            let lower = key.to_ascii_lowercase();
+            if !pattern.iter().any(|p| lower.contains(p)) {
+                continue;
+            }
+            let listed = SECRET_CONFIG_KEYS.contains(&key.as_str())
+                || NOT_SECRET_CONFIG_KEYS
+                    .iter()
+                    .any(|(k, reason)| *k == key && !reason.is_empty());
+            assert!(
+                listed,
+                "{key} looks secret-like: add it to SECRET_CONFIG_KEYS or NOT_SECRET_CONFIG_KEYS with a reason"
+            );
+        }
+    }
+
+    #[test]
+    fn every_secret_list_key_is_a_real_config_key() {
+        let schema: Vec<String> = config_schema().into_iter().map(|(key, _)| key).collect();
+        for key in SECRET_CONFIG_KEYS {
+            assert!(
+                schema.iter().any(|s| s == key)
+                    || *key == "auth.providers.oidc"
+                    || *key == "appCheck.apps",
+                "{key} is not a schema key"
+            );
+        }
     }
 }

@@ -1913,3 +1913,102 @@ test("productionDeps reads the reviewed sources", async () => {
   assert.equal(typeof deps.fetchImpl, "function");
   close();
 });
+
+// ---- the published production recording (two runs on 2026-11-11) -------------------------------------------
+
+const PUBLISHED = JSON.parse(
+  readFileSync(
+    new URL("../../functions-http-callable-rerecord-production.json", import.meta.url),
+    "utf8",
+  ),
+);
+
+test("the published re-record is masked: no project id, host hash, uid, email or token", () => {
+  const text = JSON.stringify(PUBLISHED);
+  for (const forbidden of [
+    "fireemu-oracle-query",
+    /fireemucallableprobe-[a-z0-9]{10}-uc/u,
+    /eyJ[A-Za-z0-9_-]{5,}/u,
+    /fireemu-fh-/u,
+    /@example\.com/u,
+    /(?<![0-9a-f])\d{12,}(?![0-9a-f])/u,
+  ]) {
+    if (typeof forbidden === "string") assert.ok(!text.includes(forbidden), forbidden);
+    else assert.doesNotMatch(text, forbidden);
+  }
+  for (const run of Object.values(PUBLISHED.runs)) {
+    for (const capture of run.captures) {
+      assert.equal(capture.transport.host, "fireemucallableprobe-{{projectHash}}-uc.a.run.app");
+      assert.match(
+        capture.transport.requestHead,
+        /^host: fireemucallableprobe-\{\{projectHash\}\}-uc\.a\.run\.app\r$/mu,
+      );
+      assert.ok(
+        capture.authorization === null ||
+          capture.authorization === "Bearer malformed" ||
+          capture.authorization === MASKED_TOKEN,
+        capture.authorization,
+      );
+    }
+  }
+});
+
+test("the published re-record is the answer production gave in both runs and both passes", () => {
+  assert.equal(PUBLISHED.gitSha, "48095bdff6464fb912605478d44e00c1efd573cb");
+  assert.equal(PUBLISHED.corpusDigest, SOURCE_PINS["rerecord.corpus.json"]);
+  assert.deepEqual(Object.keys(PUBLISHED.runs), ["run-1", "run-2"]);
+  const answers = [];
+  for (const run of Object.values(PUBLISHED.runs)) {
+    assert.equal(run.captures.length, 12);
+    // judged again from the published bytes, it is the judgement the recorder wrote
+    const judged = judgeRerecord(run.captures, BASELINE);
+    assert.deepEqual(judged, run.judgement);
+    assert.equal(judged.verdict, "recorded");
+    assert.deepEqual(judged.timingDiffers, []);
+    for (const capture of run.captures) {
+      answers.push([
+        capture.program.split("/").at(-1),
+        capture.caseId,
+        capture.status,
+        capture.bodyBytes,
+        capture.bodySha256,
+      ]);
+      assert.equal(capture.transport.hostForm, "service-hash-region.a.run.app");
+      assert.equal(capture.transport.httpVersion, "1.1");
+      assert.equal(capture.transport.server, "Google Frontend");
+      assert.equal(capture.transport.wwwAuthenticate, null);
+      assert.equal(capture.transport.traceContextPresent, true);
+      assert.equal(capture.headers.server, "Google Frontend");
+    }
+  }
+  // both runs, both passes: identical answers per (program, case)
+  const byCase = new Map();
+  for (const [program, caseId, status, bytes, digest] of answers) {
+    const key = `${program}#${caseId}`;
+    // the valid-token answer carries the owned user's uid and email, which differ per run: digest not compared
+    const value = JSON.stringify([
+      status,
+      bytes,
+      caseId === "valid-project-id-token" ? null : digest,
+    ]);
+    assert.equal(byCase.get(key) ?? value, value, key);
+    byCase.set(key, value);
+  }
+  const expected = {
+    "auth-context#no-authorization": [200, 24],
+    "auth-context#valid-project-id-token": [200, 149],
+    "auth-refusal#no-authorization": [200, 24],
+    "auth-refusal#malformed-bearer": [401, 66],
+    "auth-refusal#invalid-signature": [401, 66],
+    "auth-refusal#expired-id-token": [401, 66],
+  };
+  assert.deepEqual(
+    Object.fromEntries([...byCase].map(([key, value]) => [key, JSON.parse(value).slice(0, 2)])),
+    expected,
+  );
+  // the three refused credentials get the same 66-byte wrapper envelope as the recorded baseline
+  const envelope = byCase.get("auth-refusal#malformed-bearer");
+  for (const caseId of ["invalid-signature", "expired-id-token"])
+    assert.equal(byCase.get(`auth-refusal#${caseId}`), envelope, caseId);
+  assert.equal(JSON.parse(envelope)[2], sha(BASELINE.wrapperEnvelope.body));
+});

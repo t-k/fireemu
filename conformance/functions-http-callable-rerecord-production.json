@@ -1,0 +1,1738 @@
+{
+  "version": 1,
+  "recordedAgainst": {
+    "target": "production Cloud Functions 2nd gen function fireemuCallableProbe (a real onCall function, us-central1, allUsers run.invoker), FUNCTIONS-HTTP sandbox project, deployed once per program (auth-context, auth-refusal) in each of two runs",
+    "task": "FUNCTIONS-HTTP-BEARER (owner ledger 2408), packet FUNCTIONS-HTTP-CALLABLE-RERECORD v1.1",
+    "note": "The project id, its number, the Cloud Run host hash and every bucket name are left out or masked ({{projectId}}, {{projectNumber}}, {{projectHash}}); the owned Auth user's uid and email are {{uid}} and {{email}}, and every token is {{jwt}}. captures are the recorder's own records (callable-ingress/rerecord.mjs createTransport, bearer-observation.mjs captureFetch): status, kept headers, every header name in the order received, body byte count and SHA-256, body text, and the transport facts (host form, HTTP version, request head as sent). Pass 1 was sent right after the public invoker grant and its read-back, pass 2 sixty seconds later."
+  },
+  "gitSha": "48095bdff6464fb912605478d44e00c1efd573cb",
+  "corpusDigest": "665bd73ae2144f2035840835eff00a447fee33139c65a83b718978cbb5d3c167",
+  "runs": {
+    "run-1": {
+      "runId": "2026-11-11T173534.381Z",
+      "envelope": "FUNCTIONS-HTTP-CALLABLE-RERECORD-20261112-01",
+      "recordedAt": "2026-11-11T17:35:34.381Z",
+      "privateCapturesSha256": "877c13a98ad7d6f09459eb19ddba050f9650198d4429aaf71dad91aa8bb1cb7e",
+      "privateRecordingSha256": "dee17da57197c8fd3d27306226450cdf64173fa8827980a98cab3dc0971b6a09",
+      "captures": [
+        {
+          "seq": 1,
+          "pass": 1,
+          "caseId": "no-authorization",
+          "program": "functions-http/callable/auth-context",
+          "method": "POST",
+          "path": "/",
+          "authorization": null,
+          "latencyMs": 369,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "24",
+            "server": "Google Frontend",
+            "vary": "Origin"
+          },
+          "headerNames": [
+            "alt-svc",
+            "content-length",
+            "content-type",
+            "date",
+            "server",
+            "vary",
+            "x-cloud-trace-context"
+          ],
+          "bodyBytes": 24,
+          "bodySha256": "b267f186af5790ea4506732b69763cfa8252978c7092063dc79ad27f5e1cc0da",
+          "bodyText": "{\"result\":{\"auth\":null}}",
+          "error": null,
+          "transport": {
+            "sentAt": "2026-11-11T17:37:06.931Z",
+            "host": "fireemucallableprobe-{{projectHash}}-uc.a.run.app",
+            "hostForm": "service-hash-region.a.run.app",
+            "httpVersion": "1.1",
+            "alpn": null,
+            "tlsProtocol": null,
+            "requestHead": "POST / HTTP/1.1\r\nhost: fireemucallableprobe-{{projectHash}}-uc.a.run.app\r\nconnection: keep-alive\r\ncontent-type: application/json\r\naccept: */*\r\naccept-language: *\r\nsec-fetch-mode: cors\r\nuser-agent: node\r\naccept-encoding: gzip, deflate\r\ncontent-length: 22\r\n\r\n",
+            "responseHeaderNames": [
+              "vary",
+              "content-type",
+              "x-cloud-trace-context",
+              "date",
+              "server",
+              "content-length",
+              "alt-svc"
+            ],
+            "server": "Google Frontend",
+            "wwwAuthenticate": null,
+            "traceContextPresent": true,
+            "contentEncoding": null
+          }
+        },
+        {
+          "seq": 2,
+          "pass": 1,
+          "caseId": "valid-project-id-token",
+          "program": "functions-http/callable/auth-context",
+          "method": "POST",
+          "path": "/",
+          "authorization": "Bearer {{jwt}}",
+          "latencyMs": 263,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "149",
+            "server": "Google Frontend",
+            "vary": "Origin"
+          },
+          "headerNames": [
+            "alt-svc",
+            "content-length",
+            "content-type",
+            "date",
+            "server",
+            "vary",
+            "x-cloud-trace-context"
+          ],
+          "bodyBytes": 149,
+          "bodySha256": "8673eef3187f95586a155d6615aa8b963aef95e996236d653f86e3fbfa14cf61",
+          "bodyText": "{\"result\":{\"uid\":\"{{uid}}\",\"email\":\"{{email}}\",\"emailVerified\":false,\"signInProvider\":\"password\"}}",
+          "error": null,
+          "transport": {
+            "sentAt": "2026-11-11T17:37:07.300Z",
+            "host": "fireemucallableprobe-{{projectHash}}-uc.a.run.app",
+            "hostForm": "service-hash-region.a.run.app",
+            "httpVersion": "1.1",
+            "alpn": null,
+            "tlsProtocol": null,
+            "requestHead": "POST / HTTP/1.1\r\nhost: fireemucallableprobe-{{projectHash}}-uc.a.run.app\r\nconnection: keep-alive\r\ncontent-type: application/json\r\nauthorization: Bearer {{jwt}}\r\naccept: */*\r\naccept-language: *\r\nsec-fetch-mode: cors\r\nuser-agent: node\r\naccept-encoding: gzip, deflate\r\ncontent-length: 22\r\n\r\n",
+            "responseHeaderNames": [
+              "vary",
+              "content-type",
+              "x-cloud-trace-context",
+              "date",
+              "server",
+              "content-length",
+              "alt-svc"
+            ],
+            "server": "Google Frontend",
+            "wwwAuthenticate": null,
+            "traceContextPresent": true,
+            "contentEncoding": null
+          }
+        },
+        {
+          "seq": 3,
+          "pass": 2,
+          "caseId": "no-authorization",
+          "program": "functions-http/callable/auth-context",
+          "method": "POST",
+          "path": "/",
+          "authorization": null,
+          "latencyMs": 60280,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "24",
+            "server": "Google Frontend",
+            "vary": "Origin"
+          },
+          "headerNames": [
+            "alt-svc",
+            "content-length",
+            "content-type",
+            "date",
+            "server",
+            "vary",
+            "x-cloud-trace-context"
+          ],
+          "bodyBytes": 24,
+          "bodySha256": "b267f186af5790ea4506732b69763cfa8252978c7092063dc79ad27f5e1cc0da",
+          "bodyText": "{\"result\":{\"auth\":null}}",
+          "error": null,
+          "transport": {
+            "sentAt": "2026-11-11T17:38:07.584Z",
+            "host": "fireemucallableprobe-{{projectHash}}-uc.a.run.app",
+            "hostForm": "service-hash-region.a.run.app",
+            "httpVersion": "1.1",
+            "alpn": null,
+            "tlsProtocol": null,
+            "requestHead": "POST / HTTP/1.1\r\nhost: fireemucallableprobe-{{projectHash}}-uc.a.run.app\r\nconnection: keep-alive\r\ncontent-type: application/json\r\naccept: */*\r\naccept-language: *\r\nsec-fetch-mode: cors\r\nuser-agent: node\r\naccept-encoding: gzip, deflate\r\ncontent-length: 22\r\n\r\n",
+            "responseHeaderNames": [
+              "vary",
+              "content-type",
+              "x-cloud-trace-context",
+              "date",
+              "server",
+              "content-length",
+              "alt-svc"
+            ],
+            "server": "Google Frontend",
+            "wwwAuthenticate": null,
+            "traceContextPresent": true,
+            "contentEncoding": null
+          }
+        },
+        {
+          "seq": 4,
+          "pass": 2,
+          "caseId": "valid-project-id-token",
+          "program": "functions-http/callable/auth-context",
+          "method": "POST",
+          "path": "/",
+          "authorization": "Bearer {{jwt}}",
+          "latencyMs": 173,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "149",
+            "server": "Google Frontend",
+            "vary": "Origin"
+          },
+          "headerNames": [
+            "alt-svc",
+            "content-length",
+            "content-type",
+            "date",
+            "server",
+            "vary",
+            "x-cloud-trace-context"
+          ],
+          "bodyBytes": 149,
+          "bodySha256": "8673eef3187f95586a155d6615aa8b963aef95e996236d653f86e3fbfa14cf61",
+          "bodyText": "{\"result\":{\"uid\":\"{{uid}}\",\"email\":\"{{email}}\",\"emailVerified\":false,\"signInProvider\":\"password\"}}",
+          "error": null,
+          "transport": {
+            "sentAt": "2026-11-11T17:38:07.862Z",
+            "host": "fireemucallableprobe-{{projectHash}}-uc.a.run.app",
+            "hostForm": "service-hash-region.a.run.app",
+            "httpVersion": "1.1",
+            "alpn": null,
+            "tlsProtocol": null,
+            "requestHead": "POST / HTTP/1.1\r\nhost: fireemucallableprobe-{{projectHash}}-uc.a.run.app\r\nconnection: keep-alive\r\ncontent-type: application/json\r\nauthorization: Bearer {{jwt}}\r\naccept: */*\r\naccept-language: *\r\nsec-fetch-mode: cors\r\nuser-agent: node\r\naccept-encoding: gzip, deflate\r\ncontent-length: 22\r\n\r\n",
+            "responseHeaderNames": [
+              "vary",
+              "content-type",
+              "x-cloud-trace-context",
+              "date",
+              "server",
+              "content-length",
+              "alt-svc"
+            ],
+            "server": "Google Frontend",
+            "wwwAuthenticate": null,
+            "traceContextPresent": true,
+            "contentEncoding": null
+          }
+        },
+        {
+          "seq": 5,
+          "pass": 1,
+          "caseId": "no-authorization",
+          "program": "functions-http/callable/auth-refusal",
+          "method": "POST",
+          "path": "/",
+          "authorization": null,
+          "latencyMs": 378,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "24",
+            "server": "Google Frontend",
+            "vary": "Origin"
+          },
+          "headerNames": [
+            "alt-svc",
+            "content-length",
+            "content-type",
+            "date",
+            "server",
+            "vary",
+            "x-cloud-trace-context"
+          ],
+          "bodyBytes": 24,
+          "bodySha256": "b267f186af5790ea4506732b69763cfa8252978c7092063dc79ad27f5e1cc0da",
+          "bodyText": "{\"result\":{\"auth\":null}}",
+          "error": null,
+          "transport": {
+            "sentAt": "2026-11-11T18:40:06.082Z",
+            "host": "fireemucallableprobe-{{projectHash}}-uc.a.run.app",
+            "hostForm": "service-hash-region.a.run.app",
+            "httpVersion": "1.1",
+            "alpn": null,
+            "tlsProtocol": null,
+            "requestHead": "POST / HTTP/1.1\r\nhost: fireemucallableprobe-{{projectHash}}-uc.a.run.app\r\nconnection: keep-alive\r\ncontent-type: application/json\r\naccept: */*\r\naccept-language: *\r\nsec-fetch-mode: cors\r\nuser-agent: node\r\naccept-encoding: gzip, deflate\r\ncontent-length: 22\r\n\r\n",
+            "responseHeaderNames": [
+              "vary",
+              "content-type",
+              "x-cloud-trace-context",
+              "date",
+              "server",
+              "content-length",
+              "alt-svc"
+            ],
+            "server": "Google Frontend",
+            "wwwAuthenticate": null,
+            "traceContextPresent": true,
+            "contentEncoding": null
+          }
+        },
+        {
+          "seq": 6,
+          "pass": 1,
+          "caseId": "malformed-bearer",
+          "program": "functions-http/callable/auth-refusal",
+          "method": "POST",
+          "path": "/",
+          "authorization": "Bearer malformed",
+          "latencyMs": 174,
+          "status": 401,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "66",
+            "server": "Google Frontend",
+            "vary": "Origin"
+          },
+          "headerNames": [
+            "alt-svc",
+            "content-length",
+            "content-type",
+            "date",
+            "server",
+            "vary",
+            "x-cloud-trace-context"
+          ],
+          "bodyBytes": 66,
+          "bodySha256": "d6d8a75a93869bce456da27bfbbf89962eeecb466374e5a3ec6dea93062b27d8",
+          "bodyText": "{\"error\":{\"message\":\"Unauthenticated\",\"status\":\"UNAUTHENTICATED\"}}",
+          "error": null,
+          "transport": {
+            "sentAt": "2026-11-11T18:40:06.461Z",
+            "host": "fireemucallableprobe-{{projectHash}}-uc.a.run.app",
+            "hostForm": "service-hash-region.a.run.app",
+            "httpVersion": "1.1",
+            "alpn": null,
+            "tlsProtocol": null,
+            "requestHead": "POST / HTTP/1.1\r\nhost: fireemucallableprobe-{{projectHash}}-uc.a.run.app\r\nconnection: keep-alive\r\ncontent-type: application/json\r\nauthorization: Bearer malformed\r\naccept: */*\r\naccept-language: *\r\nsec-fetch-mode: cors\r\nuser-agent: node\r\naccept-encoding: gzip, deflate\r\ncontent-length: 22\r\n\r\n",
+            "responseHeaderNames": [
+              "vary",
+              "content-type",
+              "x-cloud-trace-context",
+              "date",
+              "server",
+              "content-length",
+              "alt-svc"
+            ],
+            "server": "Google Frontend",
+            "wwwAuthenticate": null,
+            "traceContextPresent": true,
+            "contentEncoding": null
+          }
+        },
+        {
+          "seq": 7,
+          "pass": 1,
+          "caseId": "invalid-signature",
+          "program": "functions-http/callable/auth-refusal",
+          "method": "POST",
+          "path": "/",
+          "authorization": "Bearer {{jwt}}",
+          "latencyMs": 249,
+          "status": 401,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "66",
+            "server": "Google Frontend",
+            "vary": "Origin"
+          },
+          "headerNames": [
+            "alt-svc",
+            "content-length",
+            "content-type",
+            "date",
+            "server",
+            "vary",
+            "x-cloud-trace-context"
+          ],
+          "bodyBytes": 66,
+          "bodySha256": "d6d8a75a93869bce456da27bfbbf89962eeecb466374e5a3ec6dea93062b27d8",
+          "bodyText": "{\"error\":{\"message\":\"Unauthenticated\",\"status\":\"UNAUTHENTICATED\"}}",
+          "error": null,
+          "transport": {
+            "sentAt": "2026-11-11T18:40:06.635Z",
+            "host": "fireemucallableprobe-{{projectHash}}-uc.a.run.app",
+            "hostForm": "service-hash-region.a.run.app",
+            "httpVersion": "1.1",
+            "alpn": null,
+            "tlsProtocol": null,
+            "requestHead": "POST / HTTP/1.1\r\nhost: fireemucallableprobe-{{projectHash}}-uc.a.run.app\r\nconnection: keep-alive\r\ncontent-type: application/json\r\nauthorization: Bearer {{jwt}}\r\naccept: */*\r\naccept-language: *\r\nsec-fetch-mode: cors\r\nuser-agent: node\r\naccept-encoding: gzip, deflate\r\ncontent-length: 22\r\n\r\n",
+            "responseHeaderNames": [
+              "vary",
+              "content-type",
+              "x-cloud-trace-context",
+              "date",
+              "server",
+              "content-length",
+              "alt-svc"
+            ],
+            "server": "Google Frontend",
+            "wwwAuthenticate": null,
+            "traceContextPresent": true,
+            "contentEncoding": null
+          }
+        },
+        {
+          "seq": 8,
+          "pass": 1,
+          "caseId": "expired-id-token",
+          "program": "functions-http/callable/auth-refusal",
+          "method": "POST",
+          "path": "/",
+          "authorization": "Bearer {{jwt}}",
+          "latencyMs": 178,
+          "status": 401,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "66",
+            "server": "Google Frontend",
+            "vary": "Origin"
+          },
+          "headerNames": [
+            "alt-svc",
+            "content-length",
+            "content-type",
+            "date",
+            "server",
+            "vary",
+            "x-cloud-trace-context"
+          ],
+          "bodyBytes": 66,
+          "bodySha256": "d6d8a75a93869bce456da27bfbbf89962eeecb466374e5a3ec6dea93062b27d8",
+          "bodyText": "{\"error\":{\"message\":\"Unauthenticated\",\"status\":\"UNAUTHENTICATED\"}}",
+          "error": null,
+          "transport": {
+            "sentAt": "2026-11-11T18:40:06.885Z",
+            "host": "fireemucallableprobe-{{projectHash}}-uc.a.run.app",
+            "hostForm": "service-hash-region.a.run.app",
+            "httpVersion": "1.1",
+            "alpn": null,
+            "tlsProtocol": null,
+            "requestHead": "POST / HTTP/1.1\r\nhost: fireemucallableprobe-{{projectHash}}-uc.a.run.app\r\nconnection: keep-alive\r\ncontent-type: application/json\r\nauthorization: Bearer {{jwt}}\r\naccept: */*\r\naccept-language: *\r\nsec-fetch-mode: cors\r\nuser-agent: node\r\naccept-encoding: gzip, deflate\r\ncontent-length: 22\r\n\r\n",
+            "responseHeaderNames": [
+              "vary",
+              "content-type",
+              "x-cloud-trace-context",
+              "date",
+              "server",
+              "content-length",
+              "alt-svc"
+            ],
+            "server": "Google Frontend",
+            "wwwAuthenticate": null,
+            "traceContextPresent": true,
+            "contentEncoding": null
+          }
+        },
+        {
+          "seq": 9,
+          "pass": 2,
+          "caseId": "no-authorization",
+          "program": "functions-http/callable/auth-refusal",
+          "method": "POST",
+          "path": "/",
+          "authorization": null,
+          "latencyMs": 60199,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "24",
+            "server": "Google Frontend",
+            "vary": "Origin"
+          },
+          "headerNames": [
+            "alt-svc",
+            "content-length",
+            "content-type",
+            "date",
+            "server",
+            "vary",
+            "x-cloud-trace-context"
+          ],
+          "bodyBytes": 24,
+          "bodySha256": "b267f186af5790ea4506732b69763cfa8252978c7092063dc79ad27f5e1cc0da",
+          "bodyText": "{\"result\":{\"auth\":null}}",
+          "error": null,
+          "transport": {
+            "sentAt": "2026-11-11T18:41:07.078Z",
+            "host": "fireemucallableprobe-{{projectHash}}-uc.a.run.app",
+            "hostForm": "service-hash-region.a.run.app",
+            "httpVersion": "1.1",
+            "alpn": null,
+            "tlsProtocol": null,
+            "requestHead": "POST / HTTP/1.1\r\nhost: fireemucallableprobe-{{projectHash}}-uc.a.run.app\r\nconnection: keep-alive\r\ncontent-type: application/json\r\naccept: */*\r\naccept-language: *\r\nsec-fetch-mode: cors\r\nuser-agent: node\r\naccept-encoding: gzip, deflate\r\ncontent-length: 22\r\n\r\n",
+            "responseHeaderNames": [
+              "vary",
+              "content-type",
+              "x-cloud-trace-context",
+              "date",
+              "server",
+              "content-length",
+              "alt-svc"
+            ],
+            "server": "Google Frontend",
+            "wwwAuthenticate": null,
+            "traceContextPresent": true,
+            "contentEncoding": null
+          }
+        },
+        {
+          "seq": 10,
+          "pass": 2,
+          "caseId": "malformed-bearer",
+          "program": "functions-http/callable/auth-refusal",
+          "method": "POST",
+          "path": "/",
+          "authorization": "Bearer malformed",
+          "latencyMs": 173,
+          "status": 401,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "66",
+            "server": "Google Frontend",
+            "vary": "Origin"
+          },
+          "headerNames": [
+            "alt-svc",
+            "content-length",
+            "content-type",
+            "date",
+            "server",
+            "vary",
+            "x-cloud-trace-context"
+          ],
+          "bodyBytes": 66,
+          "bodySha256": "d6d8a75a93869bce456da27bfbbf89962eeecb466374e5a3ec6dea93062b27d8",
+          "bodyText": "{\"error\":{\"message\":\"Unauthenticated\",\"status\":\"UNAUTHENTICATED\"}}",
+          "error": null,
+          "transport": {
+            "sentAt": "2026-11-11T18:41:07.274Z",
+            "host": "fireemucallableprobe-{{projectHash}}-uc.a.run.app",
+            "hostForm": "service-hash-region.a.run.app",
+            "httpVersion": "1.1",
+            "alpn": null,
+            "tlsProtocol": null,
+            "requestHead": "POST / HTTP/1.1\r\nhost: fireemucallableprobe-{{projectHash}}-uc.a.run.app\r\nconnection: keep-alive\r\ncontent-type: application/json\r\nauthorization: Bearer malformed\r\naccept: */*\r\naccept-language: *\r\nsec-fetch-mode: cors\r\nuser-agent: node\r\naccept-encoding: gzip, deflate\r\ncontent-length: 22\r\n\r\n",
+            "responseHeaderNames": [
+              "vary",
+              "content-type",
+              "x-cloud-trace-context",
+              "date",
+              "server",
+              "content-length",
+              "alt-svc"
+            ],
+            "server": "Google Frontend",
+            "wwwAuthenticate": null,
+            "traceContextPresent": true,
+            "contentEncoding": null
+          }
+        },
+        {
+          "seq": 11,
+          "pass": 2,
+          "caseId": "invalid-signature",
+          "program": "functions-http/callable/auth-refusal",
+          "method": "POST",
+          "path": "/",
+          "authorization": "Bearer {{jwt}}",
+          "latencyMs": 232,
+          "status": 401,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "66",
+            "server": "Google Frontend",
+            "vary": "Origin"
+          },
+          "headerNames": [
+            "alt-svc",
+            "content-length",
+            "content-type",
+            "date",
+            "server",
+            "vary",
+            "x-cloud-trace-context"
+          ],
+          "bodyBytes": 66,
+          "bodySha256": "d6d8a75a93869bce456da27bfbbf89962eeecb466374e5a3ec6dea93062b27d8",
+          "bodyText": "{\"error\":{\"message\":\"Unauthenticated\",\"status\":\"UNAUTHENTICATED\"}}",
+          "error": null,
+          "transport": {
+            "sentAt": "2026-11-11T18:41:07.447Z",
+            "host": "fireemucallableprobe-{{projectHash}}-uc.a.run.app",
+            "hostForm": "service-hash-region.a.run.app",
+            "httpVersion": "1.1",
+            "alpn": null,
+            "tlsProtocol": null,
+            "requestHead": "POST / HTTP/1.1\r\nhost: fireemucallableprobe-{{projectHash}}-uc.a.run.app\r\nconnection: keep-alive\r\ncontent-type: application/json\r\nauthorization: Bearer {{jwt}}\r\naccept: */*\r\naccept-language: *\r\nsec-fetch-mode: cors\r\nuser-agent: node\r\naccept-encoding: gzip, deflate\r\ncontent-length: 22\r\n\r\n",
+            "responseHeaderNames": [
+              "vary",
+              "content-type",
+              "x-cloud-trace-context",
+              "date",
+              "server",
+              "content-length",
+              "alt-svc"
+            ],
+            "server": "Google Frontend",
+            "wwwAuthenticate": null,
+            "traceContextPresent": true,
+            "contentEncoding": null
+          }
+        },
+        {
+          "seq": 12,
+          "pass": 2,
+          "caseId": "expired-id-token",
+          "program": "functions-http/callable/auth-refusal",
+          "method": "POST",
+          "path": "/",
+          "authorization": "Bearer {{jwt}}",
+          "latencyMs": 206,
+          "status": 401,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "66",
+            "server": "Google Frontend",
+            "vary": "Origin"
+          },
+          "headerNames": [
+            "alt-svc",
+            "content-length",
+            "content-type",
+            "date",
+            "server",
+            "vary",
+            "x-cloud-trace-context"
+          ],
+          "bodyBytes": 66,
+          "bodySha256": "d6d8a75a93869bce456da27bfbbf89962eeecb466374e5a3ec6dea93062b27d8",
+          "bodyText": "{\"error\":{\"message\":\"Unauthenticated\",\"status\":\"UNAUTHENTICATED\"}}",
+          "error": null,
+          "transport": {
+            "sentAt": "2026-11-11T18:41:07.679Z",
+            "host": "fireemucallableprobe-{{projectHash}}-uc.a.run.app",
+            "hostForm": "service-hash-region.a.run.app",
+            "httpVersion": "1.1",
+            "alpn": null,
+            "tlsProtocol": null,
+            "requestHead": "POST / HTTP/1.1\r\nhost: fireemucallableprobe-{{projectHash}}-uc.a.run.app\r\nconnection: keep-alive\r\ncontent-type: application/json\r\nauthorization: Bearer {{jwt}}\r\naccept: */*\r\naccept-language: *\r\nsec-fetch-mode: cors\r\nuser-agent: node\r\naccept-encoding: gzip, deflate\r\ncontent-length: 22\r\n\r\n",
+            "responseHeaderNames": [
+              "vary",
+              "content-type",
+              "x-cloud-trace-context",
+              "date",
+              "server",
+              "content-length",
+              "alt-svc"
+            ],
+            "server": "Google Frontend",
+            "wwwAuthenticate": null,
+            "traceContextPresent": true,
+            "contentEncoding": null
+          }
+        }
+      ],
+      "judgement": {
+        "verdict": "recorded",
+        "reasons": [],
+        "rows": [
+          {
+            "program": "functions-http/callable/auth-context",
+            "caseId": "no-authorization",
+            "passes": [
+              {
+                "pass": 1,
+                "class": "function-answer",
+                "status": 200,
+                "contentType": "application/json; charset=utf-8",
+                "bodyBytes": 24,
+                "bodySha256": "b267f186af5790ea4506732b69763cfa8252978c7092063dc79ad27f5e1cc0da"
+              },
+              {
+                "pass": 2,
+                "class": "function-answer",
+                "status": 200,
+                "contentType": "application/json; charset=utf-8",
+                "bodyBytes": 24,
+                "bodySha256": "b267f186af5790ea4506732b69763cfa8252978c7092063dc79ad27f5e1cc0da"
+              }
+            ]
+          },
+          {
+            "program": "functions-http/callable/auth-context",
+            "caseId": "valid-project-id-token",
+            "passes": [
+              {
+                "pass": 1,
+                "class": "other",
+                "status": 200,
+                "contentType": "application/json; charset=utf-8",
+                "bodyBytes": 149,
+                "bodySha256": "8673eef3187f95586a155d6615aa8b963aef95e996236d653f86e3fbfa14cf61"
+              },
+              {
+                "pass": 2,
+                "class": "other",
+                "status": 200,
+                "contentType": "application/json; charset=utf-8",
+                "bodyBytes": 149,
+                "bodySha256": "8673eef3187f95586a155d6615aa8b963aef95e996236d653f86e3fbfa14cf61"
+              }
+            ]
+          },
+          {
+            "program": "functions-http/callable/auth-refusal",
+            "caseId": "no-authorization",
+            "passes": [
+              {
+                "pass": 1,
+                "class": "function-answer",
+                "status": 200,
+                "contentType": "application/json; charset=utf-8",
+                "bodyBytes": 24,
+                "bodySha256": "b267f186af5790ea4506732b69763cfa8252978c7092063dc79ad27f5e1cc0da"
+              },
+              {
+                "pass": 2,
+                "class": "function-answer",
+                "status": 200,
+                "contentType": "application/json; charset=utf-8",
+                "bodyBytes": 24,
+                "bodySha256": "b267f186af5790ea4506732b69763cfa8252978c7092063dc79ad27f5e1cc0da"
+              }
+            ]
+          },
+          {
+            "program": "functions-http/callable/auth-refusal",
+            "caseId": "malformed-bearer",
+            "passes": [
+              {
+                "pass": 1,
+                "class": "wrapper-envelope",
+                "status": 401,
+                "contentType": "application/json; charset=utf-8",
+                "bodyBytes": 66,
+                "bodySha256": "d6d8a75a93869bce456da27bfbbf89962eeecb466374e5a3ec6dea93062b27d8"
+              },
+              {
+                "pass": 2,
+                "class": "wrapper-envelope",
+                "status": 401,
+                "contentType": "application/json; charset=utf-8",
+                "bodyBytes": 66,
+                "bodySha256": "d6d8a75a93869bce456da27bfbbf89962eeecb466374e5a3ec6dea93062b27d8"
+              }
+            ]
+          },
+          {
+            "program": "functions-http/callable/auth-refusal",
+            "caseId": "invalid-signature",
+            "passes": [
+              {
+                "pass": 1,
+                "class": "wrapper-envelope",
+                "status": 401,
+                "contentType": "application/json; charset=utf-8",
+                "bodyBytes": 66,
+                "bodySha256": "d6d8a75a93869bce456da27bfbbf89962eeecb466374e5a3ec6dea93062b27d8"
+              },
+              {
+                "pass": 2,
+                "class": "wrapper-envelope",
+                "status": 401,
+                "contentType": "application/json; charset=utf-8",
+                "bodyBytes": 66,
+                "bodySha256": "d6d8a75a93869bce456da27bfbbf89962eeecb466374e5a3ec6dea93062b27d8"
+              }
+            ]
+          },
+          {
+            "program": "functions-http/callable/auth-refusal",
+            "caseId": "expired-id-token",
+            "passes": [
+              {
+                "pass": 1,
+                "class": "wrapper-envelope",
+                "status": 401,
+                "contentType": "application/json; charset=utf-8",
+                "bodyBytes": 66,
+                "bodySha256": "d6d8a75a93869bce456da27bfbbf89962eeecb466374e5a3ec6dea93062b27d8"
+              },
+              {
+                "pass": 2,
+                "class": "wrapper-envelope",
+                "status": 401,
+                "contentType": "application/json; charset=utf-8",
+                "bodyBytes": 66,
+                "bodySha256": "d6d8a75a93869bce456da27bfbbf89962eeecb466374e5a3ec6dea93062b27d8"
+              }
+            ]
+          }
+        ],
+        "timingDiffers": [],
+        "needsReview": true,
+        "lockKept": false
+      },
+      "facts": {
+        "functions": {
+          "environment": "GEN_2",
+          "state": "ACTIVE",
+          "url": "https://us-central1-{{projectId}}.cloudfunctions.net/fireemuCallableProbe",
+          "runtime": "nodejs22",
+          "ingressSettings": "ALLOW_ALL",
+          "timeoutSeconds": 10,
+          "labels": {
+            "deployment-callable": "true",
+            "deployment-tool": "cli-firebase"
+          },
+          "allDeploymentsReadIdentically": true
+        },
+        "service": {
+          "ingress": "INGRESS_TRAFFIC_ALL",
+          "launchStage": "GA",
+          "uri": "https://fireemucallableprobe-{{projectHash}}-uc.a.run.app",
+          "urls": [
+            "https://fireemucallableprobe-{{projectNumber}}.us-central1.run.app",
+            "https://us-central1-{{projectId}}.cloudfunctions.net/fireemuCallableProbe",
+            "https://fireemucallableprobe-{{projectHash}}-uc.a.run.app"
+          ]
+        },
+        "invokerPolicies": [
+          {
+            "bindings": [
+              {
+                "role": "roles/run.invoker",
+                "members": ["allUsers"]
+              }
+            ],
+            "version": 1
+          },
+          {
+            "bindings": [
+              {
+                "role": "roles/run.invoker",
+                "members": ["allUsers"]
+              }
+            ],
+            "version": 1
+          },
+          {
+            "bindings": [
+              {
+                "role": "roles/run.invoker",
+                "members": ["allUsers"]
+              }
+            ],
+            "version": 1
+          },
+          {
+            "bindings": [],
+            "version": 1
+          },
+          {
+            "bindings": [
+              {
+                "role": "roles/run.invoker",
+                "members": ["allUsers"]
+              }
+            ],
+            "version": 1
+          },
+          {
+            "bindings": [
+              {
+                "role": "roles/run.invoker",
+                "members": ["allUsers"]
+              }
+            ],
+            "version": 1
+          },
+          {
+            "bindings": [
+              {
+                "role": "roles/run.invoker",
+                "members": ["allUsers"]
+              }
+            ],
+            "version": 1
+          },
+          {
+            "bindings": [],
+            "version": 1
+          }
+        ]
+      }
+    },
+    "run-2": {
+      "runId": "2026-11-11T184259.739Z",
+      "envelope": "FUNCTIONS-HTTP-CALLABLE-RERECORD-20261112-02",
+      "recordedAt": "2026-11-11T18:42:59.739Z",
+      "privateCapturesSha256": "7f3f0aee2bbfb1b6cfb5f17af7a9e4241b15f052e628bae5789bcedcabf46185",
+      "privateRecordingSha256": "dee17da57197c8fd3d27306226450cdf64173fa8827980a98cab3dc0971b6a09",
+      "captures": [
+        {
+          "seq": 1,
+          "pass": 1,
+          "caseId": "no-authorization",
+          "program": "functions-http/callable/auth-context",
+          "method": "POST",
+          "path": "/",
+          "authorization": null,
+          "latencyMs": 379,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "24",
+            "server": "Google Frontend",
+            "vary": "Origin"
+          },
+          "headerNames": [
+            "alt-svc",
+            "content-length",
+            "content-type",
+            "date",
+            "server",
+            "vary",
+            "x-cloud-trace-context"
+          ],
+          "bodyBytes": 24,
+          "bodySha256": "b267f186af5790ea4506732b69763cfa8252978c7092063dc79ad27f5e1cc0da",
+          "bodyText": "{\"result\":{\"auth\":null}}",
+          "error": null,
+          "transport": {
+            "sentAt": "2026-11-11T18:44:37.810Z",
+            "host": "fireemucallableprobe-{{projectHash}}-uc.a.run.app",
+            "hostForm": "service-hash-region.a.run.app",
+            "httpVersion": "1.1",
+            "alpn": null,
+            "tlsProtocol": null,
+            "requestHead": "POST / HTTP/1.1\r\nhost: fireemucallableprobe-{{projectHash}}-uc.a.run.app\r\nconnection: keep-alive\r\ncontent-type: application/json\r\naccept: */*\r\naccept-language: *\r\nsec-fetch-mode: cors\r\nuser-agent: node\r\naccept-encoding: gzip, deflate\r\ncontent-length: 22\r\n\r\n",
+            "responseHeaderNames": [
+              "vary",
+              "content-type",
+              "x-cloud-trace-context",
+              "date",
+              "server",
+              "content-length",
+              "alt-svc"
+            ],
+            "server": "Google Frontend",
+            "wwwAuthenticate": null,
+            "traceContextPresent": true,
+            "contentEncoding": null
+          }
+        },
+        {
+          "seq": 2,
+          "pass": 1,
+          "caseId": "valid-project-id-token",
+          "program": "functions-http/callable/auth-context",
+          "method": "POST",
+          "path": "/",
+          "authorization": "Bearer {{jwt}}",
+          "latencyMs": 336,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "149",
+            "server": "Google Frontend",
+            "vary": "Origin"
+          },
+          "headerNames": [
+            "alt-svc",
+            "content-length",
+            "content-type",
+            "date",
+            "server",
+            "vary",
+            "x-cloud-trace-context"
+          ],
+          "bodyBytes": 149,
+          "bodySha256": "d30d95e8626682c6310a22313ec2474c3662adcc84937aab0bffb4f71aa1ac77",
+          "bodyText": "{\"result\":{\"uid\":\"{{uid}}\",\"email\":\"{{email}}\",\"emailVerified\":false,\"signInProvider\":\"password\"}}",
+          "error": null,
+          "transport": {
+            "sentAt": "2026-11-11T18:44:38.191Z",
+            "host": "fireemucallableprobe-{{projectHash}}-uc.a.run.app",
+            "hostForm": "service-hash-region.a.run.app",
+            "httpVersion": "1.1",
+            "alpn": null,
+            "tlsProtocol": null,
+            "requestHead": "POST / HTTP/1.1\r\nhost: fireemucallableprobe-{{projectHash}}-uc.a.run.app\r\nconnection: keep-alive\r\ncontent-type: application/json\r\nauthorization: Bearer {{jwt}}\r\naccept: */*\r\naccept-language: *\r\nsec-fetch-mode: cors\r\nuser-agent: node\r\naccept-encoding: gzip, deflate\r\ncontent-length: 22\r\n\r\n",
+            "responseHeaderNames": [
+              "vary",
+              "content-type",
+              "x-cloud-trace-context",
+              "date",
+              "server",
+              "content-length",
+              "alt-svc"
+            ],
+            "server": "Google Frontend",
+            "wwwAuthenticate": null,
+            "traceContextPresent": true,
+            "contentEncoding": null
+          }
+        },
+        {
+          "seq": 3,
+          "pass": 2,
+          "caseId": "no-authorization",
+          "program": "functions-http/callable/auth-context",
+          "method": "POST",
+          "path": "/",
+          "authorization": null,
+          "latencyMs": 60277,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "24",
+            "server": "Google Frontend",
+            "vary": "Origin"
+          },
+          "headerNames": [
+            "alt-svc",
+            "content-length",
+            "content-type",
+            "date",
+            "server",
+            "vary",
+            "x-cloud-trace-context"
+          ],
+          "bodyBytes": 24,
+          "bodySha256": "b267f186af5790ea4506732b69763cfa8252978c7092063dc79ad27f5e1cc0da",
+          "bodyText": "{\"result\":{\"auth\":null}}",
+          "error": null,
+          "transport": {
+            "sentAt": "2026-11-11T18:45:38.563Z",
+            "host": "fireemucallableprobe-{{projectHash}}-uc.a.run.app",
+            "hostForm": "service-hash-region.a.run.app",
+            "httpVersion": "1.1",
+            "alpn": null,
+            "tlsProtocol": null,
+            "requestHead": "POST / HTTP/1.1\r\nhost: fireemucallableprobe-{{projectHash}}-uc.a.run.app\r\nconnection: keep-alive\r\ncontent-type: application/json\r\naccept: */*\r\naccept-language: *\r\nsec-fetch-mode: cors\r\nuser-agent: node\r\naccept-encoding: gzip, deflate\r\ncontent-length: 22\r\n\r\n",
+            "responseHeaderNames": [
+              "vary",
+              "content-type",
+              "x-cloud-trace-context",
+              "date",
+              "server",
+              "content-length",
+              "alt-svc"
+            ],
+            "server": "Google Frontend",
+            "wwwAuthenticate": null,
+            "traceContextPresent": true,
+            "contentEncoding": null
+          }
+        },
+        {
+          "seq": 4,
+          "pass": 2,
+          "caseId": "valid-project-id-token",
+          "program": "functions-http/callable/auth-context",
+          "method": "POST",
+          "path": "/",
+          "authorization": "Bearer {{jwt}}",
+          "latencyMs": 200,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "149",
+            "server": "Google Frontend",
+            "vary": "Origin"
+          },
+          "headerNames": [
+            "alt-svc",
+            "content-length",
+            "content-type",
+            "date",
+            "server",
+            "vary",
+            "x-cloud-trace-context"
+          ],
+          "bodyBytes": 149,
+          "bodySha256": "d30d95e8626682c6310a22313ec2474c3662adcc84937aab0bffb4f71aa1ac77",
+          "bodyText": "{\"result\":{\"uid\":\"{{uid}}\",\"email\":\"{{email}}\",\"emailVerified\":false,\"signInProvider\":\"password\"}}",
+          "error": null,
+          "transport": {
+            "sentAt": "2026-11-11T18:45:38.838Z",
+            "host": "fireemucallableprobe-{{projectHash}}-uc.a.run.app",
+            "hostForm": "service-hash-region.a.run.app",
+            "httpVersion": "1.1",
+            "alpn": null,
+            "tlsProtocol": null,
+            "requestHead": "POST / HTTP/1.1\r\nhost: fireemucallableprobe-{{projectHash}}-uc.a.run.app\r\nconnection: keep-alive\r\ncontent-type: application/json\r\nauthorization: Bearer {{jwt}}\r\naccept: */*\r\naccept-language: *\r\nsec-fetch-mode: cors\r\nuser-agent: node\r\naccept-encoding: gzip, deflate\r\ncontent-length: 22\r\n\r\n",
+            "responseHeaderNames": [
+              "vary",
+              "content-type",
+              "x-cloud-trace-context",
+              "date",
+              "server",
+              "content-length",
+              "alt-svc"
+            ],
+            "server": "Google Frontend",
+            "wwwAuthenticate": null,
+            "traceContextPresent": true,
+            "contentEncoding": null
+          }
+        },
+        {
+          "seq": 5,
+          "pass": 1,
+          "caseId": "no-authorization",
+          "program": "functions-http/callable/auth-refusal",
+          "method": "POST",
+          "path": "/",
+          "authorization": null,
+          "latencyMs": 399,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "24",
+            "server": "Google Frontend",
+            "vary": "Origin"
+          },
+          "headerNames": [
+            "alt-svc",
+            "content-length",
+            "content-type",
+            "date",
+            "server",
+            "vary",
+            "x-cloud-trace-context"
+          ],
+          "bodyBytes": 24,
+          "bodySha256": "b267f186af5790ea4506732b69763cfa8252978c7092063dc79ad27f5e1cc0da",
+          "bodyText": "{\"result\":{\"auth\":null}}",
+          "error": null,
+          "transport": {
+            "sentAt": "2026-11-11T19:47:25.579Z",
+            "host": "fireemucallableprobe-{{projectHash}}-uc.a.run.app",
+            "hostForm": "service-hash-region.a.run.app",
+            "httpVersion": "1.1",
+            "alpn": null,
+            "tlsProtocol": null,
+            "requestHead": "POST / HTTP/1.1\r\nhost: fireemucallableprobe-{{projectHash}}-uc.a.run.app\r\nconnection: keep-alive\r\ncontent-type: application/json\r\naccept: */*\r\naccept-language: *\r\nsec-fetch-mode: cors\r\nuser-agent: node\r\naccept-encoding: gzip, deflate\r\ncontent-length: 22\r\n\r\n",
+            "responseHeaderNames": [
+              "vary",
+              "content-type",
+              "x-cloud-trace-context",
+              "date",
+              "server",
+              "content-length",
+              "alt-svc"
+            ],
+            "server": "Google Frontend",
+            "wwwAuthenticate": null,
+            "traceContextPresent": true,
+            "contentEncoding": null
+          }
+        },
+        {
+          "seq": 6,
+          "pass": 1,
+          "caseId": "malformed-bearer",
+          "program": "functions-http/callable/auth-refusal",
+          "method": "POST",
+          "path": "/",
+          "authorization": "Bearer malformed",
+          "latencyMs": 178,
+          "status": 401,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "66",
+            "server": "Google Frontend",
+            "vary": "Origin"
+          },
+          "headerNames": [
+            "alt-svc",
+            "content-length",
+            "content-type",
+            "date",
+            "server",
+            "vary",
+            "x-cloud-trace-context"
+          ],
+          "bodyBytes": 66,
+          "bodySha256": "d6d8a75a93869bce456da27bfbbf89962eeecb466374e5a3ec6dea93062b27d8",
+          "bodyText": "{\"error\":{\"message\":\"Unauthenticated\",\"status\":\"UNAUTHENTICATED\"}}",
+          "error": null,
+          "transport": {
+            "sentAt": "2026-11-11T19:47:25.978Z",
+            "host": "fireemucallableprobe-{{projectHash}}-uc.a.run.app",
+            "hostForm": "service-hash-region.a.run.app",
+            "httpVersion": "1.1",
+            "alpn": null,
+            "tlsProtocol": null,
+            "requestHead": "POST / HTTP/1.1\r\nhost: fireemucallableprobe-{{projectHash}}-uc.a.run.app\r\nconnection: keep-alive\r\ncontent-type: application/json\r\nauthorization: Bearer malformed\r\naccept: */*\r\naccept-language: *\r\nsec-fetch-mode: cors\r\nuser-agent: node\r\naccept-encoding: gzip, deflate\r\ncontent-length: 22\r\n\r\n",
+            "responseHeaderNames": [
+              "vary",
+              "content-type",
+              "x-cloud-trace-context",
+              "date",
+              "server",
+              "content-length",
+              "alt-svc"
+            ],
+            "server": "Google Frontend",
+            "wwwAuthenticate": null,
+            "traceContextPresent": true,
+            "contentEncoding": null
+          }
+        },
+        {
+          "seq": 7,
+          "pass": 1,
+          "caseId": "invalid-signature",
+          "program": "functions-http/callable/auth-refusal",
+          "method": "POST",
+          "path": "/",
+          "authorization": "Bearer {{jwt}}",
+          "latencyMs": 270,
+          "status": 401,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "66",
+            "server": "Google Frontend",
+            "vary": "Origin"
+          },
+          "headerNames": [
+            "alt-svc",
+            "content-length",
+            "content-type",
+            "date",
+            "server",
+            "vary",
+            "x-cloud-trace-context"
+          ],
+          "bodyBytes": 66,
+          "bodySha256": "d6d8a75a93869bce456da27bfbbf89962eeecb466374e5a3ec6dea93062b27d8",
+          "bodyText": "{\"error\":{\"message\":\"Unauthenticated\",\"status\":\"UNAUTHENTICATED\"}}",
+          "error": null,
+          "transport": {
+            "sentAt": "2026-11-11T19:47:26.157Z",
+            "host": "fireemucallableprobe-{{projectHash}}-uc.a.run.app",
+            "hostForm": "service-hash-region.a.run.app",
+            "httpVersion": "1.1",
+            "alpn": null,
+            "tlsProtocol": null,
+            "requestHead": "POST / HTTP/1.1\r\nhost: fireemucallableprobe-{{projectHash}}-uc.a.run.app\r\nconnection: keep-alive\r\ncontent-type: application/json\r\nauthorization: Bearer {{jwt}}\r\naccept: */*\r\naccept-language: *\r\nsec-fetch-mode: cors\r\nuser-agent: node\r\naccept-encoding: gzip, deflate\r\ncontent-length: 22\r\n\r\n",
+            "responseHeaderNames": [
+              "vary",
+              "content-type",
+              "x-cloud-trace-context",
+              "date",
+              "server",
+              "content-length",
+              "alt-svc"
+            ],
+            "server": "Google Frontend",
+            "wwwAuthenticate": null,
+            "traceContextPresent": true,
+            "contentEncoding": null
+          }
+        },
+        {
+          "seq": 8,
+          "pass": 1,
+          "caseId": "expired-id-token",
+          "program": "functions-http/callable/auth-refusal",
+          "method": "POST",
+          "path": "/",
+          "authorization": "Bearer {{jwt}}",
+          "latencyMs": 167,
+          "status": 401,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "66",
+            "server": "Google Frontend",
+            "vary": "Origin"
+          },
+          "headerNames": [
+            "alt-svc",
+            "content-length",
+            "content-type",
+            "date",
+            "server",
+            "vary",
+            "x-cloud-trace-context"
+          ],
+          "bodyBytes": 66,
+          "bodySha256": "d6d8a75a93869bce456da27bfbbf89962eeecb466374e5a3ec6dea93062b27d8",
+          "bodyText": "{\"error\":{\"message\":\"Unauthenticated\",\"status\":\"UNAUTHENTICATED\"}}",
+          "error": null,
+          "transport": {
+            "sentAt": "2026-11-11T19:47:26.428Z",
+            "host": "fireemucallableprobe-{{projectHash}}-uc.a.run.app",
+            "hostForm": "service-hash-region.a.run.app",
+            "httpVersion": "1.1",
+            "alpn": null,
+            "tlsProtocol": null,
+            "requestHead": "POST / HTTP/1.1\r\nhost: fireemucallableprobe-{{projectHash}}-uc.a.run.app\r\nconnection: keep-alive\r\ncontent-type: application/json\r\nauthorization: Bearer {{jwt}}\r\naccept: */*\r\naccept-language: *\r\nsec-fetch-mode: cors\r\nuser-agent: node\r\naccept-encoding: gzip, deflate\r\ncontent-length: 22\r\n\r\n",
+            "responseHeaderNames": [
+              "vary",
+              "content-type",
+              "x-cloud-trace-context",
+              "date",
+              "server",
+              "content-length",
+              "alt-svc"
+            ],
+            "server": "Google Frontend",
+            "wwwAuthenticate": null,
+            "traceContextPresent": true,
+            "contentEncoding": null
+          }
+        },
+        {
+          "seq": 9,
+          "pass": 2,
+          "caseId": "no-authorization",
+          "program": "functions-http/callable/auth-refusal",
+          "method": "POST",
+          "path": "/",
+          "authorization": null,
+          "latencyMs": 60206,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "24",
+            "server": "Google Frontend",
+            "vary": "Origin"
+          },
+          "headerNames": [
+            "alt-svc",
+            "content-length",
+            "content-type",
+            "date",
+            "server",
+            "vary",
+            "x-cloud-trace-context"
+          ],
+          "bodyBytes": 24,
+          "bodySha256": "b267f186af5790ea4506732b69763cfa8252978c7092063dc79ad27f5e1cc0da",
+          "bodyText": "{\"result\":{\"auth\":null}}",
+          "error": null,
+          "transport": {
+            "sentAt": "2026-11-11T19:48:26.601Z",
+            "host": "fireemucallableprobe-{{projectHash}}-uc.a.run.app",
+            "hostForm": "service-hash-region.a.run.app",
+            "httpVersion": "1.1",
+            "alpn": null,
+            "tlsProtocol": null,
+            "requestHead": "POST / HTTP/1.1\r\nhost: fireemucallableprobe-{{projectHash}}-uc.a.run.app\r\nconnection: keep-alive\r\ncontent-type: application/json\r\naccept: */*\r\naccept-language: *\r\nsec-fetch-mode: cors\r\nuser-agent: node\r\naccept-encoding: gzip, deflate\r\ncontent-length: 22\r\n\r\n",
+            "responseHeaderNames": [
+              "vary",
+              "content-type",
+              "x-cloud-trace-context",
+              "date",
+              "server",
+              "content-length",
+              "alt-svc"
+            ],
+            "server": "Google Frontend",
+            "wwwAuthenticate": null,
+            "traceContextPresent": true,
+            "contentEncoding": null
+          }
+        },
+        {
+          "seq": 10,
+          "pass": 2,
+          "caseId": "malformed-bearer",
+          "program": "functions-http/callable/auth-refusal",
+          "method": "POST",
+          "path": "/",
+          "authorization": "Bearer malformed",
+          "latencyMs": 174,
+          "status": 401,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "66",
+            "server": "Google Frontend",
+            "vary": "Origin"
+          },
+          "headerNames": [
+            "alt-svc",
+            "content-length",
+            "content-type",
+            "date",
+            "server",
+            "vary",
+            "x-cloud-trace-context"
+          ],
+          "bodyBytes": 66,
+          "bodySha256": "d6d8a75a93869bce456da27bfbbf89962eeecb466374e5a3ec6dea93062b27d8",
+          "bodyText": "{\"error\":{\"message\":\"Unauthenticated\",\"status\":\"UNAUTHENTICATED\"}}",
+          "error": null,
+          "transport": {
+            "sentAt": "2026-11-11T19:48:26.804Z",
+            "host": "fireemucallableprobe-{{projectHash}}-uc.a.run.app",
+            "hostForm": "service-hash-region.a.run.app",
+            "httpVersion": "1.1",
+            "alpn": null,
+            "tlsProtocol": null,
+            "requestHead": "POST / HTTP/1.1\r\nhost: fireemucallableprobe-{{projectHash}}-uc.a.run.app\r\nconnection: keep-alive\r\ncontent-type: application/json\r\nauthorization: Bearer malformed\r\naccept: */*\r\naccept-language: *\r\nsec-fetch-mode: cors\r\nuser-agent: node\r\naccept-encoding: gzip, deflate\r\ncontent-length: 22\r\n\r\n",
+            "responseHeaderNames": [
+              "vary",
+              "content-type",
+              "x-cloud-trace-context",
+              "date",
+              "server",
+              "content-length",
+              "alt-svc"
+            ],
+            "server": "Google Frontend",
+            "wwwAuthenticate": null,
+            "traceContextPresent": true,
+            "contentEncoding": null
+          }
+        },
+        {
+          "seq": 11,
+          "pass": 2,
+          "caseId": "invalid-signature",
+          "program": "functions-http/callable/auth-refusal",
+          "method": "POST",
+          "path": "/",
+          "authorization": "Bearer {{jwt}}",
+          "latencyMs": 171,
+          "status": 401,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "66",
+            "server": "Google Frontend",
+            "vary": "Origin"
+          },
+          "headerNames": [
+            "alt-svc",
+            "content-length",
+            "content-type",
+            "date",
+            "server",
+            "vary",
+            "x-cloud-trace-context"
+          ],
+          "bodyBytes": 66,
+          "bodySha256": "d6d8a75a93869bce456da27bfbbf89962eeecb466374e5a3ec6dea93062b27d8",
+          "bodyText": "{\"error\":{\"message\":\"Unauthenticated\",\"status\":\"UNAUTHENTICATED\"}}",
+          "error": null,
+          "transport": {
+            "sentAt": "2026-11-11T19:48:26.978Z",
+            "host": "fireemucallableprobe-{{projectHash}}-uc.a.run.app",
+            "hostForm": "service-hash-region.a.run.app",
+            "httpVersion": "1.1",
+            "alpn": null,
+            "tlsProtocol": null,
+            "requestHead": "POST / HTTP/1.1\r\nhost: fireemucallableprobe-{{projectHash}}-uc.a.run.app\r\nconnection: keep-alive\r\ncontent-type: application/json\r\nauthorization: Bearer {{jwt}}\r\naccept: */*\r\naccept-language: *\r\nsec-fetch-mode: cors\r\nuser-agent: node\r\naccept-encoding: gzip, deflate\r\ncontent-length: 22\r\n\r\n",
+            "responseHeaderNames": [
+              "vary",
+              "content-type",
+              "x-cloud-trace-context",
+              "date",
+              "server",
+              "content-length",
+              "alt-svc"
+            ],
+            "server": "Google Frontend",
+            "wwwAuthenticate": null,
+            "traceContextPresent": true,
+            "contentEncoding": null
+          }
+        },
+        {
+          "seq": 12,
+          "pass": 2,
+          "caseId": "expired-id-token",
+          "program": "functions-http/callable/auth-refusal",
+          "method": "POST",
+          "path": "/",
+          "authorization": "Bearer {{jwt}}",
+          "latencyMs": 169,
+          "status": 401,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "66",
+            "server": "Google Frontend",
+            "vary": "Origin"
+          },
+          "headerNames": [
+            "alt-svc",
+            "content-length",
+            "content-type",
+            "date",
+            "server",
+            "vary",
+            "x-cloud-trace-context"
+          ],
+          "bodyBytes": 66,
+          "bodySha256": "d6d8a75a93869bce456da27bfbbf89962eeecb466374e5a3ec6dea93062b27d8",
+          "bodyText": "{\"error\":{\"message\":\"Unauthenticated\",\"status\":\"UNAUTHENTICATED\"}}",
+          "error": null,
+          "transport": {
+            "sentAt": "2026-11-11T19:48:27.149Z",
+            "host": "fireemucallableprobe-{{projectHash}}-uc.a.run.app",
+            "hostForm": "service-hash-region.a.run.app",
+            "httpVersion": "1.1",
+            "alpn": null,
+            "tlsProtocol": null,
+            "requestHead": "POST / HTTP/1.1\r\nhost: fireemucallableprobe-{{projectHash}}-uc.a.run.app\r\nconnection: keep-alive\r\ncontent-type: application/json\r\nauthorization: Bearer {{jwt}}\r\naccept: */*\r\naccept-language: *\r\nsec-fetch-mode: cors\r\nuser-agent: node\r\naccept-encoding: gzip, deflate\r\ncontent-length: 22\r\n\r\n",
+            "responseHeaderNames": [
+              "vary",
+              "content-type",
+              "x-cloud-trace-context",
+              "date",
+              "server",
+              "content-length",
+              "alt-svc"
+            ],
+            "server": "Google Frontend",
+            "wwwAuthenticate": null,
+            "traceContextPresent": true,
+            "contentEncoding": null
+          }
+        }
+      ],
+      "judgement": {
+        "verdict": "recorded",
+        "reasons": [],
+        "rows": [
+          {
+            "program": "functions-http/callable/auth-context",
+            "caseId": "no-authorization",
+            "passes": [
+              {
+                "pass": 1,
+                "class": "function-answer",
+                "status": 200,
+                "contentType": "application/json; charset=utf-8",
+                "bodyBytes": 24,
+                "bodySha256": "b267f186af5790ea4506732b69763cfa8252978c7092063dc79ad27f5e1cc0da"
+              },
+              {
+                "pass": 2,
+                "class": "function-answer",
+                "status": 200,
+                "contentType": "application/json; charset=utf-8",
+                "bodyBytes": 24,
+                "bodySha256": "b267f186af5790ea4506732b69763cfa8252978c7092063dc79ad27f5e1cc0da"
+              }
+            ]
+          },
+          {
+            "program": "functions-http/callable/auth-context",
+            "caseId": "valid-project-id-token",
+            "passes": [
+              {
+                "pass": 1,
+                "class": "other",
+                "status": 200,
+                "contentType": "application/json; charset=utf-8",
+                "bodyBytes": 149,
+                "bodySha256": "d30d95e8626682c6310a22313ec2474c3662adcc84937aab0bffb4f71aa1ac77"
+              },
+              {
+                "pass": 2,
+                "class": "other",
+                "status": 200,
+                "contentType": "application/json; charset=utf-8",
+                "bodyBytes": 149,
+                "bodySha256": "d30d95e8626682c6310a22313ec2474c3662adcc84937aab0bffb4f71aa1ac77"
+              }
+            ]
+          },
+          {
+            "program": "functions-http/callable/auth-refusal",
+            "caseId": "no-authorization",
+            "passes": [
+              {
+                "pass": 1,
+                "class": "function-answer",
+                "status": 200,
+                "contentType": "application/json; charset=utf-8",
+                "bodyBytes": 24,
+                "bodySha256": "b267f186af5790ea4506732b69763cfa8252978c7092063dc79ad27f5e1cc0da"
+              },
+              {
+                "pass": 2,
+                "class": "function-answer",
+                "status": 200,
+                "contentType": "application/json; charset=utf-8",
+                "bodyBytes": 24,
+                "bodySha256": "b267f186af5790ea4506732b69763cfa8252978c7092063dc79ad27f5e1cc0da"
+              }
+            ]
+          },
+          {
+            "program": "functions-http/callable/auth-refusal",
+            "caseId": "malformed-bearer",
+            "passes": [
+              {
+                "pass": 1,
+                "class": "wrapper-envelope",
+                "status": 401,
+                "contentType": "application/json; charset=utf-8",
+                "bodyBytes": 66,
+                "bodySha256": "d6d8a75a93869bce456da27bfbbf89962eeecb466374e5a3ec6dea93062b27d8"
+              },
+              {
+                "pass": 2,
+                "class": "wrapper-envelope",
+                "status": 401,
+                "contentType": "application/json; charset=utf-8",
+                "bodyBytes": 66,
+                "bodySha256": "d6d8a75a93869bce456da27bfbbf89962eeecb466374e5a3ec6dea93062b27d8"
+              }
+            ]
+          },
+          {
+            "program": "functions-http/callable/auth-refusal",
+            "caseId": "invalid-signature",
+            "passes": [
+              {
+                "pass": 1,
+                "class": "wrapper-envelope",
+                "status": 401,
+                "contentType": "application/json; charset=utf-8",
+                "bodyBytes": 66,
+                "bodySha256": "d6d8a75a93869bce456da27bfbbf89962eeecb466374e5a3ec6dea93062b27d8"
+              },
+              {
+                "pass": 2,
+                "class": "wrapper-envelope",
+                "status": 401,
+                "contentType": "application/json; charset=utf-8",
+                "bodyBytes": 66,
+                "bodySha256": "d6d8a75a93869bce456da27bfbbf89962eeecb466374e5a3ec6dea93062b27d8"
+              }
+            ]
+          },
+          {
+            "program": "functions-http/callable/auth-refusal",
+            "caseId": "expired-id-token",
+            "passes": [
+              {
+                "pass": 1,
+                "class": "wrapper-envelope",
+                "status": 401,
+                "contentType": "application/json; charset=utf-8",
+                "bodyBytes": 66,
+                "bodySha256": "d6d8a75a93869bce456da27bfbbf89962eeecb466374e5a3ec6dea93062b27d8"
+              },
+              {
+                "pass": 2,
+                "class": "wrapper-envelope",
+                "status": 401,
+                "contentType": "application/json; charset=utf-8",
+                "bodyBytes": 66,
+                "bodySha256": "d6d8a75a93869bce456da27bfbbf89962eeecb466374e5a3ec6dea93062b27d8"
+              }
+            ]
+          }
+        ],
+        "timingDiffers": [],
+        "needsReview": true,
+        "lockKept": false
+      },
+      "facts": {
+        "functions": {
+          "environment": "GEN_2",
+          "state": "ACTIVE",
+          "url": "https://us-central1-{{projectId}}.cloudfunctions.net/fireemuCallableProbe",
+          "runtime": "nodejs22",
+          "ingressSettings": "ALLOW_ALL",
+          "timeoutSeconds": 10,
+          "labels": {
+            "deployment-callable": "true",
+            "deployment-tool": "cli-firebase"
+          },
+          "allDeploymentsReadIdentically": true
+        },
+        "service": {
+          "ingress": "INGRESS_TRAFFIC_ALL",
+          "launchStage": "GA",
+          "uri": "https://fireemucallableprobe-{{projectHash}}-uc.a.run.app",
+          "urls": [
+            "https://fireemucallableprobe-{{projectNumber}}.us-central1.run.app",
+            "https://us-central1-{{projectId}}.cloudfunctions.net/fireemuCallableProbe",
+            "https://fireemucallableprobe-{{projectHash}}-uc.a.run.app"
+          ]
+        },
+        "invokerPolicies": [
+          {
+            "bindings": [
+              {
+                "role": "roles/run.invoker",
+                "members": ["allUsers"]
+              }
+            ],
+            "version": 1
+          },
+          {
+            "bindings": [
+              {
+                "role": "roles/run.invoker",
+                "members": ["allUsers"]
+              }
+            ],
+            "version": 1
+          },
+          {
+            "bindings": [
+              {
+                "role": "roles/run.invoker",
+                "members": ["allUsers"]
+              }
+            ],
+            "version": 1
+          },
+          {
+            "bindings": [],
+            "version": 1
+          },
+          {
+            "bindings": [
+              {
+                "role": "roles/run.invoker",
+                "members": ["allUsers"]
+              }
+            ],
+            "version": 1
+          },
+          {
+            "bindings": [
+              {
+                "role": "roles/run.invoker",
+                "members": ["allUsers"]
+              }
+            ],
+            "version": 1
+          },
+          {
+            "bindings": [
+              {
+                "role": "roles/run.invoker",
+                "members": ["allUsers"]
+              }
+            ],
+            "version": 1
+          },
+          {
+            "bindings": [],
+            "version": 1
+          }
+        ]
+      }
+    }
+  }
+}

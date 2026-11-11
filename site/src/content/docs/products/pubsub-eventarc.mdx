@@ -25,7 +25,7 @@ Under `profile = "emulator"`, topic `kmsKeyName` and `tags` are stored as sent a
 
 Under `strict` a message that exhausts `maxDeliveryAttempts` is forwarded to the dead-letter topic with no project number and no IAM grants, with the metadata attributes production adds. Production forwards only after the Pub/Sub service agent holds `roles/pubsub.subscriber` on the subscription and `roles/pubsub.publisher` on the dead-letter topic; set `pubsub.deadLetterAuthorization` to `"iam"` (or `productionExact`, or name `pubsub.projectNumbers`) to require the same grants through `SetIamPolicy`. The start banner then names the service agent to grant.
 
-`pubsub.restNegativeCache` is `"off"` by default. Setting it to `"production"` (strict profile only) makes REST repeat a `404` for a subscription or snapshot for about 9.6 seconds after a real `404` on the same resource, even after the resource exists, as the production REST frontend was recorded doing. It is an explicit opt-in, not part of `productionExact`, and the rule is provisional until the observation is recorded.
+`pubsub.restNegativeCache` is `"off"` by default. Setting it to `"production"` (strict profile only) makes REST repeat a `404` for a subscription or snapshot for about 9.6 seconds after a real `404` on the same resource, even after the resource exists, as the production REST frontend was recorded doing. It is an explicit opt-in, not part of `productionExact`. The rule is provisional: it is based on a partial reading of production recordings and will change once the dedicated observation has been recorded.
 
 ### Authentication
 

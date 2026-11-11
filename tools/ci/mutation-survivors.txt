@@ -1,3 +1,9 @@
 # One accepted survivor key per line, in the format <file>: <replacement>.
 # Add a comment explaining the reason above each key.
 # Produce keys from a critical run's missed list by removing the line and column numbers.
+# Equivalent: the operands of the two `|` in base64url_encode occupy disjoint bit ranges (b0 << 16, b1 << 8, b2),
+# so `^` gives the same value. Found by the first critical run (run 43066146484), 2026-11-12.
+crates/fireemu-core-auth/src/jwt.rs: replace | with ^ in base64url_encode
+# Equivalent: the operands of the `|` chain in hotp are bytes shifted to disjoint bit ranges (24..30, 16..23,
+# 8..15 and 0..7), so `^` gives the same value. Found by the first critical run, 2026-11-12.
+crates/fireemu-core-auth/src/totp.rs: replace | with ^ in hotp

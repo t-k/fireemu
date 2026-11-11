@@ -204,7 +204,33 @@ fn config_schema_out_refuses_a_directory() {
     std::fs::create_dir(dir.join("target")).unwrap();
     let output = run(&dir, &["config", "schema", "--out", "target"]);
     assert!(!output.status.success(), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("not a regular file"),
+        "{output:?}"
+    );
     assert!(dir.join("target").is_dir());
+    assert_eq!(
+        std::fs::read_dir(&*dir).unwrap().count(),
+        1,
+        "no temporary file is left"
+    );
+}
+
+/// A destination that cannot be inspected is refused with that reason, not treated as missing:
+/// here a parent component is a file.
+#[cfg(unix)]
+#[test]
+fn config_schema_out_names_a_destination_it_cannot_inspect() {
+    let dir = Scratch::new("schema-location", "inspect");
+    std::fs::write(dir.join("file"), b"x").unwrap();
+    let output = run(&dir, &["config", "schema", "--out", "file/schema.json"]);
+    assert!(!output.status.success(), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("cannot inspect"),
+        "{output:?}"
+    );
+    assert_eq!(std::fs::read(dir.join("file")).unwrap(), b"x");
+    assert_eq!(std::fs::read_dir(&*dir).unwrap().count(), 1);
 }
 
 #[test]

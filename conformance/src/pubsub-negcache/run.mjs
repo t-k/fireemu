@@ -22,6 +22,10 @@ const realClock = {
 };
 const resolvePath = (root, value) => path.resolve(root, value);
 
+/** The launch script exports this exact value; nothing else (no test, no mutation run) does. */
+export const SEND_FLAG = "PUBSUB_NEGCACHE_PRODUCTION_SEND";
+export const SEND_FLAG_VALUE = "launch-script";
+
 export function preflight(env, args, deps = {}) {
   const io = deps.fs ?? fs,
     root = deps.root ?? process.cwd();
@@ -112,7 +116,14 @@ export async function main(args, deps = {}) {
   }
   const io = deps.fs ?? fs,
     root = deps.root ?? process.cwd();
-  preflight(deps.env ?? process.env, options, deps);
+  const env = deps.env ?? process.env;
+  preflight(env, options, deps);
+  const approved = env[SEND_FLAG] === SEND_FLAG_VALUE;
+  // The real clients (credentials through gcloud, the HTTPS and gRPC transport) exist only with the flag.
+  if (!approved && (!deps.transport || (!deps.token && !deps.createCredentials)))
+    throw new Error(
+      `the production send flag ${SEND_FLAG} is not set; only the launch script sets it`,
+    );
   let summary, ageMs;
   if (mode === "a2") {
     const from = resolvePath(root, options.from);
@@ -131,7 +142,8 @@ export async function main(args, deps = {}) {
   const token =
     deps.token ?? (await (deps.createCredentials ?? createCredentials)()({ timeoutMs: 30000 }));
   const clock = deps.clock ?? realClock;
-  const transport = deps.transport ?? createTransport({ getToken: () => token, clock });
+  const transport =
+    deps.transport ?? createTransport({ getToken: () => token, clock, allowProduction: approved });
   try {
     const out = resolvePath(root, options.out);
     if (mode === "a2") {

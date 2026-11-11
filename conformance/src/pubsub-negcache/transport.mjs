@@ -7,14 +7,30 @@ import { protos } from "@google-cloud/pubsub";
 export const grpcCodeName = (code) =>
   Object.keys(grpc.status).find((k) => grpc.status[k] === code) ?? "UNKNOWN";
 
+export const DEFAULT_ENDPOINT = Object.freeze({
+  protocol: "https",
+  host: "pubsub.googleapis.com",
+  port: 443,
+});
+
+const LOOPBACK = new Set(["127.0.0.1", "::1", "localhost"]);
+
+/**
+ * A transport that sends to anything but a loopback host refuses to exist unless the caller says the
+ * launch script approved it (`allowProduction: true`). Tests never do; a mutated test run therefore
+ * cannot reach the real service through this client.
+ */
 export function createTransport({
   getToken,
   clock,
-  protocol = "https",
-  host = "pubsub.googleapis.com",
-  port = 443,
+  protocol = DEFAULT_ENDPOINT.protocol,
+  host = DEFAULT_ENDPOINT.host,
+  port = DEFAULT_ENDPOINT.port,
   grpcCall,
+  allowProduction = false,
 }) {
+  if (!LOOPBACK.has(host) && allowProduction !== true)
+    throw new Error("refusing to create a production transport without the launch script's flag");
   const net = protocol === "https" ? https : protocol === "http" ? http : null;
   if (!net) throw new Error("unsupported protocol");
   const shared = new net.Agent({ keepAlive: true });

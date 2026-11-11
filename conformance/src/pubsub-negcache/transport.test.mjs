@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
-import { createTransport, grpcCodeName } from "./transport.mjs";
+import { createTransport, DEFAULT_ENDPOINT, grpcCodeName } from "./transport.mjs";
 
 test("HTTP responses, connections, errors and timeout", async (t) => {
   let connections = 0;
@@ -52,6 +52,9 @@ test("gRPC status mapping", async () => {
   const transport = createTransport({
     getToken: () => "unused",
     clock,
+    protocol: "http",
+    host: "127.0.0.1",
+    port: 1,
     grpcCall: async () => ({ code, message: "message" }),
   });
   for (const [value, status] of Object.entries({
@@ -84,18 +87,26 @@ test("gRPC status mapping", async () => {
   transport.close();
 });
 
-test("the default endpoint is the production Pub/Sub host and an unsupported protocol is refused", () => {
-  const transport = createTransport({ getToken: () => "t", clock: { now: () => 0 } });
-  assert.deepEqual(transport.endpoint, {
-    protocol: "https",
-    host: "pubsub.googleapis.com",
-    port: 443,
-  });
-  transport.close();
+test("the default endpoint is the production Pub/Sub host, which a transport refuses without the flag, and an unsupported protocol is refused", () => {
+  assert.deepEqual(
+    { ...DEFAULT_ENDPOINT },
+    { protocol: "https", host: "pubsub.googleapis.com", port: 443 },
+  );
+  const clock = { now: () => 0 };
   assert.throws(
-    () => createTransport({ getToken: () => "t", clock: { now: () => 0 }, protocol: "ftp" }),
+    () => createTransport({ getToken: () => "t", clock }),
+    /without the launch script's flag/,
+  );
+  assert.throws(
+    () => createTransport({ getToken: () => "t", clock, host: "example.com" }),
+    /without the launch script's flag/,
+  );
+  assert.throws(
+    () => createTransport({ getToken: () => "t", clock, protocol: "ftp", host: "127.0.0.1" }),
     /unsupported protocol/,
   );
+  for (const host of ["127.0.0.1", "::1", "localhost"])
+    createTransport({ getToken: () => "t", clock, protocol: "http", host, port: 1 }).close();
 });
 
 test("pooled requests share a connection; a body brings a content type and a bodyless request does not", async (t) => {

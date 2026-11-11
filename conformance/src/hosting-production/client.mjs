@@ -5,6 +5,8 @@
 import http from "node:http";
 import https from "node:https";
 
+import { assertMaySend, isLoopback } from "./send-guard.mjs";
+
 export const DEFAULT_TIMEOUT_MS = 30_000;
 export const MAX_BODY_BYTES = 262_144;
 
@@ -18,6 +20,14 @@ export function edgeRequest(
   request,
   { timeoutMs = DEFAULT_TIMEOUT_MS, maxBodyBytes = MAX_BODY_BYTES } = {},
 ) {
+  // Only loopback is reachable unless the launch script armed the process (send-guard.mjs).
+  if (!isLoopback(request.host)) {
+    try {
+      assertMaySend(`edge request to ${request.host}`);
+    } catch (error) {
+      return Promise.reject(error);
+    }
+  }
   const started = Date.now();
   const transport = request.secure === false ? http : https;
   return new Promise((resolve) => {

@@ -8,6 +8,7 @@ import {
   compareRuns,
   conditionVerdicts,
   etagShape,
+  gzipLengthBoundHolds,
   lastModifiedShape,
   unclassifiedHeaderNames,
 } from "./judge.mjs";
@@ -687,4 +688,241 @@ test("an entry's etagSuffix is removed from the tag, the rest is still compared 
   assert.equal(compareRows(tagged('"abcundefined"'), tagged('"abc"'), plain).status, "MISMATCH");
   // a short tag is a different form once the suffix is gone
   assert.equal(compareRows(tagged('"abc-br"'), tagged(`"${hex}"`), options).status, "MISMATCH");
+});
+
+test("an entry's locationHost is replaced by the origin placeholder, so only the path of a Location is compared", () => {
+  const entry = {
+    id: "KD-ORIGIN",
+    rows: ["v01.x"],
+    fields: [],
+    locationHost: "content-(?:prod[0-9]{2}-)?firebasehosting-origin\\.googleapis\\.com",
+    appliesTo: ["production-vs-local", "run-vs-run"],
+  };
+  const located = (value) =>
+    row(
+      {},
+      {
+        status: 302,
+        headers: [
+          ["Location", value],
+          ["Content-Type", "text/html; charset=UTF-8"],
+        ],
+      },
+    );
+  const options = { known: { entries: [entry], kind: "production-vs-local" } };
+  const production = located("https://content-prod03-firebasehosting-origin.googleapis.com/a/b");
+  // the local answer names this origin: `<origin>` after the row shaping
+  const local = located(`${ORIGIN}/a/b`);
+  const matched = compareRows(production, local, options);
+  assert.equal(matched.status, "KNOWN_DIFFERENCE");
+  assert.deepEqual(matched.known, [{ field: "header:location", entry: "KD-ORIGIN" }]);
+  assert.deepEqual(matched.differences, []);
+  // the host with no `prodNN`, and the host that differs from request to request, are the same
+  const bare = located("https://content-firebasehosting-origin.googleapis.com/a/b");
+  assert.equal(
+    compareRows(production, bare, { known: { entries: [entry], kind: "run-vs-run" } }).status,
+    "KNOWN_DIFFERENCE",
+  );
+  // the path is still compared
+  const other = compareRows(production, located(`${ORIGIN}/a/c`), options);
+  assert.equal(other.status, "MISMATCH");
+  assert.deepEqual(
+    other.differences.map((d) => d.field),
+    ["header:location"],
+  );
+  assert.deepEqual(other.differences[0].a, ["<origin>/a/b"]);
+  // a host that the pattern does not name is a mismatch, as is an origin it names only in part
+  for (const value of [
+    "https://evil.example/a/b",
+    "https://content-prod3-firebasehosting-origin.googleapis.com/a/b",
+    "https://content-prod03-firebasehosting-origin.googleapis.com.evil.example/a/b",
+    "https://xcontent-prod03-firebasehosting-origin.googleapis.com/a/b",
+  ]) {
+    assert.equal(compareRows(located(value), local, options).status, "MISMATCH", value);
+  }
+  // a Location that is the host alone, and a URL that only appears inside another one
+  assert.equal(
+    compareRows(
+      located("https://content-prod03-firebasehosting-origin.googleapis.com"),
+      located(ORIGIN),
+      options,
+    ).status,
+    "KNOWN_DIFFERENCE",
+  );
+  assert.equal(
+    compareRows(
+      located("/a?u=https://content-prod03-firebasehosting-origin.googleapis.com/b"),
+      located(`/a?u=${ORIGIN}/b`),
+      options,
+    ).status,
+    "MISMATCH",
+  );
+  // a path that starts with a second slash is kept as it is
+  assert.equal(
+    compareRows(
+      located("https://content-prod03-firebasehosting-origin.googleapis.com//evil"),
+      located(`${ORIGIN}//evil`),
+      options,
+    ).status,
+    "KNOWN_DIFFERENCE",
+  );
+  assert.equal(
+    compareRows(
+      located("https://content-prod03-firebasehosting-origin.googleapis.com//evil"),
+      located(`${ORIGIN}/evil`),
+      options,
+    ).status,
+    "MISMATCH",
+  );
+  // not named: another row, another comparison, no pattern
+  const unnamed = {
+    known: { entries: [{ ...entry, rows: ["v01.z"] }], kind: "production-vs-local" },
+  };
+  assert.equal(compareRows(production, local, unnamed).status, "MISMATCH");
+  const another = { known: { entries: [entry], kind: "other-kind" } };
+  assert.equal(compareRows(production, local, another).status, "MISMATCH");
+  const none = {
+    known: { entries: [{ ...entry, locationHost: undefined }], kind: "production-vs-local" },
+  };
+  assert.equal(compareRows(production, local, none).status, "MISMATCH");
+  // two rows that agree are a MATCH, with nothing known
+  assert.equal(compareRows(local, local, options).status, "MATCH");
+});
+
+test("a gzip length bound excuses a length difference only while both answers are gzip of the same body within the bound", () => {
+  const plain = Buffer.from("The quick brown fox.\n".repeat(300));
+  const gzipRow = (body, extra = {}) =>
+    row(
+      { target: "/sz/s0100.txt" },
+      {
+        headers: [
+          ["Content-Encoding", "gzip"],
+          ["Content-Length", String(body.length)],
+          ["Content-Type", "text/plain; charset=utf-8"],
+          ...(extra.headers ?? []),
+        ],
+        body,
+      },
+    );
+  const entry = {
+    id: "KD-LEN",
+    rows: ["v01.x"],
+    fields: ["header:content-length"],
+    gzipLengthBound: 8,
+    appliesTo: ["production-vs-local"],
+  };
+  const options = { known: { entries: [entry], kind: "production-vs-local" } };
+  // gzip streams of one body whose lengths differ by a chosen number of bytes: an FEXTRA header
+  // field adds the bytes and decodes to the same body (a delta of 1 cannot be built, so use 2)
+  const padded = (extraBytes) => {
+    const base = gzipSync(plain, { level: 6 });
+    if (extraBytes === 0) return base;
+    const head = Buffer.from(base.subarray(0, 10));
+    head[3] |= 4;
+    const xlen = Buffer.alloc(2);
+    xlen.writeUInt16LE(extraBytes - 2);
+    return Buffer.concat([head, xlen, Buffer.alloc(extraBytes - 2), base.subarray(10)]);
+  };
+  const lengthOf = (buffer) => buffer.length;
+  const base = padded(0);
+  const same = compareRows(gzipRow(base), gzipRow(base), options);
+  assert.equal(same.status, "MATCH");
+  // the difference is the added bytes: exactly the bound is excused, one more is a mismatch
+  const at = (delta) => compareRows(gzipRow(base), gzipRow(padded(delta)), options);
+  assert.equal(lengthOf(padded(8)) - lengthOf(base), 8);
+  assert.equal(at(8).status, "KNOWN_DIFFERENCE");
+  assert.deepEqual(at(8).known, [{ field: "header:content-length", entry: "KD-LEN" }]);
+  assert.equal(lengthOf(padded(9)) - lengthOf(base), 9);
+  const over = at(9);
+  assert.equal(over.status, "MISMATCH");
+  assert.deepEqual(
+    over.differences.map((d) => d.field),
+    ["header:content-length"],
+  );
+  // the bound is on the absolute difference, so the other side may be the longer one
+  assert.equal(compareRows(gzipRow(padded(8)), gzipRow(base), options).status, "KNOWN_DIFFERENCE");
+  assert.equal(compareRows(gzipRow(padded(9)), gzipRow(base), options).status, "MISMATCH");
+  assert.equal(at(2).status, "KNOWN_DIFFERENCE");
+  // an identity body is not excused, nor are two bodies that decode differently
+  const identity = row(
+    { target: "/sz/s0100.txt" },
+    {
+      headers: [
+        ["Content-Length", String(plain.length)],
+        ["Content-Type", "text/plain; charset=utf-8"],
+      ],
+      body: plain,
+    },
+  );
+  assert.equal(compareRows(gzipRow(base), identity, options).status, "MISMATCH");
+  assert.equal(compareRows(identity, gzipRow(base), options).status, "MISMATCH");
+  const other = gzipRow(gzipSync(Buffer.from("something else entirely\n".repeat(400))));
+  assert.equal(compareRows(gzipRow(base), other, options).status, "MISMATCH");
+  // a different coding (here br) on one side is not excused either
+  const brotli = row(
+    { target: "/sz/s0100.txt" },
+    {
+      headers: [
+        ["Content-Encoding", "br"],
+        ["Content-Length", String(brotliCompressSync(plain).length)],
+        ["Content-Type", "text/plain; charset=utf-8"],
+      ],
+      body: brotliCompressSync(plain),
+    },
+  );
+  assert.equal(compareRows(gzipRow(base), brotli, options).status, "MISMATCH");
+  // an entry with no bound is not limited by it
+  const unbounded = {
+    known: { entries: [{ ...entry, gzipLengthBound: undefined }], kind: "production-vs-local" },
+  };
+  assert.equal(
+    compareRows(gzipRow(base), gzipRow(padded(9)), unbounded).status,
+    "KNOWN_DIFFERENCE",
+  );
+});
+
+test("gzipLengthBoundHolds needs both answers gzip, one decoded digest and a Content-Length within the bound", () => {
+  const entry = { id: "KD-LEN", gzipLengthBound: 8 };
+  const side = (length, extra = {}) => ({
+    id: "v01.x",
+    headers: { "content-encoding": ["gzip"], "content-length": [String(length)] },
+    decodedSha256: "d1",
+    ...extra,
+  });
+  const holds = (a, b, bound = entry) => gzipLengthBoundHolds(bound, a, b);
+  assert.equal(holds(side(70), side(70)), true);
+  assert.equal(holds(side(70), side(78)), true);
+  assert.equal(holds(side(78), side(70)), true);
+  assert.equal(holds(side(70), side(79)), false);
+  assert.equal(holds(side(79), side(70)), false);
+  // each of the other conditions fails the bound on its own
+  const identity = { headers: { "content-length": ["70"] }, decodedSha256: "d1" };
+  assert.equal(holds(side(70), { ...side(70), ...identity, id: "v01.x" }), false);
+  assert.equal(holds({ ...side(70), ...identity, id: "v01.x" }, side(70)), false);
+  assert.equal(
+    holds(side(70), side(70, { headers: { ...side(70).headers, "content-encoding": ["br"] } })),
+    false,
+  );
+  assert.equal(
+    holds(side(70, { headers: { ...side(70).headers, "content-encoding": ["br"] } }), side(70)),
+    false,
+  );
+  assert.equal(holds(side(70), side(70, { decodedSha256: "d2" })), false);
+  assert.equal(
+    holds(side(70, { decodedSha256: undefined }), side(70, { decodedSha256: undefined })),
+    false,
+  );
+  assert.equal(holds(side(70), side(70, { decodedSha256: undefined })), false);
+  assert.equal(holds(side(70, { decodedSha256: undefined }), side(70)), false);
+  const noLength = (row) => ({ ...row, headers: { "content-encoding": ["gzip"] } });
+  assert.equal(holds(noLength(side(70)), side(70)), false);
+  assert.equal(holds(side(70), noLength(side(70))), false);
+  const twoLengths = side(70, {
+    headers: { "content-encoding": ["gzip"], "content-length": ["70", "70"] },
+  });
+  assert.equal(holds(twoLengths, side(70)), false);
+  assert.equal(holds(side(70), twoLengths), false);
+  assert.equal(holds(side(70), side("x")), false);
+  // an entry with no bound is not limited here, whatever the rows are
+  assert.equal(holds(identity, side(70), { id: "KD-OTHER" }), true);
 });

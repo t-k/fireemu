@@ -23,6 +23,8 @@ import { edgeRequest } from "./client.mjs";
 import { servingConfig } from "./convert.mjs";
 import { buildCorpus, corpusManifest } from "./corpus.mjs";
 import { requestHeaders } from "./local.mjs";
+import { assertMaySend } from "./send-guard.mjs";
+import { FOLLOWUP_PROFILE } from "./followup.mjs";
 import { CORPUS_SHA256 } from "./pins.mjs";
 import { assertNoSecrets, maskSecrets, shapeRow } from "./rows.mjs";
 
@@ -45,6 +47,30 @@ const MAX_ATTEMPTS = 3;
 /** Ruling 13: the parent's reservation over all envelopes. */
 const MAX_CUMULATIVE_USD = 6;
 const RESERVED_USD_PER_ATTEMPT = 1;
+/**
+ * What differs between the observations this recorder runs: the HOSTING production recording (the
+ * default, unchanged) and the follow-up packet (`FIREEMU_HOSTING_PROFILE=followup`, `followup.mjs`).
+ */
+export const PRODUCTION_PROFILE = {
+  name: "production",
+  taskId: TASK_ID,
+  envelopePattern: /^HOSTING-PRODUCTION-[A-Z0-9-]{3,60}$/,
+  envelopeHint: "HOSTING-PRODUCTION-...",
+  maxAttempts: MAX_ATTEMPTS,
+  maxCumulativeUsd: MAX_CUMULATIVE_USD,
+  reservedUsdPerAttempt: RESERVED_USD_PER_ATTEMPT,
+  caps: CAPS,
+  build: buildCorpus,
+  corpusSha256: CORPUS_SHA256,
+  listFilesVersion: "v01",
+};
+/** The profile the environment names; the default is the production recording's. */
+export function profileOf(env) {
+  const name = env.FIREEMU_HOSTING_PROFILE;
+  if (name === undefined || name === "production") return PRODUCTION_PROFILE;
+  if (name === "followup") return FOLLOWUP_PROFILE;
+  throw new Error(`unknown FIREEMU_HOSTING_PROFILE ${JSON.stringify(name)}`);
+}
 const ESTIMATED_USD = 0.05;
 const WAIT_MS = 30 * 60_000;
 export const READINESS_ATTEMPTS = 12;
@@ -59,6 +85,8 @@ export const READINESS_FIRST_WAIT_MS = 30_000;
 const REQUEST_GAP_MS = 150;
 const MAX_RESPONSE_BYTES = 1 << 20;
 const RUN_TAG = /^[0-9a-f]{6}$/;
+/** The reason of the rows of a version whose finalize the API refused where a refusal is expected. */
+const CONFIG_REFUSED = "config-refused";
 const execFileAsync = promisify(execFile);
 
 /** Thrown when a request would exceed its budget kind; the request is not sent. */
@@ -104,10 +132,10 @@ const rowTime = (line) => Date.parse(line.ts ?? line.recordedAt ?? "");
  * later own row; at most MAX_ATTEMPTS attempts per envelope (FIREEMU_HOSTING_ENVELOPE, required) and
  * US$6.00 reserved over all envelopes. Returns the attempt number of the envelope and the reserved sum.
  */
-export function admit({ ledgerText, now, env }) {
+export function admit({ ledgerText, now, env, profile = profileOf(env) }) {
   const envelope = env.FIREEMU_HOSTING_ENVELOPE;
-  if (!/^HOSTING-PRODUCTION-[A-Z0-9-]{3,60}$/.test(envelope ?? "")) {
-    throw new Error("FIREEMU_HOSTING_ENVELOPE must name the envelope (HOSTING-PRODUCTION-...)");
+  if (!profile.envelopePattern.test(envelope ?? "")) {
+    throw new Error(`FIREEMU_HOSTING_ENVELOPE must name the envelope (${profile.envelopeHint})`);
   }
   const lines = ledgerText
     .split("\n")
@@ -126,7 +154,7 @@ export function admit({ ledgerText, now, env }) {
   if (now - at < WAIT_MS && env.FIREEMU_HOSTING_SOLE_SENDER !== "1") {
     throw new Error("30 minutes have not passed since the last row for the project");
   }
-  const own = lines.filter((line) => line.taskId === TASK_ID);
+  const own = lines.filter((line) => line.taskId === profile.taskId);
   own.forEach((line, index) => {
     if (line.event === "started" && !own[index + 1]) {
       throw new Error("an own started row has no terminal row: recover that attempt first");
@@ -136,9 +164,9 @@ export function admit({ ledgerText, now, env }) {
   // a row of an earlier envelope has another id or none). The money is counted over all own rows.
   const started = own.filter((line) => line.event === "started");
   const attempt = started.filter((line) => line.envelopeId === envelope).length + 1;
-  if (attempt > MAX_ATTEMPTS) {
+  if (attempt > profile.maxAttempts) {
     throw new Error(
-      `attempt ${attempt} exceeds ${MAX_ATTEMPTS} attempts of the envelope ${envelope}`,
+      `attempt ${attempt} exceeds ${profile.maxAttempts} attempts of the envelope ${envelope}`,
     );
   }
   // The launch names the attempt it believes it starts; the count of the envelope decides.
@@ -148,10 +176,10 @@ export function admit({ ledgerText, now, env }) {
       `FIREEMU_HOSTING_ATTEMPT ${JSON.stringify(named)} is not attempt ${attempt} of the envelope ${envelope}`,
     );
   }
-  const cumulativeReservedUsd = (started.length + 1) * RESERVED_USD_PER_ATTEMPT;
-  if (cumulativeReservedUsd > MAX_CUMULATIVE_USD) {
+  const cumulativeReservedUsd = (started.length + 1) * profile.reservedUsdPerAttempt;
+  if (cumulativeReservedUsd > profile.maxCumulativeUsd) {
     throw new Error(
-      `the cumulative reservation ${cumulativeReservedUsd} passes US$${MAX_CUMULATIVE_USD.toFixed(2)}`,
+      `the cumulative reservation ${cumulativeReservedUsd} passes US$${profile.maxCumulativeUsd.toFixed(2)}`,
     );
   }
   return { attempt, cumulativeReservedUsd };
@@ -216,12 +244,14 @@ export function classify(reply) {
  *   http, edge, sleep, installSignals, caps (tests only), log, warn.
  */
 export async function recordHosting(env, deps) {
+  const profile = profileOf(env);
   await deps.assertCleanTree();
-  const { corpus } = await deps.readSources();
+  const { corpus } = await deps.readSources(profile);
   const { attempt, cumulativeReservedUsd } = admit({
     ledgerText: await deps.readLedger(),
     now: deps.now(),
     env,
+    profile,
   });
   const adc = await deps.ownerAdc();
   const webConfig = await deps.webConfig();
@@ -234,7 +264,8 @@ export async function recordHosting(env, deps) {
   const runDir = await deps.makeRunDir(
     `hosting-production-${new Date(startedAt).toISOString().replaceAll(":", "")}`,
   );
-  const budget = createBudget(deps.caps ?? CAPS);
+  const caps = deps.caps ?? profile.caps;
+  const budget = createBudget(caps);
   const api = makeApi({ deps, budget, adc, runDir, secrets });
 
   // Read-only prechecks. Nothing is written to production or to the ledger before they pass.
@@ -243,13 +274,13 @@ export async function recordHosting(env, deps) {
   const base = {
     project: PROJECT,
     database: null,
-    taskId: TASK_ID,
+    taskId: profile.taskId,
     gitSha,
-    corpusDigest: CORPUS_SHA256,
+    corpusDigest: profile.corpusSha256,
     runDir,
     attempt,
     run,
-    reservedUsd: RESERVED_USD_PER_ATTEMPT,
+    reservedUsd: profile.reservedUsdPerAttempt,
     cumulativeReservedUsd,
     envelopeId: env.FIREEMU_HOSTING_ENVELOPE,
   };
@@ -278,7 +309,18 @@ export async function recordHosting(env, deps) {
     const record = (deployed[version.id] = { channelId: `hst-${run}-${version.id}` });
     const sink = [];
     try {
-      await deployAndServe({ version, record, run, api, deps, secrets, number, state, sink });
+      await deployAndServe({
+        version,
+        record,
+        run,
+        api,
+        deps,
+        secrets,
+        number,
+        state,
+        sink,
+        profile,
+      });
     } catch (error) {
       // The message may carry whatever an effect threw; it reaches the ledger, so it is masked.
       const message = maskSecrets(String(error.message), secrets);
@@ -288,12 +330,17 @@ export async function recordHosting(env, deps) {
       record.cleanup = await removeVersion({ record, api, state });
     }
     // Requests that did not get an answer are unknown rows with the reason that stopped them.
-    const reason = state.stop ? "stopped" : (record.failure ?? "failed");
+    const reason = state.stop
+      ? "stopped"
+      : (record.failure ?? (record.configRefusal ? CONFIG_REFUSED : "failed"));
     rows.push(...sink, ...unknownRows(version, reason, secrets, sink.length));
   }
   const readback = await finalReadback({ run, api, state, before });
 
-  const unknownCount = rows.filter((row) => row.outcome !== "answered").length;
+  // A finalize the API refused for a version that may be refused is an observation, not a gap.
+  const unknownCount = rows.filter(
+    (row) => row.outcome !== "answered" && row.reason !== CONFIG_REFUSED,
+  ).length;
   const closureReady =
     state.needsRecovery.length === 0 &&
     state.residual.length === 0 &&
@@ -316,7 +363,11 @@ export async function recordHosting(env, deps) {
     needsRecovery: state.needsRecovery,
     openUnknownCreates: state.openCreates,
     residual: state.residual,
+    refusedVersions: Object.entries(deployed)
+      .filter(([, record]) => record.configRefusal)
+      .map(([id]) => id),
     readback,
+    caps,
     requests,
     estimatedUsd: ESTIMATED_USD,
   };
@@ -329,7 +380,7 @@ export async function recordHosting(env, deps) {
       }
       await deps.writeRunFile(runDir, name, text);
     };
-    await write("rows.json", { schema: 1, run, corpusSha256: CORPUS_SHA256, rows });
+    await write("rows.json", { schema: 1, run, corpusSha256: profile.corpusSha256, rows });
     // A version name production returns under `projects/-` carries the project number: names are
     // masked before they reach a file (the guard above is a second layer).
     const masked = (value) => JSON.parse(maskSecrets(JSON.stringify(value), secrets));
@@ -486,7 +537,18 @@ function probeShape(answer, secrets) {
 }
 
 /** Deploys one version and serves its requests; returns the rows. Failures are recorded, not thrown. */
-async function deployAndServe({ version, record, run, api, deps, secrets, number, state, sink }) {
+async function deployAndServe({
+  version,
+  record,
+  run,
+  api,
+  deps,
+  secrets,
+  number,
+  state,
+  sink,
+  profile,
+}) {
   const fail = (reason, { halt = true } = {}) => {
     record.failure = reason;
     if (halt) state.halt ??= `${version.id}: ${reason}`;
@@ -638,6 +700,16 @@ async function deployAndServe({ version, record, run, api, deps, secrets, number
       );
     }
   }
+  // A version that may be refused (follow-up v13, v14) records a 400 or 422 as its answer: no
+  // failure, no halt, no release; the version and its channel are cleaned like any other.
+  if (
+    finalized.kind === "refused" &&
+    version.mayRefuse &&
+    (finalized.status === 400 || finalized.status === 422)
+  ) {
+    record.configRefusal = { status: finalized.status };
+    return;
+  }
   if (finalized.kind !== "ok") {
     fail(`finalize failed (${finalized.status})`);
     return;
@@ -657,7 +729,7 @@ async function deployAndServe({ version, record, run, api, deps, secrets, number
     fail(`version is ${read.value.status}`);
     return;
   }
-  if (version.id === "v01") {
+  if (version.id === profile.listFilesVersion) {
     const listed = await api.call("control", "GET", `${HOSTING}/${name}/files?pageSize=100`);
     if (listed.kind === "ok") {
       const paths = (listed.value.files ?? []).map((f) => String(f.path));
@@ -864,11 +936,12 @@ async function finalReadback({ run, api, state, before }) {
  * envelope.
  */
 export async function recoverHosting(env, deps) {
+  const profile = profileOf(env);
   const lines = (await deps.readLedger())
     .split("\n")
     .filter((text) => text.trim())
     .map((text) => JSON.parse(text))
-    .filter((line) => line.project === PROJECT && line.taskId === TASK_ID);
+    .filter((line) => line.project === PROJECT && line.taskId === profile.taskId);
   const last = lines.at(-1);
   if (!last || !["started", "needs-recovery", "recovery-read"].includes(last.event)) {
     throw new Error("the ledger shows no run of this task to recover");
@@ -884,7 +957,13 @@ export async function recoverHosting(env, deps) {
   const carried = last.openUnknownCreates ?? ["run-ended-without-a-terminal-row"];
   const carriedResidual = last.residualEntries ?? last.carriedResidual ?? [];
   const adc = await deps.ownerAdc();
-  const budget = createBudget({ token: 3, control: 0, cleanup: CAPS.cleanup, upload: 0, edge: 0 });
+  const budget = createBudget({
+    token: 3,
+    control: 0,
+    cleanup: profile.caps.cleanup,
+    upload: 0,
+    edge: 0,
+  });
   const runDir = await deps.makeRunDir(`hosting-recover-${run}-${deps.now()}`);
   const api = makeApi({ deps, budget, adc, runDir });
   const state = { needsRecovery: [], residual: [] };
@@ -946,7 +1025,7 @@ export async function recoverHosting(env, deps) {
       ts: new Date(at).toISOString(),
       project: PROJECT,
       database: null,
-      taskId: TASK_ID,
+      taskId: profile.taskId,
       run,
       runDir,
       // Never a closing event: the coordinator writes the close row after the A2 read-back.
@@ -975,6 +1054,7 @@ export async function recoverHosting(env, deps) {
 // ---- production effects -----------------------------------------------------------------------------------------
 
 async function ownerAdc() {
+  assertMaySend("reading the owner credentials");
   const path = resolve(
     process.env.FIREEMU_OWNER_ADC ||
       join(homedir(), ".config/gcloud/application_default_credentials.json"),
@@ -1017,6 +1097,7 @@ async function boundedText(response) {
 }
 
 async function acquireToken(adc) {
+  assertMaySend("the ADC token refresh");
   const response = await fetch("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
@@ -1039,6 +1120,14 @@ async function acquireToken(adc) {
 
 const CONFORMANCE = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 
+/** Wraps an effect that reaches a credential, the private ledger or the network: unarmed, it throws. */
+const armed =
+  (what, effect) =>
+  (...args) => {
+    assertMaySend(what);
+    return effect(...args);
+  };
+
 async function repositoryRoot() {
   const { stdout } = await execFileAsync(
     "git",
@@ -1050,8 +1139,10 @@ async function repositoryRoot() {
   return resolve(stdout.trim(), "..");
 }
 
-export async function productionDeps() {
-  const root = await repositoryRoot();
+export async function productionDeps({ root: givenRoot } = {}) {
+  // `root` is for tests: the directory the private ledger, the credentials directory and the run
+  // directories are looked for under (the repository's, found with git, when none is given)
+  const root = givenRoot ?? (await repositoryRoot());
   const git = (args) => execFileAsync("git", args, { cwd: CONFORMANCE });
   return {
     now: Date.now,
@@ -1060,20 +1151,24 @@ export async function productionDeps() {
         throw new Error("the worktree is not clean");
     },
     gitSha: async () => (await git(["rev-parse", "HEAD"])).stdout.trim(),
-    async readSources() {
+    async readSources(profile = PRODUCTION_PROFILE) {
       const cli = JSON.parse(
         await readFile(join(CONFORMANCE, "node_modules/firebase-tools/package.json"), "utf8"),
       );
       if (cli.version !== "15.28.2") throw new Error("pinned firebase-tools 15.28.2 is required");
-      const corpus = buildCorpus();
-      if (corpusManifest(corpus).corpusSha256 !== CORPUS_SHA256)
+      const corpus = profile.build();
+      if (corpusManifest(corpus).corpusSha256 !== profile.corpusSha256)
         throw new Error("the corpus is not the pinned one");
       return { corpus };
     },
-    readLedger: () => readFile(join(root, "docs.local/runs/sandbox-ledger.jsonl"), "utf8"),
-    appendLedger: (text) => appendFile(join(root, "docs.local/runs/sandbox-ledger.jsonl"), text),
+    readLedger: armed("reading the sandbox ledger", () =>
+      readFile(join(root, "docs.local/runs/sandbox-ledger.jsonl"), "utf8"),
+    ),
+    appendLedger: armed("writing the sandbox ledger", (text) =>
+      appendFile(join(root, "docs.local/runs/sandbox-ledger.jsonl"), text),
+    ),
     ownerAdc,
-    async webConfig() {
+    webConfig: armed("reading the web config", async () => {
       const path = resolve(process.env.FIREEMU_HOSTING_WEB_CONFIG ?? "");
       if (
         !process.env.FIREEMU_HOSTING_WEB_CONFIG ||
@@ -1087,18 +1182,21 @@ export async function productionDeps() {
       if (metadata.size > 4096 || (metadata.mode & 0o077) !== 0)
         throw new Error("the web config is not bounded and owner-only");
       return JSON.parse(await readFile(path, "utf8"));
-    },
-    async makeRunDir(name) {
+    }),
+    makeRunDir: armed("making a run directory", async (name) => {
       const dir = join(root, "docs.local/runs", name);
       await mkdir(dir, { recursive: false, mode: 0o700 });
       return dir;
-    },
-    writeRunFile: (dir, name, text) =>
+    }),
+    writeRunFile: armed("writing a run file", (dir, name, text) =>
       writeFile(join(dir, name), text, { mode: 0o600, flag: "wx" }),
-    appendRunFile: (dir, name, text) => appendFile(join(dir, name), text, { mode: 0o600 }),
+    ),
+    appendRunFile: armed("appending a run file", (dir, name, text) =>
+      appendFile(join(dir, name), text, { mode: 0o600 }),
+    ),
     runTag: () => randomBytes(3).toString("hex"),
     token: acquireToken,
-    async http({ method, url, headers, body }) {
+    http: armed("a Hosting API request", async ({ method, url, headers, body }) => {
       const { hostname } = new URL(url);
       if (!ALLOWED_HOSTS.has(hostname)) throw new Error(`host ${hostname} is not reviewed`);
       try {
@@ -1113,7 +1211,7 @@ export async function productionDeps() {
       } catch {
         return { status: 0, text: "" };
       }
-    },
+    }),
     edge: edgeRequest,
     sleep: (ms) => new Promise((resolveSleep) => setTimeout(resolveSleep, ms)),
     installSignals(handler) {
@@ -1125,23 +1223,25 @@ export async function productionDeps() {
 }
 
 /** The offline `check`: digests, counts and the worst-case request total. */
-export function checkReport() {
-  const manifest = corpusManifest();
+export function checkReport(profile = PRODUCTION_PROFILE) {
+  const manifest = corpusManifest(profile.build());
   return {
     corpusSha256: manifest.corpusSha256,
-    pinned: CORPUS_SHA256,
+    pinned: profile.corpusSha256,
     versions: manifest.versions.length,
     requests: manifest.versions.reduce((n, v) => n + v.requests.length, 0),
-    caps: CAPS,
-    worstCaseTotal: Object.values(CAPS).reduce((a, b) => a + b, 0),
+    caps: profile.caps,
+    worstCaseTotal: Object.values(profile.caps).reduce((a, b) => a + b, 0),
   };
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const mode = process.argv[2];
-  if (mode === "check") console.log(JSON.stringify(checkReport(), null, 2));
-  else if (mode === "digest") console.log(CORPUS_SHA256);
+  if (mode === "check") console.log(JSON.stringify(checkReport(profileOf(process.env)), null, 2));
+  else if (mode === "digest") console.log(profileOf(process.env).corpusSha256);
   else if (mode === "record-production" || mode === "recover") {
+    // the launch script arms the send; nothing else does (send-guard.mjs)
+    assertMaySend(`${mode}`);
     const deps = await productionDeps();
     const result = await (mode === "recover" ? recoverHosting : recordHosting)(process.env, deps);
     console.log(JSON.stringify(result));

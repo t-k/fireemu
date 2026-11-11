@@ -11,13 +11,12 @@ import { readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 import { buildCorpus, corpusManifest } from "./corpus.mjs";
+import { buildFollowupCorpus } from "./followup.mjs";
 import { compareRuns, conditionVerdicts } from "./judge.mjs";
 
-/** The known differences of the production recording (`known-differences.json`). */
-export function loadKnownDifferences(corpus = buildCorpus()) {
-  const document = JSON.parse(
-    readFileSync(new URL("./known-differences.json", import.meta.url), "utf8"),
-  );
+/** The known differences of a production recording: `known-differences.json` (the parent's corpus) or `followup-known-differences.json`. */
+export function loadKnownDifferences(corpus = buildCorpus(), file = "known-differences.json") {
+  const document = JSON.parse(readFileSync(new URL(`./${file}`, import.meta.url), "utf8"));
   const ids = new Set(corpus.versions.flatMap((v) => v.requests.map((r) => r.id)));
   for (const entry of document.entries) {
     for (const id of entry.rows) {
@@ -71,13 +70,32 @@ async function load(path, name) {
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const [kind, a, b, out] = process.argv.slice(2);
-  if (!["production-vs-local", "run-vs-run"].includes(kind) || !a || !b || !out) {
+  const [kind, a, b, out, corpusName] = process.argv.slice(2);
+  if (
+    !["production-vs-local", "run-vs-run"].includes(kind) ||
+    !a ||
+    !b ||
+    !out ||
+    ![undefined, "followup"].includes(corpusName)
+  ) {
     throw new Error(
-      "usage: compare.mjs production-vs-local|run-vs-run <a.json> <b.json> <new out file>",
+      "usage: compare.mjs production-vs-local|run-vs-run <a.json> <b.json> <new out file> [followup]",
     );
   }
-  const result = compareFiles({ kind, left: await load(a, "a"), right: await load(b, "b") });
+  const followup = buildFollowupCorpus();
+  const corpus =
+    corpusName === "followup"
+      ? {
+          corpus: followup,
+          known: loadKnownDifferences(followup, "followup-known-differences.json"),
+        }
+      : {};
+  const result = compareFiles({
+    kind,
+    left: await load(a, "a"),
+    right: await load(b, "b"),
+    ...corpus,
+  });
   await writeFile(out, `${JSON.stringify(result, null, 2)}\n`, { flag: "wx" });
   console.log(JSON.stringify({ kind, summary: result.summary }));
 }

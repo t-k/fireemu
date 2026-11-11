@@ -12,7 +12,6 @@
 
 use std::fmt::Write as _;
 use std::path::Path;
-use std::process::{Command, Stdio};
 
 use crate::functions::{locate_runner, runner_candidates};
 
@@ -59,19 +58,36 @@ impl Check {
     }
 }
 
-/// `node --version`, or `None` when Node is not on `PATH` (or does not answer).
-fn node_version() -> Option<String> {
-    let out = Command::new("node")
-        .arg("--version")
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
+/// The Node check: the executable the Functions runner selects when a codebase constrains
+/// nothing, chosen by the code Functions start-up uses. The `node` a shell finds first on
+/// `PATH` can differ (version managers put a shim there, and `FIREEMU_NODE` replaces the
+/// search), so the shell is never asked.
+fn node_check() -> Check {
+    match crate::functions::default_node() {
+        Ok(Some(node)) => Check::ok(
+            "node",
+            format!(
+                "{} at {} (selected by {}; a codebase's runtime or engines.node can select another installed Node, which `fireemu up --plan` shows per codebase)",
+                node.version
+                    .as_deref()
+                    .map_or_else(|| "version not probed".to_owned(), |v| format!("v{v}")),
+                node.program.display(),
+                node.how
+            ),
+        ),
+        Ok(None) => Check::absent(
+            "node",
+            "not found on PATH",
+            "Node is needed only to run a Functions codebase; install Node 20 or newer if you \
+             use `--functions`",
+        ),
+        Err(error) => Check::problem(
+            "node",
+            format!("unusable: {error}"),
+            "the Node that Functions would run on cannot be used; fix FIREEMU_NODE (an absolute \
+             path to an executable Node) or the Node on PATH",
+        ),
     }
-    let version = String::from_utf8(out.stdout).ok()?.trim().to_owned();
-    (!version.is_empty()).then_some(version)
 }
 
 /// The `firebase-functions` majors the located runner instruments, read out of the runner
@@ -172,15 +188,11 @@ fn checks() -> Vec<Check> {
         ui_check(),
     ];
     checks.extend(runner_checks());
-    checks.push(match node_version() {
-        Some(version) => Check::ok("node", version),
-        None => Check::absent(
-            "node",
-            "not found on PATH",
-            "Node is needed only to run a Functions codebase; install Node 20 or newer if you \
-             use `--functions`",
-        ),
-    });
+    checks.push(node_check());
+    checks.push(Check::ok(
+        "python",
+        "per codebase: the venv inside each Python codebase's source (`fireemu up --plan` probes it)",
+    ));
     // Said explicitly because the Firebase Emulator Suite does need a JVM, and the first
     // question about a drop-in replacement is whether this one does too.
     checks.push(Check::ok(

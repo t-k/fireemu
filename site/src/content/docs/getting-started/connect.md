@@ -21,7 +21,7 @@ npx fireemu exec -- node ./scripts/seed.mjs
 | `GCLOUD_PROJECT`, `GOOGLE_CLOUD_PROJECT` | The project ID |
 | `FIREEMU_CONTROL_URL`, `FIREEMU_CONTROL_TOKEN` | Fireemu's control API, used by `fireemu/testing` |
 
-Variables for the other emulators (Realtime Database, Pub/Sub, Eventarc, Cloud Tasks, App Check, the Hub) are listed with the conditions in [Environment variables](../../reference/environment-variables/). Variables for emulators that are not selected are left as your environment had them.
+Variables for the other emulators (Realtime Database, Pub/Sub, Eventarc, Cloud Tasks, App Check, the Hub) are listed with the conditions in [Environment variables](../../reference/environment-variables/). A variable your shell already carries for an emulator the run does not start stays in place and is reported with a warning; `fireemu exec --plan -- <command>` lists what the command will see, and [`--deny-inherited-emulator-env`](../../reference/cli/#inherited-emulator-variables) makes such a run fail before it starts. Variables for emulators that are not selected are left as your environment had them.
 
 ```js
 import { initializeApp } from 'firebase-admin/app';

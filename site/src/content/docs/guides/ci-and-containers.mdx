@@ -61,6 +61,20 @@ npx fireemu exec --config fireemu.production-exact.toml -- npm test
 
 With the JSON form, name the file `fireemu.production-exact.json`.
 
+### Check the configuration before the tests
+
+Three checks fail a job early, before a test runs against the wrong setup:
+
+```yaml
+      - run: npx fireemu config lint --deny-ineffective
+      - run: npx fireemu exec --plan --deny-inherited-emulator-env -- npm test
+      - run: npx fireemu exec --deny-inherited-emulator-env -- npm test
+```
+
+- `config lint --deny-ineffective` exits 1 when the configuration sets a key that Fireemu accepts but never reads. List the keys you keep on purpose with `--allow <key>` or `--allow-file <path>` (see [`config lint`](../../reference/cli/#config-lint)).
+- `exec --plan` prints what the run resolves, so the job log shows the project ID, the services and their ports, the files that were read, the Node it would use for Functions and the emulator variables it inherits. It starts nothing, and it exits 1 when the run would fail for a reason it can see. Use `--json` to feed another tool (see [Plan a run](../../reference/cli/#plan-a-run)).
+- `--deny-inherited-emulator-env` fails the run when the job's environment carries an emulator variable (`PUBSUB_EMULATOR_HOST`, `FIRESTORE_EMULATOR_HOST` of another suite, and so on) for a service this run does not start. Without it the run warns and keeps the variable. Use `--allow-inherited-emulator-env <NAME>` for a variable you set on purpose.
+
 ### Container jobs
 
 In a GitHub Actions `container:` job, or any container that runs as root with a bind-mounted checkout, the checkout is owned by a host user that the container's root does not trust, so a discovered `fireemu.toml` or `firebase.json` is skipped with a warning. Name the files explicitly, or `chown` the checkout:

@@ -1,0 +1,993 @@
+//! `fireemu up --plan` and `fireemu exec --plan -- <command>`: what a run would do, resolved by
+//! the code start-up uses, without starting anything; and the inherited-emulator-environment
+//! policy of `up` and `exec`.
+//!
+//! Every process runs with a cleared environment, an empty `HOME` and no credentials, so
+//! nothing here can reach a Google service.
+
+mod scratch;
+
+use std::path::Path;
+use std::process::{Command, Output, Stdio};
+use std::time::{Duration, Instant};
+
+use scratch::Scratch;
+use serde_json::Value;
+
+/// Runs `fireemu` in `cwd` with a cleared environment plus `env`, and kills it when it has not
+/// finished in `limit`: a `--plan` that started a daemon would otherwise hang the test.
+fn run(cwd: &Path, args: &[&str], env: &[(&str, &str)]) -> Output {
+    let home = cwd.join(".home");
+    std::fs::create_dir_all(&home).unwrap();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_fireemu"));
+    command
+        .current_dir(cwd)
+        .args(args)
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .env("HOME", &home)
+        .envs(env.iter().copied())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let child = command.spawn().unwrap();
+    let pid = child.id();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let waiter = std::thread::spawn(move || {
+        let _ = sender.send(child.wait_with_output());
+    });
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        if let Ok(output) = receiver.recv_timeout(Duration::from_millis(100)) {
+            waiter.join().unwrap();
+            return output.unwrap();
+        }
+        if Instant::now() > deadline {
+            // `pid` is the child this function spawned.
+            #[cfg(unix)]
+            let _ = Command::new("/bin/kill")
+                .args(["-KILL", &pid.to_string()])
+                .status();
+            panic!("fireemu {args:?} did not finish: a plan must not start the emulators");
+        }
+    }
+}
+
+fn stdout(output: &Output) -> String {
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+fn stderr(output: &Output) -> String {
+    String::from_utf8_lossy(&output.stderr).into_owned()
+}
+
+fn project(name: &str) -> Scratch {
+    Scratch::new("plan", name)
+}
+
+fn write(dir: &Path, name: &str, text: &str) {
+    let path = dir.join(name);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, text).unwrap();
+}
+
+fn json_plan(cwd: &Path, args: &[&str], env: &[(&str, &str)]) -> Value {
+    let output = run(cwd, args, env);
+    serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+        panic!(
+            "not JSON ({error}); status {:?}\nstdout: {}\nstderr: {}",
+            output.status,
+            stdout(&output),
+            stderr(&output)
+        )
+    })
+}
+
+fn service<'a>(plan: &'a Value, name: &str) -> &'a Value {
+    plan["services"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|service| service["name"] == name)
+        .unwrap_or_else(|| panic!("no {name} in {}", plan["services"]))
+}
+
+const FIREBASE_JSON: &str = r#"{
+  "firestore": {"rules": "firestore.rules", "indexes": "firestore.indexes.json"},
+  "emulators": {"firestore": {"port": 8181}, "auth": {"port": 9199}}
+}"#;
+
+#[test]
+fn up_plan_reports_the_project_services_and_ports_without_starting_anything() {
+    let dir = project("basic");
+    write(&dir, "firebase.json", FIREBASE_JSON);
+    write(
+        &dir,
+        ".firebaserc",
+        r#"{"projects": {"default": "rc-project"}}"#,
+    );
+    let output = run(&dir, &["up", "--plan", "--hub-port", "0"], &[]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("rc-project"), "{text}");
+    assert!(text.contains(".firebaserc"), "{text}");
+    assert!(text.contains("127.0.0.1:8181"), "{text}");
+    assert!(text.contains("firestore"), "{text}");
+}
+
+#[test]
+fn the_json_plan_names_the_project_and_where_it_came_from() {
+    let dir = project("json");
+    write(&dir, "firebase.json", FIREBASE_JSON);
+    write(
+        &dir,
+        ".firebaserc",
+        r#"{"projects": {"default": "rc-project", "staging": "stage-1"}}"#,
+    );
+    let plan = json_plan(&dir, &["up", "--plan", "--json"], &[]);
+    assert_eq!(plan["planVersion"], 1);
+    assert_eq!(plan["command"], "up");
+    assert_eq!(plan["project"]["id"], "rc-project");
+    assert_eq!(plan["project"]["source"], ".firebaserc default");
+
+    let plan = json_plan(
+        &dir,
+        &["up", "--plan", "--json", "--project", "staging"],
+        &[],
+    );
+    assert_eq!(plan["project"]["id"], "stage-1");
+    assert_eq!(plan["project"]["source"], "--project alias in .firebaserc");
+
+    let plan = json_plan(&dir, &["up", "--plan", "--json", "-P", "demo-direct"], &[]);
+    assert_eq!(plan["project"]["id"], "demo-direct");
+    assert_eq!(plan["project"]["source"], "--project");
+
+    let bare = project("json-bare");
+    let plan = json_plan(&bare, &["up", "--plan", "--json"], &[]);
+    assert_eq!(plan["project"]["id"], "demo-app");
+    assert_eq!(plan["project"]["source"], "built-in default");
+
+    write(
+        &bare,
+        "fireemu.toml",
+        "schemaVersion = 1\n[daemon]\nauthProject = \"demo-cfg\"\n",
+    );
+    let plan = json_plan(&bare, &["up", "--plan", "--json"], &[]);
+    assert_eq!(plan["project"]["id"], "demo-cfg");
+    assert_eq!(
+        plan["project"]["source"],
+        "daemon.authProject in fireemu.toml"
+    );
+}
+
+#[test]
+fn command_line_overrides_are_part_of_the_plan() {
+    let dir = project("overrides");
+    write(&dir, "firebase.json", FIREBASE_JSON);
+    let plan = json_plan(
+        &dir,
+        &[
+            "up",
+            "--plan",
+            "--json",
+            "--only",
+            "firestore,auth",
+            "--firestore-port",
+            "9100",
+            "--hub-port",
+            "0",
+        ],
+        &[],
+    );
+    let firestore = service(&plan, "firestore");
+    assert_eq!(firestore["start"], true);
+    assert_eq!(firestore["address"], "127.0.0.1:9100");
+    assert_eq!(service(&plan, "storage")["start"], false);
+    assert_eq!(service(&plan, "pubsub")["start"], false);
+    let overrides: Vec<String> = plan["overrides"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| {
+            format!(
+                "{} {}",
+                entry["flag"].as_str().unwrap(),
+                entry["value"].as_str().unwrap()
+            )
+        })
+        .collect();
+    assert!(
+        overrides.contains(&"--only firestore,auth".to_owned()),
+        "{overrides:?}"
+    );
+    assert!(
+        overrides.contains(&"--firestore-port 9100".to_owned()),
+        "{overrides:?}"
+    );
+}
+
+#[test]
+fn an_unselected_service_says_why_it_does_not_start() {
+    let dir = project("why");
+    let plan = json_plan(
+        &dir,
+        &["up", "--plan", "--json", "--only", "firestore"],
+        &[],
+    );
+    assert_eq!(service(&plan, "auth")["start"], false);
+    assert!(
+        service(&plan, "auth")["reason"]
+            .as_str()
+            .unwrap()
+            .contains("--only"),
+        "{plan}"
+    );
+    let plan = json_plan(&dir, &["up", "--plan", "--json"], &[]);
+    assert_eq!(service(&plan, "functions")["start"], false);
+    assert!(
+        service(&plan, "functions")["reason"]
+            .as_str()
+            .unwrap()
+            .contains("codebase"),
+        "{plan}"
+    );
+    assert_eq!(service(&plan, "pubsub")["start"], false);
+    assert_eq!(service(&plan, "firestore")["start"], true);
+}
+
+#[test]
+fn exec_plan_shows_the_command_and_the_environment_it_would_receive() {
+    let dir = project("exec");
+    let plan = json_plan(
+        &dir,
+        &[
+            "exec",
+            "--plan",
+            "--json",
+            "--firestore-port",
+            "8090",
+            "--",
+            "npm",
+            "test",
+        ],
+        &[],
+    );
+    assert_eq!(plan["command"], "exec");
+    assert_eq!(plan["exec"]["argv"], serde_json::json!(["npm", "test"]));
+    let set: Vec<&str> = plan["environment"]["set"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|entry| entry["names"].as_array().unwrap())
+        .map(|name| name.as_str().unwrap())
+        .collect();
+    assert!(set.contains(&"FIRESTORE_EMULATOR_HOST"), "{set:?}");
+    assert!(set.contains(&"FIREBASE_AUTH_EMULATOR_HOST"), "{set:?}");
+    assert!(!set.contains(&"PUBSUB_EMULATOR_HOST"), "{set:?}");
+
+    let script = json_plan(
+        &dir,
+        &["exec", "--plan", "--json", "echo $FIRESTORE_EMULATOR_HOST"],
+        &[],
+    );
+    assert_eq!(script["exec"]["script"], "echo $FIRESTORE_EMULATOR_HOST");
+}
+
+#[test]
+fn a_parent_variable_for_a_service_this_run_does_not_start_is_reported_and_warned() {
+    let dir = project("stale");
+    let env = [
+        ("PUBSUB_EMULATOR_HOST", "localhost:8085"),
+        ("FIRESTORE_EMULATOR_HOST", "localhost:1234"),
+    ];
+    let plan = json_plan(
+        &dir,
+        &[
+            "exec",
+            "--plan",
+            "--json",
+            "--only",
+            "firestore",
+            "--",
+            "true",
+        ],
+        &env,
+    );
+    let inherited = plan["environment"]["inherited"].as_array().unwrap();
+    let find = |name: &str| {
+        inherited
+            .iter()
+            .find(|entry| entry["name"] == name)
+            .unwrap_or_else(|| panic!("{name} missing from {inherited:?}"))
+    };
+    assert_eq!(
+        find("PUBSUB_EMULATOR_HOST")["disposition"],
+        "kept-service-not-started"
+    );
+    assert_eq!(find("PUBSUB_EMULATOR_HOST")["service"], "pubsub");
+    assert_eq!(find("FIRESTORE_EMULATOR_HOST")["disposition"], "overridden");
+    assert_eq!(plan["environment"]["policy"], "warn");
+    assert!(
+        plan["warnings"]
+            .to_string()
+            .contains("PUBSUB_EMULATOR_HOST"),
+        "{}",
+        plan["warnings"]
+    );
+}
+
+#[test]
+fn credentials_in_an_inherited_storage_endpoint_are_not_printed() {
+    let dir = project("redact");
+    let env = [(
+        "STORAGE_EMULATOR_HOST",
+        "http://fireemu:s3cretcapability@127.0.0.1:9199",
+    )];
+    let output = run(
+        &dir,
+        &["exec", "--plan", "--only", "firestore", "--", "true"],
+        &env,
+    );
+    let all = format!("{}{}", stdout(&output), stderr(&output));
+    assert!(all.contains("STORAGE_EMULATOR_HOST"), "{all}");
+    assert!(!all.contains("s3cretcapability"), "{all}");
+}
+
+#[test]
+fn deny_inherited_emulator_env_fails_before_anything_starts() {
+    let dir = project("deny");
+    let env = [("PUBSUB_EMULATOR_HOST", "localhost:8085")];
+    let output = run(
+        &dir,
+        &[
+            "exec",
+            "--deny-inherited-emulator-env",
+            "--only",
+            "firestore",
+            "--firestore-port",
+            "0",
+            "--hub-port",
+            "0",
+            "--",
+            "true",
+        ],
+        &env,
+    );
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    let error = stderr(&output);
+    assert!(error.contains("PUBSUB_EMULATOR_HOST"), "{error}");
+    assert!(error.contains("--allow-inherited-emulator-env"), "{error}");
+    assert!(
+        !error.contains("firestore:"),
+        "nothing was started: {error}"
+    );
+}
+
+/// `exec` with every listener on a free port, so a real start is cheap.
+const QUICK_EXEC: [&str; 11] = [
+    "exec",
+    "--only",
+    "firestore",
+    "--firestore-port",
+    "0",
+    "--hub-port",
+    "0",
+    "--ui-port",
+    "0",
+    "--logging-port",
+    "0",
+];
+
+#[test]
+fn by_default_a_stale_variable_is_warned_about_kept_and_the_command_runs() {
+    let dir = project("warn-run");
+    let env = [("PUBSUB_EMULATOR_HOST", "localhost:8085")];
+    let mut args = QUICK_EXEC.to_vec();
+    args.extend(["--", "sh", "-c", "echo seen=$PUBSUB_EMULATOR_HOST"]);
+    let output = run(&dir, &args, &env);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(
+        stdout(&output).contains("seen=localhost:8085"),
+        "the variable is kept: {}",
+        stdout(&output)
+    );
+    let error = stderr(&output);
+    assert!(
+        error.contains("warning: PUBSUB_EMULATOR_HOST=localhost:8085"),
+        "{error}"
+    );
+    assert!(error.contains("does not start pubsub"), "{error}");
+}
+
+#[test]
+fn an_allowed_variable_is_neither_warned_about_nor_refused_and_quiet_prints_nothing() {
+    let dir = project("allow-run");
+    let env = [("PUBSUB_EMULATOR_HOST", "localhost:8085")];
+    let mut args = QUICK_EXEC.to_vec();
+    args.extend([
+        "--deny-inherited-emulator-env",
+        "--allow-inherited-emulator-env",
+        "PUBSUB_EMULATOR_HOST",
+        "--",
+        "true",
+    ]);
+    let output = run(&dir, &args, &env);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(
+        !stderr(&output).contains("PUBSUB_EMULATOR_HOST"),
+        "{}",
+        stderr(&output)
+    );
+
+    let mut quiet = QUICK_EXEC.to_vec();
+    quiet.extend(["--log-verbosity", "quiet", "--", "true"]);
+    let output = run(&dir, &quiet, &env);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(
+        !stderr(&output).contains("PUBSUB_EMULATOR_HOST"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn a_started_services_variable_is_replaced_by_the_run_and_never_warned_about() {
+    let dir = project("replaced-run");
+    let env = [("FIRESTORE_EMULATOR_HOST", "localhost:1234")];
+    let mut args = QUICK_EXEC.to_vec();
+    args.extend([
+        "--deny-inherited-emulator-env",
+        "--",
+        "sh",
+        "-c",
+        "echo seen=$FIRESTORE_EMULATOR_HOST",
+    ]);
+    let output = run(&dir, &args, &env);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(
+        stdout(&output).contains("seen=127.0.0.1:"),
+        "{}",
+        stdout(&output)
+    );
+    assert!(
+        !stderr(&output).contains("FIRESTORE_EMULATOR_HOST"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn deny_applies_to_up_as_well() {
+    let dir = project("deny-up");
+    let env = [("FIREBASE_DATABASE_EMULATOR_HOST", "localhost:9000")];
+    let output = run(
+        &dir,
+        &[
+            "up",
+            "--deny-inherited-emulator-env",
+            "--only",
+            "firestore",
+            "--hub-port",
+            "0",
+        ],
+        &env,
+    );
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    assert!(stderr(&output).contains("FIREBASE_DATABASE_EMULATOR_HOST"));
+}
+
+#[test]
+fn the_plan_applies_the_deny_policy_and_exits_nonzero() {
+    let dir = project("deny-plan");
+    let env = [("PUBSUB_EMULATOR_HOST", "localhost:8085")];
+    let args = [
+        "up",
+        "--plan",
+        "--json",
+        "--deny-inherited-emulator-env",
+        "--only",
+        "firestore",
+    ];
+    let output = run(&dir, &args, &env);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    let plan: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(plan["environment"]["policy"], "deny");
+    assert_eq!(
+        plan["environment"]["denied"],
+        serde_json::json!(["PUBSUB_EMULATOR_HOST"])
+    );
+    assert!(stderr(&output).contains("PUBSUB_EMULATOR_HOST"));
+}
+
+#[test]
+fn an_allowed_variable_does_not_fail_the_deny_policy() {
+    let dir = project("allow");
+    let env = [("PUBSUB_EMULATOR_HOST", "localhost:8085")];
+    let output = run(
+        &dir,
+        &[
+            "up",
+            "--plan",
+            "--json",
+            "--deny-inherited-emulator-env",
+            "--allow-inherited-emulator-env",
+            "PUBSUB_EMULATOR_HOST",
+            "--only",
+            "firestore",
+        ],
+        &env,
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+    let plan: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let entry = &plan["environment"]["inherited"][0];
+    assert_eq!(entry["name"], "PUBSUB_EMULATOR_HOST");
+    assert_eq!(entry["disposition"], "kept-allowed");
+    assert_eq!(plan["environment"]["denied"], serde_json::json!([]));
+    assert!(plan["warnings"]
+        .to_string()
+        .find("PUBSUB_EMULATOR_HOST")
+        .is_none());
+}
+
+#[test]
+fn a_variable_for_a_started_service_is_overridden_and_never_denied() {
+    let dir = project("started");
+    let env = [("FIRESTORE_EMULATOR_HOST", "localhost:1234")];
+    let output = run(
+        &dir,
+        &[
+            "up",
+            "--plan",
+            "--json",
+            "--deny-inherited-emulator-env",
+            "--only",
+            "firestore",
+        ],
+        &env,
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+}
+
+#[test]
+fn an_unknown_allowed_name_is_a_usage_error() {
+    let dir = project("allow-typo");
+    let output = run(
+        &dir,
+        &[
+            "up",
+            "--plan",
+            "--allow-inherited-emulator-env",
+            "PUBSUB_EMULATOR_HOSTT",
+        ],
+        &[],
+    );
+    assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
+    let error = stderr(&output);
+    assert!(error.contains("PUBSUB_EMULATOR_HOSTT"), "{error}");
+    assert!(
+        error.contains("PUBSUB_EMULATOR_HOST"),
+        "the message lists the names: {error}"
+    );
+}
+
+#[test]
+fn json_needs_plan() {
+    let dir = project("json-alone");
+    let output = run(&dir, &["up", "--json"], &[]);
+    assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
+    assert!(stderr(&output).contains("--plan"));
+}
+
+#[test]
+fn paths_name_their_base_and_a_different_working_directory_is_warned() {
+    let dir = project("paths");
+    write(
+        &dir,
+        "firebase.json",
+        r#"{"firestore": {"rules": "from-firebase.rules"}}"#,
+    );
+    write(&dir, "sub/fireemu.toml", "schemaVersion = 1\n[rules]\nsource = \"canonical.rules\"\n[firestore]\nindexFile = \"idx.json\"\n");
+    // Canonical-configuration paths resolve against the working directory.
+    let plan = json_plan(
+        &dir,
+        &[
+            "up",
+            "--plan",
+            "--json",
+            "--config",
+            "sub/fireemu.toml",
+            "--no-config-discovery",
+        ],
+        &[],
+    );
+    let paths = plan["paths"].as_array().unwrap();
+    let rules = paths
+        .iter()
+        .find(|p| p["setting"] == "rules.source")
+        .unwrap();
+    assert_eq!(rules["written"], "canonical.rules");
+    assert_eq!(rules["base"], "working directory");
+    assert!(rules["resolved"]
+        .as_str()
+        .unwrap()
+        .ends_with("/canonical.rules"));
+    assert!(
+        !rules["resolved"].as_str().unwrap().contains("/sub/"),
+        "{rules}"
+    );
+    let warnings = plan["warnings"].to_string();
+    assert!(warnings.contains("canonical.rules"), "{warnings}");
+    assert!(warnings.contains("working directory"), "{warnings}");
+
+    // Run from the configuration's own directory, the same file resolves elsewhere.
+    let from_sub = json_plan(
+        &dir.join("sub"),
+        &[
+            "up",
+            "--plan",
+            "--json",
+            "--config",
+            "fireemu.toml",
+            "--no-config-discovery",
+        ],
+        &[],
+    );
+    let rules = from_sub["paths"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["setting"] == "rules.source")
+        .unwrap()
+        .clone();
+    assert!(
+        rules["resolved"]
+            .as_str()
+            .unwrap()
+            .contains("/sub/canonical.rules"),
+        "{rules}"
+    );
+    assert!(
+        !from_sub["warnings"].to_string().contains("canonical.rules"),
+        "{}",
+        from_sub["warnings"]
+    );
+
+    // firebase.json paths resolve against the directory of firebase.json.
+    let plan = json_plan(
+        &dir,
+        &["up", "--plan", "--json", "--firebase-json", "firebase.json"],
+        &[],
+    );
+    let rules = plan["paths"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["setting"] == "rules.source")
+        .unwrap()
+        .clone();
+    assert_eq!(rules["written"], "from-firebase.rules");
+    assert_eq!(rules["base"], "firebase.json directory");
+    assert!(rules["resolved"]
+        .as_str()
+        .unwrap()
+        .ends_with("/from-firebase.rules"));
+}
+
+#[test]
+fn ineffective_settings_and_development_defaults_come_from_the_shared_sources() {
+    let dir = project("lint");
+    write(
+        &dir,
+        "fireemu.toml",
+        "schemaVersion = 1\n[trace]\nenabled = true\n",
+    );
+    let plan = json_plan(&dir, &["up", "--plan", "--json"], &[]);
+    let ineffective: Vec<&str> = plan["ineffective"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["key"].as_str().unwrap())
+        .collect();
+    assert_eq!(ineffective, ["trace.enabled"]);
+
+    let defaults = plan["developmentDefaults"].as_array().unwrap();
+    assert!(!defaults.is_empty());
+    let relaxed = defaults
+        .iter()
+        .filter(|entry| entry["relaxed"] == true)
+        .count();
+    assert!(relaxed > 0, "{defaults:?}");
+
+    write(
+        &dir,
+        "fireemu.toml",
+        "schemaVersion = 1\nprofile = \"strict\"\nproductionExact = true\n",
+    );
+    let exact = json_plan(&dir, &["up", "--plan", "--json"], &[]);
+    assert_eq!(exact["productionExact"], true);
+    assert!(exact["developmentDefaults"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|entry| entry["relaxed"] == false));
+}
+
+#[test]
+fn a_configuration_the_daemon_refuses_fails_the_plan_with_the_same_message() {
+    let dir = project("refused");
+    write(&dir, "fireemu.toml", "schemaVersion = 1\nbogus = 1\n");
+    let plan = run(&dir, &["up", "--plan"], &[]);
+    let start = run(&dir, &["up"], &[]);
+    assert_eq!(plan.status.code(), start.status.code());
+    assert_eq!(stderr(&plan), stderr(&start));
+    assert_ne!(plan.status.code(), Some(0));
+}
+
+#[cfg(unix)]
+mod functions {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn fake_node(path: &Path, version: &str) {
+        fake_node_with(path, version, true);
+    }
+
+    /// A `node` that answers `--version` and the loader-feature probe, nothing else.
+    fn fake_node_with(path: &Path, version: &str, require_module: bool) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            path,
+            format!("#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo '{version}'; exit 0; fi\necho {require_module}\n"),
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(path, permissions).unwrap();
+    }
+
+    fn codebase(dir: &Path) {
+        write(
+            dir,
+            "firebase.json",
+            r#"{"functions": {"source": "functions", "runtime": "nodejs20"}}"#,
+        );
+        write(
+            dir,
+            "functions/package.json",
+            r#"{"name": "f", "engines": {"node": "20"}}"#,
+        );
+        write(
+            dir,
+            "functions/node_modules/firebase-functions/package.json",
+            r#"{"name": "firebase-functions", "version": "6.1.0"}"#,
+        );
+        write(
+            dir,
+            "functions/node_modules/firebase-admin/package.json",
+            r#"{"name": "firebase-admin", "version": "13.0.1"}"#,
+        );
+    }
+
+    #[test]
+    fn the_plan_names_the_node_the_runner_would_select_and_the_sdk_versions() {
+        let dir = project("node");
+        codebase(&dir);
+        let explicit = dir.join("tools/node-explicit/bin/node");
+        let on_path = dir.join("tools/node-path/node");
+        fake_node(&explicit, "v22.11.0");
+        fake_node(&on_path, "v18.20.0");
+        let path = format!("{}:/usr/bin:/bin", on_path.parent().unwrap().display());
+        let plan = json_plan(
+            &dir,
+            &["up", "--plan", "--json", "--hub-port", "0"],
+            &[
+                ("FIREEMU_NODE", explicit.to_str().unwrap()),
+                ("PATH", &path),
+            ],
+        );
+        assert_eq!(service(&plan, "functions")["start"], true);
+        let codebase = &plan["functions"][0];
+        assert_eq!(codebase["codebase"], "default");
+        assert_eq!(codebase["language"], "node");
+        assert_eq!(
+            codebase["runner"]["interpreter"],
+            explicit.to_str().unwrap()
+        );
+        assert_eq!(codebase["runner"]["version"], "22.11.0");
+        assert_eq!(codebase["sdk"]["firebase-functions"], "6.1.0");
+        assert_eq!(codebase["sdk"]["firebase-admin"], "13.0.1");
+        assert!(codebase["source"].as_str().unwrap().ends_with("/functions"));
+        assert!(codebase["error"].is_null(), "{codebase}");
+
+        // Without FIREEMU_NODE the PATH one is selected.
+        let plan = json_plan(
+            &dir,
+            &["up", "--plan", "--json", "--hub-port", "0"],
+            &[("PATH", &path)],
+        );
+        assert_eq!(
+            plan["functions"][0]["runner"]["interpreter"],
+            on_path.to_str().unwrap()
+        );
+        assert_eq!(plan["functions"][0]["runner"]["version"], "18.20.0");
+    }
+
+    #[test]
+    fn doctor_reports_the_node_the_functions_runner_selects_not_the_first_on_path() {
+        let dir = project("doctor");
+        let explicit = dir.join("tools/node-explicit/bin/node");
+        let on_path = dir.join("tools/node-path/node");
+        fake_node(&explicit, "v22.11.0");
+        fake_node(&on_path, "v18.20.0");
+        let path = format!("{}:/usr/bin:/bin", on_path.parent().unwrap().display());
+        let output = run(
+            &dir,
+            &["doctor"],
+            &[
+                ("FIREEMU_NODE", explicit.to_str().unwrap()),
+                ("PATH", &path),
+            ],
+        );
+        let text = stdout(&output);
+        let node_line = text
+            .lines()
+            .find(|line| line.contains(" node "))
+            .unwrap_or_else(|| panic!("{text}"));
+        assert!(node_line.contains("v22.11.0"), "{node_line}");
+        assert!(
+            node_line.contains(explicit.to_str().unwrap()),
+            "{node_line}"
+        );
+        assert!(node_line.contains("FIREEMU_NODE"), "{node_line}");
+    }
+
+    #[test]
+    fn doctor_names_a_node_override_that_cannot_run_instead_of_reporting_the_path_one() {
+        let dir = project("doctor-bad");
+        let on_path = dir.join("tools/node-path/node");
+        fake_node(&on_path, "v18.20.0");
+        let path = format!("{}:/usr/bin:/bin", on_path.parent().unwrap().display());
+        let output = run(
+            &dir,
+            &["doctor"],
+            &[("FIREEMU_NODE", "/nonexistent/node"), ("PATH", &path)],
+        );
+        let text = stdout(&output);
+        assert!(text.contains("FIREEMU_NODE"), "{text}");
+        assert!(!text.contains("v18.20.0"), "{text}");
+    }
+
+    #[test]
+    fn a_plan_with_no_usable_node_reports_the_error_and_fails() {
+        let dir = project("no-node");
+        codebase(&dir);
+        let output = run(
+            &dir,
+            &["up", "--plan", "--json", "--hub-port", "0"],
+            &[("FIREEMU_NODE", "/nonexistent/node")],
+        );
+        assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+        let plan: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert!(
+            plan["functions"][0]["error"]
+                .as_str()
+                .unwrap()
+                .contains("FIREEMU_NODE"),
+            "{plan}"
+        );
+    }
+
+    /// The notes of the plan are the `note:` lines start-up prints for the same choice.
+    fn plan_notes(
+        name: &str,
+        runtime: Option<&str>,
+        engines: Option<&str>,
+        require_module: bool,
+    ) -> Vec<String> {
+        let dir = project(name);
+        let runtime = runtime.map_or(String::new(), |runtime| {
+            format!(", \"runtime\": \"{runtime}\"")
+        });
+        write(
+            &dir,
+            "firebase.json",
+            &format!(r#"{{"functions": {{"source": "functions"{runtime}}}}}"#),
+        );
+        let engines = engines.map_or(String::new(), |engines| {
+            format!(", \"engines\": {{\"node\": \"{engines}\"}}")
+        });
+        write(
+            &dir,
+            "functions/package.json",
+            &format!(r#"{{"name": "f"{engines}}}"#),
+        );
+        let node = dir.join("tools/node/bin/node");
+        fake_node_with(&node, "v22.11.0", require_module);
+        let plan = json_plan(
+            &dir,
+            &["up", "--plan", "--json", "--hub-port", "0"],
+            &[("FIREEMU_NODE", node.to_str().unwrap())],
+        );
+        plan["functions"][0]["notes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|note| note.as_str().unwrap().to_owned())
+            .collect()
+    }
+
+    #[test]
+    fn the_plan_carries_the_notes_start_up_prints_about_the_node_choice() {
+        let notes = plan_notes("notes-engine", None, Some(">=20"), true);
+        assert_eq!(
+            notes,
+            ["note: functions[default]: selected Node v22.11.0 for package.json engines.node \">=20\""]
+        );
+        let notes = plan_notes("notes-engine-runtime", Some("nodejs20"), Some(">=20"), true);
+        assert_eq!(
+            notes,
+            ["note: functions[default]: selected Node v22.11.0 for package.json engines.node \">=20\" (firebase runtime nodejs20 is deployment metadata)"]
+        );
+        let notes = plan_notes("notes-fallback", None, Some("18"), true);
+        assert_eq!(
+            notes,
+            ["note: functions[default]: selected Node v22.11.0 as a loader-capable local fallback; package.json engines.node \"18\" does not include it"]
+        );
+        let notes = plan_notes("notes-runtime", Some("nodejs18"), None, true);
+        assert_eq!(
+            notes,
+            ["note: functions[default]: firebase runtime nodejs18 differs from local Node v22.11.0; the local emulator uses the first usable Node on PATH"]
+        );
+        assert_eq!(
+            plan_notes("notes-same", Some("nodejs22"), None, true),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            plan_notes("notes-none", None, None, true),
+            Vec::<String>::new()
+        );
+        let notes = plan_notes("notes-no-require", Some("nodejs22"), None, false);
+        assert_eq!(
+            notes,
+            ["note: functions[default]: Node v22.11.0 cannot synchronously require ES modules from CommonJS; install Node 20.19+, Node 22.12+, or a newer release if module loading fails"]
+        );
+    }
+
+    #[test]
+    fn a_functions_runner_override_is_reported_as_such_and_no_node_is_probed() {
+        let dir = project("override");
+        write(
+            &dir,
+            "firebase.json",
+            r#"{"functions": {"source": "functions"}}"#,
+        );
+        write(&dir, "functions/package.json", r#"{"name": "f"}"#);
+        write(&dir, "fireemu.toml", "schemaVersion = 1\n[functions]\nrunner = [\"/bin/echo\", \"x\"]\nsource = \"functions\"\n");
+        let plan = json_plan(
+            &dir,
+            &["up", "--plan", "--json", "--hub-port", "0"],
+            &[("FIREEMU_NODE", "/nonexistent/node")],
+        );
+        let runner = &plan["functions"][0]["runner"];
+        assert_eq!(runner["override"], true, "{plan}");
+        assert_eq!(runner["command"], serde_json::json!(["/bin/echo", "x"]));
+        assert!(runner["interpreter"].is_null());
+        assert!(plan["functions"][0]["error"].is_null(), "{plan}");
+    }
+
+    #[test]
+    fn a_codebase_whose_source_is_missing_reports_the_start_up_refusal() {
+        let dir = project("missing-source");
+        write(
+            &dir,
+            "firebase.json",
+            r#"{"functions": {"source": "nowhere"}}"#,
+        );
+        let output = run(&dir, &["up", "--plan", "--json", "--hub-port", "0"], &[]);
+        assert_eq!(output.status.code(), Some(1));
+        let plan: Value = serde_json::from_slice(&output.stdout).unwrap();
+        let error = plan["functions"][0]["error"].as_str().unwrap();
+        assert!(error.contains("is not a directory"), "{error}");
+        assert!(plan["functions"][0]["source"].is_null());
+    }
+}

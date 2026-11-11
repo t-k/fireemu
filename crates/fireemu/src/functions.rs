@@ -3103,43 +3103,93 @@ fn select_node_installation(
     .ok_or_else(|| "no usable Node executable was found on PATH or in VOLTA_HOME".to_owned())
 }
 
+/// The interpreter the default Node runner would be started with, and what is worth telling the
+/// developer about the choice.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NodeRunnerChoice {
+    /// The runner command: the Node executable and the bundled runner script.
+    pub command: Vec<String>,
+    /// The Node executable.
+    pub program: PathBuf,
+    /// `node --version` without the leading `v`; unknown where Node is not probed (Windows).
+    pub version: Option<String>,
+    /// The `note:` lines start-up prints about the choice.
+    pub notes: Vec<String>,
+}
+
 #[cfg(windows)]
-fn default_runner_for_codebase(
+fn select_node_runner(
     _codebase: &crate::config::FunctionsCodebase,
     _node_probe_cache: &NodeProbeCache,
-) -> Result<Vec<String>, String> {
+) -> Result<NodeRunnerChoice, String> {
     let script = locate_runner()?;
     let (candidates, _) = node_candidates(&NodeProbeKey::current())?;
     let program = candidates.first().ok_or_else(|| {
         "no Node executable was found in an absolute PATH directory; set FIREEMU_NODE to an absolute executable or configure functions.runner explicitly".to_owned()
     })?;
-    Ok(vec![
-        program.display().to_string(),
-        fireemu_adapter_functions::runner::node_path(&script.path.to_string_lossy()).into_owned(),
-    ])
+    Ok(NodeRunnerChoice {
+        command: vec![
+            program.display().to_string(),
+            fireemu_adapter_functions::runner::node_path(&script.path.to_string_lossy())
+                .into_owned(),
+        ],
+        program: program.clone(),
+        version: None,
+        notes: Vec::new(),
+    })
 }
 
 #[cfg(not(windows))]
-fn default_runner_for_codebase(
+fn select_node_runner(
     codebase: &crate::config::FunctionsCodebase,
     node_probe_cache: &NodeProbeCache,
-) -> Result<Vec<String>, String> {
+) -> Result<NodeRunnerChoice, String> {
     let script = locate_runner()?;
     let engines = package_node_engine(Path::new(&codebase.source))?;
     if let Some(expression) = engines.as_deref() {
         let _ = node_engine_matches(expression, (0, 0, 0))?;
     }
+    let runtime_major = codebase.runtime.as_deref().and_then(|runtime| {
+        runtime
+            .strip_prefix("nodejs")
+            .and_then(|major| major.parse::<u32>().ok())
+    });
+    let (selected, installations, notes) = select_probed_node(
+        node_probe_cache,
+        runtime_major,
+        engines.as_deref(),
+        &format!("the Functions codebase {:?}", codebase.codebase),
+        &format!("functions[{}]", codebase.codebase),
+    )?;
+    let installation = &installations[selected];
+    Ok(NodeRunnerChoice {
+        command: vec![
+            installation.program.display().to_string(),
+            script.path.display().to_string(),
+        ],
+        program: installation.program.clone(),
+        version: Some(installation.version.clone()),
+        notes,
+    })
+}
+
+/// Probes the Node candidates and picks one for a codebase's `runtime` major and
+/// `engines.node`: the one choice start-up, `up --plan` and `doctor` all make. `subject` opens
+/// the error ("the Functions codebase \"x\""), `label` opens each note.
+#[cfg(not(windows))]
+fn select_probed_node(
+    node_probe_cache: &NodeProbeCache,
+    runtime_major: Option<u32>,
+    engines: Option<&str>,
+    subject: &str,
+    label: &str,
+) -> Result<(usize, Vec<NodeInstallation>, Vec<String>), String> {
     let probed = node_probe_cache.probed(&NodeProbeKey::current())?;
     let ProbedNodeCandidates {
         installations,
         errors: probe_errors,
         explicit_node,
     } = probed;
-    let runtime_major = codebase.runtime.as_deref().and_then(|runtime| {
-        runtime
-            .strip_prefix("nodejs")
-            .and_then(|major| major.parse::<u32>().ok())
-    });
     if installations.is_empty() {
         let detail = if probe_errors.is_empty() {
             "no Node executable was found".to_owned()
@@ -3147,27 +3197,26 @@ fn default_runner_for_codebase(
             probe_errors.join("; ")
         };
         return Err(format!(
-            "the Functions codebase {:?}: {detail}; install Node, set FIREEMU_NODE, or configure functions.runner explicitly",
-            codebase.codebase
+            "{subject}: {detail}; install Node, set FIREEMU_NODE, or configure functions.runner explicitly"
         ));
     }
     let selected = if explicit_node {
         0
     } else {
-        select_node_installation(runtime_major, engines.as_deref(), &installations)?
+        select_node_installation(runtime_major, engines, &installations)?
     };
     let installation = &installations[selected];
     let prefer_require_module =
-        request_prefers_require_module(runtime_major, engines.as_deref(), &installations)?;
-    if let Some(engines) = &engines {
+        request_prefers_require_module(runtime_major, engines, &installations)?;
+    let mut notes = Vec::new();
+    if let Some(engines) = engines {
         let matches_engine = node_engine_matches(
             engines,
             (installation.major, installation.minor, installation.patch),
         )?;
         if matches_engine {
-            eprintln!(
-                "note: functions[{}]: selected Node v{} for package.json engines.node {:?}{}",
-                codebase.codebase,
+            notes.push(format!(
+                "note: {label}: selected Node v{} for package.json engines.node {:?}{}",
                 installation.version,
                 engines,
                 runtime_major
@@ -3175,36 +3224,87 @@ fn default_runner_for_codebase(
                     .map_or_else(String::new, |major| format!(
                         " (firebase runtime nodejs{major} is deployment metadata)"
                     ))
-            );
+            ));
         } else {
-            eprintln!(
-                "note: functions[{}]: selected Node v{} as a loader-capable local fallback; package.json engines.node {:?}{} does not include it",
-                codebase.codebase,
+            notes.push(format!(
+                "note: {label}: selected Node v{} as a loader-capable local fallback; package.json engines.node {:?}{} does not include it",
                 installation.version,
                 engines,
                 runtime_major.map_or_else(String::new, |major| format!(
                     " and firebase runtime nodejs{major}"
                 ))
-            );
+            ));
         }
     } else if let Some(major) = runtime_major {
         if major != installation.major {
-            eprintln!(
-                "note: functions[{}]: firebase runtime nodejs{major} differs from local Node v{}; the local emulator uses the first usable Node on PATH",
-                codebase.codebase, installation.version
-            );
+            notes.push(format!(
+                "note: {label}: firebase runtime nodejs{major} differs from local Node v{}; the local emulator uses the first usable Node on PATH",
+                installation.version
+            ));
         }
     }
     if !installation.require_module && prefer_require_module {
-        eprintln!(
-            "note: functions[{}]: Node v{} cannot synchronously require ES modules from CommonJS; install Node 20.19+, Node 22.12+, or a newer release if module loading fails",
-            codebase.codebase, installation.version
-        );
+        notes.push(format!(
+            "note: {label}: Node v{} cannot synchronously require ES modules from CommonJS; install Node 20.19+, Node 22.12+, or a newer release if module loading fails",
+            installation.version
+        ));
     }
-    Ok(vec![
-        installation.program.display().to_string(),
-        script.path.display().to_string(),
-    ])
+    Ok((selected, installations, notes))
+}
+
+/// The Node executable the Functions runner uses when a codebase constrains nothing (no
+/// `runtime`, no `engines.node`): what `doctor` reports. `how` says what chose it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DefaultNode {
+    pub program: PathBuf,
+    pub version: Option<String>,
+    pub how: &'static str,
+}
+
+/// Selects the default Node by the code a codebase's start-up uses, with nothing to constrain
+/// it. `Ok(None)` means there is no Node at all (nothing was asked for and nothing was found);
+/// an error means a Node that was asked for (`FIREEMU_NODE`) cannot run.
+pub(crate) fn default_node() -> Result<Option<DefaultNode>, String> {
+    let key = NodeProbeKey::current();
+    let how = if key.fireemu_node.is_some() {
+        "FIREEMU_NODE"
+    } else {
+        "first node on PATH"
+    };
+    #[cfg(not(windows))]
+    {
+        let cache = NodeProbeCache::default();
+        match select_probed_node(&cache, None, None, "Node", "node") {
+            Ok((selected, installations, _)) => {
+                let installation = &installations[selected];
+                let how = if key.fireemu_node.is_none()
+                    && !path_node_candidates(key.path.as_deref().unwrap_or_default())
+                        .contains(&installation.program)
+                {
+                    "VOLTA_HOME"
+                } else {
+                    how
+                };
+                Ok(Some(DefaultNode {
+                    program: installation.program.clone(),
+                    version: Some(installation.version.clone()),
+                    how,
+                }))
+            }
+            Err(error) if key.fireemu_node.is_some() => Err(error),
+            Err(error) if error.contains("no Node executable was found") => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+    #[cfg(windows)]
+    {
+        let (candidates, _) = node_candidates(&key)?;
+        Ok(candidates.into_iter().next().map(|program| DefaultNode {
+            program,
+            version: None,
+            how,
+        }))
+    }
 }
 
 fn launch_codebases(
@@ -3989,20 +4089,82 @@ fn validate_functions_codebase_budget(codebases: &[FunctionsCodebase]) -> Result
     Ok(())
 }
 
-/// Starts one codebase's runner, reads its environment and validates what it discovered.
-///
-/// Every codebase gets its own process, its own dotenv chain (the files live next to its
-/// `source`) and its own HTTP server; nothing about one codebase can be observed from another.
-#[allow(clippy::too_many_lines)]
-async fn start_codebase(
+/// How one codebase's runner is launched. Start-up and `up --plan` both decide it here, so the
+/// plan names the interpreter a start would use.
+pub(crate) struct RunnerSelection {
+    /// The runner command: interpreter and bundled runner script, or the `functions.runner`
+    /// override.
+    pub command: Vec<String>,
+    /// The Python virtual environment, when the codebase is Python and no override replaces it.
+    pub python_environment: Option<crate::python_functions::PythonEnvironment>,
+    /// The Node choice, when the default Node runner is used.
+    pub node: Option<NodeRunnerChoice>,
+}
+
+/// Chooses the runner for `codebase` (`source` is its canonical directory). The venv is
+/// checked before anything is spawned, with firebase-tools' wording; a `functions.runner`
+/// override replaces the whole launch and is its own responsibility.
+async fn select_runner(
     cfg: &RuntimeConfig,
     codebase: &crate::config::FunctionsCodebase,
-    hosts: &EmulatorHosts,
-    runner_secret: &str,
-    callable_trusted_protocol: bool,
+    source: &str,
+    python: bool,
     node_probe_cache: &Arc<NodeProbeCache>,
-    clock_snapshot: fireemu_core_session::clock::ClockSnapshot,
-) -> Result<fireemu_adapter_functions::runtime::CodebaseSpec, String> {
+) -> Result<RunnerSelection, String> {
+    let label = &codebase.codebase;
+    let python_environment = if python && cfg.functions_runner.is_none() {
+        Some(
+            crate::python_functions::preflight(Path::new(source), codebase.runtime.as_deref())
+                .await
+                .map_err(|error| format!("the Functions codebase {label:?}: {error}"))?,
+        )
+    } else {
+        None
+    };
+    let mut node = None;
+    let command = if let Some(command) = cfg.functions_runner.clone() {
+        command
+    } else if let Some(environment) = &python_environment {
+        let script = crate::python_functions::locate_runner()
+            .map_err(|error| format!("the Functions codebase {label:?}: {error}"))?;
+        crate::python_functions::runner_command(environment, &script)
+    } else {
+        let codebase = codebase.clone();
+        let node_probe_cache = node_probe_cache.clone();
+        let choice =
+            run_node_selection_blocking(move || select_node_runner(&codebase, &node_probe_cache))
+                .await
+                .map_err(|error| format!("the Functions codebase {label:?}: {error}"))?
+                .map_err(|error| format!("the Functions codebase {label:?}: {error}"))?;
+        let command = choice.command.clone();
+        node = Some(choice);
+        command
+    };
+    Ok(RunnerSelection {
+        command,
+        python_environment,
+        node,
+    })
+}
+
+/// The version of the npm package `name` the codebase at `source` resolves, read the way Node
+/// resolves it: `node_modules/<name>` of the source directory or of the nearest ancestor that
+/// has one.
+pub(crate) fn installed_package_version(source: &Path, name: &str) -> Option<String> {
+    let manifest = source
+        .ancestors()
+        .map(|dir| dir.join("node_modules").join(name).join("package.json"))
+        .find(|path| path.is_file())?;
+    std::fs::read_to_string(manifest)
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|package| package.get("version")?.as_str().map(str::to_owned))
+}
+
+/// The canonical directory of a codebase's source, or why start-up refuses it.
+fn canonical_codebase_source(
+    codebase: &crate::config::FunctionsCodebase,
+) -> Result<String, String> {
     let source = codebase.source.clone();
     let label = &codebase.codebase;
     if !Path::new(&source).is_dir() {
@@ -4018,41 +4180,119 @@ async fn start_codebase(
         .into_owned();
     #[cfg(windows)]
     let source = fireemu_adapter_functions::runner::node_path(&source).into_owned();
+    Ok(source)
+}
+
+/// What a codebase would run on, as `up --plan` reports it: the source and runner start-up
+/// would choose, and the SDK versions installed there. `error` is the refusal start-up would
+/// give instead.
+pub(crate) struct CodebasePlan {
+    pub source: Option<String>,
+    pub language: &'static str,
+    pub runner: Option<RunnerSelection>,
+    /// Package or distribution name to installed version.
+    pub sdk: BTreeMap<String, String>,
+    pub error: Option<String>,
+}
+
+/// Decides one codebase the way [`start_codebase`] does, without starting anything. It runs the
+/// probes start-up runs: `node --version`, and the codebase's own Python for a Python codebase.
+pub(crate) fn plan_codebase(
+    cfg: &RuntimeConfig,
+    codebase: &crate::config::FunctionsCodebase,
+    callable_trusted_protocol: bool,
+) -> CodebasePlan {
+    let python = crate::python_functions::codebase_language(codebase) == RuntimeLanguage::Python;
+    let mut plan = CodebasePlan {
+        source: None,
+        language: if python { "python" } else { "node" },
+        runner: None,
+        sdk: BTreeMap::new(),
+        error: None,
+    };
+    let source = match canonical_codebase_source(codebase) {
+        Ok(source) => source,
+        Err(error) => {
+            plan.error = Some(error);
+            return plan;
+        }
+    };
+    plan.source = Some(source.clone());
+    if python && callable_trusted_protocol {
+        plan.error = Some(python_callable_refusal(&codebase.codebase));
+        return plan;
+    }
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            plan.error = Some(format!(
+                "cannot build a runtime to probe the interpreter: {error}"
+            ));
+            return plan;
+        }
+    };
+    let cache = Arc::new(NodeProbeCache::default());
+    match runtime.block_on(select_runner(cfg, codebase, &source, python, &cache)) {
+        Ok(selection) => {
+            if let Some(environment) = &selection.python_environment {
+                plan.sdk.insert(
+                    "firebase-functions".to_owned(),
+                    environment.sdk_version.clone(),
+                );
+            }
+            plan.runner = Some(selection);
+        }
+        Err(error) => plan.error = Some(error),
+    }
+    if !python {
+        for package in ["firebase-functions", "firebase-admin"] {
+            if let Some(version) = installed_package_version(Path::new(&source), package) {
+                plan.sdk.insert(package.to_owned(), version);
+            }
+        }
+    }
+    plan
+}
+
+/// The refusal for a Python codebase when the run enables App Check, which Python callables
+/// cannot honour yet.
+fn python_callable_refusal(label: &str) -> String {
+    format!(
+        "the Functions codebase {label:?}: App Check for Python callables is not available yet, \
+         and this run enables it; load the Python codebase on its own (--only \
+         functions:{label}) or remove the App Check configuration"
+    )
+}
+
+/// Starts one codebase's runner, reads its environment and validates what it discovered.
+///
+/// Every codebase gets its own process, its own dotenv chain (the files live next to its
+/// `source`) and its own HTTP server; nothing about one codebase can be observed from another.
+#[allow(clippy::too_many_lines)]
+async fn start_codebase(
+    cfg: &RuntimeConfig,
+    codebase: &crate::config::FunctionsCodebase,
+    hosts: &EmulatorHosts,
+    runner_secret: &str,
+    callable_trusted_protocol: bool,
+    node_probe_cache: &Arc<NodeProbeCache>,
+    clock_snapshot: fireemu_core_session::clock::ClockSnapshot,
+) -> Result<fireemu_adapter_functions::runtime::CodebaseSpec, String> {
+    let label = &codebase.codebase;
+    let source = canonical_codebase_source(codebase)?;
     let python = crate::python_functions::codebase_language(codebase) == RuntimeLanguage::Python;
     if python && callable_trusted_protocol {
-        return Err(format!(
-            "the Functions codebase {label:?}: App Check for Python callables is not available yet, \
-             and this run enables it; load the Python codebase on its own (--only \
-             functions:{label}) or remove the App Check configuration"
-        ));
+        return Err(python_callable_refusal(label));
     }
-    // The venv is checked before anything is spawned, with firebase-tools' wording; a
-    // `functions.runner` override replaces the whole launch and is its own responsibility.
-    let python_environment = if python && cfg.functions_runner.is_none() {
-        Some(
-            crate::python_functions::preflight(Path::new(&source), codebase.runtime.as_deref())
-                .await
-                .map_err(|error| format!("the Functions codebase {label:?}: {error}"))?,
-        )
-    } else {
-        None
-    };
-    let mut command = if let Some(command) = cfg.functions_runner.clone() {
-        command
-    } else if let Some(environment) = &python_environment {
-        let script = crate::python_functions::locate_runner()
-            .map_err(|error| format!("the Functions codebase {label:?}: {error}"))?;
-        crate::python_functions::runner_command(environment, &script)
-    } else {
-        let codebase = codebase.clone();
-        let node_probe_cache = node_probe_cache.clone();
-        run_node_selection_blocking(move || {
-            default_runner_for_codebase(&codebase, &node_probe_cache)
-        })
-        .await
-        .map_err(|error| format!("the Functions codebase {label:?}: {error}"))?
-        .map_err(|error| format!("the Functions codebase {label:?}: {error}"))?
-    };
+    let selection = select_runner(cfg, codebase, &source, python, node_probe_cache).await?;
+    for note in selection.node.iter().flat_map(|node| &node.notes) {
+        eprintln!("{note}");
+    }
+    let python_environment = selection.python_environment;
+    let mut command = selection.command;
     let inspecting = cfg.functions_inspect_dynamic || cfg.functions_inspect_port.is_some();
     let inspector = inspector_arguments(
         python,

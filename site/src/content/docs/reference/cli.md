@@ -52,6 +52,7 @@ fireemu up - start the emulators and keep them running until Ctrl-C (alias: emul
 
 usage:
   fireemu up [options]
+  fireemu up --plan [--json] [options]
   fireemu emulators:start [options]
 
 Serves the selected emulators (Firestore, Auth, Storage and App Check; Functions when a codebase is configured, and with it Eventarc and Cloud Tasks; Pub/Sub when configured; the Realtime Database when configured) plus the control API, the Emulator Hub and the UI on loopback until Ctrl-C.
@@ -101,6 +102,14 @@ options:
         Import an export directory (from --export-on-exit or emulators:export) at start; it must exist. Default: start empty.
   --export-on-exit [dir]
         Export all state to this directory when the emulators stop; without a directory, the --import directory. Refused for the working directory or a parent of it, and unavailable on Windows. Default: no export.
+  --plan
+        Resolve the run exactly as start-up does, print what it would do and start nothing: the project ID and where it came from, the command-line overrides, each service with its address (or why it is off), the environment variables the run sets and the inherited ones that remain, the absolute path of every rules, index and source file with the directory a relative path is resolved against, the Node or Python each Functions codebase would run on with its SDK versions, the active development defaults and the settings that have no effect. It runs `node --version` and a Python codebase's own interpreter, probes no port, and exits 1 when the run would fail for a reason it can see (a codebase that cannot start, a variable --deny-inherited-emulator-env refuses). For up and exec; capabilities accepts and ignores it. Default: off.
+  --json
+        With --plan: print the plan as JSON (planVersion 1) instead of text. Requires --plan. Default: text.
+  --deny-inherited-emulator-env
+        Refuse to start (exit 1, before anything starts) when the environment carries an emulator variable (FIRESTORE_EMULATOR_HOST, PUBSUB_EMULATOR_HOST, ...) for a service this run does not start: the command, or a Functions runner that inherits the environment, would reach whatever listens there, for example another worktree's suite. Variables of services this run starts are replaced by its own values and never refused. For up and exec; capabilities accepts and ignores it. Default: warn and keep the variable, as the official emulators:exec does.
+  --allow-inherited-emulator-env <NAME>
+        Keep this inherited emulator variable on purpose (for example PUBSUB_EMULATOR_HOST when one suite deliberately uses another's Pub/Sub): no warning and no refusal for it. May be repeated. A name that is no emulator variable is a usage error. Default: none.
   --ready-file <file>
         Publish endpoint discovery, including a control capability, to this private file once every listener is bound, and remove it on graceful shutdown. For tooling such as fireemu/testing. Default: none.
   --owner-stdin
@@ -117,10 +126,13 @@ fireemu exec - start the emulators, run a command, stop them (alias: emulators:e
 usage:
   fireemu exec [options] "shell script"
   fireemu exec [options] -- <command...>
+  fireemu exec --plan [--json] [options] -- <command...>
   fireemu emulators:exec [options] "shell script"
   fireemu emulators:exec [options] -- <command...>
 
 Starts the same emulators as `up`, runs the command with the emulator host environment variables (FIRESTORE_EMULATOR_HOST, FIREBASE_AUTH_EMULATOR_HOST, and so on) once every listener is bound, stops everything when the command exits, and exits with the command's status. On Unix, a command ended by signal n gives 128 + n, and SIGINT and SIGTERM are forwarded to it.
+
+Like the official emulators:exec, the command inherits the parent environment, and this run's values replace the variables of the services it starts. An emulator variable for a service it does not start stays as it is (and is warned about); --deny-inherited-emulator-env refuses such a run instead, and --allow-inherited-emulator-env keeps a variable on purpose. --plan shows the environment without starting anything.
 
 With "shell script" (the official form) the script is run by the system shell. With `--` the command is run as exactly that program and argv, without a shell. Everything after `--` belongs to the command, including --help; a `--help` inside the script text is script text.
 
@@ -130,6 +142,36 @@ options: every option of `up` (listed under up above), and:
   -h, --help
         Print this help and exit.
 ```
+
+### Plan a run
+
+`--plan` on `up` or `exec` resolves the run exactly as start-up does, prints what it would do, and starts nothing. `--json` prints the same plan as JSON (`planVersion` 1). Put it in front of a CI job to see what a command line and a configuration add up to:
+
+```sh
+npx fireemu exec --plan -- npm test
+npx fireemu up --plan --json --only firestore,auth --project demo-ci
+```
+
+The plan lists:
+
+- The project ID and the rule that chose it (`--project`, an alias in `.firebaserc`, the `.firebaserc` default, `daemon.authProject`, or the built-in default), the configuration files that were loaded, and the command-line overrides that were applied. [`config show`](#config-show) reads the files only, so it does not include the overrides.
+- Every service with its address, or the reason it does not start (`--only`, no Functions codebase, Pub/Sub not configured). It does not probe a port; the run binds its ports when it starts.
+- The environment: the variables the run sets for its services, and the emulator variables the parent environment carries that remain (see [Inherited emulator variables](#inherited-emulator-variables)). A credential in an inherited endpoint is replaced by `***`.
+- Each rules, index, text-index and source file as the run opens it: the absolute path, the path as written, and the directory a relative path is resolved against. Paths in the canonical configuration resolve against the working directory and paths in `firebase.json` against its directory ([Relative paths](../../guides/configuration/#relative-paths)); the plan warns when the canonical configuration lives in another directory than the working directory, because the same file run from its own directory would read other files.
+- For each Functions codebase, the Node or Python executable and version the run would use, chosen by the code start-up uses (so `FIREEMU_NODE`, `PATH`, `VOLTA_HOME`, `engines.node`, and the codebase's `venv` all count), and the installed `firebase-functions` and `firebase-admin` versions. The plan runs `node --version` and a Python codebase's interpreter to find out.
+- The development defaults in effect, with the ones [`productionExact`](../../guides/profiles/) would switch marked `relaxed`, and the settings the configuration sets that have [no effect](#config-lint).
+
+The command exits 1, with the plan still printed, when the run would fail for a reason the plan can see: a Functions codebase that cannot start (no usable Node, a missing `venv`), or an inherited variable that `--deny-inherited-emulator-env` refuses. A configuration the daemon refuses fails with the same message and exit code as `up`.
+
+### Inherited emulator variables
+
+`exec` gives its command your environment with the variables of the services it starts replaced, as `firebase emulators:exec` does. A variable for a service this run does not start keeps its value, so a missing emulator never sends an SDK to production, but it also means that a variable left in your shell by another suite (a second checkout or a parallel job) points your tests at that suite. Fireemu therefore reports it:
+
+- By default it prints a `warning:` for each such variable, keeps it, and runs.
+- `--deny-inherited-emulator-env` refuses the run before anything starts (exit code 1) when the environment carries an emulator variable for a service the run does not start. The variables of services the run starts are replaced by its own values and are never refused. It applies to `up` too, where the variables belong to the shell that starts it and to a Functions runner under the `emulator` profile.
+- `--allow-inherited-emulator-env <NAME>` keeps one on purpose, for example `PUBSUB_EMULATOR_HOST` when one suite deliberately uses another's Pub/Sub. It silences the warning and the refusal for that variable, can be repeated, and refuses a name that is no emulator variable. [`--plan`](#plan-a-run) lists each inherited variable and what happens to it.
+
+The Hub and the Logging emulator are best effort (a busy default port only disables them), so whether they start is known only at start-up; the check treats them as started.
 
 ## emulators:export
 
@@ -158,7 +200,7 @@ fireemu doctor - check the installation: binary, UI, Functions runner, Node.js
 usage:
   fireemu doctor [--connect <control url> | --export-dir <path>]
 
-Reports the Fireemu binary, UI, Functions runner and Node.js that this installation finds, and suggests a remedy for each problem.
+Reports the Fireemu binary, UI, Functions runner and the Node.js that Functions would run on (FIREEMU_NODE, else the first node on PATH or in VOLTA_HOME, chosen by the code Functions start-up uses, not the node a shell finds), and suggests a remedy for each problem. A codebase's runtime or engines.node can select another installed Node; `fireemu up --plan` shows the one each codebase gets.
 
 options:
   --export-dir path
@@ -188,7 +230,7 @@ options: every option of `up` (listed under up above); only --config and --fireb
 
 ## config show
 
-`fireemu config show` prints every configuration key in schema order with its effective value and source, using the same configuration discovery as `fireemu up`, but without the command-line overrides of `up` (`--project`, `--only` and the port flags) and without starting the emulators. Use `--config <path>` or `--firebase-json <path>` to select files, and `--json` for records containing `key`, `value`, `source`, and the schema description.
+`fireemu config show` prints every configuration key in schema order with its effective value and source, using the same configuration discovery as `fireemu up`, but without the command-line overrides of `up` (`--project`, `--only` and the port flags) and without starting the emulators. To see the result of the files and the overrides together, use [`fireemu up --plan`](#plan-a-run). Use `--config <path>` or `--firebase-json <path>` to select files, and `--json` for records containing `key`, `value`, `source`, and the schema description.
 
 - Sources distinguish explicit values, defaults, `productionExact`, derived values, and unset keys.
 - When the runtime does not expose a value, the command uses its explicit file value, its schema default (marked `default (schema)`), or `(unset)` (`null` with source `unset` in JSON).

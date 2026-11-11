@@ -2040,6 +2040,7 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         ready_file,
         owner_stdin,
         config_origin,
+        ..
     } = options;
     let quiet = verbosity == Verbosity::Quiet;
     // The wall-clock reading an unpinned clock start was taken at, so that a clock that follows

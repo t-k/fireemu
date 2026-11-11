@@ -7,7 +7,7 @@ This list is taken from the source of the `fireemu` binary and the npm package. 
 
 ## Set by `fireemu exec`
 
-`exec` gives its command the variables of the emulators that are running, and nothing else of its own. Variables for emulators that are not selected are left as your environment had them, so a missing emulator never sends an SDK to production by accident. The names and formats follow what `firebase emulators:exec` writes.
+`exec` gives its command the variables of the emulators that are running, and nothing else of its own. Variables for emulators that are not selected are left as your environment had them, so a missing emulator never sends an SDK to production by accident; `exec` prints a warning for each one, and `--deny-inherited-emulator-env` refuses the run instead (see [Inherited emulator variables](../cli/#inherited-emulator-variables)). The names and formats follow what `firebase emulators:exec` writes.
 
 | Variable | Value | When |
 |---|---|---|

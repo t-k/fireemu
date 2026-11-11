@@ -17,6 +17,10 @@
 
 mod census;
 
+#[cfg(unix)]
+#[path = "../../../tests/support/real_node.rs"]
+mod real_node;
+
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
@@ -323,11 +327,10 @@ fn exec_command_with_logging_port(
     args.push(source.display().to_string());
     args.push("--".into());
     args.extend(command.iter().map(|argument| (*argument).to_owned()));
-    Command::new(env!("CARGO_BIN_EXE_fireemu"))
-        .args(&args)
-        .stdin(Stdio::null())
-        .output()
-        .unwrap()
+    let mut command = Command::new(env!("CARGO_BIN_EXE_fireemu"));
+    #[cfg(unix)]
+    real_node::use_real_node(&mut command);
+    command.args(&args).stdin(Stdio::null()).output().unwrap()
 }
 
 fn exec_command_with_inspector_port(
@@ -365,11 +368,10 @@ fn exec_command_with_inspector_port(
     args.push(source.display().to_string());
     args.push("--".into());
     args.extend(command.iter().map(|argument| (*argument).to_owned()));
-    Command::new(env!("CARGO_BIN_EXE_fireemu"))
-        .args(&args)
-        .stdin(Stdio::null())
-        .output()
-        .unwrap()
+    let mut command = Command::new(env!("CARGO_BIN_EXE_fireemu"));
+    #[cfg(unix)]
+    real_node::use_real_node(&mut command);
+    command.args(&args).stdin(Stdio::null()).output().unwrap()
 }
 
 fn stderr(out: &Output) -> String {

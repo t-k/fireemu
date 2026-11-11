@@ -22,6 +22,7 @@ import { createRuntimeClock } from "./clock.mjs";
 import { instrumentCallables } from "./callable-app-check.mjs";
 import { createAdminChannel, instrumentAdminAppCheck } from "./admin-app-check.mjs";
 import { removeAppCheckToken, withholdsAppCheckToken } from "./app-check-token.mjs";
+import { markNonCallableRequest } from "./nested-callable.mjs";
 import { blockingFailure } from "./blocking-error.mjs";
 import { blockingEvent, loadIdentityParsers, portedIdentityParsers } from "./blocking-event.mjs";
 import { blockingResult } from "./blocking-response.mjs";
@@ -1395,6 +1396,12 @@ async function makeHttpServer(functions, manifest) {
         .send(`no HTTP function ${req.params.project}/${req.params.region}/${req.params.name}`);
       return;
     }
+    // A request to a non-callable HTTP endpoint is marked in the strict profile, so that a callable
+    // wrapper nested in it refuses a credential the daemon did not verify (nested-callable.mjs).
+    markNonCallableRequest(req, {
+      strict: strictProfile(),
+      nonCallableHttp: spec.trigger?.type === "http" && spec.trigger.callable !== true,
+    });
     // Without App Check a callable that could consume a token never sees one, whichever path
     // the request took here (spec 13.4; app-check-token.mjs).
     if (withholdsAppCheckToken(spec, process.env)) removeAppCheckToken(req);

@@ -19,7 +19,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { withProjectLocks } from "../storage-rules/project-locks.mjs";
-import { armSending, createLocalDeps, createProductionDeps, fetchNet, isArmed } from "./deps.mjs";
+import { createLocalDeps, createProductionDeps, fetchNet, requireLaunch } from "./deps.mjs";
 import { installEgressGuard } from "../storage-signed-put/egress.mjs";
 import { renderLoads, renderTable } from "./judge.mjs";
 import { observe, readback } from "./observe.mjs";
@@ -143,7 +143,9 @@ export function finish(out, report, extra, log = console, plan = S9_PLAN) {
 }
 
 export function adcToken(exec = execFileSync) {
-  if (!isArmed()) throw new Error("the owner credential is read only after the launch flag");
+  // The real gcloud is a production client: it runs only under the launch flag. A rehearsal passes a
+  // fake command runner, which cannot read a credential (a real one is refused by `collaborators`).
+  if (exec === execFileSync) requireLaunch();
   try {
     return exec("gcloud", ["auth", "application-default", "print-access-token"], {
       encoding: "utf8",
@@ -200,7 +202,26 @@ export function readingOf(plan, report) {
   };
 }
 
-/** The production run, with its collaborators passed in so a test can stand in for each. */
+/**
+ * The collaborators of a command that sends. A real run (the default) takes the real ones and
+ * ignores any a caller passes, after checking the launch flag in the process environment. A
+ * rehearsal (`rehearsal: true`, for tests and dry runs against a fake world) must supply every one
+ * itself and needs no flag; whatever real client it hands over still checks the flag when it sends.
+ */
+function collaborators(rehearsal, injected, real, family, must) {
+  if (rehearsal !== true) {
+    requireLaunch(family);
+    return real;
+  }
+  // The credential command and the transport must be fakes. The observer, the project lock and the
+  // egress guard are local logic (a fake world, files, a patched http module) and may be the real ones.
+  for (const key of must)
+    if (injected[key] === undefined || injected[key] === real[key])
+      throw new Error(`a rehearsal needs an injected ${key}`);
+  return Object.fromEntries(Object.keys(real).map((key) => [key, injected[key] ?? real[key]]));
+}
+
+/** The production run: real collaborators under the launch flag, or injected ones in a rehearsal. */
 export async function recordProductionRun({
   plan = S9_PLAN,
   baseline: requested,
@@ -208,11 +229,12 @@ export async function recordProductionRun({
   lockDir = "docs.local/runs/sandbox-locks",
   legacyLock = "docs.local/runs/sandbox-ledger.jsonl.lock",
   env = process.env,
-  exec = execFileSync,
-  locks = withProjectLocks,
-  makeDeps = createProductionDeps,
-  observer = observe,
-  guardEgress = installEgressGuard,
+  rehearsal = false,
+  exec: injectedExec,
+  locks: injectedLocks,
+  makeDeps: injectedMakeDeps,
+  observer: injectedObserver,
+  guardEgress: injectedGuardEgress,
   newId = newRunId,
   pid = process.pid,
   clock = Date.now,
@@ -222,8 +244,27 @@ export async function recordProductionRun({
     if (FORBIDDEN_ENV.some((pattern) => pattern.test(name)))
       throw new Error(`refusing to start with ${name} set`);
   }
-  armSending(env, plan.id);
+  // Local validation first; then the launch flag; only then anything that reads or writes.
   const baseline = validateBaseline(requested, PROJECT);
+  const { exec, locks, makeDeps, observer, guardEgress } = collaborators(
+    rehearsal,
+    {
+      exec: injectedExec,
+      locks: injectedLocks,
+      makeDeps: injectedMakeDeps,
+      observer: injectedObserver,
+      guardEgress: injectedGuardEgress,
+    },
+    {
+      exec: execFileSync,
+      locks: withProjectLocks,
+      makeDeps: createProductionDeps,
+      observer: observe,
+      guardEgress: installEgressGuard,
+    },
+    plan.id,
+    ["exec", "makeDeps"],
+  );
   const runId = newId();
   const pin = pins(exec);
   requireCleanCheckout(pin);
@@ -232,7 +273,12 @@ export async function recordProductionRun({
   guardEgress(PRODUCTION_HOSTS);
   const tokens = tokenSource({ mint: () => adcToken(exec), now: clock });
   const accessToken = tokens.get();
-  const target = { name: "production", bucket: BUCKET, project: PROJECT };
+  const target = {
+    name: "production",
+    bucket: BUCKET,
+    project: PROJECT,
+    ...(rehearsal === true ? { rehearsal: true } : {}),
+  };
   out.save("run-header.json", { runId, plan: plan.id, startedAt, baseline, ...pin, target });
   let final;
   await locks(
@@ -296,11 +342,12 @@ export async function recoverRun({
   lockDir = "docs.local/runs/sandbox-locks",
   legacyLock = "docs.local/runs/sandbox-ledger.jsonl.lock",
   env = process.env,
-  exec = execFileSync,
-  locks = withProjectLocks,
-  makeDeps = createProductionDeps,
-  observer = observe,
-  guardEgress = installEgressGuard,
+  rehearsal = false,
+  exec: injectedExec,
+  locks: injectedLocks,
+  makeDeps: injectedMakeDeps,
+  observer: injectedObserver,
+  guardEgress: injectedGuardEgress,
   pid = process.pid,
   now = () => new Date(),
   clock = Date.now,
@@ -312,7 +359,25 @@ export async function recoverRun({
   }
   const header = JSON.parse(readFileSync(join(dir, "run-header.json"), "utf8"));
   const plan = planFor(header.plan ?? "s9");
-  armSending(env, plan.id);
+  const { exec, locks, makeDeps, observer, guardEgress } = collaborators(
+    rehearsal,
+    {
+      exec: injectedExec,
+      locks: injectedLocks,
+      makeDeps: injectedMakeDeps,
+      observer: injectedObserver,
+      guardEgress: injectedGuardEgress,
+    },
+    {
+      exec: execFileSync,
+      locks: withProjectLocks,
+      makeDeps: createProductionDeps,
+      observer: observe,
+      guardEgress: installEgressGuard,
+    },
+    plan.id,
+    ["exec", "makeDeps"],
+  );
   const baseline = validateBaseline(header.baseline, PROJECT);
   let entryRulesets;
   try {
@@ -337,7 +402,12 @@ export async function recoverRun({
   guardEgress(PRODUCTION_HOSTS);
   const tokens = tokenSource({ mint: () => adcToken(exec), now: clock });
   const accessToken = tokens.get();
-  const target = { name: "production", bucket: BUCKET, project: PROJECT };
+  const target = {
+    name: "production",
+    bucket: BUCKET,
+    project: PROJECT,
+    ...(rehearsal === true ? { rehearsal: true } : {}),
+  };
   out.save("run-header.json", {
     runId: header.runId,
     recoverOf: header.runId,
@@ -419,18 +489,29 @@ async function recordLocal() {
  */
 export async function readbackRun({
   dir,
-  env = process.env,
-  exec = execFileSync,
-  guardEgress = installEgressGuard,
-  net = fetchNet,
-  reader = readback,
+  rehearsal = false,
+  exec: injectedExec,
+  guardEgress: injectedGuardEgress,
+  net: injectedNet,
+  reader: injectedReader,
   now = () => new Date(),
   log = console,
 }) {
   const header = JSON.parse(readFileSync(join(dir, "run-header.json"), "utf8"));
   const entry = JSON.parse(readFileSync(join(dir, "entry.json"), "utf8")).entryRulesets;
   const plan = planFor(header.plan ?? "s9");
-  armSending(env, plan.id);
+  const { exec, guardEgress, net, reader } = collaborators(
+    rehearsal,
+    {
+      exec: injectedExec,
+      guardEgress: injectedGuardEgress,
+      net: injectedNet,
+      reader: injectedReader,
+    },
+    { exec: execFileSync, guardEgress: installEgressGuard, net: fetchNet, reader: readback },
+    plan.id,
+    ["exec", "net", "reader"],
+  );
   let unknowns = null;
   try {
     const list = JSON.parse(readFileSync(join(dir, "run-report.json"), "utf8")).unknowns;
@@ -465,7 +546,12 @@ export async function readbackRun({
   const report = await reader({
     plan,
     unknowns,
-    target: { name: "production", bucket: BUCKET, project: PROJECT },
+    target: {
+      name: "production",
+      bucket: BUCKET,
+      project: PROJECT,
+      ...(rehearsal === true ? { rehearsal: true } : {}),
+    },
     runId: header.runId,
     baseline: header.baseline,
     entry,

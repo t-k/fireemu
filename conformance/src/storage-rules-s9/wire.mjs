@@ -5,6 +5,7 @@
 import { Buffer } from "node:buffer";
 
 import { classifyRequest, isUnknownStatus } from "./guard.mjs";
+import { requireLaunch } from "./deps.mjs";
 import { REQUEST_TIMEOUT_MS } from "./plan.mjs";
 
 export class UnknownAnswer extends Error {
@@ -26,6 +27,8 @@ export function createWire({ target, state, budget, deps, out }) {
    *   an unknown answer is returned (with `unknown: true`) instead of thrown
    */
   async function wire(label, request, { admin = false, read = false } = {}) {
+    // Whatever transport `deps` holds, a send to production needs the launch flag at this moment.
+    if (target.name === "production" && target.rehearsal !== true) requireLaunch(state.family);
     const headers = { ...(admin ? deps.adminHeaders() : {}), ...request.headers };
     const kind = classifyRequest(target, { ...request, headers }, state);
     const n = budget.take();

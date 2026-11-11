@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
 
-import { armSending, createProductionDeps, fetchNet } from "./storage-rules-s9/deps.mjs";
+import { createProductionDeps, createRehearsalDeps, fetchNet } from "./storage-rules-s9/deps.mjs";
 import { observe, readback } from "./storage-rules-s9/observe.mjs";
 import { BUCKET, ESTIMATED_USD, PROJECT, S9_PLAN } from "./storage-rules-s9/plan.mjs";
 import {
@@ -18,9 +18,16 @@ import {
   newOutDir,
   pins,
   productionOptions,
-  readbackRun,
-  recordProductionRun,
+  readbackRun as realReadbackRun,
+  recordProductionRun as realRecordProductionRun,
 } from "./storage-rules-s9/run.mjs";
+
+// A rehearsal: every collaborator is injected, so no flag is needed and nothing real is reachable.
+const noNetwork = async () => {
+  throw new Error("a rehearsal has no network");
+};
+const readbackRun = (options) => realReadbackRun({ rehearsal: true, net: noNetwork, ...options });
+const recordProductionRun = (options) => realRecordProductionRun({ rehearsal: true, ...options });
 import { createWorld } from "./storage-rules-s9/world.fake.mjs";
 
 const scratch = mkdtempSync(join(tmpdir(), "s9-run-"));
@@ -146,7 +153,6 @@ describe("storage rules s9 pins and credentials", () => {
   });
 
   it("asks gcloud for the application default token once, with a timeout and no stdin", () => {
-    armSending({ FIREEMU_STORAGE_RULES_LAUNCH: "s9" }, "s9");
     const calls = [];
     assert.equal(adcToken(cleanExec(calls)), "ya29.token");
     assert.equal(calls.length, 1);
@@ -168,7 +174,7 @@ describe("storage rules s9 pins and credentials", () => {
 });
 
 describe("storage rules s9 production run glue", () => {
-  const target = { name: "production", bucket: BUCKET, project: PROJECT };
+  const target = { name: "production", bucket: BUCKET, project: PROJECT, rehearsal: true };
   function setup(over = {}) {
     const calls = { guard: [], locks: [], deps: [], observer: [], closed: 0, order: [] };
     const logger = sink();
@@ -176,7 +182,7 @@ describe("storage rules s9 production run glue", () => {
     const options = {
       baseline: baselineName,
       outPath: fresh(),
-      env: { PATH: "/bin", FIREEMU_STORAGE_RULES_LAUNCH: "s9" },
+      env: { PATH: "/bin" },
       exec: cleanExec(calls.order),
       newId: () => "sr-0123abcd",
       pid: 4242,
@@ -334,7 +340,6 @@ describe("storage rules s9 read-back glue", () => {
     const logger = sink();
     const report = await readbackRun({
       dir,
-      env: { FIREEMU_STORAGE_RULES_LAUNCH: "s9" },
       exec: cleanExec(),
       guardEgress: (hosts) => seen.push(["guard", hosts]),
       net: async () => ({ status: 200, headers: {}, body: Buffer.alloc(0) }),
@@ -356,7 +361,12 @@ describe("storage rules s9 read-back glue", () => {
     assert.equal(args.runId, "sr-0123abcd");
     assert.equal(args.baseline, baselineName);
     assert.deepEqual(args.entry, [{ name: "n", services: ["s"] }]);
-    assert.deepEqual(args.target, { name: "production", bucket: BUCKET, project: PROJECT });
+    assert.deepEqual(args.target, {
+      name: "production",
+      bucket: BUCKET,
+      project: PROJECT,
+      rehearsal: true,
+    });
     assert.deepEqual(args.deps.adminHeaders(), {
       authorization: "Bearer ya29.token",
       "x-goog-user-project": PROJECT,
@@ -369,7 +379,6 @@ describe("storage rules s9 read-back glue", () => {
     await assert.rejects(
       readbackRun({
         dir,
-        env: { FIREEMU_STORAGE_RULES_LAUNCH: "s9" },
         exec: cleanExec(),
         guardEgress() {},
         now: () => new Date("2026-11-08T15:30:45.123Z"),
@@ -442,7 +451,7 @@ describe("storage rules s9 network edges", () => {
 });
 
 describe("storage rules s9 read-back of a finished run", () => {
-  const target = { name: "production", bucket: BUCKET, project: PROJECT };
+  const target = { name: "production", bucket: BUCKET, project: PROJECT, rehearsal: true };
   const runId = "sr-0123abcd";
   const owner = { authorization: "Bearer t", "x-goog-user-project": PROJECT };
   const sinks = () => {
@@ -729,7 +738,6 @@ describe("storage rules s9 run receipts and read-back files", () => {
     seeded.save("entry.json", { baseline: "absent", entryRulesets: [] });
     await readbackRun({
       dir,
-      env: { FIREEMU_STORAGE_RULES_LAUNCH: "s9" },
       exec: cleanExec(),
       guardEgress() {},
       now: () => new Date("2026-11-08T15:30:45.123Z"),

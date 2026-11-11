@@ -6,11 +6,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
 
-import { LAUNCH_FLAG } from "./storage-rules-s9/deps.mjs";
 import { observe } from "./storage-rules-s9/observe.mjs";
 import { BUCKET, PROJECT } from "./storage-rules-s9/plan.mjs";
 import { CASE_PLAN } from "./storage-rules-s9/plan-case.mjs";
-import { newOutDir, ownRulesetsOf, recoverOptions, recoverRun } from "./storage-rules-s9/run.mjs";
+import {
+  newOutDir,
+  ownRulesetsOf,
+  recoverOptions,
+  recoverRun as realRecoverRun,
+} from "./storage-rules-s9/run.mjs";
+
+// A rehearsal: every collaborator is injected, so no flag is needed and nothing real is reachable.
+const recoverRun = (options) => realRecoverRun({ rehearsal: true, ...options });
 import { createWorld } from "./storage-rules-s9/world.fake.mjs";
 
 const scratch = mkdtempSync(join(tmpdir(), "case-recover-"));
@@ -19,7 +26,7 @@ let counter = 0;
 const fresh = () => join(scratch, `d${(counter += 1)}`);
 const runId = "sr-0123abcd";
 const baselineName = `projects/${PROJECT}/rulesets/22b746af-0000-4000-8000-000000000001`;
-const target = { name: "production", bucket: BUCKET, project: PROJECT };
+const target = { name: "production", bucket: BUCKET, project: PROJECT, rehearsal: true };
 const owner = { authorization: "Bearer t", "x-goog-user-project": PROJECT };
 const memory = () => {
   const saved = {};
@@ -355,7 +362,6 @@ describe("the recover command", () => {
     const final = await recoverRun({
       dir,
       exec: gitExec,
-      env: { [LAUNCH_FLAG]: "case" },
       guardEgress() {},
       pid: 7,
       now: () => new Date("2026-11-12T00:00:00.000Z"),
@@ -400,7 +406,7 @@ describe("the recover command", () => {
         if (cmd === "gcloud") seen.gcloud += 1;
         return gitExec(cmd, args);
       },
-      env: { PATH: "/bin", HOME: "/h", [LAUNCH_FLAG]: "s9" },
+      env: { PATH: "/bin", HOME: "/h" },
       guardEgress: (hosts) => seen.egress.push(hosts),
       pid: 9,
       now: () => new Date("2026-11-12T01:02:03.456Z"),
@@ -438,6 +444,7 @@ describe("the recover command", () => {
       name: "production",
       bucket: BUCKET,
       project: PROJECT,
+      rehearsal: true,
     });
     assert.deepEqual(seen.observer[0].deps, { made: true });
     assert.equal(seen.observer[0].runId, runId);
@@ -455,8 +462,8 @@ describe("the recover command", () => {
       recoverRun({
         dir,
         exec: (cmd, args) => (args.includes("rev-parse") ? `${"a".repeat(40)}\n` : " M x\n"),
-        env: { [LAUNCH_FLAG]: "case" },
         guardEgress: () => (touched += 1),
+        makeDeps: () => (touched += 1),
         locks: async () => (touched += 1),
         now: () => new Date("2026-11-12T02:00:00.000Z"),
         log: quiet,
@@ -472,7 +479,6 @@ describe("the recover command", () => {
     const common = {
       dir,
       exec: gitExec,
-      env: { [LAUNCH_FLAG]: "case" },
       guardEgress() {},
       pid: 7,
       locks: async (opts, use) => use({ confirmClosed: () => assert.fail("must not close") }),

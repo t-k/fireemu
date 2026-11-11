@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
 
-import { LAUNCH_FLAG, createProductionDeps } from "./storage-rules-s9/deps.mjs";
+import { createRehearsalDeps } from "./storage-rules-s9/deps.mjs";
 import { observe, readback } from "./storage-rules-s9/observe.mjs";
 import { BUCKET, PROJECT, S9_PLAN } from "./storage-rules-s9/plan.mjs";
 import { CASE_PLAN } from "./storage-rules-s9/plan-case.mjs";
@@ -23,10 +23,17 @@ import {
   planFor,
   pins,
   productionOptions,
-  readbackRun,
-  recordProductionRun,
+  readbackRun as realReadbackRun,
+  recordProductionRun as realRecordProductionRun,
   tokenSource,
 } from "./storage-rules-s9/run.mjs";
+
+// A rehearsal: every collaborator is injected, so no flag is needed and nothing real is reachable.
+const noNetwork = async () => {
+  throw new Error("a rehearsal has no network");
+};
+const readbackRun = (options) => realReadbackRun({ rehearsal: true, net: noNetwork, ...options });
+const recordProductionRun = (options) => realRecordProductionRun({ rehearsal: true, ...options });
 import { createWorld } from "./storage-rules-s9/world.fake.mjs";
 import { withProjectLocks } from "./storage-rules/project-locks.mjs";
 
@@ -81,7 +88,7 @@ describe("the run of the case family", () => {
       plan,
       baseline: baselineName,
       outPath: fresh(),
-      env: { PATH: "/bin", [LAUNCH_FLAG]: plan.id },
+      env: { PATH: "/bin" },
       exec: execWith(),
       newId: () => "sr-0123abcd",
       pid: 4242,
@@ -215,7 +222,6 @@ describe("a token that outlives its hour (S9 review SF1)", () => {
       outPath: join(dir, "out"),
       lockDir: join(dir, "locks"),
       legacyLock: join(dir, "legacy.lock"),
-      env: { [LAUNCH_FLAG]: "case" },
       exec: execWith(tokens),
       newId: () => "sr-0123abcd",
       pid: process.pid,
@@ -223,7 +229,7 @@ describe("a token that outlives its hour (S9 review SF1)", () => {
       guardEgress() {},
       clock: () => clock,
       makeDeps: ({ token, lease }) => ({
-        ...createProductionDeps({ accessToken: "unused", token, lease, net }),
+        ...createRehearsalDeps({ accessToken: "unused", token, lease, net }),
         sleep: async () => {},
       }),
     });
@@ -253,14 +259,13 @@ describe("a read that fails in transport does not keep the lock (S9 review SF4)"
       outPath: join(dir, "out"),
       lockDir: join(dir, "locks"),
       legacyLock: join(dir, "legacy.lock"),
-      env: { [LAUNCH_FLAG]: "case" },
       exec: execWith(),
       newId: () => "sr-0123abcd",
       pid: process.pid,
       log: quiet,
       guardEgress() {},
       makeDeps: ({ token, lease }) => ({
-        ...createProductionDeps({ accessToken: "unused", token, lease, net: fake.net }),
+        ...createRehearsalDeps({ accessToken: "unused", token, lease, net: fake.net }),
         sleep: async () => {},
       }),
     };
@@ -290,7 +295,7 @@ describe("a read that fails in transport does not keep the lock (S9 review SF4)"
 });
 
 describe("the A2 read-back does not close what the run left open (S9 review SF3)", () => {
-  const target = { name: "production", bucket: BUCKET, project: PROJECT };
+  const target = { name: "production", bucket: BUCKET, project: PROJECT, rehearsal: true };
   const runId = "sr-0123abcd";
   const owner = { authorization: "Bearer t", "x-goog-user-project": PROJECT };
   const entry = [
@@ -362,7 +367,6 @@ describe("the A2 read-back does not close what the run left open (S9 review SF3)
     const seen = [];
     const common = {
       dir,
-      env: { [LAUNCH_FLAG]: "case" },
       exec: execWith(),
       guardEgress() {},
       now: () => new Date("2026-11-12T00:00:00.000Z"),
@@ -395,7 +399,6 @@ describe("the A2 read-back does not close what the run left open (S9 review SF3)
     let plan;
     await readbackRun({
       dir,
-      env: { [LAUNCH_FLAG]: "s9" },
       exec: execWith(),
       guardEgress() {},
       now: () => new Date("2026-11-12T00:00:00.000Z"),

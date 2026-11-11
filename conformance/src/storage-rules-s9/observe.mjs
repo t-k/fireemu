@@ -98,7 +98,14 @@ export async function observe({
   };
   const root = plan.runRoot(runId);
   const ownRulesets = new Set(recover?.ownRulesets ?? []);
-  const state = { runId, root, prefixRoot: plan.prefixRoot, ownRulesets, baseline };
+  const state = {
+    runId,
+    root,
+    prefixRoot: plan.prefixRoot,
+    family: plan.id,
+    ownRulesets,
+    baseline,
+  };
   const { wire, unknownLabels, unknownReads } = createWire({ target, state, budget, deps, out });
   const bucket = target.bucket;
   const gcs = production ? "https://storage.googleapis.com" : target.origin;
@@ -810,7 +817,14 @@ export async function readback({
   unknowns = [],
 }) {
   const root = plan.runRoot(runId);
-  const state = { runId, root, prefixRoot: plan.prefixRoot, ownRulesets: new Set(), baseline };
+  const state = {
+    runId,
+    root,
+    prefixRoot: plan.prefixRoot,
+    family: plan.id,
+    ownRulesets: new Set(),
+    baseline,
+  };
   const budget = new RequestBudget(cap, cap);
   const { wire, unknownReads } = createWire({ target, state, budget, deps, out });
   const bucket = target.bucket;

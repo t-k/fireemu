@@ -1,6 +1,6 @@
 // Request guard of the Storage Rules observation. Every request passes `classifyRequest` before it
 // leaves the process: only the forms below, only the project's own bucket and release, only object
-// names under the run's root (`storage-rules-s9/<runId>/`, with one optional leading slash), and a
+// names under the run's root (`<family prefix>/<runId>/`, with one optional leading slash), and a
 // release body only with a ruleset this run created or the baseline ruleset the run must restore.
 
 import { PREFIX_ROOT } from "./plan.mjs";
@@ -83,14 +83,15 @@ const exactKeys = (value, keys) =>
 /**
  * @param {object} target `{name: "production" | "local", bucket, project, origin?}`
  * @param {{method: string, url: string, headers?: object, body?: Uint8Array}} request
- * @param {{runId: string, root: string, ownRulesets: Set<string>, baseline: string}} state
- *   `ownRulesets`: full names of rulesets this run created. `baseline`: `"absent"`, a full ruleset
+ * @param {{runId: string, root: string, prefixRoot?: string, ownRulesets: Set<string>, baseline: string}} state
+ *   `prefixRoot`: the family's prefix (the s9 family's when omitted). `ownRulesets`: full names of rulesets this run created. `baseline`: `"absent"`, a full ruleset
  *   name, or `"local"`.
  * @returns {string} the request kind
  */
 export function classifyRequest(target, request, state) {
   const root = state.root;
-  if (!root.startsWith(`${PREFIX_ROOT}/`) || !root.endsWith("/")) fail("bad run root");
+  if (!root.startsWith(`${state.prefixRoot ?? PREFIX_ROOT}/`) || !root.endsWith("/"))
+    fail("bad run root");
   const url = new URL(request.url);
   if (url.username || url.password) fail("credentials in URL");
   const method = request.method;

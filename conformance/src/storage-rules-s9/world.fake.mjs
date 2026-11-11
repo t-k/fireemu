@@ -9,7 +9,7 @@
 
 import { Buffer } from "node:buffer";
 
-import { OBJECTS, PROGRAMS, ROWS, recordingPrefix } from "./plan.mjs";
+import { S9_PLAN } from "./plan.mjs";
 
 const pretty = (value) => `${JSON.stringify(value, null, 2)}\n`;
 const reply = (status, body, contentType = "application/json; charset=UTF-8") => ({
@@ -31,6 +31,7 @@ const noRelease = (project) =>
 
 /**
  * @param {object} options
+ * @param {object} [options.plan] the family the world serves; the s9 family when omitted
  * @param {string} options.project
  * @param {string} options.bucket
  * @param {string|null} options.baseline full name of the baseline ruleset, or null for no release
@@ -40,6 +41,7 @@ const noRelease = (project) =>
  * @param {Set<string>} [options.refuseNames] object names a create refuses with 400
  */
 export function createWorld({
+  plan = S9_PLAN,
   project,
   bucket,
   baseline,
@@ -95,24 +97,25 @@ export function createWorld({
     world.release = next === null ? null : { rulesetName: next };
     world.pending = { to, remaining: lag };
   }
-  const programOf = (source) => {
-    const match = /mk\/([abc]) /.exec(source ?? "");
-    return match ? { a: "s9", b: "units", c: "lists" }[match[1]] : null;
-  };
+  // A source belongs to the program whose marker object it opens a rule for.
+  const programOf = (source) =>
+    plan.programs.find(
+      (program) => source !== undefined && source.includes(`${plan.objects[program.marker].name("")} {`),
+    )?.id ?? null;
   function allowed(op, subject, P) {
     const serving = world.serving;
     if (serving.kind === "none") return "none";
     if (serving.kind === "baseline") return false;
     const active = programOf(world.rulesets.get(serving.name)?.source);
     if (op === "list") {
-      const row = ROWS.find((r) => r.op === "list" && r.prefix(P) === subject);
+      const row = plan.rows.find((r) => r.op === "list" && r.prefix(P) === subject);
       return Boolean(row && row.program === active && allow(row, P));
     }
-    const id = Object.keys(OBJECTS).find((key) => OBJECTS[key].name(P) === subject);
+    const id = Object.keys(plan.objects).find((key) => plan.objects[key].name(P) === subject);
     if (id === undefined) return false;
-    const program = PROGRAMS.find((p) => p.marker === id);
+    const program = plan.programs.find((p) => p.marker === id);
     if (program) return program.id === active;
-    const row = ROWS.find((r) => r.op === op && r.object === id);
+    const row = plan.rows.find((r) => r.op === op && r.object === id);
     return Boolean(row && row.program === active && allow(row, P));
   }
 
@@ -334,5 +337,5 @@ export function createWorld({
     return reply(404, { error: { code: 404, message: "unrouted in the fake world" } });
   }
 
-  return { world, net, recordingPrefix };
+  return { world, net, recordingPrefix: plan.recordingPrefix };
 }

@@ -25,22 +25,13 @@ import {
   mask,
 } from "./judge.mjs";
 import {
-  LOAD_ONLY,
   LOCAL_BASELINE_RULES,
-  OBJECTS,
-  PROGRAMS,
   RECORDINGS,
-  ROWS,
+  S9_PLAN,
   SETTLE_MAX_POLLS,
   SETTLE_POLL_MS,
   SETTLE_STREAK,
   STILL_IN_FORCE_READS,
-  objectName,
-  plannedNames,
-  recordingPrefix,
-  rowsOf,
-  runRoot,
-  staticBounds,
 } from "./plan.mjs";
 import { UnknownAnswer, createWire } from "./wire.mjs";
 
@@ -52,6 +43,7 @@ const enc = encodeURIComponent;
 
 /**
  * @param {object} options
+ * @param {object} [options.plan] the family (tables and numbers); the s9 family when omitted
  * @param {object} options.target `{name: "production" | "local", bucket, project?, origin?}`
  * @param {string} options.runId `sr-xxxxxxxx`
  * @param {string} options.baseline `"absent"`, a full ruleset name (production) or `"local"`
@@ -60,6 +52,7 @@ const enc = encodeURIComponent;
  * @param {Set<string>|null} [options.rowFilter] row ids to read (dry runs only; null: all)
  */
 export async function observe({
+  plan = S9_PLAN,
   target,
   runId,
   baseline,
@@ -71,7 +64,7 @@ export async function observe({
 }) {
   const production = target.name === "production";
   if (production) validateBaseline(baseline, target.project);
-  const bounds = staticBounds(recordings);
+  const bounds = plan.staticBounds(recordings);
   const budget = new RequestBudget(caps?.main ?? bounds.main, caps?.total ?? bounds.total);
   const reportingErrors = [];
   const noteReportingError = (text) => {
@@ -93,9 +86,9 @@ export async function observe({
       }
     },
   };
-  const root = runRoot(runId);
+  const root = plan.runRoot(runId);
   const ownRulesets = new Set();
-  const state = { runId, root, ownRulesets, baseline };
+  const state = { runId, root, prefixRoot: plan.prefixRoot, ownRulesets, baseline };
   const { wire, unknownLabels, unknownReads } = createWire({ target, state, budget, deps, out });
   const bucket = target.bucket;
   const gcs = production ? "https://storage.googleapis.com" : target.origin;
@@ -143,8 +136,8 @@ export async function observe({
   }
 
   async function createObject(P, id) {
-    const name = objectName(id, P);
-    const object = OBJECTS[id];
+    const name = plan.objectName(id, P);
+    const object = plan.objects[id];
     const upload = object.metadata ? multipart(name, object) : null;
     const res = await wire(
       `create/${id}`,
@@ -193,7 +186,7 @@ export async function observe({
   const markerStatus = async (label, P, markerId) => {
     const res = await wire(
       label,
-      { method: "GET", url: v0ObjectUrl(objectName(markerId, P)) },
+      { method: "GET", url: v0ObjectUrl(plan.objectName(markerId, P)) },
       { read: true },
     );
     return res;
@@ -377,9 +370,9 @@ export async function observe({
   }
 
   async function setup(P) {
-    for (const id of Object.keys(OBJECTS)) await createObject(P, id);
+    for (const id of Object.keys(plan.objects)) await createObject(P, id);
     // Each marker must be unreadable before its program: a settle needs a change to see.
-    for (const program of PROGRAMS) {
+    for (const program of plan.programs) {
       const res = await markerStatus(`setup/marker/${program.id}`, P, program.marker);
       if (res.status === 200)
         throw new StopRun(`marker ${program.marker} is readable before its program`);
@@ -412,7 +405,7 @@ export async function observe({
         delimiter: row.delimiter ?? null,
       };
     } else {
-      const name = objectName(row.object, P);
+      const name = plan.objectName(row.object, P);
       url = v0ObjectUrl(name, row.op === "media" ? "?alt=media" : "");
       request = {
         method: "GET",
@@ -434,7 +427,7 @@ export async function observe({
 
   async function runProgram(recording, P, program, previous, masks) {
     const label = `rec${recording}/${program.id}`;
-    const rows = rowsOf(program.id).filter((row) => rowFilter === null || rowFilter.has(row.id));
+    const rows = plan.rowsOf(program.id).filter((row) => rowFilter === null || rowFilter.has(row.id));
     if (rows.length === 0) return null;
     const source = program.source(P);
     let rulesetName = null;
@@ -479,7 +472,7 @@ export async function observe({
     lastMarker = program.marker;
     const settled = await settle(label, P, program.marker, previous);
     for (const row of rows) {
-      if (row.object && refusedCreates.has(objectName(row.object, P)))
+      if (row.object && refusedCreates.has(plan.objectName(row.object, P)))
         skippedRow(recording, row, "the object could not be created");
       else await readRow(recording, P, row, masks);
     }
@@ -496,7 +489,7 @@ export async function observe({
   }
 
   async function loadOnly(recording, P, masks) {
-    for (const item of LOAD_ONLY) {
+    for (const item of plan.loadOnly) {
       const source = item.source(P);
       if (production) {
         const label = `rec${recording}/load/${item.id}`;
@@ -603,7 +596,7 @@ export async function observe({
   async function cleanupObjects() {
     const toDelete = new Map(); // name -> generation
     for (const [name, generation] of created) toDelete.set(name, generation);
-    const planned = new Set(plannedNames(runId, recordings));
+    const planned = new Set(plan.plannedNames(runId, recordings));
     for (const prefix of [root, `/${root}`]) {
       const res = await wire(
         `cleanup/list${prefix.startsWith("/") ? "-slash" : ""}`,
@@ -710,7 +703,7 @@ export async function observe({
     await guardedStep("preflight", preflight);
     if (entryRulesets !== null) out.save("entry.json", { baseline, entryRulesets });
     for (let recording = 1; recording <= recordings && stopped === null; recording += 1) {
-      const P = recordingPrefix(runId, recording);
+      const P = plan.recordingPrefix(runId, recording);
       currentP = P;
       const masks = [
         [P, "<P>"],
@@ -720,7 +713,7 @@ export async function observe({
       ];
       await guardedStep(`rec${recording}/setup`, () => setup(P));
       let previous = null;
-      for (const program of PROGRAMS) {
+      for (const program of plan.programs) {
         if (stopped !== null) break;
         await guardedStep(`rec${recording}/${program.id}`, async () => {
           // The marker of a program that was released, or null when none was.
@@ -746,10 +739,11 @@ export async function observe({
   const agreement = second.length > 0 ? compareRecordings(first, second) : [];
   const unknowns = [...new Set(unknownLabels)];
   const expectedRows =
-    ROWS.filter((row) => rowFilter === null || rowFilter.has(row.id)).length * recordings;
+    plan.rows.filter((row) => rowFilter === null || rowFilter.has(row.id)).length * recordings;
   const complete = stopped === null && rowsAll.length === expectedRows;
   const report = {
     runId,
+    plan: plan.id,
     target: target.name,
     baseline,
     requests: budget.count,
@@ -778,6 +772,7 @@ export async function observe({
  * planned object name reads 404. Reads only.
  */
 export async function readback({
+  plan = S9_PLAN,
   target,
   runId,
   baseline,
@@ -785,10 +780,10 @@ export async function readback({
   deps,
   out,
   recordings = RECORDINGS,
-  cap = 70,
+  cap = plan.readbackCap(RECORDINGS),
 }) {
-  const root = runRoot(runId);
-  const state = { runId, root, ownRulesets: new Set(), baseline };
+  const root = plan.runRoot(runId);
+  const state = { runId, root, prefixRoot: plan.prefixRoot, ownRulesets: new Set(), baseline };
   const budget = new RequestBudget(cap, cap);
   const { wire, unknownReads } = createWire({ target, state, budget, deps, out });
   const bucket = target.bucket;
@@ -834,8 +829,8 @@ export async function readback({
   }
   const names = [];
   for (let recording = 1; recording <= recordings; recording += 1) {
-    const P = recordingPrefix(runId, recording);
-    for (const id of Object.keys(OBJECTS)) names.push(objectName(id, P));
+    const P = plan.recordingPrefix(runId, recording);
+    for (const id of Object.keys(plan.objects)) names.push(plan.objectName(id, P));
   }
   for (const name of names) {
     const res = await wire(

@@ -750,6 +750,7 @@ fn the_manifest_publishes_effective_development_defaults() {
             {"key":"auth.multiTenant.allowTenants","value":"true","source":"default"},
             {"key":"auth.mfa.state","value":"ENABLED","source":"default"},
             {"key":"pubsub.deadLetterAuthorization","value":"implicit","source":"default"},
+            {"key":"pubsub.restNegativeCache","value":"off","source":"default"},
             {"key":"appCheck.debugTokens","value":"any","source":"default"},
             {"key":"database.defaultAccess","value":"open","source":"default"},
             {"key":"functions.authBlockingToken","value":"emulated","source":"default"},

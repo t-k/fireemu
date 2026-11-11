@@ -10,6 +10,8 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ### Added
 
+- Pub/Sub: `pubsub.restNegativeCache` defaults to `"off"` and selects `"production"` under `productionExact` (strict profile only).
+
 - Hosting: the strict profile (the default) answers a compressible file with `Content-Encoding: gzip` when the request accepts `gzip`, as production did in both recordings (the file's own `ETag`, `Vary: x-fh-requested-host, accept-encoding`, and the recorded length for the corpus file; an image is left alone). A request that accepts only `br` gets the file as it is: Brotli stays a declared difference (`KD-COMPRESSION` now names the four Brotli rows only, and 18 of the 201 compared rows carry a known difference, down from 21). Files from one byte to 32 MiB are compressed; ranges, `304`s and generated answers are not, and neither is a file whose `headers` rule sets `Content-Encoding` (a precompressed `*.br` file keeps its bytes and the rule's header). This adds the `flate2` crate (pure-Rust `miniz_oxide` backend, owner decision).
 
 ## [0.49.0] - 2026-11-11

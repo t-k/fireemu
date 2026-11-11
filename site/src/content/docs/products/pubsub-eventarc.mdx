@@ -25,6 +25,8 @@ Under `profile = "emulator"`, topic `kmsKeyName` and `tags` are stored as sent a
 
 Under `strict` a message that exhausts `maxDeliveryAttempts` is forwarded to the dead-letter topic with no project number and no IAM grants, with the metadata attributes production adds. Production forwards only after the Pub/Sub service agent holds `roles/pubsub.subscriber` on the subscription and `roles/pubsub.publisher` on the dead-letter topic; set `pubsub.deadLetterAuthorization` to `"iam"` (or `productionExact`, or name `pubsub.projectNumbers`) to require the same grants through `SetIamPolicy`. The start banner then names the service agent to grant.
 
+`pubsub.restNegativeCache` defaults to `"off"`; `productionExact` selects `"production"` under strict, enabling a provisional REST 404 cache for subscriptions and snapshots for about 9.6 seconds.
+
 ### Authentication
 
 Under `strict`, a request without any credential is accepted, so clients that use `PUBSUB_EMULATOR_HOST` without credentials work. A request that presents a credential is checked, and Fireemu cannot verify a real Google OAuth token offline, so such a request is refused with 401. Use a credential-free client against the emulator, for example the Java client with `NoCredentialsProvider`.

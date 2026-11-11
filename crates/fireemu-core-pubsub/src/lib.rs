@@ -21,6 +21,7 @@ pub mod label_value;
 pub mod message;
 pub mod name;
 pub mod pagination;
+pub mod rest_negative_cache;
 pub mod state;
 pub mod subscription;
 

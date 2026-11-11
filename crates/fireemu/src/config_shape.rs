@@ -910,7 +910,7 @@ mod tests {
                         ("parse_hosting", "h") => "/hosting",
                         ("parse_pubsub", "authentication") => "/pubsub/authentication",
                         ("parse_scheduler", "s") => "/scheduler",
-                        ("parse_functions", "f") => "/functions",
+                        ("parse_functions" | "parse_task_queue_defaults", "f") => "/functions",
                         ("parse_app_check", "section") => "/appCheck",
                         ("parse_app_check", "app") => "/appCheck/apps/*",
                         ("parse_sign_in_providers", "phone") => "/auth/signIn/phoneNumber",

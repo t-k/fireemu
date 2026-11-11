@@ -9,6 +9,12 @@
 //                       (functions-http/callable/auth-refusal#malformed-bearer)
 //   other               anything else that is a complete 2xx/4xx answer: a new shape, recorded in full
 //
+// Recorded answer (FUNCTIONS-HTTP-CALLABLE-INGRESS-20261111-01 and -02,
+// conformance/functions-http-callable-ingress-production.json): production answered both variants, on
+// both passes, with the function's 24-byte answer for no-authorization and with the same 66-byte
+// `{"error":{"message":"Unauthenticated","status":"UNAUTHENTICATED"}}` (401, application/json) for the
+// other five shapes. A callable's code served as onRequest is refused exactly like a real callable.
+//
 // verdict `recorded`: all twelve captures are complete, readable, ordered, sent with the right
 // Authorization, both passes agree per case, and the control is the recorded callable answer.
 // verdict `unknown`: anything else (transport failure, 1xx/3xx/5xx, unreadable body, a content-length

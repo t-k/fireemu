@@ -1238,3 +1238,114 @@ test("productionDeps writes the run files and ledger lines of twelve answers byt
     await rm(root, { recursive: true, force: true });
   }
 });
+
+// ---- replay of the recorded production answers (functions-http-callable-ingress-production.json) --------
+
+const RECORDED = json("../../functions-http-callable-ingress-production.json");
+const WRAPPER_ENVELOPE_SHA = sha(WRAPPER_BODY);
+
+test("replay: both recorded runs are judged recorded, class by class, and equal their own judgement", () => {
+  assert.deepEqual(Object.keys(RECORDED.runs), ["wrapper", "callable"]);
+  for (const [variant, run] of Object.entries(RECORDED.runs)) {
+    assert.equal(run.captures.length, 12, variant);
+    const judged = judgeObservation(run.captures, BASELINE);
+    assert.equal(judged.verdict, "recorded", `${variant}: ${judged.reasons.join("; ")}`);
+    assert.deepEqual(judged, run.judgement, variant);
+    assert.deepEqual(
+      judged.answers.map((a) => [a.caseId, a.class, a.status, a.bodyBytes]),
+      [
+        ["no-authorization", "served-by-function", 200, 24],
+        ...CASE_IDS.slice(1).map((id) => [id, "other", 401, 66]),
+      ],
+    );
+    assert.equal(run.cleanup.closureReady, true);
+    assert.equal(run.cleanup.openBuilds, 0);
+    assert.deepEqual(run.requests.invocation, 12);
+  }
+});
+
+test("replay: production answered a callable's code served as onRequest exactly as a real callable", () => {
+  const key = (run) =>
+    run.captures.map((c) => [
+      c.pass,
+      c.caseId,
+      c.status,
+      c.headers,
+      c.headerNames,
+      c.bodyBytes,
+      c.bodySha256,
+    ]);
+  const { wrapper: served, callable: real } = RECORDED.runs;
+  const strip = (rows) =>
+    rows.map(([pass, caseId, status, headers, names, bytes, digest]) => [
+      pass,
+      caseId,
+      status,
+      headers["content-type"],
+      headers.vary,
+      bytes,
+      digest,
+      names.filter((n) => !["date", "x-cloud-trace-context"].includes(n)),
+    ]);
+  assert.deepEqual(strip(key(served)), strip(key(real)));
+});
+
+test("replay: the refusal is the SDK's UNAUTHENTICATED envelope, 66 compact bytes, on every credential case and both passes", () => {
+  assert.equal(Buffer.byteLength(WRAPPER_BODY), 66);
+  for (const run of Object.values(RECORDED.runs)) {
+    for (const c of run.captures) {
+      if (c.caseId === "no-authorization") {
+        assert.equal(c.status, 200);
+        assert.equal(c.bodyText, CONTROL_BODY);
+        continue;
+      }
+      assert.equal(c.status, 401, `${c.pass} ${c.caseId}`);
+      assert.equal(c.headers["content-type"], "application/json; charset=utf-8");
+      assert.equal(c.headers["content-length"], "66");
+      assert.equal(c.headers.vary, "Origin", "sent with no Origin request header");
+      assert.equal(c.bodyBytes, 66);
+      assert.equal(c.bodySha256, WRAPPER_ENVELOPE_SHA);
+      assert.equal(c.bodyText, WRAPPER_BODY);
+      assert.equal(c.authorization, CASES.find((x) => x.id === c.caseId).authorization);
+    }
+  }
+});
+
+test("replay: a recorded answer changed in any compared field is no longer the recorded verdict", () => {
+  const run = RECORDED.runs.wrapper;
+  const change = (index, tweak) => {
+    const list = structuredClone(run.captures);
+    tweak(list[index]);
+    tweak(list[index + 6]);
+    return judgeObservation(list, BASELINE);
+  };
+  assert.equal(change(1, (c) => (c.status = 200)).answers[1].class, "other");
+  const same = change(1, (c) =>
+    Object.assign(c, {
+      status: 200,
+      bodyBytes: 24,
+      bodySha256: BASELINE.control.bodySha256,
+      headers: {
+        ...c.headers,
+        "content-type": BASELINE.control.contentType,
+        "content-length": "24",
+      },
+    }),
+  );
+  assert.equal(same.answers[1].class, "served-by-function");
+  assert.equal(same.newShapes.length, 4);
+  assert.equal(change(0, (c) => (c.status = 403)).verdict, "unknown");
+});
+
+test("replay: the recording names no project, number, bucket or host", () => {
+  const text = JSON.stringify(RECORDED);
+  assert.doesNotMatch(
+    text,
+    /fireemu-oracle|run\.app|cloudfunctions\.net|storage\.googleapis|projects\//,
+  );
+  // No project number: a run of ten digits that is neither a fraction of a second nor inside a digest.
+  assert.doesNotMatch(text, /(?<![0-9a-f.])[0-9]{10,}(?![0-9a-f])/);
+  for (const run of Object.values(RECORDED.runs)) {
+    for (const c of run.captures) assert.equal(c.path, "/");
+  }
+});

@@ -778,3 +778,130 @@ test("a wall clock that is exactly used up stops the recording", async () => {
   assert.equal(out.stopped, "wall clock cap");
   assert.equal(out.sent, 1);
 });
+
+const nameOf = (role, cell) =>
+  `projects/fireemu-oracle-idp/snapshots/fireemu-observe-${RUN_ID}-nc-${cell}-${role}`;
+const lose = (clock, ms) => async () => {
+  const startedAt = clock.now();
+  await clock.sleep(ms);
+  return { startedAt, failure: "timeout", completedAt: clock.now() };
+};
+
+test("a snapshot whose second create lost its answer (it executed) is confirmed by the cleanup, deleted, and the run closes", async () => {
+  let puts = 0;
+  const { run, world } = record({
+    wrap: async (base, req, meta, clock) => {
+      if (req.method === "PUT" && req.path.includes("-nc-p1-y") && ++puts === 2) {
+        await base(req, meta); // the create happens, the answer is lost
+        return lose(clock, 19000)();
+      }
+      return base(req, meta);
+    },
+  });
+  const out = await run();
+  assert.equal(out.stopped, "unknown create");
+  assert.equal(out.report.confirmReads >= 1, true);
+  assert.ok(out.closureReady, JSON.stringify(out.open));
+  assert.ok(empty(world));
+});
+
+test("a snapshot whose second create lost its answer and never executed stays open as an unconfirmed create", async () => {
+  let puts = 0;
+  const { run } = record({
+    wrap: async (base, req, meta, clock) => {
+      if (req.method === "PUT" && req.path.includes("-nc-p1-y") && ++puts === 2)
+        return lose(clock, 19000)();
+      return base(req, meta);
+    },
+  });
+  const out = await run();
+  assert.ok(!out.closureReady);
+  assert.deepEqual(
+    out.open.map((o) => [o.name, o.status]),
+    [[nameOf("y", "p1"), "unconfirmed-create"]],
+  );
+});
+
+const slowNotFound = (clock) => async () => {
+  const startedAt = clock.now();
+  await clock.sleep(30);
+  return {
+    startedAt,
+    headersAt: clock.now(),
+    completedAt: clock.now(),
+    status: 404,
+    bodyText: JSON.stringify({ error: { code: 404, message: "m", status: "NOT_FOUND" } }),
+  };
+};
+const listReply = () => (clock) => async (status, body) => {
+  const startedAt = clock.now();
+  await clock.sleep(300);
+  return {
+    startedAt,
+    headersAt: clock.now(),
+    completedAt: clock.now(),
+    status,
+    bodyText: JSON.stringify(body),
+  };
+};
+
+test("a DELETE 404 is retried only after a complete LIST showed the name present (the cleanup lists before the first retry)", async () => {
+  const { run, rows } = record({
+    wrap: async (base, req, meta, clock) => {
+      if (req.method === "DELETE" && req.path.includes("-nc-n2a-x")) return slowNotFound(clock)();
+      return base(req, meta);
+    },
+  });
+  const out = await run();
+  const cleanup = rows.filter((r) => r.event === "request" && r.cell === "cleanup");
+  const deletes = cleanup.filter((r) => r.method === "DELETE" && r.path.includes("-nc-n2a-x"));
+  assert.equal(deletes.length, 3);
+  for (const d of deletes.slice(1)) {
+    const before = cleanup.filter(
+      (r) => r.startedAt < d.startedAt && r.path.includes("/subscriptions?pageSize"),
+    );
+    assert.ok(before.length >= 1);
+  }
+  assert.ok(!out.closureReady);
+});
+
+test("a failed, partial or absent LIST admits no retry of a DELETE that answered 404", async () => {
+  const cases = {
+    failed: (clock) => listReply()(clock)(500, {}),
+    partial: (clock) => listReply()(clock)(200, { subscriptions: [], nextPageToken: "more" }),
+    absent: (clock) => listReply()(clock)(200, {}),
+  };
+  for (const [name, reply] of Object.entries(cases)) {
+    const { run, rows } = record({
+      wrap: async (base, req, meta, clock) => {
+        if (req.method === "DELETE" && req.path.includes("-nc-n2a-x")) return slowNotFound(clock)();
+        if (req.list === "subscription" && meta.conn === "pool:cleanup") return reply(clock);
+        return base(req, meta);
+      },
+    });
+    const out = await run();
+    const deletes = rows.filter(
+      (r) => r.event === "request" && r.method === "DELETE" && r.path.includes("-nc-n2a-x"),
+    );
+    assert.equal(deletes.length, 1, `${name}: only the first DELETE, which needed no LIST`);
+    assert.ok(
+      out.open.some((o) => o.status === "delete-404-present" && o.name.endsWith("-nc-n2a-x")),
+      name,
+    );
+    assert.ok(!out.closureReady, name);
+  }
+});
+
+test("a DELETE answered from an armed entry is retried only after a LIST showed the resource present, before the first cleanup DELETE", async () => {
+  const { run, rows } = record({ params: { served: ["getSub", "getSnap", "deleteSub"] } });
+  const out = await run();
+  const cleanup = rows.filter((r) => r.event === "request" && r.cell === "cleanup");
+  const firstDeleteIndex = cleanup.findIndex(
+    (r) => r.method === "DELETE" && r.path.includes("-nc-v4-x"),
+  );
+  const listBefore = cleanup
+    .slice(0, firstDeleteIndex)
+    .some((r) => r.path.includes("/subscriptions?pageSize"));
+  assert.ok(listBefore, "a LIST of subscriptions precedes the retry");
+  assert.ok(out.closureReady);
+});

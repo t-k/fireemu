@@ -96,18 +96,102 @@ test("DELETE 2xx but a later LIST still shows the resource: delete again", () =>
   assert.deepEqual(ledger.deletable(), [N]);
 });
 
-test("DELETE answered 404 for a confirmed resource settles nothing and is retried until the third DELETE", () => {
+test("DELETE answered 404 for a confirmed resource settles nothing and is retried only after a complete LIST shows it present, up to the third DELETE", () => {
   const ledger = createLedger();
   create(ledger, "ok");
+  assert.deepEqual(ledger.deletable(), [N], "the first DELETE needs no LIST");
   for (let i = 1; i <= MAX_DELETES; i += 1) {
-    assert.deepEqual(ledger.deletable(), [N], `delete ${i}`);
     del(ledger, "notfound");
     assert.equal(ledger.status(N), "delete-404-present");
-    ledger.read(N, "absent"); // a LIST that misses it is not enough, in the run
-    assert.equal(ledger.status(N), "delete-404-present");
+    assert.deepEqual(ledger.deletable(), [], `delete ${i}: nothing admits a retry yet`);
+    ledger.read(N, "absent", "list");
+    assert.deepEqual(ledger.deletable(), [], "a LIST that misses it admits nothing");
+    ledger.read(N, "present", "get");
+    assert.deepEqual(ledger.deletable(), [], "an own GET 200 is not a LIST");
+    ledger.read(N, "present", "list");
+    assert.deepEqual(ledger.deletable(), i < MAX_DELETES ? [N] : [], `after delete ${i}`);
   }
-  assert.deepEqual(ledger.deletable(), []);
   assert.ok(!ledger.closureReady());
+  assert.equal(ledger.status(N), "delete-404-present");
+});
+
+test("a LIST read before the latest DELETE does not admit a retry after it", () => {
+  const ledger = createLedger();
+  create(ledger, "ok");
+  del(ledger, "notfound");
+  ledger.read(N, "present", "list");
+  assert.deepEqual(ledger.deletable(), [N]);
+  del(ledger, "error");
+  assert.deepEqual(ledger.deletable(), [], "the admission belonged to the earlier DELETE");
+});
+
+test("a DELETE answered before the resource existed is not a DELETE of the resource", () => {
+  const ledger = createLedger();
+  del(ledger, "notfound");
+  create(ledger, "ok");
+  assert.equal(ledger.status(N), "live");
+  assert.deepEqual(ledger.deletable(), [N]);
+});
+
+test("a repeated create of a live name (a failed create of an existing name) keeps the resource confirmed", () => {
+  const ledger = createLedger();
+  create(ledger, "ok");
+  create(ledger, "notfound");
+  create(ledger, "conflict");
+  assert.equal(ledger.status(N), "live");
+  assert.deepEqual(ledger.deletable(), [N]);
+});
+
+test("a snapshot created again after its own DELETE is a new incarnation: a lost answer keeps it open and in the cleanup", () => {
+  const ledger = createLedger();
+  create(ledger, "ok");
+  del(ledger, "ok");
+  ledger.read(N, "absent", "get");
+  assert.equal(ledger.status(N), "deleted");
+  assert.ok(ledger.closureReady());
+  create(ledger, "unknown");
+  assert.equal(ledger.status(N), "unconfirmed-create");
+  assert.ok(!ledger.closureReady());
+  assert.deepEqual(ledger.open(), [{ name: N, status: "unconfirmed-create" }]);
+  assert.deepEqual(ledger.deletable(), [], "an unconfirmed name is read before it is deleted");
+  ledger.read(N, "absent", "get");
+  assert.equal(ledger.status(N), "unconfirmed-create", "a 404 never settles it");
+  ledger.a2Absent(N);
+  assert.equal(ledger.status(N), "unconfirmed-create", "nor does A2");
+  ledger.read(N, "present", "get");
+  assert.equal(ledger.status(N), "live");
+  assert.deepEqual(ledger.deletable(), [N]);
+  del(ledger, "ok");
+  assert.equal(ledger.status(N), "delete-unread");
+  ledger.read(N, "absent", "list");
+  assert.equal(ledger.status(N), "deleted");
+  assert.ok(ledger.closureReady());
+});
+
+test("a new incarnation answered 2xx, a 409 or a known error is judged on its own", () => {
+  for (const [result, status] of [
+    ["ok", "live"],
+    ["conflict", "unconfirmed-create"],
+    ["notfound", "never-created"],
+  ]) {
+    const ledger = createLedger();
+    create(ledger, "ok");
+    del(ledger, "ok");
+    ledger.read(N, "absent", "get");
+    create(ledger, result);
+    assert.equal(ledger.status(N), status, result);
+  }
+});
+
+test("an unknown DELETE of an earlier incarnation stays sticky across a new create", () => {
+  const ledger = createLedger();
+  create(ledger, "ok");
+  del(ledger, "ok");
+  del(ledger, "unknown");
+  create(ledger, "ok");
+  assert.equal(ledger.status(N), "delete-unknown");
+  assert.ok(ledger.deleting(N));
+  assert.deepEqual(ledger.deletable(), []);
 });
 
 test("an unknown DELETE is sticky: no retry, absence reads do not close it, only A2 does", () => {

@@ -13,7 +13,19 @@ import { listRequest, kindOfName } from "./requests.mjs";
 import { isOwned } from "./names.mjs";
 import { createJournal, writeExclusive } from "./journal.mjs";
 import { createTransport } from "./transport.mjs";
+import {
+  assertCredentialsAllowed,
+  productionSendApproved,
+  SEND_FLAG,
+  SEND_FLAG_VALUE,
+} from "./guard.mjs";
 import { createCredentials } from "../pubsub-observation/credentials.mjs";
+
+/** The gcloud helper is a production client: it is reachable only with the flag, at the moment it is asked. */
+function guardedCredentials() {
+  assertCredentialsAllowed();
+  return createCredentials();
+}
 
 const realClock = {
   now: () => performance.now(),
@@ -22,9 +34,7 @@ const realClock = {
 };
 const resolvePath = (root, value) => path.resolve(root, value);
 
-/** The launch script exports this exact value; nothing else (no test, no mutation run) does. */
-export const SEND_FLAG = "PUBSUB_NEGCACHE_PRODUCTION_SEND";
-export const SEND_FLAG_VALUE = "launch-script";
+export { SEND_FLAG, SEND_FLAG_VALUE };
 
 export function preflight(env, args, deps = {}) {
   const io = deps.fs ?? fs,
@@ -118,7 +128,8 @@ export async function main(args, deps = {}) {
     root = deps.root ?? process.cwd();
   const env = deps.env ?? process.env;
   preflight(env, options, deps);
-  const approved = env[SEND_FLAG] === SEND_FLAG_VALUE;
+  // The flag comes from the process environment only; the injected environment is for preflight.
+  const approved = productionSendApproved();
   // The real clients (credentials through gcloud, the HTTPS and gRPC transport) exist only with the flag.
   if (!approved && (!deps.transport || (!deps.token && !deps.createCredentials)))
     throw new Error(
@@ -140,10 +151,9 @@ export async function main(args, deps = {}) {
       throw new Error("A2 needs at least ten minutes after the last request");
   }
   const token =
-    deps.token ?? (await (deps.createCredentials ?? createCredentials)()({ timeoutMs: 30000 }));
+    deps.token ?? (await (deps.createCredentials ?? guardedCredentials)()({ timeoutMs: 30000 }));
   const clock = deps.clock ?? realClock;
-  const transport =
-    deps.transport ?? createTransport({ getToken: () => token, clock, allowProduction: approved });
+  const transport = deps.transport ?? createTransport({ getToken: () => token, clock });
   try {
     const out = resolvePath(root, options.out);
     if (mode === "a2") {

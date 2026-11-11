@@ -2,6 +2,7 @@ import http from "node:http";
 import https from "node:https";
 import grpc from "@grpc/grpc-js";
 import { protos } from "@google-cloud/pubsub";
+import { assertSendAllowed } from "./guard.mjs";
 
 /** The gRPC status name of a numeric code, UNKNOWN for a code this table does not know. */
 export const grpcCodeName = (code) =>
@@ -13,12 +14,10 @@ export const DEFAULT_ENDPOINT = Object.freeze({
   port: 443,
 });
 
-const LOOPBACK = new Set(["127.0.0.1", "::1", "localhost"]);
-
 /**
- * A transport that sends to anything but a loopback host refuses to exist unless the caller says the
- * launch script approved it (`allowProduction: true`). Tests never do; a mutated test run therefore
- * cannot reach the real service through this client.
+ * Every send (HTTPS on a shared, dedicated or fresh agent, the default gRPC client and an injected
+ * `grpcCall`) first asks `assertSendAllowed(host)`: a non-loopback destination needs the launch
+ * script's environment flag at that moment. There is no option that stands in for the flag.
  */
 export function createTransport({
   getToken,
@@ -27,10 +26,7 @@ export function createTransport({
   host = DEFAULT_ENDPOINT.host,
   port = DEFAULT_ENDPOINT.port,
   grpcCall,
-  allowProduction = false,
 }) {
-  if (!LOOPBACK.has(host) && allowProduction !== true)
-    throw new Error("refusing to create a production transport without the launch script's flag");
   const net = protocol === "https" ? https : protocol === "http" ? http : null;
   if (!net) throw new Error("unsupported protocol");
   const shared = new net.Agent({ keepAlive: true });
@@ -63,6 +59,7 @@ export function createTransport({
       );
     });
   const send = async (request, { conn, connPolicy, timeoutMs } = {}) => {
+    assertSendAllowed(host);
     if (request.grpc) {
       const startedAt = clock.now();
       try {

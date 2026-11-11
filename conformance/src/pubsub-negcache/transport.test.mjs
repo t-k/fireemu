@@ -87,20 +87,12 @@ test("gRPC status mapping", async () => {
   transport.close();
 });
 
-test("the default endpoint is the production Pub/Sub host, which a transport refuses without the flag, and an unsupported protocol is refused", () => {
+test("the default endpoint is the production Pub/Sub host and an unsupported protocol is refused", () => {
   assert.deepEqual(
     { ...DEFAULT_ENDPOINT },
     { protocol: "https", host: "pubsub.googleapis.com", port: 443 },
   );
   const clock = { now: () => 0 };
-  assert.throws(
-    () => createTransport({ getToken: () => "t", clock }),
-    /without the launch script's flag/,
-  );
-  assert.throws(
-    () => createTransport({ getToken: () => "t", clock, host: "example.com" }),
-    /without the launch script's flag/,
-  );
   assert.throws(
     () => createTransport({ getToken: () => "t", clock, protocol: "ftp", host: "127.0.0.1" }),
     /unsupported protocol/,

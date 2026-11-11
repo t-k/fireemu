@@ -13,9 +13,10 @@
 
 export const MAX_DELETES = 3;
 
-const blank = (name, kind) => ({
-  name,
-  kind,
+// The state of one incarnation of a name. A name created again after the run's own DELETE answered 2xx
+// (the snapshots of the exemption cells) starts a new incarnation: nothing about the previous one,
+// neither its confirmation nor its absence after the delete, carries over.
+const incarnation = () => ({
   creates: [],
   deletes: [],
   confirmed: false, // an own 2xx (create or read) or a LIST showed the name
@@ -24,7 +25,15 @@ const blank = (name, kind) => ({
   absenceAfterDelete: false,
   presentAfterDelete: false,
   readAbsentBeforeDelete: false,
+  retryAdmitted: false, // a complete LIST showed the name present after the latest DELETE that did not delete it
   a2Absent: false,
+});
+const blank = (name, kind) => ({
+  name,
+  kind,
+  stickyUnknownDelete: false,
+  history: [],
+  ...incarnation(),
 });
 
 export function createLedger() {
@@ -39,10 +48,23 @@ export function createLedger() {
     /** Records the intent before the request is sent. */
     intent({ name, action, kind }) {
       const r = get(name, kind);
+      if (action === "create" && r.deletes.some((d) => d.answer === "ok")) {
+        // A create after the run's own successful DELETE: a new incarnation. An unknown DELETE of the
+        // old one stays unknown (sticky); everything else starts again.
+        r.history.push({ creates: r.creates, deletes: r.deletes });
+        if (r.deletes.some((d) => d.answer === "unknown" || d.answer === null))
+          r.stickyUnknownDelete = true;
+        Object.assign(r, incarnation());
+      }
+      // A DELETE answered before the resource was known (a 404 for a name nobody had created) says
+      // nothing about the resource the create then makes.
+      if (action === "create" && !r.confirmed && !r.createUnknown)
+        r.deletes = r.deletes.filter((d) => d.answer === "unknown" || d.answer === null);
       const id = ++seq;
       const entry = { id, name, action, answer: null };
       requests.set(id, entry);
       (action === "create" ? r.creates : r.deletes).push(entry);
+      if (action === "delete") r.retryAdmitted = false;
       return id;
     },
     /** `result`: 'ok' | 'notfound' | 'conflict' | 'error' | 'unknown' (a complete answer is never 'unknown'). */
@@ -59,12 +81,18 @@ export function createLedger() {
         // a 409 settles nothing about an earlier unknown create, and nothing about itself either
       }
     },
-    /** An own read of the resource: 'present' (2xx GET or LIST) or 'absent' (404 / not in the LIST). */
-    read(name, what) {
+    /**
+     * An own read of the resource: 'present' (2xx GET or LIST) or 'absent' (404 / not in the LIST).
+     * `via` is 'get' or 'list'; only a complete LIST that shows the name admits another DELETE after a
+     * DELETE that did not delete it.
+     */
+    read(name, what, via = "get") {
       const r = resources.get(name);
       if (!r) return;
       if (what === "present") {
         r.confirmed = true;
+        if (via === "list") r.retryAdmitted = true;
+        r.a2Absent = false; // a later positive read outweighs an earlier absence
         // An own positive read settles an unknown create: status() reads `confirmed` first.
         r.absenceAfterDelete = false;
         r.presentAfterDelete = r.deletes.some((d) => d.answer === "ok");
@@ -81,8 +109,10 @@ export function createLedger() {
       if (r) r.a2Absent = true;
     },
     deleting(name) {
-      return (resources.get(name)?.deletes ?? []).some(
-        (d) => d.answer === "unknown" || d.answer === null,
+      const r = resources.get(name);
+      return (
+        r?.stickyUnknownDelete === true ||
+        (r?.deletes ?? []).some((d) => d.answer === "unknown" || d.answer === null)
       );
     },
     status(name) {
@@ -92,7 +122,10 @@ export function createLedger() {
       const unsettledCreate = r.createUnknown && !r.confirmed;
       if (r.a2Absent && !unsettledCreate && !r.deletes.some((d) => d.answer === null))
         return "gone-a2";
-      if (r.deletes.some((d) => d.answer === "unknown" || d.answer === null))
+      if (
+        r.stickyUnknownDelete ||
+        r.deletes.some((d) => d.answer === "unknown" || d.answer === null)
+      )
         return "delete-unknown";
       if (r.deletes.some((d) => d.answer === "ok")) {
         if (r.absenceAfterDelete) return "deleted";
@@ -104,14 +137,19 @@ export function createLedger() {
       if (r.creates.length === 0 || r.createRejected) return "never-created";
       return "unconfirmed-create"; // a 409 only: nothing known
     },
-    /** Names the cleanup should try to delete: confirmed and not yet deleted, in creation order. */
+    /**
+     * Names the cleanup should try to delete, in creation order: confirmed and not yet deleted, or
+     * shown present by a LIST after a DELETE. A DELETE that answered 404 (or another error) is retried
+     * only when a complete LIST showed the name present after it: a failed or partial LIST, or a LIST
+     * that shows it absent, admits nothing.
+     */
     deletable() {
       return [...resources.values()]
-        .filter((r) =>
-          ["live", "live-suspect", "delete-404-present", "delete-present"].includes(
-            api.status(r.name),
-          ),
-        )
+        .filter((r) => {
+          const status = api.status(r.name);
+          if (["live", "live-suspect", "delete-present"].includes(status)) return true;
+          return status === "delete-404-present" && r.retryAdmitted;
+        })
         .filter((r) => r.deletes.length < MAX_DELETES)
         .map((r) => r.name);
     },

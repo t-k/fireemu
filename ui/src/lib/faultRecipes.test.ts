@@ -82,11 +82,26 @@ describe("fault recipes", () => {
       timeoutAttempt("x", 0),
       failFirstAttempts("unknown", 1, "ABORTED"),
       failFirstAttempts("firestore.read", 1, ""),
+      failFirstAttempts("firestore.read", 1, "   "),
     ];
     for (const result of invalid) {
       expect(result.isErr()).toBe(true);
       if (result.isErr()) expect(result.error.length).toBeGreaterThan(0);
     }
+  });
+  it("keeps the event type of a duplicate rule when one is named", () => {
+    const named = duplicateDelivery(
+      "orders",
+      2,
+      "google.cloud.firestore.document.v1.written",
+    )._unsafeUnwrap();
+    expect(named.rules[0]?.match).toEqual({
+      operation: "functions.deliver",
+      function: "orders",
+      eventType: "google.cloud.firestore.document.v1.written",
+    });
+    const unnamed = duplicateDelivery("orders", 2)._unsafeUnwrap();
+    expect(unnamed.rules[0]?.match).not.toHaveProperty("eventType");
   });
   it("embeds the same plan in both snippets", () => {
     const plan = failFirstAttempts("storage.upload", 2, "ABOR'TED")._unsafeUnwrap();

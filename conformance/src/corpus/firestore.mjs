@@ -76,17 +76,21 @@ const valuesAndOrdering = {
       return snap.docs.map((d) => d.id);
     });
 
-    await ctx.step("server-transforms", async () => {
-      const ref = col.doc("transforms");
-      await ref.set({ n: 1, tags: ["a"] });
-      await ref.update({
-        n: FieldValue.increment(4),
-        tags: FieldValue.arrayUnion("b", "a"),
-        at: FieldValue.serverTimestamp(),
-      });
-      await ref.update({ tags: FieldValue.arrayRemove("a") });
-      return (await ref.get()).data();
-    });
+    await ctx.step(
+      "server-transforms",
+      async () => {
+        const ref = col.doc("transforms");
+        await ref.set({ n: 1, tags: ["a"] });
+        await ref.update({
+          n: FieldValue.increment(4),
+          tags: FieldValue.arrayUnion("b", "a"),
+          at: FieldValue.serverTimestamp(),
+        });
+        await ref.update({ tags: FieldValue.arrayRemove("a") });
+        return (await ref.get()).data();
+      },
+      { generated: { at: "timestamp" } },
+    );
 
     await ctx.step("query-order-limit-and-count", async () => {
       const q = col.orderBy("__name__").limit(2);
@@ -101,10 +105,14 @@ const valuesAndOrdering = {
       return sortStrings(cols.map((c) => c.id));
     });
 
-    await ctx.step("auto-id-shape", async () => {
-      const added = await col.add({ auto: true });
-      return { length: added.id.length, id: added.id };
-    });
+    await ctx.step(
+      "auto-id-shape",
+      async () => {
+        const added = await col.add({ auto: true });
+        return { length: added.id.length, id: added.id };
+      },
+      { generated: { id: "auto-id" } },
+    );
   },
 };
 
@@ -583,33 +591,42 @@ const restFailedPrecondition = {
       return { status: response.status, body: parsed };
     };
 
-    await ctx.step("runQuery-needing-a-composite-index", () =>
-      post(":runQuery", {
-        structuredQuery: {
-          from: [{ collectionId: "conf_index" }],
-          where: {
-            compositeFilter: {
-              op: "AND",
-              filters: [
-                {
-                  fieldFilter: {
-                    field: { fieldPath: "name" },
-                    op: "EQUAL",
-                    value: { stringValue: "x" },
+    await ctx.step(
+      "runQuery-needing-a-composite-index",
+      () =>
+        post(":runQuery", {
+          structuredQuery: {
+            from: [{ collectionId: "conf_index" }],
+            where: {
+              compositeFilter: {
+                op: "AND",
+                filters: [
+                  {
+                    fieldFilter: {
+                      field: { fieldPath: "name" },
+                      op: "EQUAL",
+                      value: { stringValue: "x" },
+                    },
                   },
-                },
-                {
-                  fieldFilter: {
-                    field: { fieldPath: "age" },
-                    op: "EQUAL",
-                    value: { integerValue: "1" },
+                  {
+                    fieldFilter: {
+                      field: { fieldPath: "age" },
+                      op: "EQUAL",
+                      value: { integerValue: "1" },
+                    },
                   },
-                },
-              ],
+                ],
+              },
             },
           },
+        }),
+      {
+        generated: {
+          "body[].document.createTime": "timestamp",
+          "body[].document.updateTime": "timestamp",
+          "body[].readTime": "timestamp",
         },
-      }),
+      },
     );
 
     await ctx.step("runQuery-with-an-unknown-operator", () =>

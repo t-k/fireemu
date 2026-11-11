@@ -1265,12 +1265,13 @@
       "criticality": "important",
       "owner": "conformance",
       "status": "partial",
-      "note": "conformance/src/normalize.mjs erases exactly five classes of value -- RFC 3339 instants, twenty-character generated ids, JWTs, UUID-shaped opaque codes and object generations -- plus the host:port the two sides deliberately bind differently; ordering is normalized only where a scenario opts in and the ordering is documented as unspecified. Everything else is compared. `pnpm -C conformance run check` exits non-zero on a parity row that drifted, a documented divergence that moved off its recorded fireemu value, a step no fixture describes, a step that vanished, a pending row that produced an observation, or a scenario that faulted; debt rows are reported and never gate. conformance/src/diff.test.mjs proves each of those without an emulator. Partial: events, logs, exported files, environment variables and process exit behaviour are compared only where a scenario already covers them, and the corpus is Node-only.",
+      "note": "conformance/src/normalize.mjs erases exactly five classes of value -- RFC 3339 instants, twenty-character generated ids, JWTs, UUID-shaped opaque codes and object generations -- only at the paths a scenario declares generated (a user-supplied string or instant of the same shape is compared exactly), plus the host:port the two sides deliberately bind differently; ordering is normalized only where a scenario opts in and the ordering is documented as unspecified. Everything else is compared. `pnpm -C conformance run check` exits non-zero on a parity row that drifted, a documented divergence that moved off its recorded fireemu value, a step no fixture describes, a step that vanished, a pending row that produced an observation, or a scenario that faulted; debt rows are reported and never gate. conformance/src/diff.test.mjs proves each of those without an emulator. Partial: events, logs, exported files, environment variables and process exit behaviour are compared only where a scenario already covers them, and the corpus is Node-only.",
       "artifacts": {
         "conformance": "conformance/fixtures",
         "integration": [
           "conformance/src/diff.test.mjs",
-          "conformance/src/normalize.mjs"
+          "conformance/src/normalize.mjs",
+          "conformance/src/normalize.test.mjs"
         ]
       }
     },

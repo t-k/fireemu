@@ -77,10 +77,24 @@ class HeavyVerificationContractTest < Minitest::Test
   end
 
   def test_a_summary_merge_that_never_fails_on_a_miss_is_refused
-    assert_violation(REAL.sub("extra+=(--fail-on-missed)", "extra+=()"), "--fail-on-missed")
-    assert_violation(REAL.sub("if [[ $FAIL_ON_MISSED == true ]]; then", "if [[ $FAIL_ON_MISSED == never ]]; then"), "--fail-on-missed")
-    assert_violation(REAL.sub('"${extra[@]}" shards summary', "shards summary"), "--fail-on-missed")
-    assert_violation(REAL.sub("FAIL_ON_MISSED: ${{ needs.plan.outputs.fail_on_missed }}", "FAIL_ON_MISSED: \"false\""), "--fail-on-missed")
+    assert_violation(REAL.sub("extra+=(--fail-on-new-critical)", "extra+=()"), "--fail-on-new-critical")
+    assert_violation(REAL.sub("if [[ $FAIL_ON_NEW_CRITICAL == true ]]; then", "if [[ $FAIL_ON_NEW_CRITICAL == never ]]; then"), "--fail-on-new-critical")
+    assert_violation(REAL.sub('"${extra[@]}" shards summary', "shards summary"), "--fail-on-new-critical")
+    assert_violation(REAL.sub("FAIL_ON_NEW_CRITICAL: ${{ needs.plan.outputs.fail_on_new_critical }}", "FAIL_ON_NEW_CRITICAL: \"false\""), "--fail-on-new-critical")
+  end
+
+  def test_scheduled_mutation_rules
+    assert_violation(REAL.sub('fail_on_new_critical: ${{ steps.validate.outputs.fail_on_new_critical }}', 'fail_on_new_critical: "false"'), "plan must expose")
+    assert_violation(REAL.sub("          - critical\n", ''), "critical dispatch")
+    assert_violation(REAL.sub('$MODE == weekly || $MODE == critical', '$MODE == weekly'), "critical selection")
+    assert_violation(REAL.sub('INPUT_JOB=critical INPUT_SHARDS=16', 'INPUT_JOB=critical INPUT_SHARDS=8'), "schedule mapping")
+    assert_violation(REAL.sub('run.get("conclusion") == "success"', 'run.get("conclusion") in ("success", "failure")'), "nightly base")
+    assert_violation(REAL.sub('job=mutants fail_on_new_critical=true', 'job=mutants fail_on_new_critical=false'), "nightly must enable")
+    assert_violation(REAL.sub('job=mutants base_sha=""', 'job=mutants fail_on_new_critical=true base_sha=""'), "weekly must report")
+    assert_violation(REAL.sub('show "$ref_sha:tools/ci/mutation-critical.txt"', 'show "HEAD:tools/ci/mutation-critical.txt"'), "critical files must come from the ref")
+    assert_violation(REAL.sub('|| fail "the critical list names a bad file"', '|| true'), "critical file tokens")
+    assert_violation(REAL.sub('--survivors tools/ci/mutation-survivors.txt', ''), "survivors and critical lists")
+    assert_violation(REAL.sub('--critical tools/ci/mutation-critical.txt', ''), "survivors and critical lists")
   end
 
   def test_a_second_mutation_run_is_refused

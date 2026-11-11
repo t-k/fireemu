@@ -1,6 +1,6 @@
 #!/usr/bin/env ruby
 # Contract of .github/workflows/heavy-verification.yml, which runs heavy verification on a public
-# repository: started only by manual dispatch and by the two pinned schedules (the nightly and weekly
+# repository: started only by manual dispatch and by the three pinned schedules (the nightly, weekly and critical
 # mutation runs, which fire on the default branch only), read-only token, no secrets, pinned actions (from a fixed table),
 # timeouts, no cache written, no run from the default branch, and no workflow input interpolated into
 # a script or any other field except where the plan job validates it.
@@ -31,8 +31,8 @@ PINS = {
 # read the inputs, the default branch and the repository URL parts; no other job may read an input.
 STEP_EXPRESSION = /\A(fromJSON\(needs\.plan\.outputs\.[a-z_]+\)|needs\.plan\.outputs\.[a-z_]+|needs\.mutants\.result|matrix\.[a-z_]+|steps\.[a-z_]+\.outputs\.[a-z_]+|runner\.temp)\z/
 PLAN_EXPRESSION = /\A(inputs\.[a-z_]+|github\.event\.repository\.default_branch|github\.server_url|github\.repository|github\.event_name|github\.event\.schedule)\z/
-# The two schedules: the nightly mutation run of the Rust diff and the weekly one of a crate.
-SCHEDULES = ["23 3 * * *", "41 4 * * 6"].freeze
+# The nightly diff, weekly crate rotation and critical file schedules.
+SCHEDULES = ["23 3 * * *", "41 4 * * 6", "17 5 * * 1,3,5"].freeze
 # What a job may test: the plan's validated outputs and the plan's result.
 JOB_IF_EXPRESSION = /\A(always\(\)|needs\.plan\.result\s*==\s*'success'|needs\.plan\.outputs\.(job|skip)\s*(==|!=)\s*'[a-z-]+'|needs\.mutants\.outputs\.count\s*!=\s*'0')\z/
 # What the run name and the concurrency group are made of: string literals, format(), the event name,
@@ -159,12 +159,17 @@ def violations(source, toolchain_channel: nil)
   errors << "the summary upload must run even when the merge failed (if: always())" unless upload && upload["if"].to_s.strip == "always()"
   merge = summary.find { |step| step["name"] == "merge the shards" }
   errors << "the summary merge must pass the shard job's result (--mutants-result \"$MUTANTS_RESULT\")" unless merge && merge["run"].to_s.include?('--mutants-result "$MUTANTS_RESULT"') && merge.dig("env", "MUTANTS_RESULT").to_s.gsub(/\s+/, "") == "${{needs.mutants.result}}"
-  errors << "the summary merge must pass --fail-on-missed when the plan says so (FAIL_ON_MISSED == true, from needs.plan.outputs.fail_on_missed)" unless merge &&
-    merge.dig("env", "FAIL_ON_MISSED").to_s.gsub(/\s+/, "") == "${{needs.plan.outputs.fail_on_missed}}" &&
-    merge["run"].to_s.include?('if [[ $FAIL_ON_MISSED == true ]]; then') && merge["run"].to_s.include?("extra+=(--fail-on-missed)") &&
+  errors << "the summary merge must pass the survivors and critical lists" unless merge &&
+    merge["run"].to_s.include?("--survivors tools/ci/mutation-survivors.txt") && merge["run"].to_s.include?("--critical tools/ci/mutation-critical.txt")
+  errors << "the summary merge must pass --fail-on-new-critical only when the plan says so" unless merge &&
+    merge.dig("env", "FAIL_ON_NEW_CRITICAL").to_s.gsub(/\s+/, "") == "${{needs.plan.outputs.fail_on_new_critical}}" &&
+    merge["run"].to_s.scan("--fail-on-new-critical").length == 1 &&
+    merge["run"].to_s.include?('if [[ $FAIL_ON_NEW_CRITICAL == true ]]; then extra+=(--fail-on-new-critical); fi') &&
     merge["run"].to_s.include?('"${extra[@]}"')
   errors << "the summary upload must fail when there is no summary (if-no-files-found: error)" unless upload && upload.dig("with", "if-no-files-found") == "error"
   mutate_runs = (workflow.dig("jobs", "mutants", "steps") || []).map { |step| step["run"].to_s }.select { |run| run.include?("cargo mutants") }
+  selection = (workflow.dig("jobs", "mutants", "steps") || []).find { |step| step["id"] == "select" }
+  errors << "critical selection must use files without a package" unless selection && selection["run"].to_s.include?('if [[ $MODE == weekly || $MODE == critical ]]; then') && selection["run"].to_s.include?('if [[ $MODE == weekly ]]; then args+=(-p "$PACKAGE"); fi')
   # The selection step only lists the mutants (--list); the shard run is the one that mutates.
   mutate_runs = mutate_runs.reject { |run| run.include?("--list") && !run.include?("--shard") }
   shardings = mutate_runs.flat_map { |run| run.scan(/--sharding[= ]\S*/) }
@@ -197,6 +202,19 @@ def violations(source, toolchain_channel: nil)
       errors << "plan must validate #{variable}" unless validate["run"].to_s.include?(variable) && validate.fetch("env", {}).key?(variable)
     end
     script = validate["run"].to_s
+    errors << "plan must expose fail_on_new_critical" unless workflow.dig("jobs", "plan", "outputs", "fail_on_new_critical") == "${{ steps.validate.outputs.fail_on_new_critical }}" && script.include?('echo "fail_on_new_critical=$fail_on_new_critical"')
+    errors << "critical dispatch must be allowed" unless Array(trigger.dig("workflow_dispatch", "inputs", "job", "options")).include?("critical") && script.include?("mutants | nextest | linux-measure | nightly | weekly | critical)")
+    { "23 3 * * *" => "nightly INPUT_SHARDS=8", "41 4 * * 6" => "weekly INPUT_SHARDS=16", "17 5 * * 1,3,5" => "critical INPUT_SHARDS=16" }.each do |cron, mapping|
+      errors << "schedule mapping must assign #{cron} to #{mapping}" unless script.include?(%Q{"#{cron}") INPUT_JOB=#{mapping} ;;})
+    end
+    errors << "nightly base must require conclusion == success and reject failure" unless script.include?('run.get("conclusion") == "success"') && !script.include?('"failure"')
+    nightly = script[/^  nightly\)\n(.*?)^    ;;/m, 1].to_s
+    weekly = script[/^  weekly\)\n(.*?)^    ;;/m, 1].to_s
+    critical = script[/^  critical\)\n(.*?)^    ;;/m, 1].to_s
+    errors << "nightly must enable fail_on_new_critical" unless nightly.include?("job=mutants fail_on_new_critical=true") && script.include?("skip=false fail_on_new_critical=false")
+    errors << "weekly must report only" if weekly.include?("fail_on_new_critical=true")
+    errors << "critical files must come from the ref and be nonempty" unless critical.include?('show "$ref_sha:tools/ci/mutation-critical.txt"') && critical.include?('(( ${#entries[@]} > 0 )) || fail') && critical.include?('job=mutants base_sha="" package="" fail_on_new_critical=true')
+    errors << "critical file tokens must be validated" unless critical.include?('[[ $token =~ ^!?[A-Za-z0-9_./*-]{1,200}$ && $token != *..* && $token != *//* ]] || fail "the critical list names a bad file"')
     errors << "plan must refuse a run from the default branch and from a tag" unless script.include?("$GITHUB_REF") && script.include?("refs/heads/$DEFAULT_BRANCH") && script.include?("refs/tags/")
     errors << "plan must resolve the ref and the base inside this repository" unless script.include?("for-each-ref --contains") && script.include?("refs/heads/$value")
     errors << "plan must pin the locale (export LC_ALL=C) before it matches a pattern" unless script.include?("export LC_ALL=C")

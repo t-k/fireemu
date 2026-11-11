@@ -7,10 +7,25 @@ require_relative "actions-security-contract"
 
 ROOT = File.expand_path("..", __dir__)
 ActionsSecurityContract.check!(ROOT)
+raise "Heavy verification contract failed" unless system(RbConfig.ruby, File.join(__dir__, "heavy-verification-contract.rb"))
 raise "Actions security regression fixtures failed" unless system(RbConfig.ruby, File.join(__dir__, "actions-security-contract.test.rb"))
 
 def assert(condition, message)
   raise message unless condition
+end
+
+tracked_files = IO.popen(["git", "-C", ROOT, "ls-files", "-z"], &:read).split("\0")
+assert($?.success?, "cannot list tracked files")
+critical_patterns = File.readlines(File.join(ROOT, "tools/ci/mutation-critical.txt"), chomp: true).map { |line| line.sub(/\s*#.*$/, "").strip }.reject(&:empty?)
+assert(!critical_patterns.empty?, "mutation-critical.txt must contain a pattern")
+critical_patterns.each do |pattern|
+  assert(tracked_files.any? { |path| File.fnmatch?(pattern, path) }, "critical pattern matches no tracked file: #{pattern}")
+end
+File.readlines(File.join(ROOT, "tools/ci/mutation-survivors.txt"), chomp: true).each do |line|
+  next if line.strip.empty? || line.lstrip.start_with?("#")
+  match = /\A(.+?): (.+)\z/.match(line)
+  assert(match && !line.match?(/:\d+:\d+:/), "invalid survivor key: #{line}")
+  assert(tracked_files.include?(match[1]) && File.file?(File.join(ROOT, match[1])), "survivor path does not exist: #{match[1]}")
 end
 
 def load_workflow(name)

@@ -26,17 +26,19 @@ Retain the tool version, source commit, selection diff, reviewed list, test argu
 
 ## Rust: scheduled runs on GitHub
 
-`heavy-verification.yml` runs mutation testing on a schedule, on the default branch only. Both runs reuse the manual `mutants` job (shards, `--sharding slice`, the `mutants-summary` merge); they only choose what to mutate.
+`heavy-verification.yml` runs mutation testing on a schedule, on the default branch only. All three runs reuse the manual `mutants` job (shards, `--sharding slice`, the `mutants-summary` merge); they only choose what to mutate.
 
 | Run | When | What is mutated | A missed mutant |
 | --- | --- | --- | --- |
-| nightly | every day, 03:23 UTC | the Rust diff from the head of the last scheduled nightly that completed with success or failure (else the commit of 24 hours ago) to the head of the default branch, 8 shards | fails the run |
+| nightly | every day, 03:23 UTC | the Rust diff from the head of the last successful scheduled nightly (else the commit of 24 hours ago) to the head of the default branch, 8 shards | fails the run on a new survivor in a critical file |
 | weekly | Saturdays, 04:41 UTC | one line of `tools/ci/mutation-weekly.txt`: line `ISO week mod number of lines`, 16 shards | is reported only (the run passes) |
+| critical | Monday, Wednesday and Friday, 05:17 UTC | the whole files of `tools/ci/mutation-critical.txt`, 16 shards | fails the run on a new survivor in a critical file |
 
-- A nightly whose diff holds no `.rs` file mutates nothing and passes. A nightly that fails still moves the base (a cancelled or skipped one does not), so the next one mutates only what changed since; the survivors of a failed run are in that run's summary, and the diff never grows until it times out.
+- A nightly whose diff holds no `.rs` file mutates nothing and passes. A failed nightly keeps its base, so its survivors stay in the diff until they are killed or accepted; cancelled and skipped runs also leave the base unchanged.
+- In `tools/ci/mutation-survivors.txt`, a survivor key is its file and replacement without the line and column (`<file>: <replacement>`). Accept a survivor by adding its key with a reason comment above it to that file and committing it; accepted keys never fail a run, and a key that no longer appears is harmless.
 - The weekly rotation walks the whole workspace in about one turn per year. A package too big for the 360-minute shard limit is split by file over several lines; the last line of a split package excludes the files of the other lines, so a new file is still mutated by it. The runners are Linux, so a file compiled for macOS only is excluded on its line and a macOS-only package is left out (its mutants would all read as missed). Add a new crate to the file, and regenerate the counts in the comments with `cargo mutants --list -p <package> --file <glob>`.
-- Results are in the run's step summary (the `mutants-summary` job) and in the `mutants-summary` artifact (`summary/summary.md` and the per-shard outcomes). The run title says `heavy-verification scheduled nightly` or `weekly`.
-- Try either mode by hand from a pushed branch: `gh workflow run heavy-verification.yml --ref <branch> -f job=nightly -f ref=<branch>` (or `-f job=weekly -f package=<package>` to take that package's first line). A dispatch never runs from the default branch, and a nightly dispatch takes its base the same way as the scheduled one.
+- Results are in the run's step summary (the `mutants-summary` job) and in the `mutants-summary` artifact (`summary/summary.md` and the per-shard outcomes). The run title says `heavy-verification scheduled nightly`, `weekly` or `critical`.
+- Try these modes by hand from a pushed branch: `gh workflow run heavy-verification.yml --ref <branch> -f job=nightly -f ref=<branch>` (or `-f job=weekly -f package=<package>` to take that package's first line). A dispatch never runs from the default branch, and a nightly dispatch takes its base the same way as the scheduled one.
 - Safety: only `schedule` and `workflow_dispatch` start the workflow (never `pull_request` or `pull_request_target`), the token is `contents: read`, there are no secrets, no job saves a cache, and one scheduled run goes at a time. `scripts/heavy-verification-contract.rb` pins all of this.
 - GitHub starts a schedule only from the default branch, so nothing runs until the workflow is merged there. GitHub also disables scheduled workflows of a repository without activity for 60 days; a push or a manual run re-enables them.
 

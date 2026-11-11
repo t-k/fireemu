@@ -508,3 +508,57 @@ test("S7: a token older than the limit is replaced at a cell boundary, a static 
   }).catch(() => {});
   assert.equal(calls, 0);
 });
+
+const START = 1000000;
+async function recordWith(t, { tokenRefreshMs, jumpAt, jumpMs }) {
+  const root = fixture(t);
+  const clock = virtualClock(START);
+  const world = createWorld({ clock });
+  const issued = [];
+  let sent = 0;
+  const transport = {
+    send: async (request, meta) => {
+      if (++sent === jumpAt) await clock.sleep(jumpMs);
+      return world.send(request, meta);
+    },
+  };
+  const create = () => async () => (issued.push(clock.now()), "token");
+  await main(["record", "--run-id", id, "--out", "out", "--lock", "lock", "--packet", "packet"], {
+    root,
+    env: {},
+    clock,
+    transport,
+    sourceHead: "h",
+    print() {},
+    tokenRefreshMs,
+    createCredentials: create,
+  });
+  const rows = fs
+    .readFileSync(path.join(root, "out", `capture-${id}.jsonl`), "utf8")
+    .trim()
+    .split("\n")
+    .map(JSON.parse);
+  const starts = [];
+  for (const row of rows)
+    if (row.event === "request" && row.step === 0 && row.cell !== "setup" && row.cell !== "cleanup")
+      starts.push(row.startedAt);
+  return { issued, starts };
+}
+
+test("S7: the refresh is exactly 'older than the limit' at a cell boundary, and the limit is 30 minutes by default", async (t) => {
+  // A limit equal to a boundary's age does not refresh there; it refreshes at the next boundary.
+  const probe = await recordWith(t, { tokenRefreshMs: 1e12 });
+  assert.equal(probe.issued.length, 1);
+  const boundary = probe.starts[5];
+  const exact = await recordWith(t, { tokenRefreshMs: boundary - START });
+  assert.ok(!exact.issued.includes(boundary), "equal age does not refresh");
+  assert.equal(
+    exact.issued[1],
+    exact.starts.find((s) => s > boundary),
+  );
+  // Default limit: a 29 minute jump after the first request makes the first refresh the first boundary older than 30 minutes.
+  const jumped = await recordWith(t, { jumpAt: 2, jumpMs: 29 * 60 * 1000 });
+  const expected = jumped.starts.find((s) => s - START > 30 * 60 * 1000);
+  assert.ok(expected !== undefined);
+  assert.equal(jumped.issued[1], expected);
+});

@@ -461,3 +461,50 @@ test("a skipped cell is reported with its reason and contributes nothing", async
     assert.match(invalid[id], /^skipped: calibration failedCreateExisting answered 409/);
   assert.ok(!valid.includes("E1"));
 });
+
+test("calibration: nothing recorded reads as null, the classes hold only when both medians reach 120 ms, the pull is the pull", () => {
+  const without = judgeRun(base.records.filter((r) => !["C0d", "C0f"].includes(r.id)));
+  assert.deepEqual(without.answers.calibration.forwardedGetMs, { dedicated: null, fresh: null });
+  assert.equal(without.answers.calibration.latencyClassesHold, "no-data");
+  assert.equal(without.answers.calibration.emptyPull, "no-data");
+  const set = (d, f) => {
+    const cd = recordOf("C0d");
+    cd.steps.filter((s) => s.op === "getTopic").forEach((s) => (s.headersMs = d));
+    const cf = recordOf("C0f");
+    cf.steps.forEach((s) => (s.headersMs = f));
+    return withRecords(cd, cf).answers.calibration;
+  };
+  assert.equal(set(120, 120).latencyClassesHold, true);
+  assert.equal(set(119, 500).latencyClassesHold, false);
+  assert.equal(set(500, 119).latencyClassesHold, false);
+  const cd = recordOf("C0d");
+  cd.steps.find((s) => s.op === "pullSub").headersMs = 777;
+  assert.equal(withRecords(cd).answers.calibration.emptyPull.headersMs, 777);
+  assert.equal(withRecords(cd).answers.calibration.freshConnectMs, 0);
+  // A C2 whose prerequisite failed still reports what its failed create answered.
+  const c2 = recordOf("C2");
+  c2.steps[0].status = 500;
+  c2.steps[1].status = 409;
+  assert.equal(withRecords(c2).answers.calibration.failedCreateOnExisting, 409);
+  assert.equal(
+    judgeRun(base.records.filter((r) => r.id !== "C2")).answers.calibration.failedCreateOnExisting,
+    "no-data",
+  );
+});
+
+test("combine: a side without ttl, rearm or calibration does not crash, equal bounds are inconsistent, a missing bound is not zero", () => {
+  const ttl = (a, b, verdict = "window") => ({
+    ttl: { cells: ["E1"], lastHitMs: a, firstMissMs: b, verdict },
+  });
+  const run = (extra) => ({ answers: extra });
+  assert.ok(combineRuns(run({ ...ttl(1, 2) }), run({})).ttl.mixed);
+  assert.ok(combineRuns(run({ rearm: { afterSeek: [null] } }), run({})).rearm.mixed);
+  assert.ok(combineRuns(run({ calibration: { a: 1 } }), run({})).calibration.mixed);
+  assert.equal(combineRuns(run(ttl(9400, 9400)), run(ttl(9400, 9400))).ttl.verdict, "inconsistent");
+  const open = combineRuns(run(ttl(9400, null, "open")), run(ttl(9400, null, "open"))).ttl;
+  assert.equal(open.verdict, "open");
+  assert.equal(open.firstMissMs, null);
+  const mixedBounds = combineRuns(run(ttl(null, 9900)), run(ttl(9400, null))).ttl;
+  assert.deepEqual([mixedBounds.lastHitMs, mixedBounds.firstMissMs], [9400, 9900]);
+  assert.equal(mixedBounds.verdict, "window");
+});

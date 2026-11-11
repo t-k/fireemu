@@ -116,3 +116,10 @@ test("only creates are marked create and only deletes are marked delete, across 
       );
     }
 });
+
+test("a pull is immediate: it needs maxMessages and asks for returnImmediately", () => {
+  assert.deepEqual(buildRequest({ op: "pullSub", target: "S" }, ctx).body, {
+    maxMessages: 1,
+    returnImmediately: true,
+  });
+});

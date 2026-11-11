@@ -276,3 +276,34 @@ test("an unknown create followed by an own positive read is live, and the A2 abs
   ledger.a2Absent(N);
   assert.equal(ledger.status(N), "gone-a2");
 });
+
+test("a create attempt of a name that is already confirmed does not drop the DELETEs that followed the create", () => {
+  const ledger = createLedger();
+  create(ledger, "ok");
+  del(ledger, "notfound");
+  create(ledger, "conflict");
+  assert.equal(ledger.status(N), "delete-404-present");
+});
+
+test("an unknown or unanswered DELETE made before the first create is kept, a 404 one is not", () => {
+  for (const answer of ["unknown", null]) {
+    const ledger = createLedger();
+    del(ledger, answer);
+    create(ledger, "ok");
+    assert.equal(ledger.status(N), "delete-unknown", String(answer));
+    assert.ok(ledger.deleting(N));
+  }
+  const ledger = createLedger();
+  del(ledger, "notfound");
+  create(ledger, "ok");
+  assert.equal(ledger.status(N), "live");
+});
+
+test("an unanswered DELETE of an earlier incarnation stays sticky across a new create", () => {
+  const ledger = createLedger();
+  create(ledger, "ok");
+  del(ledger, "ok");
+  del(ledger, null);
+  create(ledger, "ok");
+  assert.equal(ledger.status(N), "delete-unknown");
+});

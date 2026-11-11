@@ -1148,3 +1148,21 @@ test("S7: the token is refreshed at a cell boundary once it is older than the li
   );
   assert.ok(age > 0);
 });
+
+test("a DELETE answered from the armed entry is deleted in the first cleanup round, after the LIST that admits it", async () => {
+  const { run } = record({ params: { served: ["getSub", "getSnap", "deleteSub"] } });
+  const out = await run();
+  assert.equal(
+    out.report.rounds,
+    1,
+    "the pre-round LIST admitted it, so no second round was needed",
+  );
+});
+
+test("skipped cells keep an explicit null abort and the reason", async () => {
+  const { run } = record({ params: { existingMissingTopic: 409 } });
+  const out = await run();
+  const e1 = out.records.find((r) => r.id === "E1");
+  assert.equal(e1.aborted, null);
+  assert.deepEqual(e1.steps, []);
+});

@@ -7,7 +7,7 @@
 // cannot accept what the repository gate would refuse, and freezes the validated register so
 // nothing can promote a row after validation.
 
-import { readFileSync, realpathSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { resolve, sep } from "node:path";
 
 import { REPO_ROOT } from "./config.mjs";
@@ -81,6 +81,27 @@ const fixtureEscapesRoot = (root, reference) => {
   } catch {
     return false;
   }
+};
+
+/**
+ * Whether every segment of the fixture path is spelled exactly as the directory entry on disk.
+ * A case-insensitive file system (macOS, Windows) opens `Example.json` for `example.json`, a
+ * case-sensitive one (Linux CI) does not, so a reference that differs only in case would pass on
+ * one machine and fail on another. A path that does not exist is left to the row lookup.
+ */
+const fixturePathHasExactCase = (root, reference) => {
+  const path = reference.split("#")[0];
+  if (!existsSync(resolve(root, path))) return true;
+  let directory = root;
+  for (const segment of path.split("/")) {
+    try {
+      if (!readdirSync(directory).includes(segment)) return false;
+    } catch {
+      return true;
+    }
+    directory = resolve(directory, segment);
+  }
+  return true;
 };
 
 const readJson = (path) => {
@@ -195,6 +216,10 @@ function validateAuthority(key, authority, baselineVersion, root, problems, pinn
   }
   if (fixtureEscapesRoot(root, authority.fixture)) {
     problems.push(`${key}: fixture must stay inside the repository`);
+    return;
+  }
+  if (!fixturePathHasExactCase(root, authority.fixture)) {
+    problems.push(`${key}: fixture path must match the letter case of the file on disk`);
     return;
   }
   const fixtureKey = fixtureRowKey(root, authority.fixture, pinned);

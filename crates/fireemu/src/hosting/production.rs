@@ -144,47 +144,77 @@ pub(super) fn accept_languages(header: &str) -> Vec<String> {
     entries.into_iter().map(|(_, _, tag)| tag).collect()
 }
 
-/// The normalized path of a request target that climbs with dot segments, or `None` when it has
-/// none (`v01.safety-parent`: `/../outside.txt` and `/%2e%2e/outside.txt` both give
-/// `/outside.txt`). It follows RFC 3986 `remove_dot_segments`: a `..` with nothing to remove stays
-/// at the root, `.` and empty parts vanish, a trailing slash stays, and a path that ends in a dot
-/// segment ends in a slash (`/a/b/..` gives `/a/`). The parts keep their escapes.
+/// The normalized path of a request target that has dot segments, or `None` when it has none.
+/// Production answers such a request with a `302` to the normalized path on its content origin
+/// (`v01.safety-parent`, `v11.dot-*`, `v11.backslash-*` of the follow-up recording).
 ///
-/// A part that holds a raw backslash, a control character or a space gives `None`, so the request is
-/// answered as any other path (a 404): a browser reads `\` in a URL as `/`, and `/\evil.example`
-/// would be a redirect to another site. Production's answer for such a part was not recorded, and
-/// a refusal is the safe one. The result is therefore a path that starts with exactly one `/`
-/// followed by a part that is neither empty nor starts with `/` or `\`.
+/// What the recordings show: a raw `\` is read as `/` before dot segments are looked for
+/// (`/.\b` gives `/b`, `/a/./\evil.example` gives `/a//evil.example`, `/./\evil` gives `//evil`),
+/// while a path with no dot segment is not redirected whatever it holds (`/a\b` is a 404 page);
+/// the segments follow RFC 3986 `remove_dot_segments` (empty segments stay, `..` at the root stays at
+/// the root, a path that ends in a dot segment ends in a slash: `/a/b/..` gives `/a/`); an escaped
+/// dot (`%2e`) is a dot; the hex digits of the escapes that stay are upper case (`%5c` gives `%5C`).
+///
+/// The result is a path that starts with `/`. It may start with `//` (`/./\evil`): the caller makes it
+/// the path of an absolute URL on the request's own origin, where it cannot name another host. A
+/// path with a control character or a space gives `None`: production's answer was not recorded.
 pub(super) fn dot_segment_target(path: &str) -> Option<String> {
-    let parts: Vec<&str> = path.split('/').collect();
-    let dots =
-        |part: &str| super::files::decode_uri_full(part).filter(|text| text == ".." || text == ".");
-    if !parts.iter().any(|part| dots(part).is_some()) {
+    if path.chars().any(|ch| ch.is_ascii_control() || ch == ' ') {
         return None;
     }
-    if path
-        .chars()
-        .any(|ch| ch == '\\' || ch.is_ascii_control() || ch == ' ')
-    {
+    let slashed = path.replace('\\', "/");
+    let parts: Vec<&str> = slashed.split('/').collect();
+    let is_dot =
+        |part: &str| super::files::decode_uri_full(part).filter(|text| text == "." || text == "..");
+    if !parts.iter().any(|part| is_dot(part).is_some()) {
         return None;
     }
-    let mut kept: Vec<&str> = Vec::new();
-    for part in &parts {
-        match dots(part).as_deref() {
-            Some("..") => {
-                kept.pop();
+    let segments = if parts.first() == Some(&"") {
+        &parts[1..]
+    } else {
+        &parts[..]
+    };
+    let mut kept: Vec<String> = Vec::new();
+    for (index, part) in segments.iter().enumerate() {
+        let last = index + 1 == segments.len();
+        match is_dot(part).as_deref() {
+            Some(".") => {
+                if last {
+                    kept.push(String::new());
+                }
             }
-            Some(_) => {}
-            None if part.is_empty() => {}
-            None => kept.push(part),
+            Some(_) => {
+                kept.pop();
+                if last {
+                    kept.push(String::new());
+                }
+            }
+            None => kept.push(upper_escapes(part)),
         }
     }
-    let ends_in_dot_segment = parts.last().is_some_and(|part| dots(part).is_some());
-    let mut target = format!("/{}", kept.join("/"));
-    if (path.ends_with('/') || ends_in_dot_segment) && !kept.is_empty() {
-        target.push('/');
+    Some(format!("/{}", kept.join("/")))
+}
+
+/// `part` with the two hex digits of every `%xx` escape in upper case (`%5c` gives `%5C`, as the
+/// follow-up recording shows production writing it).
+fn upper_escapes(part: &str) -> String {
+    let mut out = String::with_capacity(part.len());
+    let mut rest = part;
+    while let Some(at) = rest.find('%') {
+        out.push_str(&rest[..at]);
+        let escape = rest
+            .get(at + 1..at + 3)
+            .filter(|hex| hex.bytes().all(|b| b.is_ascii_hexdigit()));
+        out.push('%');
+        if let Some(hex) = escape {
+            out.push_str(&hex.to_ascii_uppercase());
+            rest = &rest[at + 3..];
+        } else {
+            rest = &rest[at + 1..];
+        }
     }
-    Some(target)
+    out.push_str(rest);
+    out
 }
 
 /// `appAssociation: "AUTO"` serves these two documents when the site has no file of the name
@@ -399,77 +429,86 @@ mod tests {
     #[test]
     fn dot_segments_are_normalized_the_way_the_recorded_rows_were() {
         for (path, expected) in [
+            // v01.safety-parent, v01.safety-encoded-parent
             ("/../outside.txt", Some("/outside.txt")),
             ("/%2e%2e/outside.txt", Some("/outside.txt")),
             ("/%2E%2e/outside.txt", Some("/outside.txt")),
-            ("/a/../b", Some("/b")),
-            ("/a/b/../../../c/", Some("/c/")),
-            ("/a/./b", Some("/a/b")),
-            // RFC 3986: a path that ends in a dot segment ends in a slash
+            // the follow-up recording, v11 (production's Location path, row by row)
             ("/a/b/..", Some("/a/")),
+            ("/a/./b", Some("/a/b")),
             ("/a/b/.", Some("/a/b/")),
             ("/a/.", Some("/a/")),
             ("/a/..", Some("/")),
+            ("/a/../a/b", Some("/a/b")),
+            ("/./a/b", Some("/a/b")),
+            ("/a/%2e/b", Some("/a/b")),
+            ("/a/b/%2e%2e", Some("/a/")),
+            ("/a/b/../", Some("/a/")),
+            ("/a/./b/", Some("/a/b/")),
+            // a raw backslash is a slash before the dot segments are looked for
+            ("/a/./\\evil.example", Some("/a//evil.example")),
+            ("/.\\b", Some("/b")),
+            ("/./\\evil", Some("//evil")),
+            // an escape that stays has upper case hex digits
+            ("/a/./%5cevil.example", Some("/a/%5Cevil.example")),
+            // RFC 3986 for the rest
+            ("/a/b/../../../c/", Some("/c/")),
             ("/%2e%2e", Some("/")),
             ("/..", Some("/")),
             ("/a/%2e%2e/", Some("/")),
             ("/a/b%2fc/../d", Some("/a/d")),
+            ("/a//b/../c", Some("/a//c")),
+            // no dot segment: not redirected, whatever else the path holds (v11.backslash-mid, -in-name)
+            ("/a\\b", None),
+            ("/a/\\b", None),
             ("/a/..b/c", None),
             ("/a/b.c/d", None),
             ("/a%2e%2eb", None),
             ("/", None),
             ("/%2e%2e%2foutside.txt", None),
+            // a control character or a space was not recorded
+            ("/../a b", None),
+            ("/../a\tb", None),
+            ("/../a\u{7f}b", None),
         ] {
-            assert_eq!(dot_segment_target(path).as_deref(), expected, "{path}");
+            assert_eq!(dot_segment_target(path).as_deref(), expected, "{path:?}");
         }
     }
 
     #[test]
-    fn a_backslash_or_a_control_character_is_never_redirected_to() {
-        // `/./\evil.example` would be `Location: /\evil.example`, which a browser reads as
-        // `//evil.example`; the request is left to the ordinary path handling (a 404)
-        for path in [
-            "/./\\evil.example",
-            "/a/../\\\\evil.example/",
-            "/./\\\\evil.example",
-            "/a/.\\b/../c",
-            "/../a\\b",
-            "/../a b",
-            "/../a\tb",
-            "/../a\u{7f}b",
-        ] {
-            assert_eq!(dot_segment_target(path), None, "{path:?}");
-        }
-        // the escaped forms stay escaped and are safe
-        assert_eq!(
-            dot_segment_target("/./%5cevil.example").as_deref(),
-            Some("/%5cevil.example")
-        );
-        assert_eq!(
-            dot_segment_target("/./%2f%2fevil.example").as_deref(),
-            Some("/%2f%2fevil.example")
-        );
+    fn escapes_are_upper_cased_and_a_lone_percent_is_kept() {
+        assert_eq!(upper_escapes("a%5cb%2fc"), "a%5Cb%2Fc");
+        assert_eq!(upper_escapes("%e6%97%a5"), "%E6%97%A5");
+        assert_eq!(upper_escapes("100%"), "100%");
+        assert_eq!(upper_escapes("%zz%5"), "%zz%5");
+        assert_eq!(upper_escapes("日本%3a"), "日本%3A");
+        assert_eq!(upper_escapes(""), "");
     }
 
     proptest! {
-        // For any request path: no redirect, or a path-absolute target on this origin. It starts with
-        // exactly one `/` that no `/` or `\` follows, holds no backslash, control character or space,
-        // and so carries no scheme and no host whatever a browser does with the text.
+        // For any request path: no redirect, or a path that starts with `/`, holds no backslash,
+        // control character or space and has no dot segment left. The caller puts it after the
+        // request's own host in an absolute URL, so a leading `//` names no other host.
         #[test]
-        fn the_dot_segment_redirect_never_leaves_the_origin(path in "/?[a-z.%0-9A-F/\\\\ \t:@]{0,24}") {
+        fn the_dot_segment_target_is_a_clean_path(path in "/?[a-z.%0-9A-F/\\\\ \t:@]{0,24}") {
             if let Some(target) = dot_segment_target(&path) {
                 prop_assert!(target.starts_with('/'), "{target:?}");
-                prop_assert!(!target.starts_with("//") && !target.starts_with("/\\"), "{target:?}");
                 prop_assert!(!target.contains('\\') && !target.contains(' '), "{target:?}");
                 prop_assert!(!target.chars().any(|ch| ch.is_ascii_control()), "{target:?}");
-                // normalized: no dot segment remains
-                prop_assert!(target.split('/').all(|part| part != ".." && part != "."), "{target:?}");
+                prop_assert!(
+                    target.split('/').all(|part| {
+                        super::super::files::decode_uri_full(part).is_none_or(|text| text != ".." && text != ".")
+                    }),
+                    "{target:?}"
+                );
+                // escapes that stay are upper case
+                prop_assert_eq!(upper_escapes(&target), target.clone());
             }
         }
 
-        // The same for paths that are mostly dots, slashes and escapes of them.
+        // Normalizing twice changes nothing: the target of a target is no redirect.
         #[test]
-        fn dot_heavy_paths_stay_on_the_origin(
+        fn a_normalized_target_has_nothing_left_to_normalize(
             parts in proptest::collection::vec(
                 prop_oneof![
                     Just("..".to_owned()),
@@ -479,6 +518,7 @@ mod tests {
                     Just(String::new()),
                     Just("%5c".to_owned()),
                     Just("%2f".to_owned()),
+                    Just("\\".to_owned()),
                     "[a-z]{1,3}",
                 ],
                 1..8,
@@ -486,8 +526,7 @@ mod tests {
         ) {
             let path = format!("/{}", parts.join("/"));
             if let Some(target) = dot_segment_target(&path) {
-                prop_assert!(target.starts_with('/') && !target.starts_with("//"), "{path} -> {target}");
-                prop_assert!(!target.contains('\\'), "{path} -> {target}");
+                prop_assert_eq!(dot_segment_target(&target), None, "{} -> {}", path, target);
             }
         }
     }

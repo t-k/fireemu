@@ -156,16 +156,73 @@ enum HeaderPolicy {
     ExceptCacheControl,
 }
 
-/// A strict file answer that may be sent as gzip: the request accepts it and the file is
-/// compressible and within [`encoding::MAX_GZIP_INPUT`]. It rides on the response as an extension
-/// until the configured `headers` rules have run, because a rule that sets `Content-Encoding`
-/// (a precompressed `*.br` file) means the bytes are already encoded: `pack_gzip` then leaves them
-/// as they are. The handle is a duplicate of the open file, read from the start.
+/// A strict file answer that may be sent as gzip: the request holds `gzip` in `Accept-Encoding`
+/// and the file is within [`encoding::MAX_GZIP_INPUT`]. It rides on the response as an extension
+/// until the configured `headers` rules have run (production does not serve a `Content-Encoding`
+/// that a rule sets, so the rules cannot decide it), and `pack_gzip` then compresses the file and
+/// sends the compressed body when it is smaller. The handle is a duplicate of the open file.
 #[derive(Clone)]
 struct GzipPending {
     file: Arc<std::fs::File>,
     length: u64,
+    /// The status of the whole answer (`200`, or `404` for the `404.html` page).
+    status: u16,
+    /// The request's `Range`, which production takes over the compressed body (`v15.ae-range`).
+    range: Option<String>,
+    /// Where the identity answer reads the file from, to put it back if it is the answer sent.
+    position: u64,
+    /// The file has no known content type and no rule has set one (see `keep_type`): a compressed
+    /// answer is then `text/html; charset=UTF-8` (`v15.type-noext`, `-unknownext`).
+    unknown_type: bool,
 }
+
+/// A `Content-Type` that a `headers` rule sets stays as it is when the file is compressed: the
+/// rewrite of an unknown type (`GzipPending::unknown_type`) is only for the type fireemu chose.
+fn keep_type(response: &mut Response<Body>) {
+    if let Some(pending) = response.extensions_mut().get_mut::<GzipPending>() {
+        pending.unknown_type = false;
+    }
+}
+
+/// The pending gzip of a strict file answer, when the file handle can be duplicated for it.
+fn gzip_pending(
+    file: &std::fs::File,
+    position: u64,
+    length: u64,
+    status: u16,
+    range: Option<&str>,
+    path: &str,
+) -> Option<GzipPending> {
+    Some(GzipPending {
+        file: Arc::new(file.try_clone().ok()?),
+        length,
+        status,
+        range: range.map(str::to_owned),
+        position,
+        unknown_type: mime::content_type(path).is_none(),
+    })
+}
+
+/// The `Content-Type` strict sends for a file: production's (see [`production::content_type`]), and
+/// `application/octet-stream` for a `.br` file (`v14.br-*`), a type the table does not know.
+fn strict_content_type(path: &str) -> String {
+    if mime::extname(path).eq_ignore_ascii_case(".br") {
+        "application/octet-stream".to_owned()
+    } else {
+        production::content_type(mime::content_type(path).map(|(mime, _)| mime))
+    }
+}
+
+/// The page strict serves for `/__/auth/handler`. Production serves its own page there (a 462-byte
+/// script page, `v11.auth-handler`); its bytes are not shipped (owner decision, 2026-11-11), so this
+/// is a stand-in written here that makes no use of the hosted sign-in flow. The status and the headers
+/// are production's; the body is a known difference (`KD-AUTH-HANDLER-PAGE`).
+const AUTH_HANDLER_PAGE: &str = "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Authentication handler (local stand-in)</title>\n</head>\n<body>\n<p>This is the local stand-in for the hosted authentication handler page. It does not sign anyone in.</p>\n</body>\n</html>\n";
+/// The page strict serves for a path nothing answers and no `404.html` covers: one page for every
+/// path. Production serves its own (21,376 bytes, `v11.default-404`); its bytes are not shipped (owner
+/// decision, 2026-11-11), so this one is written here. The status and the headers are production's;
+/// the body is a known difference (`KD-DEFAULT-404-BODY`).
+const DEFAULT_404_PAGE: &str = "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>404 Not Found</title>\n</head>\n<body>\n<h1>404 Not Found</h1>\n<p>No file or rule of this local site answers the requested path.</p>\n</body>\n</html>\n";
 
 /// What a response is, for the headers production adds to it (`finish_strict`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -256,6 +313,11 @@ impl Site {
                     (header["key"].as_str(), header["value"].as_str())
                 {
                     let is_cache_control = name.eq_ignore_ascii_case("cache-control");
+                    // Production does not serve a `Content-Encoding` that a rule sets: the answer
+                    // is encoded or not as the compression layer decides (`v14.*` of the follow-up).
+                    if self.strict && name.eq_ignore_ascii_case("content-encoding") {
+                        continue;
+                    }
                     let skipped = match policy {
                         HeaderPolicy::All => false,
                         HeaderPolicy::OnlyCacheControl => !is_cache_control,
@@ -268,6 +330,9 @@ impl Site {
                         hyper::header::HeaderName::try_from(name),
                         hyper::header::HeaderValue::try_from(value),
                     ) {
+                        if name == hyper::header::CONTENT_TYPE {
+                            keep_type(response);
+                        }
                         response.headers_mut().insert(name, value);
                     }
                 }
@@ -410,10 +475,7 @@ impl Site {
             return marked(not_modified, Kind::File);
         }
         let mut builder = Response::builder()
-            .header(
-                "content-type",
-                production::content_type(mime::content_type(path).map(|(mime, _)| mime)),
-            )
+            .header("content-type", strict_content_type(path))
             .header("etag", etag);
         if let Some(modified) = asset.modified {
             builder = builder.header("last-modified", httpdate::fmt_http_date(modified));
@@ -424,14 +486,17 @@ impl Site {
         } else {
             production::RangeOutcome::Whole
         };
+        // rows `v01.gz-*`, `v15.*`: gzip when the request holds `gzip` in `Accept-Encoding`, decided
+        // here and carried out by `pack_gzip` once the configured headers are known
+        let gzip = encoding::within_limit(length) && encoding::accepts_gzip_in(request);
+        let range = if status == 200 { header("range") } else { None };
+        let pending = |file: &std::fs::File, position: u64| {
+            gzip.then(|| gzip_pending(file, position, length, status, range, path))
+                .flatten()
+        };
         let result = match outcome {
             production::RangeOutcome::Whole => {
-                // rows `v01.gz-*`: gzip when the request accepts it, decided here and carried out
-                // by `pack_gzip` once the configured headers are known
-                let gzip = mime::content_type(path).is_none_or(|(_, compressible)| compressible)
-                    && encoding::within_limit(length)
-                    && encoding::accepts_gzip_in(request);
-                let pending = gzip.then(|| asset.file.try_clone().ok()).flatten();
+                let pending = pending(&asset.file, 0);
                 builder
                     .status(status)
                     .header("content-length", length)
@@ -441,11 +506,8 @@ impl Site {
                         files::FileBody::new(asset.file, length).boxed()
                     })
                     .map(|mut answer| {
-                        if let Some(file) = pending {
-                            answer.extensions_mut().insert(GzipPending {
-                                file: Arc::new(file),
-                                length,
-                            });
+                        if let Some(pending) = pending {
+                            answer.extensions_mut().insert(pending);
                         }
                         answer
                     })
@@ -468,6 +530,7 @@ impl Site {
                         return response(500, "Could not read the file", None);
                     }
                 }
+                let pending = pending(&file, start);
                 builder
                     .status(206)
                     .header("content-range", format!("bytes {start}-{end}/{length}"))
@@ -477,41 +540,98 @@ impl Site {
                     } else {
                         files::FileBody::new(file, size).boxed()
                     })
+                    .map(|mut answer| {
+                        if let Some(pending) = pending {
+                            answer.extensions_mut().insert(pending);
+                        }
+                        answer
+                    })
             }
         };
         marked(result.expect("asset headers"), Kind::File)
     }
-    /// Carries out a pending gzip answer (see [`GzipPending`]) unless a configured rule has set
-    /// `Content-Encoding`, whatever its value: such a file is sent as it is, with the header the
-    /// rule gave. The file is packed on a blocking thread; the answer holds the packed bytes,
-    /// the length of a gzip body being known only once it is packed (a `HEAD` reports it too).
+    /// Carries out a pending gzip answer (see [`GzipPending`]): the file is packed on a blocking
+    /// thread and the packed body is sent when it is smaller than the file (`v15.size-*`), with the
+    /// file's own `ETag`, over which the request's `Range` is taken (`v15.ae-range`). The answer holds
+    /// the packed bytes, the length of a gzip body being known only once it is packed (a `HEAD` reports
+    /// it too).
     async fn pack_gzip(answer: &mut Response<Body>, head: bool) {
-        let Some(GzipPending { file, length }) = answer.extensions_mut().remove::<GzipPending>()
-        else {
+        let Some(pending) = answer.extensions_mut().remove::<GzipPending>() else {
             return;
         };
-        if answer.headers().contains_key("content-encoding") {
-            return;
-        }
-        let Ok(Ok(packed)) =
-            tokio::task::spawn_blocking(move || encoding::gzip_reader(&*file, length)).await
+        let handle = Arc::clone(&pending.file);
+        let length = pending.length;
+        let Ok(Ok(packed)) = tokio::task::spawn_blocking(move || {
+            use std::io::Seek as _;
+            let mut file = &*handle;
+            file.seek(std::io::SeekFrom::Start(0))?;
+            encoding::gzip_reader(file, length)
+        })
+        .await
         else {
             *answer = response(500, "Could not read the file", None);
             return;
         };
+        let total = packed.len() as u64;
+        if !encoding::pays_off(total, length) {
+            // the identity answer stays; its body reads from the shared file offset, put back
+            use std::io::Seek as _;
+            let mut file = &*pending.file;
+            let _ = file.seek(std::io::SeekFrom::Start(pending.position));
+            return;
+        }
+        let outcome = production::range(pending.range.as_deref(), total);
+        let (status, body) = match outcome {
+            production::RangeOutcome::Whole => (pending.status, packed),
+            production::RangeOutcome::Partial { start, end } => {
+                // the range lies inside the packed body, which is in memory (`production::range`
+                // clamps it to `total`, the length of `packed`), so the indices fit
+                #[allow(clippy::cast_possible_truncation)]
+                let (start, end) = (start as usize, end as usize);
+                (206, packed[start..=end].to_vec())
+            }
+            production::RangeOutcome::Unsatisfiable => (416, Vec::new()),
+        };
+        if let Ok(code) = hyper::StatusCode::from_u16(status) {
+            *answer.status_mut() = code;
+        }
         let headers = answer.headers_mut();
-        headers.insert(
-            "content-encoding",
-            hyper::header::HeaderValue::from_static("gzip"),
-        );
+        headers.remove("content-range");
+        let range_header = match outcome {
+            production::RangeOutcome::Whole => None,
+            production::RangeOutcome::Partial { start, end } => {
+                Some(format!("bytes {start}-{end}/{total}"))
+            }
+            production::RangeOutcome::Unsatisfiable => Some(format!("bytes */{total}")),
+        };
+        if let Some(value) = range_header.and_then(|v| hyper::header::HeaderValue::try_from(v).ok())
+        {
+            headers.insert("content-range", value);
+        }
+        if status != 416 {
+            headers.insert(
+                "content-encoding",
+                hyper::header::HeaderValue::from_static("gzip"),
+            );
+        }
         headers.insert(
             "content-length",
-            hyper::header::HeaderValue::from(packed.len()),
+            hyper::header::HeaderValue::from(body.len()),
         );
+        if pending.unknown_type
+            && headers
+                .get("content-type")
+                .is_some_and(|value| value == "text/plain; charset=utf-8")
+        {
+            headers.insert(
+                "content-type",
+                hyper::header::HeaderValue::from_static("text/html; charset=UTF-8"),
+            );
+        }
         *answer.body_mut() = if head {
             full(Bytes::new())
         } else {
-            full(Bytes::from(packed))
+            full(Bytes::from(body))
         };
     }
     fn redirect(&self, destination: &str, status: u16, head: bool) -> Response<Body> {
@@ -542,12 +662,13 @@ impl Site {
         }
         result
     }
-    /// A request that climbs out of the site with dot segments (`v01.safety-parent`,
-    /// `v01.safety-encoded-parent`): production answers `302` to the normalized path on its content
-    /// origin, with a host that changes from request to request, and never serves it as it came.
-    /// Strict answers the same `302` to the normalized path on this origin, so nothing outside
-    /// `public` is read and the redirect cannot leave the origin.
-    fn dot_segment_redirect(target: &str, query: &str) -> Response<Body> {
+    /// A request with dot segments (`v01.safety-parent`, `v11.dot-*`, `v11.backslash-*`): production
+    /// answers `302` to the normalized path on its content origin, with a host that changes from
+    /// request to request (`content-prod00-firebasehosting-origin.googleapis.com`), and never
+    /// serves it as it came. Strict answers the same `302` with the normalized path after the host
+    /// the request came to, so nothing outside `public` is read; the path may start with `//`
+    /// (`/./\evil` gives `//evil`), which in an absolute URL is a path and names no other host.
+    fn dot_segment_redirect(host: &str, target: &str, query: &str) -> Response<Body> {
         let mut answer = response(302, Bytes::new(), Some("text/html; charset=UTF-8"));
         let headers = answer.headers_mut();
         headers.insert(
@@ -559,7 +680,9 @@ impl Site {
             hyper::header::HeaderValue::from_static("bytes"),
         );
         // the target is the escaped path of the request, so it is a valid header value
-        if let Ok(location) = hyper::header::HeaderValue::try_from(format!("{target}{query}")) {
+        if let Ok(location) =
+            hyper::header::HeaderValue::try_from(format!("http://{host}{target}{query}"))
+        {
             headers.insert("location", location);
         }
         marked(answer, Kind::Passthrough)
@@ -655,7 +778,20 @@ impl Site {
         };
         if self.strict {
             if let Some(target) = production::dot_segment_target(&path) {
-                return Self::dot_segment_redirect(&target, &query);
+                // the host the request came to, as the guard above admitted it: only a plain
+                // host (and port) can be put in front of the path
+                let host = request
+                    .headers()
+                    .get(hyper::header::HOST)
+                    .and_then(|value| value.to_str().ok())
+                    .filter(|host| is_plain_host(host));
+                // a Host that is not plain (a `/`, `\\`, `@`, `?`, `#`, a space or a control
+                // character, an escape) cannot start an absolute URL on this origin: refused,
+                // never redirected and never answered as a path
+                return match host {
+                    Some(host) => Self::dot_segment_redirect(host, &target, &query),
+                    None => self.bad_request(),
+                };
             }
         }
         // Production matches the parts of a path one by one and decodes every escape of a
@@ -883,16 +1019,24 @@ impl Site {
         let mut answer = response(
             200,
             if head {
-                String::new()
+                Bytes::new()
             } else {
-                "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Authentication</title></head><body></body></html>\n".to_owned()
+                Bytes::from_static(AUTH_HANDLER_PAGE.as_bytes())
             },
             Some("text/html; charset=utf-8"),
         );
-        answer.headers_mut().insert(
+        let headers = answer.headers_mut();
+        headers.insert(
             "cache-control",
             hyper::header::HeaderValue::from_static("max-age=1800"),
         );
+        if head {
+            // the length the page would have (`v09.reserved-auth-handler`)
+            headers.insert(
+                "content-length",
+                hyper::header::HeaderValue::from(AUTH_HANDLER_PAGE.len()),
+            );
+        }
         answer
     }
     /// The `init.js` body: the SDK initialization, with the emulator endpoints on request.
@@ -1001,11 +1145,30 @@ impl Site {
             self.custom_headers("/404.html", &mut result);
             return result;
         }
-        Self::default_not_found(request.method(), path, head)
+        self.default_not_found(request.method(), path, head)
     }
-    /// The page for a path nothing answers and no `404.html` covers. Production's own page is
-    /// 21,376 bytes and was not recorded as text, so this one is shorter (a known difference).
-    fn default_not_found(method: &hyper::Method, path: &str, head: bool) -> Response<Body> {
+    /// The page for a path nothing answers and no `404.html` covers. Strict answers production's own
+    /// page (`v11.default-404`); the emulator profile answers the pinned oracle's short one.
+    fn default_not_found(&self, method: &hyper::Method, path: &str, head: bool) -> Response<Body> {
+        if self.strict {
+            // `v11.default-404*`: one page whatever the path, a HEAD names its length
+            let mut answer = response(
+                404,
+                if head {
+                    Bytes::new()
+                } else {
+                    Bytes::from_static(DEFAULT_404_PAGE.as_bytes())
+                },
+                Some("text/html; charset=utf-8"),
+            );
+            if head {
+                answer.headers_mut().insert(
+                    "content-length",
+                    hyper::header::HeaderValue::from(DEFAULT_404_PAGE.len()),
+                );
+            }
+            return marked(answer, Kind::File);
+        }
         let escaped = path
             .replace('&', "&amp;")
             .replace('<', "&lt;")
@@ -1194,9 +1357,29 @@ fn configured_redirect(
     )))
 }
 
-/// The name of a `:name` source part and the literal that follows it. Production reads a name as
-/// letters and `_` only, so `:id2` is the parameter `id` followed by a literal `2`
-/// (`v01.redirect-capture-prefix`, `-literal`: the source `/capture/:id/:id2` never matched).
+/// Whether `host` can be put in front of a path in an absolute URL: not empty, and only letters,
+/// digits, `.`, `-`, `:` and brackets (a name or an address with a port), so that no `/`, `@`,
+/// `\\` or `?` can end the authority early.
+fn is_plain_host(host: &str) -> bool {
+    !host.is_empty()
+        && host
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b".-:[]".contains(&b))
+}
+
+/// Whether a redirect `source` has a part `:name` whose name holds an ASCII digit. Production
+/// never matches such a rule: `/capture/:id/:id2`, `/p/:a1`, `/s/:a1/x` and `/t/:a1/:a2` answered
+/// 404 for every path tried, the literal ones and the ones that fit a letters-only reading too.
+fn has_digit_named_capture(source: &str) -> bool {
+    source
+        .split('/')
+        .filter_map(|part| part.strip_prefix(':'))
+        .any(|name| name.bytes().any(|b| b.is_ascii_digit()))
+}
+
+/// The name of a `:name` source part and the literal that follows it: a name is letters and `_`
+/// (a source with a digit in a name never matches, see [`has_digit_named_capture`], so the literal
+/// is never a digit).
 fn capture_part(part: &str, strict: bool) -> Option<(&str, &str)> {
     let name = part.strip_prefix(':')?;
     if !strict {
@@ -1292,6 +1475,16 @@ fn redirect_destination(
     strict: bool,
 ) -> Option<(String, String)> {
     let destination = rule.get("destination")?.as_str()?;
+    if strict
+        && rule
+            .get("source")
+            .and_then(Value::as_str)
+            .is_some_and(has_digit_named_capture)
+    {
+        // production matches nothing with a source whose `:name` holds a digit (`v12.*` of the
+        // follow-up: `/p/:a1` answers 404 for `/p/x`, `/p/x1` and `/p/:a1` alike)
+        return None;
+    }
     let (authority, destination) = redirect_parts(
         destination,
         rule.get("source").and_then(Value::as_str),
@@ -1509,46 +1702,105 @@ mod redirect_tests {
     }
 
     #[test]
+    fn only_a_plain_host_goes_in_front_of_a_path() {
+        for host in [
+            "127.0.0.1:5000",
+            "localhost",
+            "localhost:5000",
+            "[::1]:5000",
+            "a-b.c",
+        ] {
+            assert!(is_plain_host(host), "{host}");
+        }
+        for host in [
+            "",
+            "evil.example/x",
+            "user@evil.example",
+            "evil.example\\@x",
+            "a b",
+            "a?b",
+            "a#b",
+            "a%2fb",
+            "ホスト",
+        ] {
+            assert!(!is_plain_host(host), "{host:?}");
+        }
+    }
+
+    #[test]
     fn strict_capture_names_are_letters_and_underscores() {
-        assert_eq!(capture_part(":id2", true), Some(("id", "2")));
         assert_eq!(capture_part(":my_id", true), Some(("my_id", "")));
-        assert_eq!(capture_part(":id2", false), Some(("id2", "")));
         assert_eq!(capture_part("id", true), None);
-        // `/capture/:id/:id2` never matched in production, `/capture/:name` did
-        assert_eq!(
-            strict_location("/capture/:id/:id2", "/new/:id2/:id", "/capture/one/two", ""),
-            None
-        );
-        assert_eq!(
-            strict_location(
-                "/capture/:id/:id2",
-                "/new/:id2/:id",
-                "/capture/:id2/two",
-                ""
-            ),
-            None
-        );
-        assert_eq!(
-            strict_location(
-                "/capture/:id/:id2",
-                "/new/:id2/:id",
-                "/capture/one/two2",
-                ""
-            )
-            .as_deref(),
-            Some("/new/two2/two"),
-            "the `2` is a literal after the parameter `id`, which the second part then sets to `two`"
-        );
         assert_eq!(
             strict_location("/capture/:name", "/new/:name", "/capture/name", "").as_deref(),
             Some("/new/name")
         );
         // the emulator profile reads digits into the name
+        assert_eq!(capture_part(":id2", false), Some(("id2", "")));
         let rule =
             json!({"source": "/capture/:id/:id2", "destination": "/new/:id2/:id", "type": 302});
         assert_eq!(
             configured_redirect(&rule, "/capture/one/two", "/capture/one/two", "", false),
             Some(Ok("/new/two/one".to_owned()))
+        );
+    }
+
+    // The rows `v01.redirect-capture-*` and `v12.*` of the production recordings: a source with a
+    // digit in a `:name` matches nothing, whatever the path.
+    #[test]
+    fn a_source_with_a_digit_in_a_capture_name_matches_nothing() {
+        for (source, destination, paths) in [
+            (
+                "/capture/:id/:id2",
+                "/new/:id2/:id",
+                vec![
+                    "/capture/one/two2",
+                    "/capture/one/two",
+                    "/capture/x/:id2",
+                    "/capture/:id2/two",
+                ],
+            ),
+            ("/p/:a1", "/to-p/:a1", vec!["/p/x", "/p/x1", "/p/:a1"]),
+            ("/s/:a1/x", "/to-s/:a1", vec!["/s/v/x", "/s/:a1/x"]),
+            ("/t/:a1/:a2", "/to-t/:a2/:a1", vec!["/t/u/v", "/t/1/2"]),
+        ] {
+            for path in paths {
+                assert_eq!(
+                    strict_location(source, destination, path, ""),
+                    None,
+                    "{source} {path}"
+                );
+            }
+        }
+        // `/q/:id/:id` is no digit name: the last value wins (`v13.q-distinct`, `-same`, `-short`)
+        assert_eq!(
+            strict_location("/q/:id/:id", "/to-q/:id", "/q/a/b", "").as_deref(),
+            Some("/to-q/b")
+        );
+        assert_eq!(
+            strict_location("/q/:id/:id", "/to-q/:id", "/q/a/a", "").as_deref(),
+            Some("/to-q/a")
+        );
+        assert_eq!(strict_location("/q/:id/:id", "/to-q/:id", "/q/a", ""), None);
+        // a digit in the destination only, or in a literal part, is no capture name
+        assert_eq!(
+            strict_location("/a1/:name", "/x/:name", "/a1/b", "").as_deref(),
+            Some("/x/b")
+        );
+        assert_eq!(
+            strict_location("/go/:name", "/x2/:name", "/go/b", "").as_deref(),
+            Some("/x2/b")
+        );
+        assert!(has_digit_named_capture("/p/:a1"));
+        assert!(has_digit_named_capture("/:x/:y9/z"));
+        assert!(!has_digit_named_capture("/p/:a/b1"));
+        assert!(!has_digit_named_capture("/p/a:1"));
+        assert!(!has_digit_named_capture("/p/:"));
+        // the emulator profile is unchanged: it matches
+        let rule = json!({"source": "/p/:a1", "destination": "/to-p/:a1", "type": 302});
+        assert_eq!(
+            configured_redirect(&rule, "/p/x", "/p/x", "", false),
+            Some(Ok("/to-p/x".to_owned()))
         );
     }
 

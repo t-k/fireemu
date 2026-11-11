@@ -22,7 +22,38 @@ const gets = (idx, grid, op = "getSub", args = X) =>
   grid.map((ms) => S(op, args, { since: [idx, ms] }));
 
 const cells = [];
-const cell = (id, question, conn, arm, steps) => cells.push({ id, question, conn, arm, steps });
+const cell = (id, question, conn, arm, steps, extra = {}) =>
+  cells.push({ id, question, conn, arm, steps, ...extra });
+
+// Calibration cells run first and record what the rest depends on (v3, review S4, S5, M3):
+// C0d/C0f time forwarded GETs of the run's topic (never cached; 163-202 ms recorded) on a dedicated and on
+// a fresh connection, and one pull of the empty source subscription; C2 records what production answers to
+// a failed create of an EXISTING name, and whether that answer arms. E1-E4 and N5 run only when it is 404.
+cell("C0d", "calibration: forwarded GETs and an empty pull, dedicated connection", "dedicated", 0, [
+  S("getTopic", { target: "T" }, { at: 0 }),
+  S("getTopic", { target: "T" }, { after: 300 }),
+  S("getTopic", { target: "T" }, { after: 300 }),
+  S("pullSub", { target: "S" }, { after: 300 }),
+]);
+cell("C0f", "calibration: forwarded GETs, fresh connection per request", "fresh", 0, [
+  S("getTopic", { target: "T" }, { at: 0 }),
+  S("getTopic", { target: "T" }, { after: 300 }),
+  S("getTopic", { target: "T" }, { after: 300 }),
+]);
+cell(
+  "C2",
+  "calibration: a failed create of an existing name, and whether its answer arms",
+  "dedicated",
+  1,
+  [
+    S("putSub", T, { at: 0 }),
+    S("putSub", { target: "X", topic: "M" }, { after: 500 }),
+    S("getSub", X, { since: [1, 3000] }),
+    S("getSub", X, { since: [1, 10800] }),
+  ],
+  { calibrates: { key: "failedCreateExisting", step: 1 } },
+);
+const NEEDS_404 = { requires: { calibration: "failedCreateExisting", status: 404 } };
 
 cell("N2a", "base effect, grid A, dedicated connection", "dedicated", 0, [
   S("getSub", X, { at: 0 }),
@@ -35,11 +66,18 @@ cell("N2b", "base effect, grid A, fresh connection per request", "fresh", 0, [
   ...gets(0, GRID_A),
 ]);
 const existingFirst = (id, conn, grid) =>
-  cell(id, `existing subscription armed by a failed create, ${conn}`, conn, 1, [
-    S("putSub", T, { at: 0 }),
-    S("putSub", { target: "X", topic: "M" }, { after: 500 }),
-    ...gets(1, grid),
-  ]);
+  cell(
+    id,
+    `existing subscription armed by a failed create, ${conn}`,
+    conn,
+    1,
+    [
+      S("putSub", T, { at: 0 }),
+      S("putSub", { target: "X", topic: "M" }, { after: 500 }),
+      ...gets(1, grid),
+    ],
+    NEEDS_404,
+  );
 existingFirst("E1", "dedicated", GRID_A);
 existingFirst("E2", "fresh", GRID_A);
 existingFirst("E3", "dedicated", GRID_B);
@@ -60,13 +98,20 @@ cell("N4", "create whose body name equals the URL name", "dedicated", 0, [
 ]);
 // X exists and is armed by a failed create; W is created with a body name that names X (the create
 // takes about 5 s, so the read of X after it still falls inside the window).
-cell("N5", "create of another name whose body names the armed resource", "dedicated", 1, [
-  S("putSub", T, { at: 0 }),
-  S("putSub", { target: "X", topic: "M" }, { after: 500 }),
-  S("putSub", { target: "W", topic: "T", bodyName: "X" }, { after: 50 }),
-  S("getSub", X, { after: 100 }),
-  S("getSub", X, { since: [1, 10500] }),
-]);
+cell(
+  "N5",
+  "create of another name whose body names the armed resource",
+  "dedicated",
+  1,
+  [
+    S("putSub", T, { at: 0 }),
+    S("putSub", { target: "X", topic: "M" }, { after: 500 }),
+    S("putSub", { target: "W", topic: "T", bodyName: "X" }, { after: 50 }),
+    S("getSub", X, { after: 100 }),
+    S("getSub", X, { since: [1, 10500] }),
+  ],
+  NEEDS_404,
+);
 
 const arm = (id, question, event, existing = false) =>
   cell(

@@ -76,7 +76,7 @@ test("a prerequisite that fails voids the cell", () => {
 
 test("the baseline world reads as the provisional rule", () => {
   assert.deepEqual(base.invalid, {});
-  assert.equal(base.valid.length, 30);
+  assert.equal(base.valid.length, 33);
   assert.equal(A.ttl.verdict, "window");
   assert.ok(A.ttl.lastHitMs < 9600 && A.ttl.firstMissMs >= 9600, JSON.stringify(A.ttl));
   assert.deepEqual([A.arm.A1, A.arm.A7, A.arm.A9], ["arms", "arms", "arms"]);
@@ -94,7 +94,7 @@ test("the baseline world reads as the provisional rule", () => {
   );
   assert.equal(A.serve.V3applied, "yes");
   assert.equal(A.serve.V4present, "no");
-  assert.equal(A.rearm.deleteHit, "not-re-armed");
+  assert.equal(A.rearm.deleteHit, "not-applicable", "the DELETE reached the backend");
   assert.equal(A.rearm.getHitExtends, "no");
   assert.deepEqual(A.exempt, { "4000ms": "exempt", "7000ms": "exempt", "13000ms": "armed" });
   assert.deepEqual(A.key, {
@@ -234,11 +234,45 @@ test("two recordings answer a question only where they agree", async () => {
   const second = await judged({ ttl: 8500 });
   const combined = combineRuns(base, second);
   assert.deepEqual(combined.arm.A1, "arms");
-  assert.ok(combined.ttl.lastHitMs.mixed);
-  assert.ok(combined.ttl.verdict === "window");
-  assert.deepEqual(combineRuns(base, base), A);
+  // Windows that do not overlap are inconsistent, whatever each run said alone.
+  assert.equal(combined.ttl.verdict, "inconsistent");
+  assert.deepEqual(combineRuns(base, base), {
+    ...A,
+    calibration: { runs: [A.calibration, A.calibration] },
+  });
   const flipped = await judged({ bodyClear: "none" });
   assert.deepEqual(combineRuns(base, flipped).body.otherName.mixed, ["clears", "does-not-clear"]);
+});
+
+test("window bounds of two runs are combined as intervals: ages 30 ms apart give max(last hit) and min(first miss)", () => {
+  const run = (lastHitMs, firstMissMs, verdict = "window") => ({
+    answers: {
+      ttl: { cells: ["E1"], lastHitMs, firstMissMs, verdict },
+      rearm: { afterSeek: [null, null] },
+    },
+  });
+  assert.deepEqual(combineRuns(run(9400, 9900), run(9430, 9880)).ttl, {
+    cells: ["E1"],
+    lastHitMs: 9430,
+    firstMissMs: 9880,
+    verdict: "window",
+  });
+  assert.equal(combineRuns(run(9400, 9900), run(9950, 10300)).ttl.verdict, "inconsistent");
+  assert.deepEqual(combineRuns(run(9400, 9900), run(9400, 9900, "open")).ttl.verdict, {
+    mixed: ["window", "open"],
+  });
+  assert.equal(combineRuns(run(null, 9900), run(9400, null)).ttl.lastHitMs, 9400);
+  const seek = (a) => ({
+    answers: {
+      ttl: { cells: [], lastHitMs: null, firstMissMs: null, verdict: "no-data" },
+      rearm: { afterSeek: a },
+    },
+  });
+  assert.deepEqual(combineRuns(seek([3000, null]), seek([3010, null])).rearm.afterSeek, [
+    3010,
+    null,
+  ]);
+  assert.ok(combineRuns(seek([3000, null]), seek([null, null])).rearm.afterSeek.mixed);
 });
 
 test("a read of a forwarded answer after the window is inconclusive, not 'never armed'", async () => {
@@ -343,9 +377,19 @@ test("a LIST that was not read, or has no subscriptions, is reported as such", (
     body: { subscriptions: [{ name: "x-nc-v4-x" }] },
   });
   assert.equal(withRecords(v4a).answers.serve.V4present, "unread");
-  const v4b = setStep(recordOf("V4"), 3, { body: {} });
+  const v4b = setStep(recordOf("V4"), 3, { body: { complete: true } });
   assert.equal(withRecords(v4b).answers.serve.V4present, "no");
-  const v4c = setStep(recordOf("V4"), 3, { body: { subscriptions: [{ name: "x-nc-v4-x" }] } });
+  const v4c = setStep(recordOf("V4"), 3, {
+    body: { complete: true, subscriptions: [{ name: "x-nc-v4-x" }] },
+  });
+  const v4d = setStep(recordOf("V4"), 3, {
+    body: { complete: false, subscriptions: [{ name: "x-nc-v4-x" }] },
+  });
+  assert.equal(
+    withRecords(v4d).answers.serve.V4present,
+    "unread",
+    "a first page of several shows nothing absent",
+  );
   assert.equal(withRecords(v4c).answers.serve.V4present, "yes");
 });
 
@@ -380,4 +424,40 @@ test("combining runs keeps nulls and objects apart and agrees on equal values", 
 test("a hit on the first read after a seek is the window after the seek", () => {
   const d1 = setStep(recordOf("D1"), 2, { ...HIT, ageMs: 3000 });
   assert.deepEqual(withRecords(d1).answers.rearm.afterSeek[0], 3000);
+});
+
+test("conn: an ambiguous or unexpected read in either cell says no-data, not differs", () => {
+  const e2 = setStep(recordOf("E2"), 3, { latency: "ambiguous" });
+  assert.equal(withRecords(e2).answers.conn.grid_a_existing, "no-data");
+  const e2b = setStep(recordOf("E2"), 3, { status: 500, kind: "error", latency: "slow" });
+  assert.equal(withRecords(e2b).answers.conn.grid_a_existing, "no-data");
+  const e2c = setStep(recordOf("E2"), 3, { ...MISS });
+  assert.equal(
+    withRecords(e2c).answers.conn.grid_a_existing,
+    "differs",
+    "clear outcomes that differ are a difference",
+  );
+});
+
+test("calibration answers: forwarded GETs, handshake, the empty pull, and the failed create of an existing name", () => {
+  const c = base.answers.calibration;
+  assert.equal(c.latencyClassesHold, true);
+  assert.ok(c.forwardedGetMs.dedicated >= 120 && c.forwardedGetMs.fresh >= 120);
+  assert.deepEqual(c.emptyPull.status, 200);
+  assert.equal(c.failedCreateOnExisting, 404);
+  assert.equal(c.failedCreateArms, true, "the fake production arms a failed create");
+  const c0 = recordOf("C0f");
+  c0.steps.forEach((s) => (s.headersMs = 40));
+  assert.equal(
+    withRecords(c0).answers.calibration.latencyClassesHold,
+    false,
+    "forwarded GETs that look cached break the classes",
+  );
+});
+
+test("a skipped cell is reported with its reason and contributes nothing", async () => {
+  const { invalid, valid } = await judged({ existingMissingTopic: 409 });
+  for (const id of ["E1", "E2", "E3", "E4", "N5"])
+    assert.match(invalid[id], /^skipped: calibration failedCreateExisting answered 409/);
+  assert.ok(!valid.includes("E1"));
 });

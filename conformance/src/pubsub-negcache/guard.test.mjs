@@ -347,3 +347,18 @@ test("sandbox: a spawned child inherits the barrier", { skip: skipUnlessSandboxe
   ).trim();
   assert.equal(out, "EPERM");
 });
+
+test("an allowProduction option stands in for nothing: the transport still refuses without the flag", async (t) => {
+  for (const lib of [https, http])
+    t.mock.method(lib, "request", () => assert.fail("a request was made"));
+  const transport = createTransport({
+    getToken: () => "t",
+    clock: { now: () => 0 },
+    allowProduction: true,
+  });
+  t.after(() => transport.close());
+  await assert.rejects(
+    transport.send({ method: "GET", path: "/" }, { conn: "c", connPolicy: "pool", timeoutMs: 50 }),
+    /production send flag/,
+  );
+});

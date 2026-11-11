@@ -21,10 +21,20 @@ const SETTLES_ON_ABSENCE = new Set([
 export function settleA2({ open, lists, kindOf, ageMs }) {
   if (!(ageMs >= A2_MIN_AGE_MS))
     throw new Error("A2 needs at least ten minutes after the last request");
-  const out = { settled: [], stillPresent: [], unconfirmed: [], unreadable: [] };
+  const out = {
+    settled: [],
+    stillPresent: [],
+    unconfirmed: [],
+    presentUnconfirmed: [],
+    unreadable: [],
+  };
   for (const { name, status } of open) {
     if (status === "unconfirmed-create") {
-      out.unconfirmed.push(name);
+      // Absence never settles an unknown create; a complete LIST that shows the name is positive
+      // evidence that it exists, and the recovery packet must delete it.
+      const list = lists[kindOf(name)];
+      if (list?.complete === true && list.names.includes(name)) out.presentUnconfirmed.push(name);
+      else out.unconfirmed.push(name);
       continue;
     }
     if (!SETTLES_ON_ABSENCE.has(status)) continue;

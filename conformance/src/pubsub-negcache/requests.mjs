@@ -68,7 +68,7 @@ export function buildRequest(step, { runId, cellId }) {
       return {
         method: "POST",
         path: `${BASE}${sub()}:pull`,
-        body: { maxMessages: 1 },
+        body: { maxMessages: 1, returnImmediately: true },
         targets: [],
         create: false,
       };

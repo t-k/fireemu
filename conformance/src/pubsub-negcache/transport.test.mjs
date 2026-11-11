@@ -166,3 +166,31 @@ test("gRPC status names", () => {
   assert.equal(grpcCodeName(14), "UNAVAILABLE");
   assert.equal(grpcCodeName(99), "UNKNOWN");
 });
+
+test("requestedAt: a new connection is ready after the start, a reused one at the start", async (t) => {
+  const server = http.createServer((req, res) => res.end("{}"));
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+  let tick = 0;
+  const transport = createTransport({
+    getToken: () => "t",
+    clock: { now: () => ++tick },
+    protocol: "http",
+    host: "127.0.0.1",
+    port: server.address().port,
+  });
+  t.after(() => transport.close());
+  const meta = { conn: "d", connPolicy: "dedicated", timeoutMs: 5000 };
+  const first = await transport.send({ method: "GET", path: "/" }, meta);
+  assert.ok(
+    first.startedAt < first.requestedAt && first.requestedAt < first.headersAt,
+    "the connect event comes between the start and the answer",
+  );
+  const second = await transport.send({ method: "GET", path: "/" }, meta);
+  assert.equal(second.requestedAt, second.startedAt, "a reused socket has no connection setup");
+  const fresh = await transport.send(
+    { method: "GET", path: "/" },
+    { ...meta, connPolicy: "fresh" },
+  );
+  assert.ok(fresh.startedAt < fresh.requestedAt);
+});

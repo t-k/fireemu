@@ -36,7 +36,8 @@ export class StopRun extends Error {}
 export function journaledBody(request, body, runId) {
   if (body === null || typeof body !== "object") return null;
   if (request.list) {
-    const out = {};
+    // `complete`: the answer holds every page (no nextPageToken), so an absent name is really absent.
+    const out = { complete: body.nextPageToken === undefined };
     for (const [key, items] of Object.entries(body)) {
       if (!Array.isArray(items)) continue;
       out[key] = items.filter((item) => isOwned(item?.name, runId));
@@ -56,12 +57,21 @@ const resultOf = (answer) =>
         ? "conflict"
         : "error";
 
-export function createRecorder({ runId, transport, clock, journal, cells = CELLS, caps = CAPS }) {
+export function createRecorder({
+  runId,
+  transport,
+  clock,
+  journal,
+  cells = CELLS,
+  caps = CAPS,
+  beforeCell = async () => {},
+}) {
   const ledger = createLedger();
   const begun = clock.now();
   let sent = 0;
   let lastActivityAt = begun;
   const records = [];
+  const calibration = {};
   let stopped = null;
 
   /** Sends one request with ledger bookkeeping; returns the classified answer and timing. */
@@ -101,7 +111,9 @@ export function createRecorder({ runId, transport, clock, journal, cells = CELLS
       timeoutMs: limit,
     });
     lastActivityAt = Math.max(lastActivityAt, raw.completedAt ?? clock.now());
-    const answer = classify({ ...raw, headersMs: raw.headersAt - raw.startedAt });
+    // Latency counts from the moment the request went out, not from the connection setup (M3).
+    const sentAt = raw.requestedAt ?? raw.startedAt;
+    const answer = classify({ ...raw, headersMs: raw.headersAt - sentAt });
     if (intent !== null) ledger.answer(intent, resultOf(answer));
     // Own reads feed the ledger. A fast 404 can be a cached answer and proves nothing about absence.
     if (request.method === "GET" && !request.list && !request.grpc && !request.path.includes(":")) {
@@ -115,7 +127,8 @@ export function createRecorder({ runId, transport, clock, journal, cells = CELLS
       method: request.method,
       path: request.path,
       startedAt: raw.startedAt,
-      headersMs: raw.headersAt === undefined ? null : raw.headersAt - raw.startedAt,
+      connectMs: sentAt - raw.startedAt,
+      headersMs: raw.headersAt === undefined ? null : raw.headersAt - sentAt,
       completedMs: raw.completedAt === undefined ? null : raw.completedAt - raw.startedAt,
       status: answer.status,
       kind: answer.kind,
@@ -131,7 +144,31 @@ export function createRecorder({ runId, transport, clock, journal, cells = CELLS
     return { answer, raw, row };
   }
 
+  /** A cell with `requires` runs only when a calibration cell recorded the answer it needs. */
+  function unmet(cell) {
+    if (!cell.requires) return null;
+    const have = calibration[cell.requires.calibration];
+    return have === cell.requires.status
+      ? null
+      : `calibration ${cell.requires.calibration} answered ${have ?? "nothing"}, needs ${cell.requires.status}`;
+  }
+
   async function runCell(cell) {
+    const skipped = unmet(cell);
+    if (skipped) {
+      const out = {
+        id: cell.id,
+        conn: cell.conn,
+        arm: cell.arm,
+        steps: [],
+        aborted: null,
+        skipped,
+      };
+      records.push(out);
+      journal.write({ event: "cell-skipped", cell: cell.id, reason: skipped });
+      return out;
+    }
+    await beforeCell(cell);
     const cellStart = clock.now();
     const actual = [];
     const deadline = cellStart + Math.max(...planned(cell)) + 120000 + caps.cellOverrunMs;
@@ -174,23 +211,36 @@ export function createRecorder({ runId, transport, clock, journal, cells = CELLS
         }
         throw error;
       }
-      const startedAt = result.raw.startedAt;
+      // Ages count from the moment each request went out; lateness from its dispatch (M3).
+      const dispatched = result.raw.startedAt;
+      const startedAt = result.raw.requestedAt ?? dispatched;
       actual.push(startedAt);
       done.push(result.raw.completedAt ?? clock.now());
       out.steps.push({
         i,
         op: step.op,
         planned: target - cellStart,
-        startedMs: startedAt - cellStart,
-        late: startedAt - target > caps.lateMs,
+        startedMs: dispatched - cellStart,
+        late: dispatched - target > caps.lateMs,
         ageMs: actual[cell.arm] === undefined ? null : startedAt - actual[cell.arm],
         status: result.row.status,
         kind: result.row.kind,
         latency: result.row.latency,
+        headersMs: result.row.headersMs,
+        connectMs: result.row.connectMs,
         body: result.row.body,
       });
       if (stopped) {
         out.aborted = stopped;
+        break;
+      }
+      if (cell.calibrates)
+        calibration[cell.calibrates.key] = out.steps[cell.calibrates.step]?.status ?? null;
+      // An arming DELETE whose answer is unknown is sticky and never re-sent. The create that follows it
+      // would make a resource nothing could ever delete, so the cell stops before any later request (M2).
+      if (request.delete && result.answer.kind === "unknown") {
+        out.aborted = "unknown delete before a create";
+        journal.write({ event: "cell-abort", cell: cell.id, step: i, reason: out.aborted });
         break;
       }
     }

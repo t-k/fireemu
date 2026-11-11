@@ -77,6 +77,7 @@ function parse(args) {
     local: ["run-id", "world-params"],
     record: ["run-id", "out", "lock", "packet"],
     a2: ["run-id", "from", "out", "lock"],
+    prelist: ["run-id", "out", "lock"],
   }[mode];
   if (!allowed) throw new Error("unknown mode");
   const options = { mode };
@@ -94,6 +95,47 @@ function parse(args) {
   if (mode !== "plan" && !/^[a-f0-9]{12}$/.test(options.runId))
     throw new Error("run id must be 12 lowercase hex characters");
   return options;
+}
+
+/** One complete, paged LIST per kind (five pages at most). `keep` selects the names worth keeping; the others are counted. */
+async function completeLists(transport, keep) {
+  const lists = {};
+  for (const kind of ["snapshot", "subscription", "topic"]) {
+    const names = [];
+    let pageToken,
+      complete = false;
+    for (let page = 0; page < 5; page++) {
+      const raw = await transport.send(listRequest(kind, pageToken), {
+        conn: "a2",
+        connPolicy: "pool",
+        timeoutMs: 10000,
+      });
+      if (!(raw.status >= 200 && raw.status < 300)) break;
+      let body;
+      try {
+        body = JSON.parse(raw.bodyText);
+      } catch {
+        break;
+      }
+      if (!body || typeof body !== "object" || Array.isArray(body)) break;
+      const items = body[`${kind}s`] ?? [];
+      if (
+        !Array.isArray(items) ||
+        items.some((item) => typeof item.name !== "string") ||
+        (body.nextPageToken !== undefined && typeof body.nextPageToken !== "string")
+      )
+        break;
+      names.push(...items.map((item) => item.name));
+      pageToken = body.nextPageToken;
+      if (!pageToken) {
+        complete = true;
+        break;
+      }
+    }
+    const kept = names.filter(keep);
+    lists[kind] = { complete, names: kept, foreign: names.length - kept.length };
+  }
+  return lists;
 }
 
 export async function main(args, deps = {}) {
@@ -150,50 +192,23 @@ export async function main(args, deps = {}) {
     if (!(ageMs >= A2_MIN_AGE_MS))
       throw new Error("A2 needs at least ten minutes after the last request");
   }
-  const token =
-    deps.token ?? (await (deps.createCredentials ?? guardedCredentials)()({ timeoutMs: 30000 }));
+  const newToken = () => (deps.createCredentials ?? guardedCredentials)()({ timeoutMs: 30000 });
+  let token = deps.token ?? (await newToken());
   const clock = deps.clock ?? realClock;
+  let issuedAt = clock.now();
+  // A token older than the limit is replaced at a cell boundary (never inside a cell: no credential
+  // subprocess between an arming request and its reads). An injected static token is never replaced.
+  const refreshMs = deps.tokenRefreshMs ?? 30 * 60 * 1000;
+  const beforeCell = async () => {
+    if (deps.token !== undefined || clock.now() - issuedAt <= refreshMs) return;
+    token = await newToken();
+    issuedAt = clock.now();
+  };
   const transport = deps.transport ?? createTransport({ getToken: () => token, clock });
   try {
     const out = resolvePath(root, options.out);
     if (mode === "a2") {
-      const lists = {};
-      for (const kind of ["snapshot", "subscription", "topic"]) {
-        const names = [];
-        let pageToken,
-          complete = false;
-        for (let page = 0; page < 5; page++) {
-          const raw = await transport.send(listRequest(kind, pageToken), {
-            conn: "a2",
-            connPolicy: "pool",
-            timeoutMs: 10000,
-          });
-          if (!(raw.status >= 200 && raw.status < 300)) break;
-          let body;
-          try {
-            body = JSON.parse(raw.bodyText);
-          } catch {
-            break;
-          }
-          if (!body || typeof body !== "object" || Array.isArray(body)) break;
-          const items = body[`${kind}s`] ?? [];
-          if (
-            !Array.isArray(items) ||
-            items.some((item) => typeof item.name !== "string") ||
-            (body.nextPageToken !== undefined && typeof body.nextPageToken !== "string")
-          )
-            break;
-          names.push(...items.map((item) => item.name));
-          pageToken = body.nextPageToken;
-          if (!pageToken) {
-            complete = true;
-            break;
-          }
-        }
-        // Only this run's names are kept; the others are counted.
-        const own = names.filter((name) => isOwned(name, runId));
-        lists[kind] = { complete, names: own, foreign: names.length - own.length };
-      }
+      const lists = await completeLists(transport, (name) => isOwned(name, runId));
       const result = settleA2({ open: summary.open, lists, kindOf: kindOfName, ageMs });
       io.mkdirSync(out, { mode: 0o700 });
       writeExclusive(
@@ -201,9 +216,24 @@ export async function main(args, deps = {}) {
         JSON.stringify({ runId, ageMs, lists, ...result }, null, 2) + "\n",
       );
       print(result);
-      return result.stillPresent.length || result.unconfirmed.length || result.unreadable.length
+      return result.stillPresent.length ||
+        result.unconfirmed.length ||
+        result.presentUnconfirmed.length ||
+        result.unreadable.length
         ? 2
         : 0;
+    }
+    if (mode === "prelist") {
+      // Read-only provider-state check before a launch: no resource of any observation run may exist.
+      const lists = await completeLists(transport, (name) => name.includes("/fireemu-observe-"));
+      io.mkdirSync(out, { mode: 0o700 });
+      writeExclusive(
+        path.join(out, `prelist-${runId}.json`),
+        JSON.stringify({ runId, lists }, null, 2) + "\n",
+      );
+      const clean = Object.values(lists).every((l) => l.complete === true && l.names.length === 0);
+      print({ clean, lists });
+      return clean ? 0 : 2;
     }
     const packetSha256 = createHash("sha256")
       .update(io.readFileSync(resolvePath(root, options.packet)))
@@ -213,7 +243,7 @@ export async function main(args, deps = {}) {
       execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
     const startedAt = new Date((deps.now ?? Date.now)()).toISOString();
     const journal = createJournal(out, runId);
-    const recorder = createRecorder({ runId, transport, clock, journal });
+    const recorder = createRecorder({ runId, transport, clock, journal, beforeCell });
     let signaled = false;
     const onSignal = () => {
       if (!signaled) {

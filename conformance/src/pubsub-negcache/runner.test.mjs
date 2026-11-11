@@ -6,6 +6,8 @@ import { CELLS } from "./program.mjs";
 import { Refusal } from "./requests.mjs";
 import { prng, record, RUN_ID } from "./support.mjs";
 
+// Requests 1-2 are the setup, 3-9 the calibration reads (C0d, C0f), 10 the first create (C2).
+const FIRST_PUT = 10;
 const empty = (world) => Object.values(world.state).every((m) => m.size === 0);
 const requestsOf = (rows) => rows.filter((r) => r.event === "request");
 
@@ -13,7 +15,7 @@ test("a clean recording runs every cell, deletes everything and closes", async (
   const { run, world, rows } = record();
   const out = await run();
   assert.equal(out.stopped, null);
-  assert.equal(out.records.length, 30);
+  assert.equal(out.records.length, 33);
   assert.ok(out.records.every((r) => r.aborted === null));
   assert.ok(out.closureReady);
   assert.deepEqual(out.open, []);
@@ -80,10 +82,10 @@ test("a request that starts late is flagged, and the age is the measured one", a
 
 test("an unknown create stops the recording, runs the cleanup, and an own positive read settles it", async () => {
   // The create executed in production but its answer was lost.
-  const { run, world } = record({ faults: new Map([[4, "timeout"]]) });
+  const { run, world } = record({ faults: new Map([[FIRST_PUT, "timeout"]]) });
   const out = await run();
   assert.equal(out.stopped, "unknown create");
-  assert.equal(out.records.length, 1);
+  assert.equal(out.records.length, 3, "C0d, C0f, and C2 whose first create answered unknown");
   assert.equal(out.report.confirmReads, 1);
   assert.ok(out.closureReady);
   assert.ok(empty(world));
@@ -113,7 +115,7 @@ test("an unknown create that never shows is not settled by a 404, and its name i
 
 test("a 5xx, a redirect and an unreadable body on a create are unknown too", async () => {
   for (const fault of ["status500", "status302", "garbage"]) {
-    const { run } = record({ faults: new Map([[4, fault]]) });
+    const { run } = record({ faults: new Map([[FIRST_PUT, fault]]) });
     const out = await run();
     assert.equal(out.stopped, "unknown create", fault);
   }
@@ -265,7 +267,7 @@ test("the request cap stops the cells and leaves the cleanup its reserve", async
 });
 
 test("the wall clock cap stops the cells but not the cleanup of what exists", async () => {
-  const { run, world } = record({ caps: { ...CAPS, wallMs: 400000, cleanupReserveMs: 100000 } });
+  const { run, world } = record({ caps: { ...CAPS, wallMs: 400000, cleanupReserveMs: 200000 } });
   const out = await run();
   assert.equal(out.stopped, "wall clock cap");
   assert.ok(out.records.length < 30);
@@ -356,10 +358,14 @@ test("a LIST answer is journaled with this run's names only and a count of the o
   const other = "projects/fireemu-oracle-idp/subscriptions/someone-elses";
   const body = { subscriptions: [{ name: own }, { name: other }, { name: other }] };
   assert.deepEqual(journaledBody({ list: "subscription" }, body, RUN_ID), {
+    complete: true,
     subscriptions: [{ name: own }],
     foreign: 2,
   });
-  assert.deepEqual(journaledBody({ list: "subscription" }, {}, RUN_ID), {});
+  assert.deepEqual(journaledBody({ list: "subscription" }, {}, RUN_ID), { complete: true });
+  assert.deepEqual(journaledBody({ list: "subscription" }, { nextPageToken: "n" }, RUN_ID), {
+    complete: false,
+  });
   assert.equal(journaledBody({ method: "GET" }, null, RUN_ID), null);
   assert.deepEqual(journaledBody({ method: "GET" }, { name: "n" }, RUN_ID), { name: "n" });
   assert.equal(journaledBody({ method: "GET" }, { name: "x".repeat(5000) }, RUN_ID), null);
@@ -904,4 +910,241 @@ test("a DELETE answered from an armed entry is retried only after a LIST showed 
     .some((r) => r.path.includes("/subscriptions?pageSize"));
   assert.ok(listBefore, "a LIST of subscriptions precedes the retry");
   assert.ok(out.closureReady);
+});
+
+const PY = ["p1", "p3", "p2"].map((c) => `-nc-${c}-y`);
+
+test("M1: with no exemption and a long window the re-created snapshots are open until the cleanup deletes them, and the world ends empty", async () => {
+  const { run, world } = record({ params: { positiveExempt: false, ttl: 12000 } });
+  const out = await run();
+  assert.equal(out.stopped, null);
+  assert.ok(out.closureReady, JSON.stringify(out.open));
+  assert.ok(empty(world));
+  assert.equal(world.state.snapshot.size, 0);
+  // The cleanup, not luck, deleted them: each p*-y snapshot was deleted after its re-create.
+  const { run: run2, rows } = record({ params: { positiveExempt: false, ttl: 12000 } });
+  await run2();
+  for (const suffix of PY) {
+    const sent = rows.filter(
+      (r) =>
+        (r.event === "request" && r.path.endsWith(suffix.replace("-nc-", "-nc-"))) ||
+        (r.event === "request" && r.path.includes(suffix)),
+    );
+    const last = sent.at(-1);
+    assert.equal(last.method, "DELETE", suffix);
+    assert.equal(last.cell, "cleanup", suffix);
+  }
+});
+
+test("M1: a ledger mid-run never reads a re-created snapshot as deleted", async () => {
+  const { recorder } = record();
+  const name = nameOf("y", "p1");
+  const ledger = recorder.ledger;
+  const create = (answer) =>
+    ledger.answer(ledger.intent({ name, action: "create", kind: "snapshot" }), answer);
+  create("ok");
+  ledger.answer(ledger.intent({ name, action: "delete", kind: "snapshot" }), "ok");
+  ledger.read(name, "absent");
+  create("ok");
+  assert.equal(ledger.status(name), "live");
+  assert.deepEqual(ledger.deletable(), [name]);
+});
+
+for (const [cell, role, op, kind] of [
+  ["a2", "x", "subscriptions", "sub"],
+  ["a8", "y", "snapshots", "snap"],
+  ["p1", "y", "snapshots", "snap"],
+]) {
+  for (const fault of ["timeout", "status500", "status302", "garbage"]) {
+    for (const executed of [true, false]) {
+      test(`M2: an unknown arming DELETE in ${cell} (${fault}, ${executed ? "it executed" : "it never reached production"}) stops the cell before its create`, async () => {
+        let deletes = 0;
+        const { run, rows, world } = record({
+          wrap: async (base, req, meta, clock) => {
+            if (
+              req.method === "DELETE" &&
+              req.path.includes(`-nc-${cell}-${role}`) &&
+              ++deletes === 1
+            ) {
+              if (executed) await base(req, meta);
+              const startedAt = clock.now();
+              await clock.sleep(300);
+              if (fault === "timeout")
+                return { startedAt, failure: "timeout", completedAt: clock.now() };
+              const status = fault === "status500" ? 500 : fault === "status302" ? 302 : 200;
+              const bodyText = fault === "garbage" ? "<html>" : "{}";
+              return {
+                startedAt,
+                headersAt: clock.now(),
+                completedAt: clock.now(),
+                status,
+                bodyText,
+              };
+            }
+            return base(req, meta);
+          },
+        });
+        const out = await run();
+        const record_ = out.records.find((r) => r.id === cell.toUpperCase());
+        assert.equal(record_.aborted, "unknown delete before a create");
+        const puts = rows.filter(
+          (r) =>
+            r.event === "request" && r.method === "PUT" && r.path.includes(`-nc-${cell}-${role}`),
+        );
+        assert.deepEqual(
+          puts.map((r) => r.status),
+          cell === "p1" ? [200] : [],
+          "no create follows the unknown DELETE",
+        );
+        assert.ok(rows.some((r) => r.event === "cell-abort" && r.cell === cell.toUpperCase()));
+        // The unknown DELETE stays sticky and open; the run goes on with the other cells and the cleanup.
+        assert.ok(
+          out.open.some(
+            (o) => o.status === "delete-unknown" && o.name.includes(`-nc-${cell}-${role}`),
+          ),
+        );
+        assert.ok(!out.closureReady);
+        assert.ok(out.records.length > 20);
+        if (executed || cell !== "p1")
+          assert.ok(
+            !JSON.stringify([
+              ...world.state.subscription.keys(),
+              ...world.state.snapshot.keys(),
+            ]).includes(`-nc-${cell}-${role}`) ||
+              (cell === "p1" && !executed),
+          );
+        assert.ok(op && kind);
+      });
+    }
+  }
+}
+
+test("a random world and random faults never leave a live resource behind a closed recording", async () => {
+  const random = prng(99);
+  const pick = (list) => list[Math.floor(random() * list.length)];
+  const kinds = ["timeout", "status500", "status302", "garbage"];
+  for (let round = 0; round < 40; round += 1) {
+    const params = {
+      positiveExempt: random() < 0.5,
+      ttl: pick([2000, 6000, 9600, 12000]),
+      existingMissingTopic: pick([404, 409]),
+      getHitRearms: random() < 0.2,
+      served: random() < 0.3 ? ["getSub", "getSnap", "deleteSub"] : ["getSub", "getSnap"],
+    };
+    const faults = new Map();
+    for (let i = 1; i <= 260; i += 1) if (random() < 0.025) faults.set(i, pick(kinds));
+    const { run, world } = record({ params, faults });
+    const out = await run();
+    assert.ok(out.sent <= CAPS.requests, `round ${round}`);
+    if (out.closureReady)
+      assert.ok(
+        empty(world),
+        `round ${round} ${JSON.stringify(params)}: closed with a live resource`,
+      );
+  }
+});
+
+test("M3: latency counts from the moment the request went out, ages too, and lateness from the dispatch", async () => {
+  const { recorder, rows } = record({
+    wrap: async (base, req, meta, clock) => {
+      // A connection setup of 400 ms, then a cached-looking answer 20 ms after the request went out.
+      const startedAt = clock.now();
+      await clock.sleep(400);
+      const requestedAt = clock.now();
+      await clock.sleep(20);
+      return {
+        startedAt,
+        requestedAt,
+        headersAt: clock.now(),
+        completedAt: clock.now(),
+        status: 404,
+        bodyText: JSON.stringify({ error: { code: 404, message: "m", status: "NOT_FOUND" } }),
+      };
+    },
+  });
+  await recorder.exec(
+    { method: "GET", path: "/v1/projects/fireemu-oracle-idp/subscriptions/x", targets: [] },
+    { cell: "z", step: 0, op: "getSub", connPolicy: "fresh" },
+  );
+  const row = rows.at(-1);
+  assert.equal(row.latency, "fast", "20 ms behind a 400 ms handshake is a hit");
+  assert.equal(row.connectMs, 400);
+  assert.equal(row.headersMs, 20);
+  assert.equal(row.completedMs, 420);
+});
+
+test("M3: a fresh-connection cell's ages and lateness use the right anchors", async () => {
+  const cells = [
+    {
+      id: "F1",
+      question: "q",
+      conn: "fresh",
+      arm: 0,
+      steps: [
+        { op: "getSub", target: "X", at: 0 },
+        { op: "getSub", target: "X", since: [0, 3000] },
+      ],
+    },
+  ];
+  const { run } = record({
+    cells,
+    wrap: async (base, req, meta, clock) => {
+      const startedAt = clock.now();
+      await clock.sleep(180); // the handshake
+      const requestedAt = clock.now();
+      const out = await base(req, meta);
+      return { ...out, startedAt, requestedAt };
+    },
+  });
+  const out = await run();
+  const [a, b] = out.records[0].steps;
+  assert.equal(a.late, false);
+  assert.equal(b.late, false, "the 180 ms handshake is not lateness");
+  assert.ok(Math.abs(b.ageMs - 3000) < 400, String(b.ageMs));
+  assert.equal(a.connectMs, 180);
+});
+
+test("S5: when a failed create of an existing name does not answer 404 the cells that rest on it are skipped, with the reason", async () => {
+  const { run, rows } = record({ params: { existingMissingTopic: 409 } });
+  const out = await run();
+  const skipped = out.records.filter((r) => r.skipped).map((r) => r.id);
+  assert.deepEqual(skipped.toSorted(), ["E1", "E2", "E3", "E4", "N5"]);
+  for (const r of out.records.filter((x) => x.skipped))
+    assert.match(r.skipped, /failedCreateExisting answered 409, needs 404/);
+  assert.equal(rows.filter((r) => r.event === "cell-skipped").length, 5);
+  assert.ok(out.closureReady);
+  const none = record();
+  assert.deepEqual(
+    (await none.run()).records.filter((r) => r.skipped),
+    [],
+  );
+});
+
+test("S7: the token is refreshed at a cell boundary once it is older than the limit, never inside a cell", async () => {
+  const refreshes = [];
+  let age = 0;
+  const { run } = record({});
+  void run;
+  const clock = (await import("./world.mjs")).virtualClock(0);
+  const world = (await import("./world.mjs")).createWorld({ clock });
+  const { createRecorder } = await import("./runner.mjs");
+  const calls = [];
+  const recorder = createRecorder({
+    runId: RUN_ID,
+    transport: { send: (req, meta) => (calls.push(req.method), world.send(req, meta)) },
+    clock,
+    journal: { write() {} },
+    beforeCell: async (cell) => {
+      refreshes.push([cell.id, calls.length]);
+      age += 1;
+    },
+  });
+  await recorder.run();
+  assert.equal(refreshes.length, 33 - 0);
+  assert.equal(refreshes[0][0], "C0d");
+  assert.ok(
+    refreshes.every(([, n], i) => i === 0 || n > refreshes[i - 1][1]),
+    "the hook runs between cells, after earlier requests",
+  );
+  assert.ok(age > 0);
 });

@@ -49,8 +49,8 @@ test("plan and local baseline", async () => {
     }),
     0,
   );
-  assert.equal(output.cells, 30);
-  assert.equal(output.scheduledRequests, 189);
+  assert.equal(output.cells, 33);
+  assert.equal(output.scheduledRequests, 200);
   assert.equal(
     await main(["local", "--run-id", id], {
       print: (v) => {
@@ -323,7 +323,7 @@ test("a2: list validation refuses malformed pages and stops after five pages", a
 test("local: a recording that stops exits 2, and the token is requested with a 30 s limit", async (t) => {
   let output;
   const code = await main(
-    ["local", "--run-id", id, "--world-params", JSON.stringify({ faults: { 4: "timeout" } })],
+    ["local", "--run-id", id, "--world-params", JSON.stringify({ faults: { 10: "timeout" } })],
     {
       print: (v) => {
         output = v;
@@ -349,4 +349,162 @@ test("local: a recording that stops exits 2, and the token is requested with a 3
     },
   });
   assert.equal(limit, 30000);
+});
+
+test("prelist: read-only, clean only when every LIST is complete and holds no observation resource", async (t) => {
+  const root = fixture(t);
+  let n = 0;
+  const run = async (reply) => {
+    let output;
+    const sent = [];
+    const code = await main(["prelist", "--run-id", id, "--out", `p${++n}`, "--lock", "lock"], {
+      root,
+      env: {},
+      token: "t",
+      print: (v) => {
+        output = v;
+      },
+      transport: {
+        send: async (request, meta) => {
+          sent.push(request);
+          return reply(request, meta);
+        },
+      },
+    });
+    return { code, output, sent };
+  };
+  const ok = (value) => ({ status: 200, bodyText: JSON.stringify(value) });
+  const clean = await run(() => ok({}));
+  assert.equal(clean.code, 0);
+  assert.equal(clean.output.clean, true);
+  assert.ok(
+    clean.sent.every((r) => r.method === "GET" && r.list),
+    "only LISTs",
+  );
+  assert.equal(clean.sent.length, 3);
+  const foreignOnly = await run((r) =>
+    ok(
+      r.list === "topic"
+        ? { topics: [{ name: "projects/fireemu-oracle-idp/topics/baseline" }] }
+        : {},
+    ),
+  );
+  assert.equal(foreignOnly.code, 0, "other names are counted, not a failure");
+  assert.equal(foreignOnly.output.lists.topic.foreign, 1);
+  const leftover = await run((r) =>
+    ok(
+      r.list === "subscription"
+        ? {
+            subscriptions: [
+              {
+                name: "projects/fireemu-oracle-idp/subscriptions/fireemu-observe-0123456789ab-nc-a1-x",
+              },
+            ],
+          }
+        : {},
+    ),
+  );
+  assert.equal(leftover.code, 2);
+  assert.equal(leftover.output.lists.subscription.names.length, 1);
+  assert.equal((await run(() => ({ status: 500, bodyText: "{}" }))).code, 2);
+  assert.equal((await run(() => ok({ nextPageToken: "more" }))).code, 2);
+  const written = JSON.parse(
+    fs.readFileSync(path.join(root, `p${n}`, `prelist-${id}.json`), "utf8"),
+  );
+  assert.equal(written.lists.snapshot.complete, false);
+  await assert.rejects(
+    main(["prelist", "--run-id", id, "--out", "p1", "--lock", "lock"], {
+      root,
+      env: {},
+      token: "t",
+      transport: { send: async () => ok({}) },
+    }),
+    /output directory must be new/,
+  );
+});
+
+test("a2 exits 2 when an unconfirmed create is shown by a complete LIST, and reports it", async (t) => {
+  const root = fixture(t);
+  const from = path.join(root, "original");
+  fs.mkdirSync(from);
+  const name = `projects/fireemu-oracle-idp/subscriptions/fireemu-observe-${id}-nc-a1-x`;
+  fs.writeFileSync(
+    path.join(from, `summary-${id}.json`),
+    JSON.stringify({ runId: id, open: [{ name, status: "unconfirmed-create" }] }),
+  );
+  fs.writeFileSync(
+    path.join(from, `capture-${id}.jsonl`),
+    JSON.stringify({ event: "request", at: new Date(1000000).toISOString() }) + "\n",
+  );
+  let output;
+  const code = await main(
+    ["a2", "--run-id", id, "--from", "original", "--out", "o", "--lock", "lock"],
+    {
+      root,
+      env: {},
+      token: "t",
+      now: () => 2000000,
+      print: (v) => {
+        output = v;
+      },
+      transport: {
+        send: async (r) => ({
+          status: 200,
+          bodyText: JSON.stringify(r.list === "subscription" ? { subscriptions: [{ name }] } : {}),
+        }),
+      },
+    },
+  );
+  assert.equal(code, 2);
+  assert.deepEqual(output.presentUnconfirmed, [name]);
+  assert.deepEqual(output.unconfirmed, []);
+});
+
+test("S7: a token older than the limit is replaced at a cell boundary, a static token never", async (t) => {
+  const root = fixture(t);
+  const clock = virtualClock(1000000);
+  const world = createWorld({ clock });
+  const issued = [];
+  const used = new Set();
+  const transport = {
+    send: async (request, meta) => {
+      used.add(issued.length);
+      return world.send(request, meta);
+    },
+  };
+  const create = () => async () => (issued.push(clock.now()), `token-${issued.length}`);
+  const code = await main(
+    ["record", "--run-id", id, "--out", "out", "--lock", "lock", "--packet", "packet"],
+    {
+      root,
+      env: {},
+      clock,
+      transport,
+      sourceHead: "h",
+      print() {},
+      tokenRefreshMs: 120000,
+      createCredentials: create,
+    },
+  );
+  assert.equal(code, 0);
+  assert.ok(issued.length >= 4, `refreshed ${issued.length} times`);
+  assert.ok(
+    issued.slice(1).every((at, i) => at - issued[i] > 120000),
+    "each refresh is later than the limit after the previous token",
+  );
+  // A static token is never replaced.
+  const root2 = fixture(t);
+  let calls = 0;
+  await main(["record", "--run-id", id, "--out", "out", "--lock", "lock", "--packet", "packet"], {
+    root: root2,
+    env: {},
+    clock: virtualClock(5),
+    transport: createWorld({ clock: virtualClock(5) }),
+    sourceHead: "h",
+    print() {},
+    tokenRefreshMs: 1,
+    token: "static",
+    createCredentials: () => (calls++, async () => "x"),
+  }).catch(() => {});
+  assert.equal(calls, 0);
 });

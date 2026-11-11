@@ -8,10 +8,10 @@ import { CAPS } from "./runner.mjs";
 import { EXPECT } from "./judge.mjs";
 import { prng, RUN_ID } from "./support.mjs";
 
-test("the program has the 30 cells and 189 scheduled requests the packet states", () => {
-  assert.equal(CELLS.length, 30);
-  assert.equal(requestCount(), 189);
-  assert.equal(new Set(CELLS.map((c) => c.id)).size, 30);
+test("the program has the 33 cells and 200 scheduled requests the packet states", () => {
+  assert.equal(CELLS.length, 33);
+  assert.equal(requestCount(), 200);
+  assert.equal(new Set(CELLS.map((c) => c.id)).size, 33);
 });
 
 test("the request count plus setup and the cleanup budget fit the hard cap", () => {
@@ -101,7 +101,7 @@ test("the arming steps of the cells are the ones the packet describes", () => {
 test("the program is frozen: its canonical JSON has the pinned digest", async () => {
   const { createHash } = await import("node:crypto");
   const digest = createHash("sha256").update(JSON.stringify(CELLS)).digest("hex");
-  assert.equal(digest, "54f4124c22a5ec1dca70d7b1d363e34eb0a5cf9e143c56c46d097f2a44fc5c45");
+  assert.equal(digest, "51088e44d47a67fc7752c8e444d57bbe75bbb505b18b703df09d52445b9c74b5");
 });
 
 test("the minimum gap between two requests is 50 ms", () => {

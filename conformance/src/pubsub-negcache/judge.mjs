@@ -4,6 +4,7 @@
 // `mixed` and no rule is written. A cell whose prerequisite failed (the "absent" name answered 200,
 // the create did not answer 200) contributes nothing.
 
+import { SLOW_MS } from "./answer.mjs";
 import { CELLS } from "./program.mjs";
 
 export const WINDOW_EDGE_MS = 9400; // a read earlier than this after the arming start is inside any recorded window
@@ -26,6 +27,9 @@ export function readOutcome(step) {
 // Expected statuses of the leading steps of each cell; null = any. A mismatch fails the prerequisite.
 const ABSENT_FIRST = [404, 200];
 export const EXPECT = {
+  C0d: [200, 200, 200, 200],
+  C0f: [200, 200, 200],
+  C2: [200],
   N2a: ABSENT_FIRST,
   N2b: ABSENT_FIRST,
   N4: ABSENT_FIRST,
@@ -59,6 +63,7 @@ export const EXPECT = {
 };
 
 export function prerequisite(record) {
+  if (record.skipped) return { ok: false, reason: `skipped: ${record.skipped}` };
   const expected = EXPECT[record.id];
   if (!expected) return { ok: false, reason: "no expectation for the cell" };
   if (record.steps.length < expected.length)
@@ -231,15 +236,23 @@ export function judgeRun(records) {
     }
     if (valid.V4) {
       const list = step(valid.V4, 3);
+      // Only a complete answer (no nextPageToken) can show that a name is absent.
       const names =
-        list?.kind === "ok" && list.body
+        list?.kind === "ok" && list.body && list.body.complete === true
           ? (list.body.subscriptions ?? []).map((s) => s.name)
           : null;
       serve.V4present =
         names === null ? "unread" : names.some((n) => n.endsWith("-nc-v4-x")) ? "yes" : "no";
       const rearm = readOutcome(step(valid.V4, 4));
+      // The question only exists when the DELETE was answered from the entry.
       serve.V4rearm =
-        rearm === "hit" ? "re-armed" : ["ok", "miss"].includes(rearm) ? "not-re-armed" : "mixed";
+        serve.V4 !== "answered-from-entry"
+          ? "not-applicable"
+          : rearm === "hit"
+            ? "re-armed"
+            : ["ok", "miss"].includes(rearm)
+              ? "not-re-armed"
+              : "mixed";
     }
     answers.serve = serve;
     answers.rearm = {
@@ -301,8 +314,9 @@ export function judgeRun(records) {
         }
       : "no-data";
   }
-  // Q-CONN
+  // Q-CONN: only reads that are clearly a hit, a miss or a 200 can differ; an ambiguous or odd read says nothing.
   {
+    const clear = new Set(["hit", "miss", "ok"]);
     const same = (a, b) => {
       const ra = valid[a];
       const rb = valid[b];
@@ -310,9 +324,11 @@ export function judgeRun(records) {
       const f = (r) =>
         reads(r, r.arm + 1)
           .toSorted((x, y) => x.i - y.i)
-          .map(readOutcome)
-          .join(",");
-      return f(ra) === f(rb) ? "same" : "differs";
+          .map(readOutcome);
+      const fa = f(ra);
+      const fb = f(rb);
+      if (![...fa, ...fb].every((o) => clear.has(o))) return "no-data";
+      return fa.join(",") === fb.join(",") ? "same" : "differs";
     };
     answers.conn = {
       grid_a_existing: same("E1", "E2"),
@@ -320,10 +336,40 @@ export function judgeRun(records) {
       base: same("N2a", "N2b"),
     };
   }
+  // Calibration (C0d, C0f, C2): what the latency classes and the existing-name cells stand on.
+  {
+    const median = (values) => {
+      const sorted = values.filter((v) => Number.isFinite(v)).toSorted((x, y) => x - y);
+      return sorted.length ? sorted[Math.floor(sorted.length / 2)] : null;
+    };
+    const gets = (r) => r?.steps.filter((x) => x.op === "getTopic") ?? [];
+    const d = valid.C0d;
+    const f = valid.C0f;
+    const forwardedDedicated = median(gets(d).map((x) => x.headersMs));
+    const forwardedFresh = median(gets(f).map((x) => x.headersMs));
+    const pull = d?.steps.find((x) => x.op === "pullSub");
+    const c2 = valid.C2 ?? records.find((r) => r.id === "C2");
+    answers.calibration = {
+      forwardedGetMs: { dedicated: forwardedDedicated, fresh: forwardedFresh },
+      freshConnectMs: median(gets(f).map((x) => x.connectMs)),
+      // Forwarded GETs must classify as slow on both kinds of connection, or the latency classes do not hold here.
+      latencyClassesHold:
+        forwardedDedicated === null || forwardedFresh === null
+          ? "no-data"
+          : forwardedDedicated >= SLOW_MS && forwardedFresh >= SLOW_MS,
+      emptyPull: pull ? { status: pull.status, headersMs: pull.headersMs } : "no-data",
+      failedCreateOnExisting: c2?.steps?.[1] ? c2.steps[1].status : "no-data",
+      failedCreateArms: c2?.steps?.[2] ? readOutcome(c2.steps[2]) === "hit" : "no-data",
+    };
+  }
   return { answers, invalid, valid: Object.keys(valid) };
 }
 
-/** Two recordings: a question is answered only where they agree. */
+/**
+ * Two recordings: a question is answered only where they agree. Measured ages are compared as intervals,
+ * not by equality: the window of two runs is (max last hit, min first miss) and must stay consistent;
+ * the calibration of the two runs is reported side by side.
+ */
 export function combineRuns(first, second) {
   const merge = (a, b) => {
     if (
@@ -338,7 +384,38 @@ export function combineRuns(first, second) {
     }
     return JSON.stringify(a) === JSON.stringify(b) ? a : { mixed: [a, b] };
   };
-  return merge(first.answers, second.answers);
+  const out = merge(first.answers, second.answers);
+  const [x, y] = [first.answers, second.answers];
+  if (x?.ttl && y?.ttl) {
+    const hits = [x.ttl.lastHitMs, y.ttl.lastHitMs].filter((v) => v !== null);
+    const misses = [x.ttl.firstMissMs, y.ttl.firstMissMs].filter((v) => v !== null);
+    const lastHitMs = hits.length ? Math.max(...hits) : null;
+    const firstMissMs = misses.length ? Math.min(...misses) : null;
+    const agree = x.ttl.verdict === y.ttl.verdict;
+    out.ttl = {
+      cells: [...new Set([...x.ttl.cells, ...y.ttl.cells])],
+      lastHitMs,
+      firstMissMs,
+      verdict: !agree
+        ? { mixed: [x.ttl.verdict, y.ttl.verdict] }
+        : lastHitMs !== null && firstMissMs !== null && lastHitMs >= firstMissMs
+          ? "inconsistent"
+          : x.ttl.verdict,
+    };
+  }
+  if (x?.rearm && y?.rearm) {
+    const shape = (list) => list.map((v) => v !== null);
+    const same =
+      JSON.stringify(shape(x.rearm.afterSeek)) === JSON.stringify(shape(y.rearm.afterSeek));
+    out.rearm = {
+      ...out.rearm,
+      afterSeek: same
+        ? x.rearm.afterSeek.map((v, i) => (v === null ? null : Math.max(v, y.rearm.afterSeek[i])))
+        : { mixed: [x.rearm.afterSeek, y.rearm.afterSeek] },
+    };
+  }
+  if (x?.calibration && y?.calibration) out.calibration = { runs: [x.calibration, y.calibration] };
+  return out;
 }
 
 export const cellIds = () => CELLS.map((c) => c.id);

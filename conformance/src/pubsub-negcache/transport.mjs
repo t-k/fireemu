@@ -96,11 +96,21 @@ export function createTransport({
       } else if (connPolicy === "fresh") agent = new net.Agent({ keepAlive: false });
       let req, timer;
       let startedAt;
+      // The moment the connection was ready and the request went out: a new socket pays DNS, TCP and TLS
+      // first, which the recorded latencies (taken on reused connections) do not include. `connectMs`
+      // is that setup time, kept apart; latency classes and ages count from `requestedAt`.
+      let requestedAt;
       // A promise settles once; a second finish (an 'end' after a timeout) only repeats harmless cleanup.
       const finish = (value) => {
         clearTimeout(timer);
         if (connPolicy === "fresh") agent.destroy();
-        resolve({ startedAt: startedAt ?? clock.now(), completedAt: clock.now(), ...value });
+        const began = startedAt ?? clock.now();
+        resolve({
+          startedAt: began,
+          requestedAt: requestedAt ?? began,
+          completedAt: clock.now(),
+          ...value,
+        });
       };
       try {
         const body = request.body === undefined ? undefined : JSON.stringify(request.body);
@@ -132,6 +142,15 @@ export function createTransport({
             res.on("aborted", () => finish({ failure: "ECONNRESET" }));
           },
         );
+        req.on("socket", (socket) => {
+          if (req.reusedSocket) {
+            requestedAt = startedAt;
+            return;
+          }
+          socket.once(protocol === "https" ? "secureConnect" : "connect", () => {
+            requestedAt = clock.now();
+          });
+        });
         req.on("error", (error) => finish({ failure: error.code ?? "error" }));
         timer = setTimeout(() => {
           finish({ failure: "timeout" });

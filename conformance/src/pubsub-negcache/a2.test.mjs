@@ -71,5 +71,24 @@ test("statuses that need no A2 are left alone", () => {
     kindOf,
     ageMs: A2_MIN_AGE_MS,
   });
-  assert.deepEqual(out, { settled: [], stillPresent: [], unconfirmed: [], unreadable: [] });
+  assert.deepEqual(out, {
+    settled: [],
+    stillPresent: [],
+    unconfirmed: [],
+    presentUnconfirmed: [],
+    unreadable: [],
+  });
+});
+
+test("an unconfirmed create that a complete LIST shows is reported as present; a partial LIST proves nothing either way", () => {
+  const open = [
+    { name: S("a"), status: "unconfirmed-create" },
+    { name: S("b"), status: "unconfirmed-create" },
+  ];
+  const shown = settleA2({ open, lists: lists([S("a")]), kindOf, ageMs: A2_MIN_AGE_MS });
+  assert.deepEqual(shown.presentUnconfirmed, [S("a")]);
+  assert.deepEqual(shown.unconfirmed, [S("b")]);
+  const partial = settleA2({ open, lists: lists([S("a")], false), kindOf, ageMs: A2_MIN_AGE_MS });
+  assert.deepEqual(partial.presentUnconfirmed, []);
+  assert.deepEqual(partial.unconfirmed, [S("a"), S("b")]);
 });

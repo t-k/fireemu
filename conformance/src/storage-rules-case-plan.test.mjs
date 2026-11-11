@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   CANDIDATES,
+  PROGRAM_IDS,
   CASE_PLAN,
   CASE_ROWS,
   predictRow,
@@ -49,46 +50,62 @@ function reference(row, candidate) {
 }
 
 describe("the case family plan", () => {
-  it("is one released program, no load-only rulesets, its own prefix and task", () => {
+  it("is two released programs, no load-only rulesets, its own prefix and task", () => {
     assert.equal(CASE_PLAN.id, "case");
     assert.equal(CASE_PLAN.taskId, "STORAGE-RULES-CASE");
     assert.equal(CASE_PLAN.prefixRoot, "storage-rules-case");
     assert.deepEqual(
       CASE_PLAN.programs.map((p) => p.id),
-      ["case"],
+      ["core", "wide"],
     );
+    assert.deepEqual(PROGRAM_IDS, ["core", "wide"]);
     assert.deepEqual(CASE_PLAN.loadOnly, []);
     assert.equal(CASE_PLAN.runRoot(runId), `storage-rules-case/${runId}/`);
     assert.equal(P, `storage-rules-case/${runId}/rec1`);
     assert.deepEqual(CANDIDATES, ["ascii", "full", "simple"]);
   });
 
-  it("has a marker and one object per row, every object under the recording prefix", () => {
-    const program = CASE_PLAN.programs[0];
-    assert.equal(program.marker, "mkA");
+  it("has a marker per program and one object per row, every object under the recording prefix", () => {
+    const [core, wide] = CASE_PLAN.programs;
+    assert.equal(core.marker, "mkA");
+    assert.equal(wide.marker, "mkB");
     assert.deepEqual(
       Object.keys(CASE_PLAN.objects).toSorted(),
-      [...CASE_ROWS.map((r) => r.object), "mkA"].toSorted(),
+      [...CASE_ROWS.map((r) => r.object), "mkA", "mkB"].toSorted(),
+    );
+    assert.deepEqual(
+      core.objects.toSorted(),
+      ["mkA", ...CASE_ROWS.filter((r) => r.program === "core").map((r) => r.object)].toSorted(),
+    );
+    assert.deepEqual(
+      wide.objects.toSorted(),
+      ["mkB", ...CASE_ROWS.filter((r) => r.program === "wide").map((r) => r.object)].toSorted(),
     );
     assert.equal(new Set(CASE_ROWS.map((r) => r.id)).size, CASE_ROWS.length);
     assert.equal(new Set(CASE_ROWS.map((r) => r.object)).size, CASE_ROWS.length);
-    assert.deepEqual(program.objects.toSorted(), Object.keys(CASE_PLAN.objects).toSorted());
+    assert.deepEqual(
+      [...core.objects, ...wide.objects].toSorted(),
+      Object.keys(CASE_PLAN.objects).toSorted(),
+    );
     for (const id of Object.keys(CASE_PLAN.objects)) {
       const name = CASE_PLAN.objectName(id, P);
       assert.ok(name.startsWith(`${P}/`), name);
       assert.ok(![...name].some((c) => c.charCodeAt(0) < 0x20 || c.charCodeAt(0) === 0x7f), name);
       assert.ok(!name.split("/").some((s) => s === "" || s === "." || s === ".."), name);
     }
-    assert.equal(CASE_ROWS.length, 39);
+    assert.equal(CASE_ROWS.length, 41);
+    assert.equal(CASE_ROWS.filter((r) => r.program === "core").length, 29);
+    assert.equal(CASE_ROWS.filter((r) => r.program === "wide").length, 12);
   });
 
-  it("reads every row of the table through get on the object (meta op) in the one program", () => {
+  it("reads every row of the table through get on the object (meta op) in its program", () => {
     for (const row of CASE_PLAN.rows) {
-      assert.equal(row.program, "case");
+      assert.ok(["core", "wide"].includes(row.program));
       assert.equal(row.op, "meta");
       assert.equal(row.plan, row.candidates.ascii ? "allow" : "deny", row.id);
     }
-    assert.equal(CASE_PLAN.rowsOf("case").length, CASE_ROWS.length);
+    assert.equal(CASE_PLAN.rowsOf("core").length, 29);
+    assert.equal(CASE_PLAN.rowsOf("wide").length, 12);
   });
 
   it("predicts every row for every candidate as the reference mapping does", () => {
@@ -153,31 +170,73 @@ describe("the case family plan", () => {
     }
   });
 
-  it("writes the rule sources with the raw characters, in one service block, one match per row", () => {
-    const source = ruleSource(P);
-    assert.equal(source, CASE_PLAN.programs[0].source(P));
-    assert.ok(source.startsWith("rules_version = '2';\nservice firebase.storage {"));
-    assert.ok(source.includes("match /b/{bucket}/o {"));
-    assert.ok(source.includes(`match /${P}/mk/a {\n      allow read: if true;\n    }`));
-    assert.ok(source.includes(`match /${P}/acute-lower-mapped/x {`));
-    assert.ok(source.includes("'" + cp(0xc9) + "'.lower() == '" + cp(0xe9) + "'"));
-    assert.ok(source.includes("'" + cp(0x391, 0x3a3) + "'.lower() == '" + cp(0x3b1, 0x3c2) + "'"));
-    assert.ok(source.includes("'e" + cp(0x301) + "'.upper() == 'E" + cp(0x301) + "'"));
-    assert.ok(source.includes("'\u{1f525}a'.upper() == '\u{1f525}A'"));
-    assert.ok(source.includes("'" + cp(0xff41) + "'.upper() == '" + cp(0xff21) + "'"));
+  it("splits the rows over two rulesets: the characters no recording has put in a rule yet go in the second", () => {
+    const wideGroups = new Set(["capsharp", "comb", "emoji", "fullwidth"]);
+    for (const row of CASE_ROWS)
+      assert.equal(
+        row.program,
+        wideGroups.has(row.group) || row.id.startsWith("ctl-wide-") ? "wide" : "core",
+        row.id,
+      );
+    assert.deepEqual(
+      CASE_ROWS.filter((r) => r.program === "wide" && r.control).map((r) => r.id),
+      ["ctl-wide-upper-true", "ctl-wide-upper-false"],
+    );
+    assert.deepEqual(
+      CASE_ROWS.filter((r) => r.program === "core" && r.control).map((r) => r.id),
+      [
+        "ctl-upper-true",
+        "ctl-upper-false",
+        "ctl-lower-true",
+        "ctl-ascii-other",
+        "ctl-lower-i",
+        "ctl-size-nonascii",
+        "ctl-size-emoji",
+      ],
+    );
+    // Every character the first ruleset holds was accepted by a production Storage compile before,
+    // or is Latin-1 / Greek / Latin Extended-A; the wide ones are exactly the rest.
+    const core = ruleSource(P, "core");
+    for (const point of [0x301, 0xff41, 0xff21, 0x1e9e])
+      assert.ok(!core.includes(String.fromCodePoint(point)), point.toString(16));
+    assert.ok(ruleSource(P, "wide").includes(String.fromCodePoint(0x301)));
+  });
+
+  it("writes each rule source with the raw characters, in one service block, one match per row", () => {
+    const core = ruleSource(P, "core");
+    const wide = ruleSource(P, "wide");
+    assert.equal(core, CASE_PLAN.programs[0].source(P));
+    assert.equal(wide, CASE_PLAN.programs[1].source(P));
+    assert.throws(() => ruleSource(P, "case"), /unknown program case/);
+    assert.throws(() => ruleSource(P), /unknown program undefined/);
+    for (const source of [core, wide]) {
+      assert.ok(source.startsWith("rules_version = '2';\nservice firebase.storage {"));
+      assert.ok(source.includes("match /b/{bucket}/o {"));
+      assert.ok(!source.includes("\\u"), "no escape sequence is sent");
+      assert.ok(Buffer.byteLength(source) < 40_000);
+    }
+    assert.ok(core.includes(`match /${P}/mk/a {\n      allow read: if true;\n    }`));
+    assert.ok(wide.includes(`match /${P}/mk/b {\n      allow read: if true;\n    }`));
+    assert.ok(!core.includes("/mk/b") && !wide.includes("/mk/a"));
+    assert.ok(core.includes(`match /${P}/acute-lower-mapped/x {`));
+    assert.ok(core.includes("'" + cp(0xc9) + "'.lower() == '" + cp(0xe9) + "'"));
+    assert.ok(core.includes("'" + cp(0x391, 0x3a3) + "'.lower() == '" + cp(0x3b1, 0x3c2) + "'"));
+    assert.ok(wide.includes("'e" + cp(0x301) + "'.upper() == 'E" + cp(0x301) + "'"));
+    assert.ok(wide.includes("'\u{1f525}a'.upper() == '\u{1f525}A'"));
+    assert.ok(wide.includes("'" + cp(0xff41) + "'.upper() == '" + cp(0xff21) + "'"));
     assert.ok(
-      source.includes(
+      core.includes(
         `match /${P}/rt-lower-same/{n} {\n      allow read: if n.lower() == '${cp(0xc9)}';`,
       ),
     );
     assert.ok(
-      source.includes(
+      core.includes(
         `match /${P}/rt-res-lower-same/{n} {\n      allow read: if resource.name.lower() == resource.name;`,
       ),
     );
-    assert.equal((source.match(/allow read:/g) ?? []).length, CASE_ROWS.length + 1);
-    assert.ok(!source.includes("\\u"), "no escape sequence is sent");
-    assert.ok(Buffer.byteLength(source) < 40_000);
+    assert.ok(wide.includes(`match /${P}/ctl-wide-upper-true/x {`));
+    assert.equal((core.match(/allow read:/g) ?? []).length, 29 + 1);
+    assert.equal((wide.match(/allow read:/g) ?? []).length, 12 + 1);
   });
 
   it("keeps its own source file ASCII, so no editor or tool can normalize a probe", () => {
@@ -254,6 +313,7 @@ describe("the case family tables in detail", () => {
       assert.equal(CASE_PLAN.objectName(row.object, P), `${P}/${row.id}/${leaf}`, row.id);
     }
     assert.equal(CASE_PLAN.objectName("mkA", P), `${P}/mk/a`);
+    assert.equal(CASE_PLAN.objectName("mkB", P), `${P}/mk/b`);
   });
 
   it("gives controls the group ctl and nobody else, and every row one of four relations", () => {
@@ -268,17 +328,17 @@ describe("the case family tables in detail", () => {
         "ctl",
         "acute",
         "sharp",
-        "capsharp",
         "dotted",
         "dotless",
         "sigma",
         "alpha",
-        "comb",
-        "emoji",
-        "fullwidth",
         "rt-lower",
         "rt-sharp",
         "rt-res",
+        "capsharp",
+        "comb",
+        "emoji",
+        "fullwidth",
       ],
     );
     assert.deepEqual(
@@ -286,7 +346,7 @@ describe("the case family tables in detail", () => {
         Object.entries(Object.groupBy(CASE_ROWS, (r) => r.group)).map(([k, v]) => [k, v.length]),
       ),
       {
-        ctl: 7,
+        ctl: 9,
         acute: 4,
         sharp: 2,
         capsharp: 2,
@@ -320,6 +380,7 @@ describe("the case family tables in detail", () => {
 
   it("stores the marker as a, every other object as its row id, and states its price and local bucket", () => {
     assert.equal(CASE_PLAN.objects.mkA.body, "a");
+    assert.equal(CASE_PLAN.objects.mkB.body, "b");
     for (const row of CASE_ROWS) assert.equal(CASE_PLAN.objects[row.object].body, row.id);
     assert.equal(CASE_PLAN.estimatedUsd, 0.05);
     assert.equal(CASE_PLAN.localBucket, "demo-storage-case.appspot.com");

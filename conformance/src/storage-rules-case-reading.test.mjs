@@ -11,7 +11,7 @@ const rowsFor = (candidate, recordings = [1, 2]) =>
   recordings.flatMap((recording) =>
     CASE_ROWS.map((row) => ({
       recording,
-      program: "case",
+      program: row.program,
       id: row.id,
       class: classOf(row.candidates[candidate]),
     })),
@@ -251,12 +251,13 @@ describe("reading details", () => {
     assert.equal(lines[4], "ascii: 2 mismatch(es): ctl-lower-true, acute-lower-same");
     assert.match(lines[5], /^full: \d+ mismatch\(es\): /);
     assert.match(lines[6], /^simple: \d+ mismatch\(es\): /);
-    assert.equal(lines[7], "");
-    assert.equal(lines[8], "row\tgroup\tanswers\tascii\tfull\tsimple");
-    assert.equal(lines[9], "ctl-upper-true\tcontrol\tallow,allow\tallow\tallow\tallow");
+    assert.equal(lines[7], "programs: core=controls-failed, wide=ascii");
+    assert.equal(lines[8], "");
+    assert.equal(lines[9], "row\tgroup\tanswers\tascii\tfull\tsimple");
+    assert.equal(lines[10], "ctl-upper-true\tcontrol\tallow,allow\tallow\tallow\tallow");
     assert.ok(lines.includes("acute-lower-same\tacute\tallow,deny\tallow\tdeny\tdeny"));
     assert.ok(lines.includes("sharp-upper-full\tsharp\tother,deny\tdeny\tallow\tdeny"));
-    assert.equal(lines.length, 9 + CASE_ROWS.length);
+    assert.equal(lines.length, 10 + CASE_ROWS.length);
   });
 
   it("joins several failed controls, unread rows and disagreeing rows with a comma and a space", () => {
@@ -274,5 +275,48 @@ describe("reading details", () => {
     assert.ok(text.startsWith("verdict: full\ncomplete: true; controls: ok\nascii: "));
     assert.ok(!/unread|disagreeing|failed/.test(text.split("\n\n")[0].replace("ascii: ", "")));
     assert.match(text, /\nfull: 0 mismatch\(es\)\nsimple: /);
+  });
+});
+
+describe("the reading per ruleset", () => {
+  it("names a candidate for each ruleset alone, and `ambiguous` where its rows cannot tell two apart", () => {
+    for (const [candidate, wide] of [
+      ["ascii", "ascii"],
+      ["full", "ambiguous"],
+      ["simple", "ambiguous"],
+    ]) {
+      const reading = readCase(rowsFor(candidate), CASE_PLAN);
+      assert.deepEqual(reading.byProgram, { core: candidate, wide }, candidate);
+      assert.equal(reading.verdict, candidate);
+    }
+  });
+
+  it("still reads the first ruleset when the second was refused at create, and says the second is incomplete", () => {
+    const rows = rowsFor("ascii").map((r) =>
+      r.program === "wide" ? { ...r, class: "not-evaluated" } : r,
+    );
+    const reading = readCase(rows, CASE_PLAN);
+    assert.equal(reading.verdict, "incomplete");
+    assert.deepEqual(reading.byProgram, { core: "ascii", wide: "incomplete" });
+    assert.equal(reading.unread.length, 24);
+  });
+
+  it("reads each ruleset's own controls: a wrong wide control fails the wide ruleset only", () => {
+    const reading = readCase(flip(rowsFor("ascii"), "ctl-wide-upper-true"), CASE_PLAN);
+    assert.equal(reading.verdict, "controls-failed");
+    assert.deepEqual(reading.byProgram, { core: "ascii", wide: "controls-failed" });
+  });
+
+  it("gives a plan with no programs no per-ruleset reading, and prints none", () => {
+    const plan = { rows: CASE_PLAN.rows.map((r) => ({ ...r, program: undefined })) };
+    assert.deepEqual(readCase(rowsFor("ascii"), plan).byProgram, {});
+    assert.ok(!/programs:/.test(renderReading(readCase(rowsFor("ascii"), plan))));
+  });
+
+  it("prints the per-ruleset reading between the candidates and the table", () => {
+    const lines = renderReading(readCase(rowsFor("ascii"), CASE_PLAN)).split("\n");
+    assert.equal(lines[2], "ascii: 0 mismatch(es)");
+    assert.equal(lines[5], "programs: core=ascii, wide=ascii");
+    assert.equal(lines[6], "");
   });
 });

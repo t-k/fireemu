@@ -162,7 +162,7 @@ fn candidate_simple_one_character_mapping() {
     check(2);
 }
 
-const ROW_COUNT: usize = 39;
+const ROW_COUNT: usize = 41;
 
 #[rustfmt::skip]
 const ROWS: &[Row] = &[
@@ -179,8 +179,6 @@ const ROWS: &[Row] = &[
     row("acute-upper-same", Kind::Literal, "x", "'\u{e9}'.upper() == '\u{e9}'", [true, false, false]),
     row("sharp-upper-full", Kind::Literal, "x", "'\u{df}'.upper() == 'SS'", [false, true, false]),
     row("sharp-upper-same", Kind::Literal, "x", "'\u{df}'.upper() == '\u{df}'", [true, false, true]),
-    row("capsharp-lower-mapped", Kind::Literal, "x", "'\u{1e9e}'.lower() == '\u{df}'", [false, true, true]),
-    row("capsharp-lower-same", Kind::Literal, "x", "'\u{1e9e}'.lower() == '\u{1e9e}'", [true, false, false]),
     row("dotted-lower-full", Kind::Literal, "x", "'\u{130}'.lower().size() == 2", [false, true, false]),
     row("dotted-lower-simple", Kind::Literal, "x", "'\u{130}'.lower() == 'i'", [false, false, true]),
     row("dotted-lower-same", Kind::Literal, "x", "'\u{130}'.lower() == '\u{130}'", [true, false, false]),
@@ -191,6 +189,14 @@ const ROWS: &[Row] = &[
     row("sigma-same", Kind::Literal, "x", "'\u{391}\u{3a3}'.lower() == '\u{391}\u{3a3}'", [true, false, false]),
     row("alpha-lower-mapped", Kind::Literal, "x", "'\u{391}'.lower() == '\u{3b1}'", [false, true, true]),
     row("alpha-lower-same", Kind::Literal, "x", "'\u{391}'.lower() == '\u{391}'", [true, false, false]),
+    row("rt-lower-same", Kind::Capture, "\u{c9}", "n.lower() == '\u{c9}'", [true, false, false]),
+    row("rt-lower-mapped", Kind::Capture, "\u{c9}", "n.lower() == '\u{e9}'", [false, true, true]),
+    row("rt-upper-sharp-full", Kind::Capture, "\u{df}", "n.upper() == 'SS'", [false, true, false]),
+    row("rt-upper-sharp-same", Kind::Capture, "\u{df}", "n.upper() == '\u{df}'", [true, false, true]),
+    row("rt-res-lower-same", Kind::Resource, "\u{c9}", "resource.name.lower() == resource.name", [true, false, false]),
+    row("rt-res-lower-differs", Kind::Resource, "\u{c9}", "resource.name.lower() != resource.name", [false, true, true]),
+    row("capsharp-lower-mapped", Kind::Literal, "x", "'\u{1e9e}'.lower() == '\u{df}'", [false, true, true]),
+    row("capsharp-lower-same", Kind::Literal, "x", "'\u{1e9e}'.lower() == '\u{1e9e}'", [true, false, false]),
     row("comb-upper", Kind::Literal, "x", "'e\u{301}'.upper() == 'E\u{301}'", [true, true, true]),
     row("comb-upper-composed", Kind::Literal, "x", "'e\u{301}'.upper() == '\u{c9}'", [false, false, false]),
     row("emoji-upper", Kind::Literal, "x", "'\u{1f525}a'.upper() == '\u{1f525}A'", [true, true, true]),
@@ -199,10 +205,6 @@ const ROWS: &[Row] = &[
     row("fullwidth-upper-mapped", Kind::Literal, "x", "'\u{ff41}'.upper() == '\u{ff21}'", [false, true, true]),
     row("fullwidth-upper-same", Kind::Literal, "x", "'\u{ff41}'.upper() == '\u{ff41}'", [true, false, false]),
     row("fullwidth-lower-mapped", Kind::Literal, "x", "'\u{ff21}'.lower() == '\u{ff41}'", [false, true, true]),
-    row("rt-lower-same", Kind::Capture, "\u{c9}", "n.lower() == '\u{c9}'", [true, false, false]),
-    row("rt-lower-mapped", Kind::Capture, "\u{c9}", "n.lower() == '\u{e9}'", [false, true, true]),
-    row("rt-upper-sharp-full", Kind::Capture, "\u{df}", "n.upper() == 'SS'", [false, true, false]),
-    row("rt-upper-sharp-same", Kind::Capture, "\u{df}", "n.upper() == '\u{df}'", [true, false, true]),
-    row("rt-res-lower-same", Kind::Resource, "\u{c9}", "resource.name.lower() == resource.name", [true, false, false]),
-    row("rt-res-lower-differs", Kind::Resource, "\u{c9}", "resource.name.lower() != resource.name", [false, true, true]),
+    row("ctl-wide-upper-true", Kind::Literal, "x", "'abc'.upper() == 'ABC'", [true, true, true]),
+    row("ctl-wide-upper-false", Kind::Literal, "x", "'abc'.upper() == 'abc'", [false, false, false]),
 ];

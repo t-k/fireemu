@@ -45,7 +45,7 @@ async function run({ baseline = baselineName, candidate = "ascii", faults = [], 
 }
 
 describe("the case family in the fake world", () => {
-  it("runs both recordings with one ruleset, leaves the sandbox as it found it, and reads the planned class on every row", async () => {
+  it("runs both recordings with two rulesets each, leaves the sandbox as it found it, and reads the planned class on every row", async () => {
     const { report, world } = await run();
     assert.equal(report.stopped, null);
     assert.equal(report.mode, "record");
@@ -55,14 +55,17 @@ describe("the case family in the fake world", () => {
     assert.equal(report.requests, CASE_PLAN.expectedRequests(2));
     assert.equal(report.rows.length, CASE_ROWS.length * 2);
     assert.deepEqual(report.loads, []);
-    assert.equal(report.publications.filter((p) => p.program).length, 2);
+    assert.deepEqual(
+      report.publications.filter((p) => p.program).map((p) => `${p.recording}/${p.program}`),
+      ["1/core", "1/wide", "2/core", "2/wide"],
+    );
     assert.equal(world.objects.size, 0);
     assert.deepEqual(world.release, { rulesetName: baselineName });
     assert.deepEqual([...world.rulesets.keys()].toSorted(), [
       `projects/${project}/rulesets/22b746af-0000-4000-8000-000000000001`,
       `projects/${project}/rulesets/d0abf7c6-0000-4000-8000-000000000002`,
     ]);
-    assert.equal(world.sources.length, 2);
+    assert.equal(world.sources.length, 4);
   });
 
   for (const candidate of CANDIDATES) {
@@ -85,9 +88,13 @@ describe("the case family in the fake world", () => {
 
   it("sends the probes as UTF-8 and nothing normalized: the rule source raw, object names percent-encoded", async () => {
     const { world } = await run({ recordings: 1 });
-    const source = world.sources[0];
-    const bytes = Buffer.from(source, "utf8");
-    assert.ok(source.includes("'É'.lower()"));
+    const [core, wide] = world.sources;
+    const bytes = Buffer.from(wide, "utf8");
+    assert.ok(core.includes("'É'.lower()"));
+    assert.ok(
+      Buffer.from(core, "utf8").includes(Buffer.from([0x27, 0xc3, 0x89, 0x27])),
+      "É as two bytes",
+    );
     // E + combining acute stays two characters; the composed letter is a different probe.
     assert.ok(
       bytes.includes(Buffer.from([0x27, 0x65, 0xcc, 0x81, 0x27, 0x2e, 0x75])),
@@ -95,10 +102,12 @@ describe("the case family in the fake world", () => {
     );
     assert.ok(bytes.includes(Buffer.from([0xf0, 0x9f, 0x94, 0xa5])), "fire");
     const sent = world.calls.filter((c) => c.method === "POST" && c.url.includes("/rulesets"));
-    assert.equal(sent.length, 1);
-    const content = JSON.parse(Buffer.from(sent[0].body).toString("utf8")).source.files[0].content;
-    assert.equal(content, source);
-    assert.ok(!content.includes("\\u"));
+    assert.equal(sent.length, 2);
+    const contents = sent.map(
+      (c) => JSON.parse(Buffer.from(c.body).toString("utf8")).source.files[0].content,
+    );
+    assert.deepEqual(contents, [core, wide]);
+    for (const content of contents) assert.ok(!content.includes("\\u"));
     const creates = world.calls.filter((c) => c.url.includes("/upload/storage/"));
     assert.equal(creates.length, Object.keys(CASE_PLAN.objects).length);
     const names = creates.map((c) => new URL(c.url).searchParams.get("name"));
@@ -128,6 +137,35 @@ describe("the case family in the fake world", () => {
     assert.ok(report.rows.some((r) => r.class === "not-evaluated"));
     assert.equal(readCase(report.rows, CASE_PLAN).verdict, "incomplete");
     assert.ok(report.loads.some((l) => l.compiled === false));
+  });
+
+  it("reads the first ruleset and loses only the second when the Rules compiler refuses it, in both recordings", async () => {
+    const refuseWide = () => ({
+      match: (r) =>
+        r.method === "POST" &&
+        r.path.endsWith("/rulesets") &&
+        Buffer.from(r.body ?? [])
+          .toString("utf8")
+          .includes("/mk/b {"),
+      answer: {
+        status: 400,
+        headers: { "content-type": "application/json" },
+        body: Buffer.from('{"error":{"code":400,"message":"x","status":"INVALID_ARGUMENT"}}'),
+      },
+    });
+    const { report, world } = await run({ faults: [refuseWide(), refuseWide()] });
+    assert.equal(report.stopped, null);
+    assert.deepEqual(
+      report.loads.map((l) => `${l.recording}/${l.id}/${l.compiled}`),
+      ["1/wide/false", "2/wide/false"],
+    );
+    const reading = readCase(report.rows, CASE_PLAN);
+    assert.equal(reading.verdict, "incomplete");
+    assert.deepEqual(reading.byProgram, { core: "ascii", wide: "incomplete" });
+    assert.equal(report.rows.filter((r) => r.class === "not-evaluated").length, 24);
+    assert.equal(world.objects.size, 0);
+    assert.deepEqual(world.release, { rulesetName: baselineName });
+    assert.equal(report.closureReady, true, JSON.stringify(report.problems));
   });
 
   it("refuses a request outside its own prefix, and the s9 prefix is not its own", async () => {
@@ -210,7 +248,7 @@ describe("a recording that cannot put the release back (S9 review SF2)", () => {
     assert.match(report.stopped, /rec1\/restore/);
     assert.equal(report.closureReady, false);
     assert.equal(report.complete, false);
-    assert.equal(world.sources.length, 1, "only the first recording's ruleset was created");
+    assert.equal(world.sources.length, 2, "only the first recording's two rulesets were created");
     assert.deepEqual(world.release, { rulesetName: baselineName }, "the cleanup put it back");
     assert.equal(world.objects.size, 0);
     assert.equal(report.rows.filter((r) => r.recording === 2).length, 0);

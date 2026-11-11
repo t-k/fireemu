@@ -121,6 +121,32 @@ describe("recovering a run that stopped (S9 review SF5)", () => {
     assert.ok(report.requests <= CASE_PLAN.staticBounds(2).cleanup + 20);
   });
 
+  it("deletes both rulesets of a run that stopped between its two programs", async () => {
+    const { fake, entryRulesets, rulesetName } = await deadRun();
+    const second = await fake.net({
+      method: "POST",
+      url: `${rulesApi}/rulesets`,
+      headers: owner,
+      body: json({
+        source: {
+          files: [
+            {
+              name: "storage.rules",
+              content: CASE_PLAN.programs[1].source(CASE_PLAN.recordingPrefix(runId, 1)),
+            },
+          ],
+        },
+      }),
+    });
+    const wideName = JSON.parse(second.body.toString()).name;
+    assert.equal(fake.world.rulesets.size, 4);
+    const { report } = await recover(fake, { entryRulesets, ownRulesets: [rulesetName, wideName] });
+    assert.equal(report.closureReady, true, JSON.stringify(report.problems));
+    assert.deepEqual(fake.world.release, { rulesetName: baselineName });
+    assert.equal(fake.world.rulesets.size, 2);
+    assert.equal(fake.world.objects.size, 0);
+  });
+
   it("deletes the release when the bucket had none, and nothing else of the baseline", async () => {
     const { fake, entryRulesets, rulesetName } = await deadRun({ baseline: "absent" });
     const { report } = await recover(fake, {

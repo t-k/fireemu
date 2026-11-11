@@ -114,7 +114,7 @@ const FIRE = cp(0x1f525);
 const FULL_A_LOW = cp(0xff41); // fullwidth a
 const FULL_A_UP = cp(0xff21);
 
-const RAW_ROWS = [
+const ALL_ROWS = [
   // Controls: ASCII, and probes that only prove the non-ASCII literal itself parses and is counted.
   literal("ctl", "ctl-upper-true", "upper", "abc", "ABC", "eq", true),
   literal("ctl", "ctl-upper-false", "upper", "abc", "abc", "eq", true),
@@ -165,6 +165,26 @@ const RAW_ROWS = [
   resource("rt-res", "rt-res-lower-differs", E_UP, "differs"),
 ];
 
+// Two rulesets, so that one the Rules compiler refuses cannot cost every row. `wide` holds the
+// characters no recording has put in a rule yet (a combining mark, fullwidth letters, the capital
+// sharp s, an emoji among letters) and two ASCII controls of its own; `core` holds the rest. Each
+// ruleset is released and read on its own, and the reading is also given per ruleset.
+export const PROGRAM_IDS = ["core", "wide"];
+const WIDE_GROUPS = new Set(["capsharp", "comb", "emoji", "fullwidth"]);
+const WIDE_CONTROLS = [
+  literal("ctl", "ctl-wide-upper-true", "upper", "abc", "ABC", "eq", true),
+  literal("ctl", "ctl-wide-upper-false", "upper", "abc", "abc", "eq", true),
+];
+const programOfRow = (row) => (WIDE_GROUPS.has(row.group) ? "wide" : "core");
+const RAW_ROWS = [
+  ...ALL_ROWS.filter((row) => programOfRow(row) === "core"),
+  ...ALL_ROWS.filter((row) => programOfRow(row) === "wide"),
+  ...WIDE_CONTROLS,
+].map((row) => ({
+  ...row,
+  program: WIDE_GROUPS.has(row.group) || row.id.startsWith("ctl-wide-") ? "wide" : "core",
+}));
+
 /** The rows with their predictions under every candidate. */
 export const CASE_ROWS = RAW_ROWS.map((row) => {
   const candidates = Object.fromEntries(CANDIDATES.map((c) => [c, predictRow(row, c)]));
@@ -176,10 +196,13 @@ const wrap = (body) =>
 const allow = (path, condition_) =>
   `    match /${path} {\n      allow read: if ${condition_};\n    }\n`;
 
-/** The one released ruleset of a recording. */
-export function ruleSource(P) {
-  let body = allow(`${P}/mk/a`, "true");
-  for (const row of CASE_ROWS)
+const MARKERS = { core: "a", wide: "b" };
+
+/** The ruleset of one program for a recording: its marker, then one rule per row of the program. */
+export function ruleSource(P, program) {
+  if (!PROGRAM_IDS.includes(program)) throw new Error(`unknown program ${program}`);
+  let body = allow(`${P}/mk/${MARKERS[program]}`, "true");
+  for (const row of CASE_ROWS.filter((r) => r.program === program))
     body += allow(
       row.kind === "literal" ? `${P}/${row.id}/x` : `${P}/${row.id}/{n}`,
       conditionOf(row),
@@ -187,7 +210,10 @@ export function ruleSource(P) {
   return wrap(body);
 }
 
-const objects = { mkA: { name: (P) => `${P}/mk/a`, body: "a" } };
+const objects = {
+  mkA: { name: (P) => `${P}/mk/a`, body: "a" },
+  mkB: { name: (P) => `${P}/mk/b`, body: "b" },
+};
 for (const row of CASE_ROWS)
   objects[row.object] = { name: (P) => objectNameOf(row, P), body: row.id };
 
@@ -198,17 +224,18 @@ export const CASE_PLAN = buildPlan({
   estimatedUsd: 0.05,
   localBucket: "demo-storage-case.appspot.com",
   objects,
-  programs: [
-    {
-      id: "case",
-      marker: "mkA",
-      objects: Object.keys(objects),
-      source: ruleSource,
-    },
-  ],
+  programs: PROGRAM_IDS.map((id) => ({
+    id,
+    marker: id === "core" ? "mkA" : "mkB",
+    objects: [
+      id === "core" ? "mkA" : "mkB",
+      ...CASE_ROWS.filter((r) => r.program === id).map((r) => r.object),
+    ],
+    source: (P) => ruleSource(P, id),
+  })),
   loadOnly: [],
   rows: CASE_ROWS.map((row) => ({
-    program: "case",
+    program: row.program,
     id: row.id,
     op: "meta",
     object: row.object,

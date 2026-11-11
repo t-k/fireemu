@@ -15,7 +15,7 @@ const classOf = (allowed) => (allowed ? "allow" : "deny");
  * @param {object} plan the case plan
  * @param {{recordings?: number}} [options]
  */
-export function readCase(rows, plan, { recordings = 2 } = {}) {
+export function readCase(rows, plan, { recordings = 2, perProgram = true } = {}) {
   const planRows = plan.rows;
   const known = new Set(planRows.map((row) => row.id));
   const answers = new Map();
@@ -74,8 +74,19 @@ export function readCase(rows, plan, { recordings = 2 } = {}) {
   else if (fits.length === 1) verdict = fits[0];
   else verdict = fits.length === 0 ? "none" : "ambiguous";
 
+  // Each ruleset alone, so a refused second ruleset does not hide what the first answered.
+  const byProgram = {};
+  if (perProgram)
+    for (const id of new Set(planRows.map((row) => row.program).filter(Boolean)))
+      byProgram[id] = readCase(
+        rows,
+        { rows: planRows.filter((row) => row.program === id) },
+        { recordings, perProgram: false },
+      ).verdict;
+
   return {
     verdict,
+    byProgram,
     complete,
     controls: failedControls.length === 0 ? "ok" : "failed",
     failedControls,
@@ -106,6 +117,9 @@ export function renderReading(reading) {
       `${candidate}: ${mismatches.length} mismatch(es)${mismatches.length ? `: ${mismatches.join(", ")}` : ""}`,
     );
   }
+  const programs = Object.entries(reading.byProgram ?? {});
+  if (programs.length)
+    lines.push(`programs: ${programs.map(([id, v]) => `${id}=${v}`).join(", ")}`);
   lines.push("", ["row", "group", "answers", "ascii", "full", "simple"].join("\t"));
   for (const row of reading.table)
     lines.push(

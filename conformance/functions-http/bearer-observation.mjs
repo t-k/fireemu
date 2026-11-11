@@ -37,6 +37,7 @@ import {
   storageSend,
   withUploadClosure,
 } from "./production.mjs";
+import { guardedFetch } from "./send-guard.mjs";
 import { runCases } from "./session.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -122,7 +123,7 @@ export function validateBearerCorpus(corpus) {
 
 // ---- capture --------------------------------------------------------------------------------------
 
-const KEPT_HEADERS = [
+export const KEPT_HEADERS = [
   "content-type",
   "content-length",
   "www-authenticate",
@@ -153,19 +154,38 @@ async function readCapped(response) {
  * A fetch for runCases that records each answer as production sent it (status, selected headers, every
  * header name, the byte count and digest of the body, the body text when it is small) and hands the same
  * bytes on. Captures are numbered in send order: pass 1 control, pass 1 malformed, pass 2 control, pass 2
- * malformed. Neither the host nor a credential value is recorded; the one Authorization value sent is the
- * corpus literal `Bearer malformed`.
+ * malformed (`caseIds` names the cases of one pass for another corpus; `slots` lists `{ pass, program,
+ * caseId }` for every request of a run with several programs). Neither the host nor a credential value is
+ * recorded unless `enrich` adds it: `enrich(record, source)` is called with the response (or, for a failed
+ * request, the error) and may copy what the transport knows into the record; the Authorization values sent
+ * are the corpus literals. `maskText(text)` rewrites the stored body text (the owned user's uid and email become
+ * placeholders); `bodySha256` and `bodyBytes` stay those of the raw bytes.
  */
-export function captureFetch({ fetchImpl = fetch, onCapture, now = Date.now }) {
+export function captureFetch({
+  fetchImpl = guardedFetch,
+  onCapture,
+  now = Date.now,
+  caseIds = CASE_IDS,
+  keptHeaders = KEPT_HEADERS,
+  slots,
+  enrich,
+  maskAuthorization = (value) => value,
+  maskText = (text) => text,
+}) {
   let index = 0;
   return async (url, init) => {
     const record = {
       seq: index + 1,
-      pass: Math.floor(index / 2) + 1,
-      caseId: CASE_IDS[index % 2],
+      ...(slots
+        ? { pass: slots[index]?.pass ?? null, caseId: slots[index]?.caseId ?? null }
+        : {
+            pass: Math.floor(index / caseIds.length) + 1,
+            caseId: caseIds[index % caseIds.length],
+          }),
+      ...(slots?.[index]?.program ? { program: slots[index].program } : {}),
       method: init.method,
       path: new URL(url).pathname.replace(/^.*\/fireemuHttpProbe(?=\/)/u, ""),
-      authorization: init.headers?.authorization ?? null,
+      authorization: maskAuthorization(init.headers?.authorization ?? null),
       latencyMs: null,
       status: null,
       headers: {},
@@ -181,7 +201,7 @@ export function captureFetch({ fetchImpl = fetch, onCapture, now = Date.now }) {
       const response = await fetchImpl(url, init);
       record.status = response.status;
       record.headerNames = [...response.headers.keys()].toSorted();
-      for (const name of KEPT_HEADERS) {
+      for (const name of keptHeaders) {
         const value = response.headers.get(name);
         if (value !== null) record.headers[name] = value;
       }
@@ -189,7 +209,9 @@ export function captureFetch({ fetchImpl = fetch, onCapture, now = Date.now }) {
       record.latencyMs = now() - started;
       record.bodyBytes = bytes.length;
       record.bodySha256 = sha256(bytes);
-      if (bytes.length <= 4096) record.bodyText = bytes.toString("utf8");
+      // The digest and the byte count are of the raw bytes; the stored text hides the owned user's values.
+      if (bytes.length <= 4096) record.bodyText = maskText(bytes.toString("utf8"));
+      enrich?.(record, response);
       await onCapture(record);
       const nullBody = [101, 204, 205, 304].includes(response.status);
       return new Response(nullBody ? null : bytes, {
@@ -199,6 +221,7 @@ export function captureFetch({ fetchImpl = fetch, onCapture, now = Date.now }) {
     } catch (error) {
       if (record.latencyMs === null) record.latencyMs = now() - started;
       if (!record.error) record.error = `${error.name}: ${error.message}`;
+      enrich?.(record, error);
       if (record.bodyBytes === null || record.status === null) await onCapture(record);
       throw error;
     }
@@ -224,9 +247,10 @@ const rowTime = (line) => Date.parse(line.ts ?? line.recordedAt ?? "");
  * Plain admission on the sandbox ledger text: the last row for the project closes its run and is at
  * least 30 minutes old (unless the coordinator, as the only sender on the project with the previous run
  * closed, sets FIREEMU_BEARER_SOLE_SENDER=1: owner ledger 1299); every own `started` row has a later own
- * row; at most MAX_ATTEMPTS attempts (1 plus 2 retries). Returns the attempt number.
+ * row; at most MAX_ATTEMPTS attempts (1 plus 2 retries). Own rows are those of `taskId`. Returns the
+ * attempt number.
  */
-export function admit({ ledgerText, now, env }) {
+export function admit({ ledgerText, now, env, taskId = TASK_ID }) {
   const lines = ledgerText
     .split("\n")
     .filter((text) => text.trim())
@@ -242,7 +266,7 @@ export function admit({ ledgerText, now, env }) {
   if (!Number.isFinite(at)) throw new Error("the last row for the project has no time");
   if (now - at < WAIT_MS && env.FIREEMU_BEARER_SOLE_SENDER !== "1")
     throw new Error("30 minutes have not passed since the last row for the project");
-  const own = lines.filter((line) => line.taskId === TASK_ID);
+  const own = lines.filter((line) => line.taskId === taskId);
   own.forEach((line, index) => {
     if (line.event === "started" && !own[index + 1])
       throw new Error("an own started row has no terminal row: recover that attempt first");
@@ -254,13 +278,13 @@ export function admit({ ledgerText, now, env }) {
 }
 
 // The stage 3 estimate for one attempt (production.mjs estimatedUsd), conservative for one deploy.
-const estimatedUsd = (requests) =>
+export const estimatedUsd = (requests) =>
   Math.ceil((0.01 + requests.cliDeploy * 0.55 + requests.invocation * 0.001) * 100) / 100;
 
 // ---- the recording ------------------------------------------------------------------------------
 
 /** Builds of the run (created at or after its start): all must have ended. */
-async function readRunBuilds(control, startedAt) {
+export async function readRunBuilds(control, startedAt) {
   const reply = await control("GET", BUILDS_URL, undefined, "cleanup");
   const builds = (reply.value.builds ?? [])
     .filter((build) => Date.parse(build.createTime) >= startedAt)
@@ -270,22 +294,46 @@ async function readRunBuilds(control, startedAt) {
 }
 
 /**
+ * What differs between the observations that share this recorder: the ledger task, the run directory
+ * name, the corpus check, the judge, the case names of one pass and the response headers kept, and the
+ * fields the terminal ledger row and the first row add (`startFields`, `terminalFields`).
+ */
+export const BEARER_SPEC = Object.freeze({
+  taskId: TASK_ID,
+  runPrefix: "onrequest-bearer-obs",
+  validateCorpus: validateBearerCorpus,
+  judge: judgeObservation,
+  caseIds: CASE_IDS,
+  keptHeaders: KEPT_HEADERS,
+  startFields: () => ({}),
+  terminalFields: (judgement) => ({ differences: judgement.differences }),
+});
+
+export const recordBearer = (env, deps) => recordObservation(env, deps, BEARER_SPEC);
+
+/**
  * @param {object} env FIREEMU_BEARER_SOLE_SENDER
  * @param {object} deps every effect: now, assertCleanTree, gitSha, readSources, readLedger, appendLedger,
  *   ownerAdc, projectNumber, makeRunDir, writeRunFile, createBudget, createControl, openUploads, run (the
  *   CLI; undefined for the real one), fetchImpl, installSignals, log, warn.
+ * @param {object} spec see BEARER_SPEC
  */
-export async function recordBearer(env, deps) {
+export async function recordObservation(env, deps, spec) {
   await deps.assertCleanTree();
   const { corpus, baseline, digests } = await deps.readSources();
-  const program = validateBearerCorpus(corpus);
-  const { attempt } = admit({ ledgerText: await deps.readLedger(), now: deps.now(), env });
+  const programs = [spec.validateCorpus(corpus)].flat();
+  const { attempt } = admit({
+    ledgerText: await deps.readLedger(),
+    now: deps.now(),
+    env,
+    taskId: spec.taskId,
+  });
   const adc = await deps.ownerAdc();
   const projectNumber = await deps.projectNumber();
   const gitSha = await deps.gitSha();
   const startedAt = deps.now();
   const runDir = await deps.makeRunDir(
-    `onrequest-bearer-obs-${new Date(startedAt).toISOString().replaceAll(":", "")}`,
+    `${spec.runPrefix}-${new Date(startedAt).toISOString().replaceAll(":", "")}`,
   );
   const secrets = [projectNumber, adc.file.refresh_token, adc.file.client_secret].filter(Boolean);
   const write = async (name, value) => {
@@ -294,16 +342,18 @@ export async function recordBearer(env, deps) {
       throw new Error(`${name} would retain a private value`);
     await deps.writeRunFile(runDir, name, text);
   };
+  const reservedUsd = spec.reservedUsd ?? RESERVED_USD_PER_ATTEMPT;
   const base = {
     project: PROJECT,
     database: null,
-    taskId: TASK_ID,
+    taskId: spec.taskId,
+    ...spec.startFields(),
     gitSha,
     corpusDigest: digests.corpus,
     runDir,
     attempt,
-    reservedUsd: RESERVED_USD_PER_ATTEMPT,
-    cumulativeReservedUsd: attempt * RESERVED_USD_PER_ATTEMPT,
+    reservedUsd,
+    cumulativeReservedUsd: attempt * reservedUsd,
   };
   await deps.appendLedger(
     `${JSON.stringify({ ts: new Date(startedAt).toISOString(), ...base, event: "started" })}\n`,
@@ -321,6 +371,10 @@ export async function recordBearer(env, deps) {
     changes.push({ ts: new Date(deps.now()).toISOString(), action, detail });
   };
   const captures = [];
+  // The uid and email of an owned Auth user, registered when it exists: captures.json must not keep them.
+  const privateValues = new Map();
+  const maskText = (text) =>
+    [...privateValues].reduce((masked, [value, name]) => masked.split(value).join(name), text);
   const recordings = [{}, {}];
   const reasons = [];
   let residual = false;
@@ -329,15 +383,32 @@ export async function recordBearer(env, deps) {
   try {
     await preflightCliSideEffects(control);
     grantsBefore = await readServiceAgentGrants(control, projectNumber);
-    await observeProgram(program, control, adc.path, budget, runDir, recordings, abort, uploads, {
-      ...(deps.run ? { run: deps.run } : {}),
-      log,
-      fetchImpl: captureFetch({
-        fetchImpl: deps.fetchImpl,
-        onCapture: (capture) => captures.push(capture),
-        now: deps.now,
-      }),
+    const fetchImpl = captureFetch({
+      fetchImpl: deps.fetchImpl,
+      onCapture: (capture) => captures.push(capture),
+      now: deps.now,
+      caseIds: spec.caseIds,
+      keptHeaders: spec.keptHeaders,
+      slots: spec.slots,
+      enrich:
+        spec.enrichCapture &&
+        ((record, source) => spec.enrichCapture(record, source, { projectNumber })),
+      maskAuthorization: spec.maskAuthorization,
+      maskText,
     });
+    // The programs run one after the other, each with its own deployment; a program that fails stops the run.
+    for (const program of programs) {
+      await observeProgram(program, control, adc.path, budget, runDir, recordings, abort, uploads, {
+        ...(deps.run ? { run: deps.run } : {}),
+        ...(deps.auth ? { auth: deps.auth } : {}),
+        registerPrivate: (replacements) => {
+          for (const [value, name] of Object.entries(replacements))
+            if (value) privateValues.set(value, name);
+        },
+        log,
+        fetchImpl,
+      });
+    }
   } catch (error) {
     reasons.push(error.message);
     residual = Boolean(error.residual);
@@ -345,7 +416,10 @@ export async function recordBearer(env, deps) {
   const used = () => budget.snapshot();
   // A create (the deploy) is settled only by the run's own completed delete followed by absence; without
   // that delete, absence in the run settles nothing (checklist section 3) and A2 decides.
-  if (used().cliDeploy > 0 && !changes.some((change) => change.action === "function-deleted")) {
+  if (
+    used().cliDeploy > 0 &&
+    changes.filter((change) => change.action === "function-deleted").length < used().cliDeploy
+  ) {
     residual = true;
     reasons.push(
       "the deploy was not followed by the run's own delete: A2 read-back >= 10 min needed",
@@ -390,7 +464,7 @@ export async function recordBearer(env, deps) {
       }
     }
   }
-  const judgement = judgeObservation(captures, baseline);
+  const judgement = spec.judge(captures, baseline);
   const closureReady = !residual;
   const outcome = !closureReady
     ? "needs-recovery"
@@ -404,6 +478,8 @@ export async function recordBearer(env, deps) {
     await write("judgement.json", judgement);
     await write("builds.json", builds ?? { builds: [], open: [] });
     await write("changes.jsonl", changes.map((change) => `${JSON.stringify(change)}\n`).join(""));
+    for (const [name, value] of Object.entries(spec.extraFiles?.({ projectNumber }) ?? {}))
+      await write(name, value);
   } catch (error) {
     writeError = error.message;
   }
@@ -415,7 +491,7 @@ export async function recordBearer(env, deps) {
       event: closureReady ? "finished" : "needs-recovery",
       outcome,
       verdict: judgement.verdict,
-      differences: judgement.differences,
+      ...spec.terminalFields(judgement),
       needsReview: judgement.needsReview || !closureReady || Boolean(writeError),
       lockKept: judgement.lockKept || !closureReady || Boolean(writeError),
       closureReady,
@@ -450,10 +526,14 @@ async function readSources() {
   };
 }
 
+/** The source upload requests the budget still allows (the helper stops sending at zero). */
+export const uploadRequestsLeft = (caps, budget) => caps.upload - budget.snapshot().upload;
+
 /** The real effects. `ledger` and `privateRoot` are the private sandbox ledger and directory (a test points them elsewhere). */
 export function productionDeps({
   ledger = join(PRIVATE_ROOT, "runs/sandbox-ledger.jsonl"),
   privateRoot = PRIVATE_ROOT,
+  caps = CAPS,
 } = {}) {
   const git = (args) => execFileAsync("git", args, { cwd: CONFORMANCE });
   return {
@@ -475,7 +555,7 @@ export function productionDeps({
     },
     writeRunFile: (dir, name, text) =>
       writeFile(join(dir, name), text, { mode: 0o600, flag: "wx" }),
-    createBudget: () => createBudget(CAPS),
+    createBudget: () => createBudget(caps),
     createControl: (adcFile, budget) =>
       createControl(adcFile, budget, { extraHosts: [CLOUDBUILD_HOST] }),
     openUploads: ({ runDir, projectNumber, control, budget }) =>
@@ -485,10 +565,10 @@ export function productionDeps({
         projectNumber,
         region: REGION,
         send: storageSend(control),
-        requestsLeft: () => CAPS.upload - budget.snapshot().upload,
+        requestsLeft: () => uploadRequestsLeft(caps, budget),
       }),
     run: undefined,
-    fetchImpl: fetch,
+    fetchImpl: guardedFetch,
     installSignals(handler) {
       for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(signal, handler);
     },

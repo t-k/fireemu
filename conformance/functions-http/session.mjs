@@ -1,5 +1,6 @@
 // Executes the same bounded request corpus against a deployed function or local fireemu.
 
+import { guardedFetch } from "./send-guard.mjs";
 import { buildInvocation, normalizeInvocation, targetKey } from "./harness.mjs";
 
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
@@ -43,7 +44,7 @@ export async function runCases(
   tokens,
   budget,
   {
-    fetchImpl = fetch,
+    fetchImpl = guardedFetch,
     replacements = {},
     onResult = () => {},
     deadline = Number.POSITIVE_INFINITY,

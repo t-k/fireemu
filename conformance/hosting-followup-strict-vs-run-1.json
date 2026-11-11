@@ -1,0 +1,892 @@
+{
+  "kind": "hosting-comparison-v1",
+  "comparison": "production-vs-local",
+  "corpusSha256": "32906eba4ceafd2a3d20041f3d6a55aef116c60b0e4cfd13d356bf473d7db8ac",
+  "inputs": {
+    "a": "398a35dc1df788b268dab42cdbd4557bb04dec0c7dc5f89978259ba27b804262",
+    "b": null
+  },
+  "knownDifferences": [
+    {
+      "id": "KD-SAFETY-ORIGIN-REDIRECT",
+      "rows": 15
+    },
+    {
+      "id": "KD-DEFAULT-404-BODY",
+      "rows": 17
+    },
+    {
+      "id": "KD-AUTH-HANDLER-PAGE",
+      "rows": 2
+    },
+    {
+      "id": "KD-BROTLI",
+      "rows": 3
+    },
+    {
+      "id": "KD-GZIP-LENGTH",
+      "rows": 5
+    }
+  ],
+  "summary": {
+    "MATCH": 2,
+    "MATCH_LAYOUT": 34,
+    "KNOWN_DIFFERENCE": 42,
+    "MISMATCH": 0,
+    "UNKNOWN": 0
+  },
+  "unclassifiedHeaders": {
+    "a": [],
+    "b": []
+  },
+  "conditions": {
+    "default-404": {
+      "rows": 3,
+      "counts": {
+        "MATCH": 0,
+        "MATCH_LAYOUT": 0,
+        "KNOWN_DIFFERENCE": 3,
+        "MISMATCH": 0,
+        "UNKNOWN": 0
+      },
+      "mismatched": [],
+      "knownDifferenceRows": 3,
+      "closable": true
+    },
+    "auth-handler": {
+      "rows": 2,
+      "counts": {
+        "MATCH": 0,
+        "MATCH_LAYOUT": 0,
+        "KNOWN_DIFFERENCE": 2,
+        "MISMATCH": 0,
+        "UNKNOWN": 0
+      },
+      "mismatched": [],
+      "knownDifferenceRows": 2,
+      "closable": true
+    },
+    "dot-segments": {
+      "rows": 17,
+      "counts": {
+        "MATCH": 0,
+        "MATCH_LAYOUT": 0,
+        "KNOWN_DIFFERENCE": 17,
+        "MISMATCH": 0,
+        "UNKNOWN": 0
+      },
+      "mismatched": [],
+      "knownDifferenceRows": 17,
+      "closable": true
+    },
+    "redirect-names": {
+      "rows": 14,
+      "counts": {
+        "MATCH": 2,
+        "MATCH_LAYOUT": 0,
+        "KNOWN_DIFFERENCE": 12,
+        "MISMATCH": 0,
+        "UNKNOWN": 0
+      },
+      "mismatched": [],
+      "knownDifferenceRows": 12,
+      "closable": true
+    },
+    "precompressed": {
+      "rows": 10,
+      "counts": {
+        "MATCH": 0,
+        "MATCH_LAYOUT": 8,
+        "KNOWN_DIFFERENCE": 2,
+        "MISMATCH": 0,
+        "UNKNOWN": 0
+      },
+      "mismatched": [],
+      "knownDifferenceRows": 2,
+      "closable": true
+    },
+    "gzip-sizes": {
+      "rows": 9,
+      "counts": {
+        "MATCH": 0,
+        "MATCH_LAYOUT": 4,
+        "KNOWN_DIFFERENCE": 5,
+        "MISMATCH": 0,
+        "UNKNOWN": 0
+      },
+      "mismatched": [],
+      "knownDifferenceRows": 5,
+      "closable": true
+    },
+    "gzip-types": {
+      "rows": 13,
+      "counts": {
+        "MATCH": 0,
+        "MATCH_LAYOUT": 13,
+        "KNOWN_DIFFERENCE": 0,
+        "MISMATCH": 0,
+        "UNKNOWN": 0
+      },
+      "mismatched": [],
+      "knownDifferenceRows": 0,
+      "closable": true
+    },
+    "gzip-negotiation": {
+      "rows": 10,
+      "counts": {
+        "MATCH": 0,
+        "MATCH_LAYOUT": 9,
+        "KNOWN_DIFFERENCE": 1,
+        "MISMATCH": 0,
+        "UNKNOWN": 0
+      },
+      "mismatched": [],
+      "knownDifferenceRows": 1,
+      "closable": true
+    }
+  },
+  "rows": [
+    {
+      "id": "v11.default-404",
+      "status": "KNOWN_DIFFERENCE",
+      "differences": [],
+      "known": [
+        {
+          "field": "header:content-length",
+          "entry": "KD-DEFAULT-404-BODY"
+        },
+        {
+          "field": "bodyBytes",
+          "entry": "KD-DEFAULT-404-BODY"
+        }
+      ]
+    },
+    {
+      "id": "v11.default-404-json",
+      "status": "KNOWN_DIFFERENCE",
+      "differences": [],
+      "known": [
+        {
+          "field": "header:content-length",
+          "entry": "KD-DEFAULT-404-BODY"
+        },
+        {
+          "field": "bodyBytes",
+          "entry": "KD-DEFAULT-404-BODY"
+        }
+      ]
+    },
+    {
+      "id": "v11.default-404-nested",
+      "status": "KNOWN_DIFFERENCE",
+      "differences": [],
+      "known": [
+        {
+          "field": "header:content-length",
+          "entry": "KD-DEFAULT-404-BODY"
+        },
+        {
+          "field": "bodyBytes",
+          "entry": "KD-DEFAULT-404-BODY"
+        }
+      ]
+    },
+    {
+      "id": "v11.auth-handler",
+      "status": "KNOWN_DIFFERENCE",
+      "differences": [],
+      "known": [
+        {
+          "field": "header:content-length",
+          "entry": "KD-AUTH-HANDLER-PAGE"
+        },
+        {
+          "field": "bodyBytes",
+          "entry": "KD-AUTH-HANDLER-PAGE"
+        }
+      ]
+    },
+    {
+      "id": "v11.auth-handler-query",
+      "status": "KNOWN_DIFFERENCE",
+      "differences": [],
+      "known": [
+        {
+          "field": "header:content-length",
+          "entry": "KD-AUTH-HANDLER-PAGE"
+        },
+        {
+          "field": "bodyBytes",
+          "entry": "KD-AUTH-HANDLER-PAGE"
+        }
+      ]
+    },
+    {
+      "id": "v11.dot-end-parent",
+      "status": "KNOWN_DIFFERENCE",
+      "differences": [],
+      "known": [
+        {
+          "field": "header:location",
+          "entry": "KD-SAFETY-ORIGIN-REDIRECT"
+        }
+      ]
+    },
+    {
+      "id": "v11.dot-mid-current",
+      "status": "KNOWN_DIFFERENCE",
+      "differences": [],
+      "known": [
+        {
+          "field": "header:location",
+          "entry": "KD-SAFETY-ORIGIN-REDIRECT"
+        }
+      ]
+    },
+    {
+      "id": "v11.dot-end-current",
+      "status": "KNOWN_DIFFERENCE",
+      "differences": [],
+      "known": [
+        {
+          "field": "header:location",
+          "entry": "KD-SAFETY-ORIGIN-REDIRECT"
+        }
+      ]
+    },
+    {
+      "id": "v11.dot-dir-current",
+      "status": "KNOWN_DIFFERENCE",
+      "differences": [],
+      "known": [
+        {
+          "field": "header:location",
+          "entry": "KD-SAFETY-ORIGIN-REDIRECT"
+        }
+      ]
+    },
+    {
+      "id": "v11.dot-dir-parent",
+      "status": "KNOWN_DIFFERENCE",
+      "differences": [],
+      "known": [
+        {
+          "field": "header:location",
+          "entry": "KD-SAFETY-ORIGIN-REDIRECT"
+        }
+      ]
+    },
+    {
+      "id": "v11.dot-mid-parent",
+      "status": "KNOWN_DIFFERENCE",
+      "differences": [],
+      "known": [
+        {
+          "field": "header:location",
+          "entry": "KD-SAFETY-ORIGIN-REDIRECT"
+        }
+      ]
+    },
+    {
+      "id": "v11.dot-lead-current",
+      "status": "KNOWN_DIFFERENCE",
+      "differences": [],
+      "known": [
+        {
+          "field": "header:location",
+          "entry": "KD-SAFETY-ORIGIN-REDIRECT"
+        }
+      ]
+    },
+    {
+      "id": "v11.dot-encoded-current",
+      "status": "KNOWN_DIFFERENCE",
+      "differences": [],
+      "known": [
+        {
+          "field": "header:location",
+          "entry": "KD-SAFETY-ORIGIN-REDIRECT"
+        }
+      ]
+    },
+    {
+      "id": "v11.dot-encoded-end",
+      "status": "KNOWN_DIFFERENCE",
+      "differences": [],
+      "known": [
+        {
+          "field": "header:location",
+          "entry": "KD-SAFETY-ORIGIN-REDIRECT"
+        }
+      ]
+    },
+    {
+      "id": "v11.backslash-mid",
+      "status": "KNOWN_DIFFERENCE",
+      "differences": [],
+      "known": [
+        {
+          "field": "header:content-length",
+          "entry": "KD-DEFAULT-404-BODY"
+        },
+        {
+          "field": "bodyBytes",
+          "entry": "KD-DEFAULT-404-BODY"
+        }
+      ]
+    },
+    {
+      "id": "v11.backslash-after-dot",
+      "status": "KNOWN_DIFFERENCE",
+      "differences": [],
+      "known": [
+        {
+          "field": "header:location",
+          "entry": "KD-SAFETY-ORIGIN-REDIRECT"
+        }
+      ]
+    },
+    {
+      "id": "v11.backslash-dot-first",
+      "status": "KNOWN_DIFFERENCE",
+      "differences": [],
+      "known": [
+        {
+          "field": "header:location",
+          "entry": "KD-SAFETY-ORIGIN-REDIRECT"
+        }
+      ]
+    },
+    {
+      "id": "v11.backslash-lead",
+      "status": "KNOWN_DIFFERENCE",
+      "differences": [],
+      "known": [
+        {
+          "field": "header:location",
+          "entry": "KD-SAFETY-ORIGIN-REDIRECT"
+        }
+      ]
+    },
+    {
+      "id": "v11.backslash-encoded-after-dot",
+      "status": "KNOWN_DIFFERENCE",
+      "differences": [],
+      "known": [
+        {
+          "field": "header:location",
+          "entry": "KD-SAFETY-ORIGIN-REDIRECT"
+        }
+      ]
+    },
+    {
+      "id": "v11.backslash-in-name",
+      "status": "KNOWN_DIFFERENCE",
+      "differences": [],
+      "known": [
+        {
+          "field": "header:content-length",
+          "entry": "KD-DEFAULT-404-BODY"
+        },
+        {
+          "field": "bodyBytes",
+          "entry": "KD-DEFAULT-404-BODY"
+        }
+      ]
+    },
+    {
+      "id": "v11.dot-end-parent-slash",
+      "status": "KNOWN_DIFFERENCE",
+      "differences": [],
+      "known": [
+        {
+          "field": "header:location",
+          "entry": "KD-SAFETY-ORIGIN-REDIRECT"
+        }
+      ]
+    },
+    {
+      "id": "v11.dot-mid-current-slash",
+      "status": "KNOWN_DIFFERENCE",
+      "differences": [],
+      "known": [
+        {
+          "field": "header:location",
+          "entry": "KD-SAFETY-ORIGIN-REDIRECT"
+        }
+      ]
+    },
+    {
+      "id": "v12.cap-two2",
+      "status": "KNOWN_DIFFERENCE",
+      "differences": [],
+      "known": [
+        {
+          "field": "header:content-length",
+          "entry": "KD-DEFAULT-404-BODY"
+        },
+        {
+          "field": "bodyBytes",
+          "entry": "KD-DEFAULT-404-BODY"
+        }
+      ]
+    },
+    {
+      "id": "v12.cap-two",
+      "status": "KNOWN_DIFFERENCE",
+      "differences": [],
+      "known": [
+        {
+          "field": "header:content-length",
+          "entry": "KD-DEFAULT-404-BODY"
+        },
+        {
+          "field": "bodyBytes",
+          "entry": "KD-DEFAULT-404-BODY"
+        }
+      ]
+    },
+    {
+      "id": "v12.cap-literal-id2",
+      "status": "KNOWN_DIFFERENCE",
+      "differences": [],
+      "known": [
+        {
+          "field": "header:content-length",
+          "entry": "KD-DEFAULT-404-BODY"
+        },
+        {
+          "field": "bodyBytes",
+          "entry": "KD-DEFAULT-404-BODY"
+        }
+      ]
+    },
+    {
+      "id": "v12.cap-literal-first",
+      "status": "KNOWN_DIFFERENCE",
+      "differences": [],
+      "known": [
+        {
+          "field": "header:content-length",
+          "entry": "KD-DEFAULT-404-BODY"
+        },
+        {
+          "field": "bodyBytes",
+          "entry": "KD-DEFAULT-404-BODY"
+        }
+      ]
+    },
+    {
+      "id": "v12.p-x",
+      "status": "KNOWN_DIFFERENCE",
+      "differences": [],
+      "known": [
+        {
+          "field": "header:content-length",
+          "entry": "KD-DEFAULT-404-BODY"
+        },
+        {
+          "field": "bodyBytes",
+          "entry": "KD-DEFAULT-404-BODY"
+        }
+      ]
+    },
+    {
+      "id": "v12.p-x1",
+      "status": "KNOWN_DIFFERENCE",
+      "differences": [],
+      "known": [
+        {
+          "field": "header:content-length",
+          "entry": "KD-DEFAULT-404-BODY"
+        },
+        {
+          "field": "bodyBytes",
+          "entry": "KD-DEFAULT-404-BODY"
+        }
+      ]
+    },
+    {
+      "id": "v12.p-literal",
+      "status": "KNOWN_DIFFERENCE",
+      "differences": [],
+      "known": [
+        {
+          "field": "header:content-length",
+          "entry": "KD-DEFAULT-404-BODY"
+        },
+        {
+          "field": "bodyBytes",
+          "entry": "KD-DEFAULT-404-BODY"
+        }
+      ]
+    },
+    {
+      "id": "v12.s-v",
+      "status": "KNOWN_DIFFERENCE",
+      "differences": [],
+      "known": [
+        {
+          "field": "header:content-length",
+          "entry": "KD-DEFAULT-404-BODY"
+        },
+        {
+          "field": "bodyBytes",
+          "entry": "KD-DEFAULT-404-BODY"
+        }
+      ]
+    },
+    {
+      "id": "v12.s-literal",
+      "status": "KNOWN_DIFFERENCE",
+      "differences": [],
+      "known": [
+        {
+          "field": "header:content-length",
+          "entry": "KD-DEFAULT-404-BODY"
+        },
+        {
+          "field": "bodyBytes",
+          "entry": "KD-DEFAULT-404-BODY"
+        }
+      ]
+    },
+    {
+      "id": "v12.t-pair",
+      "status": "KNOWN_DIFFERENCE",
+      "differences": [],
+      "known": [
+        {
+          "field": "header:content-length",
+          "entry": "KD-DEFAULT-404-BODY"
+        },
+        {
+          "field": "bodyBytes",
+          "entry": "KD-DEFAULT-404-BODY"
+        }
+      ]
+    },
+    {
+      "id": "v12.t-digits",
+      "status": "KNOWN_DIFFERENCE",
+      "differences": [],
+      "known": [
+        {
+          "field": "header:content-length",
+          "entry": "KD-DEFAULT-404-BODY"
+        },
+        {
+          "field": "bodyBytes",
+          "entry": "KD-DEFAULT-404-BODY"
+        }
+      ]
+    },
+    {
+      "id": "v13.q-distinct",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v13.q-same",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v13.q-short",
+      "status": "KNOWN_DIFFERENCE",
+      "differences": [],
+      "known": [
+        {
+          "field": "header:content-length",
+          "entry": "KD-DEFAULT-404-BODY"
+        },
+        {
+          "field": "bodyBytes",
+          "entry": "KD-DEFAULT-404-BODY"
+        }
+      ]
+    },
+    {
+      "id": "v14.br-browser",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v14.br-gzip-only",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v14.br-none",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v14.gz-browser",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v14.gz-none",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v14.js-browser",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v14.js-none",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v14.identity-browser",
+      "status": "KNOWN_DIFFERENCE",
+      "differences": [],
+      "known": [
+        {
+          "field": "header:content-encoding",
+          "entry": "KD-BROTLI"
+        },
+        {
+          "field": "header:content-length",
+          "entry": "KD-BROTLI"
+        },
+        {
+          "field": "header:etag",
+          "entry": "KD-BROTLI"
+        }
+      ]
+    },
+    {
+      "id": "v14.free-browser",
+      "status": "KNOWN_DIFFERENCE",
+      "differences": [],
+      "known": [
+        {
+          "field": "header:content-encoding",
+          "entry": "KD-BROTLI"
+        },
+        {
+          "field": "header:content-length",
+          "entry": "KD-BROTLI"
+        },
+        {
+          "field": "header:etag",
+          "entry": "KD-BROTLI"
+        }
+      ]
+    },
+    {
+      "id": "v14.br-head",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v15.size-0001",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v15.size-0010",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v15.size-0100",
+      "status": "KNOWN_DIFFERENCE",
+      "differences": [],
+      "known": [
+        {
+          "field": "header:content-length",
+          "entry": "KD-GZIP-LENGTH"
+        }
+      ]
+    },
+    {
+      "id": "v15.size-0500",
+      "status": "KNOWN_DIFFERENCE",
+      "differences": [],
+      "known": [
+        {
+          "field": "header:content-length",
+          "entry": "KD-GZIP-LENGTH"
+        }
+      ]
+    },
+    {
+      "id": "v15.size-1000",
+      "status": "KNOWN_DIFFERENCE",
+      "differences": [],
+      "known": [
+        {
+          "field": "header:content-length",
+          "entry": "KD-GZIP-LENGTH"
+        }
+      ]
+    },
+    {
+      "id": "v15.size-1024",
+      "status": "KNOWN_DIFFERENCE",
+      "differences": [],
+      "known": [
+        {
+          "field": "header:content-length",
+          "entry": "KD-GZIP-LENGTH"
+        }
+      ]
+    },
+    {
+      "id": "v15.size-1500",
+      "status": "KNOWN_DIFFERENCE",
+      "differences": [],
+      "known": [
+        {
+          "field": "header:content-length",
+          "entry": "KD-GZIP-LENGTH"
+        }
+      ]
+    },
+    {
+      "id": "v15.size-2048",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v15.size-4500",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v15.type-html",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v15.type-css",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v15.type-js",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v15.type-svg",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v15.type-xml",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v15.type-wasm",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v15.type-noext",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v15.type-unknownext",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v15.type-png",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v15.type-zip",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v15.type-woff2",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v15.type-csv",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v15.type-md",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v15.ae-plain",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v15.ae-star",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v15.ae-xgzip",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v15.ae-gzip-q0",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v15.ae-identity",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v15.ae-deflate",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v15.ae-upper",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v15.ae-browser",
+      "status": "KNOWN_DIFFERENCE",
+      "differences": [],
+      "known": [
+        {
+          "field": "header:content-encoding",
+          "entry": "KD-BROTLI"
+        },
+        {
+          "field": "header:content-length",
+          "entry": "KD-BROTLI"
+        },
+        {
+          "field": "header:etag",
+          "entry": "KD-BROTLI"
+        }
+      ]
+    },
+    {
+      "id": "v15.ae-range",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v15.ae-cond",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    }
+  ]
+}

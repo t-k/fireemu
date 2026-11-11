@@ -15,7 +15,10 @@
 //  - Known differences (`known-differences.json`, one entry per ruling) take named fields of named rows
 //    out of the comparison. A row whose only differences are known is KNOWN_DIFFERENCE, never MATCH:
 //    its known fields were not compared. An entry may also name a suffix to strip from an ETag
-//    (`etagSuffix`, the `-br` of a Brotli answer) so the rest of the tag is still compared by form.
+//    (`etagSuffix`, the `-br` of a Brotli answer) so the rest of the tag is still compared by form,
+//    or a host pattern of an absolute `Location` (`locationHost`, production's internal origin host)
+//    so that the path of the `Location` is still compared, or a bound on a gzip length difference
+//    (`gzipLengthBound`: both answers gzip, equal decoded digests, a length difference within it).
 //  - What the production-vs-local comparison does not compare: the body of `init.js` (only `init.json`
 //    has a layout compared; `compareInitJs` is set for run-vs-run only), and the Content-Encoding
 //    bodies by bytes (their decoded digest is compared, against the plain body of an unencoded answer).
@@ -169,6 +172,56 @@ export function stripEtagSuffixes(id, a, b, entries = [], kind) {
 }
 
 /**
+ * The rows with the host of an absolute `Location` replaced by the origin placeholder where an entry
+ * names a host pattern for the row (`locationHost`, a regular expression source), and the entries
+ * that did it. Production answers a request with dot segments with a `302` whose `Location` is on
+ * an internal origin host that changes from request to request; the local answer names its own
+ * origin, which the row shaping already writes as `<origin>`. The path is still compared.
+ */
+export function normalizeLocationHosts(id, a, b, entries = [], kind) {
+  const applied = [];
+  let left = a;
+  let right = b;
+  for (const entry of entries) {
+    if (!entry.locationHost || !entry.appliesTo.includes(kind) || !entry.rows.includes(id))
+      continue;
+    const pattern = new RegExp(`^https?://(?:${entry.locationHost})(?=/|$)`);
+    const swap = (row) => {
+      const values = row.headers?.location;
+      if (!values) return row;
+      const swapped = values.map((value) => value.replace(pattern, "<origin>"));
+      return same(swapped, values)
+        ? row
+        : { ...row, headers: { ...row.headers, location: swapped } };
+    };
+    const before = [left, right];
+    left = swap(left);
+    right = swap(right);
+    if (left !== before[0] || right !== before[1]) {
+      applied.push({ field: "header:location", entry: entry.id });
+    }
+  }
+  return { a: left, b: right, applied };
+}
+
+/**
+ * Whether an entry with a `gzipLengthBound` may still excuse a row: both answers are `Content-Encoding:
+ * gzip`, their decoded digests are equal and their `Content-Length` values differ by at most the
+ * bound (coordinator ruling 27: another deflate encoder makes a gzip body a few bytes longer or
+ * shorter). Any other answer (an identity body, a different body, a much longer one) is not excused.
+ * An entry with no bound is not limited here.
+ */
+export function gzipLengthBoundHolds(entry, a, b) {
+  if (entry.gzipLengthBound === undefined) return true;
+  const encoding = (row) => row.headers?.["content-encoding"];
+  if (!same(encoding(a), ["gzip"]) || !same(encoding(b), ["gzip"])) return false;
+  if (a.decodedSha256 === undefined || a.decodedSha256 !== b.decodedSha256) return false;
+  const lengths = [a, b].map((row) => row.headers?.["content-length"]);
+  if (lengths.some((value) => value?.length !== 1)) return false;
+  return Math.abs(Number(lengths[0][0]) - Number(lengths[1][0])) <= entry.gzipLengthBound;
+}
+
+/**
  * Compares two shaped rows of the same request.
  * @returns {{ status: string, differences: object[], reason?: string }}
  */
@@ -188,14 +241,23 @@ export function compareRows(a, b, options = {}) {
     ? stripEtagSuffixes(a.id, a, b, options.known.entries, options.known.kind)
     : { a, b, applied: [] };
   ({ a, b } = stripped);
+  const hosts = options.known
+    ? normalizeLocationHosts(a.id, a, b, options.known.entries, options.known.kind)
+    : { a, b, applied: [] };
+  ({ a, b } = hosts);
   const differences = [];
   if (a.status !== b.status) differences.push({ field: "status", a: a.status, b: b.status });
   const headers = headerDifferences(a, b);
   differences.push(...headers.differences, ...bodyDifferences(a, b, options));
   const { remaining, known } = options.known
-    ? applyKnownDifferences(a.id, differences, options.known.entries, options.known.kind)
+    ? applyKnownDifferences(
+        a.id,
+        differences,
+        options.known.entries.filter((entry) => gzipLengthBoundHolds(entry, a, b)),
+        options.known.kind,
+      )
     : { remaining: differences, known: [] };
-  known.push(...stripped.applied);
+  known.push(...stripped.applied, ...hosts.applied);
   const extra = known.length ? { known } : {};
   if (remaining.length) return { status: "MISMATCH", differences: remaining, ...extra };
   if (known.length) return { status: "KNOWN_DIFFERENCE", differences: remaining, ...extra };

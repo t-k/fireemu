@@ -136,10 +136,34 @@ impl Reply {
 }
 
 fn send(site: &Site, method: &str, target: &str, headers: &[(&str, &str)]) -> Reply {
+    send_within(site, method, target, headers, Duration::from_secs(30))
+}
+
+/// [`send`] with the time the reply may take. Every request reads the whole file once to make its
+/// `ETag` (MD5 and SHA-256), so a request for a 16 or 32 MiB file takes seconds in a debug build and
+/// far more on a loaded machine: those tests wait for minutes, not for a guess of seconds.
+fn send_within(
+    site: &Site,
+    method: &str,
+    target: &str,
+    headers: &[(&str, &str)],
+    patience: Duration,
+) -> Reply {
+    send_to_host(site, &site.address, method, target, headers, patience)
+}
+
+/// [`send_within`] with the text of the `Host` header chosen by the caller (the site's address in
+/// every other test): for a `Host` that no client library would send.
+fn send_to_host(
+    site: &Site,
+    host: &str,
+    method: &str,
+    target: &str,
+    headers: &[(&str, &str)],
+    patience: Duration,
+) -> Reply {
     let mut stream = TcpStream::connect(&site.address).unwrap();
-    stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
-        .unwrap();
+    stream.set_read_timeout(Some(patience)).unwrap();
     let extra = headers
         .iter()
         .fold(String::new(), |mut lines, (name, value)| {
@@ -148,8 +172,7 @@ fn send(site: &Site, method: &str, target: &str, headers: &[(&str, &str)]) -> Re
         });
     write!(
         stream,
-        "{method} {target} HTTP/1.1\r\nHost: {}\r\n{extra}Connection: close\r\n\r\n",
-        site.address
+        "{method} {target} HTTP/1.1\r\nHost: {host}\r\n{extra}Connection: close\r\n\r\n"
     )
     .unwrap();
     let mut raw = Vec::new();
@@ -998,11 +1021,13 @@ fn hosting_strict_nothing_outside_public_or_ignored_is_served_by_any_profile() {
     }
 }
 
+/// `v01.safety-parent`, `-encoded-parent` and the `v11.dot-*` rows: production answers a request
+/// with dot segments with a `302` to the normalized path on its content origin (a host that differs
+/// per request); strict answers the `302` with the normalized path after the host the request came to.
 #[test]
-fn hosting_strict_a_request_that_climbs_is_a_same_origin_redirect_to_the_normalized_path() {
+fn hosting_strict_a_request_with_dot_segments_is_a_302_to_the_normalized_path() {
     let hosting = outside_site("climb", "exact", &json("{}"));
-    // v01.safety-parent, v01.safety-encoded-parent: production answers 302 to its content origin
-    // (the host differs per request); strict answers 302 to the normalized path of this origin
+    let at = |path: &str| format!("http://{}{path}", hosting.address);
     for target in [
         "/../outside.txt",
         "/%2e%2e/outside.txt",
@@ -1011,7 +1036,11 @@ fn hosting_strict_a_request_that_climbs_is_a_same_origin_redirect_to_the_normali
     ] {
         let reply = get(&hosting, target);
         assert_eq!(reply.status, 302, "{target}");
-        assert_eq!(reply.header("location"), Some("/outside.txt"), "{target}");
+        assert_eq!(
+            reply.header("location"),
+            Some(at("/outside.txt").as_str()),
+            "{target}"
+        );
         assert_eq!(reply.header("cache-control"), Some("private"));
         assert_eq!(
             reply.header("content-type"),
@@ -1029,13 +1058,34 @@ fn hosting_strict_a_request_that_climbs_is_a_same_origin_redirect_to_the_normali
     // the query stays, a trailing slash stays
     assert_eq!(
         get(&hosting, "/../index.html?x=1").header("location"),
-        Some("/index.html?x=1")
+        Some(at("/index.html?x=1").as_str())
     );
-    assert_eq!(get(&hosting, "/a/../b/").header("location"), Some("/b/"));
-    // RFC 3986: a path that ends in a dot segment ends in a slash; a single dot vanishes
-    assert_eq!(get(&hosting, "/a/b/..").header("location"), Some("/a/"));
-    assert_eq!(get(&hosting, "/a/b/.").header("location"), Some("/a/b/"));
-    assert_eq!(get(&hosting, "/a/./b").header("location"), Some("/a/b"));
+    assert_eq!(
+        get(&hosting, "/a/../b/").header("location"),
+        Some(at("/b/").as_str())
+    );
+    // the follow-up rows v11.dot-*: RFC 3986, a path that ends in a dot segment ends in a slash
+    for (target, expected) in [
+        ("/a/b/..", "/a/"),
+        ("/a/./b", "/a/b"),
+        ("/a/b/.", "/a/b/"),
+        ("/a/.", "/a/"),
+        ("/a/..", "/"),
+        ("/a/../a/b", "/a/b"),
+        ("/./a/b", "/a/b"),
+        ("/a/%2e/b", "/a/b"),
+        ("/a/b/%2e%2e", "/a/"),
+        ("/a/b/../", "/a/"),
+        ("/a/./b/", "/a/b/"),
+    ] {
+        let reply = get(&hosting, target);
+        assert_eq!(reply.status, 302, "{target}");
+        assert_eq!(
+            reply.header("location"),
+            Some(at(expected).as_str()),
+            "{target}"
+        );
+    }
     // a name that merely contains dots is not a dot segment
     assert_eq!(get(&hosting, "/..data.json").status, 404);
     // the emulator profile keeps refusing with 404
@@ -1053,66 +1103,96 @@ fn hosting_strict_a_range_is_streamed_whatever_the_size_of_the_file() {
         .unwrap()
         .set_len(16 * 1024 * 1024)
         .unwrap();
-    let reply = send(&hosting, "GET", "/big.bin", &[("Range", "bytes=0-")]);
+    let reply = send_within(
+        &hosting,
+        "GET",
+        "/big.bin",
+        &[("Range", "bytes=0-")],
+        LARGE_FILE_PATIENCE,
+    );
     assert_eq!(reply.status, 206);
     assert_eq!(
         reply.header("content-range"),
         Some("bytes 0-16777215/16777216")
     );
     assert_eq!(reply.header("content-length"), Some("16777216"));
-    let tail = send(&hosting, "GET", "/big.bin", &[("Range", "bytes=-5")]);
+    let tail = send_within(
+        &hosting,
+        "GET",
+        "/big.bin",
+        &[("Range", "bytes=-5")],
+        LARGE_FILE_PATIENCE,
+    );
     assert_eq!((tail.status, tail.body.len()), (206, 5));
     assert_eq!(
         tail.header("content-range"),
         Some("bytes 16777211-16777215/16777216")
     );
     // HEAD with a range names the part and sends nothing
-    let head = send(&hosting, "HEAD", "/big.bin", &[("Range", "bytes=10-19")]);
+    let head = send_within(
+        &hosting,
+        "HEAD",
+        "/big.bin",
+        &[("Range", "bytes=10-19")],
+        LARGE_FILE_PATIENCE,
+    );
     assert_eq!((head.status, head.body.as_str()), (206, ""));
     assert_eq!(head.header("content-length"), Some("10"));
 }
 
+/// The follow-up rows `v11.backslash-*`: production reads a raw `\\` as `/` before it looks for dot
+/// segments, and redirects only when there is one. The `Location` is an absolute URL on the origin
+/// the request came to, so `//evil` and `/a//evil.example` are paths and name no other host.
 #[test]
-fn hosting_strict_a_backslash_in_a_climbing_path_is_never_a_redirect_to_another_site() {
-    // A browser reads `\` in a URL as `/`: `Location: /\evil.example` would be `//evil.example`. The
-    // closure delta review's probes, and the control set around them, must all stay on the origin.
-    for profile in ["strict", "exact", "emulator"] {
+fn hosting_strict_a_backslash_next_to_a_dot_segment_is_a_slash() {
+    for profile in ["strict", "exact"] {
         let hosting = outside_site(&format!("backslash-{profile}"), profile, &json("{}"));
-        for target in [
-            "/./\\evil.example",
-            "/a/../\\\\evil.example/",
-            "/./\\\\evil.example",
-            "/../\\evil.example",
-            "/%2e%2e/\\evil.example",
-            "/a/.\\b/../c",
-            "/./%5cevil.example",
-            "/./%5c%5cevil.example",
-            "/./%2f%2fevil.example",
-            "/.//evil.example",
-            "/..//evil.example",
-            "/a/..//evil.example/",
+        let at = |path: &str| format!("http://{}{path}", hosting.address);
+        for (target, expected) in [
+            ("/a/./\\evil.example", "/a//evil.example"),
+            ("/.\\b", "/b"),
+            ("/./\\evil", "//evil"),
+            ("/a/./%5cevil.example", "/a/%5Cevil.example"),
+            ("/a/../\\\\evil.example/", "///evil.example/"),
+            ("/./%5c%5cevil.example", "/%5C%5Cevil.example"),
+            ("/./%2f%2fevil.example", "/%2F%2Fevil.example"),
+            ("/.//evil.example", "//evil.example"),
+            ("/..//evil.example", "//evil.example"),
         ] {
             let reply = get(&hosting, target);
-            if let Some(location) = reply.header("location") {
-                assert!(location.starts_with('/'), "{profile} {target}: {location}");
-                assert!(
-                    !location.starts_with("//")
-                        && !location.starts_with("/\\")
-                        && !location.contains('\\'),
-                    "{profile} {target}: {location}"
-                );
-            }
-            if target.contains('\\') {
-                // the raw backslash is refused like any other unserved path
-                assert_eq!(reply.status, 404, "{profile} {target}");
-                assert_eq!(reply.header("location"), None, "{profile} {target}");
-            }
+            assert_eq!(reply.status, 302, "{profile} {target}");
+            let location = reply.header("location").unwrap();
+            assert_eq!(location, at(expected), "{profile} {target}");
+            // whatever the path, the authority is the origin the request came to
+            assert!(
+                location.starts_with(&format!("http://{}/", hosting.address)),
+                "{profile} {target}: {location}"
+            );
+            assert!(!location.contains('\\'), "{location}");
         }
-        // the escaped backslash is a harmless path part of this origin
-        if profile != "emulator" {
-            assert_eq!(
-                get(&hosting, "/./%5cevil.example").header("location"),
-                Some("/%5cevil.example")
+        // no dot segment: no redirect, the default page (v11.backslash-mid, -in-name)
+        for target in ["/a\\b", "/a/\\b"] {
+            let reply = get(&hosting, target);
+            assert_eq!(reply.status, 404, "{profile} {target}");
+            assert_eq!(reply.header("location"), None, "{profile} {target}");
+            assert!(reply.body.contains("404 Not Found"), "{profile} {target}");
+        }
+    }
+    // the emulator profile never leaves the origin either: a relative `Location` that starts with a
+    // single slash, or none
+    let emulator = outside_site("backslash-emulator", "emulator", &json("{}"));
+    for target in [
+        "/./\\evil.example",
+        "/.\\b",
+        "/./\\evil",
+        "/a/./%5cevil.example",
+    ] {
+        let reply = get(&emulator, target);
+        if let Some(location) = reply.header("location") {
+            assert!(location.starts_with('/'), "{target}: {location}");
+            assert!(
+                !location.starts_with("//") && !location.contains('\\'),
+                "{target}: {location}"
             );
         }
     }
@@ -1128,8 +1208,8 @@ fn gunzip(bytes: &[u8]) -> Vec<u8> {
     out
 }
 
-/// Rows `v01.gz-*` of the production recording: gzip when the request accepts it, the file's own
-/// `ETag`, the same `Vary`, and no compression for an incompressible type.
+/// Rows `v01.gz-*` of the production recording: gzip when the request holds `gzip`, the file's own
+/// `ETag`, the same `Vary`, and a tiny file left alone.
 #[test]
 fn hosting_strict_gzip_answers_as_the_recorded_rows() {
     let big = BIG.repeat(100);
@@ -1158,6 +1238,7 @@ fn hosting_strict_gzip_answers_as_the_recorded_rows() {
         );
         assert_eq!(identity.header("content-encoding"), None, "gz-identity");
         assert_eq!(identity.body, big);
+        // production answers `br` to the two forms that name it; strict has no Brotli and answers gzip
         for (row, target, accept) in [
             ("gz-gzip", "/compress/big.txt", "gzip"),
             ("gz-gzip-br", "/compress/big.txt", "gzip, br"),
@@ -1173,6 +1254,21 @@ fn hosting_strict_gzip_answers_as_the_recorded_rows() {
                 "{row}"
             );
             assert_eq!(reply.header("etag"), Some(etag.as_str()), "{row}");
+            // a known type stays what it is once compressed
+            assert_eq!(
+                reply.header("content-type"),
+                Some(
+                    if std::path::Path::new(target)
+                        .extension()
+                        .is_some_and(|extension| extension == "json")
+                    {
+                        "application/json"
+                    } else {
+                        "text/plain; charset=utf-8"
+                    }
+                ),
+                "{row}"
+            );
             assert_eq!(reply.header("accept-ranges"), Some("bytes"), "{row}");
             // the recorded answer is 93 bytes; the length names the body that follows
             assert_eq!(reply.header("content-length"), Some("93"), "{row}");
@@ -1207,7 +1303,7 @@ fn hosting_strict_gzip_answers_as_the_recorded_rows() {
         );
         assert_eq!(head.header("content-length"), Some("93"));
         assert!(head.bytes.is_empty());
-        // gz-png-gzip: an incompressible type is left alone
+        // gz-png-gzip: two bytes are left alone (the compressed body would be larger)
         let png = send(
             &hosting,
             "GET",
@@ -1223,22 +1319,27 @@ fn hosting_strict_gzip_answers_as_the_recorded_rows() {
     }
 }
 
-/// Brotli is not produced (a declared difference): a request that accepts only `br`, a refused or
-/// malformed gzip and `*` are answered as identity.
+/// The rows `v15.ae-*`: production looks for the text `gzip` in `Accept-Encoding` as a plain,
+/// case-sensitive substring, and reads no quality.
 #[test]
-fn hosting_strict_gzip_is_only_for_a_request_that_accepts_it() {
+fn hosting_strict_gzip_is_decided_by_the_text_gzip_in_accept_encoding() {
     let big = BIG.repeat(100);
     let hosting = site(
-        "gzip-refused",
+        "gzip-forms",
         "exact",
         &json("{}"),
         &[("big.txt", &big), ("index.html", "x")],
     );
-    for accept in ["br", "gzip;q=0", "gzip;q=abc", "*", "deflate", "x-gzip", ""] {
+    for accept in ["br", "*", "deflate", "identity", "GZIP", "Gzip", "zip", ""] {
         let reply = send(&hosting, "GET", "/big.txt", &[("Accept-Encoding", accept)]);
         assert_eq!(reply.header("content-encoding"), None, "{accept:?}");
         assert_eq!(reply.header("content-length"), Some("4500"), "{accept:?}");
         assert_eq!(reply.body, big, "{accept:?}");
+    }
+    for accept in ["gzip", "x-gzip", "gzip;q=0", "gzip, deflate, br", "xgzip"] {
+        let reply = send(&hosting, "GET", "/big.txt", &[("Accept-Encoding", accept)]);
+        assert_eq!(reply.header("content-encoding"), Some("gzip"), "{accept:?}");
+        assert_eq!(gunzip(&reply.bytes), big.as_bytes(), "{accept:?}");
     }
 }
 
@@ -1253,8 +1354,9 @@ fn hosting_strict_gzip_with_conditions_ranges_and_pages() {
         &[("big.txt", &big), ("404.html", &big), ("index.html", "x")],
     );
     let gzip = [("Accept-Encoding", "gzip")];
-    let etag = get(&hosting, "/big.txt").header("etag").unwrap().to_owned();
-    // a matching tag is 304 with no encoding and no body: the tag is the file's, whatever the coding
+    let full = send(&hosting, "GET", "/big.txt", &gzip);
+    let etag = full.header("etag").unwrap().to_owned();
+    // v15.ae-cond: a matching tag is 304 with no body: the tag is the file's, whatever the coding
     let not_modified = send(
         &hosting,
         "GET",
@@ -1264,7 +1366,8 @@ fn hosting_strict_gzip_with_conditions_ranges_and_pages() {
     assert_eq!(not_modified.status, 304);
     assert_eq!(not_modified.header("content-encoding"), None);
     assert!(not_modified.bytes.is_empty());
-    // a range is served from the file as identity
+    // v15.ae-range: a range is taken over the compressed body: 206, `Content-Encoding: gzip`, the
+    // range of the 93 bytes
     let part = send(
         &hosting,
         "GET",
@@ -1272,9 +1375,54 @@ fn hosting_strict_gzip_with_conditions_ranges_and_pages() {
         &[("Accept-Encoding", "gzip"), ("Range", "bytes=0-9")],
     );
     assert_eq!(part.status, 206);
-    assert_eq!(part.header("content-encoding"), None);
-    assert_eq!(part.header("content-range"), Some("bytes 0-9/4500"));
-    assert_eq!(part.body, &big[..10]);
+    assert_eq!(part.header("content-encoding"), Some("gzip"));
+    assert_eq!(part.header("content-range"), Some("bytes 0-9/93"));
+    assert_eq!(part.header("content-length"), Some("10"));
+    assert_eq!(part.bytes, &full.bytes[..10]);
+    assert_eq!(part.header("etag"), Some(etag.as_str()));
+    let tail = send(
+        &hosting,
+        "GET",
+        "/big.txt",
+        &[("Accept-Encoding", "gzip"), ("Range", "bytes=-5")],
+    );
+    assert_eq!(tail.header("content-range"), Some("bytes 88-92/93"));
+    assert_eq!(tail.bytes, &full.bytes[88..]);
+    // a start beyond the compressed body is unsatisfiable on it
+    let beyond = send(
+        &hosting,
+        "GET",
+        "/big.txt",
+        &[("Accept-Encoding", "gzip"), ("Range", "bytes=1000-")],
+    );
+    assert_eq!(beyond.status, 416);
+    assert_eq!(beyond.header("content-range"), Some("bytes */93"));
+    assert_eq!(beyond.header("content-encoding"), None);
+    // a start past the file itself is unsatisfiable over the file: identity, `*/<file length>`
+    // (inferred, not recorded: only `bytes=0-9` was)
+    let past_file = send(
+        &hosting,
+        "GET",
+        "/big.txt",
+        &[("Accept-Encoding", "gzip"), ("Range", "bytes=9999-")],
+    );
+    assert_eq!(past_file.status, 416);
+    assert_eq!(past_file.header("content-range"), Some("bytes */4500"));
+    assert_eq!(past_file.header("content-encoding"), None);
+    // HEAD with a range names the part and sends nothing
+    let head = send(
+        &hosting,
+        "HEAD",
+        "/big.txt",
+        &[("Accept-Encoding", "gzip"), ("Range", "bytes=0-9")],
+    );
+    assert_eq!((head.status, head.bytes.len()), (206, 0));
+    assert_eq!(head.header("content-length"), Some("10"));
+    // without gzip the range is over the file, as before
+    let plain = send(&hosting, "GET", "/big.txt", &[("Range", "bytes=0-9")]);
+    assert_eq!(plain.header("content-range"), Some("bytes 0-9/4500"));
+    assert_eq!(plain.header("content-encoding"), None);
+    assert_eq!(plain.body, &big[..10]);
     // the 404 page is a file and is compressed like any other
     let missing = send(&hosting, "GET", "/nope", &gzip);
     assert_eq!(missing.status, 404);
@@ -1322,21 +1470,24 @@ fn hosting_strict_a_file_above_the_gzip_limit_is_identity() {
         .unwrap()
         .set_len(32 * 1024 * 1024 + 1)
         .unwrap();
-    let head = send(
+    // `huge.txt` is above the limit: no gzip is decided, so the body is never packed; the one read of
+    // the file is the one every request makes for its `ETag`
+    let head = send_within(
         &hosting,
         "HEAD",
         "/huge.txt",
         &[("Accept-Encoding", "gzip")],
+        LARGE_FILE_PATIENCE,
     );
     assert_eq!(head.header("content-encoding"), None);
     assert_eq!(head.header("content-length"), Some("33554433"));
 }
 
-/// Shapes the recording does not show, decided by the content type strict sends: an unknown
-/// extension is `text/plain` and compresses, `.html` compresses, a binary type does not, and an
-/// empty file is left alone.
+/// The rows `v15.size-*` and `v15.type-*`: any content type is compressed when the compressed body
+/// is smaller (an image, a zip and a font as well as text); a file of 1 or 10 bytes and an empty
+/// file are not. A file with no known type is `text/html; charset=UTF-8` once compressed.
 #[test]
-fn hosting_strict_gzip_follows_the_content_type_sent() {
+fn hosting_strict_gzip_follows_the_size_and_not_the_type() {
     let big = BIG.repeat(100);
     let hosting = site(
         "gzip-types",
@@ -1348,119 +1499,226 @@ fn hosting_strict_gzip_follows_the_content_type_sent() {
             ("data.unknownext", &big),
             ("image.png", &big),
             ("archive.zip", &big),
+            ("font.woff2", &big),
             ("empty.txt", ""),
+            ("sz/s0001.txt", "T"),
+            ("sz/s0010.txt", "The quick "),
+            ("sz/s0100.txt", &big[..100]),
         ],
     );
-    let encoded = |target: &str| {
-        send(&hosting, "GET", target, &[("Accept-Encoding", "gzip")])
-            .header("content-encoding")
-            .map(str::to_owned)
-    };
-    assert_eq!(encoded("/").as_deref(), Some("gzip"));
-    assert_eq!(encoded("/notes").as_deref(), Some("gzip"));
-    assert_eq!(encoded("/data.unknownext").as_deref(), Some("gzip"));
-    assert_eq!(encoded("/image.png"), None);
-    assert_eq!(encoded("/archive.zip"), None);
-    assert_eq!(encoded("/empty.txt"), None);
+    let get_gzip = |target: &str| send(&hosting, "GET", target, &[("Accept-Encoding", "gzip")]);
+    for target in [
+        "/",
+        "/notes",
+        "/data.unknownext",
+        "/image.png",
+        "/archive.zip",
+        "/font.woff2",
+    ] {
+        let reply = get_gzip(target);
+        assert_eq!(reply.header("content-encoding"), Some("gzip"), "{target}");
+        assert_eq!(gunzip(&reply.bytes), big.as_bytes(), "{target}");
+    }
+    // the types stay those of the files, except that of a file with no known one
+    assert_eq!(
+        get_gzip("/image.png").header("content-type"),
+        Some("image/png")
+    );
+    assert_eq!(
+        get_gzip("/archive.zip").header("content-type"),
+        Some("application/zip")
+    );
+    assert_eq!(
+        get_gzip("/font.woff2").header("content-type"),
+        Some("font/woff2")
+    );
+    assert_eq!(
+        get_gzip("/").header("content-type"),
+        Some("text/html; charset=utf-8")
+    );
+    assert_eq!(
+        get_gzip("/notes").header("content-type"),
+        Some("text/html; charset=UTF-8")
+    );
+    assert_eq!(
+        get_gzip("/data.unknownext").header("content-type"),
+        Some("text/html; charset=UTF-8")
+    );
+    // without compression a file with no known type is still `text/plain` (v01.ct-noext)
+    let plain = get(&hosting, "/notes");
+    assert_eq!(
+        plain.header("content-type"),
+        Some("text/plain; charset=utf-8")
+    );
+    assert_eq!(plain.header("content-encoding"), None);
+    // sizes: 1 and 10 bytes stay, 100 bytes is compressed; an empty file stays
+    for (target, encoded) in [
+        ("/sz/s0001.txt", false),
+        ("/sz/s0010.txt", false),
+        ("/sz/s0100.txt", true),
+        ("/empty.txt", false),
+    ] {
+        let reply = get_gzip(target);
+        assert_eq!(
+            reply.header("content-encoding").is_some(),
+            encoded,
+            "{target}"
+        );
+    }
+    assert_eq!(
+        get_gzip("/sz/s0001.txt").header("content-length"),
+        Some("1")
+    );
+    // and a gzip answer of the file is never larger than the file
+    let hundred = get_gzip("/sz/s0100.txt");
+    assert!(hundred.bytes.len() < 100, "{}", hundred.bytes.len());
 }
 
-/// A file whose configured `headers` rule sets `Content-Encoding` (a precompressed build, such as
-/// a Unity `*.br` file) is already encoded: strict sends its bytes as they are, with the header
-/// the rule gave, whatever the case of the name or the value. A rule that matches another path or
-/// sets another header changes nothing.
+/// An unknown type becomes `text/html; charset=UTF-8` once compressed only when fireemu chose the
+/// type: a `Content-Type` that a `headers` rule sets is never rewritten, whatever its value (even the
+/// one fireemu would have chosen itself).
 #[test]
-fn hosting_strict_a_configured_content_encoding_is_never_recompressed() {
+fn hosting_strict_a_content_type_set_by_a_rule_is_never_rewritten_when_compressed() {
     let big = BIG.repeat(100);
     let rules = json(
         r#"{"headers": [
-            {"source": "**/*.br", "headers": [{"key": "Content-Encoding", "value": "br"}]},
-            {"source": "/app.js", "headers": [{"key": "content-ENCODING", "value": "gzip"}]},
-            {"source": "/plain.txt", "headers": [{"key": "Content-Encoding", "value": "identity"}]},
-            {"source": "/shout.txt", "headers": [{"key": "CONTENT-ENCODING", "value": "BR"}]},
-            {"source": "/other/**", "headers": [{"key": "Content-Encoding", "value": "br"}]},
-            {"source": "**", "headers": [{"key": "X-Fixture", "value": "all"}]}
-        ],
-        "rewrites": [{"source": "/rewritten", "destination": "/free.txt"}]}"#,
+            {"source": "/same", "headers": [{"key": "Content-Type", "value": "text/plain; charset=utf-8"}]},
+            {"source": "/other", "headers": [{"key": "content-type", "value": "application/x-fixture"}]},
+            {"source": "/html", "headers": [{"key": "Content-Type", "value": "text/html; charset=UTF-8"}]},
+            {"source": "/known.txt", "headers": [{"key": "Content-Type", "value": "text/plain; charset=utf-8"}]},
+            {"source": "/rule-elsewhere/**", "headers": [{"key": "X-Fixture", "value": "1"}]}
+        ]}"#,
     );
     for profile in ["strict", "exact"] {
         let hosting = site(
-            "gzip-configured",
+            "gzip-type-rule",
             profile,
             &rules,
             &[
-                ("Build/game.wasm.br", &big),
-                ("app.js", &big),
-                ("plain.txt", &big),
-                ("shout.txt", &big),
-                ("free.txt", &big),
-                ("other/x.txt", &big),
-                ("404.html", &big),
+                ("same", &big),
+                ("other", &big),
+                ("html", &big),
+                ("free", &big),
+                ("known.txt", &big),
                 ("index.html", "x"),
             ],
         );
-        let accept = [("Accept-Encoding", "gzip, deflate, br")];
-        for (target, encoding) in [
-            ("/Build/game.wasm.br", "br"),
-            ("/app.js", "gzip"),
-            ("/plain.txt", "identity"),
-            ("/shout.txt", "BR"),
-            ("/other/x.txt", "br"),
-        ] {
-            let reply = send(&hosting, "GET", target, &accept);
-            assert_eq!(reply.status, 200, "{profile} {target}");
-            assert_eq!(reply.header("content-encoding"), Some(encoding), "{target}");
-            assert_eq!(reply.header("content-length"), Some("4500"), "{target}");
-            assert_eq!(reply.body, big, "{profile} {target} is sent as it is");
-            let head = send(&hosting, "HEAD", target, &accept);
-            assert_eq!(head.header("content-encoding"), Some(encoding), "{target}");
-            assert_eq!(head.header("content-length"), Some("4500"), "HEAD {target}");
-        }
-        // near misses: a rule for another path, or for another header, leaves gzip alone
-        for target in ["/free.txt", "/other"] {
-            let reply = send(&hosting, "GET", target, &accept);
-            if target == "/free.txt" {
-                assert_eq!(reply.header("content-encoding"), Some("gzip"), "{target}");
-                assert_eq!(reply.header("x-fixture"), Some("all"));
-                assert_eq!(gunzip(&reply.bytes), big.as_bytes());
-            }
-        }
-        // the rule follows the request path, not the file a rewrite or the 404 page serves
-        let rewritten = send(&hosting, "GET", "/rewritten", &accept);
-        assert_eq!(rewritten.header("content-encoding"), Some("gzip"));
-        assert_eq!(gunzip(&rewritten.bytes), big.as_bytes());
-        let missing = send(&hosting, "GET", "/missing", &accept);
-        assert_eq!(missing.status, 404);
-        assert_eq!(missing.header("content-encoding"), Some("gzip"));
+        let gzip = [("Accept-Encoding", "gzip")];
+        let type_of = |target: &str| {
+            let reply = send(&hosting, "GET", target, &gzip);
+            assert_eq!(reply.header("content-encoding"), Some("gzip"), "{target}");
+            reply.header("content-type").map(str::to_owned)
+        };
+        // the rule sets the value fireemu would have chosen: it stays
+        assert_eq!(
+            type_of("/same").as_deref(),
+            Some("text/plain; charset=utf-8")
+        );
+        assert_eq!(type_of("/other").as_deref(), Some("application/x-fixture"));
+        assert_eq!(
+            type_of("/html").as_deref(),
+            Some("text/html; charset=UTF-8")
+        );
+        assert_eq!(
+            type_of("/known.txt").as_deref(),
+            Some("text/plain; charset=utf-8")
+        );
+        // no rule: fireemu's own default is rewritten, as recorded
+        assert_eq!(
+            type_of("/free").as_deref(),
+            Some("text/html; charset=UTF-8")
+        );
+        // uncompressed, the same rule gives the same value
+        let plain = send(&hosting, "GET", "/same", &[]);
+        assert_eq!(
+            plain.header("content-type"),
+            Some("text/plain; charset=utf-8")
+        );
     }
-    // a rule on the request path of a rewrite or on `/404.html` also stops the packing
-    let by_request = json(
-        r#"{"headers": [
-            {"source": "/rewritten", "headers": [{"key": "Content-Encoding", "value": "br"}]},
-            {"source": "/404.html", "headers": [{"key": "Content-Encoding", "value": "gzip"}]}
-        ],
-        "rewrites": [{"source": "/rewritten", "destination": "/free.txt"}]}"#,
-    );
-    let hosting = site(
-        "gzip-configured-paths",
-        "exact",
-        &by_request,
-        &[("free.txt", &big), ("404.html", &big), ("index.html", "x")],
-    );
-    let accept = [("Accept-Encoding", "gzip")];
-    let rewritten = send(&hosting, "GET", "/rewritten", &accept);
-    assert_eq!(rewritten.header("content-encoding"), Some("br"));
-    assert_eq!(rewritten.body, big);
-    let missing = send(&hosting, "GET", "/missing", &accept);
-    assert_eq!(missing.status, 404);
-    assert_eq!(missing.header("content-encoding"), Some("gzip"));
-    assert_eq!(
-        missing.body, big,
-        "the 404 page is not packed a second time"
-    );
-    assert_eq!(missing.header("content-length"), Some("4500"));
 }
 
-/// Every `Accept-Encoding` line of a request is one list; the first gzip member decides.
+/// The rows `v14.*`: production does not serve a `Content-Encoding` that a `headers` rule sets. A
+/// precompressed file (a `*.br`, `*.gz` or script of already packed bytes) is sent as it is because
+/// compressing it again does not make it smaller; a text file with the rule `identity` or `br` is
+/// compressed like any other. A `.br` file is `application/octet-stream`.
+#[test]
+fn hosting_strict_a_content_encoding_rule_is_never_served() {
+    let big = BIG.repeat(100);
+    // bytes that do not compress: a fixed pseudo-random run
+    let packed = |length: usize| {
+        let mut state = 0x9e37_79b9_u32;
+        (0..length)
+            .map(|_| {
+                state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                (state >> 24) as u8
+            })
+            .collect::<Vec<u8>>()
+    };
+    let rules = json(
+        r#"{"headers": [
+            {"source": "/pre/*.br", "headers": [{"key": "Content-Encoding", "value": "br"}]},
+            {"source": "/pre/*.gz", "headers": [{"key": "Content-Encoding", "value": "gzip"}]},
+            {"source": "/pre/script.js", "headers": [{"key": "content-ENCODING", "value": "gzip"}]},
+            {"source": "/pre/plain.txt", "headers": [{"key": "Content-Encoding", "value": "identity"}]},
+            {"source": "/pre/shout.txt", "headers": [{"key": "CONTENT-ENCODING", "value": "BR"}]},
+            {"source": "**", "headers": [{"key": "X-Fixture", "value": "all"}]}
+        ]}"#,
+    );
+    for profile in ["strict", "exact"] {
+        let hosting = site(
+            "gzip-rule",
+            profile,
+            &rules,
+            &[
+                ("pre/plain.txt", &big),
+                ("pre/shout.txt", &big),
+                ("pre/free.txt", &big),
+                ("index.html", "x"),
+            ],
+        );
+        for (name, bytes) in [
+            ("pre/big.txt.br", packed(61)),
+            ("pre/big.txt.gz", packed(93)),
+            ("pre/script.js", packed(93)),
+        ] {
+            std::fs::write(hosting.dir.join("public").join(name), bytes).unwrap();
+        }
+        let browser = [("Accept-Encoding", "gzip, deflate, br")];
+        for (target, length, content_type) in [
+            ("/pre/big.txt.br", "61", "application/octet-stream"),
+            ("/pre/big.txt.gz", "93", "application/gzip"),
+            ("/pre/script.js", "93", "text/javascript; charset=utf-8"),
+        ] {
+            for headers in [&browser[..], &[("Accept-Encoding", "gzip")][..], &[][..]] {
+                let reply = send(&hosting, "GET", target, headers);
+                assert_eq!(reply.status, 200, "{profile} {target}");
+                assert_eq!(reply.header("content-encoding"), None, "{profile} {target}");
+                assert_eq!(reply.header("content-length"), Some(length), "{target}");
+                assert_eq!(reply.header("content-type"), Some(content_type), "{target}");
+                assert_eq!(reply.header("x-fixture"), Some("all"));
+            }
+            let head = send(&hosting, "HEAD", target, &[("Accept-Encoding", "gzip")]);
+            assert_eq!(head.header("content-encoding"), None, "HEAD {target}");
+            assert_eq!(head.header("content-length"), Some(length), "HEAD {target}");
+        }
+        // the rule's value is ignored, whatever it is, and the text is compressed
+        for target in ["/pre/plain.txt", "/pre/shout.txt", "/pre/free.txt"] {
+            let reply = send(&hosting, "GET", target, &browser);
+            assert_eq!(
+                reply.header("content-encoding"),
+                Some("gzip"),
+                "{profile} {target}"
+            );
+            assert_eq!(gunzip(&reply.bytes), big.as_bytes(), "{target}");
+        }
+        // without `gzip` in the request the text is as it is, and still has no encoding header
+        let plain = send(&hosting, "GET", "/pre/plain.txt", &[]);
+        assert_eq!(plain.header("content-encoding"), None);
+        assert_eq!(plain.body, big);
+    }
+}
+
+/// Every `Accept-Encoding` line of a request is one list; the text `gzip` on any line is enough.
 #[test]
 fn hosting_strict_gzip_reads_every_accept_encoding_line() {
     let big = BIG.repeat(100);
@@ -1473,8 +1731,9 @@ fn hosting_strict_gzip_reads_every_accept_encoding_line() {
     for (lines, gzipped) in [
         (vec!["br", "gzip"], true),
         (vec!["deflate", "gzip;q=0.5"], true),
-        (vec!["gzip;q=0", "gzip"], false),
+        (vec!["gzip;q=0", "identity"], true),
         (vec!["br", "deflate"], false),
+        (vec!["br", "GZIP"], false),
     ] {
         let headers: Vec<(&str, &str)> = lines
             .iter()
@@ -1487,4 +1746,194 @@ fn hosting_strict_gzip_reads_every_accept_encoding_line() {
             "{lines:?}"
         );
     }
+}
+
+/// How long a request for a 16 or 32 MiB file may take (see [`send_within`]).
+const LARGE_FILE_PATIENCE: Duration = Duration::from_secs(600);
+
+/// The follow-up rows `v11.default-404*` and `v11.auth-handler*`: strict answers with status,
+/// content type, cache control and `Vary` as production did, and with pages written for fireemu (the
+/// owner decided not to ship production's own page bytes: the bodies are known differences). The
+/// pages say what they are and do not imitate the hosted ones.
+#[test]
+fn hosting_strict_the_default_404_page_and_the_auth_handler_are_fireemu_pages() {
+    for profile in ["strict", "exact"] {
+        let hosting = site("pages", profile, &json("{}"), &[("index.html", "x")]);
+        let mut seen = Vec::new();
+        // v11.default-404, -json, -nested, v11.backslash-mid, -in-name: the same page for any path
+        for target in [
+            "/missing",
+            "/missing.json",
+            "/a/missing/deeper",
+            "/a\\b",
+            "/a/\\b",
+        ] {
+            let reply = get(&hosting, target);
+            assert_eq!(reply.status, 404, "{profile} {target}");
+            assert_eq!(
+                reply.header("content-type"),
+                Some("text/html; charset=utf-8")
+            );
+            assert_eq!(
+                reply.header("content-length"),
+                Some(reply.bytes.len().to_string().as_str()),
+                "{target}"
+            );
+            assert!(reply.body.contains("404 Not Found"), "{target}");
+            seen.push(reply.body);
+        }
+        assert!(seen.windows(2).all(|pair| pair[0] == pair[1]));
+        let head = send(&hosting, "HEAD", "/missing", &[]);
+        assert_eq!((head.status, head.bytes.len()), (404, 0));
+        assert_eq!(
+            head.header("content-length"),
+            Some(seen[0].len().to_string().as_str())
+        );
+        // v11.auth-handler, -query
+        let mut handler = Vec::new();
+        for target in ["/__/auth/handler", "/__/auth/handler?mode=signIn"] {
+            let reply = get(&hosting, target);
+            assert_eq!(reply.status, 200, "{profile} {target}");
+            assert_eq!(
+                reply.header("content-type"),
+                Some("text/html; charset=utf-8")
+            );
+            assert_eq!(reply.header("cache-control"), Some("max-age=1800"));
+            assert_eq!(
+                reply.header("content-length"),
+                Some(reply.bytes.len().to_string().as_str())
+            );
+            assert!(reply.body.contains("local stand-in"));
+            handler.push(reply.body);
+        }
+        assert_eq!(handler[0], handler[1]);
+        let head = send(&hosting, "HEAD", "/__/auth/handler", &[]);
+        assert_eq!((head.status, head.bytes.len()), (200, 0));
+        assert_eq!(
+            head.header("content-length"),
+            Some(handler[0].len().to_string().as_str())
+        );
+        // neither page is the hosted one, nor says it is Firebase's
+        for page in seen.iter().chain(handler.iter()) {
+            let lower = page.to_ascii_lowercase();
+            for word in ["firebase", "google", "fireauth", "roboto", "page not found"] {
+                assert!(!lower.contains(word), "{word} in {page}");
+            }
+            assert!(page.len() < 1000);
+        }
+    }
+    // the emulator profile keeps the pinned oracle's short page
+    let emulator = site(
+        "pages-emulator",
+        "emulator",
+        &json("{}"),
+        &[("index.html", "x")],
+    );
+    let reply = get(&emulator, "/missing");
+    assert_eq!(reply.status, 404);
+    assert!(reply.bytes.len() < 1000 && reply.body.contains("Cannot GET /missing"));
+}
+
+/// The `Location` of a dot-segment redirect is an absolute URL on the `Host` of the request, so the
+/// `Host` must be plain: a name or an address with a port. A `Host` with a `/`, `\`, `@`, `?`, `#`, a
+/// space, a tab or an escape is refused (`400`; the host guard may refuse it first): never a redirect,
+/// whatever the path.
+#[test]
+fn hosting_strict_a_host_that_is_not_plain_never_gets_a_redirect() {
+    let hosting = outside_site("host-guard", "exact", &json("{}"));
+    let patience = Duration::from_secs(30);
+    let port = hosting.address.rsplit(':').next().unwrap().to_owned();
+    for host in [
+        format!("evil.example/{port}"),
+        format!("127.0.0.1:{port}/evil"),
+        format!("127.0.0.1:{port}@evil.example"),
+        format!("evil.example\\@127.0.0.1:{port}"),
+        format!("127.0.0.1:{port}?x"),
+        format!("127.0.0.1:{port}#x"),
+        format!("127.0.0.1:{port} evil.example"),
+        format!("127.0.0.1:{port}\tx"),
+        format!("127.0.0.1%2f:{port}"),
+        "127.0.0.1:{port}".to_owned(),
+        "ホスト".to_owned(),
+    ] {
+        for target in ["/../outside.txt", "/./\\evil", "/a/b/.."] {
+            let reply = send_to_host(&hosting, &host, "GET", target, &[], patience);
+            assert!(
+                reply.header("location").is_none(),
+                "{host:?} {target}: {:?}",
+                reply.header("location")
+            );
+            assert!(
+                [400, 403, 404].contains(&reply.status),
+                "{host:?} {target}: {}",
+                reply.status
+            );
+        }
+    }
+    // the same paths with the site's own host are the redirects
+    for target in ["/../outside.txt", "/./\\evil", "/a/b/.."] {
+        let reply = send_to_host(&hosting, &hosting.address, "GET", target, &[], patience);
+        assert_eq!(reply.status, 302, "{target}");
+        assert!(reply
+            .header("location")
+            .unwrap()
+            .starts_with(&format!("http://{}/", hosting.address)));
+    }
+    // a name the guard admits is used as it is: `localhost` with the port
+    let localhost = format!("localhost:{port}");
+    let reply = send_to_host(&hosting, &localhost, "GET", "/a/./b", &[], patience);
+    assert_eq!(reply.status, 302);
+    assert_eq!(
+        reply.header("location"),
+        Some(format!("http://localhost:{port}/a/b").as_str())
+    );
+}
+
+/// The follow-up rows `v12.*`: a redirect whose source has a digit in a `:name` matches nothing
+/// (every request is the 404 page); `v13.*`: a repeated name matches, the last value wins.
+#[test]
+fn hosting_strict_a_digit_in_a_redirect_name_matches_nothing() {
+    let rules = json(
+        r#"{"redirects": [
+            {"source": "/capture/:id/:id2", "destination": "/new/:id2/:id", "type": 301},
+            {"source": "/p/:a1", "destination": "/to-p/:a1", "type": 302},
+            {"source": "/s/:a1/x", "destination": "/to-s/:a1", "type": 302},
+            {"source": "/t/:a1/:a2", "destination": "/to-t/:a2/:a1", "type": 302},
+            {"source": "/q/:id/:id", "destination": "/to-q/:id", "type": 302}
+        ]}"#,
+    );
+    for profile in ["strict", "exact"] {
+        let hosting = site("digit-names", profile, &rules, &[("index.html", "x")]);
+        for target in [
+            "/capture/one/two2",
+            "/capture/one/two",
+            "/capture/x/:id2",
+            "/capture/:id2/two",
+            "/p/x",
+            "/p/x1",
+            "/p/:a1",
+            "/s/v/x",
+            "/s/:a1/x",
+            "/t/u/v",
+            "/t/1/2",
+            "/q/a",
+        ] {
+            let reply = get(&hosting, target);
+            assert_eq!(reply.status, 404, "{profile} {target}");
+            assert_eq!(reply.header("location"), None, "{target}");
+        }
+        for (target, location) in [("/q/a/b", "/to-q/b"), ("/q/a/a", "/to-q/a")] {
+            let reply = get(&hosting, target);
+            assert_eq!(reply.status, 302, "{profile} {target}");
+            assert_eq!(reply.header("location"), Some(location), "{target}");
+        }
+    }
+    // the emulator profile reads a digit into the name, as the pinned oracle does
+    let emulator = site(
+        "digit-names-emulator",
+        "emulator",
+        &rules,
+        &[("index.html", "x")],
+    );
+    assert_eq!(get(&emulator, "/p/x").header("location"), Some("/to-p/x"));
 }

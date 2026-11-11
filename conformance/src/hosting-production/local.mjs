@@ -3,7 +3,7 @@
 // recorder sends to production are sent to it with the same client, and the answers are shaped
 // into the same rows. Nothing here reaches a network except loopback.
 //
-//   FIREEMU_BIN=<fireemu binary> node local.mjs --profile strict|emulator --out <new file>
+//   FIREEMU_BIN=<fireemu binary> node local.mjs --profile strict|emulator [--corpus followup] --out <new file>
 import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 
 import { edgeRequest } from "./client.mjs";
 import { buildCorpus, corpusManifest } from "./corpus.mjs";
+import { buildFollowupCorpus } from "./followup.mjs";
 import { shapeRow } from "./rows.mjs";
 
 const LOCAL_PROJECT = "demo-hosting";
@@ -151,8 +152,7 @@ export async function runVersion(version, { binary, profile, send = edgeRequest 
   }
 }
 
-export async function runLocal({ binary, profile }) {
-  const corpus = buildCorpus();
+export async function runLocal({ binary, profile, corpus = buildCorpus() }) {
   const rows = [];
   for (const version of corpus.versions)
     rows.push(...(await runVersion(version, { binary, profile })));
@@ -166,7 +166,14 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   if (!["strict", "emulator"].includes(profile)) throw new Error("--profile strict|emulator");
   if (!out || !process.env.FIREEMU_BIN)
     throw new Error("--out <new file> and FIREEMU_BIN are required");
-  const result = await runLocal({ binary: resolve(process.env.FIREEMU_BIN), profile });
+  const corpusAt = process.argv.indexOf("--corpus");
+  const corpusName = corpusAt < 0 ? undefined : process.argv[corpusAt + 1];
+  if (corpusName !== undefined && corpusName !== "followup") throw new Error("--corpus followup");
+  const result = await runLocal({
+    binary: resolve(process.env.FIREEMU_BIN),
+    profile,
+    ...(corpusName === "followup" ? { corpus: buildFollowupCorpus() } : {}),
+  });
   await writeFile(resolve(out), `${JSON.stringify(result, null, 2)}\n`, { flag: "wx" });
   console.log(
     JSON.stringify({

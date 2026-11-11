@@ -1,6 +1,6 @@
 // A test world owns a daemon, private input snapshots and generation-scoped clients.
 import { spawn } from 'node:child_process';
-import { mkdtemp, readFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -80,6 +80,10 @@ function snapshotFailure(error,signal){
 
 function retainCleanupError(error,cleanupError){
   if(error&&typeof error==='object')try{error.cleanupError=cleanupError;}catch{}
+}
+
+export function dumpPaths(directory){
+  return {json:join(directory,'bundle.json'),html:join(directory,'bundle.html')};
 }
 
 /** Create an independent emulator world; no method changes the parent's environment. */
@@ -164,6 +168,20 @@ export async function createTestWorld(options={}){
     get environment(){check();return current.environment;},
     get directory(){return directory;},
     control,
+    async dump(directory){
+      const paths=dumpPaths(directory);
+      const bundle=await control('GET','/v1/sessions/default/diagnostics/bundle');
+      if(!bundle||typeof bundle!=='object'||Array.isArray(bundle)||bundle.schemaVersion!==1)throw Error(`invalid diagnostics bundle for ${directory}`);
+      const html=await control('GET','/v1/sessions/default/diagnostics/bundle?format=html');
+      if(typeof html?.html!=='string'||!html.html.startsWith('<!doctype html>'))throw Error(`invalid diagnostics HTML for ${paths.html}`);
+      await mkdir(directory,{recursive:true});
+      for(const [path,contents] of [[paths.json,JSON.stringify(bundle,null,2)],[paths.html,html.html]]){
+        const temporary=`${path}.${randomUUID()}.tmp`;
+        try{await writeFile(temporary,contents);await rename(temporary,path);}
+        finally{await rm(temporary,{force:true});}
+      }
+      return paths;
+    },
     clock:Object.freeze({
       get:()=>control('GET','/v1/sessions/default'),
       set:(instant,{allowBackwards=false}={})=>control('POST','/v1/sessions/default/clock:set',{instant,allowBackwards}),

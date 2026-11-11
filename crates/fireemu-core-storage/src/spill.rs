@@ -161,3 +161,86 @@ impl Drop for SpillFile {
         let _ = fs::remove_file(&self.path);
     }
 }
+
+const PREFIX: &str = "fireemu-spill-";
+
+/// Owns a process-specific directory for temporary body files.
+pub struct ProcessSpill {
+    dir: PathBuf,
+}
+
+impl ProcessSpill {
+    /// Removes stale directories and creates a fresh directory for this process.
+    pub fn create(root: &Path) -> io::Result<Self> {
+        fs::create_dir_all(root)?;
+        sweep_stale(root, process_is_alive)?;
+        let dir = root.join(format!("{PREFIX}{}", std::process::id()));
+        match fs::remove_dir_all(&dir) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+        fs::create_dir(&dir)?;
+        Ok(Self { dir })
+    }
+
+    /// Returns the process-specific directory path.
+    pub fn path(&self) -> &Path {
+        &self.dir
+    }
+
+    /// Returns a handle for creating temporary files in this directory.
+    pub fn spill_dir(&self) -> SpillDir {
+        SpillDir::new(self.path())
+    }
+}
+
+impl Drop for ProcessSpill {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.dir);
+    }
+}
+
+/// Removes directories belonging to processes that are no longer alive.
+pub fn sweep_stale(root: &Path, is_alive: impl Fn(u32) -> bool) -> io::Result<usize> {
+    let entries = match fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(error),
+    };
+    let mut removed = 0;
+    for entry in entries {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let name = entry.file_name();
+        let Some(pid) = name
+            .to_str()
+            .and_then(|name| name.strip_prefix(PREFIX))
+            .and_then(|suffix| suffix.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        if !is_alive(pid) {
+            fs::remove_dir_all(entry.path())?;
+            removed += 1;
+        }
+    }
+    Ok(removed)
+}
+
+/// Checks whether a process exists using signal zero.
+pub fn process_is_alive(pid: u32) -> bool {
+    match std::process::Command::new("kill")
+        .arg("-0")
+        .arg(pid.to_string())
+        .output()
+    {
+        Ok(output) => {
+            output.status.success()
+                || String::from_utf8_lossy(&output.stderr).contains("Operation not permitted")
+        }
+        Err(_) => false,
+    }
+}

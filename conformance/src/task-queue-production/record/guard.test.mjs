@@ -240,3 +240,75 @@ test("a rule needs https, no port, no credentials in the URL and no repeated que
   assert.equal(queueIdsOf(RUN).length, ROLE_IDS.length + 1);
   assert.ok(queueIdsOf(RUN).includes("tqnone" + RUN.slice(0, 6)));
 });
+
+test("the shapes follow the targets: a new set of targets is a new set of planned bodies", () => {
+  const guard = armed();
+  const spec = PROGRAM.find((s) => s.key === "env-default");
+  const mine = materialize(spec, { runId: RUN, now: 0, targets });
+  assert.equal(guard.allow(mine), true);
+  const other = Object.fromEntries(
+    ROLE_IDS.map((role) => [
+      role,
+      {
+        uri: "https://" + role + "-zzz-uc.a.run.app",
+        serviceAccountEmail: "x@y.gserviceaccount.com",
+      },
+    ]),
+  );
+  guard.setTargets(other);
+  assert.equal(guard.allow(mine), false, "the old function URL is no longer planned");
+  assert.equal(guard.allow(materialize(spec, { runId: RUN, now: 0, targets: other })), true);
+});
+
+test("a task is read only by a planned name, and a log read must be ordered oldest first", () => {
+  const guard = armed();
+  const q = (role) => `${TASKS}/queues/${fn(role)}`;
+  assert.equal(
+    guard.allow({ method: "GET", url: `${q("tqdef")}/tasks/tqrun-${RUN}-env-default` }),
+    false,
+  );
+  assert.equal(
+    guard.allow({ method: "GET", url: `${q("tqdef")}/tasks/tqrun-${RUN}-dup-sched` }),
+    true,
+  );
+  const log = (json) => ({
+    method: "POST",
+    url: "https://logging.googleapis.com/v2/entries:list",
+    json,
+  });
+  const base = { resourceNames: ["projects/" + PROJECT], filter: "f", pageSize: 200 };
+  assert.equal(guard.allow(log({ ...base, orderBy: "timestamp asc" })), true);
+  assert.equal(guard.allow(log(base)), false, "no order");
+  assert.equal(guard.allow(log({ ...base, orderBy: "timestamp desc" })), false);
+});
+
+test("a createTask body is allowed only on the queue of its own step", () => {
+  const guard = armed();
+  const spec = PROGRAM.find((s) => s.key === "env-named");
+  const mine = materialize(spec, { runId: RUN, now: 0, targets });
+  assert.equal(guard.allow(mine), true);
+  const elsewhere = { ...mine, url: mine.url.replace(fn("tqdef"), fn("tqretry")) };
+  assert.equal(guard.allow(elsewhere), false, "the same body to another queue");
+  const absent = { ...mine, url: mine.url.replace(fn("tqdef"), "tqnone" + RUN.slice(0, 6)) };
+  assert.equal(guard.allow(absent), false, "the same body to the queue that is never deployed");
+  const probe = PROGRAM.find((s) => s.key === "err-queue-missing");
+  const onAbsent = materialize(probe, { runId: RUN, now: 0, targets });
+  assert.equal(guard.allow(onAbsent), true);
+  assert.equal(guard.allow({ ...onAbsent, url: onAbsent.url.replace("tqnone", "tqdef") }), false);
+});
+
+test("a query key that is a property of every object is refused, not thrown at", () => {
+  const list = rules(RUN, NUMBER);
+  const url = `https://cloudtasks.googleapis.com/v2/projects/${PROJECT}/locations/${REGION}/queues`;
+  for (const key of ["__proto__", "constructor", "toString", "hasOwnProperty"])
+    assert.equal(matchRule({ method: "GET", url: url + "?" + key + "=1" }, list), null, key);
+});
+
+test("the shared image repository is read and never written", () => {
+  const guard = armed();
+  const url = `https://artifactregistry.googleapis.com/v1/projects/${PROJECT}/locations/${REGION}/repositories/gcf-artifacts`;
+  assert.equal(guard.allow({ method: "GET", url }), true);
+  for (const method of ["PATCH", "DELETE", "POST", "PUT"])
+    assert.equal(guard.allow({ method, url, json: { cleanupPolicies: {} } }), false, method);
+  assert.equal(guard.allow({ method: "GET", url: url.replace("gcf-artifacts", "other") }), false);
+});

@@ -100,6 +100,7 @@ test("the committed fixture, run through the SDK's own discovery, declares what 
   symlinkSync(deps, join(copy, "functions/node_modules"));
   const discover = (suffixDir, extra = {}) =>
     sourceProblems({
+      checkDependencies: false,
       fixtureDir: join(copy, "functions"),
       node: process.execPath,
       directory: join(copy, suffixDir),
@@ -275,4 +276,40 @@ test("the inventory compares the queues too: a queue that appears or disappears 
       .length,
     1,
   );
+});
+
+test("the dependency tree is checked with the discovery: the pinned SDK and no link that leaves the tree", () => {
+  const fixture = tempDir("tq-deps-fixture-");
+  const nodeModules = join(fixture, "node_modules/firebase-functions");
+  mkdirSync(nodeModules, { recursive: true });
+  writeFileSync(join(nodeModules, "package.json"), '{"version":"7.3.2","main":"index.js"}');
+  writeFileSync(join(nodeModules, "index.js"), "");
+  writeFileSync(join(fixture, "package.json"), "{}");
+  const clean = sourceProblems({
+    fixtureDir: fixture,
+    node: "n",
+    directory: "d",
+    runId: RUN,
+    discoverFn: () => endpointsOf(),
+  });
+  assert.deepEqual(clean, []);
+  writeFileSync(join(nodeModules, "package.json"), '{"version":"7.0.0","main":"index.js"}');
+  const old = sourceProblems({
+    fixtureDir: fixture,
+    node: "n",
+    directory: "d",
+    runId: RUN,
+    discoverFn: () => endpointsOf(),
+  });
+  assert.match(old[0], /7\.0\.0, not 7\.3\.2/);
+  writeFileSync(join(nodeModules, "package.json"), '{"version":"7.3.2","main":"index.js"}');
+  symlinkSync("/", join(fixture, "node_modules/escape"));
+  const linked = sourceProblems({
+    fixtureDir: fixture,
+    node: "n",
+    directory: "d",
+    runId: RUN,
+    discoverFn: () => endpointsOf(),
+  });
+  assert.match(linked[0], /leave the tree/);
 });

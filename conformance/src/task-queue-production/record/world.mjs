@@ -113,6 +113,9 @@ export function createWorld({
   queueTombstones = new Set(),
   seedQueues = [],
   seedChannels = [],
+  seedFunctions = [],
+  seedPackages = [],
+  repositoryPolicies = { "keep-recent": { id: "keep-recent" } },
 } = {}) {
   const FNS = functionsOf(runId);
   const w = {
@@ -148,6 +151,18 @@ export function createWorld({
     ]),
   };
   for (const id of seedQueues) w.queues.set(id, { name: queueName(id), state: "RUNNING" });
+  // Functions of the codebase that another run (or anybody) left: the CLI deploy of the codebase deletes them (it is --force).
+  for (const id of seedFunctions) {
+    w.functions.set(functionName(id), {
+      name: functionName(id),
+      state: "ACTIVE",
+      labels: { "firebase-functions-codebase": "task-queue" },
+      serviceConfig: { uri: uriOf(id), serviceAccountEmail: SERVICE_ACCOUNT },
+    });
+    w.runServices.add(id);
+  }
+  for (const id of seedPackages) w.packages.add(id);
+  w.repository = { cleanupPolicies: structuredClone(repositoryPolicies) };
   const log = (entry) => w.entries.push({ insertId: "w" + ++w.insert, ...entry });
   const marker = runMarker(runId);
 
@@ -258,12 +273,23 @@ export function createWorld({
   };
 
   const createDeployed = () => {
+    // `firebase deploy --force` deletes every function of the codebase that the source does not have, and its queue.
+    for (const [name, item] of w.functions) {
+      const fn = name.split("/").at(-1);
+      if (item.labels?.["firebase-functions-codebase"] === "task-queue" && !FNS.includes(fn)) {
+        w.functions.delete(name);
+        w.runServices.delete(fn);
+        w.queues.delete(fn);
+        w.deletedByDeploy = [...(w.deletedByDeploy ?? []), fn];
+      }
+    }
     for (const fn of FNS) {
       const name = functionName(fn);
       w.functions.set(name, {
         name,
         state: deployState,
         environment: "GEN_2",
+        labels: { "firebase-functions-codebase": "task-queue" },
         serviceConfig: { uri: uriOf(fn), serviceAccountEmail: SERVICE_ACCOUNT },
       });
       w.runServices.add(fn);
@@ -533,6 +559,14 @@ export function createWorld({
       if (path.includes("/operations/")) return reply(200, { name: path, done: true });
       const base =
         "projects/" + PROJECT + "/locations/" + REGION + "/repositories/gcf-artifacts/packages";
+      if (path.endsWith("/repositories/gcf-artifacts") && method === "GET")
+        return reply(200, {
+          name: "projects/" + PROJECT + "/locations/" + REGION + "/repositories/gcf-artifacts",
+          format: "DOCKER",
+          ...(w.repository.cleanupPolicies === null
+            ? {}
+            : { cleanupPolicies: w.repository.cleanupPolicies }),
+        });
       if (path.endsWith("/packages"))
         return page(
           [...w.packages].map((id) => ({ name: base + "/" + id })),

@@ -15,6 +15,7 @@ import {
   corpusManifest,
   formatTime,
   materialize,
+  functionOfRoleOrAbsent,
   materializeCreate,
   minStarts,
   plannedShapes,
@@ -174,17 +175,27 @@ test("a step's shape does not depend on the time it is sent, and different steps
   const shapes = creates.map((s) => shapeOf(materializeCreate(s, ctx()).json));
   assert.equal(new Set(shapes).size, shapes.length, "every create has its own shape");
   assert.equal(plannedShapes(RUN, targets).size, shapes.length);
+  for (const spec of creates)
+    assert.ok(
+      plannedShapes(RUN, targets).has(
+        functionOfRoleOrAbsent(RUN, spec.role) +
+          "\n" +
+          shapeOf(materializeCreate(spec, ctx()).json),
+      ),
+    );
 });
 
 test("a shape that is not a step of the program is not planned, whatever small change makes it", () => {
   const planned = plannedShapes(RUN, targets);
   const spec = PROGRAM.find((s) => s.key === "env-named");
   const base = materializeCreate(spec, ctx()).json;
-  assert.ok(planned.has(shapeOf(base)));
+  const queue = "tqdef" + RUN.slice(0, 6);
+  const keyOf = (json, q = queue) => q + "\n" + shapeOf(json);
+  assert.ok(planned.has(keyOf(base)));
   const mutate = (fn) => {
     const copy = structuredClone(base);
     fn(copy);
-    return shapeOf(copy);
+    return keyOf(copy);
   };
   for (const change of [
     (j) => (j.task.httpRequest.url = "https://evil.example/"),
@@ -200,8 +211,10 @@ test("a shape that is not a step of the program is not planned, whatever small c
   ])
     assert.equal(planned.has(mutate(change)), false, change.toString());
   // A different run's task is not this run's shape.
-  const other = shapeOf(materializeCreate(spec, ctx("fedcba9876543210")).json);
-  assert.equal(planned.has(other), false);
+  const other = materializeCreate(spec, ctx("fedcba9876543210")).json;
+  assert.equal(planned.has(keyOf(other, "tqdef" + "fedcba")), false);
+  // The same body is another step's shape only on that step's queue.
+  assert.equal(planned.has(keyOf(base, "tqretry" + RUN.slice(0, 6))), false);
 });
 
 test("reads and deletes name only tasks of the program, in the run's queues", () => {
@@ -317,7 +330,13 @@ test("the pairwise table covers every pair of values of the four axes, with the 
 });
 
 test("the shape keeps the form of a time: the digits of the fraction, the zone, and whether it is text at all", () => {
-  const shape = (key) => shapeOf(materializeCreate(PROGRAM.find((s) => s.key === key), ctx()).json);
+  const shape = (key) =>
+    shapeOf(
+      materializeCreate(
+        PROGRAM.find((s) => s.key === key),
+        ctx(),
+      ).json,
+    );
   const scheduled = (key) => JSON.parse(shape(key)).task.scheduleTime;
   assert.equal(scheduled("sch-20s"), "T.f3Z");
   assert.equal(scheduled("sch-nanos"), "T.f9Z");
@@ -326,4 +345,28 @@ test("the shape keeps the form of a time: the digits of the fraction, the zone, 
   assert.equal(scheduled("sch-no-zone"), "2026-11-12T00:00:00");
   assert.equal(scheduled("sch-leap-second"), "TZ");
   assert.equal(JSON.parse(shape("env-named")).task.scheduleTime, undefined);
+});
+
+test("the fields a step is named for are in its request: the script, the unknown field, the view, the headers, the pad", () => {
+  const task = (key) =>
+    materializeCreate(
+      PROGRAM.find((s) => s.key === key),
+      ctx(),
+    ).json;
+  const data = (key) =>
+    JSON.parse(Buffer.from(task(key).task.httpRequest.body, "base64").toString("utf8")).data;
+  assert.equal(data("retry-ladder").script.length, 6);
+  assert.deepEqual(data("retry-ladder").script[1], { status: "resource-exhausted" });
+  assert.equal(task("err-unknown-field").task.fireemuUnknownField, 1);
+  assert.equal(task("env-view-full").responseView, "FULL");
+  assert.equal(task("env-default").responseView, undefined);
+  assert.equal(task("env-headers").task.httpRequest.headers["X-Fireemu-Probe"], "kept");
+  assert.equal(task("env-headers").task.httpRequest.headers["Content-Type"], "application/json");
+  assert.equal(data("env-large").pad.length, 100_000);
+  assert.equal(data("env-default").pad, undefined);
+  assert.equal(task("dead-15").task.dispatchDeadline, "15s");
+  assert.equal(task("dl-fraction").task.dispatchDeadline, "15.5s");
+  assert.equal(task("env-default").task.dispatchDeadline, undefined);
+  assert.deepEqual(data("dead-15").script, [{ status: "ok", sleepMs: 20_000 }, { status: "ok" }]);
+  assert.equal(data("env-default").script, undefined);
 });

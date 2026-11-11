@@ -320,7 +320,7 @@ test("a bad command or a missing argument is exit 2 and prints the maximum numbe
     }),
     2,
   );
-  assert.match(io.lines.out[0], /maxRequests": 540/);
+  assert.match(io.lines.out[0], /maxRequests": 600/);
 });
 
 test("the read-back waits ten minutes after the run's last request, and closes nothing the run left open", async () => {

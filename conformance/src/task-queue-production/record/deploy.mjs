@@ -29,7 +29,10 @@ export {
   runCli,
   unknownWrites,
 } from "../../../scheduled-delivery/record/deploy.mjs";
-import { discoverManifest } from "../../../scheduled-delivery/record/deploy.mjs";
+import {
+  dependencyProblems,
+  discoverManifest,
+} from "../../../scheduled-delivery/record/deploy.mjs";
 
 export const READY_POLL_SECONDS = 30;
 export const READY_MAX_POLLS = 40;
@@ -110,8 +113,10 @@ export function sourceProblems({
   directory,
   runId,
   discoverFn = discoverManifest,
+  checkDependencies = true,
 }) {
   let endpoints;
+  const dependencies = checkDependencies ? dependencyProblems(join(fixtureDir)) : [];
   try {
     endpoints = discoverFn({ fixtureDir, node, directory });
   } catch (error) {
@@ -119,7 +124,7 @@ export function sourceProblems({
       `the SDK discovery of the fixture failed: ${String(error.stderr ?? error.message).slice(0, 300)}`,
     ];
   }
-  return declarationProblems(endpoints, runId);
+  return [...dependencies, ...declarationProblems(endpoints, runId)];
 }
 
 /** The pinned SDK is the one in the dependency tree (a `node_modules` directory) the deploy resolves it from. */
@@ -502,4 +507,17 @@ export function iamPolicyDifferences(before, after) {
         );
     }
   return { complete: true, unexpected };
+}
+
+// ---- the shared image repository -----------------------------------------------------------------------------------
+
+const same = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+
+/** What differs between the repository policy read before and after. A policy that was not read makes the comparison incomplete. */
+export function repositoryDifferences(before, after) {
+  if (!before || !after) return { complete: false, differences: [] };
+  return {
+    complete: true,
+    differences: same(before, after) ? [] : [{ kind: "repository", before, after }],
+  };
 }

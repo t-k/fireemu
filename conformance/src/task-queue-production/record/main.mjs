@@ -498,6 +498,9 @@ export async function main(
         runId,
         outcome: result.outcome,
         closureReady: result.closureReady,
+        // `closureReady` is "safe to close", not "every delivery was seen": the findings of the judge say what was missing.
+        observationComplete: result.judged?.observationComplete ?? null,
+        findings: result.judged?.findings?.length ?? null,
         readBackRequired: result.readBackRequired,
         attempted: result.attempted,
       },

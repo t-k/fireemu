@@ -55,13 +55,14 @@ export function rules(runId, projectNumber, state = { objects: new Set(), target
   // The shapes the program may send, once the targets are known: before the readbacks no createTask is allowed.
   let shapes = null;
   let shapesFor = null;
-  const allowedShape = (json) => {
+  const allowedShape = (json, pathname) => {
     if (state.targets === null) return false;
     if (shapesFor !== state.targets) {
       shapes = plannedShapes(runId, state.targets);
       shapesFor = state.targets;
     }
-    return shapes.has(shapeOf(json));
+    const queue = /\/queues\/([^/]+)\/tasks$/.exec(pathname)?.[1];
+    return queue !== undefined && shapes.has(queue + "\n" + shapeOf(json));
   };
   const taskPath = (pathname) => {
     const m = /^\/v2\/(projects\/[^/]+\/locations\/[^/]+\/queues\/[^/]+\/tasks\/[^/]+)$/.exec(
@@ -140,7 +141,11 @@ export function rules(runId, projectNumber, state = { objects: new Set(), target
       `^/v1/projects/${P}/subscriptions$`,
       q({ pageSize: num(1000), pageToken: token }),
     ),
-    // Artifact Registry: lists, and the deletes of this run's own function images
+    // Artifact Registry: the shared image repository's own record (read), lists, and the deletes of this run's own function images
+    read(
+      "artifactregistry.googleapis.com",
+      `^/v1/projects/${P}/locations/${R}/repositories/gcf-artifacts$`,
+    ),
     read(
       "artifactregistry.googleapis.com",
       `^/v1/projects/${P}/locations/${R}/repositories/gcf-artifacts/packages$`,
@@ -174,8 +179,9 @@ export function rules(runId, projectNumber, state = { objects: new Set(), target
       "cloudtasks.googleapis.com",
       `^/v2/projects/${P}/locations/${R}/queues/${queues}/tasks$`,
       q({}),
-      allowedShape,
+      isObject,
       true,
+      (pathname, _params, json) => allowedShape(json, pathname),
     ],
     [
       "GET",
@@ -273,9 +279,15 @@ export function matchRule(spec, ruleList) {
     if (!rule.path.test(url.pathname)) continue;
     const keys = [...url.searchParams.keys()];
     if (new Set(keys).size !== keys.length) continue;
-    if (!keys.every((key) => rule.query[key]?.(url.searchParams.get(key)) === true)) continue;
+    if (
+      !keys.every(
+        (key) =>
+          Object.hasOwn(rule.query, key) && rule.query[key](url.searchParams.get(key)) === true,
+      )
+    )
+      continue;
     if (!rule.body(spec.json)) continue;
-    if (rule.check && rule.check(url.pathname, url.searchParams) !== true) continue;
+    if (rule.check && rule.check(url.pathname, url.searchParams, spec.json) !== true) continue;
     return rule;
   }
   return null;

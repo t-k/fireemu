@@ -3,7 +3,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { PROGRAM } from "../corpus.mjs";
-import { PROJECT, REGION, functionName, functionOfRole, functionsOf, queueName } from "../plan.mjs";
+import {
+  PROJECT,
+  REGION,
+  functionName,
+  functionOfRole,
+  functionsOf,
+  packageIds,
+  queueName,
+} from "../plan.mjs";
 import { RUN, count, emptyWorld, go, mutations } from "./harness.mjs";
 import { absent, iamPolicyOf } from "./run.mjs";
 import { NUMBER, reply } from "./world.mjs";
@@ -57,29 +65,47 @@ test("a createTask answered 400 or 409 is data: the run closes", async () => {
 
 // ---- an unknown DELETE (a deleteTask), checklist 3 case 3 ------------------------------------------------------------
 
-test("a deleteTask answered 5xx is sticky: never sent again, the run cannot close", async () => {
+test("a deleteTask answered 5xx is sticky: never sent again, no later step on that id is sent, the run cannot close", async () => {
   const { world, result, journal } = await go({
     hooks: { [taskUrl("DELETE", "tqdef", "dup-sched")]: once(() => error(500, "INTERNAL")) },
   });
   assert.equal(
     count(world, taskUrl("DELETE", "tqdef", "dup-sched")),
-    2,
-    "the program's two deletes of that id, none resent",
+    1,
+    "the second delete of that id is not sent",
   );
   assert.equal(
     stepRows(journal, "del-dup-sched").filter((r) => r.state === "before-send").length,
     1,
   );
   assert.equal(result.program["del-dup-sched"].class, "unknown-status");
+  for (const key of ["del-dup-sched-again", "dup-sched-after-delete"]) {
+    assert.equal(result.program[key].sent, false, key);
+    assert.match(result.program[key].why, /same task id has an unknown answer/);
+  }
+  assert.equal(result.program["dup-first-after-done"].sent, true, "another id is not affected");
   assert.equal(result.closureReady, false);
   assert.equal(result.readBackRequired, true);
-  // The later 404 of the same id (the second delete) does not settle it.
-  assert.equal(
-    result.program["del-dup-sched-again"].status,
-    200,
-    "the task the unknown delete may or may not have removed is still there, so the next delete is answered 200",
-  );
   assert.ok(result.unknownMutationList.some((m) => m.id === "step-del-dup-sched"));
+});
+
+test("an unknown create keeps every later step on the same task id from being sent", async () => {
+  let hit = false;
+  const { result } = await go({
+    hooks: {
+      [tasksUrl("tqdef")]: ({ body }) => {
+        if (hit || !body.task?.name?.endsWith("-dup-first")) return undefined;
+        hit = true;
+        return error(503, "UNAVAILABLE");
+      },
+    },
+  });
+  assert.equal(result.program["dup-first"].class, "unknown-status");
+  assert.equal(result.program["dup-first-after-done"].sent, false);
+  assert.equal(result.program["get-dup-first"].sent, false);
+  assert.equal(result.program["del-dup-first"].sent, false);
+  assert.equal(result.program["dup-sched"].sent, true, "another id is not affected");
+  assert.equal(result.closureReady, false);
 });
 
 test("a 409 of a later request never settles an earlier request's unknown answer", async () => {
@@ -221,20 +247,18 @@ test("a failed deploy cleans up what the CLI may have made and does not run the 
   assert.ok(emptyWorld(world));
 });
 
-test("a queue Cloud Tasks will not create again leaves a function without a queue and the run reports it", async () => {
+test("a queue Cloud Tasks will not create again fails the CLI deploy: the program is not sent and the run reports it", async () => {
   const tomb = new Set([functionsOf(RUN)[0]]);
-  const { result } = await go({ queueTombstones: tomb });
+  const { world, result } = await go({ queueTombstones: tomb });
   assert.equal(result.closureReady, false);
   assert.ok(result.unknownMutationList.some((m) => m.class === "cli-write-retried"));
   assert.ok(
     result.unconfirmedCreates.length > 0,
     "every name of a retried write is an open create",
   );
-  assert.equal(
-    result.program["queue-tqdef"].status,
-    404,
-    "the queue the deploy could not make reads 404",
-  );
+  assert.deepEqual(result.program, {}, "no step of the program is sent against a partial deploy");
+  assert.equal(count(world, "POST cloudtasks.googleapis.com"), 0);
+  assert.ok(world.cliRuns.includes("delete"));
 });
 
 test("a 401 stops the run where it is and the CLI delete still runs", async () => {
@@ -454,4 +478,51 @@ test("absent() reads only a 404 whose body says NOT_FOUND, and the IAM policy ke
   assert.equal(iamPolicyOf({ status: 200, json: { bindings: [{ role: 1 }] } }), null);
   assert.equal(iamPolicyOf({ status: 500, json: {} }), null);
   assert.equal(queueName("x"), `projects/${PROJECT}/locations/${REGION}/queues/x`);
+});
+
+// ---- what the CLI deploy of the codebase may delete, and what it may write -------------------------------------------
+
+const STRAY = "tqdef999999";
+for (const [name, options] of [
+  ["a function of the codebase left by another run", { seedFunctions: [STRAY] }],
+  ["a queue of another run", { seedQueues: [STRAY] }],
+  ["an image of another run", { seedPackages: [packageIds(STRAY)[0], packageIds(STRAY)[1]] }],
+]) {
+  test(`the run stops before anything is created when ${name} is in the project (the deploy would delete it)`, async () => {
+    const { world, result } = await go(options);
+    assert.equal(result.stoppedBecause, "codebase-not-empty");
+    assert.ok(result.strayFixture.some((x) => x.includes(STRAY)));
+    assert.deepEqual(world.cliRuns, []);
+    assert.deepEqual(mutations(world), []);
+    assert.equal(world.deletedByDeploy, undefined);
+  });
+}
+
+test("a function labelled with the codebase, whatever its id, stops the run", async () => {
+  const { world, result } = await go({ seedFunctions: ["somethingelse"] });
+  assert.equal(result.stoppedBecause, "codebase-not-empty");
+  assert.deepEqual(world.cliRuns, []);
+});
+
+test("the model of the CLI deploys --force deleting a leftover of the codebase, which is why the stop exists", async () => {
+  // Without the preflight check (a world the recorder did not read first) the deploy removes it: the world models that.
+  const world = (await import("./world.mjs")).createWorld({ runId: RUN, seedFunctions: [STRAY] });
+  await world.runCli({ action: "deploy" });
+  assert.deepEqual(world.deletedByDeploy, [STRAY]);
+});
+
+test("the image repository must already have a cleanup policy, and a change of it during the run is a difference", async () => {
+  const none = await go({ repositoryPolicies: null });
+  assert.equal(none.result.stoppedBecause, "artifact-cleanup-policy");
+  assert.deepEqual(none.world.cliRuns, []);
+  const changed = await go({}, {}, (send, world) => async (request) => {
+    if (request.method === "DELETE" && request.url.includes("/packages/"))
+      world.repository.cleanupPolicies = {
+        "keep-recent": { id: "keep-recent" },
+        extra: { id: "extra" },
+      };
+    return send(request);
+  });
+  assert.equal(changed.result.cleanup.verified, false);
+  assert.ok(changed.result.inventory.differences.some((d) => d.kind === "repository"));
 });

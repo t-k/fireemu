@@ -73,6 +73,26 @@ export const functionOfRole = (runId, role) => {
   return role + suffixOf(runId);
 };
 
+/**
+ * The fixture id inside a resource name, an Artifact Registry package id (`<project>__<region>__<function>`, with its
+ * `%2Fcache` sibling) or a bare id: a role and six hexadecimal digits. Whether it is this run's is for the caller; the
+ * recognizer finds the functions, queues and images of ANY run of this fixture, because the CLI deploy of the codebase
+ * deletes every function of the codebase the source no longer has.
+ */
+export const fixtureIdIn = (text) => {
+  const last = String(text ?? "")
+    .split("/")
+    .filter((part) => part !== "")
+    .at(-1)
+    ?.split("__")
+    .at(-1)
+    ?.replace(/%2Fcache$/, "");
+  return last !== undefined &&
+    ROLE_IDS.some((role) => new RegExp("^" + role + "[0-9a-f]{6}$").test(last))
+    ? last
+    : null;
+};
+
 export const functionName = (fn) =>
   "projects/" + PROJECT + "/locations/" + REGION + "/functions/" + fn;
 export const queueName = (fn) => "projects/" + PROJECT + "/locations/" + REGION + "/queues/" + fn;

@@ -192,3 +192,34 @@ test("property: the deliveries of a case are its start frames sorted by time, wh
     assert.equal(again.findings.length, out.findings.length + 1);
   }
 });
+
+test("two attempts that start in the same millisecond keep their own ends", () => {
+  const frames = [
+    start("a", 100, 0),
+    start("a", 100, 1),
+    end("a", 100, 150, 1),
+    end("a", 100, 120, 0),
+  ];
+  const [first, second] = deliveriesOf(frames);
+  const byRetry = Object.fromEntries([first, second].map((d) => [d.retryCount, d.endedAt]));
+  assert.deepEqual(byRetry, { 0: at(120), 1: at(150) });
+});
+
+test("the server's createTime is a second origin for the times, and is null when the answer has none", () => {
+  const program = {
+    a: created(1000, 200, { answer: { json: { createTime: at(900) } } }),
+    b: created(1000),
+    c: created(1000, 200, { answer: { json: { createTime: "not a time" } } }),
+  };
+  const out = judge({
+    runId: RUN,
+    program,
+    frames: [start("a", 1500), start("b", 1500), start("c", 1500)],
+  });
+  assert.equal(out.cases.a.serverCreateMs, T0 + 900);
+  assert.equal(out.cases.a.deliveries[0].startFromCreateMs, 600);
+  assert.equal(out.cases.a.deliveries[0].startMs, 500);
+  assert.equal(out.cases.b.serverCreateMs, null);
+  assert.equal(out.cases.b.deliveries[0].startFromCreateMs, null);
+  assert.equal(out.cases.c.deliveries[0].startFromCreateMs, null);
+});

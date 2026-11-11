@@ -546,8 +546,11 @@ export function plannedShapes(runId, targets) {
     ROLE_IDS.map((role) => [role, targets?.[role] ?? DUMMY_TARGET]),
   );
   return new Set(
-    PROGRAM.filter((s) => s.kind === "create").map((spec) =>
-      shapeOf(materializeCreate(spec, { runId, now: 1_800_000_000_000, targets: filled }).json),
+    PROGRAM.filter((s) => s.kind === "create").map(
+      (spec) =>
+        functionOfRoleOrAbsent(runId, spec.role) +
+        "\n" +
+        shapeOf(materializeCreate(spec, { runId, now: 1_800_000_000_000, targets: filled }).json),
     ),
   );
 }

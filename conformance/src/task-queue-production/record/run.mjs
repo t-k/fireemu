@@ -34,6 +34,7 @@ import {
   iamPolicyDifferences,
   nonePresent,
   putClass,
+  repositoryDifferences,
   summarize,
   supportedIamPolicy,
 } from "./deploy.mjs";
@@ -41,6 +42,7 @@ import { createGuard, ownPackages, queueIdsOf } from "./guard.mjs";
 import { judge } from "./judge.mjs";
 import { errorFilter, frameFilter, listRequest, parseErrors, parseFrames } from "./logs.mjs";
 import {
+  CODEBASE,
   DELIVERY_WINDOW_SECONDS,
   LOG_DELAY_SECONDS,
   PROJECT,
@@ -51,6 +53,7 @@ import {
   STEP_GAP_SECONDS,
   functionName,
   functionOfRole,
+  fixtureIdIn,
   functionsOf,
   isOwnUploadObject,
   packageIds,
@@ -60,11 +63,12 @@ import {
 } from "../plan.mjs";
 
 export const NORMAL_CEILING = 340;
-export const CLEANUP_CEILING = 200;
+export const CLEANUP_CEILING = 260;
 export const MAX_REQUESTS = NORMAL_CEILING + CLEANUP_CEILING;
 export const LOG_POLL_SECONDS = 60;
 const GCF = "https://cloudfunctions.googleapis.com/v2/";
 const TASKS = `https://cloudtasks.googleapis.com/v2/projects/${PROJECT}/locations/${REGION}/queues`;
+const REPOSITORY = `https://artifactregistry.googleapis.com/v1/projects/${PROJECT}/locations/${REGION}/repositories/gcf-artifacts`;
 const REGISTRY = `https://artifactregistry.googleapis.com/v1/projects/${PROJECT}/locations/${REGION}/repositories/gcf-artifacts/packages`;
 const iso = (ms) => new Date(ms).toISOString();
 
@@ -98,6 +102,17 @@ const lastSegment = (name) =>
   String(name ?? "")
     .split("/")
     .at(-1);
+
+/** The part of the image repository that the deploy may write and the run compares: its cleanup policy. */
+export const repositoryPolicy = (json) => ({
+  cleanupPolicies:
+    json?.cleanupPolicies &&
+    typeof json.cleanupPolicies === "object" &&
+    Object.keys(json.cleanupPolicies).length > 0
+      ? json.cleanupPolicies
+      : null,
+  cleanupPolicyDryRun: json?.cleanupPolicyDryRun ?? null,
+});
 
 /** What an answer shows, without the raw bytes (the journal holds those). */
 const answerSummary = (a) =>
@@ -551,6 +566,36 @@ export async function record({
     const ownQueues = queues.queues.some((qe) => QUEUES.includes(lastSegment(qe.name)));
     if (!nonePresent(summarize(before, runId)) || ownPackagesPresent || ownTriggers || ownQueues)
       return "namespace";
+    // The CLI deploy of the codebase deletes (with --force, and with the queue of each) every function of the codebase that the
+    // source does not have. A function, service, queue or image of another run of this fixture, or any function labelled with
+    // the codebase, would be deleted without a trace of ours: the run stops instead.
+    const strayFixture = [
+      ...(before.v2.functions ?? [])
+        .filter(
+          (f) =>
+            f.labels?.["firebase-functions-codebase"] === CODEBASE || fixtureIdIn(f.name) !== null,
+        )
+        .map((f) => "function:" + lastSegment(f.name)),
+      ...(before.run.services ?? [])
+        .filter((s) => fixtureIdIn(s.name) !== null)
+        .map((s) => "service:" + lastSegment(s.name)),
+      ...queues.queues
+        .filter((qe) => fixtureIdIn(qe.name) !== null)
+        .map((qe) => "queue:" + lastSegment(qe.name)),
+      ...packages.packages
+        .filter((p) => fixtureIdIn(p.name) !== null)
+        .map((p) => "package:" + lastSegment(p.name)),
+    ];
+    if (strayFixture.length > 0) {
+      out.strayFixture = strayFixture.toSorted();
+      return "codebase-not-empty";
+    }
+    // `--force` also writes a cleanup policy into the shared image repository when it has none: that persistent change is not
+    // the run's to make, so a repository without one stops the run, and the policy is compared after the cleanup.
+    const repository = await read({ id: "preflight-repository", method: "GET", url: REPOSITORY });
+    if (!(repository?.status === 200 && readable(repository))) return "lists";
+    out.inventory.before.repository = repositoryPolicy(repository.json);
+    if (out.inventory.before.repository.cleanupPolicies === null) return "artifact-cleanup-policy";
     await pollLogs("preflight");
     // Every read-only check must have passed before anything is created: a read that failed (an unknown answer, a 4xx or
     // 5xx on a baseline, a log poll that gave no entries list) stops the run here.
@@ -622,12 +667,15 @@ export async function record({
       result: out.cli.deploy,
       responseAt: iso(clock()),
     });
-    const polls = cliFailed(out.cli.deploy) ? 2 : wait.readyPolls;
+    // A deploy the CLI reports as failed is never followed by the program, whatever the lists show: a partial deploy would
+    // muddy every case (the run is cleaned up and reported incomplete).
+    const failed = cliFailed(out.cli.deploy);
+    const polls = failed ? 2 : wait.readyPolls;
     let found = null;
     for (let poll = 1; poll <= polls; poll++) {
       found = await functionLists("ready-" + poll);
       out.ready = complete(found) ? summarize(found, runId) : null;
-      if (out.ready && allActive(out.ready)) return true;
+      if (!failed && out.ready && allActive(out.ready)) return true;
       if (poll < polls) await pause(wait.ready);
     }
     return false;
@@ -663,9 +711,20 @@ export async function record({
 
   /** The program: one request per step, in order. A 4xx is an answer; a 5xx or no answer is an unknown mutation. */
   async function runProgram(targets) {
+    // A step on a task id whose earlier create or delete has an unknown answer is not sent: it would be a second try at the
+    // same name, and its answer could not be told from the effect of the first.
+    const unknownIds = new Set();
     for (const spec of PROGRAM) {
       if (signal.aborted) throw new BudgetError("stopped by a signal");
       if (spec.pauseBefore) await pause(spec.pauseBefore);
+      if (spec.id !== undefined && unknownIds.has(spec.id)) {
+        out.program[spec.key] = {
+          kind: spec.kind,
+          sent: false,
+          why: "an earlier step on the same task id has an unknown answer",
+        };
+        continue;
+      }
       const request = materialize(spec, { runId, now: clock(), targets });
       const dispatchedAt = clock();
       const mutation = spec.kind === "create" || spec.kind === "delete";
@@ -690,6 +749,7 @@ export async function record({
         answeredAt: clock(),
         answer: answerSummary(answer),
       };
+      if (mutation && isUnknownClass(answer) && spec.id !== undefined) unknownIds.add(spec.id);
       if (
         answer?.status === 403 &&
         !MAY_FORBID.has(spec.key) &&
@@ -1095,6 +1155,17 @@ export async function record({
         cleanup: true,
       });
       out.inventory.iam = iamPolicyDifferences(out.inventory.before.iam, iamPolicyOf(iamAfter));
+      const repositoryAfter = await read(
+        { id: "repository-after", method: "GET", url: REPOSITORY, cleanup: true },
+        { observe: true },
+      );
+      out.inventory.repository =
+        repositoryAfter?.status === 200 && readable(repositoryAfter)
+          ? repositoryDifferences(
+              out.inventory.before.repository,
+              repositoryPolicy(repositoryAfter.json),
+            )
+          : { complete: false, differences: [] };
       const after = await list("services-after", SERVICES_URL, "services");
       const servicesNow = after ? after.services.map((svc) => svc.config?.name).toSorted() : null;
       out.inventory.services =
@@ -1141,11 +1212,13 @@ export async function record({
         kinds: ["channels", "triggers", "subscriptions", "topics", "packages", "queues"],
       });
       const iam = out.inventory.iam;
-      out.inventory.complete = compared.complete && iam.complete;
+      out.inventory.complete =
+        compared.complete && iam.complete && out.inventory.repository.complete;
       out.inventory.missing = compared.missing;
       out.inventory.differences = [
         ...compared.differences,
         ...iam.unexpected.map((what) => ({ kind: "iam", what })),
+        ...out.inventory.repository.differences,
       ];
     });
     out.cleanup.verified =

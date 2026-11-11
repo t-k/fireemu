@@ -79,7 +79,15 @@ export function judge({ runId, program, frames, errors = [], projectNumber = nul
         endMs:
           atMs(d.endedAt) !== null && dispatched !== null ? atMs(d.endedAt) - dispatched : null,
       }));
-      record.deliveries = deliveries;
+      // The server's own createTime (when the answer has one) is a second origin for the times: the Cloud Run instance's clock
+      // and this machine's clock are not the same clock.
+      const createMs = atMs(step.answer?.json?.createTime);
+      record.serverCreateMs = createMs;
+      record.deliveries = deliveries.map((d) => ({
+        ...d,
+        startFromCreateMs:
+          createMs !== null && atMs(d.startedAt) !== null ? atMs(d.startedAt) - createMs : null,
+      }));
       if (step.class === "2xx" && deliveries.length === 0 && !isNotDelivered(key))
         findings.push({ kind: "not-delivered", case: key });
       if (step.class !== "2xx" && step.class !== undefined && deliveries.length > 0)

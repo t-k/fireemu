@@ -1,0 +1,129 @@
+{
+  "schemaVersion": 1,
+  "project": "fireemu-oracle-query",
+  "region": "us-central1",
+  "fixtureSource": "conformance/functions-http/fixtures",
+  "functions": {
+    "http": "fireemuHttpProbe",
+    "callable": "fireemuCallableProbe"
+  },
+  "placeholders": ["idToken", "invalidSignatureIdToken", "expiredIdToken"],
+  "programs": [
+    {
+      "id": "functions-http/callable/auth-context",
+      "cases": [
+        {
+          "id": "no-authorization",
+          "target": "callable",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headers": {
+              "content-type": "application/json"
+            },
+            "body": {
+              "data": {
+                "op": "auth"
+              }
+            }
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "valid-project-id-token",
+          "target": "callable",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headers": {
+              "content-type": "application/json",
+              "authorization": "Bearer {{idToken}}"
+            },
+            "body": {
+              "data": {
+                "op": "auth"
+              }
+            }
+          },
+          "capture": "complete"
+        }
+      ]
+    },
+    {
+      "id": "functions-http/callable/auth-refusal",
+      "cases": [
+        {
+          "id": "no-authorization",
+          "target": "callable",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headers": {
+              "content-type": "application/json"
+            },
+            "body": {
+              "data": {
+                "op": "auth"
+              }
+            }
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "malformed-bearer",
+          "target": "callable",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headers": {
+              "content-type": "application/json",
+              "authorization": "Bearer malformed"
+            },
+            "body": {
+              "data": {
+                "op": "auth"
+              }
+            }
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "invalid-signature",
+          "target": "callable",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headers": {
+              "content-type": "application/json",
+              "authorization": "Bearer {{invalidSignatureIdToken}}"
+            },
+            "body": {
+              "data": {
+                "op": "auth"
+              }
+            }
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "expired-id-token",
+          "target": "callable",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headers": {
+              "content-type": "application/json",
+              "authorization": "Bearer {{expiredIdToken}}"
+            },
+            "body": {
+              "data": {
+                "op": "auth"
+              }
+            }
+          },
+          "capture": "complete"
+        }
+      ]
+    }
+  ]
+}

@@ -208,3 +208,17 @@ fn time_step_clamps_nonpositive_time_and_zero_period() {
     assert_eq!(time_step(&normal, LogicalInstant::from_unix_seconds(60)), 2);
     assert_eq!(time_step(&zero, LogicalInstant::from_unix_seconds(60)), 0);
 }
+
+#[test]
+fn has_factor_matches_phone_factors_by_exact_id() {
+    let mut state = MfaState::default();
+    let phone = fireemu_core_auth::mfa::PhoneFactor {
+        mfa_enrollment_id: "phone-1".into(),
+        display_name: None,
+        phone_number: "+15555550100".into(),
+        enrolled_at: LogicalInstant::UNIX_EPOCH,
+    };
+    state.import_factors(vec![], vec![phone]).unwrap();
+    assert!(state.has_factor("phone-1"));
+    assert!(!state.has_factor("phone-2"));
+}

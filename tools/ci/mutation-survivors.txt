@@ -7,3 +7,6 @@ crates/fireemu-core-auth/src/jwt.rs: replace | with ^ in base64url_encode
 # Equivalent: the operands of the `|` chain in hotp are bytes shifted to disjoint bit ranges (24..30, 16..23,
 # 8..15 and 0..7), so `^` gives the same value. Found by the first critical run, 2026-11-12.
 crates/fireemu-core-auth/src/totp.rs: replace | with ^ in hotp
+# Equivalent: in base64url_decode the buffer is shifted left by 6 before `|` joins a 6-bit value, so its low six bits
+# are zero and `^` gives the same value. Found by the second critical run (43087932670), 2026-11-12.
+crates/fireemu-core-auth/src/jwt.rs: replace | with ^ in base64url_decode

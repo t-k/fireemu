@@ -2248,6 +2248,7 @@ impl RuntimeConfig {
             "pubsub.projectNumbers" => Some(json!(self.pubsub_project_numbers)),
             "pubsub.authentication.localBearerToken" => Some(json!(self.pubsub_local_bearer_token)),
             "pubsub.pushMinimumRedeliveryIntervalMillis" => Some(json!(self.pubsub_push_minimum_redelivery_interval_millis)),
+            "pubsub.restNegativeCache" => Some(json!(self.pubsub_rest_negative_cache.as_config_str())),
             "scheduler.defaultTimeZone" => Some(json!(self.scheduler_default_time_zone)),
             "scheduler.catchUp" => Some(json!(self.scheduler_catch_up)),
             "scheduler.maxCatchUpRuns" => Some(json!(self.scheduler_max_catch_up_runs)),
@@ -6929,6 +6930,10 @@ mod tests {
                 (
                     "pubsub.deadLetterAuthorization",
                     json!(cfg.pubsub_dead_letter_authorization.as_config_str()),
+                ),
+                (
+                    "pubsub.restNegativeCache",
+                    json!(cfg.pubsub_rest_negative_cache.as_config_str()),
                 ),
                 (
                     "database.defaultAccess",

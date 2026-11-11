@@ -11,4 +11,5 @@ pub mod entropy;
 pub mod notice_limit;
 pub mod secret;
 
+pub mod diagnostics;
 pub mod lexical;

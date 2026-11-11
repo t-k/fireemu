@@ -34,6 +34,7 @@
     "smoke:password-policy": "node password-policy-sdk.mjs",
     "smoke:auth-settings-oracle": "node auth-settings-sdk-oracle.mjs",
     "test:sdk-pins": "node --test sdk-pins.test.mjs",
+    "test:sdk-latest-record": "node --test sdk-latest-record.test.mjs",
     "test:password-policy": "node --test password-policy-sdk.test.mjs",
     "test:auth-settings-oracle": "node --test auth-settings-sdk-oracle.test.mjs",
     "smoke:server-timestamp-query": "node server-timestamp-transaction-query.mjs",

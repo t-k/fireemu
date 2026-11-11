@@ -6,7 +6,7 @@ description: The JSON Schema of fireemu.toml.
 `fireemu.toml` is described by a JSON Schema. Download it from this site, or read it in the repository:
 
 - [fireemu.schema.json on this site](../../spec/config/fireemu.schema.json)
-- [spec/config/fireemu.schema.json on GitHub](https://github.com/fireemu/fireemu/blob/main/spec/config/fireemu.schema.json), and the same file at a release tag, `https://raw.githubusercontent.com/fireemu/fireemu/v<version>/spec/config/fireemu.schema.json`, which is what `fireemu init` writes into a new file
+- [spec/config/fireemu.schema.json on GitHub](https://github.com/fireemu/fireemu/blob/main/spec/config/fireemu.schema.json), and the same file at a release tag, `https://raw.githubusercontent.com/fireemu/fireemu/v<version>/spec/config/fireemu.schema.json`, which is what `fireemu init` of a released binary writes into a new file (a build from source writes the `main` location)
 - `npx fireemu config schema --out fireemu.schema.json` writes the schema bundled in the binary you run: the keys it accepts are the keys it validates with
 
 The same settings can be written as TOML (`fireemu.toml`) or JSON (`fireemu.json`); see [Configuration files](../../guides/configuration/) for which file is loaded. Fireemu validates the file at startup, including rules the schema cannot express, and stops with an error on a value it does not accept. `npx fireemu config show` prints every key with its effective value and source.

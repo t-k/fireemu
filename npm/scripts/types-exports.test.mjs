@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { pathToFileURL, fileURLToPath } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 // Every value the package exports at runtime has a declaration, and every declared value exists at
@@ -20,7 +20,7 @@ export function compileProbe(name, runtimeNames, declarationDirectory = packageD
   try {
     const union = runtimeNames.length === 0 ? 'never' : runtimeNames.map(item => JSON.stringify(item)).join(' | ');
     writeFileSync(join(directory, 'probe.mts'), `
-import type * as declared from ${JSON.stringify(pathToFileURL(join(declarationDirectory, `${name}.mjs`)).href.replace('file://', ''))};
+import type * as declared from ${JSON.stringify(join(declarationDirectory, `${name}.mjs`).replaceAll('\\', '/'))};
 type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
 export const exactlyTheRuntimeExports: Equal<keyof typeof declared, ${union}> = true;
 `);
@@ -62,4 +62,17 @@ test('the probe fails when a runtime export has no declaration or a declaration 
   assert.throws(() => compileProbe('control', ['createControlClient', 'undeclaredExport']));
   assert.throws(() => compileProbe('control', []));
   assert.equal(stripComments('// any\n/** any */ export type A = any;').match(/\bany\b/g)?.length, 1);
+});
+
+test('a checkout path with spaces, percent signs and non-ASCII characters is read as the real path', () => {
+  const base = mkdtempSync(join(tmpdir(), 'fireemu types '));
+  try {
+    const checkout = join(base, 'my checkout %20 100% 空白', 'npm', 'fireemu');
+    mkdirSync(checkout, { recursive: true });
+    for (const file of ['control.d.mts', 'control.mjs', 'testing.d.mts', 'testing.mjs']) copyFileSync(join(packageDirectory, file), join(checkout, file));
+    compileProbe('control', ['createControlClient'], checkout);
+    assert.throws(() => compileProbe('control', ['createControlClient', 'undeclaredExport'], checkout));
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
 });

@@ -429,8 +429,7 @@ fn config_schema_command(args: &[String]) -> Result<(), CliError> {
         }
     }
     match out {
-        Some(path) => std::fs::write(path, config::CONFIG_SCHEMA_JSON)
-            .map_err(|e| CliError::refused(format!("cannot write {}: {e}", diagnostic_text(path)))),
+        Some(path) => init::replace_config(Path::new(path), config::CONFIG_SCHEMA_JSON.as_bytes()),
         None => std::io::Write::write_all(
             &mut std::io::stdout().lock(),
             config::CONFIG_SCHEMA_JSON.as_bytes(),

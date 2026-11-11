@@ -161,6 +161,24 @@ end
   assert(cached.empty?, "release #{job} must not restore a cache")
 end
 release_build = release.dig("jobs", "build")
+# Only a binary built here writes its release tag as the schema URL; a build from source between
+# releases reports the last release's version but embeds main's newer schema (review of DX-05).
+build_daemon = release_build.fetch("steps").find { |step| step["name"] == "build the daemon" }
+assert(build_daemon&.dig("env", "FIREEMU_RELEASE_BUILD") == "1", "release must mark the daemon build with FIREEMU_RELEASE_BUILD=1")
+assert(
+  release_build.fetch("steps").any? { |step| step["name"] == "the binary writes the schema URL of its own release tag" && step["run"].to_s.include?("init --yes") },
+  "release must check that the built binary writes its release tag as the schema URL"
+)
+reproducible_builds = release.dig("jobs", "reproducible", "steps").select { |step| step["run"].to_s.include?("cargo build --release --locked -p fireemu") }
+assert(
+  reproducible_builds.size == 2 && reproducible_builds.all? { |step| step.dig("env", "FIREEMU_RELEASE_BUILD") == "1" },
+  "both reproducibility builds must set FIREEMU_RELEASE_BUILD=1 like the published build"
+)
+Dir.glob(File.join(ROOT, ".github", "workflows", "*.yml")).each do |path|
+  next if File.basename(path) == "release.yml"
+
+  assert(!File.read(path).include?("FIREEMU_RELEASE_BUILD"), "only release.yml may set FIREEMU_RELEASE_BUILD (#{File.basename(path)})")
+end
 release_build_runs = release_build.fetch("steps").map { |step| step["run"] }.compact.join("\n")
 assert(!release_build_runs.include?("cargo nextest"), "release platform builds must not duplicate the workspace test suite")
 assert(release.dig("jobs", "publish", "needs").include?("test"), "release publish must depend on the dedicated test job")
@@ -335,6 +353,9 @@ package_runs = jobs.fetch("package").fetch("steps").map { |step| step["run"] }.c
 types_consumer_command = "node --test npm/scripts/types-consumer.test.mjs"
 assert(package_runs.include?(types_consumer_command), "package CI must type-check actual packed public subpaths")
 assert(package_runs.index("pnpm -C ui install --frozen-lockfile") < package_runs.index(types_consumer_command), "type consumers must use the installed pinned UI TypeScript compiler")
+types_exports_command = "node --test npm/scripts/types-exports.test.mjs"
+assert(package_runs.include?(types_exports_command), "package CI must check that the declared exports match the runtime exports")
+assert(package_runs.index("pnpm -C ui install --frozen-lockfile") < package_runs.index(types_exports_command), "the export parity test must use the installed pinned UI TypeScript compiler")
 release_source = File.read(File.join(ROOT, ".github", "workflows", "release.yml"))
 assert(!release_source.include?("NPM_TOKEN"), "release publish must authenticate through Trusted Publishing")
 assert(!release_source.include?("NODE_AUTH_TOKEN"), "release publish must not inject a registry token")

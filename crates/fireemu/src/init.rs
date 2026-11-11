@@ -530,7 +530,10 @@ fn write_config(path: &Path, bytes: &[u8], force: bool) -> Result<(), CliError> 
     })
 }
 
-fn replace_config(path: &Path, bytes: &[u8]) -> Result<(), CliError> {
+/// Replaces `path` atomically (a sibling temporary file renamed over it, removed on failure),
+/// keeping the permissions of an existing regular file. A symbolic link, even a dangling one,
+/// and anything that is not a regular file is refused. `fireemu config schema --out` shares it.
+pub(crate) fn replace_config(path: &Path, bytes: &[u8]) -> Result<(), CliError> {
     let existing_permissions = match std::fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
             return Err(CliError::refused(format!(

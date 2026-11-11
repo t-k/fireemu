@@ -197,4 +197,4 @@ options: every option of `up` (listed under up above); only --config and --fireb
 
 ## config schema
 
-`fireemu config schema` prints the JSON Schema that this binary validates configuration with, byte for byte and without the network. `--out <path>` writes it to a file instead (an existing file is replaced, so the copy follows an upgrade) and prints nothing. `fireemu init` writes the schema URL of the installed release into the files it generates; use `config schema` when an editor or tool needs the schema of the installed version and cannot fetch that URL.
+`fireemu config schema` prints the JSON Schema that this binary validates configuration with, byte for byte and without the network. `--out <path>` writes it to a file instead (an existing regular file is replaced atomically, so the copy follows an upgrade; a symbolic link is refused, as `init --force` does) and prints nothing. `fireemu init` of a released binary writes the schema URL of its release into the files it generates; use `config schema` when an editor or tool needs the schema of the installed version and cannot fetch that URL.

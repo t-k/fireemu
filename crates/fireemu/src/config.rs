@@ -4229,19 +4229,40 @@ fn is_release_number(text: &str) -> bool {
 /// plain release number (a pre-release build) has no tag and falls back to the `main`
 /// location, which the loader also accepts.
 pub fn schema_url_for_version(version: &str) -> String {
-    let reference = if is_release_number(version) {
-        format!("v{version}")
+    if is_release_number(version) {
+        format!("{SCHEMA_URL_PREFIX}v{version}{SCHEMA_URL_SUFFIX}")
     } else {
-        "main".to_owned()
-    };
-    format!("{SCHEMA_URL_PREFIX}{reference}{SCHEMA_URL_SUFFIX}")
+        main_schema_url()
+    }
 }
 
-/// The schema URL that generated configuration files carry: the schema of this binary's own
-/// release, so the editor completes and rejects the same keys that this binary does. The same
-/// bytes are printed by `fireemu config schema`.
+/// The location of the schema file on the `main` branch.
+fn main_schema_url() -> String {
+    format!("{SCHEMA_URL_PREFIX}main{SCHEMA_URL_SUFFIX}")
+}
+
+/// The schema URL for a build: the release tag's file for a binary built by the release
+/// workflow (`release_build` is `Some("1")`), the `main` location for any other build. The
+/// workspace version alone cannot tell them apart: a build from source between releases
+/// reports the last release's version but embeds the newer schema of `main`. The release
+/// workflow requires the tag to equal the workspace version, so a release binary's tag schema
+/// is the schema it embeds.
+pub fn schema_url_for_build(version: &str, release_build: Option<&str>) -> String {
+    if release_build == Some("1") {
+        schema_url_for_version(version)
+    } else {
+        main_schema_url()
+    }
+}
+
+/// The schema URL that generated configuration files carry (see [`schema_url_for_build`]).
+/// `FIREEMU_RELEASE_BUILD=1` is set at compile time by `.github/workflows/release.yml` only.
+/// `fireemu config schema` prints the schema this binary validates with, whatever the build.
 pub fn installed_schema_url() -> String {
-    schema_url_for_version(env!("CARGO_PKG_VERSION"))
+    schema_url_for_build(
+        env!("CARGO_PKG_VERSION"),
+        option_env!("FIREEMU_RELEASE_BUILD"),
+    )
 }
 
 /// Whether `url` is a location `$schema` may name: the schema at `main`, at any release tag, or
@@ -12834,7 +12855,8 @@ mod hosting_selection_tests {
 #[cfg(test)]
 mod schema_url_tests {
     use super::{
-        installed_schema_url, is_accepted_schema_url, schema_url_for_version, CONFIG_SCHEMA_JSON,
+        installed_schema_url, is_accepted_schema_url, schema_url_for_build, schema_url_for_version,
+        CONFIG_SCHEMA_JSON,
     };
     use proptest::prelude::*;
 
@@ -12892,8 +12914,29 @@ mod schema_url_tests {
         assert!(is_accepted_schema_url(&installed_schema_url()));
         assert_eq!(
             installed_schema_url(),
-            schema_url_for_version(env!("CARGO_PKG_VERSION"))
+            schema_url_for_build(
+                env!("CARGO_PKG_VERSION"),
+                option_env!("FIREEMU_RELEASE_BUILD")
+            )
         );
+    }
+
+    #[test]
+    fn only_a_release_build_pins_its_release_tag() {
+        let main = "https://raw.githubusercontent.com/fireemu/fireemu/main/spec/config/fireemu.schema.json";
+        let tag = "https://raw.githubusercontent.com/fireemu/fireemu/v0.49.0/spec/config/fireemu.schema.json";
+        assert_eq!(schema_url_for_build("0.49.0", Some("1")), tag);
+        // A build from source reports the last release's version but embeds main's schema.
+        assert_eq!(schema_url_for_build("0.49.0", None), main);
+        for marker in ["", "0", "true", "yes", "1 ", " 1", "01"] {
+            assert_eq!(
+                schema_url_for_build("0.49.0", Some(marker)),
+                main,
+                "{marker:?}"
+            );
+        }
+        // A release build with a version that has no tag cannot name one.
+        assert_eq!(schema_url_for_build("0.50.0-rc.1", Some("1")), main);
     }
 
     #[test]
@@ -12967,6 +13010,15 @@ mod schema_url_tests {
         #[test]
         fn the_predicate_and_the_schema_pattern_agree(url in near_location()) {
             prop_assert_eq!(is_accepted_schema_url(&url), schema_pattern().is_match(&url), "{:?}", url);
+        }
+
+        /// A build that is not marked as a release build never names a tag, whatever its version.
+        #[test]
+        fn an_unmarked_build_always_names_main(version in "\\PC{0,20}", marker in proptest::option::of("\\PC{0,3}")) {
+            prop_assume!(marker.as_deref() != Some("1"));
+            let url = schema_url_for_build(&version, marker.as_deref());
+            prop_assert!(url.contains("/main/"), "{:?}", url);
+            prop_assert!(is_accepted_schema_url(&url));
         }
 
         /// Whatever the running version looks like, the location written into a generated

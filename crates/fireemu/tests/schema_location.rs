@@ -17,6 +17,16 @@ fn tagged(version: &str) -> String {
     format!("{PREFIX}/v{version}/{SUFFIX}")
 }
 
+/// The URL `init` writes: the release tag in a binary built by the release workflow
+/// (`FIREEMU_RELEASE_BUILD=1` at compile time), `main` in every other build.
+fn installed() -> String {
+    if option_env!("FIREEMU_RELEASE_BUILD") == Some("1") {
+        tagged(VERSION)
+    } else {
+        format!("{PREFIX}/main/{SUFFIX}")
+    }
+}
+
 fn run(dir: &std::path::Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_fireemu"))
         .current_dir(dir)
@@ -37,30 +47,30 @@ fn repository_schema() -> Vec<u8> {
 }
 
 #[test]
-fn init_pins_the_release_tag_of_the_running_version() {
+fn init_writes_the_schema_url_of_the_build() {
     let dir = Scratch::new("schema-location", "init");
     let output = run(&dir, &["init", "--yes"]);
     assert!(output.status.success(), "{output:?}");
     let generated = std::fs::read_to_string(dir.join("fireemu.toml")).unwrap();
     assert!(
-        generated.starts_with(&format!("#:schema {}\n", tagged(VERSION))),
+        generated.starts_with(&format!("#:schema {}\n", installed())),
         "{generated}"
     );
     let document: serde_json::Value = toml::from_str(&generated).unwrap();
-    assert_eq!(document["$schema"], tagged(VERSION));
+    assert_eq!(document["$schema"], installed());
     // The file it generates loads.
     let output = run(&dir, &["capabilities", "--config", "fireemu.toml"]);
     assert!(output.status.success(), "{output:?}");
 }
 
 #[test]
-fn init_reference_pins_the_release_tag_of_the_running_version() {
+fn init_reference_writes_the_schema_url_of_the_build() {
     let dir = Scratch::new("schema-location", "reference");
     let output = run(&dir, &["init", "--yes", "--reference"]);
     assert!(output.status.success(), "{output:?}");
     let reference = std::fs::read_to_string(dir.join("fireemu.reference.toml")).unwrap();
     assert!(
-        reference.starts_with(&format!("#:schema {}\n", tagged(VERSION))),
+        reference.starts_with(&format!("#:schema {}\n", installed())),
         "{reference}"
     );
 }
@@ -96,6 +106,105 @@ fn config_schema_out_writes_the_same_bytes_and_prints_nothing() {
         std::fs::read(dir.join("schema.json")).unwrap(),
         repository_schema()
     );
+}
+
+#[test]
+fn config_schema_out_replaces_a_file_atomically_and_keeps_its_permissions() {
+    let dir = Scratch::new("schema-location", "atomic");
+    let target = dir.join("schema.json");
+    std::fs::write(&target, b"old").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o640)).unwrap();
+    }
+    let output = run(&dir, &["config", "schema", "--out", "schema.json"]);
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(std::fs::read(&target).unwrap(), repository_schema());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        assert_eq!(
+            std::fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+            0o640
+        );
+    }
+    // No temporary sibling is left behind.
+    let names: Vec<_> = std::fs::read_dir(&*dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names, ["schema.json"]);
+}
+
+/// A failed write leaves the existing file as it was and no temporary file behind.
+#[cfg(unix)]
+#[test]
+fn config_schema_out_leaves_the_existing_file_intact_when_the_write_fails() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = Scratch::new("schema-location", "failure");
+    let target = dir.join("schema.json");
+    std::fs::write(&target, b"old").unwrap();
+    std::fs::set_permissions(&*dir, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let writable = std::fs::File::create(dir.join("probe")).is_ok();
+    let output = run(&dir, &["config", "schema", "--out", "schema.json"]);
+    std::fs::set_permissions(&*dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    if writable {
+        // Running as a user the directory mode does not bind (root): nothing to assert.
+        let _ = std::fs::remove_file(dir.join("probe"));
+        return;
+    }
+    assert!(!output.status.success(), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert_eq!(std::fs::read(&target).unwrap(), b"old");
+    let names: Vec<_> = std::fs::read_dir(&*dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names, ["schema.json"]);
+}
+
+/// `--out` refuses a symbolic link, as `init --force` does, and writes nothing through it:
+/// a link to a file, a dangling link and a link to a directory.
+#[cfg(unix)]
+#[test]
+fn config_schema_out_refuses_symbolic_links_without_touching_their_targets() {
+    use std::os::unix::fs::symlink;
+    let dir = Scratch::new("schema-location", "symlink");
+    std::fs::write(dir.join("real.json"), b"precious").unwrap();
+    std::fs::create_dir(dir.join("directory")).unwrap();
+    symlink("real.json", dir.join("to-file.json")).unwrap();
+    symlink("missing.json", dir.join("dangling.json")).unwrap();
+    symlink("directory", dir.join("to-directory.json")).unwrap();
+    for link in ["to-file.json", "dangling.json", "to-directory.json"] {
+        let output = run(&dir, &["config", "schema", "--out", link]);
+        assert!(!output.status.success(), "{link}: {output:?}");
+        assert!(output.stdout.is_empty(), "{link}: {output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("symbolic link"),
+            "{link}: {output:?}"
+        );
+        assert!(
+            std::fs::symlink_metadata(dir.join(link))
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "{link} is still a link"
+        );
+    }
+    assert_eq!(std::fs::read(dir.join("real.json")).unwrap(), b"precious");
+    assert!(!dir.join("missing.json").exists());
+    assert_eq!(std::fs::read_dir(dir.join("directory")).unwrap().count(), 0);
+}
+
+/// A directory is not a file to replace.
+#[test]
+fn config_schema_out_refuses_a_directory() {
+    let dir = Scratch::new("schema-location", "directory");
+    std::fs::create_dir(dir.join("target")).unwrap();
+    let output = run(&dir, &["config", "schema", "--out", "target"]);
+    assert!(!output.status.success(), "{output:?}");
+    assert!(dir.join("target").is_dir());
 }
 
 #[test]

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { CAPS, StopRun } from "./runner.mjs";
+import { CAPS, StopRun, journaledBody } from "./runner.mjs";
 import { CELLS } from "./program.mjs";
 import { Refusal } from "./requests.mjs";
 import { prng, record, RUN_ID } from "./support.mjs";
@@ -349,4 +349,41 @@ test("property: with random faults a recording never crashes, stays inside the c
       assert.equal(later.length, 0, `round ${round}: unknown delete re-sent`);
     }
   }
+});
+
+test("a LIST answer is journaled with this run's names only and a count of the others", () => {
+  const own = `projects/fireemu-oracle-idp/subscriptions/fireemu-observe-${RUN_ID}-nc-v4-x`;
+  const other = "projects/fireemu-oracle-idp/subscriptions/someone-elses";
+  const body = { subscriptions: [{ name: own }, { name: other }, { name: other }] };
+  assert.deepEqual(journaledBody({ list: "subscription" }, body, RUN_ID), {
+    subscriptions: [{ name: own }],
+    foreign: 2,
+  });
+  assert.deepEqual(journaledBody({ list: "subscription" }, {}, RUN_ID), {});
+  assert.equal(journaledBody({ method: "GET" }, null, RUN_ID), null);
+  assert.deepEqual(journaledBody({ method: "GET" }, { name: "n" }, RUN_ID), { name: "n" });
+  assert.equal(journaledBody({ method: "GET" }, { name: "x".repeat(5000) }, RUN_ID), null);
+});
+
+test("the cleanup LIST rows in a recording never carry a foreign name", async () => {
+  const { run, rows } = record({
+    wrap: async (base, req, meta) => {
+      const out = await base(req, meta);
+      if (!req.list) return out;
+      const body = JSON.parse(out.bodyText);
+      const key = Object.keys(body)[0] ?? "subscriptions";
+      body[key] = [
+        ...(body[key] ?? []),
+        { name: "projects/fireemu-oracle-idp/subscriptions/not-ours" },
+      ];
+      return { ...out, bodyText: JSON.stringify(body) };
+    },
+  });
+  await run();
+  const lists = requestsOf(rows).filter(
+    (r) => r.method === "GET" && r.path.includes("pageSize=100"),
+  );
+  assert.ok(lists.length >= 4);
+  for (const row of lists) assert.ok(!JSON.stringify(row.body).includes("not-ours"));
+  assert.ok(lists.every((row) => row.body.foreign >= 1));
 });

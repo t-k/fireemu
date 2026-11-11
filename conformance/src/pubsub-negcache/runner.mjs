@@ -32,6 +32,21 @@ export const timeoutMs = (request) =>
 
 export class StopRun extends Error {}
 
+/** A LIST answer keeps only the names this run owns (and a count of the others); other bodies are kept when small. */
+export function journaledBody(request, body, runId) {
+  if (body === null || typeof body !== "object") return null;
+  if (request.list) {
+    const out = {};
+    for (const [key, items] of Object.entries(body)) {
+      if (!Array.isArray(items)) continue;
+      out[key] = items.filter((item) => isOwned(item?.name, runId));
+      out.foreign = (out.foreign ?? 0) + items.length - out[key].length;
+    }
+    return out;
+  }
+  return JSON.stringify(body).length <= 4096 ? body : null;
+}
+
 const resultOf = (answer) =>
   answer.kind === "ok"
     ? "ok"
@@ -109,7 +124,7 @@ export function createRecorder({ runId, transport, clock, journal, cells = CELLS
       code: answer.code,
       latency: answer.latency,
       failure: raw.failure ?? null,
-      body: answer.body !== null && JSON.stringify(answer.body).length <= 4096 ? answer.body : null,
+      body: journaledBody(request, answer.body, runId),
     };
     journal.write({ event: "request", ...row });
     if (intent !== null && request.create && answer.kind === "unknown") {

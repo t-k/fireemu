@@ -71,6 +71,23 @@ npx fireemu exec --config fireemu.toml --firebase-json firebase.json -- npm test
 
 See [Configuration files](../configuration/#file-ownership-checks).
 
+## Keep the diagnostics of a failed run
+
+When a test fails in CI, the log alone rarely shows which Security Rules condition refused a request or which index was missing. A test that uses `withTestWorld` can write the diagnostics bundle when it fails, and the CI job can keep that directory as an artifact:
+
+```yaml
+      - run: npm test
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fireemu-diagnostics
+          path: /tmp/fireemu-failure
+```
+
+Call `world.dump('/tmp/fireemu-failure')` in the test's failure handler, as shown in [Test worlds](../test-worlds/#dump-diagnostics-when-a-test-fails). Open `bundle.html` from the artifact to read it in a browser; the page needs no network access. `bundle.json` is the same data for scripts.
+
+A command-line dump (`fireemu dump`, and `fireemu exec --dump-on-failure` for a whole job) is planned for the same change but is not yet part of this release. Until it lands, use `world.dump` from a test.
+
 ## Serve the emulators from a container
 
 By default every listener is on loopback, which a published container port cannot reach. To serve the emulators to the host or to other containers, opt in with `network.allowNonLoopbackHosts` in `fireemu.toml`, and give the product emulators a host in `firebase.json`:

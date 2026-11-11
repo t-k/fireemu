@@ -18,7 +18,7 @@ The same settings can be written as TOML (`fireemu.toml`) or JSON (`fireemu.json
 | `profile`, `productionExact` | Production or official-emulator behavior | [Profiles and productionExact](../../guides/profiles/) |
 | `firebaseJson` | The `firebase.json` to read ports, rules, indexes and Functions from | [Configuration files](../../guides/configuration/) |
 | `firestore` | Edition, API mode, indexes, limits, history | [Cloud Firestore](../../products/firestore/) |
-| `rules` | Firestore Security Rules source, and the denial log for Firestore and Storage | [Security Rules](../../guides/security-rules/) |
+| `rules` | Firestore Security Rules source, the denial log for Firestore and Storage, and `denialHistory` (keep the request trace from daemon start, `retention` 1 to 10000, default 100, off by default) | [Security Rules](../../guides/security-rules/) |
 | `auth` | `requireClientApiKey` (default `false`) makes the emulator profile refuse client requests without an API key or Authorization header with the official emulator 403; strict is unchanged. Also configures sign-in methods, password policy, MFA, tenants, providers, tokens, and whether the Firestore, Storage and Realtime Database Security Rules surfaces accept unsigned mock ID tokens (`allowUnsignedIdTokens`) | [Authentication](../../products/auth/) |
 | `storage` | Storage Security Rules, object size, buffered-body and stored-byte limits | [Cloud Storage](../../products/storage/) |
 | `database` | What a Realtime Database instance without a rules file allows (`defaultAccess`); `auth.allowUnsignedIdTokens` decides, in both profiles, whether its rules accept `@firebase/rules-unit-testing` mock tokens | [Realtime Database](../../products/realtime-database/) |

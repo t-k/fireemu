@@ -36,6 +36,26 @@ Separate worlds isolate their clocks, Rules, Functions and service state. The `f
 
 To inspect the same world in the debug UI, pass `ui: true` to `createTestWorld()` and open `world.uiUrl`. The UI is disabled by default. Each enabled world receives its own loopback port and shares its live Firestore, Auth, Storage and Functions state. Keep the world alive while inspecting it; `dispose()` also stops its UI. After `reset()`, read `world.uiUrl` again and reopen the page. See [test worlds](https://github.com/fireemu/fireemu/blob/main/docs/test-worlds.md#inspect-a-world-in-the-ui) for an interactive example.
 
+## Dump diagnostics when a test fails
+
+`world.dump(directory)` writes the world's diagnostics bundle into `directory` as two files: `bundle.json` and `bundle.html`. The bundle holds the Security Rules denials with their source line and column, the missing composite indexes, the Functions events and attempts, and the resources the daemon retains. It also records any ranges that were dropped or truncated, and how many values were redacted. Call it from a test's failure handler:
+
+```js
+try {
+  await run();
+} catch (error) {
+  await world.dump(join(tmpdir(), 'fireemu-failure'));
+  throw error;
+}
+```
+
+Two shapes to know about:
+
+- `bundle.json` is the parsed answer of the control endpoint, written back out with `JSON.stringify(…, null, 2)`. It is the same data, not the raw response bytes; the test world's control client does not expose the raw bytes.
+- The control endpoint answers the HTML page inside a JSON object, `{"html": "…"}`, because the control client parses only JSON answers. `bundle.html` is that `html` field written as a file.
+
+The bundle contains no secrets: configuration values that carry them are redacted, and the scanner masks credential shapes such as bearer tokens and private-key blocks. The config section of the bundle is filled by the command-line dump, which is not part of this release yet; `world.dump` leaves it empty.
+
 ## Export and import
 
 Enable `hub: true` to export a test world and import its data into a fresh one; see [Export independent test worlds](../data/#export-independent-test-worlds).

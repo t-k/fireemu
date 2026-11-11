@@ -19,7 +19,7 @@ Ten sequential REST observations in production only with a first-generation befo
 
 Control sign-up photo URL persisted: **False**. Target sign-up: refused; record exists afterwards: True, disabled: True.
 
-Review subject (unapproved): `206490130d5191df9a25a80634315a2b2c0ba190860cc91f7455931a9c25b362`.
+Review subject (unapproved): `b6e1ad0224e1464f80d6c2c728550e5099b397d5982c6890895714210f5b97c5`.
 
 The target rows are approved-as-recorded candidates for what a beforeSignIn disable does to the account the same request creates. Refused rows carry the HTTP status and classified error only; the record readback and the second sign-up are the state evidence. The control readback keeps observing that sign-up does not persist a photo URL (revision 1).
 

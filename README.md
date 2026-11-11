@@ -12,7 +12,7 @@ Passing tests against the official emulator does not always mean your applicatio
 
 Fireemu is still in development and does not yet reproduce every feature and behavior of production Firebase. Before relying on its results in CI, run the same tests against Fireemu and a dedicated Firebase test project (not your live production project) for the features and critical workflows your application uses, and check for differences.
 
-**Documentation:** <https://t-k.github.io/fireemu/>
+**Documentation:** <https://fireemu.github.io/fireemu/>
 
 ## Quick start
 
@@ -38,7 +38,7 @@ npx fireemu exec --only auth,firestore,storage -- npm test
 
 The official command names `emulators:start` and `emulators:exec` work as aliases. `up` and `exec` read `fireemu.toml` (or an existing `fireemu.json`) from the current directory, or, when there is none, the nearest `firebase.json`; the first lines of the startup output name the files that were loaded. Run `npx fireemu --help` and `npx fireemu <command> --help` for every option, and `npx fireemu doctor` if the emulator does not start.
 
-See [Install and run](https://t-k.github.io/fireemu/getting-started/install/), [Connect your app](https://t-k.github.io/fireemu/getting-started/connect/) and [Migrate from the Local Emulator Suite](https://t-k.github.io/fireemu/getting-started/migrate/).
+See [Install and run](https://fireemu.github.io/fireemu/getting-started/install/), [Connect your app](https://fireemu.github.io/fireemu/getting-started/connect/) and [Migrate from the Local Emulator Suite](https://fireemu.github.io/fireemu/getting-started/migrate/).
 
 ### Testing helpers
 
@@ -56,23 +56,24 @@ await withTestWorld(
 );
 ```
 
-See [Time and scheduled functions](https://t-k.github.io/fireemu/guides/time/) and [test clocks and independent worlds](docs/test-worlds.md).
+See [Time and scheduled functions](https://fireemu.github.io/fireemu/guides/time/) and [test clocks and independent worlds](docs/test-worlds.md).
 
 ## Supported scope
 
 | Product | Summary | Documentation |
 |---|---|---|
-| Cloud Firestore | Standard and Enterprise editions, composite index validation, Security Rules; the Enterprise Pipeline API supports a subset of read operations including bounded `union` and `sample` shapes, and text search is a local lexical engine | [Cloud Firestore](https://t-k.github.io/fireemu/products/firestore/) |
-| Firebase Authentication (Identity Platform) | Sign-in methods, TOTP and SMS multi-factor authentication, multi-tenancy, OIDC and SAML providers, blocking functions; flows that talk to external identity providers are outside the scope | [Authentication](https://t-k.github.io/fireemu/products/auth/) |
-| Cloud Storage for Firebase | Firebase and JSON APIs, Security Rules; signed-URL signatures, IAM, `compose` and notification configuration are outside the scope | [Cloud Storage](https://t-k.github.io/fireemu/products/storage/) |
-| Cloud Functions for Firebase | HTTP, callable, event, task-queue, blocking and scheduled functions on a virtual clock; Python codebases serve HTTP, callable, Firestore, Pub/Sub, Storage, Eventarc, database, scheduled, task-queue and blocking triggers in real time | [Cloud Functions](https://t-k.github.io/fireemu/products/functions/) |
-| Cloud Pub/Sub and Eventarc | Topics, subscriptions, push and pull delivery, dead-letter topics and StreamingPull; Eventarc custom events for Functions | [Pub/Sub and Eventarc](https://t-k.github.io/fireemu/products/pubsub-eventarc/) |
-| Firebase Realtime Database | REST, realtime protocol, Security Rules, export and import; supported for the recorded scope, verified against production for the recorded cases (an open gap against the official emulator) | [Realtime Database](https://t-k.github.io/fireemu/products/realtime-database/) |
-| Firebase App Check | Local testing with debug tokens; no real attestation providers or replay protection | [App Check](https://t-k.github.io/fireemu/products/app-check/) |
+| Cloud Firestore | Standard and Enterprise editions, composite index validation, Security Rules; the Enterprise Pipeline API supports a subset of read operations including bounded `union` and `sample` shapes, and text search is a local lexical engine | [Cloud Firestore](https://fireemu.github.io/fireemu/products/firestore/) |
+| Firebase Authentication (Identity Platform) | Sign-in methods, TOTP and SMS multi-factor authentication, multi-tenancy, OIDC and SAML providers, blocking functions; flows that talk to external identity providers are outside the scope | [Authentication](https://fireemu.github.io/fireemu/products/auth/) |
+| Cloud Storage for Firebase | Firebase and JSON APIs, Security Rules; signed-URL signatures, IAM, `compose` and notification configuration are outside the scope | [Cloud Storage](https://fireemu.github.io/fireemu/products/storage/) |
+| Cloud Functions for Firebase | HTTP, callable, event, task-queue, blocking and scheduled functions on a virtual clock; Python codebases serve HTTP, callable, Firestore, Pub/Sub, Storage, Eventarc, database, scheduled, task-queue and blocking triggers in real time | [Cloud Functions](https://fireemu.github.io/fireemu/products/functions/) |
+| Cloud Pub/Sub and Eventarc | Topics, subscriptions, push and pull delivery, dead-letter topics and StreamingPull; Eventarc custom events for Functions | [Pub/Sub and Eventarc](https://fireemu.github.io/fireemu/products/pubsub-eventarc/) |
+| Firebase Realtime Database | REST, realtime protocol, Security Rules, export and import; supported for the recorded scope, verified against production for the recorded cases (an open gap against the official emulator) | [Realtime Database](https://fireemu.github.io/fireemu/products/realtime-database/) |
+| Firebase Hosting | One `firebase.json` site served locally: static files, redirects, rewrites (including to functions of the same run), headers, clean URLs and localization; verified against production for its recorded cases, with no parity claim against the official emulator (an open gap) | [Firebase Hosting](https://fireemu.github.io/fireemu/products/hosting/) |
+| Firebase App Check | Local testing with debug tokens; no real attestation providers or replay protection | [App Check](https://fireemu.github.io/fireemu/products/app-check/) |
 
-Firebase Hosting, App Hosting and Data Connect are deferred (not currently supported), and Firebase Extensions support is not planned. Fireemu also provides a UI for managing data and viewing logs.
+App Hosting and Data Connect are deferred (not currently supported), and Firebase Extensions support is not planned. Fireemu also provides a UI for managing data and viewing logs.
 
-This table is a summary, not an exhaustive list. See [Limitations](https://t-k.github.io/fireemu/compatibility/limitations/), the [capability manifest](crates/fireemu/src/capabilities.json) (also printed by `npx fireemu capabilities`) and the [Functions support inventory](docs/functions-export-inventory.md) for individual APIs and conditions.
+This table is a summary, not an exhaustive list. See [Limitations](https://fireemu.github.io/fireemu/compatibility/limitations/), the [capability manifest](crates/fireemu/src/capabilities.json) (also printed by `npx fireemu capabilities`) and the [Functions support inventory](docs/functions-export-inventory.md) for individual APIs and conditions.
 
 ## Compatibility
 
@@ -83,15 +84,15 @@ Fireemu has two compatibility profiles:
 | `strict` | Matches production Firebase behavior and constraints as closely as possible within the supported scope. This is the default profile. Recommended, including when migrating from the official emulator |
 | `emulator` | Targets the behavior of a pinned version of the official emulator. Use it only to check alignment with the pinned official emulator (for example as an extra test target); it is not needed for a migration |
 
-Where production needs setup that a test should not have to do (signed tokens, signing keys, enabling a feature through an Admin API call), both profiles use a documented development default with its own setting, and `productionExact = true` restores production's behavior for all of them. See [Profiles and productionExact](https://t-k.github.io/fireemu/guides/profiles/).
+Where production needs setup that a test should not have to do (signed tokens, signing keys, enabling a feature through an Admin API call), both profiles use a documented development default with its own setting, and `productionExact = true` restores production's behavior for all of them. See [Profiles and productionExact](https://fireemu.github.io/fireemu/guides/profiles/).
 
-Each area is compared with recordings from real Firebase projects. The [compatibility tables](https://t-k.github.io/fireemu/compatibility/) list the areas verified against production, and the [compatibility documentation](docs/compatibility-contract.md) explains the verification process and how to read its records.
+Each area is compared with recordings from real Firebase projects. The [compatibility tables](https://fireemu.github.io/fireemu/compatibility/) list the areas verified against production, and the [compatibility documentation](docs/compatibility-contract.md) explains the verification process and how to read its records.
 
 ### Comparison with the official emulator
 
 The official emulator comparison baseline is `firebase-tools 15.28.2`.
 
-Fireemu is compatible with the listed Local Emulator Suite products as shipped by firebase-tools 15.28.2 -- Cloud Firestore, Firebase Authentication, Cloud Storage for Firebase, Cloud Functions, Cloud Pub/Sub and Eventarc, with Security Rules on the Firestore and Storage surfaces -- under the `emulator` compatibility profile and the evidence recorded in `spec/compatibility/contract.json`; it makes no complete-suite and no unqualified superset claim while the Realtime Database is served without a parity claim (an open gap), Firebase Hosting, App Hosting and Data Connect are deferred and Firebase Extensions is not planned.
+Fireemu is compatible with the listed Local Emulator Suite products as shipped by firebase-tools 15.28.2 -- Cloud Firestore, Firebase Authentication, Cloud Storage for Firebase, Cloud Functions, Cloud Pub/Sub and Eventarc, with Security Rules on the Firestore and Storage surfaces -- under the `emulator` compatibility profile and the evidence recorded in `spec/compatibility/contract.json`; it makes no complete-suite and no unqualified superset claim while the Realtime Database and Firebase Hosting are served without a parity claim against the official emulator (an open gap; both are verified against production for recorded cases), App Hosting and Data Connect are deferred and Firebase Extensions is not planned.
 
 The [compatibility contract](spec/compatibility/contract.json) records scope and known differences. A successful local operation does not guarantee the same result in production: Fireemu does not reproduce real quota accounting, billing, IAM, organization policies, regional or network differences, or service rollouts.
 
@@ -100,7 +101,7 @@ The [compatibility contract](spec/compatibility/contract.json) records scope and
 `npx fireemu init` creates a minimal `fireemu.toml`:
 
 ```toml
-#:schema https://raw.githubusercontent.com/t-k/fireemu/main/spec/config/fireemu.schema.json
+#:schema https://raw.githubusercontent.com/fireemu/fireemu/main/spec/config/fireemu.schema.json
 schemaVersion = 1
 profile = "strict"
 
@@ -111,16 +112,16 @@ apiMode = "native"
 
 Keep Fireemu-specific settings in `fireemu.toml` and point it at your existing `firebase.json` (`npx fireemu init --firebase-json firebase.json`), whose rules, indexes, Functions codebases and ports are read on every start. `npx fireemu config show` prints every key with its effective value and source.
 
-- [Configuration files](https://t-k.github.io/fireemu/guides/configuration/): which files are loaded and the ownership checks on discovered files
-- [Configuration schema](https://t-k.github.io/fireemu/reference/configuration/): every section, and the [JSON Schema](spec/config/fireemu.schema.json)
-- Guides: [Security Rules](https://t-k.github.io/fireemu/guides/security-rules/), [Time and scheduled functions](https://t-k.github.io/fireemu/guides/time/), [Export and import data](https://t-k.github.io/fireemu/guides/data/), [Emulator UI](https://t-k.github.io/fireemu/guides/ui/), [CI and containers](https://t-k.github.io/fireemu/guides/ci-and-containers/), [Troubleshooting](https://t-k.github.io/fireemu/guides/troubleshooting/)
-- [CLI reference](https://t-k.github.io/fireemu/reference/cli/)
+- [Configuration files](https://fireemu.github.io/fireemu/guides/configuration/): which files are loaded and the ownership checks on discovered files
+- [Configuration schema](https://fireemu.github.io/fireemu/reference/configuration/): every section, and the [JSON Schema](spec/config/fireemu.schema.json)
+- Guides: [Security Rules](https://fireemu.github.io/fireemu/guides/security-rules/), [Time and scheduled functions](https://fireemu.github.io/fireemu/guides/time/), [Export and import data](https://fireemu.github.io/fireemu/guides/data/), [Emulator UI](https://fireemu.github.io/fireemu/guides/ui/), [CI and containers](https://fireemu.github.io/fireemu/guides/ci-and-containers/), [Troubleshooting](https://fireemu.github.io/fireemu/guides/troubleshooting/)
+- [CLI reference](https://fireemu.github.io/fireemu/reference/cli/)
 
-Keep the emulator bound to localhost (the default); see [CI and containers](https://t-k.github.io/fireemu/guides/ci-and-containers/) before exposing ports to other hosts.
+Keep the emulator bound to localhost (the default); see [CI and containers](https://fireemu.github.io/fireemu/guides/ci-and-containers/) before exposing ports to other hosts.
 
 ## Performance
 
-In the benchmark against the official Firestore emulator, Fireemu starts about 21.6 times faster and uses about 1/34 of the idle memory. See [Performance](https://t-k.github.io/fireemu/compatibility/performance/) for the method and the full results.
+In the benchmark against the official Firestore emulator, Fireemu starts about 21.6 times faster and uses about 1/34 of the idle memory. See [Performance](https://fireemu.github.io/fireemu/compatibility/performance/) for the method and the full results.
 
 ## Changes between versions
 

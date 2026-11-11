@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "note": "Differences between the production recording and strict fireemu that are known and not aligned. Each entry names its rows and fields; a difference outside an entry is a MISMATCH. Header-level exclusions (strict-transport-security, x-robots-tag and the SDK-row headers) are in rows.mjs.",
+  "entries": [
+    {
+      "id": "KD-COMPRESSION",
+      "rows": ["v01.gz-br", "v01.gz-gzip-br", "v01.gz-br-refused", "v01.gz-json-br"],
+      "fields": ["header:content-encoding", "header:content-length"],
+      "appliesTo": ["production-vs-local"],
+      "reason": "Production answers a request that accepts Brotli with a Brotli body (Content-Encoding: br, an ETag ending in -br); strict has no Brotli encoder. A request that accepts only br is answered as identity, one that also accepts gzip is answered as gzip (production answered br to `br;q=0, gzip` as well; that row is a cache hit). The decoded body of every row is the file the corpus deployed and is compared with the plain or decoded body of the strict answer; the ETag is compared by form once the -br suffix is removed (etagSuffix). Status, content type and the other headers of these rows are compared. The gzip rows (gz-gzip, gz-head-gzip, gz-json-gzip) are not differences: strict answers the same encoding, ETag and length.",
+      "authority": "coordinator ruling 15 (2026-11-11), narrowed to Brotli by ruling 26 and owner ledger 2458 (flate2 approved)",
+      "etagSuffix": "-br"
+    },
+    {
+      "id": "KD-DEFAULT-404-BODY",
+      "rows": ["v02.page-slash", "v03.page", "v03.page-slash", "v04.page", "v04.page-slash"],
+      "fields": ["bodyBytes", "header:content-length"],
+      "appliesTo": ["production-vs-local"],
+      "reason": "Production answers an unmatched path with its own 21,376-byte Page Not Found page; the recording keeps only its digest, not its bytes, so strict answers with its own short page. Status, content type and the other headers of these rows are compared.",
+      "authority": "coordinator ruling 16 (2026-11-11); recording the page body is a To-Do for the next idp packet"
+    },
+    {
+      "id": "KD-SAFETY-ORIGIN-REDIRECT",
+      "rows": ["v01.safety-parent", "v01.safety-encoded-parent"],
+      "fields": ["header:location"],
+      "appliesTo": ["production-vs-local", "run-vs-run"],
+      "reason": "Production answers a request for a parent directory (/../outside.txt, /%2e%2e/outside.txt) with a 302 whose Location is an absolute URL on an internal origin host (content-prodNN-firebasehosting-origin.googleapis.com) that differs from one request to the next. Strict answers the same 302 (status, Cache-Control: private, Content-Type text/html; charset=UTF-8, an empty body, Accept-Ranges) with the normalized path on this origin, so only the Location is not compared; the replay asserts the status and the Location path of both rows and that nothing outside public is read.",
+      "authority": "coordinator rulings 17 and 21 (2026-11-11)"
+    },
+    {
+      "id": "KD-SDK-FILES",
+      "rows": ["v01.reserved-sdk-10", "v01.reserved-sdk-12"],
+      "fields": "*",
+      "appliesTo": ["production-vs-local"],
+      "reason": "The /__/firebase/<version>/*.js files are served by Google's CDN; a local fireemu has no network source for them and answers 503 offline.",
+      "authority": "coordinator ruling 17 (2026-11-11)",
+      "wildcardReason": "Coordinator ruling 17 names the SDK files as a whole: Google's CDN serves them and a local fireemu answers 503 offline, so no field of these two rows can match."
+    },
+    {
+      "id": "KD-INIT-KEYS",
+      "rows": ["v01.reserved-json", "v01.reserved-js", "v01.reserved-emulator-js"],
+      "fields": ["layout", "header:content-length"],
+      "appliesTo": ["production-vs-local"],
+      "reason": "Production's init.json holds the seven keys of the project's web app configuration; a local fireemu knows only the project id and a placeholder key, so the layout of init.json (its key set beyond apiKey and projectId) and the length of init.json and init.js differ. The production-vs-local comparison does not compare the body of init.js at all (only the run-vs-run comparison does). Status and the other headers of these rows are compared.",
+      "authority": "coordinator ruling 17 (2026-11-11)"
+    },
+    {
+      "id": "KD-AUTH-HANDLER-PAGE",
+      "rows": ["v01.reserved-auth-handler", "v09.reserved-auth-handler"],
+      "fields": ["header:content-length"],
+      "appliesTo": ["production-vs-local"],
+      "reason": "The hosted /__/auth/handler page is served by Firebase, not from the site's files. The recorded requests are HEAD and show only its length (462 bytes) and headers; strict answers with a stand-in page of another length. Status and the other headers are compared.",
+      "authority": "coordinator ruling 20 (2026-11-11); recording the page is a To-Do for the next idp packet"
+    }
+  ]
+}

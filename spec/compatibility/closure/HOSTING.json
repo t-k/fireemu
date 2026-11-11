@@ -1,0 +1,1314 @@
+{
+  "schemaVersion": 1,
+  "parent": "HOSTING",
+  "parentStatus": "COMPAT_VERIFIED",
+  "inventoryStatus": "PROPOSED",
+  "oracleTrack": "preview-channel-observations",
+  "scopeDecisions": [
+    {
+      "id": "HOSTING-LOCAL-ONLY",
+      "decision": "Only local registered Functions targets can be rewritten. No Cloud Run lookup or live Functions fallback is allowed. Missing local targets remain unverified and are not an approved production equivalence.",
+      "status": "IMPLEMENTING"
+    },
+    {
+      "id": "HOSTING-ORACLE",
+      "decision": "Production is observed only through disposable preview channels (24 hour TTL) of the default site of the Identity Platform sandbox, one channel per site version, through the Hosting REST API. The live channel is never released to and the firebase CLI is not used, so the project's authorized domains are not written. A preview channel is not the live channel: a claim is limited to what a preview channel serves.",
+      "status": "IMPLEMENTING"
+    },
+    {
+      "id": "HOSTING-REST-SCOPE",
+      "decision": "Function and Cloud Run rewrites are out of scope for this parent (owner ledger 2435). They are recorded as NOT_COMPARED with the official-emulator comparison as their only evidence. The REST API carries a file manifest, so the deploy-time `ignore` rule is not observable in production.",
+      "status": "ANSWERED"
+    }
+  ],
+  "conditions": [
+    {
+      "conditionId": "HOSTING/static-files",
+      "description": "Static files and directory indexes",
+      "status": "VERIFIED",
+      "recipeIds": [
+        "hosting/static-files"
+      ],
+      "fixture": "conformance/hosting-fixtures/cases.json",
+      "productionEvidence": [
+        {
+          "alias": "pass-1",
+          "fixturePath": "conformance/hosting-production-pass-1.json",
+          "fixtureSha256": "56739920bd499ac72d85ccd262838da25e81528c5183bc340535b40ece8039cc"
+        },
+        {
+          "alias": "pass-2",
+          "fixturePath": "conformance/hosting-production-pass-2.json",
+          "fixtureSha256": "5574d57144bd47fd96d261f18ab673571489f43f169839d0d6b53153ca896bfc"
+        }
+      ],
+      "fixtureCaseIds": [
+        "root",
+        "static",
+        "directory",
+        "index",
+        "head",
+        "static-post",
+        "range"
+      ],
+      "officialFixture": "conformance/hosting-fixtures/official.json",
+      "productionCorpus": {
+        "versions": [
+          "v01"
+        ],
+        "requests": 23
+      },
+      "observedPasses": 2,
+      "passComparison": "MATCH",
+      "comparisons": {
+        "runVsRun": {
+          "rows": 23,
+          "counts": {
+            "MATCH": 5,
+            "MATCH_LAYOUT": 18,
+            "KNOWN_DIFFERENCE": 0,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        },
+        "strictVsPass1": {
+          "rows": 23,
+          "counts": {
+            "MATCH": 2,
+            "MATCH_LAYOUT": 21,
+            "KNOWN_DIFFERENCE": 0,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        },
+        "strictVsPass2": {
+          "rows": 23,
+          "counts": {
+            "MATCH": 2,
+            "MATCH_LAYOUT": 21,
+            "KNOWN_DIFFERENCE": 0,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        }
+      },
+      "knownDifferences": [],
+      "profiles": {
+        "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
+        "emulator": "NO_PRODUCTION_CLAIM"
+      },
+      "reviewRef": "3417880952084c9fad3c06945d3847439620d7ff211e05c508f4de4843bc9109"
+    },
+    {
+      "conditionId": "HOSTING/redirects",
+      "description": "First-match redirects, captures and query preservation",
+      "status": "VERIFIED",
+      "recipeIds": [
+        "hosting/redirects"
+      ],
+      "fixture": "conformance/hosting-fixtures/cases.json",
+      "productionEvidence": [
+        {
+          "alias": "pass-1",
+          "fixturePath": "conformance/hosting-production-pass-1.json",
+          "fixtureSha256": "56739920bd499ac72d85ccd262838da25e81528c5183bc340535b40ece8039cc"
+        },
+        {
+          "alias": "pass-2",
+          "fixturePath": "conformance/hosting-production-pass-2.json",
+          "fixtureSha256": "5574d57144bd47fd96d261f18ab673571489f43f169839d0d6b53153ca896bfc"
+        }
+      ],
+      "fixtureCaseIds": [
+        "redirect-first",
+        "redirect-capture",
+        "query",
+        "redirect-capture-prefix",
+        "redirect-capture-literal"
+      ],
+      "officialFixture": "conformance/hosting-fixtures/official.json",
+      "productionCorpus": {
+        "versions": [
+          "v01",
+          "v09"
+        ],
+        "requests": 46
+      },
+      "observedPasses": 2,
+      "passComparison": "MATCH",
+      "comparisons": {
+        "runVsRun": {
+          "rows": 46,
+          "counts": {
+            "MATCH": 41,
+            "MATCH_LAYOUT": 5,
+            "KNOWN_DIFFERENCE": 0,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        },
+        "strictVsPass1": {
+          "rows": 46,
+          "counts": {
+            "MATCH": 41,
+            "MATCH_LAYOUT": 5,
+            "KNOWN_DIFFERENCE": 0,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        },
+        "strictVsPass2": {
+          "rows": 46,
+          "counts": {
+            "MATCH": 41,
+            "MATCH_LAYOUT": 5,
+            "KNOWN_DIFFERENCE": 0,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        }
+      },
+      "knownDifferences": [],
+      "profiles": {
+        "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
+        "emulator": "NO_PRODUCTION_CLAIM"
+      },
+      "reviewRef": "3417880952084c9fad3c06945d3847439620d7ff211e05c508f4de4843bc9109"
+    },
+    {
+      "conditionId": "HOSTING/rewrites",
+      "description": "Static precedence and first-match rewrites",
+      "status": "VERIFIED",
+      "recipeIds": [
+        "hosting/rewrites"
+      ],
+      "fixture": "conformance/hosting-fixtures/cases.json",
+      "productionEvidence": [
+        {
+          "alias": "pass-1",
+          "fixturePath": "conformance/hosting-production-pass-1.json",
+          "fixtureSha256": "56739920bd499ac72d85ccd262838da25e81528c5183bc340535b40ece8039cc"
+        },
+        {
+          "alias": "pass-2",
+          "fixturePath": "conformance/hosting-production-pass-2.json",
+          "fixtureSha256": "5574d57144bd47fd96d261f18ab673571489f43f169839d0d6b53153ca896bfc"
+        }
+      ],
+      "fixtureCaseIds": [
+        "rewrite-first",
+        "static"
+      ],
+      "officialFixture": "conformance/hosting-fixtures/official.json",
+      "productionCorpus": {
+        "versions": [
+          "v01",
+          "v10"
+        ],
+        "requests": 3
+      },
+      "observedPasses": 2,
+      "passComparison": "MATCH",
+      "comparisons": {
+        "runVsRun": {
+          "rows": 3,
+          "counts": {
+            "MATCH": 0,
+            "MATCH_LAYOUT": 3,
+            "KNOWN_DIFFERENCE": 0,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        },
+        "strictVsPass1": {
+          "rows": 3,
+          "counts": {
+            "MATCH": 0,
+            "MATCH_LAYOUT": 3,
+            "KNOWN_DIFFERENCE": 0,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        },
+        "strictVsPass2": {
+          "rows": 3,
+          "counts": {
+            "MATCH": 0,
+            "MATCH_LAYOUT": 3,
+            "KNOWN_DIFFERENCE": 0,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        }
+      },
+      "knownDifferences": [],
+      "profiles": {
+        "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
+        "emulator": "NO_PRODUCTION_CLAIM"
+      },
+      "reviewRef": "3417880952084c9fad3c06945d3847439620d7ff211e05c508f4de4843bc9109"
+    },
+    {
+      "conditionId": "HOSTING/glob-matching",
+      "description": "Glob matching and ordered overlapping rules",
+      "status": "VERIFIED",
+      "recipeIds": [
+        "hosting/glob-matching"
+      ],
+      "fixture": "conformance/hosting-fixtures/glob-cases.json",
+      "productionEvidence": [
+        {
+          "alias": "pass-1",
+          "fixturePath": "conformance/hosting-production-pass-1.json",
+          "fixtureSha256": "56739920bd499ac72d85ccd262838da25e81528c5183bc340535b40ece8039cc"
+        },
+        {
+          "alias": "pass-2",
+          "fixturePath": "conformance/hosting-production-pass-2.json",
+          "fixtureSha256": "5574d57144bd47fd96d261f18ab673571489f43f169839d0d6b53153ca896bfc"
+        }
+      ],
+      "officialFixture": "conformance/hosting-fixtures/official-globs.json",
+      "fixtureSelection": "All 138 pattern/path pairs",
+      "productionCorpus": {
+        "versions": [
+          "v10"
+        ],
+        "requests": 11
+      },
+      "observedPasses": 2,
+      "passComparison": "MATCH",
+      "comparisons": {
+        "runVsRun": {
+          "rows": 11,
+          "counts": {
+            "MATCH": 0,
+            "MATCH_LAYOUT": 11,
+            "KNOWN_DIFFERENCE": 0,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        },
+        "strictVsPass1": {
+          "rows": 11,
+          "counts": {
+            "MATCH": 0,
+            "MATCH_LAYOUT": 11,
+            "KNOWN_DIFFERENCE": 0,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        },
+        "strictVsPass2": {
+          "rows": 11,
+          "counts": {
+            "MATCH": 0,
+            "MATCH_LAYOUT": 11,
+            "KNOWN_DIFFERENCE": 0,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        }
+      },
+      "knownDifferences": [],
+      "profiles": {
+        "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
+        "emulator": "NO_PRODUCTION_CLAIM"
+      },
+      "reviewRef": "3417880952084c9fad3c06945d3847439620d7ff211e05c508f4de4843bc9109"
+    },
+    {
+      "conditionId": "HOSTING/headers-cache",
+      "description": "Custom headers and cache metadata",
+      "status": "VERIFIED",
+      "recipeIds": [
+        "hosting/headers-cache"
+      ],
+      "fixture": "conformance/hosting-fixtures/cases.json",
+      "productionEvidence": [
+        {
+          "alias": "pass-1",
+          "fixturePath": "conformance/hosting-production-pass-1.json",
+          "fixtureSha256": "56739920bd499ac72d85ccd262838da25e81528c5183bc340535b40ece8039cc"
+        },
+        {
+          "alias": "pass-2",
+          "fixturePath": "conformance/hosting-production-pass-2.json",
+          "fixtureSha256": "5574d57144bd47fd96d261f18ab673571489f43f169839d0d6b53153ca896bfc"
+        }
+      ],
+      "fixtureCaseIds": [
+        "static",
+        "conditional-static",
+        "conditional-rewrite",
+        "modified-static",
+        "modified-rewrite"
+      ],
+      "officialFixture": "conformance/hosting-fixtures/official.json",
+      "productionCorpus": {
+        "versions": [
+          "v01"
+        ],
+        "requests": 6
+      },
+      "observedPasses": 2,
+      "passComparison": "MATCH",
+      "comparisons": {
+        "runVsRun": {
+          "rows": 6,
+          "counts": {
+            "MATCH": 1,
+            "MATCH_LAYOUT": 5,
+            "KNOWN_DIFFERENCE": 0,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        },
+        "strictVsPass1": {
+          "rows": 6,
+          "counts": {
+            "MATCH": 1,
+            "MATCH_LAYOUT": 5,
+            "KNOWN_DIFFERENCE": 0,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        },
+        "strictVsPass2": {
+          "rows": 6,
+          "counts": {
+            "MATCH": 1,
+            "MATCH_LAYOUT": 5,
+            "KNOWN_DIFFERENCE": 0,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        }
+      },
+      "knownDifferences": [],
+      "profiles": {
+        "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
+        "emulator": "NO_PRODUCTION_CLAIM"
+      },
+      "reviewRef": "3417880952084c9fad3c06945d3847439620d7ff211e05c508f4de4843bc9109"
+    },
+    {
+      "conditionId": "HOSTING/clean-urls",
+      "description": "cleanUrls path selection",
+      "status": "VERIFIED",
+      "recipeIds": [
+        "hosting/clean-urls"
+      ],
+      "fixture": "conformance/hosting-fixtures/cases.json",
+      "productionEvidence": [
+        {
+          "alias": "pass-1",
+          "fixturePath": "conformance/hosting-production-pass-1.json",
+          "fixtureSha256": "56739920bd499ac72d85ccd262838da25e81528c5183bc340535b40ece8039cc"
+        },
+        {
+          "alias": "pass-2",
+          "fixturePath": "conformance/hosting-production-pass-2.json",
+          "fixtureSha256": "5574d57144bd47fd96d261f18ab673571489f43f169839d0d6b53153ca896bfc"
+        }
+      ],
+      "fixtureCaseIds": [
+        "clean-_page",
+        "clean-_page_",
+        "clean-_page.html",
+        "clean-_dir",
+        "clean-_dir_",
+        "clean-_dir_index.html",
+        "clean-slash-_page",
+        "clean-slash-_page_",
+        "clean-slash-_page.html",
+        "clean-slash-_dir",
+        "clean-slash-_dir_",
+        "clean-slash-_dir_index.html",
+        "clean-noslash-_page",
+        "clean-noslash-_page_",
+        "clean-noslash-_page.html",
+        "clean-noslash-_dir",
+        "clean-noslash-_dir_",
+        "clean-noslash-_dir_index.html"
+      ],
+      "officialFixture": "conformance/hosting-fixtures/official.json",
+      "productionCorpus": {
+        "versions": [
+          "v02"
+        ],
+        "requests": 7
+      },
+      "observedPasses": 2,
+      "passComparison": "MATCH",
+      "comparisons": {
+        "runVsRun": {
+          "rows": 7,
+          "counts": {
+            "MATCH": 3,
+            "MATCH_LAYOUT": 4,
+            "KNOWN_DIFFERENCE": 0,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        },
+        "strictVsPass1": {
+          "rows": 7,
+          "counts": {
+            "MATCH": 2,
+            "MATCH_LAYOUT": 4,
+            "KNOWN_DIFFERENCE": 1,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 1
+        },
+        "strictVsPass2": {
+          "rows": 7,
+          "counts": {
+            "MATCH": 2,
+            "MATCH_LAYOUT": 4,
+            "KNOWN_DIFFERENCE": 1,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 1
+        }
+      },
+      "knownDifferences": [
+        "KD-DEFAULT-404-BODY"
+      ],
+      "profiles": {
+        "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
+        "emulator": "NO_PRODUCTION_CLAIM"
+      },
+      "reviewRef": "3417880952084c9fad3c06945d3847439620d7ff211e05c508f4de4843bc9109"
+    },
+    {
+      "conditionId": "HOSTING/trailing-slash",
+      "description": "trailingSlash path canonicalization",
+      "status": "VERIFIED",
+      "recipeIds": [
+        "hosting/trailing-slash"
+      ],
+      "fixture": "conformance/hosting-fixtures/cases.json",
+      "productionEvidence": [
+        {
+          "alias": "pass-1",
+          "fixturePath": "conformance/hosting-production-pass-1.json",
+          "fixtureSha256": "56739920bd499ac72d85ccd262838da25e81528c5183bc340535b40ece8039cc"
+        },
+        {
+          "alias": "pass-2",
+          "fixturePath": "conformance/hosting-production-pass-2.json",
+          "fixtureSha256": "5574d57144bd47fd96d261f18ab673571489f43f169839d0d6b53153ca896bfc"
+        }
+      ],
+      "fixtureCaseIds": [
+        "slash-_page",
+        "slash-_page_",
+        "slash-_page.html",
+        "slash-_dir",
+        "slash-_dir_",
+        "slash-_dir_index.html",
+        "noslash-_page",
+        "noslash-_page_",
+        "noslash-_page.html",
+        "noslash-_dir",
+        "noslash-_dir_",
+        "noslash-_dir_index.html",
+        "clean-slash-_page",
+        "clean-slash-_page_",
+        "clean-slash-_page.html",
+        "clean-slash-_dir",
+        "clean-slash-_dir_",
+        "clean-slash-_dir_index.html",
+        "clean-noslash-_page",
+        "clean-noslash-_page_",
+        "clean-noslash-_page.html",
+        "clean-noslash-_dir",
+        "clean-noslash-_dir_",
+        "clean-noslash-_dir_index.html"
+      ],
+      "officialFixture": "conformance/hosting-fixtures/official.json",
+      "productionCorpus": {
+        "versions": [
+          "v01",
+          "v03",
+          "v04",
+          "v05",
+          "v06",
+          "v08"
+        ],
+        "requests": 30
+      },
+      "observedPasses": 2,
+      "passComparison": "MATCH",
+      "comparisons": {
+        "runVsRun": {
+          "rows": 30,
+          "counts": {
+            "MATCH": 15,
+            "MATCH_LAYOUT": 15,
+            "KNOWN_DIFFERENCE": 0,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        },
+        "strictVsPass1": {
+          "rows": 30,
+          "counts": {
+            "MATCH": 11,
+            "MATCH_LAYOUT": 15,
+            "KNOWN_DIFFERENCE": 4,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 4
+        },
+        "strictVsPass2": {
+          "rows": 30,
+          "counts": {
+            "MATCH": 11,
+            "MATCH_LAYOUT": 15,
+            "KNOWN_DIFFERENCE": 4,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 4
+        }
+      },
+      "knownDifferences": [
+        "KD-DEFAULT-404-BODY"
+      ],
+      "profiles": {
+        "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
+        "emulator": "NO_PRODUCTION_CLAIM"
+      },
+      "reviewRef": "3417880952084c9fad3c06945d3847439620d7ff211e05c508f4de4843bc9109"
+    },
+    {
+      "conditionId": "HOSTING/i18n",
+      "description": "Language, country, cookie and fallback selection",
+      "status": "VERIFIED",
+      "recipeIds": [
+        "hosting/i18n"
+      ],
+      "fixture": "conformance/hosting-fixtures/cases.json",
+      "productionEvidence": [
+        {
+          "alias": "pass-1",
+          "fixturePath": "conformance/hosting-production-pass-1.json",
+          "fixtureSha256": "56739920bd499ac72d85ccd262838da25e81528c5183bc340535b40ece8039cc"
+        },
+        {
+          "alias": "pass-2",
+          "fixturePath": "conformance/hosting-production-pass-2.json",
+          "fixtureSha256": "5574d57144bd47fd96d261f18ab673571489f43f169839d0d6b53153ca896bfc"
+        }
+      ],
+      "fixtureCaseIds": [
+        "i18n-language",
+        "i18n-country",
+        "i18n-country-fallback",
+        "i18n-language-cookie",
+        "i18n-fallback"
+      ],
+      "officialFixture": "conformance/hosting-fixtures/official.json",
+      "productionCorpus": {
+        "versions": [
+          "v07",
+          "v08"
+        ],
+        "requests": 17
+      },
+      "observedPasses": 2,
+      "passComparison": "MATCH",
+      "comparisons": {
+        "runVsRun": {
+          "rows": 17,
+          "counts": {
+            "MATCH": 2,
+            "MATCH_LAYOUT": 15,
+            "KNOWN_DIFFERENCE": 0,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        },
+        "strictVsPass1": {
+          "rows": 17,
+          "counts": {
+            "MATCH": 2,
+            "MATCH_LAYOUT": 15,
+            "KNOWN_DIFFERENCE": 0,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        },
+        "strictVsPass2": {
+          "rows": 17,
+          "counts": {
+            "MATCH": 2,
+            "MATCH_LAYOUT": 15,
+            "KNOWN_DIFFERENCE": 0,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        }
+      },
+      "knownDifferences": [],
+      "profiles": {
+        "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
+        "emulator": "NO_PRODUCTION_CLAIM"
+      },
+      "reviewRef": "3417880952084c9fad3c06945d3847439620d7ff211e05c508f4de4843bc9109"
+    },
+    {
+      "conditionId": "HOSTING/reserved-paths",
+      "description": "Reserved initialization paths",
+      "status": "VERIFIED",
+      "recipeIds": [
+        "hosting/reserved-paths"
+      ],
+      "fixture": "conformance/hosting-fixtures/cases.json",
+      "productionEvidence": [
+        {
+          "alias": "pass-1",
+          "fixturePath": "conformance/hosting-production-pass-1.json",
+          "fixtureSha256": "56739920bd499ac72d85ccd262838da25e81528c5183bc340535b40ece8039cc"
+        },
+        {
+          "alias": "pass-2",
+          "fixturePath": "conformance/hosting-production-pass-2.json",
+          "fixtureSha256": "5574d57144bd47fd96d261f18ab673571489f43f169839d0d6b53153ca896bfc"
+        }
+      ],
+      "fixtureCaseIds": [
+        "reserved-json",
+        "reserved-js",
+        "reserved-emulator-js",
+        "reserved-unknown"
+      ],
+      "officialFixture": "conformance/hosting-fixtures/official.json",
+      "productionCorpus": {
+        "versions": [
+          "v01",
+          "v09"
+        ],
+        "requests": 11
+      },
+      "observedPasses": 2,
+      "passComparison": "MATCH",
+      "comparisons": {
+        "runVsRun": {
+          "rows": 11,
+          "counts": {
+            "MATCH": 7,
+            "MATCH_LAYOUT": 4,
+            "KNOWN_DIFFERENCE": 0,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        },
+        "strictVsPass1": {
+          "rows": 11,
+          "counts": {
+            "MATCH": 3,
+            "MATCH_LAYOUT": 1,
+            "KNOWN_DIFFERENCE": 7,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 7
+        },
+        "strictVsPass2": {
+          "rows": 11,
+          "counts": {
+            "MATCH": 3,
+            "MATCH_LAYOUT": 1,
+            "KNOWN_DIFFERENCE": 7,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 7
+        }
+      },
+      "knownDifferences": [
+        "KD-AUTH-HANDLER-PAGE",
+        "KD-INIT-KEYS",
+        "KD-SDK-FILES"
+      ],
+      "profiles": {
+        "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
+        "emulator": "NO_PRODUCTION_CLAIM"
+      },
+      "reviewRef": "3417880952084c9fad3c06945d3847439620d7ff211e05c508f4de4843bc9109"
+    },
+    {
+      "conditionId": "HOSTING/not-found",
+      "description": "404 handling",
+      "status": "VERIFIED",
+      "recipeIds": [
+        "hosting/not-found"
+      ],
+      "fixture": "conformance/hosting-fixtures/cases.json",
+      "productionEvidence": [
+        {
+          "alias": "pass-1",
+          "fixturePath": "conformance/hosting-production-pass-1.json",
+          "fixtureSha256": "56739920bd499ac72d85ccd262838da25e81528c5183bc340535b40ece8039cc"
+        },
+        {
+          "alias": "pass-2",
+          "fixturePath": "conformance/hosting-production-pass-2.json",
+          "fixtureSha256": "5574d57144bd47fd96d261f18ab673571489f43f169839d0d6b53153ca896bfc"
+        }
+      ],
+      "fixtureCaseIds": [
+        "missing",
+        "404-direct",
+        "default-404"
+      ],
+      "officialFixture": "conformance/hosting-fixtures/official.json",
+      "productionCorpus": {
+        "versions": [
+          "v01"
+        ],
+        "requests": 4
+      },
+      "observedPasses": 2,
+      "passComparison": "MATCH",
+      "comparisons": {
+        "runVsRun": {
+          "rows": 4,
+          "counts": {
+            "MATCH": 0,
+            "MATCH_LAYOUT": 4,
+            "KNOWN_DIFFERENCE": 0,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        },
+        "strictVsPass1": {
+          "rows": 4,
+          "counts": {
+            "MATCH": 0,
+            "MATCH_LAYOUT": 4,
+            "KNOWN_DIFFERENCE": 0,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        },
+        "strictVsPass2": {
+          "rows": 4,
+          "counts": {
+            "MATCH": 0,
+            "MATCH_LAYOUT": 4,
+            "KNOWN_DIFFERENCE": 0,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        }
+      },
+      "knownDifferences": [],
+      "profiles": {
+        "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
+        "emulator": "NO_PRODUCTION_CLAIM"
+      },
+      "reviewRef": "3417880952084c9fad3c06945d3847439620d7ff211e05c508f4de4843bc9109"
+    },
+    {
+      "conditionId": "HOSTING/content-types",
+      "description": "Content-Type per extension, including charset, no extension and unknown extension",
+      "status": "VERIFIED",
+      "recipeIds": [
+        "hosting/content-types"
+      ],
+      "fixture": "conformance/hosting-fixtures/cases.json",
+      "productionEvidence": [
+        {
+          "alias": "pass-1",
+          "fixturePath": "conformance/hosting-production-pass-1.json",
+          "fixtureSha256": "56739920bd499ac72d85ccd262838da25e81528c5183bc340535b40ece8039cc"
+        },
+        {
+          "alias": "pass-2",
+          "fixturePath": "conformance/hosting-production-pass-2.json",
+          "fixtureSha256": "5574d57144bd47fd96d261f18ab673571489f43f169839d0d6b53153ca896bfc"
+        }
+      ],
+      "productionCorpus": {
+        "versions": [
+          "v01"
+        ],
+        "requests": 32
+      },
+      "observedPasses": 2,
+      "passComparison": "MATCH",
+      "comparisons": {
+        "runVsRun": {
+          "rows": 32,
+          "counts": {
+            "MATCH": 0,
+            "MATCH_LAYOUT": 32,
+            "KNOWN_DIFFERENCE": 0,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        },
+        "strictVsPass1": {
+          "rows": 32,
+          "counts": {
+            "MATCH": 0,
+            "MATCH_LAYOUT": 32,
+            "KNOWN_DIFFERENCE": 0,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        },
+        "strictVsPass2": {
+          "rows": 32,
+          "counts": {
+            "MATCH": 0,
+            "MATCH_LAYOUT": 32,
+            "KNOWN_DIFFERENCE": 0,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        }
+      },
+      "knownDifferences": [],
+      "profiles": {
+        "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
+        "emulator": "NO_PRODUCTION_CLAIM"
+      },
+      "reviewRef": "3417880952084c9fad3c06945d3847439620d7ff211e05c508f4de4843bc9109"
+    },
+    {
+      "conditionId": "HOSTING/compression-vary",
+      "description": "Vary and negotiation headers of compressible and incompressible types and gzip Content-Encoding with the file's own ETag and length; Brotli is not reproduced (KD-COMPRESSION: br only)",
+      "status": "VERIFIED",
+      "recipeIds": [
+        "hosting/compression-vary"
+      ],
+      "fixture": "conformance/hosting-fixtures/cases.json",
+      "productionEvidence": [
+        {
+          "alias": "pass-1",
+          "fixturePath": "conformance/hosting-production-pass-1.json",
+          "fixtureSha256": "56739920bd499ac72d85ccd262838da25e81528c5183bc340535b40ece8039cc"
+        },
+        {
+          "alias": "pass-2",
+          "fixturePath": "conformance/hosting-production-pass-2.json",
+          "fixtureSha256": "5574d57144bd47fd96d261f18ab673571489f43f169839d0d6b53153ca896bfc"
+        }
+      ],
+      "productionCorpus": {
+        "versions": [
+          "v01"
+        ],
+        "requests": 10
+      },
+      "observedPasses": 2,
+      "passComparison": "MATCH",
+      "comparisons": {
+        "runVsRun": {
+          "rows": 10,
+          "counts": {
+            "MATCH": 0,
+            "MATCH_LAYOUT": 10,
+            "KNOWN_DIFFERENCE": 0,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        },
+        "strictVsPass1": {
+          "rows": 10,
+          "counts": {
+            "MATCH": 0,
+            "MATCH_LAYOUT": 6,
+            "KNOWN_DIFFERENCE": 4,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 4
+        },
+        "strictVsPass2": {
+          "rows": 10,
+          "counts": {
+            "MATCH": 0,
+            "MATCH_LAYOUT": 6,
+            "KNOWN_DIFFERENCE": 4,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 4
+        }
+      },
+      "knownDifferences": [
+        "KD-COMPRESSION"
+      ],
+      "profiles": {
+        "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
+        "emulator": "NO_PRODUCTION_CLAIM"
+      },
+      "reviewRef": "3417880952084c9fad3c06945d3847439620d7ff211e05c508f4de4843bc9109"
+    },
+    {
+      "conditionId": "HOSTING/app-association",
+      "description": "appAssociation: AUTO and the /.well-known association files",
+      "status": "VERIFIED",
+      "recipeIds": [
+        "hosting/app-association"
+      ],
+      "fixture": "conformance/hosting-fixtures/cases.json",
+      "productionEvidence": [
+        {
+          "alias": "pass-1",
+          "fixturePath": "conformance/hosting-production-pass-1.json",
+          "fixtureSha256": "56739920bd499ac72d85ccd262838da25e81528c5183bc340535b40ece8039cc"
+        },
+        {
+          "alias": "pass-2",
+          "fixturePath": "conformance/hosting-production-pass-2.json",
+          "fixtureSha256": "5574d57144bd47fd96d261f18ab673571489f43f169839d0d6b53153ca896bfc"
+        }
+      ],
+      "productionCorpus": {
+        "versions": [
+          "v02"
+        ],
+        "requests": 2
+      },
+      "observedPasses": 2,
+      "passComparison": "MATCH",
+      "comparisons": {
+        "runVsRun": {
+          "rows": 2,
+          "counts": {
+            "MATCH": 2,
+            "MATCH_LAYOUT": 0,
+            "KNOWN_DIFFERENCE": 0,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        },
+        "strictVsPass1": {
+          "rows": 2,
+          "counts": {
+            "MATCH": 2,
+            "MATCH_LAYOUT": 0,
+            "KNOWN_DIFFERENCE": 0,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        },
+        "strictVsPass2": {
+          "rows": 2,
+          "counts": {
+            "MATCH": 2,
+            "MATCH_LAYOUT": 0,
+            "KNOWN_DIFFERENCE": 0,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          },
+          "knownDifferenceRows": 0
+        }
+      },
+      "knownDifferences": [],
+      "profiles": {
+        "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
+        "emulator": "NO_PRODUCTION_CLAIM"
+      },
+      "reviewRef": "3417880952084c9fad3c06945d3847439620d7ff211e05c508f4de4843bc9109"
+    }
+  ],
+  "integratedRegression": {
+    "status": "OFFLINE_PASS",
+    "suite": "conformance/src/hosting/run.mjs",
+    "matrix": "conformance/HOSTING-MATRIX.md",
+    "scope": "82 HTTP cases and 138 glob pairs against the official emulator (emulator profile); the strict profile against the two production recordings (comparisons)",
+    "comparisons": [
+      {
+        "path": "conformance/hosting-production-run-comparison.json",
+        "sha256": "1e38ea12d38c84f22ef381016e7408de4e0a1f032c452024cecda860128c2c7b",
+        "rows": 201,
+        "summary": {
+          "MATCH": 76,
+          "MATCH_LAYOUT": 123,
+          "KNOWN_DIFFERENCE": 2,
+          "MISMATCH": 0,
+          "UNKNOWN": 0
+        }
+      },
+      {
+        "path": "conformance/hosting-production-strict-vs-pass-1.json",
+        "sha256": "379191373c2d3cc4bac49c2144aa1cd506a2a00f477252314283cd5f9d7b1e82",
+        "rows": 201,
+        "summary": {
+          "MATCH": 64,
+          "MATCH_LAYOUT": 119,
+          "KNOWN_DIFFERENCE": 18,
+          "MISMATCH": 0,
+          "UNKNOWN": 0
+        }
+      },
+      {
+        "path": "conformance/hosting-production-strict-vs-pass-2.json",
+        "sha256": "7fbd5d7c5e9edd94ef1609acc3629789db470fbf2313195061eef3d9b3e96f70",
+        "rows": 201,
+        "summary": {
+          "MATCH": 64,
+          "MATCH_LAYOUT": 119,
+          "KNOWN_DIFFERENCE": 18,
+          "MISMATCH": 0,
+          "UNKNOWN": 0
+        }
+      }
+    ],
+    "productionRequests": 0,
+    "result": "COMPARED_ON_RECORDED_CORPUS_WITH_KNOWN_DIFFERENCES",
+    "strictReplay": {
+      "test": "conformance/src/hosting-production/strict-replay.test.mjs",
+      "command": "FIREEMU_BIN=<fireemu> node --test conformance/src/hosting-production/strict-replay.test.mjs",
+      "requires": "the committed comparisons equal the ones recomputed on the binary, with productionExact set (local.mjs does)"
+    },
+    "releaseBindingNote": "Run R37 of conformance/src/release-strict-regression.mjs reproduces the three comparisons on the packed binary (strict profile, productionExact, loopback only) and requires each to equal its committed file; the conformance workflow runs the same replay on a fresh build (conformance.yml, step \"strict replay of the Hosting recordings\"). The kinds of the production recordings are not rerun: the release job cannot reach production."
+  },
+  "productionProposal": "spec/compatibility/hosting-production-packet.md",
+  "recordingPolicy": {
+    "observedPasses": 2,
+    "requiredPasses": 2,
+    "waiver": null
+  },
+  "excludedFromParent": [
+    {
+      "conditionId": "HOSTING/function-rewrites",
+      "description": "Registered local Functions rewrites",
+      "status": "NOT_COMPARED",
+      "recipeIds": [
+        "hosting/function-rewrites"
+      ],
+      "reason": "Out of scope for this parent: a production function rewrite needs a deployed function, and fireemu forwards to the local Functions runtime. The official-emulator comparison is the only evidence.",
+      "authority": "owner ledger 2435 and coordinator rulings 2026-11-10"
+    },
+    {
+      "conditionId": "HOSTING/run-rewrites",
+      "description": "Registered local Run-style rewrites",
+      "status": "NOT_COMPARED",
+      "recipeIds": [
+        "hosting/run-rewrites"
+      ],
+      "reason": "Out of scope for this parent: a production Cloud Run rewrite needs a deployed service, and fireemu forwards to the local function of the same id. The official-emulator comparison is the only evidence.",
+      "authority": "owner ledger 2435 and coordinator rulings 2026-11-10"
+    },
+    {
+      "conditionId": "HOSTING/ignore",
+      "description": "The ignore globs that choose which files exist",
+      "status": "NOT_COMPARED",
+      "recipeIds": [
+        "hosting/ignore"
+      ],
+      "reason": "The ignore globs are not observable in production; official-emulator comparison only. The REST API receives a file manifest, so the rule is applied by the deploy tool (firebase-tools listFiles) before upload; the 3,220-row comparison against that function is the evidence.",
+      "authority": "owner ledger 2435 and coordinator rulings 2026-11-10"
+    },
+    {
+      "conditionId": "HOSTING/local-safety",
+      "description": "Path confinement, the Host guard, ports, --only selection and lifecycle",
+      "status": "NOT_COMPARED",
+      "recipeIds": [
+        "hosting/local-safety"
+      ],
+      "reason": "Path confinement, the Host guard, ports and lifecycle are not observable in production; official-emulator comparison only. These are properties of the local process (retained-handle confinement, DNS-rebinding refusal, port search, readiness) with no production counterpart.",
+      "authority": "owner ledger 2435 and coordinator rulings 2026-11-10"
+    }
+  ],
+  "corpusPath": "conformance/src/hosting-production/corpus.manifest.json",
+  "corpusSha256": "9c86405766440def7b565417de145b01cfed2395b7819fdba2596f6183b355ab",
+  "corpusContentSha256": "fa57f2b080426de0ea30e5b9758f117481a770561e625903974c4672fca43150",
+  "recorder": "conformance/src/hosting-production/record.mjs",
+  "judge": "conformance/src/hosting-production/judge.mjs",
+  "recordings": [
+    {
+      "alias": "pass-1",
+      "run": "658bb2",
+      "envelope": "HOSTING-PRODUCTION-V4-20261111",
+      "fixturePath": "conformance/hosting-production-pass-1.json",
+      "fixtureSha256": "56739920bd499ac72d85ccd262838da25e81528c5183bc340535b40ece8039cc",
+      "corpusSha256": "fa57f2b080426de0ea30e5b9758f117481a770561e625903974c4672fca43150"
+    },
+    {
+      "alias": "pass-2",
+      "run": "9a8d57",
+      "envelope": "HOSTING-PRODUCTION-V5-20261111",
+      "fixturePath": "conformance/hosting-production-pass-2.json",
+      "fixtureSha256": "5574d57144bd47fd96d261f18ab673571489f43f169839d0d6b53153ca896bfc",
+      "corpusSha256": "fa57f2b080426de0ea30e5b9758f117481a770561e625903974c4672fca43150"
+    }
+  ],
+  "limitations": [
+    "Observations come from preview channels only; the live channel is never touched.",
+    "Edge-set headers (date, age, via, x-cache*, x-served-by, x-timer, server, alt-svc) are recorded and never compared; any other header that is neither compared nor volatile must be named by the review.",
+    "The reserved initialization bodies keep byte count, line count and, for JSON, key order with value types and byte lengths; no value is retained.",
+    "ETag and Last-Modified are compared by form, not by value.",
+    "The redirect `type` default of the CLI is not observable through the REST API, which requires a status code.",
+    "The strict profile matches the recorded cases under productionExact. Under the default profile two development defaults differ from production on purpose (hosting.cacheControl \"none\": no default Cache-Control; hosting.clientCountry \"honoured\": X-Country-Code and the country cookie select i18n content); productionExact restores production for both (owner policy 1396/1403, coordinator ruling 23). A request outside the corpus is answered by the same rules, not by an observation.",
+    "Known differences (known-differences.json): Brotli encoding (KD-COMPRESSION: strict answers a request that accepts only br as identity, and one that also accepts gzip as gzip), the 21,376-byte default 404 page body (KD-DEFAULT-404-BODY), the hosted SDK files (KD-SDK-FILES), the init.json layout beyond apiKey and projectId and the init.json and init.js lengths (KD-INIT-KEYS), the length of the hosted /__/auth/handler page (KD-AUTH-HANDLER-PAGE, ruling 20) and the Location host of a parent-directory 302 (KD-SAFETY-ORIGIN-REDIRECT: production answers a 302 to an internal origin host, strict answers the same 302 to the normalized path of this origin; rulings 17 and 21). Strict-transport-security, x-robots-tag and the SDK-row headers are excluded as edge-set. 18 of the 201 rows of each strict comparison carry a known difference and are counted as KNOWN_DIFFERENCE, not MATCH.",
+    "Gzip: strict answers a compressible file as gzip when the request accepts it, with the file's own ETag, the recorded Vary and the same length as production's 93 bytes for the corpus file, as the recorded rows gz-gzip, gz-head-gzip and gz-json-gzip show (miniz_oxide through flate2 at the default level; the length of another file may differ from production's encoder by a few bytes, and the body is compared decoded). Not recorded: which types and sizes production compresses beyond text/plain and application/json (compressed) and image/png of two bytes (not); strict decides by the content type it sends (the mime-db compressible flag, and text/plain for an unknown extension), compresses a file of 1 byte up to 32 MiB (an empty file and a larger one are answered as identity, the whole answer being built in memory), accepts only an explicit gzip member of Accept-Encoding with a quality above zero (not `*` and not x-gzip), answers a Range request and a 304 without Content-Encoding, reads every Accept-Encoding line as one list, and compresses the /404.html answer like any file; a file whose headers rule sets Content-Encoding (any case, any value, for the request path the rule matches) is answered as it is, without gzip, so a precompressed `*.br` file keeps its bytes and the rule's header; not recorded; a generated answer (redirect, default 404 page, reserved routes) is not compressed. Probing these is a To-Do for the next idp packet.",
+    "Not compared: the body of init.js in the production-vs-local comparison (only init.json has a layout compared), and the stand-in /__/auth/handler page body (HEAD only was recorded).",
+    "Inferred, not recorded: the redirect parameter name rule. Strict reads a name as letters and underscore only, so `:id2` is the parameter `id` followed by a literal `2`. The recording shows only that GET /capture/one/two and GET /capture/:id2/two do not match the source /capture/:id/:id2; other readings fit both rows (`:id2` a literal segment; production rejecting or dropping the rule; digit names allowed but repeated parameters refused). The rule applies to every user redirect with a digit in a parameter name (ruling 24); probing digit-bearing names is a To-Do for the next idp packet.",
+    "Strict answers that no recording covers: 416 with Content-Range: bytes */N for an unsatisfiable range; a multi-range request answered whole; Range on HEAD answering 206 with the part's length and no body; If-Modified-Since on HEAD; OPTIONS on a path that is not a file (answered as any request); the normalized-path 302 for dot segments other than a leading parent (`/a/../b` answers 302 to `/b`, `/a/./b` to `/a/b`, and a path that ends in a dot segment ends in a slash as RFC 3986 says: `/a/b/..` answers 302 to `/a/`); a dot-segment path with a raw backslash, control character or space, which is not redirected (a browser reads `\\` as `/`, so `Location: /\\evil.example` would leave the origin) and answers 404; the stand-in /__/auth/handler page; and the redirect rule for digit-bearing parameter names above."
+  ],
+  "outOfScope": [
+    "Production deployment of functions and live upstream routing are not executed (owner ledger 2435).",
+    "No condition is promoted from official-emulator behavior or documentation alone; the NOT_COMPARED entries are excluded from the parent claim, not verified."
+  ],
+  "comparisons": {
+    "runVsRun": {
+      "path": "conformance/hosting-production-run-comparison.json",
+      "sha256": "1e38ea12d38c84f22ef381016e7408de4e0a1f032c452024cecda860128c2c7b",
+      "summary": {
+        "MATCH": 76,
+        "MATCH_LAYOUT": 123,
+        "KNOWN_DIFFERENCE": 2,
+        "MISMATCH": 0,
+        "UNKNOWN": 0
+      }
+    },
+    "strictVsPass1": {
+      "path": "conformance/hosting-production-strict-vs-pass-1.json",
+      "sha256": "379191373c2d3cc4bac49c2144aa1cd506a2a00f477252314283cd5f9d7b1e82",
+      "summary": {
+        "MATCH": 64,
+        "MATCH_LAYOUT": 119,
+        "KNOWN_DIFFERENCE": 18,
+        "MISMATCH": 0,
+        "UNKNOWN": 0
+      }
+    },
+    "strictVsPass2": {
+      "path": "conformance/hosting-production-strict-vs-pass-2.json",
+      "sha256": "7fbd5d7c5e9edd94ef1609acc3629789db470fbf2313195061eef3d9b3e96f70",
+      "summary": {
+        "MATCH": 64,
+        "MATCH_LAYOUT": 119,
+        "KNOWN_DIFFERENCE": 18,
+        "MISMATCH": 0,
+        "UNKNOWN": 0
+      }
+    }
+  },
+  "knownDifferences": {
+    "path": "conformance/src/hosting-production/known-differences.json",
+    "sha256": "bd764258654fa8265c6433421583f1f49b083644a5a5abb7c01d8b694a1035a1",
+    "entries": [
+      "KD-COMPRESSION",
+      "KD-DEFAULT-404-BODY",
+      "KD-SAFETY-ORIGIN-REDIRECT",
+      "KD-SDK-FILES",
+      "KD-INIT-KEYS",
+      "KD-AUTH-HANDLER-PAGE"
+    ]
+  },
+  "headerExclusions": [
+    {
+      "headers": [
+        "strict-transport-security"
+      ],
+      "reason": "Production sends it on every https answer; a local http listener does not. Recorded, never compared.",
+      "authority": "coordinator ruling 17 (2026-11-11)"
+    },
+    {
+      "headers": [
+        "x-robots-tag"
+      ],
+      "reason": "The preview channel adds noindex to every answer (195 of 201 rows); the live site does not and a local listener has no channel. Recorded, never compared.",
+      "authority": "coordinator ruling 17 (2026-11-11)"
+    },
+    {
+      "headers": [
+        "content-security-policy-report-only",
+        "cross-origin-opener-policy",
+        "cross-origin-resource-policy",
+        "expires",
+        "report-to",
+        "x-xss-protection"
+      ],
+      "reason": "Carried only by the two production-served SDK file rows, which are a known difference (KD-SDK-FILES). Recorded, never compared.",
+      "authority": "coordinator ruling 17 (2026-11-11)"
+    }
+  ],
+  "followUps": [
+    "Next idp packet: probe gzip beyond the corpus file: a small text file (the size below which production does not compress), text/html and image/svg+xml, a file with no known extension, a Range request with Accept-Encoding: gzip, Accept-Encoding: * and x-gzip, a precompressed file (a `*.br` or `*.gz` file with a headers rule that sets Content-Encoding), so that the types and sizes strict compresses are observed (strict gzip itself is built, owner ledger 2458; Brotli stays a declared difference).",
+    "Next idp packet: record the body of the default 404 page (ruling 16) and the hosted /__/auth/handler page with a GET (ruling 20), and the answers to dot-segment paths other than a leading parent: /a/b/.. (strict: 302 to /a/), /a/./b (302 to /a/b) and a path with a raw backslash (strict: 404).",
+    "Next idp packet: probe redirect sources with digit-bearing parameter names so the `:id2` rule (ruling 24) is observed: /capture/one/two2 against /capture/:id/:id2, /capture/x/:id2, a single-parameter source such as /p/:a1 with /p/x, and a repeated name `/q/:id/:id`. Alternative readings to separate: (1) letters-and-underscore names with a literal suffix (strict today), (2) `:id2` a literal segment, (3) the rule rejected or dropped by production, (4) digit names allowed but a second parameter refused."
+  ],
+  "closureReview": {
+    "decision": "APPROVED",
+    "decidedOn": "2026-11-11",
+    "decider": "project coordinator",
+    "decisionRef": "owner ledger 2435, 2458; coordinator rulings 11-26",
+    "reviewedCommit": "7c1a191fc5e40ff172f3c27bc16403a3c8a1ad6e",
+    "reviews": [
+      {
+        "reviewer": "independent promotion reviewer",
+        "reportPath": "docs.local/reviews/2026-11-11-hosting-parent-closure-promotion-review.md",
+        "reportSha256": "3417880952084c9fad3c06945d3847439620d7ff211e05c508f4de4843bc9109",
+        "reviewedCommit": "c56ebcd4a91aa6733e77ac3357e26256da91bca3",
+        "outcome": "PROMOTE-AFTER-FIXES"
+      },
+      {
+        "reviewer": "independent promotion reviewer",
+        "reportPath": "docs.local/reviews/2026-11-11-hosting-parent-closure-delta-review.md",
+        "reportSha256": "6f6e0c6d5653f008c423e033b5eaa99e4798a5580557bd67985407e07a87279b",
+        "reviewedCommit": "2d4b64fe44ba717e69ee208a3114e06544a28a96",
+        "outcome": "PROMOTE-AFTER-FIXES"
+      },
+      {
+        "reviewer": "project coordinator",
+        "reviewedCommit": "7c1a191fc5e40ff172f3c27bc16403a3c8a1ad6e",
+        "outcome": "APPROVED",
+        "scope": "re-check of the delta review's D1 to D4 (the dot-segment 302 refusal of raw backslash, control character and space, the release judge and replay tests, RFC 3986 trailing dot segments, the config.rs test placement) on 7c1a191fc; recorded in the coordinator's message of 2026-11-11, no report file"
+      },
+      {
+        "reviewer": "independent delta reviewer",
+        "reportPath": "docs.local/reviews/2026-11-11-hosting-gzip-delta-review.md",
+        "reportSha256": "e985a6c8739a76fb9e6c919fc44258c3462d9b845f1fbcfced1952237a8877e4",
+        "reviewedCommit": "234f8c208760339cc7d4da3fc903df8db6552fa4",
+        "outcome": "MERGE-AFTER-FIXES",
+        "scope": "strict gzip (owner ledger 2458, ruling 26): KD-COMPRESSION narrowed to the four Brotli rows, judge compares the decoded body of an encoded answer with the plain body of an unencoded one, counts 64/119/18/0/0 per strict comparison, limitations and gzip probe follow-up"
+      }
+    ]
+  }
+}

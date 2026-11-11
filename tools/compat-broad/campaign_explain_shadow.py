@@ -15,7 +15,7 @@ from pathlib import Path
 # Import broad first: it installs the repository's inventory helper search path.
 import broad
 from batch_adapter import Adapter, candidate
-from batch_contract import NUMBER, PROJECT
+from batch_contract import LOCAL_NUMBER, PROJECT
 from broad_contract import digest, local_origin
 from campaign_explain import (
     Gate,
@@ -121,7 +121,7 @@ def run(output: Path) -> dict:
         output,
         child_script=Path(__file__).resolve(),
         project=PROJECT,
-        configuration={"daemon": {"authProjectNumbers": {PROJECT: NUMBER}}},
+        configuration={"daemon": {"authProjectNumbers": {PROJECT: LOCAL_NUMBER}}},
         execution_timeout=1200,
         recovery_grace=300,
     )

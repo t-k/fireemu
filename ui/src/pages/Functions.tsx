@@ -29,6 +29,7 @@ import {
 import { buildCallableInvoke, buildEnqueue, buildRequestInvoke } from "../lib/invoke";
 import { mergeFunctionLogs } from "../lib/functionsTimeline";
 import { matchesLog, type LevelFilter } from "../lib/logFilter";
+import { runtimeLabel } from "../lib/functionRuntime";
 
 const LEVEL_OPTIONS: { value: LevelFilter; key: Parameters<typeof t>[0] }[] = [
   { value: "all", key: "functions.levelAll" },
@@ -394,6 +395,9 @@ const FunctionRow: Component<{
     <tr data-testid={`function-row-${props.f.name}`}>
       <td class="mono">{props.f.name}</td>
       <td class="mono text-xs">{props.f.region}</td>
+      <td data-testid={`function-runtime-${props.f.name}`}>
+        {props.f.runtime ? runtimeLabel(props.f.runtime) : "-"}
+      </td>
       <td class="text-xs">
         {describeTrigger(trigger())}
         <Show
@@ -862,6 +866,7 @@ const Functions: Component = () => {
                 <tr>
                   <th>{t("functions.name")}</th>
                   <th>{t("functions.region")}</th>
+                  <th>{t("functions.runtime")}</th>
                   <th>{t("functions.trigger")}</th>
                   <th>{t("functions.timeout")}</th>
                   <th>{t("functions.retry")}</th>
@@ -926,23 +931,70 @@ const Functions: Component = () => {
               >
                 <Show when={s()}>
                   {(st) => (
-                    <dl
-                      class="grid grid-cols-2 gap-x-4 gap-y-1 text-sm"
-                      data-testid="function-status"
-                    >
-                      <dt class="label">{t("functions.pending")}</dt>
-                      <dd>{st().pending}</dd>
-                      <dt class="label">{t("functions.running")}</dt>
-                      <dd>{st().running}</dd>
-                      <dt class="label">{t("functions.retryWaiting")}</dt>
-                      <dd>{st().retryWaiting}</dd>
-                      <dt class="label">{t("functions.succeeded")}</dt>
-                      <dd data-testid="succeeded-count">{st().succeeded}</dd>
-                      <dt class="label">{t("functions.deadLettered")}</dt>
-                      <dd>{st().deadLettered}</dd>
-                      <dt class="label">{t("functions.runnerAlive")}</dt>
-                      <dd>{st().runnerAlive ? t("app.yes") : t("app.no")}</dd>
-                    </dl>
+                    <>
+                      <dl
+                        class="grid grid-cols-2 gap-x-4 gap-y-1 text-sm"
+                        data-testid="function-status"
+                      >
+                        <dt class="label">{t("functions.pending")}</dt>
+                        <dd>{st().pending}</dd>
+                        <dt class="label">{t("functions.running")}</dt>
+                        <dd>{st().running}</dd>
+                        <dt class="label">{t("functions.retryWaiting")}</dt>
+                        <dd>{st().retryWaiting}</dd>
+                        <dt class="label">{t("functions.succeeded")}</dt>
+                        <dd data-testid="succeeded-count">{st().succeeded}</dd>
+                        <dt class="label">{t("functions.deadLettered")}</dt>
+                        <dd>{st().deadLettered}</dd>
+                        <dt class="label">{t("functions.runnerAlive")}</dt>
+                        <dd>{st().runnerAlive ? t("app.yes") : t("app.no")}</dd>
+                        <dt class="label">{t("functions.authEventsPending")}</dt>
+                        <dd data-testid="status-auth-events-pending">
+                          {st().authEventsPending ?? 0}
+                        </dd>
+                        <dt class="label">{t("functions.tasksInFlight")}</dt>
+                        <dd data-testid="status-tasks-in-flight">{st().tasksInFlight ?? 0}</dd>
+                        <dt class="label">{t("functions.catchUpPending")}</dt>
+                        <dd data-testid="status-catch-up-pending">
+                          {st().catchUpPending ? t("app.yes") : t("app.no")}
+                        </dd>
+                        <dt class="label">{t("functions.overlapRejected")}</dt>
+                        <dd data-testid="status-overlap-rejected">{st().overlapRejected}</dd>
+                      </dl>
+                      <Show when={(st().codebases?.length ?? 0) > 0}>
+                        <ul class="mt-3 text-sm" data-testid="codebase-list">
+                          <For each={st().codebases}>
+                            {(codebase) => {
+                              const runtime = () =>
+                                o()?.codebases?.find((c) => c.codebase === codebase.codebase);
+                              return (
+                                <li data-testid={`codebase-status-${codebase.codebase}`}>
+                                  {codebase.codebase}{" "}
+                                  <Show when={runtime()}>
+                                    {(value) => <>{runtimeLabel(value())} </>}
+                                  </Show>
+                                  {codebase.runnerAlive
+                                    ? t("functions.codebaseRunning")
+                                    : t("functions.codebaseStopped")}
+                                </li>
+                              );
+                            }}
+                          </For>
+                        </ul>
+                      </Show>
+                      <Show when={(st().ignored?.length ?? 0) > 0}>
+                        <div data-testid="ignored-exports" class="mt-3 text-sm">
+                          <h3 class="font-semibold">{t("functions.ignoredExports")}</h3>
+                          <For each={st().ignored}>
+                            {(entry) => (
+                              <p>
+                                {entry.name} {entry.triggerType} {entry.region} {entry.reason}
+                              </p>
+                            )}
+                          </For>
+                        </div>
+                      </Show>
+                    </>
                   )}
                 </Show>
               </FetchState>

@@ -168,6 +168,12 @@ const isKnownDifferencePointer = (key, value) =>
   key === "knownDifferences" && /^\/knownDifferences\/[A-Za-z0-9_-]+$/.test(value);
 const isKnownRootUrl = (key, value) => /url/i.test(key) && value === "/";
 const isRecordedRootRoute = (key, value) => ["production", "local"].includes(key) && value === "/";
+// The EVENTARC recorder's CloudEvents source (a scheme-relative URI reference, not a path) and the
+// loopback base its SDK facet ran against, as EVENTARC-comparison.json.gz records them.
+const isRecorderEventSource = (key, value) =>
+  key === "source" && /^\/\/fireemu\/recorder\/[0-9a-f]{12}$/.test(value);
+const isLoopbackSdkBase = (key, value) =>
+  key === "base" && /^http:\/\/127\.0\.0\.1:\d{1,5}$/.test(value);
 const isFilesystemPath = (value) => {
   if (/^~(?:[\\/]|$)/.test(value)) return true;
   if (/^file:/i.test(value) || /^[A-Za-z]:[\\/]/.test(value) || value.startsWith("\\\\"))
@@ -213,7 +219,12 @@ export function publicEvidence(value) {
         return;
       }
       if (isUrl(current)) {
-        if (/url|uri|link|origin|authority/i.test(key) || key === "source") return;
+        if (
+          /url|uri|link|origin|authority/i.test(key) ||
+          key === "source" ||
+          isLoopbackSdkBase(key, current)
+        )
+          return;
         fail("URL_CONTEXT");
       }
       if (
@@ -222,7 +233,8 @@ export function publicEvidence(value) {
         isKnownDifferencePointer(key, current) ||
         isApiOrRpc(key, current) ||
         isKnownRootUrl(key, current) ||
-        isRecordedRootRoute(key, current)
+        isRecordedRootRoute(key, current) ||
+        isRecorderEventSource(key, current)
       )
         return;
       if (/^file:/i.test(current)) fail("FILE_URL");

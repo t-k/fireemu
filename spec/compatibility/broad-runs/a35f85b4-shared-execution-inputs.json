@@ -416,7 +416,7 @@
     "comparisonContractDigest": "e20a4f5d2325a3c88306ca30407a3d5b8f224ce9d95f77490f9d0908ec22eb6c",
     "localRecordSha256": "ca623539a723f8799ef18153c1119ab6c2ed5f1c2d7719e5399b8c5414a3b353",
     "project": "fireemu-35fe6",
-    "projectNumber": "592603257417",
+    "projectNumber": "<project-number>",
     "quotaProject": "fireemu-35fe6",
     "databaseProjectionContractDigest": "24b4847314fe67940a1e0e8eb53e34e2bd007ef2e1d942639b51564677d30f18",
     "databaseProjection": {
@@ -458,7 +458,7 @@
     "scope": "Authorized authentication/read preflight; if all explicit candidate conditions match, execute each of the two mapped scenarios once; recover owned resources, postflight and compare with the bound local reference. No retries or inherited permissions.",
     "baselineSource": {
       "path": "spec/compatibility/broad-runs/bc38f392-execution-result.json",
-      "sha256": "5997e5ecc9f3da0addeed6b88c290cfc97c496e317c7625a9175232105953b88",
+      "sha256": "de9d0e64f024f7e98a1d18633f1dff82e14d8133d4474c53ec9c135152e84691",
       "basis": "Historical saved evidence, not current acquisition or inherited approval"
     },
     "baselineStatus": "Historical candidate, neither current acquisition nor accepted baseline",

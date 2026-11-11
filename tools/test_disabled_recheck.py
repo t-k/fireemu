@@ -16,7 +16,7 @@ def test_recheck_publisher_exists_and_preserves_original_subject():
     spec.loader.exec_module(module)
     assert (
         module.PREVIOUS_SUBJECT
-        == "ff502af7fc37542347394d0f28e8df1b9b1566b64a5acb496a41402f040cf3de"
+        == "2cbaf584ef6568167ea496c998b6cc421488081ac1be190be2b81b5553fcee85"
     )
     assert module.BUNDLE != module.old.BUNDLE
 

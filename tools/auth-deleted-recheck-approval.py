@@ -14,7 +14,7 @@ publisher = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(publisher)
 APPROVAL = ROOT / "spec/compatibility/evidence/auth-deleted-recheck/approval.json"
 PAGE = ROOT / "docs/compatibility/auth-deleted-recheck-approval.md"
-SUBJECT = "538747b5e8e9fc3be27952255019fe1a147b766d12c919e8b8c1aef865744174"
+SUBJECT = "a527057df18eab02938cd851407962cf4f1599e725269f42cd32af55e7967cb9"
 SCOPE = "Twelve observations rechecked on the recorded corrected local artifact against unchanged saved production observations. No tenant, local strict profile and recorded production authentication/password-policy settings. Target A is deleted using its own fixed ID token; independent B is the unaffected successful control. Each phase follows the recorded order: password signin, fixed original ID-token lookup, then fixed original refresh-token exchange; successful issued tokens are used for lookup. Approval includes selected state checks, deletion and UID/email absence, remaining owned-account cleanup and owned process termination. Only elapsedMs is excluded from semantic comparison: deleted-A signin returns INVALID_LOGIN_CREDENTIALS, deleted-A ID lookup and refresh return USER_NOT_FOUND, and the remaining nine succeed. This is not a new production run. Approval explicitly excludes identifier-based accounts:lookup authorization; its authentication/authorization bypass is a separate required fix. No claim covers all credential series, ID-token UID reuse, SDK/checkRevoked, Rules, actual expiry, propagation time or fault recovery."
 
 

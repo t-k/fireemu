@@ -1,4 +1,4 @@
-// Runs a plain-HTTP suite of the RTDB SDK observer (rest, rules, tokens, rules-load) against the pinned official emulator jar
+// Runs a plain-HTTP suite of the RTDB SDK observer (rest, rules, tokens, rules-load, rules-syntax) against the pinned official emulator jar
 // and reduces the journal the way the suite's local entry does, so the emulator profile can be compared with the jar.
 //
 //   node rtdb-sdk-jar.mjs <suite> --out <new dir> [--timeout <ms>]
@@ -17,6 +17,7 @@ export const SUITES = {
   rules: () => import('./rtdb-sdk-rules.mjs'),
   tokens: () => import('./rtdb-sdk-tokens.mjs'),
   'rules-load': () => import('./rtdb-sdk-rules-load.mjs'),
+  'rules-syntax': () => import('./rtdb-sdk-rules-syntax.mjs'),
 };
 
 export function parse(argv) {

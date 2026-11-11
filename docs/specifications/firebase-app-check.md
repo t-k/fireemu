@@ -1,6 +1,6 @@
 # Firebase App Check support specification
 
-- Status: historical design specification with maintained transport notes (review decisions of 2026-08-30 applied; see section 25). For released behavior and configuration, see the [App Check guide](https://t-k.github.io/fireemu/products/app-check/).
+- Status: historical design specification with maintained transport notes (review decisions of 2026-08-30 applied; see section 25). For released behavior and configuration, see the [App Check guide](https://fireemu.github.io/fireemu/products/app-check/).
 - Specification date: 2026-08-30
 - Target: `fireemu`
 - Initial delivery: baseline App Check for Auth, Cloud Firestore, Cloud Storage for Firebase, and callable Cloud Functions

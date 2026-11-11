@@ -905,6 +905,7 @@ mod tests {
                         ("parse_eventarc", "entry") => "/eventarc/oauthCredentials/*",
                         ("parse_pubsub", "p") => "/pubsub",
                         ("parse_database", "d") => "/database",
+                        ("parse_hosting", "h") => "/hosting",
                         ("parse_pubsub", "authentication") => "/pubsub/authentication",
                         ("parse_scheduler", "s") => "/scheduler",
                         ("parse_functions", "f") => "/functions",
@@ -923,6 +924,7 @@ mod tests {
                             match branch {
                                 Some("eventarc") => "/emulators/eventarc",
                                 Some("tasks") => "/emulators/tasks",
+                                Some("hosting") => "/emulators/hosting",
                                 Some("ui") => "/emulators/ui",
                                 _ => {
                                     missing.insert(format!("unmapped emulator branch: {branch:?}"));
@@ -1074,8 +1076,8 @@ mod tests {
     #[test]
     fn the_loader_s_key_lists_are_the_schema_s_properties() {
         use crate::config::{
-            AUTH_KEYS, DAEMON_KEYS, DATABASE_KEYS, EVENTS_KEYS, FUNCTIONS_KEYS, KNOWN_TOP_LEVEL,
-            PUBSUB_KEYS, SCHEDULER_KEYS,
+            AUTH_KEYS, DAEMON_KEYS, DATABASE_KEYS, EVENTS_KEYS, FUNCTIONS_KEYS, HOSTING_KEYS,
+            KNOWN_TOP_LEVEL, PUBSUB_KEYS, SCHEDULER_KEYS,
         };
         let schema = schema();
         let declared = |pointer: &str| -> std::collections::BTreeSet<String> {
@@ -1099,6 +1101,7 @@ mod tests {
             ("functions", &FUNCTIONS_KEYS[..]),
             ("pubsub", &PUBSUB_KEYS[..]),
             ("database", &DATABASE_KEYS[..]),
+            ("hosting", &HOSTING_KEYS[..]),
             ("scheduler", &SCHEDULER_KEYS[..]),
         ] {
             assert_eq!(

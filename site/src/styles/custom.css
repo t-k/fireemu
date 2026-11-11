@@ -103,3 +103,31 @@ ul.conditions {
 .sl-markdown-content table {
 	max-width: 100%;
 }
+
+/* Keep a status badge on one line, also in a narrow table column. */
+.sl-markdown-content .sl-badge {
+	white-space: nowrap;
+}
+
+/* Status badges in tables: a readable size and weight, and solid colours in the dark theme, where
+   Starlight's default dark-tinted background with a thin border is hard to read. */
+.sl-markdown-content table .sl-badge {
+	font-family: var(--sl-font);
+	font-size: var(--sl-text-sm);
+	font-weight: 600;
+	padding: 0.125rem 0.5rem;
+}
+:root:not([data-theme='light']) .sl-markdown-content table .sl-badge {
+	--sl-badge-default-bg: var(--sl-color-accent-high);
+	--sl-badge-note-bg: var(--sl-color-blue);
+	--sl-badge-danger-bg: var(--sl-color-red);
+	--sl-badge-success-bg: var(--sl-color-green);
+	--sl-badge-caution-bg: var(--sl-color-orange);
+	--sl-badge-tip-bg: var(--sl-color-purple);
+	--sl-badge-default-text: var(--sl-color-black);
+	--sl-badge-note-text: var(--sl-color-black);
+	--sl-badge-danger-text: var(--sl-color-black);
+	--sl-badge-success-text: var(--sl-color-black);
+	--sl-badge-caution-text: var(--sl-color-black);
+	--sl-badge-tip-text: var(--sl-color-black);
+}

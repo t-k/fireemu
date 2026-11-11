@@ -23,7 +23,7 @@ Weak-password rejection and preserved credentials through end-user REST under re
 | delete | Matched | Matched | — / — | — / — |
 | deleted-account-absent | Matched | Matched | — / — | — / — |
 
-Review subject (no approval granted): `d1fee3f26e44d169ac1719c5af76738a7ced8830f0d1d8e97ce1e8c594b265c8`.
+Review subject (no approval granted): `d3ca3cc27c2d04ad4009cfe4266fcb95d1df09272b84f5ed2ef1f35a2719630b`.
 
 Baseline signin proves the original password works. Its original refresh token is used before and after the refused update, without replacement by newly returned refresh bytes. A five-character ASCII password is sent with that baseline ID token to accounts:update. The expected refusal is HTTP400 WEAK_PASSWORD under the explicitly recorded minimum-six policy. The original ID token then retrieves unchanged selected account fields, and the original password signs in again.
 

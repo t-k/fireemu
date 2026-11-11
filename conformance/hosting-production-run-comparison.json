@@ -1,0 +1,1216 @@
+{
+  "kind": "hosting-comparison-v1",
+  "comparison": "run-vs-run",
+  "corpusSha256": "fa57f2b080426de0ea30e5b9758f117481a770561e625903974c4672fca43150",
+  "inputs": {
+    "a": "56739920bd499ac72d85ccd262838da25e81528c5183bc340535b40ece8039cc",
+    "b": "5574d57144bd47fd96d261f18ab673571489f43f169839d0d6b53153ca896bfc"
+  },
+  "knownDifferences": [
+    {
+      "id": "KD-SAFETY-ORIGIN-REDIRECT",
+      "rows": 2
+    }
+  ],
+  "summary": {
+    "MATCH": 76,
+    "MATCH_LAYOUT": 123,
+    "KNOWN_DIFFERENCE": 2,
+    "MISMATCH": 0,
+    "UNKNOWN": 0
+  },
+  "unclassifiedHeaders": {
+    "a": [],
+    "b": []
+  },
+  "conditions": {
+    "static-files": {
+      "rows": 23,
+      "counts": {
+        "MATCH": 5,
+        "MATCH_LAYOUT": 18,
+        "KNOWN_DIFFERENCE": 0,
+        "MISMATCH": 0,
+        "UNKNOWN": 0
+      },
+      "mismatched": [],
+      "knownDifferenceRows": 0,
+      "closable": true
+    },
+    "headers-cache": {
+      "rows": 6,
+      "counts": {
+        "MATCH": 1,
+        "MATCH_LAYOUT": 5,
+        "KNOWN_DIFFERENCE": 0,
+        "MISMATCH": 0,
+        "UNKNOWN": 0
+      },
+      "mismatched": [],
+      "knownDifferenceRows": 0,
+      "closable": true
+    },
+    "trailing-slash": {
+      "rows": 30,
+      "counts": {
+        "MATCH": 15,
+        "MATCH_LAYOUT": 15,
+        "KNOWN_DIFFERENCE": 0,
+        "MISMATCH": 0,
+        "UNKNOWN": 0
+      },
+      "mismatched": [],
+      "knownDifferenceRows": 0,
+      "closable": true
+    },
+    "not-found": {
+      "rows": 4,
+      "counts": {
+        "MATCH": 0,
+        "MATCH_LAYOUT": 4,
+        "KNOWN_DIFFERENCE": 0,
+        "MISMATCH": 0,
+        "UNKNOWN": 0
+      },
+      "mismatched": [],
+      "knownDifferenceRows": 0,
+      "closable": true
+    },
+    "rewrites": {
+      "rows": 3,
+      "counts": {
+        "MATCH": 0,
+        "MATCH_LAYOUT": 3,
+        "KNOWN_DIFFERENCE": 0,
+        "MISMATCH": 0,
+        "UNKNOWN": 0
+      },
+      "mismatched": [],
+      "knownDifferenceRows": 0,
+      "closable": true
+    },
+    "redirects": {
+      "rows": 46,
+      "counts": {
+        "MATCH": 41,
+        "MATCH_LAYOUT": 5,
+        "KNOWN_DIFFERENCE": 0,
+        "MISMATCH": 0,
+        "UNKNOWN": 0
+      },
+      "mismatched": [],
+      "knownDifferenceRows": 0,
+      "closable": true
+    },
+    "reserved-paths": {
+      "rows": 11,
+      "counts": {
+        "MATCH": 7,
+        "MATCH_LAYOUT": 4,
+        "KNOWN_DIFFERENCE": 0,
+        "MISMATCH": 0,
+        "UNKNOWN": 0
+      },
+      "mismatched": [],
+      "knownDifferenceRows": 0,
+      "closable": true
+    },
+    "compression-vary": {
+      "rows": 10,
+      "counts": {
+        "MATCH": 0,
+        "MATCH_LAYOUT": 10,
+        "KNOWN_DIFFERENCE": 0,
+        "MISMATCH": 0,
+        "UNKNOWN": 0
+      },
+      "mismatched": [],
+      "knownDifferenceRows": 0,
+      "closable": true
+    },
+    "content-types": {
+      "rows": 32,
+      "counts": {
+        "MATCH": 0,
+        "MATCH_LAYOUT": 32,
+        "KNOWN_DIFFERENCE": 0,
+        "MISMATCH": 0,
+        "UNKNOWN": 0
+      },
+      "mismatched": [],
+      "knownDifferenceRows": 0,
+      "closable": true
+    },
+    "clean-urls": {
+      "rows": 7,
+      "counts": {
+        "MATCH": 3,
+        "MATCH_LAYOUT": 4,
+        "KNOWN_DIFFERENCE": 0,
+        "MISMATCH": 0,
+        "UNKNOWN": 0
+      },
+      "mismatched": [],
+      "knownDifferenceRows": 0,
+      "closable": true
+    },
+    "app-association": {
+      "rows": 2,
+      "counts": {
+        "MATCH": 2,
+        "MATCH_LAYOUT": 0,
+        "KNOWN_DIFFERENCE": 0,
+        "MISMATCH": 0,
+        "UNKNOWN": 0
+      },
+      "mismatched": [],
+      "knownDifferenceRows": 0,
+      "closable": true
+    },
+    "i18n": {
+      "rows": 17,
+      "counts": {
+        "MATCH": 2,
+        "MATCH_LAYOUT": 15,
+        "KNOWN_DIFFERENCE": 0,
+        "MISMATCH": 0,
+        "UNKNOWN": 0
+      },
+      "mismatched": [],
+      "knownDifferenceRows": 0,
+      "closable": true
+    },
+    "glob-matching": {
+      "rows": 11,
+      "counts": {
+        "MATCH": 0,
+        "MATCH_LAYOUT": 11,
+        "KNOWN_DIFFERENCE": 0,
+        "MISMATCH": 0,
+        "UNKNOWN": 0
+      },
+      "mismatched": [],
+      "knownDifferenceRows": 0,
+      "closable": true
+    }
+  },
+  "rows": [
+    {
+      "id": "v01.root",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.static",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.query",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.encoded-static",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.directory",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v01.directory-slash",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.index-file",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.page",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.page-slash",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.page-html",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.dir-index-html",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.head-static",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.head-root",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.post-static",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.put-static",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.delete-static",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.options-static",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v01.post-missing",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.range",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.range-suffix",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.cond-etag",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v01.cond-etag-wrong",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.cond-since-future",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v01.cond-since-past",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.missing",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.not-found-direct",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.head-missing",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.rewrite-first",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.cond-etag-rewrite",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v01.rewrite-query",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.redirect-first",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v01.head-redirect",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v01.redirect-capture",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v01.redirect-capture-prefix",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.redirect-capture-literal",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.header-index",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.header-not-found-direct",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.reserved-json",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.reserved-js",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.reserved-emulator-js",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.reserved-unknown",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.reserved-sdk-10",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v01.reserved-sdk-12",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v01.reserved-auth-handler",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v01.gz-none",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.gz-identity",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.gz-gzip",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.gz-br",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.gz-gzip-br",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.gz-br-refused",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.gz-head-gzip",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.gz-json-gzip",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.gz-json-br",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.gz-png-gzip",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.safety-parent",
+      "status": "KNOWN_DIFFERENCE",
+      "differences": [],
+      "known": [
+        {
+          "field": "header:location",
+          "entry": "KD-SAFETY-ORIGIN-REDIRECT"
+        }
+      ]
+    },
+    {
+      "id": "v01.safety-encoded-parent",
+      "status": "KNOWN_DIFFERENCE",
+      "differences": [],
+      "known": [
+        {
+          "field": "header:location",
+          "entry": "KD-SAFETY-ORIGIN-REDIRECT"
+        }
+      ]
+    },
+    {
+      "id": "v01.safety-bad-percent",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v01.ct-html",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.ct-css",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.ct-js",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.ct-mjs",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.ct-json",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.ct-map",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.ct-xml",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.ct-svg",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.ct-txt",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.ct-md",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.ct-csv",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.ct-ico",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.ct-png",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.ct-jpg",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.ct-gif",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.ct-webp",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.ct-avif",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.ct-woff",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.ct-woff2",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.ct-ttf",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.ct-pdf",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.ct-wasm",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.ct-zip",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.ct-webmanifest",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.ct-mp4",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.ct-mp3",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.ct-ts",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.ct-upper",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.ct-noext",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.ct-unknown",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.ct-double",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.ct-dotfile",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.edge-1-00",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.edge-1-01",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v01.edge-1-02",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v01.edge-1-03",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v01.edge-1-04",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v01.edge-1-05",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v01.edge-1-06",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v01.edge-1-07",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v01.edge-1-08",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v01.edge-1-09",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v01.edge-1-10",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v01.edge-1-11",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v01.edge-1-12",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v01.edge-2-00",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.edge-2-01",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v01.edge-2-02",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v01.edge-2-03",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v01.edge-2-04",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v01.edge-2-05",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v01.edge-2-06",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v01.edge-2-07",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v01.edge-2-08",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v01.edge-2-09",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v01.edge-2-10",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v01.edge-2-11",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v01.edge-2-12",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v01.edge-3-00",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v01.edge-3-01",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v01.edge-3-02",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v01.edge-3-03",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v01.edge-3-04",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v01.edge-3-05",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v01.edge-3-06",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v01.edge-3-07",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v01.edge-3-08",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v01.edge-3-09",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v01.edge-3-10",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v01.edge-3-11",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v01.edge-3-12",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v02.page",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v02.page-slash",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v02.page-html",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v02.dir",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v02.dir-slash",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v02.dir-index-html",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v02.root",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v02.assetlinks",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v02.apple-app-site-association",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v03.page",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v03.page-slash",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v03.page-html",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v03.dir",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v03.dir-slash",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v03.dir-index-html",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v03.root",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v04.page",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v04.page-slash",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v04.page-html",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v04.dir",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v04.dir-slash",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v04.dir-index-html",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v04.root",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v05.page",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v05.page-slash",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v05.page-html",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v05.dir",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v05.dir-slash",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v05.dir-index-html",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v05.root",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v06.page",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v06.page-slash",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v06.page-html",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v06.dir",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v06.dir-slash",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v06.dir-index-html",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v06.root",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v07.language",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v07.country-header",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v07.country-header-only",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v07.language-cookie",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v07.fallback",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v07.country-cookie",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v07.country-cookie-only",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v07.both-cookies",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v07.none",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v07.region-tag",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v07.quality",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v07.root",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v07.head-language",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v08.page-html",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v08.page",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v08.page-slash",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v08.dir",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v08.page-country-cookie",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v09.reserved-json",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v09.reserved-js",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v09.reserved-unknown",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v09.reserved-auth-handler",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v09.control",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v09.control-static",
+      "status": "MATCH",
+      "differences": []
+    },
+    {
+      "id": "v10.path-00",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v10.path-01",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v10.path-02",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v10.path-03",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v10.path-04",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v10.path-05",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v10.path-06",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v10.path-07",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v10.path-08",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v10.path-09",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v10.path-10",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    },
+    {
+      "id": "v10.static-over-rewrite",
+      "status": "MATCH_LAYOUT",
+      "differences": []
+    }
+  ]
+}

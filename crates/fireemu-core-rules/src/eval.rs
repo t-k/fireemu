@@ -90,6 +90,12 @@ pub const ABSTRACT_SEGMENT: &str = "fireemu-placeholder";
 /// proofs); only a recursive wildcard can consume it.
 pub const ABSTRACT_PREFIX: &str = "fireemu-any-prefix";
 
+/// [`ABSTRACT_PREFIX`] for a Storage list without a delimiter, the one listing shape whose
+/// `request.path` production has shown: the bucket-relative path of the prefix, without its
+/// trailing `/` (recorded, STORAGE-RULES-S9: `request.path == /b/$(bucket)/o/<prefix>` allowed
+/// a listing of `<prefix>/`). Every other proof marker leaves `request.path` undetermined.
+pub const ABSTRACT_LIST_PREFIX: &str = "fireemu-list-prefix";
+
 /// Typed matcher input keeps concrete names distinct from query proof markers.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum MatchSegment {
@@ -140,7 +146,7 @@ fn match_segments(ctx: &RequestContext) -> Vec<MatchSegment> {
                 && (ctx.service != RulesService::Storage || index + 1 == segments.len());
             match (*value, abstract_segment) {
                 (ABSTRACT_SEGMENT, true) => MatchSegment::AnySegment,
-                (ABSTRACT_PREFIX, true) => MatchSegment::AnyPrefix,
+                (ABSTRACT_PREFIX | ABSTRACT_LIST_PREFIX, true) => MatchSegment::AnyPrefix,
                 _ => MatchSegment::Literal((*value).to_owned()),
             }
         })
@@ -375,6 +381,11 @@ struct Binding<'a> {
     query_numeric_error_source: bool,
     query_float_zero_ambiguous: bool,
     query_numeric_stringification_sensitive: bool,
+    /// The binding holds the query's resource itself (see `is_query_resource_expr`).
+    query_resource: bool,
+    /// Resolving the binding read a key the query does not constrain (see
+    /// `Evaluator::absent_reads`); every later read of it counts as such a read again.
+    absent_read: bool,
     state: BindingState<'a>,
 }
 
@@ -398,6 +409,8 @@ impl Binding<'_> {
             query_numeric_error_source: false,
             query_float_zero_ambiguous: false,
             query_numeric_stringification_sensitive: false,
+            query_resource: false,
+            absent_read: false,
             state: BindingState::Value(value),
         }
     }
@@ -420,6 +433,8 @@ impl Binding<'_> {
             query_numeric_error_source,
             query_float_zero_ambiguous,
             query_numeric_stringification_sensitive,
+            query_resource: false,
+            absent_read: false,
             state: BindingState::Value(value),
         }
     }
@@ -464,6 +479,9 @@ impl DocumentAccess for NoDocumentAccess {
 struct Evaluator<'a> {
     /// Current `eval` recursion depth.
     nesting: u32,
+    /// How a half of a surrogate pair and a lone surrogate in a pattern are treated:
+    /// production's way or the official emulator's.
+    lone_surrogates: crate::ast::LoneSurrogates,
     request: Arc<RulesValue>,
     resource: Arc<RulesValue>,
     /// Abstract resources are query proofs: equality filters preserve Firestore's numeric
@@ -484,6 +502,11 @@ struct Evaluator<'a> {
     /// [`REGEX_EXHAUSTIONS_PER_REQUEST_MAX`]).
     regex_exhaustions: u64,
     projected_member_reads: u64,
+    /// Reads in a query proof of a key the query does not constrain (a member or index of a
+    /// partial map that lacks it): such a read may be a missing-field error for a stored
+    /// document, unlike an undetermined value that exists (`resource.id`, a field the query
+    /// orders by). A call whose argument is undetermined because of one is undetermined.
+    absent_reads: u64,
     doc_reads_max: u64,
     /// `rules_version = '2'`: `**` matches zero or more segments.
     wildcard_zero_or_more: bool,
@@ -684,6 +707,7 @@ fn evaluate_prepared(
         };
         let mut ev = Evaluator {
             nesting: 0,
+            lone_surrogates: ruleset.lone_surrogates,
             request: Arc::clone(request),
             resource: Arc::clone(resource),
             query_proof: ctx.abstract_path,
@@ -694,6 +718,7 @@ fn evaluate_prepared(
             regex_exhaustions: 0,
             regex_diagnostics: RegexEvaluationDiagnostics::default(),
             projected_member_reads: 0,
+            absent_reads: 0,
             doc_reads_max: limit_max(match ctx.service {
                 // A query's rule may read as many documents as a multi-document request
                 // (20: production and the official emulator allow 20 and refuse 21, FS-RULES).
@@ -788,6 +813,28 @@ fn evaluate_prepared(
     }
 }
 
+/// `request.path`: the request's own path, or undetermined in a proof over every potential
+/// result. A Storage listing proof of the recorded shape ([`ABSTRACT_LIST_PREFIX`]) still knows
+/// it: it is the path of the listed prefix, which is the path without the synthetic tail.
+fn request_path(ctx: &RequestContext) -> RulesValue {
+    let mut segments: Vec<String> = ctx
+        .path
+        .trim_start_matches('/')
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+        .collect();
+    if ctx.abstract_path {
+        let listed_prefix = ctx.service == RulesService::Storage
+            && segments.last().map(String::as_str) == Some(ABSTRACT_LIST_PREFIX);
+        if !listed_prefix {
+            return RulesValue::Unknown;
+        }
+        segments.pop();
+    }
+    RulesValue::Path(segments)
+}
+
 fn build_request(ctx: &RequestContext) -> RulesValue {
     build_request_with_resource(ctx, ctx.request_resource.clone())
 }
@@ -807,21 +854,7 @@ fn build_request_with_resource(
         "method".to_owned(),
         RulesValue::String(ctx.method.name().to_owned()),
     );
-    m.insert(
-        "path".to_owned(),
-        if ctx.abstract_path {
-            RulesValue::Unknown
-        } else {
-            RulesValue::Path(
-                ctx.path
-                    .trim_start_matches('/')
-                    .split('/')
-                    .filter(|s| !s.is_empty())
-                    .map(str::to_owned)
-                    .collect(),
-            )
-        },
-    );
+    m.insert("path".to_owned(), request_path(ctx));
     m.insert(
         "time".to_owned(),
         RulesValue::Timestamp(ctx.time_unix_nanos),
@@ -1692,6 +1725,103 @@ impl<'a> Evaluator<'a> {
             .iter()
             .rev()
             .any(|binding| binding.name == name)
+    }
+
+    /// `keys()`, `size()` and `get(key, default)` of a query proof's `resource.data`, which
+    /// production answers from the keys the query constrains alone, whatever the stored
+    /// documents hold (FS-RULES-SHAPES and FS-RULES-SHAPES-TWO, 2026-11-08: `!keys().hasAny(
+    /// ["blocked"])`, `keys().hasOnly(["a"])`, `size() == 1` and `get("blocked", false) ==
+    /// false` allowed with `a == 1` also over documents that store another key;
+    /// `keys().hasOnly(["b"])`, `size() == 0`, `size() > 0` unfiltered and `get("a", 0) == 1`
+    /// unfiltered refused). The receiver must be `resource.data` itself (see
+    /// [`Self::is_query_resource_data_expr`]). `None` for every other call, which keeps its
+    /// ordinary answer.
+    fn closed_query_data_call(
+        &self,
+        object: &Expr,
+        receiver: &RulesValue,
+        name: &str,
+        args: &[RulesValue],
+    ) -> Option<Result<RulesValue, EvalError>> {
+        let RulesValue::PartialMap(fields) = receiver else {
+            return None;
+        };
+        if !matches!(name, "keys" | "size" | "get") || !self.is_query_resource_data_expr(object) {
+            return None;
+        }
+        if args.iter().any(undetermined) {
+            return Some(Err(EvalError::Unknown));
+        }
+        Some(match (name, args) {
+            ("keys", []) => Ok(RulesValue::List(
+                fields.keys().cloned().map(RulesValue::String).collect(),
+            )),
+            ("size", []) => Ok(RulesValue::Int(
+                i64::try_from(fields.len()).unwrap_or(i64::MAX),
+            )),
+            ("get", [RulesValue::String(key), default]) => {
+                Ok(fields.get(key).cloned().unwrap_or_else(|| default.clone()))
+            }
+            _ => Err(EvalError::Unknown),
+        })
+    }
+
+    /// Evaluates a container member or a function argument, which concrete evaluation
+    /// evaluates eagerly: in a query proof, a value undetermined because it read a field the
+    /// query does not constrain (an absent read not absorbed, see `absent_reads`) may be a
+    /// missing-field error for a stored document, so it is undetermined here too.
+    fn eval_operand_that_cannot_fail(&mut self, expr: &Expr) -> Result<RulesValue, EvalError> {
+        let absent_before = self.absent_reads;
+        let value = self.eval(expr)?;
+        if self.query_proof
+            && matches!(value, RulesValue::Unknown)
+            && self.absent_reads > absent_before
+        {
+            return Err(EvalError::Unknown);
+        }
+        Ok(value)
+    }
+
+    /// A member or index read of a partial map: the value of a constrained key, or `Unknown`
+    /// for a key the query does not constrain, which is counted (see `absent_reads`).
+    fn partial_read(&mut self, value: Option<&RulesValue>) -> RulesValue {
+        value.cloned().unwrap_or_else(|| {
+            self.absent_reads += 1;
+            RulesValue::Unknown
+        })
+    }
+
+    /// Whether `expr` is the query's resource in a query proof: the identifier `resource`
+    /// unshadowed, or a binding (a function parameter, a `let`) bound to it. It is recognized
+    /// by where the value comes from rather than by its value (review 2026-11-08 r2), so that
+    /// only `resource.data` itself answers its key set (`Self::closed_query_data_call`), also
+    /// through `f(resource)` (FS-RULES-SHAPES-TWO 2026-11-08 recorded `f(resource)` with
+    /// `f(r) = r != null` allowed).
+    fn is_query_resource_expr(&self, expr: &Expr) -> bool {
+        if !self.query_proof {
+            return false;
+        }
+        let ExprKind::Ident(name) = expr.kind() else {
+            return false;
+        };
+        match self
+            .scope
+            .bindings
+            .iter()
+            .rposition(|binding| binding.name == *name)
+        {
+            Some(index) => self.scope.bindings[index].query_resource,
+            None => name == "resource",
+        }
+    }
+
+    /// Whether `expr` is `resource.data` of a query proof (see
+    /// [`Self::is_query_resource_expr`]).
+    fn is_query_resource_data_expr(&self, expr: &Expr) -> bool {
+        matches!(
+            expr.kind(),
+            ExprKind::Member { object, name } if name == "data" && self.is_query_resource_expr(object)
+        )
     }
 
     fn query_derived_expression(&self, expr: &Expr) -> bool {
@@ -3074,6 +3204,10 @@ impl<'a> Evaluator<'a> {
                 ExprKind::Member { object, name } if name == "size" => {
                     self.query_numeric_stringification_sensitive_with(object)
                 }
+                // A map's keys are field names, never a stringified value.
+                ExprKind::Member { object, name } if name == "keys" => {
+                    self.query_numeric_stringification_sensitive_with(object)
+                }
                 ExprKind::Member { object, name } if name == "join" => {
                     self.query_numeric_expression_source(object)
                         || self.query_numeric_stringification_sensitive_with(object)
@@ -3815,6 +3949,9 @@ impl<'a> Evaluator<'a> {
             }
             BindingState::Resolved { result, cause } => {
                 self.cause.clone_from(&cause);
+                if self.scope.bindings[index].absent_read {
+                    self.absent_reads += 1;
+                }
                 self.scope.bindings[index].state = BindingState::Resolved {
                     result: result.clone(),
                     cause,
@@ -3828,7 +3965,9 @@ impl<'a> Evaluator<'a> {
             BindingState::Lazy(expr) => {
                 let visible_before = self.scope.bindings[index].visible_before;
                 let mut hidden = self.scope.bindings.split_off(visible_before);
+                let absent_before = self.absent_reads;
                 let result = self.eval(expr);
+                hidden[index - visible_before].absent_read = self.absent_reads > absent_before;
                 hidden[index - visible_before].state = BindingState::Resolved {
                     result: result.clone(),
                     cause: self.cause.clone(),
@@ -4209,6 +4348,7 @@ impl<'a> Evaluator<'a> {
                 Literal::Int(i) => RulesValue::Int(*i),
                 Literal::Float(f) => RulesValue::Float(*f),
                 Literal::Str(s) => RulesValue::String(s.clone()),
+                Literal::IllFormedStr(units) => RulesValue::IllFormed(units.clone()),
             }),
             ExprKind::Ident(name) => self
                 .lookup(name)?
@@ -4221,11 +4361,9 @@ impl<'a> Evaluator<'a> {
                         .cloned()
                         .ok_or_else(|| soft(format!("missing member {name}"))),
                     // A key the query does not constrain may or may not exist.
-                    RulesValue::PartialMap(m) => {
-                        Ok(m.get(name).cloned().unwrap_or(RulesValue::Unknown))
-                    }
+                    RulesValue::PartialMap(m) => Ok(self.partial_read(m.get(name))),
                     RulesValue::PartialMapExcluding { fields, .. } => {
-                        Ok(fields.get(name).cloned().unwrap_or(RulesValue::Unknown))
+                        Ok(self.partial_read(fields.get(name)))
                     }
                     RulesValue::Unknown => Err(EvalError::Unknown),
                     RulesValue::Null => Err(soft(format!("member {name} of null"))),
@@ -4253,10 +4391,10 @@ impl<'a> Evaluator<'a> {
                         .cloned()
                         .ok_or_else(|| soft(format!("missing key {k}"))),
                     (RulesValue::PartialMap(m), RulesValue::String(k)) => {
-                        Ok(m.get(&k).cloned().unwrap_or(RulesValue::Unknown))
+                        Ok(self.partial_read(m.get(&k)))
                     }
                     (RulesValue::PartialMapExcluding { fields, .. }, RulesValue::String(k)) => {
-                        Ok(fields.get(&k).cloned().unwrap_or(RulesValue::Unknown))
+                        Ok(self.partial_read(fields.get(&k)))
                     }
                     (o, i) if undetermined(&o) || undetermined(&i) => Err(EvalError::Unknown),
                     (RulesValue::List(items), RulesValue::Int(i)) => usize::try_from(i)
@@ -4268,11 +4406,17 @@ impl<'a> Evaluator<'a> {
                         .and_then(|i| segments.get(i).cloned())
                         .map(RulesValue::String)
                         .ok_or_else(|| soft("path index out of range")),
-                    (RulesValue::String(s), RulesValue::Int(i)) => usize::try_from(i)
-                        .ok()
-                        .and_then(|i| s.chars().nth(i))
-                        .map(|c| RulesValue::String(c.to_string()))
-                        .ok_or_else(|| soft("string index out of range")),
+                    (
+                        text @ (RulesValue::String(_) | RulesValue::IllFormed(_)),
+                        RulesValue::Int(i),
+                    ) => {
+                        let units = text.utf16_units().unwrap_or_default();
+                        usize::try_from(i)
+                            .ok()
+                            .filter(|i| *i < units.len())
+                            .ok_or_else(|| soft("string index out of range"))
+                            .and_then(|i| select_units(&text, i, i + 1, self.lone_surrogates))
+                    }
                     (o, i) => Err(soft(format!(
                         "cannot index {} with {}",
                         o.type_name(),
@@ -4292,7 +4436,7 @@ impl<'a> Evaluator<'a> {
                 {
                     return Err(EvalError::Unknown);
                 }
-                slice(&obj, &lo, &hi)
+                slice(&obj, &lo, &hi, self.lone_surrogates)
             }
             ExprKind::Call {
                 callee,
@@ -4336,16 +4480,26 @@ impl<'a> Evaluator<'a> {
                     self.eval(otherwise)
                 }
             }
-            ExprKind::List(items) => Ok(RulesValue::List(
-                items
+            // In a query proof, a list or map the rule builds from a member that may fail to
+            // evaluate for a stored document (a read of a field the query does not constrain)
+            // is undetermined as a whole, so no operation on it (a type test, a member, a shape
+            // read, a comparison) can be proven (reviews 2026-11-08 r3 and r4). A member that
+            // exists but is undetermined (`resource.id`, a Storage path capture) cannot fail
+            // (coordinator ruling A, 2026-11-09). See `eval_operand_that_cannot_fail`.
+            ExprKind::List(items) => {
+                let values = items
                     .iter()
-                    .map(|i| self.eval(i))
-                    .collect::<Result<_, _>>()?,
-            )),
+                    .map(|i| self.eval_operand_that_cannot_fail(i))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(RulesValue::List(values))
+            }
             ExprKind::Map(entries) => {
                 let mut m = BTreeMap::new();
                 for (k, v) in entries {
-                    m.insert(k.clone(), self.eval(v)?);
+                    // Checked per entry: a later duplicate key would overwrite it (review
+                    // 2026-11-08 r5).
+                    let value = self.eval_operand_that_cannot_fail(v)?;
+                    m.insert(k.clone(), value);
                 }
                 Ok(RulesValue::Map(m))
             }
@@ -4500,9 +4654,16 @@ impl<'a> Evaluator<'a> {
             // ends the request, and the second is fireemu admitting it cannot evaluate the
             // operand, which must never be allowed to read as a permissive answer.
             let mut deferred: Option<EvalError> = None;
+            // A definite answer absorbed every absent read of its operands (see
+            // `absent_reads`): none of them can fail the expression any more (review
+            // 2026-11-08 r7b).
+            let absent_before = self.absent_reads;
             for operand in operands.into_iter().rev() {
                 match self.eval(operand).and_then(|v| truthy(&v)) {
-                    Ok(b) if b == stop_on => return Ok(RulesValue::Bool(stop_on)),
+                    Ok(b) if b == stop_on => {
+                        self.absent_reads = absent_before;
+                        return Ok(RulesValue::Bool(stop_on));
+                    }
                     Ok(_) => {}
                     Err(e @ (EvalError::Budget { .. } | EvalError::Unsupported(_))) => {
                         return Err(e)
@@ -4581,6 +4742,16 @@ impl<'a> Evaluator<'a> {
             (BinaryOp::In, V::String(k), V::PartialMap(m)) => {
                 if m.contains_key(k) {
                     V::Bool(true)
+                } else if self.query_proof {
+                    // Production answers a key the query does not constrain as absent from
+                    // `resource.data` and from a map of it the query constrains in part
+                    // (FS-RULES-DIFFS and FS-RULES-SHAPES 2026-11-08: `!("blocked" in
+                    // resource.data)` allowed also when stored documents hold `blocked`,
+                    // `"owner" in resource.data` refused without a filter, `!("blocked" in
+                    // resource.data.meta)` allowed with a `meta.a` filter). Every partial map
+                    // of a list proof comes from the query resource, and every field a result
+                    // must hold is one of its keys.
+                    V::Bool(false)
                 } else {
                     return Err(EvalError::Unknown);
                 }
@@ -4739,6 +4910,15 @@ impl<'a> Evaluator<'a> {
                     return Err(EvalError::Unknown);
                 }
             }
+            // A map, list or set is never null, whatever undetermined members it holds: the
+            // query `resource` is a document (FS-RULES-DIFFS 2026-11-08, `resource != null`
+            // allowed). Such a container is always one that exists (`request`, `resource`,
+            // a binding of them): one the rule builds from an undetermined value is
+            // undetermined as a whole (see `ExprKind::List` in `eval_inner`).
+            (BinaryOp::Eq | BinaryOp::Ne, V::Map(_) | V::List(_) | V::Set(_), V::Null)
+            | (BinaryOp::Eq | BinaryOp::Ne, V::Null, V::Map(_) | V::List(_) | V::Set(_)) => {
+                V::Bool(op == BinaryOp::Ne)
+            }
             (_, a, b) if undetermined(a) || undetermined(b) => return Err(EvalError::Unknown),
             (BinaryOp::Eq, a, b) => V::Bool(if query_resource_value {
                 query_equality_result(BinaryOp::Eq, a, b)?
@@ -4775,6 +4955,16 @@ impl<'a> Evaluator<'a> {
             | (BinaryOp::Sub, V::Duration(a), V::Duration(b)) => V::Duration(a - b),
             (BinaryOp::Add, V::Duration(a), V::Duration(b)) => V::Duration(a + b),
             (BinaryOp::Add, V::String(a), V::String(b)) => V::String(format!("{a}{b}")),
+            (
+                BinaryOp::Add,
+                a @ (V::String(_) | V::IllFormed(_)),
+                b @ (V::String(_) | V::IllFormed(_)),
+            ) => {
+                // A lone high surrogate and a lone low one that meet are one character.
+                let mut units = a.utf16_units().unwrap_or_default();
+                units.extend(b.utf16_units().unwrap_or_default());
+                V::from_utf16_units(&units)
+            }
             (BinaryOp::Add, V::List(a), V::List(b)) => {
                 V::List(a.iter().chain(b).cloned().collect())
             }
@@ -4820,9 +5010,15 @@ impl<'a> Evaluator<'a> {
         match callee.kind() {
             ExprKind::Ident(name) => {
                 if let Some(f) = self.function(name) {
+                    // Arguments are evaluated before the call: an argument undetermined because
+                    // it read a field the query does not constrain may be a missing-field
+                    // error for a stored document, whatever the function does with it (review
+                    // 2026-11-08 r5). An undetermined value that exists (`resource.id`, a field
+                    // the query orders by) and `resource` itself pass (review r6;
+                    // `f(resource)`, FS-RULES-SHAPES-TWO).
                     let values = args
                         .iter()
-                        .map(|a| self.eval(a))
+                        .map(|argument| self.eval_operand_that_cannot_fail(argument))
                         .collect::<Result<Vec<_>, _>>()?;
                     let query_provenance = args
                         .iter()
@@ -4845,13 +5041,17 @@ impl<'a> Evaluator<'a> {
                         .iter()
                         .map(|argument| self.query_numeric_error_source(argument))
                         .collect();
+                    let resource_provenance = args
+                        .iter()
+                        .map(|argument| self.is_query_resource_expr(argument))
+                        .collect();
                     return self.call_user(
                         f,
                         values,
                         query_provenance,
                         stringification_provenance,
                         numeric_source_provenance,
-                        numeric_error_provenance,
+                        (numeric_error_provenance, resource_provenance),
                     );
                 }
                 match name.as_str() {
@@ -4993,10 +5193,21 @@ impl<'a> Evaluator<'a> {
                     .iter()
                     .map(|a| self.eval(a))
                     .collect::<Result<Vec<_>, _>>()?;
-                if matches!(receiver, RulesValue::String(_))
+                let ill_formed = matches!(receiver, RulesValue::IllFormed(_))
+                    || values.iter().any(|v| matches!(v, RulesValue::IllFormed(_)));
+                if ill_formed
+                    && matches!(receiver, RulesValue::String(_) | RulesValue::IllFormed(_))
+                    && matches!(name.as_str(), "matches" | "replace" | "split")
+                {
+                    self.ill_formed_string_call(&receiver, name, &values, compiled_regex)
+                } else if matches!(receiver, RulesValue::String(_))
                     && matches!(name.as_str(), "matches" | "replace")
                 {
                     self.string_regex_call(&receiver, name, &values, compiled_regex)
+                } else if let Some(answer) =
+                    self.closed_query_data_call(object, &receiver, name, &values)
+                {
+                    answer
                 } else {
                     let query_derived_receiver = self.query_derived_expression(object);
                     let query_derived = query_derived_receiver
@@ -5020,6 +5231,28 @@ impl<'a> Evaluator<'a> {
                 }
             }
             _ => Err(soft("call target is not callable")),
+        }
+    }
+
+    /// The compiled pattern of a string value, which may hold a lone surrogate (a literal
+    /// that matches that unit alone).
+    fn regex_for_text(
+        &mut self,
+        pattern: &RulesValue,
+        compiled_regex: Option<&Arc<crate::regex::Regex>>,
+    ) -> Result<Arc<crate::regex::Regex>, EvalError> {
+        match pattern {
+            RulesValue::String(text) => self.regex_for(text, compiled_regex),
+            other => {
+                let pieces = crate::value::pieces(&other.utf16_units().unwrap_or_default());
+                crate::regex::Regex::from_pieces(&pieces)
+                    .map(Arc::new)
+                    .map_err(|error| {
+                        EvalError::Unsupported(crate::regex::escape_diagnostic_text(
+                            &error.to_string(),
+                        ))
+                    })
+            }
         }
     }
 
@@ -5105,6 +5338,57 @@ impl<'a> Evaluator<'a> {
         }
     }
 
+    /// `matches()`, `replace()` and `split()` where the subject or an argument holds a lone
+    /// surrogate.
+    ///
+    /// Recorded in production (`regex#*-hi*`, 2026-11-08): `"\ud83d".matches(".")` is true (a lone
+    /// unit is a character), while a pattern, a separator or a subject of `replace()` that
+    /// holds one made the rule fail (`rep-hi`, `split-hi`, `split-fire-by-hi*`, `m-hi-lit`).
+    /// The official emulator matches them, a lone unit only against a lone unit. Anything
+    /// production was not recorded with fails, as production does.
+    fn ill_formed_string_call(
+        &mut self,
+        receiver: &RulesValue,
+        name: &str,
+        args: &[RulesValue],
+        compiled_regex: Option<&Arc<crate::regex::Regex>>,
+    ) -> Result<RulesValue, EvalError> {
+        use RulesValue as V;
+        let production = self.lone_surrogates == crate::ast::LoneSurrogates::Production;
+        let is_text = |v: &V| matches!(v, V::String(_) | V::IllFormed(_));
+        let pieces_of = |text: &V| crate::value::pieces(&text.utf16_units().unwrap_or_default());
+        match (name, args) {
+            ("split", [separator]) if is_text(separator) => {
+                if production {
+                    return Err(soft("split() with a lone surrogate"));
+                }
+                Ok(split_pieces(receiver, separator))
+            }
+            ("split", _) => Err(soft("split() expects a string")),
+            ("matches", [pattern]) if is_text(pattern) => {
+                if production && matches!(pattern, V::IllFormed(_)) {
+                    return Err(soft("a lone surrogate in a pattern"));
+                }
+                let regex = self.regex_for_text(pattern, compiled_regex)?;
+                let subject = pieces_of(receiver);
+                let matched = regex.is_full_match_pieces(&subject);
+                Ok(V::Bool(matched.map_err(|e| self.regex_failure(e))?))
+            }
+            ("replace", [pattern, replacement]) if is_text(pattern) && is_text(replacement) => {
+                if production {
+                    return Err(soft("replace() with a lone surrogate"));
+                }
+                let regex = self.regex_for_text(pattern, None)?;
+                let replaced = regex
+                    .replace_all_pieces(&pieces_of(receiver), &pieces_of(replacement))
+                    .map_err(|e| self.regex_failure(e))?;
+                Ok(crate::value::string_from_pieces(&replaced))
+            }
+            ("matches", _) => Err(soft("matches() expects a string pattern")),
+            _ => Err(soft("replace() expects a pattern and a replacement")),
+        }
+    }
+
     fn call_user(
         &mut self,
         f: &'a FunctionDecl,
@@ -5112,7 +5396,7 @@ impl<'a> Evaluator<'a> {
         query_provenance: Vec<QueryFloatZeroProvenance>,
         stringification_provenance: Vec<bool>,
         numeric_source_provenance: Vec<bool>,
-        numeric_error_provenance: Vec<bool>,
+        (numeric_error_provenance, resource_provenance): (Vec<bool>, Vec<bool>),
     ) -> Result<RulesValue, EvalError> {
         if values.len() != f.params.len() {
             return Err(soft(format!(
@@ -5161,6 +5445,14 @@ impl<'a> Evaluator<'a> {
                 stringification_sensitive,
             ));
         }
+        // The parameters are the last bindings pushed.
+        let parameters = self.scope.bindings.len() - f.params.len();
+        for (binding, query_resource) in self.scope.bindings[parameters..]
+            .iter_mut()
+            .zip(resource_provenance)
+        {
+            binding.query_resource = query_resource;
+        }
         let result = {
             for l in &f.lets {
                 let visible_before = self.scope.bindings.len();
@@ -5175,6 +5467,7 @@ impl<'a> Evaluator<'a> {
                     self.query_numeric_stringification_sensitive(&l.value);
                 let query_numeric_source = self.query_numeric_expression_source(&l.value);
                 let query_numeric_error_source = self.query_numeric_error_source(&l.value);
+                let query_resource = self.is_query_resource_expr(&l.value);
                 self.scope.bindings.push(Binding {
                     name: l.name.clone(),
                     visible_before,
@@ -5183,6 +5476,8 @@ impl<'a> Evaluator<'a> {
                     query_numeric_error_source,
                     query_float_zero_ambiguous,
                     query_numeric_stringification_sensitive,
+                    query_resource,
+                    absent_read: false,
                     state: BindingState::Lazy(&l.value),
                 });
             }
@@ -5529,7 +5824,9 @@ fn method_call(
     //
     // `keys()` and `size()` of a map are the exception: both read the key set, which an
     // undetermined *value* leaves fully known. `request.keys()` depends on it, because
-    // `request.auth` is undetermined while a query is being proven.
+    // `request.path` is undetermined while a query is being proven. Such a map always exists
+    // (`request`, `resource`): one the rule builds from an undetermined value is undetermined
+    // as a whole (see `ExprKind::List` in `eval_inner`).
     let shape_only = matches!(receiver, V::Map(_)) && matches!(name, "keys" | "size");
     if (!shape_only
         && matches!(receiver, V::List(_) | V::Set(_) | V::Map(_))
@@ -5622,17 +5919,23 @@ fn method_call(
             | V::PartialMapExcluding { .. },
             _,
         ) => return Err(EvalError::Unknown),
-        (V::String(s), "size") => {
+        (V::String(_) | V::IllFormed(_) | V::Fragment(_), "size") => {
             arity(0)?;
-            V::Int(i64::try_from(s.chars().count()).unwrap_or(i64::MAX))
+            V::Int(i64::try_from(utf16_len(receiver)).unwrap_or(i64::MAX))
+        }
+        (V::IllFormed(units), "lower" | "upper") => {
+            arity(0)?;
+            let lower = name == "lower";
+            V::from_utf16_units(&units_case(units, lower))
         }
         (V::String(s), "lower") => {
             arity(0)?;
-            V::String(s.to_lowercase())
+            // ASCII letters only: recorded in production (`unicode/case#*`, 2026-11-08).
+            V::String(s.to_ascii_lowercase())
         }
         (V::String(s), "upper") => {
             arity(0)?;
-            V::String(s.to_uppercase())
+            V::String(s.to_ascii_uppercase())
         }
         (V::String(s), "trim") => {
             arity(0)?;
@@ -5998,6 +6301,7 @@ fn slice(
     receiver: &RulesValue,
     start: &RulesValue,
     end: &RulesValue,
+    mode: crate::ast::LoneSurrogates,
 ) -> Result<RulesValue, EvalError> {
     use RulesValue as V;
     if undetermined(receiver) || undetermined(start) || undetermined(end) {
@@ -6012,7 +6316,7 @@ fn slice(
     };
     let len = match receiver {
         V::List(items) => items.len(),
-        V::String(s) => s.chars().count(),
+        V::String(_) | V::IllFormed(_) => utf16_len(receiver),
         other => {
             return Err(soft(format!(
                 "{} cannot be range indexed",
@@ -6030,9 +6334,125 @@ fn slice(
     );
     Ok(match receiver {
         V::List(items) => V::List(items[lo..hi].to_vec()),
-        V::String(s) => V::String(s.chars().skip(lo).take(hi - lo).collect()),
+        V::String(_) | V::IllFormed(_) => select_units(receiver, lo, hi, mode)?,
         _ => unreachable!("the length arm already rejected every other receiver"),
     })
+}
+
+/// The length of a string value in UTF-16 code units, which is what the Rules runtime counts
+/// (`string-index#size-4`: `"é🔥x".size() == 4`, recorded in production).
+fn utf16_len(text: &RulesValue) -> usize {
+    match text {
+        RulesValue::String(s) => s.encode_utf16().count(),
+        RulesValue::IllFormed(units) => units.len(),
+        RulesValue::Fragment(_) => 1,
+        _ => 0,
+    }
+}
+
+/// The units `lo..hi` of a string value (the caller checked the bounds), the way the Rules
+/// runtime reads a string: by UTF-16 unit (`string-index#idx0` to `idx4-*`,
+/// `strings#rng-*`).
+///
+/// A unit that was one half of a pair in `receiver` is what the profile says. The official
+/// emulator keeps the lone unit (`"é🔥x"[1] == "\ud83d"` is true); production recorded
+/// `false` there (`string-escape#esc-high`) and `true` for the size of `[1:2]` and for
+/// `"a\ud83dz"[1:2] == "\ud83d"`, so it holds the half of a pair as U+FFFD while a lone unit
+/// the string held already stays what it was.
+fn select_units(
+    receiver: &RulesValue,
+    lo: usize,
+    hi: usize,
+    mode: crate::ast::LoneSurrogates,
+) -> Result<RulesValue, EvalError> {
+    use crate::value::Piece;
+    let units = receiver.utf16_units().unwrap_or_default();
+    let mut original_lone = vec![false; units.len()];
+    let mut at = 0;
+    for piece in crate::value::pieces(&units) {
+        match piece {
+            Piece::Char(c) => at += c.len_utf16(),
+            Piece::Lone(_) => {
+                original_lone[at] = true;
+                at += 1;
+            }
+        }
+    }
+    let mut offset = lo;
+    let mut cut_halves = Vec::new();
+    let selected: Vec<Piece> = crate::value::pieces(&units[lo..hi])
+        .into_iter()
+        .inspect(|piece| match piece {
+            Piece::Char(c) => offset += c.len_utf16(),
+            Piece::Lone(unit) => {
+                if !original_lone[offset] {
+                    cut_halves.push(*unit);
+                }
+                offset += 1;
+            }
+        })
+        .collect();
+    if mode == crate::ast::LoneSurrogates::Production && !cut_halves.is_empty() {
+        // Not recorded beyond a half on its own: its size is one and it is not the lone unit
+        // an escape writes. A range that cuts a pair among other text fails the rule.
+        return match (selected.as_slice(), cut_halves.as_slice()) {
+            ([Piece::Lone(unit)], [_]) => Ok(RulesValue::Fragment(*unit)),
+            _ => Err(soft("a range cuts a surrogate pair")),
+        };
+    }
+    Ok(crate::value::string_from_pieces(&selected))
+}
+
+/// `lower()` or `upper()` of a string that holds a lone surrogate: ASCII letters change, every
+/// other unit stays (the mapping is ASCII-only, `unicode/case#*`).
+fn units_case(units: &[u16], lower: bool) -> Vec<u16> {
+    units
+        .iter()
+        .map(|unit| match u8::try_from(*unit) {
+            // A byte above 0x7f is not an ASCII letter and stays as it is.
+            Ok(byte) => u16::from(if lower {
+                byte.to_ascii_lowercase()
+            } else {
+                byte.to_ascii_uppercase()
+            }),
+            _ => *unit,
+        })
+        .collect()
+}
+
+/// `split()` where a lone surrogate is involved (the official emulator): the separator is
+/// searched for character by character, and a lone unit matches only a lone unit, never half
+/// of a pair (`regex#split-fire-by-hi-1`: `"a🔥b".split("\ud83d").size() == 1`).
+fn split_pieces(subject: &RulesValue, separator: &RulesValue) -> RulesValue {
+    let pieces_of =
+        |text: &RulesValue| crate::value::pieces(&text.utf16_units().unwrap_or_default());
+    let subject = pieces_of(subject);
+    let separator = pieces_of(separator);
+    let mut parts: Vec<RulesValue> = Vec::new();
+    let mut start = 0;
+    let mut at = 0;
+    if separator.is_empty() {
+        // Rust's `split("")` on an ordinary string: an empty part, each character, an empty part.
+        parts.push(RulesValue::String(String::new()));
+        parts.extend(
+            subject
+                .iter()
+                .map(|piece| crate::value::string_from_pieces(&[*piece])),
+        );
+        parts.push(RulesValue::String(String::new()));
+        return RulesValue::List(parts);
+    }
+    while at + separator.len() <= subject.len() {
+        if subject[at..at + separator.len()] == separator[..] {
+            parts.push(crate::value::string_from_pieces(&subject[start..at]));
+            at += separator.len();
+            start = at;
+        } else {
+            at += 1;
+        }
+    }
+    parts.push(crate::value::string_from_pieces(&subject[start..]));
+    RulesValue::List(parts)
 }
 
 /// Nanoseconds per day.

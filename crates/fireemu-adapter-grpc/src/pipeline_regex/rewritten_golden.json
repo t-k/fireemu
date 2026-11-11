@@ -1,0 +1,1003 @@
+{
+  "emulator": [
+    {
+      "groups": 0,
+      "ok": "[0-9]",
+      "pattern": "\\d"
+    },
+    {
+      "groups": 0,
+      "ok": "[0-9]+",
+      "pattern": "\\d+"
+    },
+    {
+      "groups": 0,
+      "ok": "[^0-9]",
+      "pattern": "\\D"
+    },
+    {
+      "groups": 0,
+      "ok": "[0-9]+",
+      "pattern": "\\d+"
+    },
+    {
+      "groups": 0,
+      "ok": "[0-9]",
+      "pattern": "[\\d]"
+    },
+    {
+      "groups": 0,
+      "ok": "\\p{Nd}+",
+      "pattern": "\\p{Nd}+"
+    },
+    {
+      "err": "InvalidSyntax",
+      "pattern": "[[:digit:]]"
+    },
+    {
+      "groups": 0,
+      "ok": "[0-9]",
+      "pattern": "[0-9]"
+    },
+    {
+      "groups": 0,
+      "ok": "[0-9A-Za-z_]",
+      "pattern": "\\w"
+    },
+    {
+      "groups": 0,
+      "ok": "[^0-9A-Za-z_]",
+      "pattern": "\\W"
+    },
+    {
+      "groups": 0,
+      "ok": "[0-9A-Za-z_]+",
+      "pattern": "\\w+"
+    },
+    {
+      "groups": 0,
+      "ok": "[^0-9A-Za-z_]",
+      "pattern": "\\W"
+    },
+    {
+      "groups": 0,
+      "ok": "(?-u:\\b)caf(?-u:\\b)",
+      "pattern": "\\bcaf\\b"
+    },
+    {
+      "groups": 0,
+      "ok": "(?-u:\\b)café(?-u:\\b)",
+      "pattern": "\\bcafé\\b"
+    },
+    {
+      "groups": 0,
+      "ok": "(?-u:\\b)",
+      "pattern": "\\b"
+    },
+    {
+      "groups": 0,
+      "ok": "(?-u:\\B)",
+      "pattern": "\\B"
+    },
+    {
+      "groups": 0,
+      "ok": "[0-9A-Za-z_]+",
+      "pattern": "\\w+"
+    },
+    {
+      "groups": 0,
+      "ok": "\\pL",
+      "pattern": "\\pL"
+    },
+    {
+      "groups": 0,
+      "ok": "[0-9A-Za-z_]",
+      "pattern": "[\\w]"
+    },
+    {
+      "err": "InvalidSyntax",
+      "pattern": "[[:word:]]"
+    },
+    {
+      "groups": 0,
+      "ok": "a[\\t\\n\\x0B\\x0C\\r\\x20]b",
+      "pattern": "a\\sb"
+    },
+    {
+      "groups": 0,
+      "ok": "a[^\\t\\n\\x0B\\x0C\\r\\x20]b",
+      "pattern": "a\\Sb"
+    },
+    {
+      "groups": 0,
+      "ok": "[\\t\\n\\x0B\\x0C\\r\\x20]",
+      "pattern": "\\s"
+    },
+    {
+      "groups": 0,
+      "ok": "a[\\t\\n\\x0B\\x0C\\r\\x20]b",
+      "pattern": "a\\sb"
+    },
+    {
+      "groups": 0,
+      "ok": "a[\\t\\n\\x0B\\x0C\\r\\x20]b",
+      "pattern": "a\\sb"
+    },
+    {
+      "groups": 0,
+      "ok": "a[\\t\\n\\x0B\\x0C\\r\\x20]b",
+      "pattern": "a\\sb"
+    },
+    {
+      "groups": 0,
+      "ok": "a[\\t\\n\\x0B\\x0C\\r\\x20]b",
+      "pattern": "a\\sb"
+    },
+    {
+      "err": "InvalidSyntax",
+      "pattern": "a[[:space:]]b"
+    },
+    {
+      "err": "InvalidSyntax",
+      "pattern": "a[[:space:]]b"
+    },
+    {
+      "groups": 0,
+      "ok": "a\\x{a0}b",
+      "pattern": "a\\x{a0}b"
+    },
+    {
+      "groups": 0,
+      "ok": "é",
+      "pattern": "(?i)é"
+    },
+    {
+      "groups": 0,
+      "ok": "σ",
+      "pattern": "(?i)σ"
+    },
+    {
+      "groups": 0,
+      "ok": "[kK]",
+      "pattern": "(?i)k"
+    },
+    {
+      "groups": 0,
+      "ok": "[aA][bB]",
+      "pattern": "(?i)ab"
+    },
+    {
+      "groups": 0,
+      "ok": "(?:[aA])b",
+      "pattern": "(?i:a)b"
+    },
+    {
+      "groups": 0,
+      "ok": "[aA]b",
+      "pattern": "(?i)a(?-i)b"
+    },
+    {
+      "groups": 0,
+      "ok": "a.b",
+      "pattern": "a.b"
+    },
+    {
+      "groups": 0,
+      "ok": "(?s)a.b",
+      "pattern": "(?s)a.b"
+    },
+    {
+      "err": "InvalidSyntax",
+      "pattern": "(?m)^b$"
+    },
+    {
+      "groups": 0,
+      "ok": "^b$",
+      "pattern": "^b$"
+    },
+    {
+      "groups": 0,
+      "ok": "[0-9A-Za-z_]",
+      "pattern": "(?u)\\w"
+    },
+    {
+      "groups": 0,
+      "ok": "[0-9A-Za-z_]",
+      "pattern": "(?-u)\\w"
+    },
+    {
+      "groups": 0,
+      "ok": "a+",
+      "pattern": "(?U)a+"
+    },
+    {
+      "groups": 0,
+      "ok": "\\\\",
+      "pattern": "\\\\"
+    },
+    {
+      "groups": 0,
+      "ok": "a\\\\b",
+      "pattern": "a\\\\b"
+    },
+    {
+      "groups": 0,
+      "ok": "[\\\\]",
+      "pattern": "[\\\\]"
+    },
+    {
+      "groups": 0,
+      "ok": "\\x{5c}",
+      "pattern": "\\x{5c}"
+    },
+    {
+      "groups": 0,
+      "ok": "\\\\d",
+      "pattern": "\\\\d"
+    },
+    {
+      "groups": 0,
+      "ok": "[0-9]",
+      "pattern": "\\d"
+    },
+    {
+      "err": "InvalidSyntax",
+      "pattern": "\\"
+    },
+    {
+      "groups": 0,
+      "ok": "a\\x01b",
+      "pattern": "a\\x01b"
+    },
+    {
+      "err": "InvalidSyntax",
+      "pattern": "[[:cntrl:]]"
+    },
+    {
+      "groups": 0,
+      "ok": "[\\x00-\\x1f]",
+      "pattern": "[\\x00-\\x1f]"
+    },
+    {
+      "groups": 0,
+      "ok": "a.b",
+      "pattern": "a.b"
+    },
+    {
+      "err": "InvalidSyntax",
+      "pattern": "[[:cntrl:]]"
+    },
+    {
+      "groups": 0,
+      "ok": "a[\\t\\n\\x0B\\x0C\\r\\x20]b",
+      "pattern": "a\\sb"
+    },
+    {
+      "groups": 0,
+      "ok": "a\\tb",
+      "pattern": "a\\tb"
+    },
+    {
+      "groups": 2,
+      "ok": "(a)|(b)",
+      "pattern": "(a)|(b)"
+    },
+    {
+      "groups": 2,
+      "ok": "(a)|(b)",
+      "pattern": "(a)|(b)"
+    },
+    {
+      "groups": 1,
+      "ok": "(a)?b",
+      "pattern": "(a)?b"
+    },
+    {
+      "groups": 1,
+      "ok": "(a)|b",
+      "pattern": "(a)|b"
+    },
+    {
+      "groups": 2,
+      "ok": "(a)(b)",
+      "pattern": "(a)(b)"
+    },
+    {
+      "groups": 0,
+      "ok": "a(?:b)",
+      "pattern": "a(?:b)"
+    },
+    {
+      "groups": 1,
+      "ok": "(?P<x>a)b",
+      "pattern": "(?P<x>a)b"
+    },
+    {
+      "groups": 2,
+      "ok": "((a))b",
+      "pattern": "((a))b"
+    },
+    {
+      "groups": 1,
+      "ok": "(a*)",
+      "pattern": "(a*)"
+    },
+    {
+      "groups": 1,
+      "ok": "(a)|b",
+      "pattern": "(a)|b"
+    },
+    {
+      "groups": 2,
+      "ok": "(a)(b)?",
+      "pattern": "(a)(b)?"
+    },
+    {
+      "groups": 0,
+      "ok": "[0-9]+\\.[0-9]*",
+      "pattern": "\\d+\\.\\d*"
+    },
+    {
+      "groups": 0,
+      "ok": "[0-9\\t\\n\\x0B\\x0C\\r\\x20]",
+      "pattern": "[\\d\\s]"
+    },
+    {
+      "groups": 0,
+      "ok": "[a0-9z]",
+      "pattern": "[a\\dz]"
+    },
+    {
+      "groups": 0,
+      "ok": "[[^0-9A-Za-z_]]",
+      "pattern": "[\\W]"
+    },
+    {
+      "groups": 0,
+      "ok": "[^0-9]",
+      "pattern": "[^\\d]"
+    },
+    {
+      "groups": 0,
+      "ok": "[0-9A-Za-z_][0-9A-Za-z_][0-9A-Za-z_]",
+      "pattern": "\\w\\w\\w"
+    },
+    {
+      "groups": 0,
+      "ok": "(?-u:\\b)[0-9A-Za-z_]+(?-u:\\b)",
+      "pattern": "\\b\\w+\\b"
+    },
+    {
+      "groups": 0,
+      "ok": "[aA][bB]",
+      "pattern": "(?i)ab"
+    },
+    {
+      "groups": 0,
+      "ok": "(?:[aA])b",
+      "pattern": "(?i:a)b"
+    },
+    {
+      "groups": 0,
+      "ok": "[aA]b",
+      "pattern": "(?i)a(?-i)b"
+    },
+    {
+      "groups": 0,
+      "ok": "a[bB]|[cC]",
+      "pattern": "a(?i)b|c"
+    },
+    {
+      "groups": 1,
+      "ok": "(a[bB])c",
+      "pattern": "(a(?i)b)c"
+    },
+    {
+      "groups": 0,
+      "ok": "(?s)[aA].",
+      "pattern": "(?is)a."
+    },
+    {
+      "groups": 0,
+      "ok": "[a-cA-C]",
+      "pattern": "(?i)[a-c]"
+    },
+    {
+      "groups": 0,
+      "ok": "[^kK]",
+      "pattern": "(?i)[^k]"
+    },
+    {
+      "groups": 0,
+      "ok": "[Z-aAz]",
+      "pattern": "(?i)[Z-a]"
+    },
+    {
+      "groups": 0,
+      "ok": "(?x)a b",
+      "pattern": "(?x)a b"
+    },
+    {
+      "groups": 0,
+      "ok": "(?R)a",
+      "pattern": "(?R)a"
+    },
+    {
+      "groups": 0,
+      "ok": "(?-sxR)a",
+      "pattern": "(?-sxR)a"
+    },
+    {
+      "groups": 0,
+      "ok": "(?s-xR)[aA]",
+      "pattern": "(?is-xR)a"
+    },
+    {
+      "groups": 0,
+      "ok": "a",
+      "pattern": "(?-m)a"
+    },
+    {
+      "groups": 0,
+      "ok": "(?:a)",
+      "pattern": "(?-m:a)"
+    },
+    {
+      "groups": 0,
+      "ok": "(?-s:[aA])",
+      "pattern": "(?i-s:a)"
+    },
+    {
+      "groups": 0,
+      "ok": "\\\\d",
+      "pattern": "\\\\d"
+    },
+    {
+      "groups": 0,
+      "ok": "[\\\\d]",
+      "pattern": "[\\\\d]"
+    },
+    {
+      "groups": 0,
+      "ok": "\\p{Nd}+[\\t\\n\\x0B\\x0C\\r\\x20]*[^\\t\\n\\x0B\\x0C\\r\\x20]",
+      "pattern": "\\p{Nd}+\\s*\\S"
+    },
+    {
+      "groups": 0,
+      "ok": "é[0-9A-Za-z_]☃[^0-9A-Za-z_]😀",
+      "pattern": "é\\w☃\\W😀"
+    },
+    {
+      "groups": 0,
+      "ok": "[\\t\\n\\x0B\\x0C\\r\\x20][^\\t\\n\\x0B\\x0C\\r\\x20][0-9][^0-9][0-9A-Za-z_][^0-9A-Za-z_](?-u:\\b)(?-u:\\B)",
+      "pattern": "\\s\\S\\d\\D\\w\\W\\b\\B"
+    },
+    {
+      "groups": 0,
+      "ok": "a+",
+      "pattern": "(?U)a+"
+    },
+    {
+      "groups": 0,
+      "ok": "[0-9A-Za-z_]",
+      "pattern": "(?u)\\w"
+    },
+    {
+      "groups": 0,
+      "ok": "a{2}",
+      "pattern": "a{2}"
+    },
+    {
+      "groups": 0,
+      "ok": "\\A[0-9A-Za-z_]",
+      "pattern": "\\A\\w"
+    },
+    {
+      "err": "InvalidSyntax",
+      "pattern": "[[:digit:]]"
+    },
+    {
+      "err": "InvalidSyntax",
+      "pattern": "("
+    },
+    {
+      "groups": 0,
+      "ok": "",
+      "pattern": ""
+    }
+  ],
+  "strict": [
+    {
+      "groups": 0,
+      "ok": "[0-9]",
+      "pattern": "\\d"
+    },
+    {
+      "groups": 0,
+      "ok": "[0-9]+",
+      "pattern": "\\d+"
+    },
+    {
+      "groups": 0,
+      "ok": "[^0-9]",
+      "pattern": "\\D"
+    },
+    {
+      "groups": 0,
+      "ok": "[0-9]+",
+      "pattern": "\\d+"
+    },
+    {
+      "groups": 0,
+      "ok": "[0-9]",
+      "pattern": "[\\d]"
+    },
+    {
+      "groups": 0,
+      "ok": "\\p{Nd}+",
+      "pattern": "\\p{Nd}+"
+    },
+    {
+      "err": "InvalidSyntax",
+      "pattern": "[[:digit:]]"
+    },
+    {
+      "groups": 0,
+      "ok": "[0-9]",
+      "pattern": "[0-9]"
+    },
+    {
+      "groups": 0,
+      "ok": "[0-9A-Za-z_]",
+      "pattern": "\\w"
+    },
+    {
+      "groups": 0,
+      "ok": "[^0-9A-Za-z_]",
+      "pattern": "\\W"
+    },
+    {
+      "groups": 0,
+      "ok": "[0-9A-Za-z_]+",
+      "pattern": "\\w+"
+    },
+    {
+      "groups": 0,
+      "ok": "[^0-9A-Za-z_]",
+      "pattern": "\\W"
+    },
+    {
+      "groups": 0,
+      "ok": "(?-u:\\b)caf(?-u:\\b)",
+      "pattern": "\\bcaf\\b"
+    },
+    {
+      "groups": 0,
+      "ok": "(?-u:\\b)café(?-u:\\b)",
+      "pattern": "\\bcafé\\b"
+    },
+    {
+      "groups": 0,
+      "ok": "(?-u:\\b)",
+      "pattern": "\\b"
+    },
+    {
+      "groups": 0,
+      "ok": "(?-u:\\B)",
+      "pattern": "\\B"
+    },
+    {
+      "groups": 0,
+      "ok": "[0-9A-Za-z_]+",
+      "pattern": "\\w+"
+    },
+    {
+      "groups": 0,
+      "ok": "\\pL",
+      "pattern": "\\pL"
+    },
+    {
+      "groups": 0,
+      "ok": "[0-9A-Za-z_]",
+      "pattern": "[\\w]"
+    },
+    {
+      "err": "InvalidSyntax",
+      "pattern": "[[:word:]]"
+    },
+    {
+      "groups": 0,
+      "ok": "a[\\t\\n\\x0B\\x0C\\r\\x20]b",
+      "pattern": "a\\sb"
+    },
+    {
+      "groups": 0,
+      "ok": "a[^\\t\\n\\x0B\\x0C\\r\\x20]b",
+      "pattern": "a\\Sb"
+    },
+    {
+      "groups": 0,
+      "ok": "[\\t\\n\\x0B\\x0C\\r\\x20]",
+      "pattern": "\\s"
+    },
+    {
+      "groups": 0,
+      "ok": "a[\\t\\n\\x0B\\x0C\\r\\x20]b",
+      "pattern": "a\\sb"
+    },
+    {
+      "groups": 0,
+      "ok": "a[\\t\\n\\x0B\\x0C\\r\\x20]b",
+      "pattern": "a\\sb"
+    },
+    {
+      "groups": 0,
+      "ok": "a[\\t\\n\\x0B\\x0C\\r\\x20]b",
+      "pattern": "a\\sb"
+    },
+    {
+      "groups": 0,
+      "ok": "a[\\t\\n\\x0B\\x0C\\r\\x20]b",
+      "pattern": "a\\sb"
+    },
+    {
+      "err": "InvalidSyntax",
+      "pattern": "a[[:space:]]b"
+    },
+    {
+      "err": "InvalidSyntax",
+      "pattern": "a[[:space:]]b"
+    },
+    {
+      "groups": 0,
+      "ok": "a\\x{a0}b",
+      "pattern": "a\\x{a0}b"
+    },
+    {
+      "groups": 0,
+      "ok": "é",
+      "pattern": "(?i)é"
+    },
+    {
+      "groups": 0,
+      "ok": "σ",
+      "pattern": "(?i)σ"
+    },
+    {
+      "groups": 0,
+      "ok": "[kK]",
+      "pattern": "(?i)k"
+    },
+    {
+      "groups": 0,
+      "ok": "[aA][bB]",
+      "pattern": "(?i)ab"
+    },
+    {
+      "groups": 0,
+      "ok": "(?:[aA])b",
+      "pattern": "(?i:a)b"
+    },
+    {
+      "groups": 0,
+      "ok": "[aA]b",
+      "pattern": "(?i)a(?-i)b"
+    },
+    {
+      "groups": 0,
+      "ok": "a.b",
+      "pattern": "a.b"
+    },
+    {
+      "groups": 0,
+      "ok": "(?s)a.b",
+      "pattern": "(?s)a.b"
+    },
+    {
+      "err": "InvalidSyntax",
+      "pattern": "(?m)^b$"
+    },
+    {
+      "groups": 0,
+      "ok": "^b$",
+      "pattern": "^b$"
+    },
+    {
+      "groups": 0,
+      "ok": "[0-9A-Za-z_]",
+      "pattern": "(?u)\\w"
+    },
+    {
+      "groups": 0,
+      "ok": "[0-9A-Za-z_]",
+      "pattern": "(?-u)\\w"
+    },
+    {
+      "groups": 0,
+      "ok": "a+",
+      "pattern": "(?U)a+"
+    },
+    {
+      "groups": 0,
+      "ok": "\\\\",
+      "pattern": "\\\\"
+    },
+    {
+      "groups": 0,
+      "ok": "a\\\\b",
+      "pattern": "a\\\\b"
+    },
+    {
+      "groups": 0,
+      "ok": "[\\\\]",
+      "pattern": "[\\\\]"
+    },
+    {
+      "groups": 0,
+      "ok": "\\x{5c}",
+      "pattern": "\\x{5c}"
+    },
+    {
+      "groups": 0,
+      "ok": "\\\\d",
+      "pattern": "\\\\d"
+    },
+    {
+      "groups": 0,
+      "ok": "[0-9]",
+      "pattern": "\\d"
+    },
+    {
+      "err": "InvalidSyntax",
+      "pattern": "\\"
+    },
+    {
+      "groups": 0,
+      "ok": "a\\x01b",
+      "pattern": "a\\x01b"
+    },
+    {
+      "err": "InvalidSyntax",
+      "pattern": "[[:cntrl:]]"
+    },
+    {
+      "groups": 0,
+      "ok": "[\\x00-\\x1f]",
+      "pattern": "[\\x00-\\x1f]"
+    },
+    {
+      "groups": 0,
+      "ok": "a.b",
+      "pattern": "a.b"
+    },
+    {
+      "err": "InvalidSyntax",
+      "pattern": "[[:cntrl:]]"
+    },
+    {
+      "groups": 0,
+      "ok": "a[\\t\\n\\x0B\\x0C\\r\\x20]b",
+      "pattern": "a\\sb"
+    },
+    {
+      "groups": 0,
+      "ok": "a\\tb",
+      "pattern": "a\\tb"
+    },
+    {
+      "groups": 2,
+      "ok": "(a)|(b)",
+      "pattern": "(a)|(b)"
+    },
+    {
+      "groups": 2,
+      "ok": "(a)|(b)",
+      "pattern": "(a)|(b)"
+    },
+    {
+      "groups": 1,
+      "ok": "(a)?b",
+      "pattern": "(a)?b"
+    },
+    {
+      "groups": 1,
+      "ok": "(a)|b",
+      "pattern": "(a)|b"
+    },
+    {
+      "groups": 2,
+      "ok": "(a)(b)",
+      "pattern": "(a)(b)"
+    },
+    {
+      "groups": 0,
+      "ok": "a(?:b)",
+      "pattern": "a(?:b)"
+    },
+    {
+      "groups": 1,
+      "ok": "(?P<x>a)b",
+      "pattern": "(?P<x>a)b"
+    },
+    {
+      "groups": 2,
+      "ok": "((a))b",
+      "pattern": "((a))b"
+    },
+    {
+      "groups": 1,
+      "ok": "(a*)",
+      "pattern": "(a*)"
+    },
+    {
+      "groups": 1,
+      "ok": "(a)|b",
+      "pattern": "(a)|b"
+    },
+    {
+      "groups": 2,
+      "ok": "(a)(b)?",
+      "pattern": "(a)(b)?"
+    },
+    {
+      "groups": 0,
+      "ok": "[0-9]+\\.[0-9]*",
+      "pattern": "\\d+\\.\\d*"
+    },
+    {
+      "groups": 0,
+      "ok": "[0-9\\t\\n\\x0B\\x0C\\r\\x20]",
+      "pattern": "[\\d\\s]"
+    },
+    {
+      "groups": 0,
+      "ok": "[a0-9z]",
+      "pattern": "[a\\dz]"
+    },
+    {
+      "groups": 0,
+      "ok": "[[^0-9A-Za-z_]]",
+      "pattern": "[\\W]"
+    },
+    {
+      "groups": 0,
+      "ok": "[^0-9]",
+      "pattern": "[^\\d]"
+    },
+    {
+      "groups": 0,
+      "ok": "[0-9A-Za-z_][0-9A-Za-z_][0-9A-Za-z_]",
+      "pattern": "\\w\\w\\w"
+    },
+    {
+      "groups": 0,
+      "ok": "(?-u:\\b)[0-9A-Za-z_]+(?-u:\\b)",
+      "pattern": "\\b\\w+\\b"
+    },
+    {
+      "groups": 0,
+      "ok": "[aA][bB]",
+      "pattern": "(?i)ab"
+    },
+    {
+      "groups": 0,
+      "ok": "(?:[aA])b",
+      "pattern": "(?i:a)b"
+    },
+    {
+      "groups": 0,
+      "ok": "[aA]b",
+      "pattern": "(?i)a(?-i)b"
+    },
+    {
+      "groups": 0,
+      "ok": "a[bB]|[cC]",
+      "pattern": "a(?i)b|c"
+    },
+    {
+      "groups": 1,
+      "ok": "(a[bB])c",
+      "pattern": "(a(?i)b)c"
+    },
+    {
+      "err": "Unobserved",
+      "pattern": "(?is)a."
+    },
+    {
+      "err": "Unobserved",
+      "pattern": "(?i)[a-c]"
+    },
+    {
+      "err": "Unobserved",
+      "pattern": "(?i)[^k]"
+    },
+    {
+      "err": "Unobserved",
+      "pattern": "(?i)[Z-a]"
+    },
+    {
+      "err": "Unobserved",
+      "pattern": "(?x)a b"
+    },
+    {
+      "err": "Unobserved",
+      "pattern": "(?R)a"
+    },
+    {
+      "err": "Unobserved",
+      "pattern": "(?-sxR)a"
+    },
+    {
+      "err": "Unobserved",
+      "pattern": "(?is-xR)a"
+    },
+    {
+      "err": "Unobserved",
+      "pattern": "(?-m)a"
+    },
+    {
+      "err": "Unobserved",
+      "pattern": "(?-m:a)"
+    },
+    {
+      "err": "Unobserved",
+      "pattern": "(?i-s:a)"
+    },
+    {
+      "groups": 0,
+      "ok": "\\\\d",
+      "pattern": "\\\\d"
+    },
+    {
+      "groups": 0,
+      "ok": "[\\\\d]",
+      "pattern": "[\\\\d]"
+    },
+    {
+      "groups": 0,
+      "ok": "\\p{Nd}+[\\t\\n\\x0B\\x0C\\r\\x20]*[^\\t\\n\\x0B\\x0C\\r\\x20]",
+      "pattern": "\\p{Nd}+\\s*\\S"
+    },
+    {
+      "groups": 0,
+      "ok": "é[0-9A-Za-z_]☃[^0-9A-Za-z_]😀",
+      "pattern": "é\\w☃\\W😀"
+    },
+    {
+      "groups": 0,
+      "ok": "[\\t\\n\\x0B\\x0C\\r\\x20][^\\t\\n\\x0B\\x0C\\r\\x20][0-9][^0-9][0-9A-Za-z_][^0-9A-Za-z_](?-u:\\b)(?-u:\\B)",
+      "pattern": "\\s\\S\\d\\D\\w\\W\\b\\B"
+    },
+    {
+      "groups": 0,
+      "ok": "a+",
+      "pattern": "(?U)a+"
+    },
+    {
+      "groups": 0,
+      "ok": "[0-9A-Za-z_]",
+      "pattern": "(?u)\\w"
+    },
+    {
+      "err": "Unobserved",
+      "pattern": "a{2}"
+    },
+    {
+      "err": "Unobserved",
+      "pattern": "\\A\\w"
+    },
+    {
+      "err": "InvalidSyntax",
+      "pattern": "[[:digit:]]"
+    },
+    {
+      "err": "InvalidSyntax",
+      "pattern": "("
+    },
+    {
+      "groups": 0,
+      "ok": "",
+      "pattern": ""
+    }
+  ]
+}

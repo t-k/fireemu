@@ -23,7 +23,7 @@ def private_report():
             "acceptance": "candidate",
             "target": "production",
             "project": "fireemu-35fe6",
-            "projectNumber": "592603257417",
+            "projectNumber": "<project-number>",
             "corpus": publisher.CORPUS,
             "recordedAt": "2026-09-11T00:00:00+00:00",
             "probeSourceCommit": "0" * 40,

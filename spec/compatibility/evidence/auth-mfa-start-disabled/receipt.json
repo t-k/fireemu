@@ -154,7 +154,7 @@
       }
     ]
   },
-  "publicationContractSha256": "f80a9484b4b3a53de53972d506042f649d43b76be718163e10fe60c165937baf",
+  "publicationContractSha256": "442539e696e233e8be9557eddbbd82d6bb1ce1fdcf7f9f8ff989e8553d7ec3c7",
   "schemaVersion": 1,
   "scope": "Six sequential REST observations in production only: a fresh phone MFA completion (control) while enabled; the account is disabled through privileged accounts:update and read back; the pending credential obtained before the disable is presented to mfaSignIn:start, and its session finalized if one was returned; the account is re-enabled and read back and the same pending credential is started and finalized; a fresh completion (control) closes the run. Phone MFA with one test phone number, no tenant, no blocking function, one run; the pending credential is obtained before the disable. The oracle configuration was changed for the run and restored with a digest comparison. No human approval, no local artifact comparison, no claim about tenants, SDK, Rules or the credential's expiry; the held rows are the observation, not a rule.",
   "sourceReviewSha256": "b2a10677fc672da4ea0b14f4144213c6aea5af9294c74fbe83ca53bbc750b367"

@@ -4,8 +4,8 @@ import starlight from '@astrojs/starlight';
 import { fileURLToPath } from 'node:url';
 
 // The deployment target is set by the Pages workflow. The defaults build for
-// https://t-k.github.io/fireemu/, the project page of the repository.
-const site = process.env.FIREEMU_SITE_URL ?? 'https://t-k.github.io';
+// https://fireemu.github.io/fireemu/, the project page of the repository.
+const site = process.env.FIREEMU_SITE_URL ?? 'https://fireemu.github.io';
 const base = process.env.FIREEMU_SITE_BASE ?? '/fireemu';
 
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
@@ -24,10 +24,10 @@ export default defineConfig({
 			description:
 				'A local Firebase emulator for tests and CI that follows production Firebase behavior.',
 			social: [
-				{ icon: 'github', label: 'GitHub', href: 'https://github.com/t-k/fireemu' },
+				{ icon: 'github', label: 'GitHub', href: 'https://github.com/fireemu/fireemu' },
 				{ icon: 'npm', label: 'npm', href: 'https://www.npmjs.com/package/fireemu' },
 			],
-			editLink: { baseUrl: 'https://github.com/t-k/fireemu/edit/main/site/' },
+			editLink: { baseUrl: 'https://github.com/fireemu/fireemu/edit/main/site/' },
 			lastUpdated: false,
 			customCss: ['./src/styles/custom.css'],
 			components: {
@@ -51,8 +51,10 @@ export default defineConfig({
 						{ label: 'Authentication', slug: 'products/auth' },
 						{ label: 'Cloud Storage', slug: 'products/storage' },
 						{ label: 'Cloud Functions', slug: 'products/functions' },
+						{ label: 'Cloud Functions (Python)', slug: 'products/functions-python' },
 						{ label: 'Pub/Sub and Eventarc', slug: 'products/pubsub-eventarc' },
 						{ label: 'Realtime Database', slug: 'products/realtime-database' },
+						{ label: 'Firebase Hosting', slug: 'products/hosting' },
 						{ label: 'App Check', slug: 'products/app-check' },
 					],
 				},
@@ -63,6 +65,7 @@ export default defineConfig({
 						{ label: 'Profiles and productionExact', slug: 'guides/profiles' },
 						{ label: 'Security Rules', slug: 'guides/security-rules' },
 						{ label: 'Time and scheduled functions', slug: 'guides/time' },
+						{ label: 'Test worlds', slug: 'guides/test-worlds' },
 						{ label: 'Export and import data', slug: 'guides/data' },
 						{ label: 'Emulator UI', slug: 'guides/ui' },
 						{ label: 'CI and containers', slug: 'guides/ci-and-containers' },
@@ -82,6 +85,7 @@ export default defineConfig({
 					items: [
 						{ label: 'CLI', slug: 'reference/cli' },
 						{ label: 'Configuration schema', slug: 'reference/configuration' },
+						{ label: 'Environment variables', slug: 'reference/environment-variables' },
 					],
 				},
 			],

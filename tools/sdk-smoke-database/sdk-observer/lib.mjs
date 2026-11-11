@@ -139,8 +139,8 @@ export function checkApproval(ledgerText, want) {
   if (new Set(pairs.map(([k]) => k)).size !== pairs.length) throw new Error('approval fields repeated');   // a repeated field would be silently collapsed: "decision=REVOKED; decision=APPROVE" must not pass
   const fields = Object.fromEntries(pairs);
   const suite = want.suite ?? 'small';
-  if (!['small', 'events', 'admin', 'events+admin', 'rest', 'rules', 'tokens', 'rules-load'].includes(suite)) throw new Error('approval suite');
-  const expected = { decision: 'APPROVE', scriptSha256: want.scriptSha256, directCap: String(want.directCap), adc: '1', prefix: want.prefix, ...(suite === 'small' ? { basis: '2196' } : { suite, basis: '2217' }) };
+  if (!['small', 'events', 'admin', 'events+admin', 'rest', 'rules', 'tokens', 'rules-load', 'rules-syntax'].includes(suite)) throw new Error('approval suite');
+  const expected = { decision: 'APPROVE', scriptSha256: want.scriptSha256, directCap: String(want.directCap), adc: '1', prefix: want.prefix, ...(suite === 'small' ? { basis: '2196' } : { suite, basis: suite === 'rules-syntax' ? '2350' : '2217' }) };
   if (Object.keys(fields).sort().join() !== Object.keys(expected).sort().join() || Object.entries(expected).some(([k, v]) => fields[k] !== v)) throw new Error('approval fields differ');
 }
 

@@ -1,6 +1,8 @@
 """Verify immutable evidence at a reviewed Git anchor, never at a receipt-selected revision."""
 
 import argparse
+import hashlib
+import json
 import os
 import re
 import subprocess
@@ -10,6 +12,15 @@ from pathlib import Path, PurePosixPath
 
 ANCHOR = "672db735ad36dc8f473b98bac2906f19f37bb70b"
 ROOT = Path(__file__).resolve().parents[2]
+# The one declared rebind of frozen bytes: the 2026-11-10 mask of the old oracle project number. The record lists,
+# for every file it changed, the sha256 the file had at the anchor, the byte offsets of the masked number and the
+# digest pairs that followed. The record is pinned here by its own sha256, and a frozen file may differ from the
+# anchor only by exactly those substitutions (see `rebuild`); the record's postSha256 is never trusted.
+REBIND_RECORD = "spec/compatibility/oracle-number-mask-2026-11-10.json"
+REBIND_RECORD_SHA256 = "f11b42d12b06d46f890d102de5b9ba019064b8628388189c3d1f9a5c8d33ff28"
+PLACEHOLDER = b"<project-number>"
+NUMBER_LENGTH = 12
+HEX64 = re.compile(r"[0-9a-f]{64}")
 TEST_DIRS = (
     "tools/compat-inventory",
     "tools/aggregation-limit",
@@ -86,7 +97,80 @@ def git(root, *args):
         raise ValueError("Required local Git history unavailable") from error
 
 
-def verify_frozen(root, anchor, prefixes):
+def load_rebound(root, pinned=None):
+    """The mask record's entries as {path: entry}, or {} when `root` has no record.
+
+    The record must be the pinned one: any other bytes are refused, so editing the record is not a way to change
+    a frozen file. Entries for files outside the frozen sets are inert; `verify_frozen` reads only the ones it
+    meets."""
+    record = Path(root) / REBIND_RECORD
+    if not record.is_file():
+        return {}
+    data = record.read_bytes()
+    require(
+        hashlib.sha256(data).hexdigest() == (pinned or REBIND_RECORD_SHA256),
+        "Rebind record is not the pinned record",
+    )
+    return json.loads(data)["files"]
+
+
+def rebuild(blob, entry, name):
+    """The bytes a frozen file must have now: the anchor blob with the number at each recorded offset replaced by
+    the placeholder, then each recorded digest replaced by its successor. Nothing else may differ."""
+    require(
+        isinstance(entry, dict) and not entry.get("editedAfterCascade"),
+        "Rebind entry is not a mask and cannot be rebuilt: " + name,
+    )
+    offsets = entry.get("maskedOffsets", [])
+    pairs = entry.get("digestRewrites", [])
+    require(bool(offsets) or bool(pairs), "Rebind entry names no substitution: " + name)
+    require(
+        hashlib.sha256(blob).hexdigest() == entry.get("preSha256"),
+        "Rebind record does not match the anchor: " + name,
+    )
+    require(
+        all(type(offset) is int for offset in offsets)
+        and entry.get("maskedOccurrences", len(offsets)) == len(offsets),
+        "Rebind offsets are not a count of integers: " + name,
+    )
+    pieces, last = [], 0
+    for offset in offsets:  # an offset before the end of the previous one (unsorted, repeated, overlapping) fails here
+        end = offset + NUMBER_LENGTH
+        require(
+            offset >= last and end <= len(blob) and blob[offset:end].isdigit(),
+            "Rebind offset is not a digit run: " + name,
+        )
+        require(
+            not blob[offset - 1 : offset].isdigit() and not blob[end : end + 1].isdigit(),
+            "Rebind offset is not a whole number: " + name,
+        )
+        pieces += [blob[last:offset], PLACEHOLDER]
+        last = end
+    data = b"".join([*pieces, blob[last:]])
+    successors = {}
+    for pair in pairs:
+        require(
+            isinstance(pair, list)
+            and len(pair) == 2
+            and all(isinstance(item, str) and HEX64.fullmatch(item) for item in pair)
+            and pair[0] not in successors
+            and pair[0].encode() in data,
+            "Rebind digest pair is not a digest present in the file: " + name,
+        )
+        successors[pair[0]] = pair[1]
+    if successors:
+        data = re.sub(
+            "|".join(successors).encode(), lambda found: successors[found.group().decode()].encode(), data
+        )
+    return data
+
+
+def verify_frozen(root, anchor, prefixes, rebound=None):
+    """Compare the working tree with the anchor; `rebound` ({path: record entry}) names the only files allowed to
+    differ, and each must equal `rebuild` of its anchor blob. Without `rebound` the pinned record of `root` is
+    used (none in an archived anchor checkout, so that checkout stays byte-exact)."""
+    if rebound is None:
+        rebound = load_rebound(root)
     require(re.fullmatch(r"[0-9a-f]{40}", anchor), "Full pinned commit required")
     require(
         git(root, "rev-parse", anchor + "^{commit}").decode().strip() == anchor,
@@ -156,17 +240,22 @@ def verify_frozen(root, anchor, prefixes):
             and not any((root / p).is_symlink() for p in (relative, *relative.parents)),
             "Missing or linked frozen input",
         )
-        require(
-            path.read_bytes() == git(root, "cat-file", "blob", oid),
-            "Frozen bytes changed: " + name,
-        )
+        blob = git(root, "cat-file", "blob", oid)
+        if name in rebound:
+            require(
+                path.read_bytes() == rebuild(blob, rebound[name], name),
+                "Frozen bytes changed beyond the rebind: " + name,
+            )
+        else:
+            require(path.read_bytes() == blob, "Frozen bytes changed: " + name)
 
 
 @contextmanager
 def snapshot(root, anchor, prefixes, *, current_prefixes=None):
     root = root.resolve()
     current_prefixes = prefixes if current_prefixes is None else current_prefixes
-    verify_frozen(root, anchor, current_prefixes)
+    rebound = load_rebound(root)
+    verify_frozen(root, anchor, current_prefixes, rebound)
     with tempfile.TemporaryDirectory(prefix="fireemu-history-") as temporary:
         archived = Path(temporary) / "source"
         subprocess.run(
@@ -191,11 +280,11 @@ def snapshot(root, anchor, prefixes, *, current_prefixes=None):
             git(archived, "rev-parse", "HEAD").decode().strip() == anchor,
             "Wrong snapshot revision",
         )
-        verify_frozen(archived, anchor, prefixes)
+        verify_frozen(archived, anchor, prefixes, {})
         try:
             yield archived
         finally:
-            verify_frozen(root, anchor, current_prefixes)
+            verify_frozen(root, anchor, current_prefixes, rebound)
 
 
 def offline_environment(source):

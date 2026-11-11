@@ -18,7 +18,7 @@ Nine sequential REST observations in production only: fresh phone MFA completion
 
 Tampered ID token with an administrator-only field, before any disable: **refused / INVALID_ID_TOKEN**; A unchanged on readback: True. Disabled account, held session, wrong code (A): **refused / INVALID_CODE**. Disabled account, held session, correct code (B): **refused / USER_DISABLED**. The same held credentials and sessions after re-enablement: A accepted / none, B accepted / none.
 
-Review subject (unapproved): `6c76f862a7b7a2d9ad557ae43d03d3787221089a76e999ae03478e20069fe3c4`.
+Review subject (unapproved): `52da79dbcfd40cb43baca7f0dcf4dacc90d7d5a421a7a5e5f2616ce9a044417c`.
 
 A and B differ only in the code they present while disabled, on sessions started before the disable and read back afterwards, so the two rows together show which of the code and the account state is checked first. The re-enabled rows reuse the same pending credential and session, so they show whether each refusal consumed them. The tampered-token row carries a real ID token of A with one signature character changed inside the signature, so only an invalid signature and a privileged field overlap; the fields were chosen so that an acceptance could not have changed A's verified email, factor enrollment or ownership marker. Elapsed milliseconds are cumulative time from the recorder's measurement origin (set before account setup), sampled when each row is recorded after its checks; they are neither request latency nor time since the disable, and are excluded from semantic equality.
 

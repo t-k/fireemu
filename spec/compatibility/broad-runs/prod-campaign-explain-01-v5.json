@@ -118,13 +118,13 @@
   ],
   "collector": "existing-batch-adapter-shared-v1",
   "environment": {
-    "configurationDigest": "cf2b716aa3ecc5bbb5dfc248980d05d05401f49897d39ffb3d0159ad8a63db80",
+    "configurationDigest": "e3bc85b3786ec8d44969b59cd49e8fd1181d9722eabf53d8d7977729cb89bb37",
     "database": "(default)",
     "databaseProjectionContractDigest": "24b4847314fe67940a1e0e8eb53e34e2bd007ef2e1d942639b51564677d30f18",
     "edition": "STANDARD",
     "observerSha256": "7737e75a7bb976994b14ea011daa4ff8c634ac2c0289119fb8dac850f433c2a4",
     "project": "fireemu-35fe6",
-    "projectNumber": "592603257417"
+    "projectNumber": "<project-number>"
   },
   "kind": "production-campaign-explain-01-v5",
   "networkCalls": 0,
@@ -142,7 +142,7 @@
     "accounts": 0,
     "collector": "existing-batch-adapter-shared-v1",
     "configurationChanges": 0,
-    "configurationDigest": "cf2b716aa3ecc5bbb5dfc248980d05d05401f49897d39ffb3d0159ad8a63db80",
+    "configurationDigest": "e3bc85b3786ec8d44969b59cd49e8fd1181d9722eabf53d8d7977729cb89bb37",
     "contract": "shared-local-v1",
     "coordinatorRequests": 0,
     "costMicrousd": 10000,

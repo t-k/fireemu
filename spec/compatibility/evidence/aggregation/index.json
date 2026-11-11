@@ -10,7 +10,7 @@
   },
   "approvals": [
     {
-      "subjectSha256": "08f92bf428850eefda32833de2003a3f93c94955e6793247e8ea2f7d8e94def3",
+      "subjectSha256": "124d6b4ae962f08a21e3ba5ebd25741a669c652fd1b106fe49308a7de946a098",
       "cases": [
         "count-alone",
         "count-sum",
@@ -35,7 +35,7 @@
   "files": {
     "corpus.json": "8c49ce7a5af5f1e252251103815dfd0eb1ef664d0fc0978ab7a4d25e09248db2",
     "local.json": "44412d3bb9a5536f1e20dccdba48c6d66a1f923792b90cc6937feada8293bbc2",
-    "production.json": "dcf97b9380d060e7a8dd085730d01fdbce76dac7e1cde101c7004bafbeaea85e",
+    "production.json": "9662a80a92dda512820371dc84186a656d870cae2d293c0545ebf58331927ba4",
     "source-review.json": "06679de5636a25e88c91afbdc22af7016acacabf33fa1edf02dd94324e0361f8",
     "source.html.gz": "d4d0ede79ab62a0a7edced0454f85d57852627eafc983d635ef6878d465e060b"
   }

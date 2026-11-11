@@ -45,6 +45,19 @@ fn free_port() -> u16 {
     port
 }
 
+/// Three ports nothing is listening on, distinct from each other: all three are held at once
+/// before they are released, so the kernel cannot hand the same one out twice.
+fn distinct_free_ports() -> [u16; 3] {
+    let held: Vec<std::net::TcpListener> = (0..3)
+        .map(|_| std::net::TcpListener::bind("127.0.0.1:0").unwrap())
+        .collect();
+    let ports: Vec<u16> = held
+        .iter()
+        .map(|listener| listener.local_addr().unwrap().port())
+        .collect();
+    [ports[0], ports[1], ports[2]]
+}
+
 fn scratch(name: &str) -> Scratch {
     Scratch::new("exec", name)
 }
@@ -897,8 +910,13 @@ fn run_selection(name: &str, ports: [u16; 3], extra: &[&str]) -> BTreeMap<String
 
 #[test]
 fn an_unselected_service_binds_no_listener_at_all() {
-    // Fixed ports: whatever `--only` leaves out has to stay free while the daemon serves,
-    // which is what "the service is not started" has to mean.
+    // Whatever `--only` leaves out must not be bound by the daemon while it serves, which is what
+    // "the service is not started" means. The check reads the daemon's own listeners (lsof on the
+    // parent of the command), so a parallel test that reuses a freed port cannot fail it.
+    // A freed port can still be taken by the daemon's own ephemeral binds (the control listener
+    // and the automatic Hub). The daemon now skips every configured port, and the scripted
+    // collision tests in `ephemeral_bind_tests` (crates/fireemu/src/main.rs) are the
+    // deterministic guard for that; this test checks the whole run end to end.
     for (label, only, want) in [
         ("firestore-only", "firestore", [true, false, false]),
         ("auth-only", "auth", [false, true, false]),
@@ -910,12 +928,12 @@ fn an_unselected_service_binds_no_listener_at_all() {
             [true, false, true],
         ),
     ] {
-        let ports = [free_port(), free_port(), free_port()];
+        let ports = distinct_free_ports();
         let dir = scratch(&format!("lifecycle-{label}"));
         let probe = dir.join("probe.txt");
-        // The command probes each port from inside the run, while the daemon is serving.
+        // The command is a direct child of the daemon and runs while it is serving.
         let script = format!(
-            "for p in {} {} {}; do (exec 3<>/dev/tcp/127.0.0.1/$p) 2>/dev/null && echo \"$p open\" || echo \"$p closed\"; done > {}",
+            "listeners=$(lsof -nP -a -p \"$PPID\" -iTCP -sTCP:LISTEN -Fn) || exit 1; for p in {} {} {}; do echo \"$listeners\" | grep -E \":$p$\" >/dev/null && echo \"$p open\" || echo \"$p closed\"; done > {}",
             ports[0],
             ports[1],
             ports[2],
@@ -1125,7 +1143,6 @@ fn the_control_plane_leaves_the_auth_port_free_when_auth_is_not_selected() {
 #[test]
 fn an_official_service_fireemu_does_not_serve_is_refused_with_its_status() {
     for (service, fragment) in [
-        ("hosting", "deferred"),
         ("apphosting", "deferred"),
         ("dataconnect", "deferred"),
         ("extensions", "not planned"),

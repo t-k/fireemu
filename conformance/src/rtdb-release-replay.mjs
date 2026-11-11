@@ -18,10 +18,13 @@ import { recordedJournal as recordedTokens } from "../../tools/sdk-smoke-databas
 import { summarize as summarizeTokens } from "../../tools/sdk-smoke-database/rtdb-sdk-tokens-judge.mjs";
 import { recordedJournal as recordedRulesLoad } from "../../tools/sdk-smoke-database/rtdb-sdk-rules-load-fixture.mjs";
 import { summarize as summarizeRulesLoad } from "../../tools/sdk-smoke-database/rtdb-sdk-rules-load-judge.mjs";
+import { recordedJournal as recordedRulesSyntax } from "../../tools/sdk-smoke-database/rtdb-sdk-rules-syntax-fixture.mjs";
+import { summarize as summarizeRulesSyntax } from "../../tools/sdk-smoke-database/rtdb-sdk-rules-syntax-judge.mjs";
 import {
   compareRecordings as compareBreadth,
   readFrames as readBreadthFrames,
 } from "./rtdb-functions/breadth-compare.mjs";
+import { adjudicateKinds } from "./rtdb-functions/kinds-replay.mjs";
 import { comparison as compareAuth } from "../../tools/sdk-smoke-database/cv11-fixture.mjs";
 import { judgeCaptured } from "../../tools/sdk-smoke-database/cv07-ondisconnect.mjs";
 import { judgeRow, judgeM14, localRequests } from "../../tools/sdk-smoke-database/rest-replay.mjs";
@@ -43,7 +46,9 @@ const names = {
   "sdk-rules": "sdk-rules",
   "sdk-tokens": "sdk-tokens",
   "sdk-rules-load": "sdk-rules-load",
+  "sdk-rules-syntax": "sdk-rules-syntax",
   breadth: "breadth",
+  kinds: "kinds",
   functions: "functions",
   smoke: "smoke",
 };
@@ -59,7 +64,9 @@ const scripts = {
   "sdk-rules": `${T}/rtdb-sdk-rules.mjs`,
   "sdk-tokens": `${T}/rtdb-sdk-tokens.mjs`,
   "sdk-rules-load": `${T}/rtdb-sdk-rules-load.mjs`,
+  "sdk-rules-syntax": `${T}/rtdb-sdk-rules-syntax.mjs`,
   breadth: "conformance/src/rtdb-functions/breadth-local-run.mjs",
+  kinds: "conformance/src/rtdb-functions/kinds-replay-run.mjs",
   functions: "conformance/src/rtdb-functions/local-run.mjs",
 };
 // The recorded observer suites replayed under the strict profile: their fixture, reduction and judge.
@@ -88,6 +95,12 @@ const SUITES = {
     summarize: summarizeRulesLoad,
     rows: 14,
   },
+  "sdk-rules-syntax": {
+    fixture: "production-sdk-rules-syntax.json",
+    recorded: recordedRulesSyntax,
+    summarize: summarizeRulesSyntax,
+    rows: 86,
+  },
 };
 export function campaignPlan(name, binary, out) {
   const campaign = Object.hasOwn(names, name) ? names[name] : undefined;
@@ -109,7 +122,7 @@ export function campaignPlan(name, binary, out) {
       ],
     };
   const argv = [process.execPath, repo(scripts[campaign])];
-  if (campaign !== "functions" && campaign !== "breadth") argv.push("local");
+  if (!["functions", "breadth", "kinds"].includes(campaign)) argv.push("local");
   argv.push("--fireemu", binary, "--out", out);
   if (
     [
@@ -121,7 +134,9 @@ export function campaignPlan(name, binary, out) {
       "sdk-rules",
       "sdk-tokens",
       "sdk-rules-load",
+      "sdk-rules-syntax",
       "breadth",
+      "kinds",
       "functions",
     ].includes(campaign)
   )
@@ -251,6 +266,20 @@ export function sourceResources(campaign) {
       "conformance/src/rtdb-functions/breadth-sdk.mjs",
       "conformance/src/rtdb-functions/recorded/production-rtdb-breadth.json",
     ],
+    kinds: [
+      "conformance/src/rtdb-functions/kinds-replay-run.mjs",
+      "conformance/src/rtdb-functions/kinds-replay.mjs",
+      "conformance/src/rtdb-functions/kinds-local-run.mjs",
+      "conformance/src/rtdb-functions/kinds-compare.mjs",
+      "conformance/src/rtdb-functions/kinds-mask.mjs",
+      "conformance/src/rtdb-functions/kinds-sequence.mjs",
+      "conformance/src/rtdb-functions/kinds-scenario.mjs",
+      "conformance/src/rtdb-functions/kinds-frames.mjs",
+      "conformance/src/rtdb-functions/kinds-sdk-page.js",
+      "conformance/src/rtdb-functions/breadth-sdk.mjs",
+      "conformance/src/rtdb-functions/recorded/production-rtdb-kinds.json",
+      "conformance/src/rtdb-functions/recorded/production-rtdb-kinds-user-ladder.json",
+    ],
     functions: [
       "conformance/src/rtdb-functions/local-run.mjs",
       "conformance/src/rtdb-functions/compare-local.mjs",
@@ -286,10 +315,12 @@ export function runtimeResources(
       ? "conformance/src/rtdb-functions/fixtures"
       : campaign === "breadth"
         ? "conformance/src/rtdb-functions/fixtures-breadth"
-        : T,
+        : campaign === "kinds"
+          ? "conformance/src/rtdb-functions/fixtures-kinds"
+          : T,
   ),
 ) {
-  if (campaign === "functions" || campaign === "breadth") {
+  if (campaign === "functions" || campaign === "breadth" || campaign === "kinds") {
     for (const [name, version] of [
       ["firebase-functions", "7.3.2"],
       ["firebase-admin", "14.3.0"],
@@ -502,6 +533,7 @@ export function adjudicate(campaign, out) {
       result,
     };
   }
+  if (campaign === "kinds") return adjudicateKinds(out);
   if (campaign === "breadth") {
     const production = json(
       repo("conformance/src/rtdb-functions/recorded/production-rtdb-breadth.json"),

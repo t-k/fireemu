@@ -27,7 +27,7 @@ from contract import (
 )
 
 PROJECT = "fireemu-35fe6"
-NUMBER = "592603257417"
+NUMBER = "<project-number>"
 ROOT = Path(__file__).resolve().parents[2]
 
 

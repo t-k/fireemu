@@ -2612,10 +2612,20 @@ fn refresh_authentication_time_remains_revocable_in_both_profiles() {
                     .and_then(fireemu_core_types::json::JsonValue::as_i64),
                 Some(initial_auth_time)
             );
+            // firebase-tools compares `iat` alone against `validSince` (`parseIdToken`,
+            // `operations.js:1727`), and a refreshed token's `iat` is the refresh time, so the
+            // emulator profile admits it (coordinator ruling 2026-11-10, ledger 787); the
+            // token issued before the revocation is the one it refuses.
             let (status, looked_up) = post(
                 &s,
                 &format!("{V1}/accounts:lookup"),
                 &json!({"idToken": refreshed["id_token"]}),
+            );
+            assert_eq!(status, 200, "{looked_up}");
+            let (status, looked_up) = post(
+                &s,
+                &format!("{V1}/accounts:lookup"),
+                &json!({"idToken": signed_in["idToken"]}),
             );
             assert_eq!(status, 400, "{looked_up}");
             assert!(
@@ -3002,6 +3012,60 @@ async fn serves_over_a_real_socket() {
     let parsed: Value = serde_json::from_str(&text[json_start..]).unwrap();
     assert_eq!(parsed["email"], "s@example.com");
     server.abort();
+}
+
+#[tokio::test]
+async fn api_key_header_precedence_over_a_real_socket() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    for required in [false, true] {
+        let mut shared = state();
+        let mut tenancy = Tenancy::new("demo-app");
+        tenancy.declare_default_api_keys(&["allowed".to_owned()]);
+        shared.tenancy = Some(Arc::new(RwLock::new(tenancy)));
+        if required {
+            shared.client_api_key =
+                fireemu_adapter_http::identity_toolkit::ClientApiKeyPolicy::EmulatorRequired;
+        }
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(fireemu_adapter_http::server::serve(
+            listener,
+            Arc::new(shared),
+        ));
+        for (query, headers, expected) in [
+            (
+                "",
+                "Authorization: Bearer owner\r\nX-Goog-Api-Key: unknown\r\n",
+                200,
+            ),
+            ("", "X-Goog-Api-Key: allowed\r\n", 200),
+            ("", "X-Goog-Api-Key: unknown\r\n", 400),
+            ("?key=allowed", "", 200),
+            ("?key=allowed", "X-Goog-Api-Key: unknown\r\n", 200),
+            ("?key=unknown", "X-Goog-Api-Key: allowed\r\n", 400),
+            (
+                "?key=unknown",
+                "Authorization: Bearer owner\r\nX-Goog-Api-Key: allowed\r\n",
+                400,
+            ),
+            ("", "", if required { 403 } else { 200 }),
+        ] {
+            let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+            let request = format!(
+                "POST {V1}/accounts:signUp{query} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\n{headers}Content-Length: 2\r\nConnection: close\r\n\r\n{{}}"
+            );
+            stream.write_all(request.as_bytes()).await.unwrap();
+            let mut response = Vec::new();
+            stream.read_to_end(&mut response).await.unwrap();
+            let text = String::from_utf8(response).unwrap();
+            assert!(
+                text.starts_with(&format!("HTTP/1.1 {expected} ")),
+                "required={required}, query={query}, headers={headers}"
+            );
+        }
+        server.abort();
+    }
 }
 
 /// The strict profile frames the three recorded answers as production does (lean-v5): headers, the
@@ -6682,6 +6746,10 @@ fn firebase_profile_admin_password_change_preserves_refresh_and_update_is_atomic
         &json!({"grant_type": "refresh_token", "refresh_token": refresh}),
     );
     assert_eq!(status, 200, "{refreshed_before_update}");
+    // The emulator profile judges a token by its `iat` against `validSince` (`operations.js:1727`),
+    // so the change happens a second after the refresh, as a token issued in the second of the
+    // revocation stays valid.
+    advance(&s, 1);
     let (status, _) = admin(
         &s,
         "POST",
@@ -6718,13 +6786,10 @@ fn firebase_profile_admin_password_change_preserves_refresh_and_update_is_atomic
         &format!("{V1}/accounts:lookup"),
         &json!({"idToken": refreshed_after_update["id_token"]}),
     );
-    assert_eq!(status, 400, "{looked_up_after_refresh}");
-    assert!(
-        looked_up_after_refresh["error"]["message"]
-            .as_str()
-            .is_some_and(|message| message.starts_with("TOKEN_EXPIRED")),
-        "{looked_up_after_refresh}"
-    );
+    // The token refreshed after the change was issued at the change's second: `iat >= validSince`,
+    // which is all `parseIdToken` compares (`operations.js:1727`), though it keeps the older
+    // `auth_time` of its session.
+    assert_eq!(status, 200, "{looked_up_after_refresh}");
     let (status, _) = post(
         &s,
         &format!("{V1}/accounts:signInWithPassword"),

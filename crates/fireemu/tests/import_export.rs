@@ -1492,6 +1492,52 @@ fn a_storage_blob_that_does_not_match_its_metadata_refuses_the_whole_import() {
 }
 
 #[test]
+fn a_configured_storage_object_limit_applies_to_an_import() {
+    let dir = scratch("storage-import-object-limit");
+    let export = copy_fixture("official-multiproduct", &dir);
+    let config = dir.join("fireemu.json");
+    let marker = dir.join("command-ran");
+    let largest = std::fs::read_dir(export.join("storage_export/blobs"))
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.metadata().unwrap().len())
+        .max()
+        .unwrap();
+    assert!(largest > 1, "the fixture needs a blob larger than one byte");
+    for (limit, accepted) in [
+        (1_u64, false),
+        (largest - 1, false),
+        (largest, true),
+        (1_048_576, true),
+    ] {
+        std::fs::write(
+            &config,
+            format!(r#"{{"schemaVersion":1,"storage":{{"maxObjectBytes":{limit}}}}}"#),
+        )
+        .unwrap();
+        let _ = std::fs::remove_file(&marker);
+        let output = exec()
+            .arg("--config")
+            .arg(&config)
+            .args(["--only", "storage", "--import"])
+            .arg(&export)
+            .args(["--", "/bin/sh", "-c"])
+            .arg(format!("touch {}", marker.display()))
+            .output()
+            .unwrap();
+        let log = text(&output);
+        if accepted {
+            assert!(output.status.success(), "{limit}: {log}");
+            assert!(marker.exists(), "{limit}: {log}");
+        } else {
+            assert_eq!(output.status.code(), Some(1), "{limit}: {log}");
+            assert!(log.contains("exceeds the object limit"), "{limit}: {log}");
+            assert!(!marker.exists(), "{limit}: the command must not run");
+        }
+    }
+}
+
+#[test]
 fn a_storage_resource_limit_refuses_a_mixed_import_before_the_command_starts() {
     let dir = scratch("storage-import-limit");
     let export = copy_fixture("official-multiproduct", &dir);

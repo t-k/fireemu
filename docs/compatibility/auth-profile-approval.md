@@ -4,7 +4,7 @@ Twelve scoped cases verified and approved as redacted semantic observations matc
 
 Photo URL setting, replacement and deletion through REST using end-user tokens; no tenant; local strict profile and recorded production configuration; only the recorded artifact, configuration and auth-photo-url corpus revision 1 twelve cases; approved as redacted semantic observations matching the published checks.
 
-Subject: `23913299c5d414abbdffe0692711f77ead500b639318a09a60a5802bd1f199d2`. Recomputed from the complete receipt during offline validation; approval cannot transfer to a changed subject.
+Subject: `8176f98733cb63ed4712037391a7861cfb06e857739e5fc42070f07d2d08e299`. Recomputed from the complete receipt during offline validation; approval cannot transfer to a changed subject.
 
 Reviewed commit: `bb2f1a2f15f8aa447bce9395e7322840ec11b5f3`. Reviewer: `github:t-k (id:426779)`. Approval date: 2026-09-10.
 

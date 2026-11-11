@@ -250,6 +250,38 @@ async fn start_runtime(
     (runtime, clock)
 }
 
+/// A runtime in `session` whose runner logs every invoke frame to `log`.
+async fn start_in_session(
+    session: u128,
+    log: &Path,
+) -> (Arc<FunctionsRuntime>, Arc<Mutex<VirtualClock>>) {
+    let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py");
+    let spec = SpawnSpec {
+        command: vec!["python3".to_owned(), script.to_owned()],
+        cwd: None,
+        env: vec![(
+            "FIREEMU_FAKE_FRAME_LOG".to_owned(),
+            log.display().to_string(),
+        )],
+        hello_timeout: RUNNER_HELLO_TIMEOUT,
+    };
+    let runner = Runner::spawn_spec(&spec).await.unwrap();
+    let manifest = parse_manifest(runner.hello().manifest.as_ref().unwrap()).unwrap();
+    let clock = Arc::new(Mutex::new(VirtualClock::new(START)));
+    let runtime = FunctionsRuntime::new(
+        manifest,
+        FunctionsConfig {
+            session: fireemu_core_types::ids::SessionId::new(session),
+            ..FunctionsConfig::for_tests(1000, "s".into())
+        },
+        clock.clone(),
+        Arc::new(runner),
+        Some(spec),
+    );
+    tokio::spawn(runtime.clone().dispatch_loop());
+    (runtime, clock)
+}
+
 async fn wait_for_runner(runtime: &FunctionsRuntime) {
     let deadline = tokio::time::Instant::now() + RUNNER_HELLO_TIMEOUT + Duration::from_secs(1);
     while !runtime.runner_alive() {
@@ -352,7 +384,7 @@ async fn fixed_inspector_reload_holds_recovery_until_the_new_runner_is_published
         .stop_runner_for_fixed_inspector_reload("default")
         .await
         .unwrap();
-    runtime.publish("jobs", &[json!({"data": "YQ=="})]);
+    runtime.publish("jobs", &[json!({"data": "YQ=="})]).unwrap();
     let pending = {
         let runtime = runtime.clone();
         tokio::spawn(async move {
@@ -410,7 +442,7 @@ async fn fixed_inspector_reload_wakes_queued_background_work() {
         .stop_runner_for_fixed_inspector_reload("default")
         .await
         .unwrap();
-    runtime.publish("jobs", &[json!({"data": "YQ=="})]);
+    runtime.publish("jobs", &[json!({"data": "YQ=="})]).unwrap();
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert!(!runtime.is_idle());
     assert!(runtime.history().is_empty());
@@ -1619,7 +1651,9 @@ async fn failed_blocking_auth_respawn_releases_recovery_ownership() {
         .unwrap();
     drop(admission);
     assert!(runtime.restart_runner_after_blocking_failure(&blocking));
-    runtime.publish("crash-once", &[json!({"data": "YQ=="})]);
+    runtime
+        .publish("crash-once", &[json!({"data": "YQ=="})])
+        .unwrap();
     tokio::time::timeout(Duration::from_secs(10), async {
         while std::fs::read_to_string(&probe).unwrap().lines().count() < 3 {
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -2063,7 +2097,9 @@ async fn a_crashed_event_retries_only_when_retry_is_enabled() {
         },
     )
     .await;
-    runtime.publish("crash-once", &[json!({"data": "YQ=="})]);
+    runtime
+        .publish("crash-once", &[json!({"data": "YQ=="})])
+        .unwrap();
     let waiting = runtime.await_idle(Duration::from_millis(500)).await;
     assert!(
         waiting.is_err(),
@@ -2112,7 +2148,9 @@ async fn a_spontaneously_crashing_non_retry_event_terminates_after_one_delivery(
     )
     .await;
 
-    runtime.publish("crash-always", &[json!({"data": "YQ=="})]);
+    runtime
+        .publish("crash-always", &[json!({"data": "YQ=="})])
+        .unwrap();
     let idle = runtime.await_idle(Duration::from_secs(4)).await;
     let records: Vec<_> = runtime
         .history()
@@ -2155,7 +2193,9 @@ async fn a_spontaneously_crashing_retry_event_exhausts_its_attempt_budget() {
         },
     )
     .await;
-    runtime.publish("crash-always", &[json!({"data": "YQ=="})]);
+    runtime
+        .publish("crash-always", &[json!({"data": "YQ=="})])
+        .unwrap();
     for delivered in 1..=3 {
         tokio::time::timeout(Duration::from_secs(5), async {
             loop {
@@ -2422,7 +2462,7 @@ async fn reload_wakes_background_work_after_superseding_recovery() {
     )
     .await;
     runtime.runner().kill_now();
-    runtime.publish("jobs", &[json!({"data": "YQ=="})]);
+    runtime.publish("jobs", &[json!({"data": "YQ=="})]).unwrap();
     tokio::time::timeout(Duration::from_secs(2), async {
         while std::fs::read_to_string(&probe).unwrap().lines().count() < 2 {
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -4180,16 +4220,20 @@ async fn pubsub_messages_and_auth_user_events_reach_their_functions() {
     use fireemu_core_types::determinism::SplitMix64;
     let (runtime, _clock) = start().await;
     // Two messages on a subscribed topic, one on a topic nobody listens to.
-    let ids = runtime.publish(
-        "jobs",
-        &[
-            serde_json::json!({"data": "aGVsbG8=", "attributes": {"k": "v"}}),
-            serde_json::json!({"data": "d29ybGQ=", "orderingKey": "o1"}),
-        ],
-    );
+    let ids = runtime
+        .publish(
+            "jobs",
+            &[
+                serde_json::json!({"data": "aGVsbG8=", "attributes": {"k": "v"}}),
+                serde_json::json!({"data": "d29ybGQ=", "orderingKey": "o1"}),
+            ],
+        )
+        .unwrap();
     assert_eq!(ids.len(), 2);
     assert_ne!(ids[0], ids[1]);
-    let silent = runtime.publish("nobody", &[serde_json::json!({"data": ""})]);
+    let silent = runtime
+        .publish("nobody", &[serde_json::json!({"data": ""})])
+        .unwrap();
     assert_eq!(silent.len(), 1, "message ids are assigned regardless");
     assert!(runtime.await_idle(Duration::from_secs(5)).await.is_ok());
     let on_job = runtime
@@ -4220,6 +4264,179 @@ async fn pubsub_messages_and_auth_user_events_reach_their_functions() {
         .map(|r| r.function.clone())
         .collect();
     assert_eq!(names, vec!["onUser".to_owned(), "onGone".to_owned()]);
+}
+
+/// Fills the event queue but for `free` records with an unpublished reservation of broker
+/// messages on `jobs` (one record each). Dropping the reservation returns the records.
+fn fill_event_queue_but(
+    runtime: &Arc<FunctionsRuntime>,
+    free: usize,
+) -> fireemu_adapter_functions::runtime::EventBatchReservation {
+    let messages: Vec<serde_json::Value> = (0
+        ..fireemu_adapter_functions::runtime::MAX_ACTIVE_EVENT_RECORDS - free)
+        .map(|n| serde_json::json!({"data": "YQ==", "messageId": format!("m{n}")}))
+        .collect();
+    runtime.reserve_pubsub_events("jobs", &messages).unwrap()
+}
+
+fn auth_user_events() -> Vec<fireemu_core_auth::store::UserEvent> {
+    use fireemu_core_auth::mfa::TotpPolicy;
+    use fireemu_core_auth::store::{AuthStore, NewUser};
+    use fireemu_core_types::determinism::SplitMix64;
+    let mut store = AuthStore::new("demo-app", SplitMix64::new(1), TotpPolicy::default());
+    let uid = store
+        .create_user(NewUser::email("held@example.com"), START)
+        .unwrap();
+    let mut events = store.take_user_events();
+    store.delete_user_by_id(uid.as_str()).unwrap();
+    events.extend(store.take_user_events());
+    events
+}
+
+async fn wait_for_invocation(runtime: &Arc<FunctionsRuntime>, function: &str) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !runtime
+        .history()
+        .iter()
+        .any(|r| r.function == function && r.outcome == "ok")
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "{function} never ran: {}",
+            runtime.status()
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// EVDROP-1: with the event queue full, a successful Auth change keeps its promised event. It
+/// is delivered once records are released (here the reservation of other work is dropped),
+/// not discarded.
+#[tokio::test]
+async fn an_auth_event_refused_at_capacity_is_delivered_when_a_reservation_is_released() {
+    let (runtime, _clock) = start().await;
+    let events = auth_user_events();
+    // No free record: both events wait, and nothing runs.
+    let reservation = fill_event_queue_but(&runtime, 0);
+    for event in &events {
+        runtime.on_user_event(event);
+    }
+    assert_eq!(runtime.status()["authEventsPending"], 2);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        runtime
+            .history()
+            .iter()
+            .all(|r| r.function != "onUser" && r.function != "onGone"),
+        "nothing is delivered while the queue is full"
+    );
+    drop(reservation);
+    wait_for_invocation(&runtime, "onUser").await;
+    wait_for_invocation(&runtime, "onGone").await;
+    assert_eq!(runtime.status()["authEventsPending"], 0);
+    assert!(runtime.await_idle(Duration::from_secs(5)).await.is_ok());
+    runtime.shutdown().await;
+}
+
+/// EVDROP-1: the completion of a delivery frees a record and admits the held event, with the
+/// other reservation still in place.
+#[tokio::test]
+async fn an_auth_event_refused_at_capacity_is_delivered_when_a_delivery_completes() {
+    let (runtime, _clock) = start().await;
+    let events = auth_user_events();
+    let reservation = fill_event_queue_but(&runtime, 1);
+    // The one free record goes to a Pub/Sub delivery; the Auth event finds no room.
+    runtime
+        .publish("jobs", &[serde_json::json!({"data": "YQ=="})])
+        .unwrap();
+    runtime.on_user_event(&events[0]);
+    wait_for_invocation(&runtime, "onJob").await;
+    wait_for_invocation(&runtime, "onUser").await;
+    assert_eq!(runtime.status()["authEventsPending"], 0);
+    drop(reservation);
+    runtime.shutdown().await;
+}
+
+/// The id each kind of source gets for the first event of a boot, as the runner receives it
+/// (the frames of the handlers it was handed), keyed by function.
+async fn first_delivered_ids(session: u128) -> std::collections::BTreeMap<String, String> {
+    let dir = std::env::temp_dir().join(format!(
+        "fireemu-session-ids-{}-{session}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let log = dir.join("frames");
+    let (runtime, _clock) = start_in_session(session, &log).await;
+    // Each source gets its first event of the boot, one at a time so the ordinals are alike.
+    let wanted = ["onJob", "onUser", "slow", "ok"];
+    runtime
+        .publish("jobs", &[serde_json::json!({"data": "YQ=="})])
+        .unwrap();
+    runtime.on_user_event(&auth_user_events()[0]);
+    runtime.on_storage_event(&slow_object("late.txt"));
+    runtime
+        .reserve_commit_events(&commit(vec![DocumentChange {
+            path: doc("items/a", 1).path,
+            before: None,
+            after: Some(doc("items/a", 1).into()),
+        }]))
+        .unwrap()
+        .publish();
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let ids = loop {
+        let text = std::fs::read_to_string(&log).unwrap_or_default();
+        let mut ids = std::collections::BTreeMap::new();
+        for line in text.lines() {
+            let frame: serde_json::Value = serde_json::from_str(line).unwrap();
+            let function = frame["function"].as_str().unwrap().to_owned();
+            let event = &frame["event"];
+            let id = event["id"]
+                .as_str()
+                .or_else(|| event["eventId"].as_str())
+                .or_else(|| frame["context"]["eventId"].as_str())
+                .unwrap_or_else(|| panic!("no event id in {frame}"))
+                .to_owned();
+            ids.entry(function).or_insert(id);
+        }
+        if wanted.iter().all(|name| ids.contains_key(*name)) {
+            break ids;
+        }
+        assert!(std::time::Instant::now() < deadline, "frames: {text}");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    runtime.shutdown().await;
+    std::fs::remove_dir_all(&dir).unwrap();
+    wanted
+        .iter()
+        .map(|name| ((*name).to_owned(), ids[*name].clone()))
+        .collect()
+}
+
+/// M1: two boots in different sessions (a start without `daemon.seed`) deliver different ids for
+/// the first Pub/Sub, Auth, Storage and Firestore event, so a handler that remembers processed
+/// event ids across a restart is never told a new event is a repeat. One session replays its
+/// ids, and the pinned session 42 keeps the documented golden ids.
+#[tokio::test]
+async fn two_boots_deliver_different_ids_and_a_pinned_seed_replays_its_own() {
+    let boot_a = first_delivered_ids(7_391_204_883_201).await;
+    let boot_b = first_delivered_ids(1_048_822_093_516).await;
+    let boot_a_again = first_delivered_ids(7_391_204_883_201).await;
+    assert_eq!(boot_a, boot_a_again, "one session replays its ids");
+    for function in ["onJob", "onUser", "slow", "ok"] {
+        assert_ne!(
+            boot_a[function], boot_b[function],
+            "{function}: the first event of two boots shares an id"
+        );
+    }
+    let pinned = first_delivered_ids(42).await;
+    // The documented golden of `event_id_uuid("42-2")`: the Auth event is the second event of the
+    // boot, after the one Pub/Sub delivery.
+    assert_eq!(pinned["onUser"], "637a85d9-e582-43b9-a01a-b56a34eb0571");
+    // The first control publish of session 42 (the derivation's pin in fireemu-core-types).
+    assert_eq!(pinned["onJob"], "22251127104849513");
+    // Two pinned runs deliver the same ids for every source.
+    assert_eq!(pinned, first_delivered_ids(42).await);
 }
 
 #[test]
@@ -4428,7 +4645,9 @@ async fn fault_plans_duplicate_delay_dead_letter_and_crash_the_runner() {
         ],
     });
     runtime.set_faults(faults);
-    runtime.publish("jobs", &[serde_json::json!({"data": ""})]);
+    runtime
+        .publish("jobs", &[serde_json::json!({"data": ""})])
+        .unwrap();
     assert!(
         runtime.await_idle(Duration::from_secs(5)).await.is_ok(),
         "{}",
@@ -5224,14 +5443,18 @@ async fn messages_published_through_the_runtime_get_seventeen_digit_decimal_ids(
     // strings (FUNCTIONS-EVENTS formal record 2026-10-04, `messageId` of the 2nd gen frames
     // 6ac2a47f0000967f445e8b09 and 6ac2a51c000844422b7986d1).
     let (runtime, _clock) = start().await;
-    let ids = runtime.publish(
-        "jobs",
-        &[
-            serde_json::json!({"data": "YQ=="}),
-            serde_json::json!({"data": "Yg=="}),
-        ],
-    );
-    let silent = runtime.publish("nobody", &[serde_json::json!({"data": ""})]);
+    let ids = runtime
+        .publish(
+            "jobs",
+            &[
+                serde_json::json!({"data": "YQ=="}),
+                serde_json::json!({"data": "Yg=="}),
+            ],
+        )
+        .unwrap();
+    let silent = runtime
+        .publish("nobody", &[serde_json::json!({"data": ""})])
+        .unwrap();
     let mut all: Vec<String> = ids.into_iter().chain(silent).collect();
     for id in &all {
         assert_eq!(id.len(), 17, "{id}");
@@ -5248,14 +5471,16 @@ async fn messages_published_to_a_topic_nobody_listens_to_still_get_different_ids
     // Pub/Sub assigns ids even when nothing is subscribed; no delivery advances the counter here,
     // so the publish itself must.
     let (runtime, _clock) = start().await;
-    let ids = runtime.publish(
-        "nobody",
-        &[
-            serde_json::json!({"data": "YQ=="}),
-            serde_json::json!({"data": "Yg=="}),
-            serde_json::json!({"data": "Yw=="}),
-        ],
-    );
+    let ids = runtime
+        .publish(
+            "nobody",
+            &[
+                serde_json::json!({"data": "YQ=="}),
+                serde_json::json!({"data": "Yg=="}),
+                serde_json::json!({"data": "Yw=="}),
+            ],
+        )
+        .unwrap();
     let mut distinct = ids.clone();
     distinct.sort();
     distinct.dedup();
@@ -5269,7 +5494,7 @@ async fn diagnostic_retention_is_bounded_and_counters_survive_eviction() {
     let (runtime, _clock) = start().await;
     runtime.set_retention(8, 4);
     for i in 0..20 {
-        let ids = runtime.publish("jobs", &[json!({"n": i})]);
+        let ids = runtime.publish("jobs", &[json!({"n": i})]).unwrap();
         assert_eq!(ids.len(), 1);
     }
     assert!(
@@ -5573,7 +5798,9 @@ async fn the_causality_window_is_bounded_and_a_reset_is_a_gap_not_a_completion()
     let (runtime, _clock) = start().await;
     runtime.set_causality_retention(2);
     for body in ["a", "b", "c"] {
-        let ids = runtime.publish("jobs", &[json!({"json": {"job": body}})]);
+        let ids = runtime
+            .publish("jobs", &[json!({"json": {"job": body}})])
+            .unwrap();
         assert_eq!(ids.len(), 1);
         assert!(runtime.await_idle(Duration::from_secs(5)).await.is_ok());
     }

@@ -28,11 +28,13 @@ import {
   EXCLUDED_PARTS,
   FUNCTIONS_HTTP_LOCK_SUCCESSORS,
   FUNCTIONS_HTTP_RECORDED_REQUEST_KINDS,
+  GROUPS,
   RUNS,
   runEntry,
   assertNoOutboundNetwork,
   commandModes,
   compareLaneExport,
+  eventarcSourceRebinds,
   exportCopies,
   forbiddenEnvironment,
   judge,
@@ -48,6 +50,7 @@ import {
   planComparisons,
   planRelease,
   readReleaseJson,
+  selectGroup,
 } from "./release-strict-regression.mjs";
 import { PROGRAMS } from "./firestore-probe/programs.mjs";
 import { createBudget } from "../functions-http/harness.mjs";
@@ -94,6 +97,269 @@ test("a lane export equal to the committed comparison passes", () => {
     const path = `${EVIDENCE}/${name}-comparison.json`;
     assert.deepEqual(compareLaneExport(readJson(path), exportOf(path), BINARY), [], name);
   }
+});
+
+test("compareLaneExport applies the EVENTARC source rebind to current and historical exports", () => {
+  const expected = readJson("spec/compatibility/closure/evidence/EVENTARC-comparison.json.gz");
+  const { sourceRebinds } = readJson(
+    "spec/compatibility/closure/evidence/EVENTARC-adjudication.json",
+  );
+  const [rebind] = sourceRebinds;
+  const actual = {
+    ...expected,
+    artifactSha256: BINARY,
+    sourcePins: { ...expected.sourcePins, [rebind.path]: rebind.sha256 },
+  };
+  assert.deepEqual(compareLaneExport(expected, actual, BINARY, { sourceRebinds }), []);
+  assert.ok(compareLaneExport(expected, actual, BINARY).some((d) => d.startsWith("sourcePins:")));
+  assert.deepEqual(
+    compareLaneExport(expected, { ...expected, artifactSha256: BINARY }, BINARY, { sourceRebinds }),
+    [],
+  );
+});
+
+test("EVENTARC source rebind refuses unrelated or unverified pin changes", () => {
+  const expected = readJson("spec/compatibility/closure/evidence/EVENTARC-comparison.json.gz");
+  const { sourceRebinds } = readJson(
+    "spec/compatibility/closure/evidence/EVENTARC-adjudication.json",
+  );
+  const [rebind] = sourceRebinds;
+  const other = "conformance/src/eventarc-production/compare.mjs";
+  const actual = {
+    ...expected,
+    artifactSha256: BINARY,
+    sourcePins: { ...expected.sourcePins, [rebind.path]: rebind.sha256 },
+  };
+  const wrong = "f".repeat(64);
+  const cases = [
+    [actual, [{ ...rebind, previousSha256: wrong }]],
+    [{ ...actual, sourcePins: { ...actual.sourcePins, [rebind.path]: wrong } }, sourceRebinds],
+    [actual, [{ ...rebind, sha256: wrong }]],
+    [{ ...actual, sourcePins: { ...actual.sourcePins, [other]: wrong } }, sourceRebinds],
+    [
+      {
+        ...expected,
+        artifactSha256: BINARY,
+        sourcePins: { ...expected.sourcePins, [other]: wrong },
+      },
+      [],
+    ],
+    [actual, [{ ...rebind, path: other }]],
+  ];
+  for (const [exported, rebinds] of cases) {
+    assert.ok(
+      compareLaneExport(expected, exported, BINARY, { sourceRebinds: rebinds }).some((d) =>
+        d.startsWith("sourcePins:"),
+      ),
+    );
+  }
+  const unrelated = readJson(`${EVIDENCE}/AUTH-CONFIG-SDK-comparison.json`);
+  const exported = { ...unrelated, artifactSha256: BINARY };
+  assert.deepEqual(compareLaneExport(unrelated, exported, BINARY, { sourceRebinds }), []);
+  assert.ok(
+    compareLaneExport(unrelated, { ...exported, fixtureSha256: wrong }, BINARY, {
+      sourceRebinds,
+    }).some((d) => d.startsWith("fixtureSha256:")),
+  );
+});
+
+test("compareLaneExport applies an EVENTARC source rebind to the path it names only", () => {
+  const expected = readJson("spec/compatibility/closure/evidence/EVENTARC-comparison.json.gz");
+  const [rebind] = readJson(
+    "spec/compatibility/closure/evidence/EVENTARC-adjudication.json",
+  ).sourceRebinds;
+  const other = "conformance/src/eventarc-production/compare.mjs";
+  const actual = {
+    ...expected,
+    artifactSha256: BINARY,
+    sourcePins: { ...expected.sourcePins, [other]: rebind.sha256 },
+  };
+  assert.ok(
+    compareLaneExport(expected, actual, BINARY, { sourceRebinds: [rebind] }).some((difference) =>
+      difference.startsWith("sourcePins:"),
+    ),
+  );
+});
+
+const adjudicationPath = "spec/compatibility/closure/evidence/EVENTARC-adjudication.json";
+const recordsPath = "spec/compatibility/closure/record-digests.json";
+const closurePath = "spec/compatibility/closure/EVENTARC.json";
+const eventarcPath = "spec/compatibility/closure/evidence/EVENTARC-comparison.json.gz";
+const eventarcDisk = () =>
+  new Map(
+    [adjudicationPath, recordsPath, closurePath].map((path) => [path, readFileSync(repo(path))]),
+  );
+const diskRead = (disk) => (path) => {
+  if (!disk.has(path)) throw new Error(`missing ${path}`);
+  return disk.get(path);
+};
+const writeDiskJson = (disk, path, value) => disk.set(path, Buffer.from(JSON.stringify(value)));
+const diskDigest = (disk) => createHash("sha256").update(disk.get(adjudicationPath)).digest("hex");
+const eventarcJudge = (disk, actual) =>
+  judge(
+    { path: eventarcPath, kind: "eventarc-production-comparison-v1", runIds: ["test"] },
+    { test: actual },
+    { binarySha256: BINARY, readJson, readBytes: diskRead(disk) },
+  );
+
+test("EVENTARC adjudication is verified before its rebinds are used", () => {
+  const disk = eventarcDisk();
+  const expected = readJson(eventarcPath);
+  const rebinds = eventarcSourceRebinds(diskRead(disk));
+  assert.deepEqual(rebinds, readJson(adjudicationPath).sourceRebinds);
+  assert.equal(rebinds.length, 1);
+  assert.equal(rebinds[0].path, "conformance/src/eventarc-production/run.mjs");
+  const other = "conformance/src/eventarc-production/compare.mjs";
+  const extra = { path: other, previousSha256: expected.sourcePins[other], sha256: "e".repeat(64) };
+  const actual = {
+    ...expected,
+    artifactSha256: BINARY,
+    sourcePins: { ...expected.sourcePins, [other]: extra.sha256 },
+  };
+  const adjudication = JSON.parse(disk.get(adjudicationPath));
+  adjudication.sourceRebinds.push(extra);
+  writeDiskJson(disk, adjudicationPath, adjudication);
+  assert.throws(() => eventarcSourceRebinds(diskRead(disk)), /^Error: EVENTARC adjudication/);
+  const differences = eventarcJudge(disk, actual);
+  assert.ok(
+    differences.some((difference) => difference.includes("EVENTARC source rebinds refused")),
+  );
+  assert.ok(differences.some((difference) => difference.startsWith("sourcePins:")));
+  const digest = diskDigest(disk);
+  const records = JSON.parse(disk.get(recordsPath));
+  const closure = JSON.parse(disk.get(closurePath));
+  const originalRecords = disk.get(recordsPath);
+  records.records[adjudicationPath] = digest;
+  writeDiskJson(disk, recordsPath, records);
+  assert.throws(() => eventarcSourceRebinds(diskRead(disk)), /EVENTARC adjudication/);
+  disk.set(recordsPath, originalRecords);
+  closure.retrospectiveAdjudication.sha256 = digest;
+  writeDiskJson(disk, closurePath, closure);
+  assert.throws(() => eventarcSourceRebinds(diskRead(disk)), /EVENTARC adjudication/);
+  const changed = eventarcDisk();
+  const changedAdjudication = JSON.parse(changed.get(adjudicationPath));
+  changedAdjudication.reason = "changed";
+  writeDiskJson(changed, adjudicationPath, changedAdjudication);
+  assert.throws(() => eventarcSourceRebinds(diskRead(changed)), /EVENTARC adjudication/);
+  const missing = judge(
+    { path: eventarcPath, kind: expected.kind, runIds: ["test"] },
+    { test: actual },
+    { binarySha256: BINARY, readJson },
+  );
+  assert.ok(missing.some((difference) => difference.includes("EVENTARC source rebinds refused")));
+});
+
+test("EVENTARC source rebind refuses a path outside the allowed driver", () => {
+  const disk = eventarcDisk();
+  const expected = readJson(eventarcPath);
+  const [driver] = eventarcSourceRebinds(diskRead(disk));
+  const other = "conformance/src/eventarc-production/compare.mjs";
+  const extra = { path: other, previousSha256: expected.sourcePins[other], sha256: "e".repeat(64) };
+  const actual = {
+    ...expected,
+    artifactSha256: BINARY,
+    sourcePins: { ...expected.sourcePins, [other]: extra.sha256 },
+  };
+  const adjudication = JSON.parse(disk.get(adjudicationPath));
+  adjudication.sourceRebinds.push(extra);
+  writeDiskJson(disk, adjudicationPath, adjudication);
+  const digest = diskDigest(disk);
+  const records = JSON.parse(disk.get(recordsPath));
+  records.records[adjudicationPath] = digest;
+  writeDiskJson(disk, recordsPath, records);
+  const closure = JSON.parse(disk.get(closurePath));
+  closure.retrospectiveAdjudication.sha256 = digest;
+  writeDiskJson(disk, closurePath, closure);
+  assert.throws(() => eventarcSourceRebinds(diskRead(disk)), /EVENTARC adjudication.*compare\.mjs/);
+  assert.ok(
+    eventarcJudge(disk, actual).some((difference) =>
+      difference.includes("EVENTARC source rebinds refused"),
+    ),
+  );
+  assert.ok(
+    compareLaneExport(expected, actual, BINARY, { sourceRebinds: [extra] }).some((difference) =>
+      difference.includes("is not allowed"),
+    ),
+  );
+  const driverExport = {
+    ...expected,
+    artifactSha256: BINARY,
+    sourcePins: { ...expected.sourcePins, [driver.path]: driver.sha256 },
+  };
+  assert.deepEqual(eventarcJudge(eventarcDisk(), driverExport), []);
+});
+
+test("EVENTARC adjudication pins are each required", () => {
+  // A harmless change keeps every rebind path allowed, so only the digest checks can refuse it.
+  const altered = () => {
+    const disk = eventarcDisk();
+    const adjudication = JSON.parse(disk.get(adjudicationPath));
+    adjudication.note = "changed";
+    writeDiskJson(disk, adjudicationPath, adjudication);
+    return disk;
+  };
+  const pin = (disk, which) => {
+    const digest = diskDigest(disk);
+    if (which.includes("records")) {
+      const records = JSON.parse(disk.get(recordsPath));
+      records.records[adjudicationPath] = digest;
+      writeDiskJson(disk, recordsPath, records);
+    }
+    if (which.includes("closure")) {
+      const closure = JSON.parse(disk.get(closurePath));
+      closure.retrospectiveAdjudication.sha256 = digest;
+      writeDiskJson(disk, closurePath, closure);
+    }
+    return disk;
+  };
+  for (const which of [[], ["records"], ["closure"]]) {
+    assert.throws(
+      () => eventarcSourceRebinds(diskRead(pin(altered(), which))),
+      /EVENTARC adjudication: digest mismatch/,
+      which.join(","),
+    );
+  }
+  assert.deepEqual(
+    eventarcSourceRebinds(diskRead(pin(altered(), ["records", "closure"]))),
+    readJson(adjudicationPath).sourceRebinds,
+  );
+});
+
+test("judge reads EVENTARC adjudication only for the EVENTARC comparison", () => {
+  const reads = [];
+  const disk = eventarcDisk();
+  const context = {
+    binarySha256: BINARY,
+    readJson,
+    readBytes: (path) => {
+      reads.push(path);
+      return diskRead(disk)(path);
+    },
+  };
+  const expected = readJson(eventarcPath);
+  const [rebind] = readJson(adjudicationPath).sourceRebinds;
+  const actual = {
+    ...expected,
+    artifactSha256: BINARY,
+    sourcePins: { ...expected.sourcePins, [rebind.path]: rebind.sha256 },
+  };
+  assert.deepEqual(
+    judge({ path: eventarcPath, kind: expected.kind, runIds: ["test"] }, { test: actual }, context),
+    [],
+  );
+  assert.ok(reads.includes(adjudicationPath));
+  reads.length = 0;
+  const other = `${EVIDENCE}/AUTH-CONFIG-SDK-comparison.json`;
+  const unrelated = readJson(other);
+  assert.deepEqual(
+    judge(
+      { path: other, kind: unrelated.kind, runIds: ["test"] },
+      { test: { ...unrelated, artifactSha256: BINARY } },
+      context,
+    ),
+    [],
+  );
+  assert.deepEqual(reads, []);
 });
 
 test("a row order change alone is not a difference", () => {
@@ -455,6 +721,7 @@ test("the excluded kinds are exactly the ones the release discloses", () => {
     "fs-listen-sdk-comparison-v1",
     "fs-text-search-replay-comparison-v1",
     "functions-events-comparison",
+    "functions-python-pass-comparison-v1",
     "pubsub-production-comparison-v1",
     "scheduled-functions-calendar-comparison-v1",
     "scheduled-functions-comparison-v1",
@@ -670,6 +937,8 @@ test("the arguments name an output directory and accept nothing else", () => {
     out: "dir",
     dist: "npm/dist",
   });
+  assert.equal(parseArguments(["--out", "dir", "--group", "rtdb-a"]).group, "rtdb-a");
+  assert.throws(() => parseArguments(["--out", "dir", "--group", "unknown"]), /unknown group/);
   assert.throws(() => parseArguments([]), /--out/);
   assert.throws(() => parseArguments(["--out"]), /--out/);
   assert.throws(() => parseArguments(["--out", "dir", "--record"]), /unknown/);
@@ -1122,6 +1391,73 @@ const strictProductionJob = () => {
   assert.ok(start > 0 && end > start, "the strict-production job is in release.yml");
   return workflow.slice(start, end);
 };
+
+test("groups partition runs and keep each comparison together", () => {
+  const ids = Object.values(GROUPS).flat();
+  assert.equal(new Set(ids).size, ids.length);
+  assert.deepEqual([...ids].sort(), RUNS.map(({ id }) => id).sort());
+  const comparisons = planComparisons(committedClosures(), readJson).comparisons;
+  for (const comparison of comparisons) {
+    assert.equal(
+      Object.values(GROUPS).filter((group) => comparison.runIds.every((id) => group.includes(id)))
+        .length,
+      1,
+      comparison.path,
+    );
+  }
+  const matrix = strictProductionJob().match(/group: \[([^\]]+)\]/);
+  assert.ok(matrix);
+  assert.deepEqual(
+    matrix[1].split(",").map((name) => name.trim()),
+    Object.keys(GROUPS),
+  );
+});
+
+test("rtdb is split in two groups covering R22 to R36 once", () => {
+  assert.deepEqual(Object.keys(GROUPS), ["eventarc", "transaction", "rtdb-a", "rtdb-b", "rest"]);
+  assert.deepEqual(
+    [...GROUPS["rtdb-a"], ...GROUPS["rtdb-b"]].sort(),
+    Array.from({ length: 15 }, (_, index) => `R${index + 22}`),
+  );
+  assert.ok(GROUPS["rtdb-a"].length > 0);
+  assert.ok(GROUPS["rtdb-b"].length > 0);
+  assert.equal(Object.hasOwn(GROUPS, "rtdb"), false);
+});
+
+test("group selection filters runs, comparisons, exports and the R10 report", () => {
+  const plan = planComparisons(committedClosures(), readJson);
+  const all = selectGroup(plan);
+  assert.deepEqual(all.runs, RUNS);
+  assert.deepEqual(all.comparisons, plan.comparisons);
+  assert.equal(all.reportsR10, true);
+  const comparisons = [];
+  const copies = [];
+  for (const [group, ids] of Object.entries(GROUPS)) {
+    const selected = selectGroup(plan, group);
+    assert.deepEqual(selected.runs.map(({ id }) => id).sort(), [...ids].sort());
+    assert.deepEqual(
+      selected.comparisons,
+      plan.comparisons.filter((comparison) => comparison.runIds.every((id) => ids.includes(id))),
+    );
+    assert.equal(selected.reportsR10, group === "rest");
+    comparisons.push(...selected.comparisons);
+    const groupCopies = exportCopies(selected.comparisons, selected.runs);
+    for (const copy of groupCopies)
+      assert.ok(ids.includes(copy.from.replace(/-export\.json$/, "")));
+    copies.push(...groupCopies);
+  }
+  assert.equal(new Set(comparisons).size, comparisons.length);
+  assert.deepEqual(new Set(comparisons), new Set(plan.comparisons));
+  const sortCopies = (items) => items.map((item) => JSON.stringify(item)).sort();
+  assert.deepEqual(sortCopies(copies), sortCopies(exportCopies(plan.comparisons, RUNS)));
+});
+
+test("a comparison spanning groups is selected by no group", () => {
+  const comparison = { path: "synthetic.json", runIds: ["R10", "R20"] };
+  for (const group of Object.keys(GROUPS)) {
+    assert.deepEqual(selectGroup({ comparisons: [comparison] }, group).comparisons, []);
+  }
+});
 
 test("the strict-production job installs the blocking fixture's dependencies before the loopback run", () => {
   const job = strictProductionJob();
@@ -2029,7 +2365,7 @@ test("FS-LISTEN-SDK uses its disclosed exclusion as a verified closure", () => {
   assert.ok(reviewed.excluded.some((entry) => entry.kind === "fs-listen-sdk-comparison-v1"));
 });
 
-test("RTDB retains its fourteen disclosed comparisons", () => {
+test("RTDB retains its sixteen disclosed comparisons", () => {
   const closures = committedClosures();
   const rtdb = closures.find((entry) => entry.closure.parent === "RTDB");
   assert.equal(rtdb.closure.parentStatus, "COMPAT_VERIFIED");
@@ -2054,11 +2390,13 @@ test("RTDB retains its fourteen disclosed comparisons", () => {
       "spec/compatibility/closure/evidence/RTDB-sdk-rest-comparison.json",
       "spec/compatibility/closure/evidence/RTDB-sdk-rules-comparison.json",
       "spec/compatibility/closure/evidence/RTDB-sdk-rules-load-comparison.json",
+      "spec/compatibility/closure/evidence/RTDB-sdk-rules-syntax-comparison.json",
       "spec/compatibility/closure/evidence/RTDB-sdk-tokens-comparison.json",
+      "spec/compatibility/closure/evidence/RTDB-kinds-comparison.json",
     ].toSorted(),
   );
   assert.ok(planned.every((entry) => entry.parents.join() === "RTDB" && entry.runIds.length === 1));
-  assert.equal(new Set(planned.map((entry) => entry.runIds[0])).size, 13);
+  assert.equal(new Set(planned.map((entry) => entry.runIds[0])).size, 15);
   assert.deepEqual(
     planned.find((entry) => entry.path.endsWith("RTDB-sdk-small-comparison.json")).runIds,
     ["R28"],
@@ -2080,7 +2418,7 @@ test("every release command binds its declared mode to the actual CLI action", (
   }
 });
 
-test("R19 executes with the reviewed interpreter and owns both expanded output paths", async () => {
+test("R19 executes with the reviewed interpreter and owns its output path", async () => {
   const { chmodSync } = await import("node:fs");
   const dir = mkdtempSync(join(tmpdir(), "fireemu R19 setup-"));
   try {
@@ -2108,11 +2446,11 @@ console.log(JSON.stringify({ args }));
       env: { PATH: dir, R19_OWNED_OUT: dir },
     });
     assert.deepEqual(entry.record.errors, []);
-    assert.equal(entry.record.commands.length, 2);
-    for (const [index, command] of entry.record.commands.entries()) {
+    assert.equal(entry.record.commands.length, 1);
+    for (const command of entry.record.commands) {
       assert.deepEqual(command.argv.slice(0, 5), ["uv", "run", "--python", "3.12.13", "python"]);
       const output = command.argv[command.argv.indexOf("--out") + 1];
-      assert.equal(output, join(dir, index === 0 ? "R19-export.json.check" : "R19-export.json"));
+      assert.equal(output, join(dir, "R19-export.json"));
       assert.ok(existsSync(output + ".receipt"));
       assert.deepEqual(
         JSON.parse(readFileSync(output + ".receipt", "utf8")),
@@ -2208,7 +2546,7 @@ test("R20 declares the real check and evidence-reusing export CLI with scoped de
     assert.deepEqual(command.expectedExitCodes, [0]);
     assert.deepEqual(command.env, {});
   }
-  for (const other of RUNS.filter(({ id }) => id !== "R20" && !/^R(2[2-9]|3[0-4])$/.test(id)))
+  for (const other of RUNS.filter(({ id }) => id !== "R20" && !/^R(2[2-9]|3[0-7])$/.test(id)))
     for (const command of other.commands) assert.equal(command.timeoutMs, undefined, other.id);
   assert.match(strictProductionJob(), /timeout-minutes: 180\n/);
 });
@@ -2579,8 +2917,35 @@ test("the exact EVENTARC gzip canonical preserves decoded bytes and plain artifa
   }
 });
 
+test("the Python parent names its pass comparison as an excluded kind before and after promotion", () => {
+  const python = () =>
+    committedClosures().find(({ closure }) => closure.parent === "FUNCTIONS-PYTHON");
+  const path = python().closure.integratedRegression.comparisons[0].path;
+  const kind = readJson(path).kind;
+  assert.equal(
+    RUNS.some((run) => run.kind === kind),
+    false,
+  );
+  for (const status of ["IMPLEMENTING", "COMPAT_VERIFIED"]) {
+    const closures = committedClosures();
+    closures.find(({ closure }) => closure.parent === "FUNCTIONS-PYTHON").closure.parentStatus =
+      status;
+    const plan = planComparisons(closures, readJson);
+    assert.deepEqual(plan.errors, [], status);
+    const excluded = plan.excluded.find((item) => item.path === path);
+    assert.deepEqual(excluded?.parents, ["FUNCTIONS-PYTHON"]);
+    assert.equal(excluded.kind, kind);
+  }
+  // The committed file is read as it is: an unknown kind or a missing comparison fails closed.
+  const changed = committedClosures();
+  const read = (p) => (p === path ? { kind: "functions-python-other-v1" } : readJson(p));
+  assert.ok(
+    planComparisons(changed, read).errors.some((e) => e.includes("functions-python-other-v1")),
+  );
+});
+
 test("reopened parents require comparisons while unrelated pending parents stay excluded", () => {
-  for (const parent of ["RTDB", "FS-PIPELINE"]) {
+  for (const parent of ["RTDB", "FS-PIPELINE", "FUNCTIONS-PYTHON"]) {
     const closures = committedClosures();
     const entry = closures.find(({ closure }) => closure.parent === parent);
     entry.closure.parentStatus = "IMPLEMENTING";
@@ -2993,6 +3358,8 @@ test("RTDB release entries bind every local producer to the installed binary", (
     "R32",
     "R33",
     "R34",
+    "R35",
+    "R36",
   ]) {
     const run = RUNS.find((entry) => entry.id === id);
     assert.ok(run);
@@ -3016,6 +3383,8 @@ test("RTDB release entries bind every local producer to the installed binary", (
     ["R32", "sdk-tokens"],
     ["R33", "sdk-rules-load"],
     ["R34", "breadth"],
+    ["R35", "sdk-rules-syntax"],
+    ["R36", "kinds"],
   ])
     assert.equal(RUNS.find((entry) => entry.id === id).commands[0].argv[3], campaign, id);
 });
@@ -3080,6 +3449,8 @@ test("RTDB run entries expand the owned output and binary, and reject producer f
       "R32",
       "R33",
       "R34",
+      "R35",
+      "R36",
     ]) {
       const run = clone(RUNS.find((entry) => entry.id === id));
       const result = await runEntry(run, context);
@@ -3458,7 +3829,7 @@ test("a timed-out RTDB entry does not parse a partial export before writing fail
   assert.equal(called, false);
 });
 
-test("R30 to R34 judge only a matching export of their own campaign bound to the installed binary", () => {
+test("R30 to R36 judge only a matching export of their own campaign bound to the installed binary", () => {
   const context = { readJson, binarySha256: BINARY };
   const runs = [
     ["R30", "sdk-rest", "RTDB-sdk-rest-comparison.json"],
@@ -3466,6 +3837,8 @@ test("R30 to R34 judge only a matching export of their own campaign bound to the
     ["R32", "sdk-tokens", "RTDB-sdk-tokens-comparison.json"],
     ["R33", "sdk-rules-load", "RTDB-sdk-rules-load-comparison.json"],
     ["R34", "breadth", "RTDB-breadth-comparison.json"],
+    ["R35", "sdk-rules-syntax", "RTDB-sdk-rules-syntax-comparison.json"],
+    ["R36", "kinds", "RTDB-kinds-comparison.json"],
   ];
   for (const [id, campaign, file] of runs) {
     const cmp = {

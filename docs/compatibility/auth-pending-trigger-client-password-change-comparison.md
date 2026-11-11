@@ -16,7 +16,7 @@ Row-by-row comparison of the approved production record of the client-password-c
 
 Differing rows: none.
 
-Comparison subject (unapproved): `40e224d4e2876a54c260679d45e5c56ff4a642debe01dca85b6c950a809314bb`. Production subject compared: `698884037cb56f6ec50d5656fb57b490512c26556eae58c35e7147bd581aa1d6`.
+Comparison subject (unapproved): `da3955f92a9bfb7459df9b0ddeebb1abc22610fde42aebbbc1431740da188ceb`. Production subject compared: `49a6986eef4a1d52bef70f203131815da525f527cafd90da113eccbd2ecdd048`.
 
 Local artifact `0.7.0` built from the tree at `d3c2f4fc3772af8cd9a5095c481e42bc4ee4d299` (repository HEAD `d3c2f4fc3772af8cd9a5095c481e42bc4ee4d299` at run time) with recorder files at `d3c2f4fc3772af8cd9a5095c481e42bc4ee4d299`; strict profile. Owned process exit 0 with listeners closed; the account was deleted with absence confirmation.
 

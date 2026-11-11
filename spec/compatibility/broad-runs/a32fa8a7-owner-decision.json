@@ -1,14 +1,14 @@
 {
   "kind": "owner-decision-draft-not-permission",
   "executionInputsPath": "spec/compatibility/broad-runs/a32fa8a7-execution-inputs.json",
-  "executionInputsFileSha256": "7c65133ba139d25d42ef1fcfa82c34d0bc2b3e792e1c9ec9b710842ed9093d92",
+  "executionInputsFileSha256": "62acc9e576050f53f5b6a412c882aba093c66f4425db2fc802fb2b3b10732439",
   "frozenCommit": "a32fa8a7fa9b2b3f4e286a3d8167723c8c26fcf0",
   "observerSha256": "de284c0a6c8496eb91f5765d9822a1c60d1d4c4e2bcd26a728fd187d95adb34a",
-  "manifestSha256": "4b6d42bc5acd1a697622b25325ba67620af272d5c44f5d00982dbffe8bb8cc3f",
-  "comparisonContractDigest": "453565e1eb4f74219d8648f3409ee996a0514d83222669f3edf29d8f7feb6434",
+  "manifestSha256": "854aa3d3446158f89da7cd69665cee759dea8dc4ed7fe0e5bd842977923e7811",
+  "comparisonContractDigest": "6915ab4c7f2b1c75affb8fcf865e046db7a7aab840eebdd8e31ec9fe5e065c67",
   "readOnlyCollectionProposal": {
     "project": "fireemu-35fe6",
-    "projectNumber": "592603257417",
+    "projectNumber": "<project-number>",
     "database": "(default)",
     "permission": {
       "scope": "four metadata reads, one ADC acquisition and one tokeninfo; no retry, 180s, no data/config changes",
@@ -365,7 +365,7 @@
   "apiEnablementResult": {
     "authorizationSource": "User asked assistant to enable the required API; scope limited to API Keys API on fireemu-35fe6 and verification, without IAM changes or production batch permission.",
     "quotaProject": "fireemu-35fe6",
-    "serviceName": "projects/592603257417/services/apikeys.googleapis.com",
+    "serviceName": "projects/<project-number>/services/apikeys.googleapis.com",
     "serviceState": "ENABLED",
     "serviceEnabledConfirmed": true,
     "startedAt": "2026-09-12T14:20:39.487064+00:00",
@@ -424,7 +424,7 @@
         "parsedResponseDigest": "c937bc6dc61f6533e25ef3665d6390dd366f6dc7771f90f8d819114af92d02d6"
       }
     ],
-    "operationName": "operations/acat.p2-592603257417-eef3de67-0f21-4b25-b4e8-0761d6da0d7f",
+    "operationName": "operations/acat.p2-<project-number>-eef3de67-0f21-4b25-b4e8-0761d6da0d7f",
     "sameAdcPrincipalConfirmed": true,
     "persistentAdcAndGcloudConfigUnchanged": true,
     "enableRequests": 1,
@@ -488,8 +488,8 @@
     "frozenCommit": "7be6cf08f1e9b1620eb0b7675b8352470b0968f5",
     "executionInputsPath": "spec/compatibility/broad-runs/7be6cf08-execution-inputs.json",
     "observerSha256": "dcab73c44e07152d21bd22897d18c296908bd2ab88b9eed4a31e41edffc60603",
-    "manifestSha256": "4b6d42bc5acd1a697622b25325ba67620af272d5c44f5d00982dbffe8bb8cc3f",
-    "comparisonContractDigest": "453565e1eb4f74219d8648f3409ee996a0514d83222669f3edf29d8f7feb6434",
+    "manifestSha256": "854aa3d3446158f89da7cd69665cee759dea8dc4ed7fe0e5bd842977923e7811",
+    "comparisonContractDigest": "6915ab4c7f2b1c75affb8fcf865e046db7a7aab840eebdd8e31ec9fe5e065c67",
     "quotaProject": "fireemu-35fe6",
     "reason": "Explicit request quota header required by existing ADC; original a32fa8a7 preserved",
     "scopeChange": "none; same46 rows, resources, budgets and comparison contract",

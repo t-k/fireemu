@@ -11,7 +11,15 @@ Fireemu serves the `google.pubsub.v1` API over gRPC and REST at `127.0.0.1:8085`
 
 Topics, subscriptions, publish, pull and acknowledgement, push delivery, filters, ordering keys, dead-letter topics, StreamingPull, snapshots and seek are supported. Schemas, BigQuery and Cloud Storage subscription delivery, and some APIs such as `UpdateTopic` are not.
 
-`fireemu exec` sets `PUBSUB_EMULATOR_HOST`, which the Google Cloud client libraries read.
+`fireemu exec` sets `PUBSUB_EMULATOR_HOST`, which the Google Cloud client libraries read (see [Environment variables](../../reference/environment-variables/)).
+
+### Topic message storage policy
+
+A topic's `messageStoragePolicy` (`allowedPersistenceRegions` and `enforceInTransit`) is stored, returned by get and list, and changed by `UpdateTopic` (REST `PATCH` with `updateMask`, masks `messageStoragePolicy` and its two members) under `profile = "emulator"`, exactly as sent, as the official emulator does: an unknown, repeated or empty region list, and an empty policy, are all kept. A mask that names the policy but sends none removes it. Nothing is enforced: messages are not routed by region. The `strict` profile refuses the field with `UNIMPLEMENTED` (REST 501) and an explanation, because production checks every region against Google Cloud's Pub/Sub region list (it answered `INVALID_ARGUMENT` for `no-such-region1` and accepted `us-central1`) and Fireemu has no cited copy of that list to check against. Leave the field out under `strict`, or select the emulator profile to keep it.
+
+### Topic key name and tags
+
+Under `profile = "emulator"`, topic `kmsKeyName` and `tags` are stored as sent and returned over REST and gRPC without validation or enforcement. `UpdateTopic` can replace or clear `kms_key_name`; tags are immutable. The strict profile refuses these fields because production validation depends on Cloud KMS and Resource Manager inventories and permissions that Fireemu does not have. The official emulator 0.8.35 stores these values unvalidated and refuses every update mask; production behavior is not recorded.
 
 ### Dead-letter topics
 
@@ -27,9 +35,11 @@ For tests that need a credential, set a local fixture bearer token. The endpoint
 <TabItem label="TOML">
 
 ```toml
+# Configuration schema version: 1.
 schemaVersion = 1
 
 [pubsub.authentication]
+# Require this non-empty local bearer token for strict-profile Pub/Sub requests.
 localBearerToken = "fixture-token"
 ```
 

@@ -19,16 +19,30 @@ use tokio::sync::Semaphore;
 use crate::identity_toolkit::origin_is_local;
 use crate::storage::{handle_framed, StorageRequest, StorageState};
 
-/// Maximum accepted upload body (object limit plus multipart overhead).
+/// Room a request body has beyond the object limit for multipart framing and metadata.
+pub const BODY_OVERHEAD_BYTES: usize = 4 * 1024 * 1024;
+
+/// Default maximum accepted upload body (the default object limit plus [`BODY_OVERHEAD_BYTES`]).
 pub const MAX_STORAGE_BODY_BYTES: usize = 260 * 1024 * 1024;
 
-/// Process-wide budget for the upload bodies buffered at the same time (1 GiB, about four
-/// near-limit uploads). It is a documented constant rather than a config key: it bounds a
-/// memory failure mode, not a semantic of the emulated service.
-///
-/// A request that does not fit is rejected with `503` and `Retry-After: 1` before its
-/// buffer is allocated, so concurrent clients get a stable rejection instead of exhausting
-/// the process (`STG-MEM-03`).
+/// Largest `storage.bufferedBodyBudgetBytes`; a body this long still fits a 32-bit `usize`.
+pub const MAX_CONFIGURED_BUDGET_BYTES: u64 = i32::MAX as u64;
+
+/// Largest `storage.maxObjectBytes`; the body limit derived from it stays within
+/// [`MAX_CONFIGURED_BUDGET_BYTES`].
+pub const MAX_CONFIGURED_OBJECT_BYTES: u64 =
+    MAX_CONFIGURED_BUDGET_BYTES - BODY_OVERHEAD_BYTES as u64;
+
+/// The longest request body for an object limit, or `None` when it does not fit a `usize`.
+#[must_use]
+pub fn body_cap_for_object_limit(max_object_bytes: u64) -> Option<usize> {
+    usize::try_from(max_object_bytes)
+        .ok()?
+        .checked_add(BODY_OVERHEAD_BYTES)
+}
+
+/// Default process-wide budget for concurrently buffered upload bodies.
+/// Requests exceeding the budget receive 503 and `Retry-After: 1`.
 pub const DEFAULT_BODY_BUDGET_BYTES: usize = 1024 * 1024 * 1024;
 
 /// Granularity of budget charges for bodies that arrive without a `Content-Length`.
@@ -64,7 +78,7 @@ impl Drop for SetOnDrop {
 /// a rejected, failed or finished upload gives its budget back immediately.
 #[derive(Debug)]
 pub struct BodyBudget {
-    limit: usize,
+    limit: AtomicUsize,
     in_flight: AtomicUsize,
 }
 
@@ -73,15 +87,20 @@ impl BodyBudget {
     #[must_use]
     pub const fn new(limit: usize) -> Self {
         Self {
-            limit,
+            limit: AtomicUsize::new(limit),
             in_flight: AtomicUsize::new(0),
         }
     }
 
     /// The configured limit.
     #[must_use]
-    pub const fn limit(&self) -> usize {
-        self.limit
+    pub fn limit(&self) -> usize {
+        self.limit.load(Ordering::Acquire)
+    }
+
+    /// Configures the budget before accepting requests.
+    pub fn set_limit(&self, limit: usize) {
+        self.limit.store(limit, Ordering::Release);
     }
 
     /// Bytes charged to the budget right now.
@@ -95,7 +114,7 @@ impl BodyBudget {
         let mut current = self.in_flight.load(Ordering::Relaxed);
         loop {
             let next = match current.checked_add(bytes) {
-                Some(n) if n <= self.limit => n,
+                Some(n) if n <= self.limit() => n,
                 _ => return false,
             };
             match self.in_flight.compare_exchange_weak(
@@ -131,8 +150,8 @@ enum BodyError {
 /// buffer is dropped, which is after the handler returns (also on every error path).
 struct BudgetedBody {
     budget: &'static BodyBudget,
-    /// The longest body this request may have. It is [`MAX_STORAGE_BODY_BYTES`] for the data
-    /// routes and the control port's limit for the privileged rules route, and it is applied
+    /// The longest body this request may have. Data routes use the configured object limit plus
+    /// multipart overhead; the privileged rules route uses the control port's limit. It is applied
     /// as the bytes arrive, so a client that declares no length cannot buffer more than it.
     cap: usize,
     charged: usize,
@@ -370,8 +389,25 @@ async fn respond(
     state: Arc<StorageState>,
     budget: &'static BodyBudget,
     remote_peer: bool,
+    body_cap: usize,
     req: Request<Incoming>,
 ) -> Result<Response<StorageBody>, std::io::Error> {
+    if let Err(refusal) = fireemu_core_session::host_guard::admits_request(
+        req.version() == hyper::Version::HTTP_2,
+        req.headers()
+            .get_all(hyper::header::HOST)
+            .iter()
+            .map(hyper::header::HeaderValue::as_bytes),
+    ) {
+        return Ok(Response::builder()
+            .status(StatusCode::FORBIDDEN)
+            .header(
+                "content-type",
+                fireemu_core_session::host_guard::REFUSAL_CONTENT_TYPE,
+            )
+            .body(plain(Bytes::from(refusal.body())))
+            .unwrap_or_else(|_| Response::new(plain(Bytes::new()))));
+    }
     let origin = req
         .headers()
         .get("origin")
@@ -483,7 +519,7 @@ async fn respond(
     let cap = if method == "PUT" && path == "/internal/setRules" {
         crate::storage::MAX_SET_RULES_BODY_BYTES
     } else {
-        MAX_STORAGE_BODY_BYTES
+        body_cap
     };
     // The buffer moves into the blocking handler and holds its budget charge until that
     // handler finishes, even if the connection is closed while it runs.
@@ -609,25 +645,40 @@ pub async fn serve_storage(listener: TcpListener, state: Arc<StorageState>) -> s
 }
 
 /// [`serve_storage`] against an explicit body budget (tests).
-pub async fn serve_storage_with_budget(
+pub fn serve_storage_with_budget(
     listener: TcpListener,
     state: Arc<StorageState>,
     budget: &'static BodyBudget,
-) -> std::io::Result<()> {
-    loop {
-        let (stream, peer) =
-            fireemu_adapter_support::accept::accept_with_backoff("storage", || listener.accept())
-                .await?;
-        let remote_peer = !peer.ip().to_canonical().is_loopback();
-        let state = state.clone();
-        tokio::spawn(async move {
-            let io = TokioIo::new(GracefulClose::new(
-                stream,
-                DrainBounds::for_largest_body(MAX_STORAGE_BODY_BYTES),
-            ));
-            let svc = service_fn(move |req| respond(state.clone(), budget, remote_peer, req));
-            let _ = http1::Builder::new().serve_connection(io, svc).await;
+) -> impl std::future::Future<Output = std::io::Result<()>> {
+    let body_cap = state
+        .store
+        .lock()
+        .map_err(|_| std::io::Error::other("Storage store lock poisoned"))
+        .and_then(|store| {
+            body_cap_for_object_limit(store.max_object_bytes())
+                .ok_or_else(|| std::io::Error::other("Storage object limit is too large"))
         });
+    async move {
+        let body_cap = body_cap?;
+        loop {
+            let (stream, peer) =
+                fireemu_adapter_support::accept::accept_with_backoff("storage", || {
+                    listener.accept()
+                })
+                .await?;
+            let remote_peer = !peer.ip().to_canonical().is_loopback();
+            let state = state.clone();
+            tokio::spawn(async move {
+                let io = TokioIo::new(GracefulClose::new(
+                    stream,
+                    DrainBounds::for_largest_body(body_cap),
+                ));
+                let svc = service_fn(move |req| {
+                    respond(state.clone(), budget, remote_peer, body_cap, req)
+                });
+                let _ = http1::Builder::new().serve_connection(io, svc).await;
+            });
+        }
     }
 }
 
@@ -726,5 +777,46 @@ mod zero_length_tests {
             std::pin::Pin::new(&mut body).poll_frame(&mut context),
             Poll::Ready(None)
         ));
+    }
+}
+
+#[cfg(test)]
+mod body_budget_tests {
+    use super::*;
+
+    /// The budget admits a charge exactly up to its limit, refuses the byte past it and a sum
+    /// that would overflow, and gives released bytes back. Direct calls, so a mutant that admits
+    /// or refuses everything fails here at once instead of through a socket that waits.
+    #[test]
+    fn the_budget_admits_up_to_its_limit_and_gives_released_bytes_back() {
+        let budget = BodyBudget::new(8);
+        assert!(budget.charge(5), "5 of 8 fits");
+        assert_eq!(budget.in_flight(), 5);
+        assert!(budget.charge(3), "5 + 3 is exactly the limit");
+        assert_eq!(budget.in_flight(), 8);
+        assert!(!budget.charge(1), "one byte past the limit is refused");
+        assert_eq!(budget.in_flight(), 8, "a refused charge changes nothing");
+        budget.release(5);
+        assert_eq!(budget.in_flight(), 3);
+        assert!(budget.charge(5), "released bytes are available again");
+        budget.release(8);
+        assert_eq!(budget.in_flight(), 0);
+        assert!(
+            !budget.charge(usize::MAX),
+            "a sum that overflows is refused"
+        );
+        assert_eq!(budget.in_flight(), 0);
+    }
+
+    /// A reconfigured limit applies to the next charge, in both directions.
+    #[test]
+    fn a_reconfigured_limit_applies_to_the_next_charge() {
+        let budget = BodyBudget::new(8);
+        budget.set_limit(2);
+        assert!(!budget.charge(3));
+        assert!(budget.charge(2));
+        budget.set_limit(10);
+        assert!(budget.charge(8));
+        assert_eq!(budget.in_flight(), 10);
     }
 }

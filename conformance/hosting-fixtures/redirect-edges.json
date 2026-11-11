@@ -1,0 +1,746 @@
+{
+  "pin": "firebase-tools@15.28.2",
+  "rows": [
+    {
+      "path": "/go/",
+      "destination": "/:name",
+      "status": 404,
+      "authority": null
+    },
+    {
+      "path": "/go/%5cevil.example",
+      "destination": "/:name",
+      "status": 302,
+      "location": "/%5Cevil.example",
+      "authority": "127.0.0.1"
+    },
+    {
+      "path": "/go/%255cevil.example",
+      "destination": "/:name",
+      "status": 302,
+      "location": "/%255cevil.example",
+      "authority": "127.0.0.1"
+    },
+    {
+      "path": "/go/%2fevil.example",
+      "destination": "/:name",
+      "status": 302,
+      "location": "/%252fevil.example",
+      "authority": "127.0.0.1"
+    },
+    {
+      "path": "/go/%252fevil.example",
+      "destination": "/:name",
+      "status": 302,
+      "location": "/%252fevil.example",
+      "authority": "127.0.0.1"
+    },
+    {
+      "path": "/go/a%20b",
+      "destination": "/:name",
+      "status": 302,
+      "location": "/a%20b",
+      "authority": "127.0.0.1"
+    },
+    {
+      "path": "/go/a%09b",
+      "destination": "/:name",
+      "status": 302,
+      "location": "/a%09b",
+      "authority": "127.0.0.1"
+    },
+    {
+      "path": "/go/a%0db",
+      "destination": "/:name",
+      "status": 302,
+      "location": "/a%0Db",
+      "authority": "127.0.0.1"
+    },
+    {
+      "path": "/go/%E6%97%A5",
+      "destination": "/:name",
+      "status": 302,
+      "location": "/%E6%97%A5",
+      "authority": "127.0.0.1"
+    },
+    {
+      "path": "/go/a:b",
+      "destination": "/:name",
+      "status": 302,
+      "location": "/a:b",
+      "authority": "127.0.0.1"
+    },
+    {
+      "path": "/go/%3Aother",
+      "destination": "/:name",
+      "status": 302,
+      "location": "/%253Aother",
+      "authority": "127.0.0.1"
+    },
+    {
+      "path": "/go/a%25b",
+      "destination": "/:name",
+      "status": 302,
+      "location": "/a%25b",
+      "authority": "127.0.0.1"
+    },
+    {
+      "path": "/go/a%3Fb",
+      "destination": "/:name",
+      "status": 302,
+      "location": "/a%253Fb",
+      "authority": "127.0.0.1"
+    },
+    {
+      "path": "/go/a%23b",
+      "destination": "/:name",
+      "status": 302,
+      "location": "/a%2523b",
+      "authority": "127.0.0.1"
+    },
+    {
+      "path": "/go/plain?x=%5c",
+      "destination": "/:name",
+      "status": 302,
+      "location": "/plain?x=%5C",
+      "authority": "127.0.0.1"
+    },
+    {
+      "path": "/go/%09",
+      "destination": "/:name",
+      "status": 302,
+      "location": "/%09",
+      "authority": "127.0.0.1"
+    },
+    {
+      "path": "/go/\\evil.example",
+      "destination": "/:name",
+      "status": 302,
+      "location": "/%5Cevil.example",
+      "authority": "127.0.0.1"
+    },
+    {
+      "path": "/go/%E6%97%A5?x=%5c",
+      "destination": "/:name",
+      "status": 302,
+      "location": "/%E6%97%A5?x=%5C",
+      "authority": "127.0.0.1"
+    },
+    {
+      "path": "/go/a:b?x=%5c",
+      "destination": "/:name",
+      "status": 302,
+      "location": "/a:b?x=%5C",
+      "authority": "127.0.0.1"
+    },
+    {
+      "path": "/go/",
+      "destination": "/next/:name",
+      "status": 404,
+      "authority": null
+    },
+    {
+      "path": "/go/%5cevil.example",
+      "destination": "/next/:name",
+      "status": 302,
+      "location": "/next/%5Cevil.example",
+      "authority": "127.0.0.1"
+    },
+    {
+      "path": "/go/%255cevil.example",
+      "destination": "/next/:name",
+      "status": 302,
+      "location": "/next/%255cevil.example",
+      "authority": "127.0.0.1"
+    },
+    {
+      "path": "/go/%2fevil.example",
+      "destination": "/next/:name",
+      "status": 302,
+      "location": "/next/%252fevil.example",
+      "authority": "127.0.0.1"
+    },
+    {
+      "path": "/go/%252fevil.example",
+      "destination": "/next/:name",
+      "status": 302,
+      "location": "/next/%252fevil.example",
+      "authority": "127.0.0.1"
+    },
+    {
+      "path": "/go/a%20b",
+      "destination": "/next/:name",
+      "status": 302,
+      "location": "/next/a%20b",
+      "authority": "127.0.0.1"
+    },
+    {
+      "path": "/go/a%09b",
+      "destination": "/next/:name",
+      "status": 302,
+      "location": "/next/a%09b",
+      "authority": "127.0.0.1"
+    },
+    {
+      "path": "/go/a%0db",
+      "destination": "/next/:name",
+      "status": 302,
+      "location": "/next/a%0Db",
+      "authority": "127.0.0.1"
+    },
+    {
+      "path": "/go/%E6%97%A5",
+      "destination": "/next/:name",
+      "status": 302,
+      "location": "/next/%E6%97%A5",
+      "authority": "127.0.0.1"
+    },
+    {
+      "path": "/go/a:b",
+      "destination": "/next/:name",
+      "status": 302,
+      "location": "/next/a:b",
+      "authority": "127.0.0.1"
+    },
+    {
+      "path": "/go/%3Aother",
+      "destination": "/next/:name",
+      "status": 302,
+      "location": "/next/%253Aother",
+      "authority": "127.0.0.1"
+    },
+    {
+      "path": "/go/a%25b",
+      "destination": "/next/:name",
+      "status": 302,
+      "location": "/next/a%25b",
+      "authority": "127.0.0.1"
+    },
+    {
+      "path": "/go/a%3Fb",
+      "destination": "/next/:name",
+      "status": 302,
+      "location": "/next/a%253Fb",
+      "authority": "127.0.0.1"
+    },
+    {
+      "path": "/go/a%23b",
+      "destination": "/next/:name",
+      "status": 302,
+      "location": "/next/a%2523b",
+      "authority": "127.0.0.1"
+    },
+    {
+      "path": "/go/plain?x=%5c",
+      "destination": "/next/:name",
+      "status": 302,
+      "location": "/next/plain?x=%5C",
+      "authority": "127.0.0.1"
+    },
+    {
+      "path": "/go/%09",
+      "destination": "/next/:name",
+      "status": 302,
+      "location": "/next/%09",
+      "authority": "127.0.0.1"
+    },
+    {
+      "path": "/go/\\evil.example",
+      "destination": "/next/:name",
+      "status": 302,
+      "location": "/next/%5Cevil.example",
+      "authority": "127.0.0.1"
+    },
+    {
+      "path": "/go/a:b?x=%5c",
+      "destination": "/next/:name",
+      "status": 302,
+      "location": "/next/a:b?x=%5C",
+      "authority": "127.0.0.1"
+    },
+    {
+      "path": "/go/%2fevil.example?x=%5c",
+      "destination": "/next/:name",
+      "status": 302,
+      "location": "/next/%252fevil.example?x=%5C",
+      "authority": "127.0.0.1"
+    },
+    {
+      "path": "/go/a%25b?x=%5c",
+      "destination": "/next/:name",
+      "status": 302,
+      "location": "/next/a%25b?x=%5C",
+      "authority": "127.0.0.1"
+    },
+    {
+      "path": "/go/",
+      "destination": "https://example.test/:name",
+      "status": 404,
+      "authority": null
+    },
+    {
+      "path": "/go/%5cevil.example",
+      "destination": "https://example.test/:name",
+      "status": 302,
+      "location": "https://example.test/%5Cevil.example",
+      "authority": "example.test"
+    },
+    {
+      "path": "/go/%255cevil.example",
+      "destination": "https://example.test/:name",
+      "status": 302,
+      "location": "https://example.test/%255cevil.example",
+      "authority": "example.test"
+    },
+    {
+      "path": "/go/%2fevil.example",
+      "destination": "https://example.test/:name",
+      "status": 302,
+      "location": "https://example.test/%252fevil.example",
+      "authority": "example.test"
+    },
+    {
+      "path": "/go/%252fevil.example",
+      "destination": "https://example.test/:name",
+      "status": 302,
+      "location": "https://example.test/%252fevil.example",
+      "authority": "example.test"
+    },
+    {
+      "path": "/go/a%20b",
+      "destination": "https://example.test/:name",
+      "status": 302,
+      "location": "https://example.test/a%20b",
+      "authority": "example.test"
+    },
+    {
+      "path": "/go/a%09b",
+      "destination": "https://example.test/:name",
+      "status": 302,
+      "location": "https://example.test/a%09b",
+      "authority": "example.test"
+    },
+    {
+      "path": "/go/a%0db",
+      "destination": "https://example.test/:name",
+      "status": 302,
+      "location": "https://example.test/a%0Db",
+      "authority": "example.test"
+    },
+    {
+      "path": "/go/%E6%97%A5",
+      "destination": "https://example.test/:name",
+      "status": 302,
+      "location": "https://example.test/%E6%97%A5",
+      "authority": "example.test"
+    },
+    {
+      "path": "/go/a:b",
+      "destination": "https://example.test/:name",
+      "status": 302,
+      "location": "https://example.test/a:b",
+      "authority": "example.test"
+    },
+    {
+      "path": "/go/%3Aother",
+      "destination": "https://example.test/:name",
+      "status": 302,
+      "location": "https://example.test/%253Aother",
+      "authority": "example.test"
+    },
+    {
+      "path": "/go/a%25b",
+      "destination": "https://example.test/:name",
+      "status": 302,
+      "location": "https://example.test/a%25b",
+      "authority": "example.test"
+    },
+    {
+      "path": "/go/a%3Fb",
+      "destination": "https://example.test/:name",
+      "status": 302,
+      "location": "https://example.test/a%253Fb",
+      "authority": "example.test"
+    },
+    {
+      "path": "/go/a%23b",
+      "destination": "https://example.test/:name",
+      "status": 302,
+      "location": "https://example.test/a%2523b",
+      "authority": "example.test"
+    },
+    {
+      "path": "/go/plain?x=%5c",
+      "destination": "https://example.test/:name",
+      "status": 302,
+      "location": "https://example.test/plain?x=%5C",
+      "authority": "example.test"
+    },
+    {
+      "path": "/go/%09",
+      "destination": "https://example.test/:name",
+      "status": 302,
+      "location": "https://example.test/%09",
+      "authority": "example.test"
+    },
+    {
+      "path": "/go/\\evil.example",
+      "destination": "https://example.test/:name",
+      "status": 302,
+      "location": "https://example.test/%5Cevil.example",
+      "authority": "example.test"
+    },
+    {
+      "path": "/go/a%25b?x=%5c",
+      "destination": "https://example.test/:name",
+      "status": 302,
+      "location": "https://example.test/a%25b?x=%5C",
+      "authority": "example.test"
+    },
+    {
+      "path": "/go/%09?x=%5c",
+      "destination": "https://example.test/:name",
+      "status": 302,
+      "location": "https://example.test/%09?x=%5C",
+      "authority": "example.test"
+    },
+    {
+      "path": "/go/%E6%97%A5?x=%5c",
+      "destination": "https://example.test/:name",
+      "status": 302,
+      "location": "https://example.test/%E6%97%A5?x=%5C",
+      "authority": "example.test"
+    },
+    {
+      "path": "/go/%2fevil.example?x=%5c",
+      "destination": "https://example.test/:name",
+      "status": 302,
+      "location": "https://example.test/%252fevil.example?x=%5C",
+      "authority": "example.test"
+    },
+    {
+      "path": "/go/%5cevil.example?x=%5c",
+      "destination": "https://example.test/:name",
+      "status": 302,
+      "location": "https://example.test/%5Cevil.example?x=%5C",
+      "authority": "example.test"
+    },
+    {
+      "path": "/go/",
+      "destination": "/:name/evil.example",
+      "status": 404,
+      "authority": null
+    },
+    {
+      "path": "/go/%5cevil.example",
+      "destination": "/:name/evil.example",
+      "status": 302,
+      "location": "/%5Cevil.example/evil.example",
+      "authority": "127.0.0.1"
+    },
+    {
+      "path": "/go/%255cevil.example",
+      "destination": "/:name/evil.example",
+      "status": 302,
+      "location": "/%255cevil.example/evil.example",
+      "authority": "127.0.0.1"
+    },
+    {
+      "path": "/go/%2fevil.example",
+      "destination": "/:name/evil.example",
+      "status": 302,
+      "location": "/%252fevil.example/evil.example",
+      "authority": "127.0.0.1"
+    },
+    {
+      "path": "/go/%252fevil.example",
+      "destination": "/:name/evil.example",
+      "status": 302,
+      "location": "/%252fevil.example/evil.example",
+      "authority": "127.0.0.1"
+    },
+    {
+      "path": "/go/a%20b",
+      "destination": "/:name/evil.example",
+      "status": 302,
+      "location": "/a%20b/evil.example",
+      "authority": "127.0.0.1"
+    },
+    {
+      "path": "/go/a%09b",
+      "destination": "/:name/evil.example",
+      "status": 302,
+      "location": "/a%09b/evil.example",
+      "authority": "127.0.0.1"
+    },
+    {
+      "path": "/go/a%0db",
+      "destination": "/:name/evil.example",
+      "status": 302,
+      "location": "/a%0Db/evil.example",
+      "authority": "127.0.0.1"
+    },
+    {
+      "path": "/go/%E6%97%A5",
+      "destination": "/:name/evil.example",
+      "status": 302,
+      "location": "/%E6%97%A5/evil.example",
+      "authority": "127.0.0.1"
+    },
+    {
+      "path": "/go/a:b",
+      "destination": "/:name/evil.example",
+      "status": 302,
+      "location": "/a:b/evil.example",
+      "authority": "127.0.0.1"
+    },
+    {
+      "path": "/go/%3Aother",
+      "destination": "/:name/evil.example",
+      "status": 302,
+      "location": "/%253Aother/evil.example",
+      "authority": "127.0.0.1"
+    },
+    {
+      "path": "/go/a%25b",
+      "destination": "/:name/evil.example",
+      "status": 302,
+      "location": "/a%25b/evil.example",
+      "authority": "127.0.0.1"
+    },
+    {
+      "path": "/go/a%3Fb",
+      "destination": "/:name/evil.example",
+      "status": 302,
+      "location": "/a%253Fb/evil.example",
+      "authority": "127.0.0.1"
+    },
+    {
+      "path": "/go/a%23b",
+      "destination": "/:name/evil.example",
+      "status": 302,
+      "location": "/a%2523b/evil.example",
+      "authority": "127.0.0.1"
+    },
+    {
+      "path": "/go/plain?x=%5c",
+      "destination": "/:name/evil.example",
+      "status": 302,
+      "location": "/plain/evil.example?x=%5C",
+      "authority": "127.0.0.1"
+    },
+    {
+      "path": "/go/%09",
+      "destination": "/:name/evil.example",
+      "status": 302,
+      "location": "/%09/evil.example",
+      "authority": "127.0.0.1"
+    },
+    {
+      "path": "/go/\\evil.example",
+      "destination": "/:name/evil.example",
+      "status": 302,
+      "location": "/%5Cevil.example/evil.example",
+      "authority": "127.0.0.1"
+    },
+    {
+      "path": "/__/firebase/init.json",
+      "status": 302,
+      "location": "/maintenance"
+    },
+    {
+      "path": "/__/firebase/init.js?useEmulator=true",
+      "status": 302,
+      "location": "/maintenance?useEmulator=true"
+    },
+    {
+      "source": "/go/:locale/:page",
+      "destination": "/:locale/:page",
+      "path": "/go//evil.example",
+      "status": 404,
+      "origin": "http://127.0.0.1"
+    },
+    {
+      "source": "/go/:locale/:page",
+      "destination": "/:locale/:page",
+      "path": "/go/en/",
+      "status": 404,
+      "origin": "http://127.0.0.1"
+    },
+    {
+      "source": "/go/:locale/:page",
+      "destination": "/:locale/:page",
+      "path": "/go/en/page",
+      "status": 302,
+      "location": "/en/page",
+      "origin": "http://127.0.0.1"
+    },
+    {
+      "source": "/go/:a/:b/:c",
+      "destination": "/:a/:b/:c",
+      "path": "/go/en//page",
+      "status": 404,
+      "origin": "http://127.0.0.1"
+    },
+    {
+      "source": "/go/:a/:b/:c",
+      "destination": "/:a/:b/:c",
+      "path": "/go/en/ok/page",
+      "status": 302,
+      "location": "/en/ok/page",
+      "origin": "http://127.0.0.1"
+    },
+    {
+      "source": "/go/:1234/:name",
+      "destination": "https://example.test:1234/:name",
+      "path": "/go/80@evil.example/plain",
+      "status": 302,
+      "location": "https://example.test80@evil.example/plain",
+      "origin": "https://evil.example",
+      "fireemuDecision": "Keep configured authority fixed; do not allow capture-driven authority or scheme selection.",
+      "fireemuLocation": "https://example.test:1234/plain",
+      "fireemuStatus": 302
+    },
+    {
+      "source": "/go/:1234/:name",
+      "destination": "https://example.test:1234/:name",
+      "path": "/go/ok/plain",
+      "status": 302,
+      "location": "https://example.testok/plain",
+      "origin": "https://example.testok",
+      "fireemuDecision": "Keep configured authority fixed; do not allow capture-driven authority or scheme selection.",
+      "fireemuLocation": "https://example.test:1234/plain",
+      "fireemuStatus": 302
+    },
+    {
+      "source": "/go/:1234/:name",
+      "destination": "//example.test:1234/:name",
+      "path": "/go/80@evil.example/plain",
+      "status": 302,
+      "location": "//example.test80@evil.example/plain",
+      "origin": "http://evil.example",
+      "fireemuDecision": "Keep configured authority fixed; do not allow capture-driven authority or scheme selection.",
+      "fireemuLocation": "//example.test:1234/plain",
+      "fireemuStatus": 302
+    },
+    {
+      "source": "/go/:name",
+      "destination": "http://[::1]/:name",
+      "path": "/go/plain",
+      "status": 404,
+      "origin": "http://127.0.0.1",
+      "fireemuDecision": "Keep configured authority fixed; do not allow capture-driven authority or scheme selection.",
+      "fireemuLocation": "http://[::1]/plain",
+      "fireemuStatus": 302
+    },
+    {
+      "source": "/go/:name",
+      "destination": "https://:name/path",
+      "path": "/go/evil.example",
+      "status": 302,
+      "location": "https://evil.example/path",
+      "origin": "https://evil.example",
+      "fireemuDecision": "Keep configured authority fixed; do not allow capture-driven authority or scheme selection.",
+      "fireemuLocation": null,
+      "fireemuStatus": 404
+    },
+    {
+      "source": "/go/:name",
+      "destination": ":name",
+      "path": "/go/javascript:alert(1)",
+      "status": 302,
+      "location": "javascript:alert(1)",
+      "origin": "null",
+      "fireemuDecision": "Keep configured authority fixed; do not allow capture-driven authority or scheme selection.",
+      "fireemuLocation": null,
+      "fireemuStatus": 404
+    },
+    {
+      "source": "/fixed",
+      "destination": "http://[::1]/fixed",
+      "path": "/fixed",
+      "status": 302,
+      "location": "http://%5B::1%5D/fixed",
+      "origin": "invalid URL",
+      "fireemuLocation": "http://[::1]/fixed",
+      "fireemuStatus": 302,
+      "fireemuDecision": "Preserve valid literal IPv6 authority rather than encode its brackets."
+    },
+    {
+      "source": "/go/:name",
+      "destination": "https:/:name/path",
+      "path": "/go/evil.example",
+      "status": 302,
+      "location": "https:/evil.example/path",
+      "origin": "https://evil.example",
+      "fireemuStatus": 404,
+      "fireemuLocation": null,
+      "fireemuDecision": "Reject capture-dependent scheme-shaped templates without a fixed HTTP(S) authority."
+    },
+    {
+      "source": "/go/:name",
+      "destination": "https::name",
+      "path": "/go/evil.example",
+      "status": 404,
+      "origin": "http://127.0.0.1",
+      "fireemuStatus": 404,
+      "fireemuLocation": null,
+      "fireemuDecision": "Reject capture-dependent scheme-shaped templates without a fixed HTTP(S) authority."
+    },
+    {
+      "source": "/go/:name",
+      "destination": "HTTPS://example.test:444/:name",
+      "path": "/go/plain",
+      "status": 404,
+      "origin": "http://127.0.0.1",
+      "fireemuStatus": 302,
+      "fireemuLocation": "HTTPS://example.test:444/plain",
+      "fireemuDecision": "Preserve original case-insensitive HTTP(S) scheme and literal port."
+    },
+    {
+      "source": "/go/:name",
+      "destination": "folder/:name",
+      "path": "/go/plain",
+      "status": 302,
+      "location": "folder/plain",
+      "origin": "http://127.0.0.1"
+    },
+    {
+      "source": "/fixed",
+      "destination": "next-page",
+      "path": "/fixed",
+      "status": 302,
+      "location": "next-page",
+      "origin": "http://127.0.0.1"
+    },
+    {
+      "source": "/go/:name",
+      "destination": "https://example.test/fixed",
+      "path": "/go/plain",
+      "status": 404,
+      "origin": "http://127.0.0.1"
+    },
+    {
+      "source": "/go/:name",
+      "destination": "/fixed",
+      "path": "/go/plain",
+      "status": 404,
+      "origin": "http://127.0.0.1"
+    }
+  ],
+  "malformedQuery": {
+    "path": "/go/plain?x=%GG",
+    "officialOutcome": "process terminates with uncaught URIError in decodeURI(req.url)",
+    "fireemuExpectedStatus": 400
+  },
+  "inputs": {
+    "observerSha256": "5931c349b00cafa463c0c7133f6b75b24e8ffd7339971bd75f40fdf631c60448",
+    "lockSha256": "f197c15da81d633ed4d96665886ef8a10153cf105213e27fd0e4c6526bb1d821",
+    "emptyObserverSha256": "aa850d0bfbd7f1bb827fdf471f8ef3526daae66f1cd9e6fc5b4e2df753ab9c34",
+    "authorityObserverSha256": "4d9ba874b98012f516654e9108f7d8d89d3444f7898d593b0275ac7778b4df43",
+    "controlsObserverSha256": "b00b0ee232b11f448d260ba7c08c8188052386b835a7950fc24ec0beca87a289",
+    "pictModelSha256": "65bf589772e97e2be5644e50e16aea7402a9917817913cf92227b95b8a9c0148",
+    "pictRowsSha256": "415baa392c0200e0bcda72a96bcf9660dbff179c9ded4461590bc408a67fbfb6",
+    "pictSeedsSha256": "d1a11ecc7f1adeb06305ca6e1a673769885b6ef58d693aa12040a279ad4c42f9"
+  }
+}

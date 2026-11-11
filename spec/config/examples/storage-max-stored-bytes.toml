@@ -1,4 +1,4 @@
-#:schema https://raw.githubusercontent.com/t-k/fireemu/main/spec/config/fireemu.schema.json
+#:schema https://raw.githubusercontent.com/fireemu/fireemu/main/spec/config/fireemu.schema.json
 schemaVersion = 1
 profile = "emulator"
 
@@ -13,3 +13,5 @@ apiMode = "native"
 
 [storage]
 maxStoredBytes = 1073741824
+maxObjectBytes = 335544320
+bufferedBodyBudgetBytes = 1073741824

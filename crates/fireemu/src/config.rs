@@ -299,6 +299,18 @@ impl CompatibilityProfile {
         }
     }
 
+    /// How Security Rules treat a lone surrogate: production holds a half cut from a pair as
+    /// U+FFFD, so `"é🔥x"[1] == "\ud83d"` is false (`string-escape#esc-high`, recorded
+    /// 2026-11-08), and refuses a pattern that holds one; the official emulator keeps the lone
+    /// unit, so the comparison is true and the emulator profile never refuses more than it.
+    #[must_use]
+    pub const fn lone_surrogates(self) -> fireemu_core_rules::ast::LoneSurrogates {
+        match self {
+            Self::Emulator => fireemu_core_rules::ast::LoneSurrogates::Official,
+            Self::Strict => fireemu_core_rules::ast::LoneSurrogates::Production,
+        }
+    }
+
     /// How a caller's ID token is verified on the Security Rules surfaces.
     #[must_use]
     pub const fn token_acceptance(self) -> TokenAcceptance {
@@ -331,6 +343,15 @@ impl CompatibilityProfile {
     /// official emulator opens both.
     #[must_use]
     pub const fn end_user_transactions(self) -> bool {
+        matches!(self, Self::Emulator)
+    }
+
+    /// Whether a Firestore query authorization also gives the official emulator's answers to
+    /// shapes production has not been recorded answering: an `OR` mixing a branch that names a
+    /// document with one that names none (production asked for a composite index first,
+    /// FS-RULES-SHAPES 2026-11-08). `strict` refuses them until production is recorded.
+    #[must_use]
+    pub const fn official_query_answers(self) -> bool {
         matches!(self, Self::Emulator)
     }
 }
@@ -1057,6 +1078,10 @@ pub struct RuntimeConfig {
     /// `storage.maxStoredBytes`: the object data the Storage emulator retains, a local bound
     /// production does not have (owner ledger 759). `None` bounds nothing.
     pub storage_max_stored_bytes: Option<u64>,
+    /// Maximum size of an individual Storage object.
+    pub storage_max_object_bytes: u64,
+    /// Process-wide budget for buffered Storage request bodies.
+    pub storage_buffered_body_budget_bytes: usize,
     /// `storage.buckets`: Cloud Storage buckets the project owns besides its two default ones,
     /// for the strict profile, which refuses an object operation on a bucket nothing declared.
     pub storage_buckets: Vec<String>,
@@ -1089,6 +1114,10 @@ pub struct RuntimeConfig {
     pub clock_mode: Option<ClockMode>,
     /// Deterministic seed.
     pub seed: u64,
+    /// Whether `daemon.seed` named the seed. Without it the Functions event ids are not a
+    /// function of the seed (a fresh daemon would repeat the previous run's ids, so a handler that
+    /// deduplicates by event id could drop a new event); with it they are, for a replay.
+    pub seed_pinned: bool,
     /// Project ID used for Auth token issuance.
     pub auth_project: String,
     /// Explicit project ID to number mappings for Auth response metadata.
@@ -1179,6 +1208,12 @@ pub struct RuntimeConfig {
     pub rules_denial_log: bool,
     /// Functions HTTP bind address.
     pub functions_addr: String,
+    /// Hosting HTTP bind address.
+    pub hosting_addr: String,
+    /// Whether the Hosting port was configured; firebase-tools moves only a default port.
+    pub hosting_addr_explicit: bool,
+    /// The site configuration loaded from firebase.json.
+    pub hosting: Option<crate::hosting::Config>,
     /// Eventarc HTTP bind address. The pinned official suite starts this dependency only
     /// when a Functions codebase is loaded; its default port is 9299.
     pub eventarc_addr: String,
@@ -1237,6 +1272,9 @@ pub struct RuntimeConfig {
     /// a non-loopback address such as `0.0.0.0` (a container). The Hub, the UI and the Logging
     /// emulator stay on loopback, and the control API answers loopback peers only.
     pub allow_non_loopback_hosts: bool,
+    /// `network.allowedHosts`: the host names, beyond loopback names, IP addresses and the
+    /// container host names, that the product listeners answer (the DNS-rebinding defence).
+    pub allowed_hosts: Vec<fireemu_core_session::host_guard::AllowedHost>,
     /// `emulators.singleProjectMode`. fireemu isolates every project into its own session, so
     /// this is recorded and published rather than enforced separately.
     pub single_project_mode: bool,
@@ -1284,6 +1322,13 @@ pub struct RuntimeConfig {
     pub pubsub_dead_letter_authorization: DeadLetterAuthorization,
     /// `database.defaultAccess`: what a Realtime Database without rules allows.
     pub database_default_access: DatabaseDefaultAccess,
+    /// `functions.authBlockingToken`: the Auth blocking function token mode.
+    pub functions_auth_blocking_token: AuthBlockingToken,
+    /// `hosting.cacheControl`: whether strict adds Hosting production's default
+    /// `Cache-Control: max-age=3600` to deployed files.
+    pub hosting_cache_control: HostingCacheControl,
+    /// `hosting.clientCountry`: whether the country a client sends decides localized content.
+    pub hosting_client_country: HostingClientCountry,
     /// The rules files the `database` section of `firebase.json` names, and where each
     /// applies.
     pub database_rules: Vec<DatabaseRulesEntry>,
@@ -1328,6 +1373,8 @@ pub struct RuntimeConfig {
     /// with another key are refused as production's API front end refuses them; when none is,
     /// any key is accepted, as by the official emulator.
     pub auth_api_keys: Vec<String>,
+    /// Require a client API key in the emulator profile (`auth.requireClientApiKey`).
+    pub auth_require_client_api_key: bool,
     /// App Check (`appCheck`); disabled by default.
     pub app_check: AppCheckConfig,
 }
@@ -1404,6 +1451,117 @@ pub enum DatabaseDefaultAccess {
     Open,
     /// Only the `owner` credential is allowed.
     Locked,
+}
+
+/// `hosting.cacheControl`: the default `Cache-Control` of a deployed file under strict.
+///
+/// Hosting production adds `max-age=3600` to a file whose rules set no `Cache-Control`, so a
+/// browser keeps an edited file for an hour. That is a poor default for local development, so
+/// both profiles default to `none`: the answer the official emulator gives, no header, and an edit
+/// shows at once. `productionExact` asks for `production` (strict only). A `headers` rule that
+/// sets `Cache-Control` wins in every mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HostingCacheControl {
+    /// No default `Cache-Control` (the official emulator's answer).
+    #[default]
+    None,
+    /// `Cache-Control: max-age=3600`, as Hosting production answers.
+    Production,
+}
+
+impl HostingCacheControl {
+    /// Parses the configuration spelling.
+    #[must_use]
+    pub fn parse_config(text: &str) -> Option<Self> {
+        match text {
+            "none" => Some(Self::None),
+            "production" => Some(Self::Production),
+            _ => None,
+        }
+    }
+
+    /// The configuration spelling.
+    #[must_use]
+    pub const fn as_config_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Production => "production",
+        }
+    }
+}
+
+/// `hosting.clientCountry`: whether localized content follows the country a client sends.
+///
+/// Hosting production decides the country at its edge: the `X-Country-Code` header and the
+/// `firebase-country-override` cookie a client sends decide nothing. A local server has no edge, and
+/// those two inputs are the only way to test country content, so both profiles default to
+/// `honoured`, as the official emulator does. `productionExact` asks for `ignored` (strict only).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HostingClientCountry {
+    /// The header and the cookie select country content.
+    #[default]
+    Honoured,
+    /// Neither selects anything, as in production.
+    Ignored,
+}
+
+impl HostingClientCountry {
+    /// Parses the configuration spelling.
+    #[must_use]
+    pub fn parse_config(text: &str) -> Option<Self> {
+        match text {
+            "honoured" => Some(Self::Honoured),
+            "ignored" => Some(Self::Ignored),
+            _ => None,
+        }
+    }
+
+    /// The configuration spelling.
+    #[must_use]
+    pub const fn as_config_str(self) -> &'static str {
+        match self {
+            Self::Honoured => "honoured",
+            Self::Ignored => "ignored",
+        }
+    }
+}
+
+/// `functions.authBlockingToken`: the Auth blocking function token mode.
+///
+/// Both profiles default to `emulated`: the official Auth emulator's unsigned token has the
+/// local runner address as its audience and expires 70 seconds after issue, and Admin SDKs skip
+/// verification. `productionExact` selects `production` under strict: an RS256 token with a kid,
+/// the registered cloudfunctions.net audience and a 300-second lifetime, verified by Python.
+/// Node functions receive the same production-shaped token but do not verify it, so they behave as before.
+/// Production mode requires the strict profile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AuthBlockingToken {
+    /// The official emulator's unsigned token.
+    #[default]
+    Emulated,
+    /// The production-signed token and Python verification.
+    Production,
+}
+
+impl AuthBlockingToken {
+    /// Parses the configuration spelling.
+    #[must_use]
+    pub fn parse_config(text: &str) -> Option<Self> {
+        match text {
+            "emulated" => Some(Self::Emulated),
+            "production" => Some(Self::Production),
+            _ => None,
+        }
+    }
+
+    /// The configuration spelling.
+    #[must_use]
+    pub const fn as_config_str(self) -> &'static str {
+        match self {
+            Self::Emulated => "emulated",
+            Self::Production => "production",
+        }
+    }
 }
 
 /// A rules file of the `database` section of `firebase.json`.
@@ -1646,6 +1804,9 @@ impl Default for RuntimeConfig {
             history_max_versions_per_path: None,
             history_max_bytes: None,
             storage_max_stored_bytes: None,
+            storage_max_object_bytes: fireemu_core_storage::store::MAX_OBJECT_BYTES,
+            storage_buffered_body_budget_bytes:
+                fireemu_adapter_http::storage_server::DEFAULT_BODY_BUDGET_BYTES,
             storage_buckets: Vec::new(),
             storage_public_buckets: Vec::new(),
             storage_default_bucket: fireemu_adapter_http::storage::DefaultBuckets::Both,
@@ -1656,6 +1817,7 @@ impl Default for RuntimeConfig {
             clock_start_pinned: false,
             clock_mode: None,
             seed: 42,
+            seed_pinned: false,
             auth_project: "demo-app".to_owned(),
             auth_project_numbers: BTreeMap::new(),
             auth_totp: None,
@@ -1692,6 +1854,9 @@ impl Default for RuntimeConfig {
             rules_enforced: true,
             rules_denial_log: true,
             functions_addr: "127.0.0.1:5001".to_owned(),
+            hosting_addr: "127.0.0.1:5000".to_owned(),
+            hosting_addr_explicit: false,
+            hosting: None,
             eventarc_addr: "127.0.0.1:9299".to_owned(),
             eventarc_enabled: false,
             eventarc_addr_explicit: false,
@@ -1712,6 +1877,7 @@ impl Default for RuntimeConfig {
             logging_enabled: true,
             logging_addr_explicit: false,
             allow_non_loopback_hosts: false,
+            allowed_hosts: Vec::new(),
             single_project_mode: false,
             functions_source: None,
             functions_codebases: Vec::new(),
@@ -1730,6 +1896,9 @@ impl Default for RuntimeConfig {
             pubsub_local_bearer_token: None,
             pubsub_dead_letter_authorization: DeadLetterAuthorization::Implicit,
             database_default_access: DatabaseDefaultAccess::Open,
+            hosting_cache_control: HostingCacheControl::None,
+            hosting_client_country: HostingClientCountry::Honoured,
+            functions_auth_blocking_token: AuthBlockingToken::Emulated,
             database_rules: Vec::new(),
             database_rules_resolved: Vec::new(),
             pubsub_push_minimum_redelivery_interval_millis:
@@ -1746,6 +1915,7 @@ impl Default for RuntimeConfig {
             auth_idp_signers: None,
             auth_idp_assertions: IdpAssertionMode::Fixture,
             auth_api_keys: Vec::new(),
+            auth_require_client_api_key: false,
             // The strict profile's development default: served without registration.
             app_check: AppCheckConfig {
                 debug_tokens: AppCheckDebugTokens::Any,
@@ -1980,6 +2150,7 @@ impl RuntimeConfig {
             "profile" => Some(json!(self.profile.as_str())),
             "productionExact" => Some(json!(self.production_exact)),
             "network.allowNonLoopbackHosts" => Some(json!(self.allow_non_loopback_hosts)),
+            "network.allowedHosts" => Some(json!(self.allowed_host_entries())),
             "projects.requireDemoPrefix" => Some(json!(self.require_demo_prefix)),
             "projects.unknownProjects" => Some(json!(if self.refuse_unknown_projects { "refuse" } else { "serve" })),
             "firestore.edition" => Some(json!(self.edition.as_config_str())),
@@ -1998,6 +2169,8 @@ impl RuntimeConfig {
             "rules.denialLog" => Some(json!(if self.rules_denial_log { "summary" } else { "off" })),
             "storage.rules" => Some(json!(self.storage_rules_file)),
             "storage.maxStoredBytes" => Some(json!(self.storage_max_stored_bytes)),
+            "storage.maxObjectBytes" => Some(json!(self.storage_max_object_bytes)),
+            "storage.bufferedBodyBudgetBytes" => Some(json!(self.storage_buffered_body_budget_bytes)),
             "storage.buckets" => Some(json!(self.storage_buckets)),
             "storage.publicBuckets" => Some(json!(self.storage_public_buckets)),
             "storage.defaultBucket" => Some(json!(match self.storage_default_bucket {
@@ -2012,12 +2185,13 @@ impl RuntimeConfig {
             "daemon.seed" => Some(json!(self.seed)),
             "daemon.authProject" => Some(json!(self.auth_project)),
             "daemon.authProjectNumbers" => Some(json!(self.auth_project_numbers)),
-            "daemon.firestorePort" | "daemon.httpPort" | "daemon.storagePort" | "daemon.functionsPort" | "daemon.eventarcPort" | "daemon.tasksPort" | "daemon.pubsubPort" | "daemon.databasePort" | "daemon.loggingPort" | "daemon.hubPort" | "daemon.uiPort" => {
+            "daemon.firestorePort" | "daemon.httpPort" | "daemon.storagePort" | "daemon.functionsPort" | "daemon.hostingPort" | "daemon.eventarcPort" | "daemon.tasksPort" | "daemon.pubsubPort" | "daemon.databasePort" | "daemon.loggingPort" | "daemon.hubPort" | "daemon.uiPort" => {
                 let addr = match key {
                     "daemon.firestorePort" => &self.firestore_addr,
                     "daemon.httpPort" => &self.http_addr,
                     "daemon.storagePort" => &self.storage_addr,
                     "daemon.functionsPort" => &self.functions_addr,
+                    "daemon.hostingPort" => &self.hosting_addr,
                     "daemon.eventarcPort" => &self.eventarc_addr,
                     "daemon.tasksPort" => &self.tasks_addr,
                     "daemon.pubsubPort" => &self.pubsub_addr,
@@ -2046,6 +2220,7 @@ impl RuntimeConfig {
             "scheduler.overlap" => Some(json!(self.scheduler_overlap)),
             "auth.idTokenSigning" => Some(json!(match self.id_token_signing { fireemu_core_auth::jwt::SigningMode::UnsignedEmulator => "unsigned-emulator", fireemu_core_auth::jwt::SigningMode::SessionRsa => "session-rsa" })),
             "auth.apiKeys" => Some(json!(self.auth_api_keys)),
+            "auth.requireClientApiKey" => Some(json!(self.auth_require_client_api_key)),
             "auth.customTokenSigners" => Some(json!(self.auth_custom_token_signers)),
             "auth.idpSigners" => Some(json!(self.auth_idp_signers)),
             "auth.authorizedDomains" => Some(json!(self.auth_authorized_domains)),
@@ -2093,11 +2268,12 @@ impl RuntimeConfig {
 }
 
 /// The keys of the `daemon` section (spec/config/fireemu.schema.json).
-pub(crate) const DAEMON_KEYS: [&str; 16] = [
+pub(crate) const DAEMON_KEYS: [&str; 17] = [
     "firestorePort",
     "storagePort",
     "httpPort",
     "functionsPort",
+    "hostingPort",
     "eventarcPort",
     "tasksPort",
     "pubsubPort",
@@ -2126,6 +2302,9 @@ pub(crate) const PUBSUB_KEYS: [&str; 4] = [
 /// The keys of the `database` section.
 pub(crate) const DATABASE_KEYS: [&str; 1] = ["defaultAccess"];
 
+/// The keys of the `hosting` section.
+pub(crate) const HOSTING_KEYS: [&str; 2] = ["cacheControl", "clientCountry"];
+
 /// The keys of the `scheduler` section.
 pub(crate) const SCHEDULER_KEYS: [&str; 5] = [
     "clock",
@@ -2136,19 +2315,21 @@ pub(crate) const SCHEDULER_KEYS: [&str; 5] = [
 ];
 
 /// The keys of the `functions` section.
-pub(crate) const FUNCTIONS_KEYS: [&str; 6] = [
+pub(crate) const FUNCTIONS_KEYS: [&str; 7] = [
     "manifest",
     "source",
     "runner",
     "maxGlobalConcurrency",
     "unservedTriggers",
+    "authBlockingToken",
     "clock",
 ];
 
 /// The keys of the `auth` section (spec/config/fireemu.schema.json).
-pub(crate) const AUTH_KEYS: [&str; 28] = [
+pub(crate) const AUTH_KEYS: [&str; 29] = [
     "enabled",
     "apiKeys",
+    "requireClientApiKey",
     "projectIssuer",
     "idTokenSigning",
     "customTokenSigners",
@@ -2182,7 +2363,7 @@ pub(crate) const AUTH_KEYS: [&str; 28] = [
 pub struct ConfigError(pub String);
 
 /// The service emulators fireemu serves, in `--only` spelling.
-pub const SERVED_SERVICES: [&str; 9] = [
+pub const SERVED_SERVICES: [&str; 10] = [
     "auth",
     "firestore",
     "storage",
@@ -2192,6 +2373,7 @@ pub const SERVED_SERVICES: [&str; 9] = [
     "pubsub",
     "database",
     "appcheck",
+    "hosting",
 ];
 
 /// Official Local Emulator Suite service emulators fireemu does not serve, each with the
@@ -2200,11 +2382,7 @@ pub const SERVED_SERVICES: [&str; 9] = [
 ///
 /// `deferred` products have an open compatibility issue and no implementation; `planned`
 /// products are on the active list; `not planned` is a closed product decision.
-pub const UNSERVED_OFFICIAL_SERVICES: [(&str, &str); 4] = [
-    (
-        "hosting",
-        "deferred: the Firebase Hosting emulator is not in the active supported surface",
-    ),
+pub const UNSERVED_OFFICIAL_SERVICES: [(&str, &str); 3] = [
     (
         "apphosting",
         "deferred: the App Hosting emulator is not in the active supported surface",
@@ -2245,6 +2423,8 @@ pub struct Selection {
     pub storage: bool,
     /// The functions codebase is loaded and `FIREEMU_FUNCTIONS_HOST` exported.
     pub functions: bool,
+    /// Serve the configured Hosting public directory.
+    pub hosting: bool,
     /// Whether `--only` named the Eventarc support emulator.
     pub eventarc: bool,
     /// Whether `--only` named the Cloud Tasks support emulator.
@@ -2274,6 +2454,7 @@ impl Default for Selection {
             auth: true,
             storage: true,
             functions: true,
+            hosting: true,
             eventarc: false,
             tasks: false,
             pubsub: true,
@@ -2297,6 +2478,7 @@ impl Selection {
             auth: false,
             storage: false,
             functions: false,
+            hosting: false,
             eventarc: false,
             tasks: false,
             pubsub: false,
@@ -2338,6 +2520,7 @@ impl Selection {
                 "auth" => sel.auth = true,
                 "storage" => sel.storage = true,
                 "functions" => sel.functions = true,
+                "hosting" => sel.hosting = true,
                 // The official controller accepts these names but creates both listeners
                 // only when at least one Functions backend is loaded. They therefore do not
                 // select Functions or carry independent Selection flags.
@@ -2645,6 +2828,23 @@ fn emulator_addr(
 }
 
 impl RuntimeConfig {
+    /// The `Host` policy every product listener applies (the DNS-rebinding defence): the
+    /// `network.allowedHosts` entries, and single-label names (a Compose service name) when
+    /// `network.allowNonLoopbackHosts` exposed the emulators.
+    #[must_use]
+    pub fn host_policy(&self) -> fireemu_core_session::host_guard::HostPolicy {
+        fireemu_core_session::host_guard::HostPolicy::new(
+            self.allowed_hosts.clone(),
+            self.allow_non_loopback_hosts,
+        )
+    }
+
+    /// `network.allowedHosts` as configuration entries (normalized).
+    #[must_use]
+    pub fn allowed_host_entries(&self) -> Vec<String> {
+        self.allowed_hosts.iter().map(ToString::to_string).collect()
+    }
+
     /// The warning a strict configuration earns when `auth.totp` is declared and the project's
     /// multi-factor configuration does not enable TOTP: production enables TOTP only through
     /// that configuration, so `auth.totp` alone enables nothing under the strict profile.
@@ -3126,6 +3326,21 @@ impl RuntimeConfig {
         self.apply_storage(obj.get("storage"), &file, &mut report)?;
         self.database_rules = Self::apply_database(obj.get("database"), &file)?;
         self.apply_functions(obj.get("functions"), base, only, &mut report)?;
+        // A run that did not name Hosting keeps starting when its Hosting entry is one fireemu
+        // cannot serve (firebase-tools 15.28.2 serves it); the entry is only noted, as it was
+        // before Hosting existed. `--only hosting` keeps every error.
+        let mut hosting_unsupported = None;
+        if only.hosting {
+            match obj
+                .get("hosting")
+                .map(|value| crate::hosting::Config::parse(value, base))
+                .transpose()
+            {
+                Ok(hosting) => self.hosting = hosting,
+                Err(error) if only.explicit => return Err(ConfigError(error)),
+                Err(error) => hosting_unsupported = Some(error),
+            }
+        }
         if let Some(emulators) = obj.get("emulators") {
             let emulators = emulators.as_object().ok_or_else(|| {
                 ConfigError("firebase.json: emulators must be an object".to_owned())
@@ -3163,6 +3378,26 @@ impl RuntimeConfig {
                             &self.storage_addr,
                             self.allow_non_loopback_hosts,
                         )?;
+                    }
+                    // An unselected or unsupported Hosting entry configures nothing.
+                    "hosting" => {
+                        if only.hosting && hosting_unsupported.is_none() {
+                            match emulator_addr(
+                                entry,
+                                name,
+                                &self.hosting_addr,
+                                self.allow_non_loopback_hosts,
+                            ) {
+                                Ok(addr) => {
+                                    self.hosting_addr = addr;
+                                    self.hosting_addr_explicit = entry
+                                        .as_object()
+                                        .is_some_and(|entry| entry.contains_key("port"));
+                                }
+                                Err(error) if only.explicit => return Err(error),
+                                Err(ConfigError(error)) => hosting_unsupported = Some(error),
+                            }
+                        }
                     }
                     "functions" => {
                         self.functions_addr = emulator_addr(
@@ -3271,6 +3506,12 @@ impl RuntimeConfig {
                     }
                 }
             }
+        }
+        if let Some(error) = hosting_unsupported {
+            self.hosting = None;
+            report.notices.push(format!(
+                "hosting: {error}; Hosting is not started (name it in --only to make this an error)"
+            ));
         }
         Ok(report)
     }
@@ -3960,6 +4201,7 @@ pub(crate) const KNOWN_TOP_LEVEL: &[&str] = &[
     "events",
     "pubsub",
     "database",
+    "hosting",
     "eventarc",
     "scheduler",
     "functions",
@@ -3968,7 +4210,7 @@ pub(crate) const KNOWN_TOP_LEVEL: &[&str] = &[
 ];
 
 pub const CANONICAL_SCHEMA_URL: &str =
-    "https://raw.githubusercontent.com/t-k/fireemu/main/spec/config/fireemu.schema.json";
+    "https://raw.githubusercontent.com/fireemu/fireemu/main/spec/config/fireemu.schema.json";
 const LEGACY_SCHEMA_URL: &str = "https://fireemu.dev/spec/config/fireemu.schema.json";
 
 /// The Firebase project configuration composed by a canonical fireemu configuration.
@@ -4121,6 +4363,21 @@ impl RuntimeConfig {
         } else {
             DatabaseDefaultAccess::Open
         };
+        self.functions_auth_blocking_token = if exact {
+            AuthBlockingToken::Production
+        } else {
+            AuthBlockingToken::Emulated
+        };
+        self.hosting_cache_control = if exact {
+            HostingCacheControl::Production
+        } else {
+            HostingCacheControl::None
+        };
+        self.hosting_client_country = if exact {
+            HostingClientCountry::Ignored
+        } else {
+            HostingClientCountry::Honoured
+        };
         self.app_check.debug_tokens = if !exact && self.profile == CompatibilityProfile::Strict {
             AppCheckDebugTokens::Any
         } else {
@@ -4210,6 +4467,18 @@ impl RuntimeConfig {
             (
                 "database.defaultAccess",
                 self.database_default_access.as_config_str(),
+            ),
+            (
+                "functions.authBlockingToken",
+                self.functions_auth_blocking_token.as_config_str(),
+            ),
+            (
+                "hosting.cacheControl",
+                self.hosting_cache_control.as_config_str(),
+            ),
+            (
+                "hosting.clientCountry",
+                self.hosting_client_country.as_config_str(),
             ),
         ];
         self.development_defaults = values
@@ -4356,6 +4625,10 @@ impl RuntimeConfig {
         if let Some(port) = d.get("httpPort").and_then(Value::as_u64) {
             cfg.http_addr = format!("127.0.0.1:{port}");
         }
+        if let Some(port) = d.get("hostingPort").and_then(Value::as_u64) {
+            cfg.hosting_addr = format!("127.0.0.1:{port}");
+            cfg.hosting_addr_explicit = true;
+        }
         if let Some(port) = d.get("functionsPort").and_then(Value::as_u64) {
             cfg.functions_addr = format!("127.0.0.1:{port}");
         }
@@ -4398,6 +4671,7 @@ impl RuntimeConfig {
         }
         if let Some(seed) = d.get("seed").and_then(Value::as_u64) {
             cfg.seed = seed;
+            cfg.seed_pinned = true;
         }
         if let Some(p) = d.get("authProject").and_then(Value::as_str) {
             p.clone_into(&mut cfg.auth_project);
@@ -4579,6 +4853,55 @@ impl RuntimeConfig {
             catalog.insert(key, grants);
         }
         cfg.eventarc_oauth_credentials = Some(catalog);
+        Ok(())
+    }
+
+    /// Reads the `hosting` section. The production values change what the strict profile answers,
+    /// so they require the strict profile.
+    fn parse_hosting(
+        h: &serde_json::Map<String, Value>,
+        cfg: &mut Self,
+    ) -> Result<(), ConfigError> {
+        for key in h.keys() {
+            if !HOSTING_KEYS.contains(&key.as_str()) {
+                return Err(ConfigError(format!("hosting: unknown key {key:?}")));
+            }
+        }
+        if let Some(value) = h.get("cacheControl") {
+            let mode = value
+                .as_str()
+                .and_then(HostingCacheControl::parse_config)
+                .ok_or_else(|| {
+                    ConfigError(
+                        "hosting.cacheControl must be \"none\" or \"production\"".to_owned(),
+                    )
+                })?;
+            if mode == HostingCacheControl::Production
+                && cfg.profile != CompatibilityProfile::Strict
+            {
+                return Err(ConfigError(
+                    "hosting.cacheControl \"production\" requires the strict profile".to_owned(),
+                ));
+            }
+            cfg.hosting_cache_control = mode;
+        }
+        if let Some(value) = h.get("clientCountry") {
+            let mode = value
+                .as_str()
+                .and_then(HostingClientCountry::parse_config)
+                .ok_or_else(|| {
+                    ConfigError(
+                        "hosting.clientCountry must be \"honoured\" or \"ignored\"".to_owned(),
+                    )
+                })?;
+            if mode == HostingClientCountry::Ignored && cfg.profile != CompatibilityProfile::Strict
+            {
+                return Err(ConfigError(
+                    "hosting.clientCountry \"ignored\" requires the strict profile".to_owned(),
+                ));
+            }
+            cfg.hosting_client_country = mode;
+        }
         Ok(())
     }
 
@@ -4771,6 +5094,25 @@ impl RuntimeConfig {
             if !FUNCTIONS_KEYS.contains(&key.as_str()) {
                 return Err(ConfigError(format!("unknown config key functions.{key}")));
             }
+        }
+        if let Some(value) = f.get("authBlockingToken") {
+            let mode = value
+                .as_str()
+                .and_then(AuthBlockingToken::parse_config)
+                .ok_or_else(|| {
+                    ConfigError(
+                        "functions.authBlockingToken must be \"emulated\" or \"production\""
+                            .to_owned(),
+                    )
+                })?;
+            if mode == AuthBlockingToken::Production && cfg.profile != CompatibilityProfile::Strict
+            {
+                return Err(ConfigError(
+                    "functions.authBlockingToken \"production\" requires the strict profile"
+                        .to_owned(),
+                ));
+            }
+            cfg.functions_auth_blocking_token = mode;
         }
         if let Some(value) = f.get("clock") {
             let modes = value
@@ -5142,6 +5484,31 @@ impl RuntimeConfig {
                             )
                         })?;
                     }
+                    "allowedHosts" => {
+                        let entries = value.as_array().ok_or_else(|| {
+                            ConfigError(
+                                "network.allowedHosts must be an array of strings".to_owned(),
+                            )
+                        })?;
+                        cfg.allowed_hosts = entries
+                            .iter()
+                            .enumerate()
+                            .map(|(index, entry)| {
+                                let entry = entry.as_str().ok_or_else(|| {
+                                    ConfigError(format!(
+                                        "network.allowedHosts[{index}] must be a string"
+                                    ))
+                                })?;
+                                fireemu_core_session::host_guard::AllowedHost::parse(entry).map_err(
+                                    |reason| {
+                                        ConfigError(format!(
+                                            "network.allowedHosts[{index}]: {reason}"
+                                        ))
+                                    },
+                                )
+                            })
+                            .collect::<Result<_, _>>()?;
+                    }
                     other => {
                         return Err(ConfigError(format!("unknown config key network.{other}")))
                     }
@@ -5309,6 +5676,36 @@ impl RuntimeConfig {
             if let Some(source) = storage.get("rules").and_then(Value::as_str) {
                 cfg.storage_rules_file = Some(source.to_owned());
             }
+            for (key, maximum) in [
+                (
+                    "maxObjectBytes",
+                    fireemu_adapter_http::storage_server::MAX_CONFIGURED_OBJECT_BYTES,
+                ),
+                (
+                    "bufferedBodyBudgetBytes",
+                    fireemu_adapter_http::storage_server::MAX_CONFIGURED_BUDGET_BYTES,
+                ),
+            ] {
+                let Some(value) = storage.get(key) else {
+                    continue;
+                };
+                let bytes = value
+                    .as_u64()
+                    .filter(|bytes| (1..=maximum).contains(bytes))
+                    .ok_or_else(|| {
+                        ConfigError(format!(
+                            "storage.{key} must be a whole number of bytes between 1 and {maximum}"
+                        ))
+                    })?;
+                if key == "maxObjectBytes" {
+                    cfg.storage_max_object_bytes = bytes;
+                } else {
+                    cfg.storage_buffered_body_budget_bytes =
+                        usize::try_from(bytes).map_err(|_| {
+                            ConfigError(format!("storage.{key} does not fit this platform"))
+                        })?;
+                }
+            }
             if let Some(value) = storage.get("maxStoredBytes") {
                 let bytes = value.as_u64().filter(|bytes| *bytes >= 1).ok_or_else(|| {
                     ConfigError(
@@ -5357,6 +5754,12 @@ impl RuntimeConfig {
                 .ok_or_else(|| ConfigError("database must be an object".to_owned()))?;
             Self::parse_database(database, &mut cfg)?;
         }
+        if let Some(hosting) = obj.get("hosting") {
+            let hosting = hosting
+                .as_object()
+                .ok_or_else(|| ConfigError("hosting must be an object".to_owned()))?;
+            Self::parse_hosting(hosting, &mut cfg)?;
+        }
         if let Some(scheduler) = obj.get("scheduler") {
             let scheduler = scheduler
                 .as_object()
@@ -5384,6 +5787,11 @@ impl RuntimeConfig {
                     )));
                 }
                 cfg.id_token_signing = m;
+            }
+            if let Some(value) = auth.get("requireClientApiKey") {
+                cfg.auth_require_client_api_key = value.as_bool().ok_or_else(|| {
+                    ConfigError("auth.requireClientApiKey must be a boolean".to_owned())
+                })?;
             }
             if let Some(keys) = auth.get("apiKeys") {
                 let keys = keys
@@ -5734,6 +6142,21 @@ mod tests {
 
     use super::*;
 
+    /// `string-escape#esc-high`: the strict profile follows production, the emulator profile
+    /// the official emulator.
+    #[test]
+    fn the_profile_decides_what_a_lone_surrogate_escape_is() {
+        use fireemu_core_rules::ast::LoneSurrogates;
+        assert_eq!(
+            CompatibilityProfile::Strict.lone_surrogates(),
+            LoneSurrogates::Production
+        );
+        assert_eq!(
+            CompatibilityProfile::Emulator.lone_surrogates(),
+            LoneSurrogates::Official
+        );
+    }
+
     /// The profile decides how strictly `firestore.indexes.json` loads.
     #[test]
     fn the_profile_decides_how_the_index_file_is_checked() {
@@ -5795,6 +6218,8 @@ mod tests {
             ("firestore.history.maxVersionsPerPath", json!(7)),
             ("firestore.history.maxBytes", json!(268_435_456)),
             ("storage.maxStoredBytes", json!(8192)),
+            ("storage.maxObjectBytes", json!(1_048_576)),
+            ("storage.bufferedBodyBudgetBytes", json!(2_097_152)),
             (
                 "storage.buckets",
                 json!(["media-bucket", "other.example.com"]),
@@ -5957,6 +6382,7 @@ mod tests {
             ("rules.denialLog", json!("summary"), "default"),
             ("auth.idTokenSigning", json!("unsigned-emulator"), "default"),
             ("auth.apiKeys", json!([]), "default"),
+            ("auth.requireClientApiKey", json!(false), "default"),
             ("auth.allowUnsignedCustomTokens", json!(true), "default"),
             ("auth.allowUnsignedIdTokens", json!(true), "default"),
             ("auth.customTokenSigners", json!(null), "unset"),
@@ -6048,6 +6474,12 @@ mod tests {
             ("daemon.authProjectNumbers", json!({}), "default"),
             ("storage.rules", json!(null), "unset"),
             ("storage.maxStoredBytes", json!(null), "unset"),
+            ("storage.maxObjectBytes", json!(268_435_456), "default"),
+            (
+                "storage.bufferedBodyBudgetBytes",
+                json!(1_073_741_824),
+                "default",
+            ),
             ("storage.buckets", json!([]), "default"),
             ("storage.publicBuckets", json!([]), "default"),
             ("storage.defaultBucket", json!("both"), "default"),
@@ -6301,6 +6733,7 @@ mod tests {
                     "network.allowNonLoopbackHosts",
                     json!(cfg.allow_non_loopback_hosts),
                 ),
+                ("network.allowedHosts", json!(cfg.allowed_host_entries())),
                 ("projects.requireDemoPrefix", json!(cfg.require_demo_prefix)),
                 (
                     "projects.unknownProjects",
@@ -6357,6 +6790,10 @@ mod tests {
                 (
                     "auth.allowUnsignedIdTokens",
                     json!(cfg.auth_allow_unsigned_id_tokens),
+                ),
+                (
+                    "auth.requireClientApiKey",
+                    json!(cfg.auth_require_client_api_key),
                 ),
                 (
                     "auth.idpAssertions",
@@ -6438,6 +6875,18 @@ mod tests {
                     json!(cfg.database_default_access.as_config_str()),
                 ),
                 (
+                    "hosting.cacheControl",
+                    json!(cfg.hosting_cache_control.as_config_str()),
+                ),
+                (
+                    "hosting.clientCountry",
+                    json!(cfg.hosting_client_country.as_config_str()),
+                ),
+                (
+                    "functions.authBlockingToken",
+                    json!(cfg.functions_auth_blocking_token.as_config_str()),
+                ),
+                (
                     "functions.clock.date",
                     json!(if cfg.functions_clock.date_virtual {
                         "virtual"
@@ -6487,7 +6936,11 @@ mod tests {
                     }
                     ("pubsub.deadLetterAuthorization", true) => json!("iam"),
                     ("database.defaultAccess", true) => json!("locked"),
-                    ("eventarc.authentication", true) => json!("production"),
+                    ("hosting.cacheControl", true) => json!("production"),
+                    ("hosting.clientCountry", true) => json!("ignored"),
+                    ("functions.authBlockingToken" | "eventarc.authentication", true) => {
+                        json!("production")
+                    }
                     // The key only matters to the strict profile; the emulator profile
                     // runs the query (Report is its inert value).
                     ("firestore.missingIndexes", _) if profile == "emulator" => json!("report"),
@@ -6821,6 +7274,78 @@ mod tests {
                 );
             } else {
                 proptest::prop_assert!(bytes.is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn storage_object_and_buffered_body_limit_defaults() {
+        let cfg = RuntimeConfig::from_json(&json!({"schemaVersion": 1})).unwrap();
+        assert_eq!(cfg.storage_max_object_bytes, 256 * 1024 * 1024);
+        assert_eq!(cfg.storage_buffered_body_budget_bytes, 1024 * 1024 * 1024);
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn storage_object_and_budget_limits_accept_exactly_the_documented_range(
+            value in proptest::prop_oneof![
+                0_u64..4,
+                2_143_289_330_u64..2_143_289_350,
+                2_147_483_640_u64..2_147_483_660,
+                proptest::num::u64::ANY,
+            ],
+        ) {
+            use fireemu_adapter_http::storage_server::{
+                MAX_CONFIGURED_BUDGET_BYTES, MAX_CONFIGURED_OBJECT_BYTES,
+            };
+            for (key, maximum) in [
+                ("maxObjectBytes", MAX_CONFIGURED_OBJECT_BYTES),
+                ("bufferedBodyBudgetBytes", MAX_CONFIGURED_BUDGET_BYTES),
+            ] {
+                let parsed = RuntimeConfig::from_json(
+                    &json!({"schemaVersion": 1, "storage": {key: value}}),
+                );
+                if (1..=maximum).contains(&value) {
+                    let cfg = parsed.unwrap();
+                    let stored = if key == "maxObjectBytes" {
+                        cfg.storage_max_object_bytes
+                    } else {
+                        cfg.storage_buffered_body_budget_bytes as u64
+                    };
+                    proptest::prop_assert_eq!(stored, value);
+                } else {
+                    let message = parsed.unwrap_err().0;
+                    proptest::prop_assert!(message.contains(&format!("storage.{key}")), "{}", message);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_largest_configured_object_limit_has_a_body_cap_that_fits_the_budget_range() {
+        use fireemu_adapter_http::storage_server::{
+            body_cap_for_object_limit, MAX_CONFIGURED_BUDGET_BYTES, MAX_CONFIGURED_OBJECT_BYTES,
+        };
+        let cap = body_cap_for_object_limit(MAX_CONFIGURED_OBJECT_BYTES).unwrap();
+        assert_eq!(cap as u64, MAX_CONFIGURED_BUDGET_BYTES);
+    }
+
+    #[test]
+    fn storage_object_and_buffered_body_limits_validate_configured_values() {
+        for key in ["maxObjectBytes", "bufferedBodyBudgetBytes"] {
+            let valid = json!({"schemaVersion": 1, "storage": {key: 1024}});
+            assert!(RuntimeConfig::from_json(&valid).is_ok(), "{key}");
+            for bad in [
+                json!(0),
+                json!(-1),
+                json!(1.5),
+                json!("1024"),
+                json!(null),
+                json!(u64::MAX),
+            ] {
+                let invalid = json!({"schemaVersion": 1, "storage": {key: bad}});
+                let error = RuntimeConfig::from_json(&invalid).unwrap_err();
+                assert!(error.0.contains(&format!("storage.{key}")), "{error}");
             }
         }
     }
@@ -7275,6 +7800,7 @@ mod tests {
         assert!(emulator.implicit_database_creation);
         assert!(!emulator.refuse_without_ruleset);
         assert!(emulator.end_user_transactions);
+        assert!(emulator.profile.official_query_answers());
         assert!(!emulator.listen_stream_lifetime);
 
         // strict: every one of those becomes production's refusal, including a missing
@@ -7286,6 +7812,7 @@ mod tests {
         assert!(!strict.implicit_database_creation);
         assert!(strict.refuse_without_ruleset);
         assert!(!strict.end_user_transactions);
+        assert!(!strict.profile.official_query_answers());
         // The one-hour Listen lifetime is a development default (owner decision 2026-10-13).
         assert!(!strict.listen_stream_lifetime);
     }
@@ -7853,6 +8380,66 @@ mod tests {
     }
 
     #[test]
+    fn network_allowed_hosts_are_parsed_and_validated() {
+        use fireemu_core_session::host_guard::AllowedHost;
+        let cfg = RuntimeConfig::from_json(&json!({"schemaVersion": 1})).unwrap();
+        assert!(cfg.allowed_hosts.is_empty());
+        let cfg = RuntimeConfig::from_json(&json!({
+            "schemaVersion": 1,
+            "network": {"allowedHosts": ["Emulator.CI.example", ".svc.cluster.local", "*"]}
+        }))
+        .unwrap();
+        assert_eq!(
+            cfg.allowed_hosts,
+            vec![
+                AllowedHost::Exact("emulator.ci.example".to_owned()),
+                AllowedHost::Suffix(".svc.cluster.local".to_owned()),
+                AllowedHost::Any,
+            ]
+        );
+        assert_eq!(
+            cfg.allowed_host_entries(),
+            ["emulator.ci.example", ".svc.cluster.local", "*"]
+        );
+        for (value, needle) in [
+            (
+                json!("fireemu"),
+                "network.allowedHosts must be an array of strings",
+            ),
+            (json!([1]), "network.allowedHosts[0] must be a string"),
+            (json!(["ok", "fireemu:8080"]), "network.allowedHosts[1]"),
+            (json!(["http://x"]), "is not a host name"),
+            (json!(["127.0.0.1"]), "every IP address is already admitted"),
+        ] {
+            let error = RuntimeConfig::from_json(
+                &json!({"schemaVersion": 1, "network": {"allowedHosts": value}}),
+            )
+            .unwrap_err();
+            assert!(error.0.contains(needle), "{value}: {}", error.0);
+        }
+    }
+
+    #[test]
+    fn the_host_policy_follows_the_network_section() {
+        use fireemu_core_session::host_guard::admits;
+        let host = |cfg: &RuntimeConfig, name: &str| {
+            admits(&cfg.host_policy(), false, [name.as_bytes()]).is_ok()
+        };
+        let default = RuntimeConfig::from_json(&json!({"schemaVersion": 1})).unwrap();
+        assert!(host(&default, "localhost:9199"));
+        assert!(!host(&default, "fireemu:9199"));
+        assert!(!host(&default, "ci.example"));
+        let exposed = RuntimeConfig::from_json(&json!({
+            "schemaVersion": 1,
+            "network": {"allowNonLoopbackHosts": true, "allowedHosts": ["ci.example"]}
+        }))
+        .unwrap();
+        assert!(host(&exposed, "fireemu:9199"));
+        assert!(host(&exposed, "ci.example"));
+        assert!(!host(&exposed, "evil.example"));
+    }
+
+    #[test]
     fn the_network_section_is_validated() {
         let e =
             RuntimeConfig::from_json(&json!({"schemaVersion": 1, "network": true})).unwrap_err();
@@ -8166,6 +8753,19 @@ mod tests {
                 "{bad}"
             );
         }
+    }
+
+    #[test]
+    fn require_client_api_key_config_is_boolean_and_defaults_off() {
+        let parse =
+            |auth: Value| RuntimeConfig::from_json(&json!({"schemaVersion": 1, "auth": auth}));
+        assert!(!parse(json!({})).unwrap().auth_require_client_api_key);
+        assert!(
+            parse(json!({"requireClientApiKey": true}))
+                .unwrap()
+                .auth_require_client_api_key
+        );
+        assert!(parse(json!({"requireClientApiKey": "true"})).is_err());
     }
 
     #[test]
@@ -9098,7 +9698,7 @@ mod tests {
         assert!(
             Selection::parse("auth,database").is_ok_and(|s| s.auth && s.database && !s.firestore)
         );
-        assert!(Selection::parse("auth,hosting").is_err());
+        assert!(Selection::parse("auth,apphosting").is_err());
         assert_eq!(
             cfg.apply_firebase_json(&json!({"firestore": {"rules": 1}}), base, &only),
             Err(ConfigError(
@@ -9779,6 +10379,110 @@ mod tests {
         }
     }
 
+    #[test]
+    fn the_hosting_development_defaults_are_off_unless_production_exact_or_declared() {
+        let modes = |input: Value| {
+            let cfg = RuntimeConfig::from_json(&input).unwrap();
+            let source = |key: &str| {
+                cfg.development_defaults
+                    .iter()
+                    .find(|entry| entry["key"] == key)
+                    .unwrap()["source"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned()
+            };
+            (
+                cfg.hosting_cache_control,
+                cfg.hosting_client_country,
+                source("hosting.cacheControl"),
+                source("hosting.clientCountry"),
+            )
+        };
+        let defaults = (
+            HostingCacheControl::None,
+            HostingClientCountry::Honoured,
+            "default".to_owned(),
+            "default".to_owned(),
+        );
+        assert_eq!(
+            modes(json!({"schemaVersion": 1, "profile": "emulator"})),
+            defaults
+        );
+        assert_eq!(
+            modes(json!({"schemaVersion": 1, "profile": "strict"})),
+            defaults
+        );
+        assert_eq!(
+            modes(json!({"schemaVersion": 1, "profile": "strict", "productionExact": true})),
+            (
+                HostingCacheControl::Production,
+                HostingClientCountry::Ignored,
+                "productionExact".to_owned(),
+                "productionExact".to_owned()
+            )
+        );
+        // an explicit key wins over productionExact, each on its own
+        assert_eq!(
+            modes(
+                json!({"schemaVersion": 1, "profile": "strict", "productionExact": true,
+                "hosting": {"cacheControl": "none"}})
+            ),
+            (
+                HostingCacheControl::None,
+                HostingClientCountry::Ignored,
+                "explicit".to_owned(),
+                "productionExact".to_owned()
+            )
+        );
+        assert_eq!(
+            modes(json!({"schemaVersion": 1, "profile": "strict",
+                "hosting": {"clientCountry": "ignored"}})),
+            (
+                HostingCacheControl::None,
+                HostingClientCountry::Ignored,
+                "default".to_owned(),
+                "explicit".to_owned()
+            )
+        );
+        // the emulator profile may name the values it already has
+        assert_eq!(
+            modes(json!({"schemaVersion": 1, "profile": "emulator",
+                "hosting": {"cacheControl": "none", "clientCountry": "honoured"}}))
+            .0,
+            HostingCacheControl::None
+        );
+        for (bad, message) in [
+            (
+                json!({"schemaVersion": 1, "profile": "emulator", "hosting": {"cacheControl": "production"}}),
+                "hosting.cacheControl \"production\" requires the strict profile",
+            ),
+            (
+                json!({"schemaVersion": 1, "profile": "emulator", "hosting": {"clientCountry": "ignored"}}),
+                "hosting.clientCountry \"ignored\" requires the strict profile",
+            ),
+            (
+                json!({"schemaVersion": 1, "hosting": {"cacheControl": "always"}}),
+                "hosting.cacheControl must be \"none\" or \"production\"",
+            ),
+            (
+                json!({"schemaVersion": 1, "hosting": {"clientCountry": 1}}),
+                "hosting.clientCountry must be \"honoured\" or \"ignored\"",
+            ),
+            (
+                json!({"schemaVersion": 1, "hosting": {"other": 1}}),
+                "unknown key",
+            ),
+            (
+                json!({"schemaVersion": 1, "hosting": 1}),
+                "hosting must be an object",
+            ),
+        ] {
+            let error = RuntimeConfig::from_json(&bad).unwrap_err();
+            assert!(error.0.contains(message), "{bad}: {}", error.0);
+        }
+    }
+
     /// Naming a Pub/Sub project number is how a configuration asks for production's dead-letter
     /// grants, and the report says so; an empty map, the emulator profile and an explicit key
     /// say something else.
@@ -9890,6 +10594,75 @@ mod tests {
     }
 
     #[test]
+    fn auth_blocking_token_follows_profile_exact_and_explicit_precedence() {
+        for profile in ["emulator", "strict"] {
+            for exact in [None, Some(true), Some(false)] {
+                for key in [None, Some("emulated"), Some("production")] {
+                    let mut input = json!({"schemaVersion": 1, "profile": profile});
+                    if let Some(exact) = exact {
+                        input["productionExact"] = json!(exact);
+                    }
+                    if let Some(key) = key {
+                        input["functions"] = json!({"authBlockingToken": key});
+                    }
+                    let parsed = RuntimeConfig::from_json(&input);
+                    if profile == "emulator" && (exact == Some(true) || key == Some("production")) {
+                        assert!(parsed.is_err(), "{input}");
+                        continue;
+                    }
+                    let cfg = parsed.unwrap_or_else(|e| panic!("{input}: {e:?}"));
+                    let value = key.unwrap_or(if exact == Some(true) {
+                        "production"
+                    } else {
+                        "emulated"
+                    });
+                    let source = if key.is_some() {
+                        "explicit"
+                    } else if exact == Some(true) {
+                        "productionExact"
+                    } else {
+                        "default"
+                    };
+                    let entry = cfg
+                        .development_defaults
+                        .iter()
+                        .find(|entry| entry["key"] == "functions.authBlockingToken")
+                        .unwrap();
+                    assert_eq!(
+                        cfg.functions_auth_blocking_token.as_config_str(),
+                        value,
+                        "{input}"
+                    );
+                    assert_eq!(entry["value"], value, "{input}");
+                    assert_eq!(entry["source"], source, "{input}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn auth_blocking_token_rejects_invalid_values() {
+        for value in [
+            json!("unknown"),
+            json!(""),
+            json!(1),
+            json!(null),
+            json!(true),
+        ] {
+            let input = json!({"schemaVersion": 1, "functions": {"authBlockingToken": value}});
+            assert_eq!(
+                RuntimeConfig::from_json(&input).unwrap_err().0,
+                "functions.authBlockingToken must be \"emulated\" or \"production\""
+            );
+        }
+        let input = json!({"schemaVersion": 1, "profile": "emulator", "functions": {"authBlockingToken": "production"}});
+        assert_eq!(
+            RuntimeConfig::from_json(&input).unwrap_err().0,
+            "functions.authBlockingToken \"production\" requires the strict profile"
+        );
+    }
+
+    #[test]
     fn development_defaults_report_effective_values_and_sources() {
         let keys = [
             "auth.allowUnsignedCustomTokens",
@@ -9900,6 +10673,7 @@ mod tests {
             "auth.tenantIdFormat",
             "pubsub.deadLetterAuthorization",
             "appCheck.debugTokens",
+            "functions.authBlockingToken",
         ];
         let defaults = [
             "true",
@@ -9910,6 +10684,7 @@ mod tests {
             "readable",
             "implicit",
             "any",
+            "emulated",
         ];
         let production = [
             "false",
@@ -9920,6 +10695,7 @@ mod tests {
             "generated",
             "iam",
             "registered",
+            "production",
         ];
         for exact in [None, Some(false), Some(true)] {
             let mut input = json!({"schemaVersion": 1});
@@ -11916,5 +12692,93 @@ mod eventarc_authentication_tests {
                 prop_assert_eq!(cfg.eventarc_authentication, expected);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod hosting_selection_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn apply(
+        firebase: &Value,
+        only: &Selection,
+    ) -> (RuntimeConfig, Result<FirebaseJsonReport, ConfigError>) {
+        let mut cfg = RuntimeConfig::default();
+        let result = cfg.apply_firebase_json(firebase, std::path::Path::new("/project"), only);
+        (cfg, result)
+    }
+
+    // Review 2026-11-07 P2: `--only auth` with a nonloopback Hosting host must start.
+    #[test]
+    fn an_excluded_hosting_address_never_blocks_other_services() {
+        let firebase = json!({"hosting": {"public": "public"}, "emulators": {"hosting": {"host": "0.0.0.0", "port": 5000}}});
+        let (cfg, result) = apply(&firebase, &Selection::parse("auth").unwrap());
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(cfg.hosting, None);
+        assert_eq!(cfg.hosting_addr, "127.0.0.1:5000");
+    }
+
+    #[test]
+    fn explicitly_selected_hosting_keeps_its_configuration_errors() {
+        let only = Selection::parse("hosting").unwrap();
+        for firebase in [
+            json!({"hosting": {"public": "public"}, "emulators": {"hosting": {"host": "0.0.0.0"}}}),
+            json!({"hosting": [{"target": "a", "public": "a"}, {"target": "b", "public": "b"}]}),
+            json!({"hosting": {"source": "."}}),
+        ] {
+            let (_, result) = apply(&firebase, &only);
+            assert!(result.is_err(), "{firebase}");
+        }
+    }
+
+    // firebase-tools 15.28.2 starts Hosting for these shapes; before Hosting existed, fireemu
+    // only noted the entry. A run that did not name Hosting must keep starting.
+    #[test]
+    fn default_selection_notes_unsupported_hosting_instead_of_refusing_startup() {
+        for firebase in [
+            json!({"hosting": {"public": "public"}, "emulators": {"hosting": {"host": "0.0.0.0"}}}),
+            json!({"hosting": [{"target": "a", "public": "a"}, {"target": "b", "public": "b"}]}),
+            json!({"hosting": {"source": "."}}),
+            json!({"hosting": {"public": "public", "rewrites": [{"regex": "(", "destination": "/"}]}}),
+        ] {
+            let (cfg, result) = apply(&firebase, &Selection::default());
+            let report = result.unwrap_or_else(|error| panic!("{firebase}: {error:?}"));
+            assert_eq!(cfg.hosting, None, "{firebase}");
+            assert_eq!(cfg.hosting_addr, "127.0.0.1:5000", "{firebase}");
+            assert!(
+                report.notices.iter().any(|n| n.contains("hosting")),
+                "{firebase}: {:?}",
+                report.notices
+            );
+        }
+        let (cfg, result) = apply(
+            &json!({"hosting": {"public": "public"}, "emulators": {"hosting": {"port": 5005}}}),
+            &Selection::default(),
+        );
+        assert!(result.unwrap().notices.is_empty());
+        assert!(cfg.hosting.is_some());
+        assert_eq!(cfg.hosting_addr, "127.0.0.1:5005");
+        assert!(cfg.hosting_addr_explicit);
+    }
+
+    #[test]
+    fn a_daemon_hosting_port_is_explicit() {
+        let cfg =
+            RuntimeConfig::from_json(&json!({"schemaVersion": 1, "daemon": {"hostingPort": 5050}}))
+                .unwrap();
+        assert_eq!(cfg.hosting_addr, "127.0.0.1:5050");
+        assert!(cfg.hosting_addr_explicit);
+    }
+
+    #[test]
+    fn the_default_hosting_port_is_relocatable_and_a_configured_one_is_not() {
+        let (cfg, result) = apply(
+            &json!({"hosting": {"public": "public"}, "emulators": {"hosting": {"host": "127.0.0.1"}}}),
+            &Selection::default(),
+        );
+        result.unwrap();
+        assert!(!cfg.hosting_addr_explicit);
+        assert!(!RuntimeConfig::default().hosting_addr_explicit);
     }
 }

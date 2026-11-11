@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "profile": "strict",
+  "network": {
+    "allowedHosts": [
+      "emulator.ci.example:8080"
+    ]
+  },
+  "limits": {
+    "catalog": "firestore-standard-2026-08-25",
+    "queryCatalog": "firestore-standard-query-2026-08-25"
+  },
+  "firestore": {
+    "edition": "standard",
+    "apiMode": "native"
+  }
+}

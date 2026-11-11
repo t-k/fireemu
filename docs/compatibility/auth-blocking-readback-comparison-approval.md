@@ -4,7 +4,7 @@ Verified and approved within this limited scope. This is not a new production ru
 
 Row-by-row comparison of the approved production record of auth-blocking-readback revision 1 with one run of the same corpus on the owned local artifact after the persistence rule was corrected: all eleven semantic projections agree (the measured seconds are excluded). Production used the recorded first-generation blocking function; the owned local run used the equivalent second-generation Identity fixture installed with npm ci from the committed lockfile, with the runner, fixture files, lockfile and artifact bound to committed content. Approved as a comparison of these cases on that artifact, profile and recorder; not a claim of Functions SDK generation parity or beyond these cases.
 
-Subject: `2ad20cfc17f7f67e49daf21b03686a154386ae7d0ea96f857e262e2b61af53a1`. Recomputed from the complete record; this approval cannot transfer to a changed subject.
+Subject: `6aa2bee43e4020514a4e53023e4e91f7d85a8000bb27b316c300a77b6dde9556`. Recomputed from the complete record; this approval cannot transfer to a changed subject.
 
 Reviewed commit: `bfe70d7f1bb8d95d1f4a49abfc2f3c09a4da0122`. Reviewer: `github:t-k (id:426779)`. Approval date: 2026-09-12.
 

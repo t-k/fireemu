@@ -9,8 +9,8 @@ use fireemu_proto_pubsub::google::pubsub::v1 as pb;
 use pb::publisher_server::Publisher;
 
 use crate::convert::{
-    message_from_proto, status, topic_to_proto, validate_topic_options,
-    validate_topic_update_options,
+    message_from_proto, status, storage_policy_from_proto, topic_to_proto, validate_topic_options,
+    validate_topic_update_options, TopicUpdatePaths,
 };
 use crate::PubSubHandle;
 
@@ -35,6 +35,25 @@ fn project_of(resource: &str) -> Result<&str, Status> {
         .ok_or_else(|| Status::invalid_argument("project must be projects/{project}"))
 }
 
+/// A topic as the wire carries it, read from the shared state.
+fn stored_topic(
+    state: &fireemu_core_pubsub::PubSubState,
+    name: &TopicName,
+) -> fireemu_core_pubsub::Result<pb::Topic> {
+    let mut topic = topic_to_proto(name, state.topic_labels(name)?);
+    topic.message_retention_duration = state
+        .topic_retention(name)?
+        .map(crate::convert::duration_to_proto);
+    topic.message_storage_policy = state
+        .topic_storage_policy(name)?
+        .map(crate::convert::storage_policy_to_proto);
+    state
+        .topic_kms_key_name(name)?
+        .clone_into(&mut topic.kms_key_name);
+    topic.tags = state.topic_tags(name)?.clone().into_iter().collect();
+    Ok(topic)
+}
+
 #[tonic::async_trait]
 impl Publisher for PublisherService {
     async fn create_topic(
@@ -42,7 +61,7 @@ impl Publisher for PublisherService {
         request: Request<pb::Topic>,
     ) -> Result<Response<pb::Topic>, Status> {
         let topic = request.into_inner();
-        validate_topic_options(&topic).map_err(|e| status(&e))?;
+        validate_topic_options(&topic, self.handle.paging_policy).map_err(|e| status(&e))?;
         let name = TopicName::parse(&topic.name).map_err(|e| status(&e))?;
         let labels = topic.labels.into_iter().collect();
         if self.handle.paging_policy == crate::PagingPolicy::Strict {
@@ -51,31 +70,27 @@ impl Publisher for PublisherService {
         }
         self.handle
             .state()
-            .create_topic_with_retention(
+            .create_topic_with_options(
                 name.clone(),
                 labels,
-                topic
-                    .message_retention_duration
-                    .as_ref()
-                    .map(crate::convert::duration_from_proto)
-                    .transpose()
-                    .map_err(|error| status(&error))?,
+                fireemu_core_pubsub::TopicOptions {
+                    message_retention_duration: topic
+                        .message_retention_duration
+                        .as_ref()
+                        .map(crate::convert::duration_from_proto)
+                        .transpose()
+                        .map_err(|error| status(&error))?,
+                    message_storage_policy: topic
+                        .message_storage_policy
+                        .as_ref()
+                        .map(storage_policy_from_proto),
+                    kms_key_name: topic.kms_key_name,
+                    tags: topic.tags.into_iter().collect(),
+                },
             )
             .map_err(|e| status(&e))?;
         self.handle.retry_pending_dead_letters();
-        let mut created = topic_to_proto(
-            &name,
-            self.handle
-                .state()
-                .topic_labels(&name)
-                .map_err(|e| status(&e))?,
-        );
-        created.message_retention_duration = self
-            .handle
-            .state()
-            .topic_retention(&name)
-            .map_err(|error| status(&error))?
-            .map(crate::convert::duration_to_proto);
+        let created = stored_topic(&self.handle.state(), &name).map_err(|e| status(&e))?;
         Ok(Response::new(created))
     }
 
@@ -84,36 +99,40 @@ impl Publisher for PublisherService {
         request: Request<pb::UpdateTopicRequest>,
     ) -> Result<Response<pb::Topic>, Status> {
         let request = request.into_inner();
-        validate_topic_update_options(&request).map_err(|e| status(&e))?;
-        if request
+        validate_topic_update_options(&request, self.handle.paging_policy)
+            .map_err(|e| status(&e))?;
+        let Some(paths) = request
             .update_mask
             .as_ref()
-            .is_none_or(|mask| mask.paths != ["labels"])
-            || request.topic.is_none()
-        {
+            .and_then(|mask| TopicUpdatePaths::from_mask(&mask.paths))
+        else {
             return Err(Status::unimplemented(
                 "UpdateTopic is not supported by the Pub/Sub emulator",
             ));
-        }
-        let topic = request.topic.expect("the topic was checked above");
+        };
+        let Some(topic) = request.topic else {
+            return Err(Status::unimplemented(
+                "UpdateTopic is not supported by the Pub/Sub emulator",
+            ));
+        };
         let name = TopicName::parse(&topic.name).map_err(|error| status(&error))?;
         let mut state = self.handle.state();
+        let update = paths.build(
+            &topic,
+            state
+                .topic_storage_policy(&name)
+                .map_err(|error| status(&error))?,
+        );
         state
-            .update_topic_labels(
+            .update_topic(
                 &name,
-                topic.labels.into_iter().collect(),
+                update,
                 self.handle.paging_policy == crate::PagingPolicy::Strict,
             )
             .map_err(|error| status(&error))?;
-        let mut updated = topic_to_proto(
-            &name,
-            state.topic_labels(&name).map_err(|error| status(&error))?,
-        );
-        updated.message_retention_duration = state
-            .topic_retention(&name)
-            .map_err(|error| status(&error))?
-            .map(crate::convert::duration_to_proto);
-        Ok(Response::new(updated))
+        Ok(Response::new(
+            stored_topic(&state, &name).map_err(|e| status(&e))?,
+        ))
     }
 
     async fn publish(
@@ -145,13 +164,7 @@ impl Publisher for PublisherService {
         request: Request<pb::GetTopicRequest>,
     ) -> Result<Response<pb::Topic>, Status> {
         let name = TopicName::parse(&request.into_inner().topic).map_err(|e| status(&e))?;
-        let state = self.handle.state();
-        let labels = state.topic_labels(&name).map_err(|e| status(&e))?;
-        let mut topic = topic_to_proto(&name, labels);
-        topic.message_retention_duration = state
-            .topic_retention(&name)
-            .map_err(|error| status(&error))?
-            .map(crate::convert::duration_to_proto);
+        let topic = stored_topic(&self.handle.state(), &name).map_err(|e| status(&e))?;
         Ok(Response::new(topic))
     }
 
@@ -165,15 +178,7 @@ impl Publisher for PublisherService {
         let topics: Vec<_> = state
             .list_topics(project)
             .iter()
-            .map(|n| {
-                let labels = state.topic_labels(n).cloned().unwrap_or_default();
-                let mut topic = topic_to_proto(n, &labels);
-                topic.message_retention_duration = state
-                    .topic_retention(n)
-                    .unwrap_or_default()
-                    .map(crate::convert::duration_to_proto);
-                topic
-            })
+            .map(|n| stored_topic(&state, n).unwrap_or_default())
             .collect();
         let page = state
             .paginate(

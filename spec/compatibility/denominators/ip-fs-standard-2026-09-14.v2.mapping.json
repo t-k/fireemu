@@ -4,15 +4,15 @@
   "adapterId": "auth-pending-trigger-provider-unlink.v1",
   "receipt": {
     "path": "spec/compatibility/evidence/auth-pending-trigger-provider-unlink/receipt.json",
-    "sha256": "e1f5755e46f7900466f7cfdfc7480f0ab8cbf810ba415d3b662e7fb63411b7b3"
+    "sha256": "893e69466ab8f84161604c125bbdb55c61caf6c8e69a57273e971e8646612774"
   },
   "localComparison": {
     "path": "spec/compatibility/evidence/auth-pending-trigger-provider-unlink/local-comparison.json",
-    "sha256": "d741ad61fb6110f079fa51dd734a70f5cdee4198f222d488bb17ff336b2121d7"
+    "sha256": "b6ffbbbdedcecfebc4b54502c6c7905d6177400b823cf0e1f548de78574ebccd"
   },
   "comparisonApproval": {
     "path": "spec/compatibility/evidence/auth-pending-trigger-provider-unlink/comparison-approval.json",
-    "sha256": "65507b1a64717c6b520dd12242c41e97b230a9bf4a4113471d4d2281c12ffdc1"
+    "sha256": "4d6ce317a27a16bc5f055f6b245206c80c86cd9e827aef44fff55c555dc21af1"
   },
   "sourceReview": {
     "path": "spec/compatibility/evidence/auth-pending-trigger-provider-unlink/source-review.json",

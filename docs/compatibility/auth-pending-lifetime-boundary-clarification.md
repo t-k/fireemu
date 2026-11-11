@@ -1,6 +1,6 @@
 # Session clarification for the revision 2 lifetime candidate
 
-This clarifies the explanatory prose accompanying production subject `fa7a8be261077f7f670965297772d43afae793dc131d010b1ce32efb87e28f0b` and comparison subject `7a81e3c255dc531925f6ce2a656f68f40532a088c8fc745123e3821f9691dbb0`. The pinned receipts, generated pages and their checks remain unchanged.
+This clarifies the explanatory prose accompanying production subject `0ffdcd07fac2fad30bb3d6089b11c2078282c3675be9e4698335e758f244e394` and comparison subject `e082b4f2cef04bf03c05ac5eae3301721078d87d358b06505d18391a5cf98584`. The pinned receipts, generated pages and their checks remain unchanged.
 
 The design finalizes a fresh SMS session only when start succeeds and returns a session. In this production run, every aged start (600, 1800, 3300 and 3900 seconds) was refused. No corresponding session was returned, and every aged finalize was skipped. The measured session ages near zero therefore describe the successful fresh controls, not the refused aged diagnostics. Successful local diagnostics have their own separately recorded session ages.
 

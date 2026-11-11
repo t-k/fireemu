@@ -598,7 +598,7 @@
     "target": "local",
     "trigger": "provider-unlink"
   },
-  "productionSubjectSha256": "8628018a57979e03f35c49950dbd7114e50c8e0b97d0b2f9063f09aa100c2f24",
+  "productionSubjectSha256": "cb6853bcf078ea3632340c87c6f361ac4fee8353efad0c14b157d9e58fcb7b10",
   "publicationContractSha256": "10fe2965208ae947c416330abef1b6991e81a68fd24338d4b5c352e0910556da",
   "schemaVersion": 1,
   "scope": "Row-by-row comparison of the approved production record of the provider-unlink trigger (auth-pending-trigger) with one run of the same corpus on an owned local fireemu artifact (strict profile, --only auth, no configuration change, codes read from the emulator inspection route). Semantic projections exclude elapsed milliseconds. This is a comparison record, not a new production run, not an approval, and not a claim that the local artifact matches on anything outside these seven cases or for any other trigger."

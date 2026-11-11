@@ -1416,6 +1416,8 @@ pub async fn serve_pubsub(
         prepared_router =
             prepared_router.layer(axum::middleware::from_fn(recorded_grpc_error_headers));
     }
+    // Outermost, so a rebound page is refused before authentication or any route runs.
+    prepared_router = prepared_router.layer(axum::middleware::from_fn(refuse_rebound_hosts));
     let result = tonic::transport::Server::builder()
         .accept_http1(true)
         .serve_with_incoming(
@@ -3251,6 +3253,31 @@ fn canonical_recorded_grpc_message(message: &str) -> String {
             "pubsub-basics#resource_names",
         )
         .replace("subscriber%23create", "subscriber#create")
+}
+
+/// The DNS-rebinding defence of the REST surface (HTTP/1); gRPC over HTTP/2 is not checked.
+async fn refuse_rebound_hosts(
+    request: axum::http::Request<axum::body::Body>,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    match fireemu_core_session::host_guard::admits_request(
+        request.version() == axum::http::Version::HTTP_2,
+        request
+            .headers()
+            .get_all(axum::http::header::HOST)
+            .iter()
+            .map(axum::http::HeaderValue::as_bytes),
+    ) {
+        Ok(()) => next.run(request).await,
+        Err(refusal) => axum::response::Response::builder()
+            .status(axum::http::StatusCode::FORBIDDEN)
+            .header(
+                axum::http::header::CONTENT_TYPE,
+                fireemu_core_session::host_guard::REFUSAL_CONTENT_TYPE,
+            )
+            .body(axum::body::Body::from(refusal.body()))
+            .unwrap_or_else(|_| axum::response::Response::new(axum::body::Body::empty())),
+    }
 }
 
 async fn recorded_grpc_error_headers(

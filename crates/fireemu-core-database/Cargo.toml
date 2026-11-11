@@ -12,6 +12,7 @@ description = "std-only Realtime Database core: JSON tree, paths, priorities, se
 fireemu-core-rules = { path = "../fireemu-core-rules" }
 
 [dev-dependencies]
+fireemu-core-types = { path = "../fireemu-core-types" }
 proptest.workspace = true
 serde_json.workspace = true
 

@@ -21,7 +21,7 @@ The twelve-case corpus adds signup-token lookup, signup-token refresh and lookup
 | delete | Matched | Matched | — / — |
 | deleted-account-absent | Matched | Matched | — / — |
 
-Review subject (no approval granted): `0eb3689e1eb636f4166d3f296bba2fea2cf2ac70bf6ab6901d1077575a2a60cb`.
+Review subject (no approval granted): `72744f1dfaf72d89423aa056f54479dc4d7aafca9df1d43f7cf4cef9edbaad63`.
 
 [Public redacted receipt](../../spec/compatibility/evidence/auth-basic-v2/receipt.json) includes exact artifact/configuration/build inputs, process identity/exit checks and production configuration projection. Offline validation rechecks those relationships, expiry predicates and case verdict consistency. Token presence, identity relationships and service acceptance remain recorder observations; no reusable token values, passwords, raw account records or recovery journals are published. This is not independent cryptographic verification of the live service.
 

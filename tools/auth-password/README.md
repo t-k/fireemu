@@ -6,7 +6,7 @@ The flow proves the original password by signin, changes it using that fresh ID 
 
 ## Safety and scope
 
-- Production is fixed to `fireemu-35fe6` / `592603257417`. No tenant is specified. Email/password and improved email privacy must be enabled; blocking hooks must be absent.
+- Production is fixed to `fireemu-35fe6` / `<project-number>`. No tenant is specified. Email/password and improved email privacy must be enabled; blocking hooks must be absent.
 - Creation requires omitted admin `passwordPolicyConfig` plus explicit client `getPasswordPolicy` readback: schema 1, ENFORCE, minimum 6 and maximum 4096. Missing admin configuration is not interpreted as OFF. Other policies are a recorder preflight blocker, not a runtime compatibility conclusion. No configuration is changed.
 - Both passwords are independent 47-character values containing uppercase, lowercase, numeric and non-alphanumeric characters. They are held only in memory. The public receipt does not contain passwords, tokens, password hashes, UID or email.
 - Journal intent precedes signup. Marker/email plus independent UID lookup establish ownership, which is persisted privately and reread before mutation. Cleanup verifies UID/email and persists recovered UID before deletion. A reused email with another UID is refused. Unknown UID plus absent email is unresolved, not successful cleanup.

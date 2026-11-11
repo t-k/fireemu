@@ -3,6 +3,7 @@
   "ignorePatterns": [
     "node_modules",
     "fixtures",
+    "hosting-fixtures",
     ".runs",
     "pnpm-lock.yaml",
     "*-matrix.json",
@@ -16,6 +17,7 @@
     "fs-config-lifecycle-production.json",
     "fs-data-write-list-production.json",
     "fs-ent-pipeline-requests.json",
+    "fs-ent-pipeline-regex-requests.json",
     "fs-data-write-production-supplements/bracket-fb886aa8eed899746ecf607b.json",
     "fs-data-write-production-supplements/delta-v3-a14f265fea575003423c7ebd.json",
     "fs-data-write-production-supplements/followup-b0aeefc97b4c48765db4a9a1-indexed.json",
@@ -30,6 +32,7 @@
     "auth-federation-saml-production.json",
     "auth-fs-cross-stage2-production.json",
     "auth-tenant-blocking-production.json",
+    "securetoken-body-production.json",
     "src/auth-federation/corpus-saml.mjs",
     "src/auth-federation/corpus.mjs",
     "src/auth-federation/saml.mjs",

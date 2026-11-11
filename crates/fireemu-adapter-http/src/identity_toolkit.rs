@@ -794,10 +794,12 @@ pub enum AuthQueryLimits {
 /// Whether client routes admit a caller that presents neither an API key nor a credential.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientApiKeyPolicy {
-    /// Match the Firebase Auth Emulator, which serves keyless client requests.
+    /// Serve keyless client requests as a local extension.
     Optional,
     /// Refuse them as production's API front end does ("unregistered callers").
     Required,
+    /// Refuse them with the official Auth emulator response.
+    EmulatorRequired,
 }
 
 /// Whether this embedding exposes bounded local `pendingToken` continuation handles.
@@ -1272,37 +1274,13 @@ fn str_field<'a>(body: &'a Value, key: &str) -> Option<&'a str> {
     body.get(key).and_then(Value::as_str)
 }
 
-/// Whether a Secure Token refresh body is read in the Android SDK's camelCase spelling
-/// (`grantType`, `refreshToken`): only when it carries neither `snake_case` field. The server
-/// drops the camelCase keys of a form body, so a form and a body mixing the spellings are read
-/// as `snake_case` only, as they were before the SDK's JSON shape was added.
-fn refresh_body_is_camel_case(body: &Value) -> bool {
-    body.get("grant_type").is_none() && body.get("refresh_token").is_none()
-}
-
-/// The refresh token a request carries, in the one spelling its body is read in: the store
-/// selection, the tenant checks and the exchange all call this, so they agree.
+/// Store selection, tenant checks and exchange read the same refresh token.
 fn request_refresh_token(body: &Value) -> Option<&str> {
-    str_field(
-        body,
-        if refresh_body_is_camel_case(body) {
-            "refreshToken"
-        } else {
-            "refresh_token"
-        },
-    )
+    str_field(body, "refresh_token").or_else(|| str_field(body, "refreshToken"))
 }
 
-/// The grant type a refresh request carries, read in the same spelling as its token.
 fn request_grant_type(body: &Value) -> Option<&str> {
-    str_field(
-        body,
-        if refresh_body_is_camel_case(body) {
-            "grantType"
-        } else {
-            "grant_type"
-        },
-    )
+    str_field(body, "grant_type").or_else(|| str_field(body, "grantType"))
 }
 
 fn issue_tokens(
@@ -2569,6 +2547,7 @@ fn dispatch_with_blocking_hook(
     quota_reservation: &mut Option<SignupReservation>,
     idp_trust: Option<&crate::oidc::LocalOidcTrust>,
     saml_trust: Option<&strict_saml::StrictSaml>,
+    parent_authorized_domains: Option<&[String]>,
 ) -> JsonResponse {
     // A configuration that changes while the request runs is a retryable conflict in the strict
     // profile, fireemu's own guard; the emulator profile goes on with the configuration it finds,
@@ -2632,7 +2611,7 @@ fn dispatch_with_blocking_hook(
         body,
         headers,
         at,
-        &blocking_dispatch_options(state),
+        &blocking_dispatch_options(state, parent_authorized_domains),
     );
     if revision_changed() {
         return error(409, "BLOCKING_FUNCTION_CONFIGURATION_CHANGED");
@@ -2834,7 +2813,8 @@ fn dispatch_with_blocking_hook(
     if revision_changed() {
         return error(409, "BLOCKING_FUNCTION_CONFIGURATION_CHANGED");
     }
-    let mut commit = |metadata: Option<&fireemu_core_auth::store::TenantMetadata>| {
+    let mut commit = |metadata: Option<&fireemu_core_auth::store::TenantMetadata>,
+                      committed_domains: Option<&[String]>| {
         if revision_changed() {
             return error(409, "BLOCKING_FUNCTION_CONFIGURATION_CHANGED");
         }
@@ -2934,7 +2914,7 @@ fn dispatch_with_blocking_hook(
                 body,
                 headers,
                 at,
-                &blocking_dispatch_options(state),
+                &blocking_dispatch_options(state, committed_domains),
             )
         };
         if committed_response.status != 200 {
@@ -3175,6 +3155,11 @@ fn dispatch_with_blocking_hook(
         },
         None => None,
     };
+    // A tenant-scoped link is decided by the project's list as it stands now, as a project
+    // scoped one is by the live store: the function ran unlocked, so an Admin update may have
+    // landed. It is read with the parent check below, after the gate is retaken and before the
+    // registry's tenant locks and the tenant store are taken (parent before tenant).
+    let mut committed_domains = None;
     if !state.stateless_refresh_tokens && tenant.is_some() {
         let Some(parent) = state
             .registry
@@ -3189,13 +3174,16 @@ fn dispatch_with_blocking_hook(
         if !parent.allows_tenants() {
             return unknown_tenant_refusal(handler, error(404, "TENANT_NOT_FOUND"));
         }
+        committed_domains = parent_authorized_domains.map(|_| parent.authorized_domains());
     }
     match (tenant.as_deref(), state.registry.as_ref()) {
         (Some(tenant), Some(registry)) => {
-            registry.with_existing_tenant_metadata(&project, tenant, commit)
+            registry.with_existing_tenant_metadata(&project, tenant, |metadata| {
+                commit(metadata, committed_domains.as_deref())
+            })
         }
         (Some(_), None) => error(400, "TENANT_NOT_FOUND"),
-        (None, _) => commit(None),
+        (None, _) => commit(None, None),
     }
 }
 
@@ -3889,13 +3877,12 @@ fn emulator_creates_named_tenant(
     // the store selection itself, not by a copy of its rules) makes nothing here and is admitted
     // by App Check for the project it is served from, by the pipeline. A selection that fails
     // (a tenant not made yet) or lands in this project goes on.
-    if let Ok(store) = select_store(state, routing, path, query, body, resolution) {
-        if store
+    if select_store(state, routing, path, query, body, resolution).is_ok_and(|store| {
+        store
             .lock()
             .is_ok_and(|store| store.project_id() != project)
-        {
-            return Ok(None);
-        }
+    }) {
+        return Ok(None);
     }
     let path_tenant = routes::scoped_target(path).and_then(|(_, tenant)| tenant);
     let body_tenant = match body.get("tenantId") {
@@ -3939,6 +3926,17 @@ fn emulator_creates_named_tenant(
     };
     if registry.tenant_store(&project, &target).is_some() {
         return Ok(None);
+    }
+    if route.class == routes::RouteClass::EndUser
+        && !request.api_key
+        && request.headers.authorization.is_none()
+    {
+        let response = missing_tenant(registry, &project, &target);
+        return Err(if route.handler == routes::Handler::Token {
+            secure_token_error_shape(response)
+        } else {
+            response
+        });
     }
     let Some(CreationParent { parent, candidate }) =
         creation_parent(state, registry, &project, path)
@@ -4360,7 +4358,9 @@ fn handle_with_policy_inner(
     // Production's API front end answers a caller without identity before the service reads
     // any selector, tenant or body (sandbox recording 2026-09-23).
     if let Err(response) = caller_identity_check(state, resolution, headers, api_key) {
-        return if api_service(path) == "securetoken.googleapis.com" {
+        return if api_service(path) == "securetoken.googleapis.com"
+            && state.client_api_key != ClientApiKeyPolicy::EmulatorRequired
+        {
             secure_token_error_shape(response)
         } else {
             response
@@ -4680,7 +4680,11 @@ fn handle_with_policy_inner(
             None => None,
         }
     };
-    if !state.stateless_refresh_tokens && store_tenant.is_some() {
+    // Strict: a tenant-scoped request is authorized against the parent project, whose live
+    // Config holds the authorized domains (a Tenant resource has none). The list is read here,
+    // under the parent lock this admission already takes before the tenant store's lock, so no
+    // lock is nested later and the request sees one consistent project configuration.
+    let parent_authorized_domains = if !state.stateless_refresh_tokens && store_tenant.is_some() {
         let Some(parent) = state
             .registry
             .as_ref()
@@ -4699,7 +4703,10 @@ fn handle_with_policy_inner(
                 _ => error(404, "TENANT_NOT_FOUND"),
             };
         }
-    }
+        Some(parent.authorized_domains())
+    } else {
+        None
+    };
     let tenant_metadata = store_tenant.as_deref().and_then(|tenant| {
         state
             .registry
@@ -5092,7 +5099,8 @@ fn handle_with_policy_inner(
             body,
             headers,
             at,
-            &state.into(),
+            &DispatchOptions::from(state)
+                .with_parent_authorized_domains(parent_authorized_domains.as_deref()),
         );
         let retain_candidate = response.status == 200
             && pending_routed_project.is_some()
@@ -5168,6 +5176,7 @@ fn handle_with_policy_inner(
             &mut quota_reservation,
             idp_trust,
             strict_saml_trust.as_ref(),
+            parent_authorized_domains.as_deref(),
         )
     } else if let Some(reservation) = quota_reservation.clone() {
         // Run quota-accounted creation on an isolated store copy. This gives the quota
@@ -5181,7 +5190,8 @@ fn handle_with_policy_inner(
             dispatch_body,
             headers,
             at,
-            &state.into(),
+            &DispatchOptions::from(state)
+                .with_parent_authorized_domains(parent_authorized_domains.as_deref()),
         );
         // Determine creation from the request's returned identity and the isolated store
         // transition. A global user-count delta is not a per-request result: another actor may
@@ -5223,7 +5233,8 @@ fn handle_with_policy_inner(
             dispatch_body,
             headers,
             at,
-            &state.into(),
+            &DispatchOptions::from(state)
+                .with_parent_authorized_domains(parent_authorized_domains.as_deref()),
         );
         drop(store);
         response
@@ -5349,6 +5360,19 @@ fn caller_identity_check(
         {
             Err(unregistered_caller())
         }
+        routes::RouteClass::EndUser
+            if state.client_api_key == ClientApiKeyPolicy::EmulatorRequired && !api_key =>
+        {
+            // firebase-tools 15.28.2: conformance/node_modules/firebase-tools/lib/emulator/auth/server.js:232
+            // and conformance/node_modules/firebase-tools/lib/emulator/auth/errors.js:43-45.
+            let message = "The request is missing a valid API key.";
+            Err(JsonResponse {
+                status: 403,
+                body: json!({"error": {"code": 403, "message": message,
+                    "errors": [{"message": message, "reason": "forbidden", "domain": "global"}],
+                    "status": "PERMISSION_DENIED"}}),
+            })
+        }
         _ => Ok(()),
     }
 }
@@ -5400,14 +5424,31 @@ struct DispatchOptions {
     inbound_credential_policy: fireemu_core_functions::manifest::BlockingAuthTokenPolicy,
     /// The strict daemon's OIDC issuers (keys and authorization endpoints).
     idp_signers: Option<Arc<IdpSignerTrust>>,
+    /// The parent project's live authorized domains, read when a strict tenant-scoped request
+    /// was admitted. A tenant store holds only the project defaults, so a tenant-scoped action
+    /// link never checks its own list (without this snapshot it is refused), and the client
+    /// project configuration reports this list for a tenant-scoped request.
+    parent_authorized_domains: Option<Vec<String>>,
+}
+
+impl DispatchOptions {
+    /// The same options for a request admitted with the parent project's authorized domains.
+    fn with_parent_authorized_domains(mut self, domains: Option<&[String]>) -> Self {
+        self.parent_authorized_domains = domains.map(<[String]>::to_vec);
+        self
+    }
 }
 
 /// The options of a request whose blocking trigger is selected: it keeps secure tokens.
-fn blocking_dispatch_options(state: &AuthState) -> DispatchOptions {
+fn blocking_dispatch_options(
+    state: &AuthState,
+    parent_authorized_domains: Option<&[String]>,
+) -> DispatchOptions {
     DispatchOptions {
         legacy_tokens: false,
         ..state.into()
     }
+    .with_parent_authorized_domains(parent_authorized_domains)
 }
 
 impl From<&AuthState> for DispatchOptions {
@@ -5424,6 +5465,7 @@ impl From<&AuthState> for DispatchOptions {
                 IdpAssertionPolicy::SignedOidc(signers) => Some(signers.clone()),
                 IdpAssertionPolicy::Fixture => None,
             },
+            parent_authorized_domains: None,
             inbound_credential_policy: state.blocking.as_deref().map_or_else(
                 fireemu_core_functions::manifest::BlockingAuthTokenPolicy::default,
                 |blocking| {
@@ -5512,6 +5554,7 @@ fn dispatch(
             headers,
             false,
             !options.stateless_refresh_tokens,
+            options.parent_authorized_domains.as_deref(),
         ),
         Handler::ResetPassword => reset_password(store, body, at, options.stateless_refresh_tokens),
         Handler::SignInWithEmailLink => {
@@ -5540,7 +5583,11 @@ fn dispatch(
             !options.stateless_refresh_tokens,
             options.idp_signers.as_deref(),
         ),
-        Handler::Projects => client_project_config(store, !options.stateless_refresh_tokens),
+        Handler::Projects => client_project_config(
+            store,
+            !options.stateless_refresh_tokens,
+            options.parent_authorized_domains.as_deref(),
+        ),
         Handler::RecaptchaParams => {
             let mut body = json!({
                 "kind": "identitytoolkit#GetRecaptchaParamResponse",
@@ -5634,6 +5681,7 @@ fn dispatch(
                 headers,
                 true,
                 !options.stateless_refresh_tokens,
+                options.parent_authorized_domains.as_deref(),
             )
         }
         // Stateful refresh sessions mark the strict profile.
@@ -10305,12 +10353,25 @@ fn custom_token_claims_hold(payload: &JsonValue, now_secs: i64) -> bool {
 /// `GET v1/projects`: the project named by its number, as production and the official
 /// emulator both answer, and the project's authorized domains (sandbox read 2026-09-25). The
 /// emulator profile keeps the official emulator's `localhost` until domains are configured.
-fn client_project_config(store: &AuthStore, strict: bool) -> JsonResponse {
+///
+/// The list is the project's: production's request has no tenant field and the SDK adds none
+/// for a tenant client, and the SDK checks its origin against this list. A strict request that
+/// still selects a tenant store (the query `tenantId`) is answered with
+/// `parent_authorized_domains`, the parent project's live list read when the request was
+/// admitted, never with the tenant store's own list (only the project defaults) or a copy. A
+/// tenant request without that snapshot reports no domain, so the SDK refuses every origin.
+fn client_project_config(
+    store: &AuthStore,
+    strict: bool,
+    parent_authorized_domains: Option<&[String]>,
+) -> JsonResponse {
     let project = store.project_number().map_or_else(
         || store.project_id().to_owned(),
         |number| number.to_string(),
     );
-    let domains = if strict || store.sign_in_config().authorized_domains.is_some() {
+    let domains = if strict && store.tenant_id().is_some() {
+        parent_authorized_domains.unwrap_or(&[]).to_vec()
+    } else if strict || store.sign_in_config().authorized_domains.is_some() {
         store.authorized_domains()
     } else {
         vec!["localhost".to_owned()]
@@ -13562,7 +13623,7 @@ fn oob_link(
     link
 }
 
-fn percent_encode(s: &str) -> String {
+pub(crate) fn percent_encode(s: &str) -> String {
     use std::fmt::Write as _;
     s.bytes()
         .fold(String::with_capacity(s.len()), |mut out, b| {
@@ -13588,6 +13649,7 @@ fn send_oob_code(
     headers: &RequestHeaders,
     privileged: bool,
     strict: bool,
+    parent_authorized_domains: Option<&[String]>,
 ) -> JsonResponse {
     let return_oob_link = match opt_bool(body, "returnOobLink") {
         Ok(Some(value)) => value,
@@ -13746,7 +13808,9 @@ fn send_oob_code(
             if absolute_uri_host(url).is_none() {
                 return error(400, "INVALID_CONTINUE_URI : Missing domain in continue url");
             }
-            if let Some(response) = unauthorized_continue_url(store, body) {
+            if let Some(response) =
+                unauthorized_continue_url(store, parent_authorized_domains, body)
+            {
                 return response;
             }
         }
@@ -13853,11 +13917,27 @@ fn mobile_link(store: &AuthStore, body: &Value, link: String) -> String {
 }
 
 /// The refusal of a continue URL whose host is not one of the project's authorized domains.
-fn unauthorized_continue_url(store: &AuthStore, body: &Value) -> Option<JsonResponse> {
+///
+/// Authorized domains belong to the project, so a tenant store never answers for them: a
+/// tenant-scoped request is checked against `parent_authorized_domains`, the parent project's
+/// live list read at admission. A tenant request that carries none (an entry that did not read
+/// the parent) is refused rather than checked against the tenant store's project defaults,
+/// which would accept a domain the project removed.
+fn unauthorized_continue_url(
+    store: &AuthStore,
+    parent_authorized_domains: Option<&[String]>,
+    body: &Value,
+) -> Option<JsonResponse> {
     let url = str_field(body, "continueUrl")?;
     let host = absolute_uri_host(url)?;
-    if store
-        .authorized_domains()
+    let own;
+    let domains: &[String] = if store.tenant_id().is_some() {
+        parent_authorized_domains.unwrap_or(&[])
+    } else {
+        own = store.authorized_domains();
+        &own
+    };
+    if domains
         .iter()
         .any(|domain| domain.eq_ignore_ascii_case(&host))
     {
@@ -17554,6 +17634,66 @@ mod body_tenant_selector_tests {
             assert_eq!(
                 registry.tenants("demo-app"),
                 ["matrix-body", "matrix-other"]
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod continue_url_domain_tests {
+    use super::*;
+    use fireemu_core_auth::mfa::TotpPolicy;
+    use fireemu_core_types::determinism::SplitMix64;
+    use proptest::prelude::*;
+
+    const HOSTS: [&str; 4] = ["a.test", "b.test", "c.test", "localhost"];
+
+    fn refused(answer: Option<JsonResponse>) -> bool {
+        answer.is_some_and(|response| {
+            response.status == 400
+                && response.body["error"]["message"]
+                    == "UNAUTHORIZED_DOMAIN : Domain not allowlisted by project"
+        })
+    }
+
+    fn body(host: &str) -> Value {
+        json!({"continueUrl": format!("https://{host}/done")})
+    }
+
+    fn domains(hosts: &[usize]) -> Vec<String> {
+        hosts.iter().map(|i| HOSTS[*i].to_owned()).collect()
+    }
+
+    proptest! {
+        /// A project store decides by its own list and ignores any snapshot; a tenant store
+        /// decides by the snapshot only, and without one refuses every host: its own list
+        /// (project defaults, or anything set directly) never decides.
+        #[test]
+        fn the_domains_checked_are_the_projects_for_a_project_and_the_snapshot_for_a_tenant(
+            own in proptest::sample::subsequence((0..HOSTS.len()).collect::<Vec<_>>(), 0..=HOSTS.len()),
+            snapshot in proptest::option::of(
+                proptest::sample::subsequence((0..HOSTS.len()).collect::<Vec<_>>(), 0..=HOSTS.len())
+            ),
+            host in 0..HOSTS.len(),
+            upper in any::<bool>(),
+        ) {
+            let spelled = if upper { HOSTS[host].to_uppercase() } else { HOSTS[host].to_owned() };
+            let own_list = domains(&own);
+            let snapshot = snapshot.map(|s| domains(&s));
+            let mut project = AuthStore::new("demo-app", SplitMix64::new(1), TotpPolicy::default());
+            project.set_authorized_domains_seed(own_list.clone()).unwrap();
+            let mut tenant =
+                AuthStore::new_tenant("demo-app", "tenant-a", SplitMix64::new(2), TotpPolicy::default());
+            tenant.set_authorized_domains_seed(own_list.clone()).unwrap();
+            let listed = |list: &[String]| list.iter().any(|d| d.eq_ignore_ascii_case(&spelled));
+            let request = body(&spelled);
+            prop_assert_eq!(
+                refused(unauthorized_continue_url(&project, snapshot.as_deref(), &request)),
+                !listed(&own_list)
+            );
+            prop_assert_eq!(
+                refused(unauthorized_continue_url(&tenant, snapshot.as_deref(), &request)),
+                !snapshot.as_deref().is_some_and(listed)
             );
         }
     }

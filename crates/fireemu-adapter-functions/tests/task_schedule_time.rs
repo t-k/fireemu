@@ -339,7 +339,10 @@ async fn runnable_idle_retains_future_tasks_without_dispatch_or_schedule_mutatio
     assert!(!f.runtime.is_idle());
     assert!(f.runtime.is_idle_with_scope(true));
     assert_eq!(
-        f.runtime.publish("jobs", &[json!({"data": "e30="})]).len(),
+        f.runtime
+            .publish("jobs", &[json!({"data": "e30="})])
+            .unwrap()
+            .len(),
         1
     );
     assert!(

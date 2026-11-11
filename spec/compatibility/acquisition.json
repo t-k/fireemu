@@ -43,13 +43,13 @@
   "files": {
     "spec/compatibility/observations/2026-09-09/timestamps-production.json": "5d5a74e0f16daf009ff3a33f7a71b076967ef4c47a815640c0fab387e4bcc55d",
     "spec/compatibility/observations/2026-09-09/timestamps-fireemu.json": "2abae0c69ccac78b7469a15919802567893b6b0edc52dec2f81b02b10b8f7243",
-    "spec/compatibility/observations/2026-09-09/aggregation-production-final.json": "0e9cd56a4a7a9359809d62db32ac866e00006b27e1cbebcdc72085ce3ee97e24",
-    "spec/compatibility/observations/2026-09-09/aggregation-fireemu-final.json": "ffc2485e0800f577c3395c7d6575f05a04035e78987e8513bad6fce8a7222efc",
+    "spec/compatibility/observations/2026-09-09/aggregation-production-final.json": "6c63634049ef24ba5a43d7127287418bd6d1ec8f5d814a2c6edd01850fa47494",
+    "spec/compatibility/observations/2026-09-09/aggregation-fireemu-final.json": "0d7df0ed686d8a46545be72588352451251eaea7ce413927132c5164a9cb6490",
     "spec/compatibility/observations/2026-09-09/auth-production-final.json": "560294a2d3a2ce786ebb851be2e9893eb1d918a1dd6edcba182e801133789866",
     "spec/compatibility/upstream/2026-09-09-retry/manifest.json": "674535c0f1394fec1eb5a81930919c00700de995bc405d4554fb8039dcc33877",
     "spec/compatibility/upstream/firestore-protobuf.json": "0e4a9f8bbc8cf782f73fb3266960cd9ff09f8267d4614fbba997d107f29f0fd9",
-    "tools/sdk-smoke/timestamp-array-oracle.mjs": "1118ca9d0a4164279ef54f9832968e085cf72ac48ccdf363e78f5937642f8aa4",
-    "spec/compatibility/observations/2026-09-09/harness/probe.py": "ed363f8319d26a75461298b9de9bfb5e13c9a286b13ed0b64fd97d0fde8fb28d",
+    "tools/sdk-smoke/timestamp-array-oracle.mjs": "9c6101d1a10134d1b1ac80d98ed6043e8082b21df3db391a13998683b39cf51b",
+    "spec/compatibility/observations/2026-09-09/harness/probe.py": "70b9aeef4de4391af9142a44383d66ac89b0f33f40e5fe0206f5b0e76c8192b8",
     "tools/compat-inventory/auth_probe.py": "097ead80880d23fe74902601578ee8250efcc06218b7cd0588e54004ad027122",
     "tools/compat-inventory/capture.py": "955b8af8f4efa0a884479c9db495cde37be7f535541c639a49487c8893c24848",
     "tools/compat-inventory/protobuf_inventory.py": "d1218f5a411770f98b3d87c7c308af887b65cc2385db931e2f77389a0f5ce76b"

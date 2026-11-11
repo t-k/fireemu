@@ -672,7 +672,10 @@ fn proof_captures_partial_map_get_and_absent_resource_reporting() {
         c
     };
     assert!(proves(&known, "resource.data.get('owner', 'x') == 'u1'"));
-    assert!(!proves(&known, "resource.data.get('missing', 0) == 0"));
+    // An unconstrained key of the query data answers the default (FS-RULES-SHAPES
+    // 2026-11-08, `get-neg-nofilter` allowed, `get-pos-nofilter` refused).
+    assert!(proves(&known, "resource.data.get('missing', 0) == 0"));
+    assert!(!proves(&known, "resource.data.get('missing', 0) == 1"));
     assert!(!proves(&known, "resource.data.get(1, 0) == 0"));
     // A create rule that reads `resource` (absent) is reported as such.
     let mut create = ctx(Method::Create, &[]);

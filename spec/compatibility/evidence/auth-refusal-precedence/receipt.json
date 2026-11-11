@@ -212,7 +212,7 @@
       }
     ]
   },
-  "publicationContractSha256": "67134f0246a2c5f971499988f99f307b4abaf3b33c21189e72b3d9c8ddc0f1e6",
+  "publicationContractSha256": "fc5d2da248be9dfa927732589e94c80ec270bd2d2f31cbcf28a608f697804987",
   "schemaVersion": 1,
   "scope": "Nine sequential REST observations in production only: fresh phone MFA completions for A and B; a client accounts:update with A's baseline ID token altered by one signature character, a sentinel custom claim and a sentinel photo URL, sent before any disable and followed by a privileged readback; then, with a pending credential and an SMS session held by each account, both accounts disabled and read back, the held credential and session of A finalized with a fixed wrong code and those of B with the correct code; both accounts re-enabled and read back and the same held credentials and sessions finalized with the correct code; fresh completions for A and B. Phone MFA with test phone numbers, no tenant, no blocking function, one run. The oracle configuration was changed for the run and restored with a digest comparison. Admin is used for owned account setup, the disable and re-enable transitions, readback and cleanup. No human approval, no local artifact comparison, no claim about a valid token with a privileged field, about mfaSignIn:start on a disabled account, about the pending credential's expiry, TOTP, SDK or Rules.",
   "sourceReviewSha256": "9da73a9c1c1a60e8d259cafc4207dc05d470228462a073930836819852361626"

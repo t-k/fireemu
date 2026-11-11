@@ -4864,7 +4864,15 @@ async fn await_in_flight(budget: &BodyBudget, bytes: usize) {
 async fn read_response(stream: &mut tokio::net::TcpStream) -> String {
     use tokio::io::AsyncReadExt;
     let mut response = Vec::new();
-    stream.read_to_end(&mut response).await.unwrap();
+    // A bounded wait: a server that admitted a request it should have refused waits for the rest
+    // of the body, and a test that waited with it would time out instead of failing.
+    tokio::time::timeout(
+        std::time::Duration::from_secs(20),
+        stream.read_to_end(&mut response),
+    )
+    .await
+    .expect("no response within 20 s: the request was admitted when it should have been answered")
+    .unwrap();
     String::from_utf8_lossy(&response).into_owned()
 }
 
@@ -5147,6 +5155,118 @@ async fn a_body_over_the_object_boundary_is_refused_without_buffering_it() {
     assert!(response.starts_with("HTTP/1.1 413"), "{response}");
     assert_eq!(BUDGET.in_flight(), 0, "nothing was charged");
     server.abort();
+}
+
+/// Starts a server whose store holds `max_object_bytes`, sends one media upload of `len` bytes
+/// (or only its head when `body` is false) and returns the response.
+async fn upload_with_object_limit(
+    budget: &'static BodyBudget,
+    max_object_bytes: u64,
+    len: usize,
+    body: bool,
+) -> String {
+    use tokio::io::AsyncWriteExt;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let shared = Arc::new(state(None));
+    shared
+        .store
+        .lock()
+        .unwrap()
+        .set_max_object_bytes(max_object_bytes);
+    let server = tokio::spawn(serve_storage_with_budget(listener, shared, budget));
+    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    stream
+        .write_all(upload_head("limited.bin", len).as_bytes())
+        .await
+        .unwrap();
+    if body {
+        stream.write_all(&vec![7u8; len]).await.unwrap();
+    }
+    let response = read_response(&mut stream).await;
+    server.abort();
+    response
+}
+
+#[tokio::test]
+async fn a_configured_object_limit_admits_the_limit_and_refuses_one_byte_more() {
+    static BUDGET: BodyBudget = BodyBudget::new(1_572_864);
+    let at = upload_with_object_limit(&BUDGET, 10, 10, true).await;
+    assert!(at.starts_with("HTTP/1.1 200"), "{at}");
+    let over = upload_with_object_limit(&BUDGET, 10, 11, true).await;
+    assert!(over.starts_with("HTTP/1.1 413"), "{over}");
+    assert!(over.contains("object too large"), "{over}");
+    let raised = upload_with_object_limit(&BUDGET, 11, 11, true).await;
+    assert!(raised.starts_with("HTTP/1.1 200"), "{raised}");
+    assert_eq!(BUDGET.in_flight(), 0);
+}
+
+#[tokio::test]
+async fn the_body_cap_follows_the_configured_object_limit() {
+    static BUDGET: BodyBudget = BodyBudget::new(1_572_864);
+    // A lowered limit lowers the body cap: the head alone is refused, nothing is charged.
+    let lowered = fireemu_adapter_http::storage_server::body_cap_for_object_limit(10).unwrap();
+    let refused = upload_with_object_limit(&BUDGET, 10, lowered + 1, false).await;
+    assert!(refused.starts_with("HTTP/1.1 413"), "{refused}");
+    assert_eq!(BUDGET.in_flight(), 0);
+    // A raised limit admits a body past the default cap; the 1.5 MiB budget then refuses it.
+    let raised = upload_with_object_limit(
+        &BUDGET,
+        300 * 1024 * 1024,
+        MAX_STORAGE_BODY_BYTES + 1,
+        false,
+    )
+    .await;
+    assert!(raised.starts_with("HTTP/1.1 503"), "{raised}");
+    assert_eq!(BUDGET.in_flight(), 0);
+}
+
+#[tokio::test]
+async fn a_reconfigured_body_budget_limit_applies_to_the_next_request() {
+    static BUDGET: BodyBudget = BodyBudget::new(1_572_864);
+    assert_eq!(BUDGET.limit(), 1_572_864);
+    let admitted = upload_with_object_limit(&BUDGET, 100, 11, true).await;
+    assert!(admitted.starts_with("HTTP/1.1 200"), "{admitted}");
+    BUDGET.set_limit(10);
+    assert_eq!(BUDGET.limit(), 10);
+    let refused = upload_with_object_limit(&BUDGET, 100, 11, true).await;
+    assert!(refused.starts_with("HTTP/1.1 503"), "{refused}");
+    assert!(
+        refused.to_ascii_lowercase().contains("retry-after: 1"),
+        "{refused}"
+    );
+    BUDGET.set_limit(11);
+    let at_limit = upload_with_object_limit(&BUDGET, 100, 11, true).await;
+    assert!(at_limit.starts_with("HTTP/1.1 200"), "{at_limit}");
+    assert_eq!(BUDGET.in_flight(), 0);
+}
+
+#[test]
+fn the_documented_storage_limits_keep_their_values() {
+    use fireemu_adapter_http::storage_server::{
+        body_cap_for_object_limit, BODY_OVERHEAD_BYTES, DEFAULT_BODY_BUDGET_BYTES,
+        MAX_CONFIGURED_BUDGET_BYTES, MAX_CONFIGURED_OBJECT_BYTES,
+    };
+    assert_eq!(BODY_OVERHEAD_BYTES, 4 * 1024 * 1024);
+    assert_eq!(MAX_STORAGE_BODY_BYTES, 272_629_760);
+    assert_eq!(DEFAULT_BODY_BUDGET_BYTES, 1_073_741_824);
+    assert_eq!(
+        body_cap_for_object_limit(fireemu_core_storage::store::MAX_OBJECT_BYTES),
+        Some(MAX_STORAGE_BODY_BYTES)
+    );
+    assert_eq!(MAX_CONFIGURED_BUDGET_BYTES, 2_147_483_647);
+    assert_eq!(MAX_CONFIGURED_OBJECT_BYTES, 2_143_289_343);
+}
+
+proptest::proptest! {
+    #[test]
+    fn the_body_cap_is_the_object_limit_plus_the_overhead(limit in 0_u64..=u64::MAX) {
+        use fireemu_adapter_http::storage_server::{body_cap_for_object_limit, BODY_OVERHEAD_BYTES};
+        let expected = limit
+            .checked_add(BODY_OVERHEAD_BYTES as u64)
+            .and_then(|total| usize::try_from(total).ok());
+        proptest::prop_assert_eq!(body_cap_for_object_limit(limit), expected);
+    }
 }
 
 #[tokio::test]
@@ -9830,16 +9950,19 @@ service firebase.storage {
                     403,
                 );
             }
-            // The strict outcomes are observed production results; emulator preserves its old target.
+            // The strict outcomes are observed production results. A listing with the delimiter `/`
+            // is answered the same way in the emulator profile (STORAGE-RULES-S9: the official
+            // emulator and production allow it too); without a delimiter the emulator profile
+            // preserves its old target.
             for delimiter in ["/", ""] {
-                let own_status = if (strict && delimiter == "/")
+                let own_status = if delimiter == "/"
                     || variant != "single" && (!strict || variant == "recursive")
                 {
                     200
                 } else {
                     403
                 };
-                let ancestor_status = if strict && delimiter == "/" && variant != "single" {
+                let ancestor_status = if delimiter == "/" && variant != "single" {
                     200
                 } else {
                     403

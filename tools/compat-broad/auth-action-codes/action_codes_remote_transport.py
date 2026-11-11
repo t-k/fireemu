@@ -30,7 +30,7 @@ from broad_contract import digest
 
 NONCE = re.compile(r"^[0-9a-f]{32}$")
 AUTHORIZED_PROJECT = "fireemu-35fe6"
-AUTHORIZED_PROJECT_NUMBER = "592603257417"
+AUTHORIZED_PROJECT_NUMBER = "<project-number>"
 EMAIL = re.compile(r"^o1-oob-([0-9a-f]{32})-(?:a|b|absent)@example\.invalid$")
 UID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 SERVICE_PREFIX = "/identitytoolkit.googleapis.com/v1/"
@@ -382,7 +382,7 @@ def management_receipt(*, slot_id, deadline, capability, binding, binding_digest
 
     def config_project_id(body: Any) -> str | None:
         """Extract a project identity from an Auth Config response."""
-        project_number = globals().get("AUTHORIZED_PROJECT_NUMBER", "592603257417")
+        project_number = globals().get("AUTHORIZED_PROJECT_NUMBER", "<project-number>")
         authorized_names = {AUTHORIZED_PROJECT, project_number}
 
         def canonical_name(value: str) -> str:

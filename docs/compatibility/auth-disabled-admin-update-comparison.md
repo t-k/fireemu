@@ -19,7 +19,7 @@ Row-by-row comparison of the production candidate record of auth-disabled-admin-
 
 Differing rows: none.
 
-Comparison subject (unapproved): `87086b8343892b9bffd0a8e913b72658c6d277e2ea86d26dd88382b9acb8cc90`. Production subject compared: `c5edbe9850fc52c66c666ca0c62961af3c4ad214fc074a950380c592960560fd`.
+Comparison subject (unapproved): `a1ee9774159a2f62d9ef62cb1313aab8963edf741095b99518f7c5e1e07d7fa3`. Production subject compared: `dc566656b98026aad05bccc1e55388ae90b24271902a8149979ffd7f2a08e570`.
 
 Local artifact `0.7.0` built from the tree at `481b76e844a59721ddb1934ab9a3527bb246be74` (repository HEAD `2b60137674807217a82e7033d220f57f0260d85b` at run time) with recorder files at `8dddb9736d64e9acc68fc2e73f2483ef98be43ec`; strict profile. Owned process exit 0 with listeners closed; both accounts were deleted with absence confirmation.
 

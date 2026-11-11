@@ -41,10 +41,15 @@ const BREADTH_PINS = {
   "fixtures-breadth/package-lock.json":
     "c492afe0fa1e5336d78be6f1fa76e594d357e0412cacfd9d963d2569389b7dea",
 };
-async function requiredBreadthSources() {
-  for (const [file, expected] of Object.entries(BREADTH_PINS)) {
+/** The reviewed sources of a scenario (default: the breadth ones) and the installed fixture dependencies. */
+export async function requiredBreadthSources({
+  pins = BREADTH_PINS,
+  fixtureDir = "fixtures-breadth",
+  stageDir = STAGE_DIR,
+} = {}) {
+  for (const [file, expected] of Object.entries(pins)) {
     const hash = createHash("sha256")
-      .update(await readFile(join(STAGE_DIR, file)))
+      .update(await readFile(join(stageDir, file)))
       .digest("hex");
     if (hash !== expected) throw Error(`reviewed source changed: ${file}`);
   }
@@ -53,13 +58,13 @@ async function requiredBreadthSources() {
     ["firebase-admin", "14.3.0"],
   ]) {
     const installed = JSON.parse(
-      await readFile(join(STAGE_DIR, "fixtures-breadth/node_modules", name, "package.json")),
+      await readFile(join(stageDir, fixtureDir, "node_modules", name, "package.json")),
     );
     if (installed.name !== name || installed.version !== version)
       throw Error(`fixture dependency ${name} ${version} is required`);
   }
   const cliPackage = JSON.parse(
-    await readFile(join(STAGE_DIR, "../../node_modules/firebase-tools/package.json")),
+    await readFile(join(stageDir, "../../node_modules/firebase-tools/package.json")),
   );
   if (cliPackage.version !== "15.28.2") throw Error("pinned Firebase CLI 15.28.2 is required");
 }
@@ -254,7 +259,7 @@ export async function executeRun({ environment, runDir, packetPins, assemble = a
  * the packet's pins, the reviewed sources, and an ADC token with the scopes the RTDB hosts need. Every
  * outside effect comes in through `deps`, so each refusal is tested.
  */
-export async function admitRun({ env, privateRoot, root, deps }) {
+export async function admitRun({ env, privateRoot, root, deps, fixtureDir = "fixtures-breadth" }) {
   const reviewPath = env.FIREEMU_CV14_REVIEW;
   const packetPath = env.FIREEMU_CV14_PACKET;
   if (
@@ -281,7 +286,7 @@ export async function admitRun({ env, privateRoot, root, deps }) {
     root,
   );
   if (dirty) throw new Error("CV14 needs a clean reviewed commit");
-  // The CLI uploads everything in fixtures-breadth/ except node_modules and .git and reads its .env files; an
+  // The CLI uploads everything in the fixture directory except node_modules and .git and reads its .env files; an
   // ignored file there would be deployed without showing in the status above.
   const ignored = (
     await deps.git(
@@ -294,7 +299,7 @@ export async function admitRun({ env, privateRoot, root, deps }) {
         "--untracked-files=normal",
         "--ignored",
         "--",
-        "conformance/src/rtdb-functions/fixtures-breadth",
+        `conformance/src/rtdb-functions/${fixtureDir}`,
       ],
       root,
     )
@@ -302,7 +307,7 @@ export async function admitRun({ env, privateRoot, root, deps }) {
     .split("\n")
     .filter(
       (line) =>
-        line !== "" && line !== "!! conformance/src/rtdb-functions/fixtures-breadth/node_modules/",
+        line !== "" && line !== `!! conformance/src/rtdb-functions/${fixtureDir}/node_modules/`,
     );
   if (ignored.length > 0) {
     throw new Error(
@@ -320,7 +325,7 @@ export async function admitRun({ env, privateRoot, root, deps }) {
 }
 
 /** The command-line entry: admission by approval file, pins and the ADC scope check, then the run. */
-export async function recordBreadth() {
+export async function recordBreadth(scenario = {}) {
   try {
     const args = process.argv.slice(2);
     if (args.length !== 2 || args[0] !== "--key-file" || !isAbsolute(args[1]))
@@ -328,7 +333,7 @@ export async function recordBreadth() {
     let apiKey;
     const root = fileURLToPath(new URL("../../..", import.meta.url));
     let adc;
-    const budget = createBreadthBudget();
+    const budget = createBreadthBudget(scenario);
     // every access token this process holds is a secret a stored file must not contain
     let getToken;
     const secrets = [];
@@ -336,11 +341,14 @@ export async function recordBreadth() {
       env: process.env,
       privateRoot: PRIVATE_ROOT,
       root,
+      fixtureDir: scenario.fixtureDir,
       deps: {
         git: async (args, cwd) => execFileSync("git", args, { cwd, encoding: "utf8" }),
         readFile,
         requiredSources: async () => {
-          await requiredBreadthSources();
+          await requiredBreadthSources(
+            scenario.pins ? { pins: scenario.pins, fixtureDir: scenario.fixtureDir } : undefined,
+          );
           apiKey = parseKeyFile(await readFile(args[1], "utf8"));
           secrets.push(apiKey);
         },
@@ -364,7 +372,7 @@ export async function recordBreadth() {
     const runDir = join(
       PRIVATE_ROOT,
       "runs",
-      `breadth-${new Date().toISOString().replaceAll(":", "")}`,
+      `${scenario.runDirPrefix ?? "breadth"}-${new Date().toISOString().replaceAll(":", "")}`,
     );
     await mkdir(runDir, { recursive: true, mode: 0o700 });
     const nonce = randomBytes(8).toString("hex");
@@ -382,9 +390,12 @@ export async function recordBreadth() {
     try {
       const environment = {
         control: createControl(adc.file, budget, { extraHosts: [...BREADTH_HOSTS] }),
-        runCli: breadthCli((args, adcPath, runBudget, kind, dir, track) =>
-          cli(args, adcPath, runBudget, kind, dir, track, undefined, { cwd: STAGE_DIR }),
+        runCli: breadthCli(
+          (args, adcPath, runBudget, kind, dir, track) =>
+            cli(args, adcPath, runBudget, kind, dir, track, undefined, { cwd: STAGE_DIR }),
+          scenario,
         ),
+        scenario,
         adminFetch: async (...args) => {
           budget.take("rtdbAdmin");
           return bearerFetch(getToken, PROJECT)(...args);
@@ -419,6 +430,7 @@ export async function recordBreadth() {
             apiKey,
             email,
             password,
+            claims: scenario.claims,
             log: (row) => log("auth", row),
             stop,
             secrets,
@@ -440,6 +452,12 @@ export async function recordBreadth() {
                 ["identitytoolkit.googleapis.com", "securetoken.googleapis.com"].includes(host) ||
                 /^[a-z0-9-]+\.firebaseio\.com$/u.test(host),
               stop,
+              pageFile: scenario.sdk?.pageFile,
+              ids: scenario.sdk?.ids,
+              caps: scenario.limits && {
+                http: scenario.limits.browserHttp,
+                ws: scenario.limits.browserWs,
+              },
             }),
             { apiKey, projectId: PROJECT, databaseURL: `https://${INSTANCE}.firebaseio.com` },
             () => ({ email, password, uid: auth.uid, nonce }),

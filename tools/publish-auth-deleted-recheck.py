@@ -13,7 +13,7 @@ if spec is None or spec.loader is None:
     raise ImportError("Original deleted-account publisher is unavailable")
 old = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(old)
-PREVIOUS_SUBJECT = "04f8ac7d63ee9e34eab54057a03c876dce2d75bc8e0e5eb0430b1f7cb5faedc1"
+PREVIOUS_SUBJECT = "292b07f395d7baa5037ee944c738ca437db466f48809e877588d8e96a3385816"
 BUNDLE = ROOT / "spec/compatibility/evidence/auth-deleted-recheck/receipt.json"
 PAGE = ROOT / "docs/compatibility/auth-deleted-recheck.md"
 

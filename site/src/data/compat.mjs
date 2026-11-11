@@ -16,11 +16,17 @@ const PRODUCT_ORDER = [
 	'Cloud Pub/Sub',
 	'Eventarc',
 	'App Check',
+	'Firebase Hosting',
 	'Tooling',
 ];
 
 /** Production verification areas, as named by spec/compatibility/closure/<parent>.json. */
 export const AREAS = {
+	'HOSTING': {
+		product: 'Firebase Hosting',
+		title: 'Hosting',
+		covers: 'Static files, routing, headers, URL canonicalization, localization and local rewrites. Production observations are pending.',
+	},
 	'FS-DATA-WRITE': {
 		product: 'Cloud Firestore',
 		title: 'Writes, batches and limits',
@@ -126,6 +132,11 @@ export const AREAS = {
 		title: 'Event triggers',
 		covers: 'Firestore, Storage, Authentication and Pub/Sub triggers: which events fire, their payloads and routing, and delivery retries.',
 	},
+	'FUNCTIONS-PYTHON': {
+		product: 'Cloud Functions',
+		title: 'Python functions',
+		covers: 'Recorded Python SDK and request projections for Firestore, Pub/Sub, Storage, Eventarc, Scheduler and Tasks under the strict profile. Auth blocking and deployment equivalence are outside this area and not claimed.',
+	},
 	'SCHEDULED-FUNCTIONS': {
 		product: 'Cloud Functions',
 		title: 'Scheduled functions',
@@ -168,12 +179,13 @@ export function productSurfaceRows(contract) {
 }
 
 const AREA_STATUS = { COMPAT_VERIFIED: 'Verified against production', IN_PROGRESS: 'In progress', IMPLEMENTING: 'In progress' };
-const CONDITION_STATUSES = new Set(['VERIFIED', 'KNOWN_DIFFERENCE_APPROVED']);
+const CONDITION_STATUSES = new Set(['VERIFIED', 'KNOWN_DIFFERENCE_APPROVED', 'UNVERIFIED', 'PRODUCTION_RECORDED', 'OPEN', 'NOT_COMPARED']);
 
 function differenceTexts(record) {
 	const texts = [];
 	for (const entry of record.approvedKnownDifferences ?? []) texts.push(entry.reason);
 	for (const entry of Object.values(record.knownDifferences ?? {})) texts.push(entry.statement);
+	for (const entry of record.declaredDifferences ?? []) texts.push(entry.reason);
 	return texts.filter((text) => typeof text === 'string' && text.length > 0);
 }
 
@@ -232,6 +244,7 @@ const CAPABILITY_PRODUCTS = [
 	['STORAGE-', 'Cloud Storage'],
 	['FN-', 'Cloud Functions'],
 	['PUBSUB-', 'Cloud Pub/Sub'],
+	['HOSTING-', 'Firebase Hosting'],
 	['CTL-', 'Tooling'],
 	['CLI-', 'Tooling'],
 	['LOG-', 'Tooling'],

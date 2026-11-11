@@ -652,7 +652,7 @@
     },
     "target": "local"
   },
-  "productionSubjectSha256": "81dae6d26f525a31e121abb87669e875026696f50ce44a223fc9c396c9806b9b",
+  "productionSubjectSha256": "096d16ab0e6b95394847f5dd5fe46ce2ee40b1d717f99c4bbdf11d7cfb7e536e",
   "publicationContractSha256": "45d23ca836c9b6c9e384858520a4002a5915a6337777c4ee6d9bb492e286b84f",
   "schemaVersion": 1,
   "scope": "Row-by-row comparison of the production candidate record of auth-blocking-readback revision 1 with one run of the same corpus on an owned local fireemu artifact (strict profile, --only auth,functions, the disabling local fixture from tools/auth-blocking-disable served by the repository's Functions runner). Semantic projections exclude elapsed milliseconds and the measured seconds since the refusal. This is a comparison record, not a new production run, not an approval, and not a claim beyond these eleven cases on one time axis. Production used the recorded first-generation blocking function; the owned local run used the equivalent second-generation Identity fixture supported by fireemu's Functions runner, installed with npm ci from the committed lockfile. This comparison covers the resulting Auth behavior, not first- versus second-generation Functions SDK parity."

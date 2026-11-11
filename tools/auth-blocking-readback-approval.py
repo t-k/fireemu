@@ -14,7 +14,7 @@ publisher = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(publisher)
 APPROVAL = ROOT / "spec/compatibility/evidence/auth-blocking-readback/approval.json"
 PAGE = ROOT / "docs/compatibility/auth-blocking-readback-approval.md"
-SUBJECT = "81dae6d26f525a31e121abb87669e875026696f50ce44a223fc9c396c9806b9b"
+SUBJECT = "096d16ab0e6b95394847f5dd5fe46ce2ee40b1d717f99c4bbdf11d7cfb7e536e"
 SOURCE_COMMIT = "3cadafe7a42effb58b392897298e583a32e51792"
 SCOPE = "Eleven executed rows projected without secrets from the saved 2026-09-12 production run of auth-blocking-readback revision 1 with the recorded first-generation disabling function. Approved as recorded: two claimed accounts were refused on sign-in; the disabled flag read back as not disabled before, immediately after, five and about thirty-one seconds after the refusal for one account, and after thirty seconds with no earlier read for the other, while their second sign-ins were refused under the registered function; the control signed in first and last; the function was removed and the trigger registration restored with a digest comparison; the three accounts were deleted with absence confirmation. The measured seconds are recorder-side. Not extended to the same accounts after the function's removal, to propagation timing beyond these points, to other sign-in methods, or to SDK or Rules."
 CASES = [

@@ -51,6 +51,7 @@ mod database_rules;
 mod doctor;
 mod functions;
 mod help;
+mod hosting;
 mod hub;
 mod import_export;
 mod init;
@@ -77,7 +78,7 @@ use process_wrap::tokio::{JobObject, KillOnDrop, TokioChildWrapper, TokioCommand
 
 use crate::config::{RuntimeConfig, Selection};
 
-const OPTIONS_USAGE: &str = "[--config <file>] [--firebase-json <file>] [--no-config-discovery] [--project <id|alias>] [--only auth,firestore,storage,functions,eventarc,tasks,pubsub,database,appcheck] [--firestore-port <n>] [--http-port <n>] [--storage-port <n>] [--functions-port <n>] [--eventarc-port <n>] [--tasks-port <n>] [--pubsub-port <n>] [--database-port <n>] [--functions <dir>] [--ui-port <n|auto>] [--hub-port <n|auto>] [--logging-port <n>] [--inspect-functions [port]] [--log-verbosity quiet|silent|info|debug] [--import <dir>] [--export-on-exit [dir]] [--ready-file <file>]";
+const OPTIONS_USAGE: &str = "[--config <file>] [--firebase-json <file>] [--no-config-discovery] [--project <id|alias>] [--only auth,firestore,storage,functions,eventarc,tasks,pubsub,database,hosting,appcheck] [--firestore-port <n>] [--http-port <n>] [--storage-port <n>] [--functions-port <n>] [--hosting-port <n>] [--eventarc-port <n>] [--tasks-port <n>] [--pubsub-port <n>] [--database-port <n>] [--functions <dir>] [--ui-port <n|auto>] [--hub-port <n|auto>] [--logging-port <n>] [--inspect-functions [port]] [--log-verbosity quiet|silent|info|debug] [--import <dir>] [--export-on-exit [dir]] [--ready-file <file>]";
 
 fn usage() -> ExitCode {
     eprintln!("usage: fireemu init [--profile strict|emulator] [--firebase-json <file>] [--interactive|--yes|--no-interactive] [--force]\n       fireemu up|emulators:start {OPTIONS_USAGE}\n       fireemu exec|emulators:exec {OPTIONS_USAGE} [--ui] \"shell script\"\n       fireemu exec|emulators:exec {OPTIONS_USAGE} [--ui] -- <command...>\n       fireemu emulators:export <dir> [--project <id>] [--force]\n       fireemu doctor\n       fireemu capabilities\n       fireemu --version\n       fireemu --help | fireemu help <command>\n\nrun `fireemu --help` for the commands, or `fireemu <command> --help` for the options of one");
@@ -869,6 +870,7 @@ struct RawOptions {
     http_port: Option<u16>,
     storage_port: Option<u16>,
     functions_port: Option<u16>,
+    hosting_port: Option<u16>,
     eventarc_port: Option<u16>,
     tasks_port: Option<u16>,
     pubsub_port: Option<u16>,
@@ -1002,6 +1004,10 @@ fn parse_raw_options(args: &[String], context: OptionContext) -> Result<RawOptio
             }
             "--functions-port" => {
                 raw.functions_port = Some(port_arg(args, i, "--functions-port")?);
+                i += 2;
+            }
+            "--hosting-port" => {
+                raw.hosting_port = Some(port_arg(args, i, "--hosting-port")?);
                 i += 2;
             }
             "--eventarc-port" => {
@@ -1349,6 +1355,10 @@ fn apply_port_overrides(cfg: &mut RuntimeConfig, raw: &RawOptions) {
     }
     if let Some(p) = raw.storage_port {
         cfg.storage_addr = with_port(&cfg.storage_addr, p);
+    }
+    if let Some(p) = raw.hosting_port {
+        cfg.hosting_addr = with_port(&cfg.hosting_addr, p);
+        cfg.hosting_addr_explicit = true;
     }
     if let Some(p) = raw.functions_port {
         cfg.functions_addr = with_port(&cfg.functions_addr, p);
@@ -1737,6 +1747,7 @@ fn parse_options(
         || only.auth
         || only.storage
         || only.functions
+        || only.hosting
         || only.pubsub
         || only.database
         || only.appcheck;
@@ -1904,6 +1915,8 @@ struct BoundAddrs {
     storage: Option<std::net::SocketAddr>,
     /// Functions HTTP.
     functions: Option<std::net::SocketAddr>,
+    /// Hosting HTTP.
+    hosting: Option<std::net::SocketAddr>,
     /// Eventarc HTTP, present only as a dependency of a loaded Functions runtime.
     eventarc: Option<std::net::SocketAddr>,
     /// Cloud Tasks HTTP, present only as a dependency of a loaded Functions runtime.
@@ -2413,7 +2426,8 @@ fn load_storage_rules_registry(
             Some(path) => read_storage_rules(path, compilations)?,
             None => LoadedRules::default(),
         };
-        let slot = Arc::new(RulesetSlot::new(loaded));
+        let slot =
+            Arc::new(RulesetSlot::new(loaded).with_lone_surrogates(cfg.profile.lone_surrogates()));
         let watched = cfg
             .storage_rules_file
             .iter()
@@ -2432,7 +2446,10 @@ fn load_storage_rules_registry(
     let mut by_bucket = std::collections::BTreeMap::new();
     let mut watched = Vec::new();
     for (target, path) in &cfg.storage_rules_by_target {
-        let slot = Arc::new(RulesetSlot::new(read_storage_rules(path, compilations)?));
+        let slot = Arc::new(
+            RulesetSlot::new(read_storage_rules(path, compilations)?)
+                .with_lone_surrogates(cfg.profile.lone_surrogates()),
+        );
         let buckets = cfg.storage_buckets_by_target.get(target).ok_or_else(|| {
             format!("Storage rules target {target:?} has no resolved bucket mapping")
         })?;
@@ -2853,11 +2870,14 @@ fn storage_state(
         allow_unsigned_id_tokens: cfg.auth_allow_unsigned_id_tokens,
         control_token: Some(control_token),
     });
-    state
-        .store
-        .lock()
-        .map_err(|_| "the Storage store lock is poisoned".to_owned())?
-        .set_stored_bytes_limit(cfg.storage_max_stored_bytes);
+    {
+        let mut store = state
+            .store
+            .lock()
+            .map_err(|_| "the Storage store lock is poisoned".to_owned())?;
+        store.set_stored_bytes_limit(cfg.storage_max_stored_bytes);
+        store.set_max_object_bytes(cfg.storage_max_object_bytes);
+    }
     Ok(state)
 }
 
@@ -2879,6 +2899,7 @@ struct Listeners {
     auth_selected: bool,
     storage: Option<tokio::net::TcpListener>,
     functions: Option<tokio::net::TcpListener>,
+    hosting: Option<tokio::net::TcpListener>,
     eventarc: Option<tokio::net::TcpListener>,
     tasks: Option<tokio::net::TcpListener>,
     pubsub: Option<tokio::net::TcpListener>,
@@ -2895,10 +2916,73 @@ async fn bind_listener(addr: &str) -> Result<tokio::net::TcpListener, String> {
         .map_err(|error| format!("bind {addr}: {error}"))
 }
 
+/// The ports every configured address names, whether or not the product is selected.
+fn configured_ports(cfg: &RuntimeConfig) -> Vec<u16> {
+    [
+        &cfg.firestore_addr,
+        &cfg.http_addr,
+        &cfg.storage_addr,
+        &cfg.functions_addr,
+        &cfg.hosting_addr,
+        &cfg.eventarc_addr,
+        &cfg.tasks_addr,
+        &cfg.pubsub_addr,
+        &cfg.database_addr,
+        &cfg.hub_addr,
+        &cfg.ui_addr,
+        &cfg.logging_addr,
+    ]
+    .into_iter()
+    .filter_map(|addr| addr.rsplit_once(':')?.1.parse::<u16>().ok())
+    .filter(|port| *port != 0)
+    .collect()
+}
+
+/// How the kernel picks an ephemeral port; a test swaps it to force a collision.
+type EphemeralPick = fn(&str) -> std::io::Result<std::net::TcpListener>;
+
+fn kernel_pick(addr: &str) -> std::io::Result<std::net::TcpListener> {
+    std::net::TcpListener::bind(addr)
+}
+
+/// Binds `addr` (port 0 asked of the kernel) on a port no configured address names. The
+/// kernel hands out ephemeral ports at random, and Linux prefers the lower half of the range
+/// (about 7000 ports) for a `SO_REUSEADDR` listener, so a port the user configured for a product that is not
+/// running, or one a selected product has yet to bind, is taken often enough to matter: the
+/// unselected product would then be listening, or the selected one would fail to bind. Every
+/// rejected listener is held until a usable one is found, so the kernel cannot offer it again.
+fn bind_ephemeral_avoiding(
+    addr: &str,
+    avoid: &[u16],
+    pick: EphemeralPick,
+) -> Result<tokio::net::TcpListener, String> {
+    let mut rejected = Vec::new();
+    for _ in 0..256 {
+        let listener = pick(addr).map_err(|error| format!("bind {addr}: {error}"))?;
+        let port = listener
+            .local_addr()
+            .map_err(|error| format!("bind {addr}: {error}"))?
+            .port();
+        if avoid.contains(&port) {
+            rejected.push(listener);
+            continue;
+        }
+        listener
+            .set_nonblocking(true)
+            .map_err(|error| format!("bind {addr}: {error}"))?;
+        return tokio::net::TcpListener::from_std(listener)
+            .map_err(|error| format!("bind {addr}: {error}"));
+    }
+    Err(format!(
+        "bind {addr}: every ephemeral port offered was a configured one"
+    ))
+}
+
 async fn bind_relocatable_listener(
     addr: &str,
     explicit: bool,
     service: &'static str,
+    avoid: &[u16],
 ) -> Result<tokio::net::TcpListener, String> {
     if explicit || addr.ends_with(":0") {
         return bind_listener(addr).await;
@@ -2907,7 +2991,7 @@ async fn bind_relocatable_listener(
         .rsplit_once(':')
         .and_then(|(host, port)| port.parse::<u16>().ok().map(|port| (host, port)))
         .ok_or_else(|| format!("bind {addr}: invalid address"))?;
-    for candidate in port..=u16::MAX {
+    for candidate in (port..=u16::MAX).filter(|candidate| !avoid.contains(candidate)) {
         let candidate_addr = format!("{host}:{candidate}");
         match tokio::net::TcpListener::bind(&candidate_addr).await {
             Ok(listener) => {
@@ -2927,12 +3011,49 @@ async fn bind_relocatable_listener(
     ))
 }
 
+/// firebase-tools 15.28.2 moves a default Hosting port up and never onto 5001.
+async fn bind_hosting(
+    cfg: &RuntimeConfig,
+    only: &Selection,
+) -> Result<Option<tokio::net::TcpListener>, String> {
+    if only.explicit && only.hosting && cfg.hosting.is_none() {
+        return Err("--only hosting requires hosting.public in firebase.json".to_owned());
+    }
+    if !only.hosting || cfg.hosting.is_none() {
+        return Ok(None);
+    }
+    bind_relocatable_listener(
+        &cfg.hosting_addr,
+        cfg.hosting_addr_explicit,
+        "Hosting emulator",
+        &[5001],
+    )
+    .await
+    .map(Some)
+}
+
 async fn bind_listeners(cfg: &RuntimeConfig, only: &Selection) -> Result<Listeners, String> {
+    bind_listeners_with(cfg, only, kernel_pick).await
+}
+
+async fn bind_listeners_with(
+    cfg: &RuntimeConfig,
+    only: &Selection,
+    pick: EphemeralPick,
+) -> Result<Listeners, String> {
+    let configured = configured_ports(cfg);
+    // Every product listener reads the DNS-rebinding `Host` policy per request; it is in place
+    // before the first listener exists.
+    let host_policy = cfg.host_policy();
+    for warning in host_policy.warnings() {
+        eprintln!("{warning}");
+    }
+    fireemu_core_session::host_guard::install(host_policy);
     // An explicit Hub address wins over every port-zero listener. The default remains late
     // and best effort: a selected product configured on 4400 must win and disable discovery.
     let prebound_hub = if cfg.hub_addr_explicit {
         if cfg.hub_auto_port {
-            Some(bind_listener(&cfg.hub_addr).await?)
+            Some(bind_ephemeral_avoiding(&cfg.hub_addr, &configured, pick)?)
         } else {
             hub::bind(&cfg.hub_addr, true).await?
         }
@@ -2948,13 +3069,14 @@ async fn bind_listeners(cfg: &RuntimeConfig, only: &Selection) -> Result<Listene
         bind_listener(&cfg.http_addr).await?
     } else {
         // Loopback, ephemeral: the configured Auth port belongs to whoever wants it.
-        bind_listener("127.0.0.1:0").await?
+        bind_ephemeral_avoiding("127.0.0.1:0", &configured, pick)?
     };
     let storage = if only.storage {
         Some(bind_listener(&cfg.storage_addr).await?)
     } else {
         None
     };
+    let hosting = bind_hosting(cfg, only).await?;
     let functions = if only.functions && cfg.functions_source.is_some() {
         Some(bind_listener(&cfg.functions_addr).await?)
     } else {
@@ -2969,6 +3091,7 @@ async fn bind_listeners(cfg: &RuntimeConfig, only: &Selection) -> Result<Listene
                 &cfg.eventarc_addr,
                 cfg.eventarc_addr_explicit,
                 "Eventarc emulator",
+                &[],
             )
             .await?,
         )
@@ -2981,6 +3104,7 @@ async fn bind_listeners(cfg: &RuntimeConfig, only: &Selection) -> Result<Listene
                 &cfg.tasks_addr,
                 cfg.tasks_addr_explicit,
                 "Cloud Tasks emulator",
+                &[],
             )
             .await?,
         )
@@ -3019,6 +3143,7 @@ async fn bind_listeners(cfg: &RuntimeConfig, only: &Selection) -> Result<Listene
         auth_selected: only.auth,
         storage,
         functions,
+        hosting,
         eventarc,
         tasks,
         pubsub,
@@ -3057,6 +3182,7 @@ fn hub_emulators(addrs: &BoundAddrs) -> Vec<hub::EmulatorInfo> {
         ("auth", addrs.auth),
         ("storage", addrs.storage),
         ("functions", addrs.functions),
+        ("hosting", addrs.hosting),
         ("eventarc", addrs.eventarc),
         ("tasks", addrs.tasks),
         ("pubsub", addrs.pubsub),
@@ -3831,6 +3957,59 @@ mod config_reload_tests {
     const INDEXES_ONE: &str = r#"{"indexes":[{"collectionGroup":"items","queryScope":"COLLECTION","fields":[{"fieldPath":"a","order":"ASCENDING"},{"fieldPath":"b","order":"DESCENDING"}]}],"fieldOverrides":[]}"#;
     const INDEXES_TWO: &str = r#"{"indexes":[{"collectionGroup":"other","queryScope":"COLLECTION","fields":[{"fieldPath":"c","order":"ASCENDING"},{"fieldPath":"d","order":"DESCENDING"}]}],"fieldOverrides":[]}"#;
 
+    /// Every ruleset slot the daemon creates at start carries the profile's meaning of a lone
+    /// surrogate escape (`string-escape#esc-high`), also after a reload.
+    #[test]
+    fn storage_slots_carry_the_profile_s_lone_surrogate_meaning() {
+        use fireemu_core_rules::ast::LoneSurrogates;
+        let dir = scratch("storage-lone-surrogate");
+        let path = dir.join("storage.rules").display().to_string();
+        std::fs::write(&path, STORAGE_DENY).unwrap();
+        for (profile, literals) in [
+            (
+                config::CompatibilityProfile::Emulator,
+                LoneSurrogates::Official,
+            ),
+            (
+                config::CompatibilityProfile::Strict,
+                LoneSurrogates::Production,
+            ),
+        ] {
+            for per_target in [false, true] {
+                let cfg = RuntimeConfig {
+                    profile,
+                    storage_rules_file: (!per_target).then(|| path.clone()),
+                    storage_rules_by_target: if per_target {
+                        std::collections::BTreeMap::from([("t".to_owned(), path.clone())])
+                    } else {
+                        std::collections::BTreeMap::new()
+                    },
+                    storage_buckets_by_target: std::collections::BTreeMap::from([(
+                        "t".to_owned(),
+                        vec!["t.test".to_owned()],
+                    )]),
+                    ..RuntimeConfig::default()
+                };
+                let loaded =
+                    load_storage_rules_registry(&cfg, &mut RulesCompilationCache::default())
+                        .unwrap();
+                let slot = &loaded.watched[0].1;
+                assert_eq!(slot.lone_surrogates(), Some(literals));
+                let held = |slot: &RulesetSlot| {
+                    slot.snapshot()
+                        .unwrap()
+                        .ruleset
+                        .as_ref()
+                        .unwrap()
+                        .lone_surrogates()
+                };
+                assert_eq!(held(slot), literals);
+                slot.replace_source(STORAGE_ALLOW).unwrap();
+                assert_eq!(held(slot), literals);
+            }
+        }
+    }
+
     #[test]
     fn storage_startup_keeps_identical_targets_independent_and_reports_the_failing_path() {
         let dir = scratch("identical-storage-startup");
@@ -4255,6 +4434,19 @@ mod config_reload_tests {
         }
     }
 
+    proptest::proptest! {
+        #[test]
+        fn hosting_port_override_preserves_configured_host(port in proptest::prelude::any::<u16>()) {
+            for host in ["[::1]", "127.0.0.2", "192.168.1.10"] {
+                let mut cfg = RuntimeConfig { hosting_addr: format!("{host}:5000"), ..RuntimeConfig::default() };
+                let raw = parse_raw_options(&["--hosting-port".to_owned(), port.to_string()], OptionContext::Start).unwrap_or_else(|error| panic!("{}",error.message));
+                apply_port_overrides(&mut cfg, &raw);
+                proptest::prop_assert_eq!(cfg.hosting_addr, format!("{host}:{port}"));
+                proptest::prop_assert!(cfg.hosting_addr_explicit);
+            }
+        }
+    }
+
     #[test]
     fn support_service_cli_ports_override_configured_addresses() {
         let mut cfg = RuntimeConfig {
@@ -4284,6 +4476,7 @@ mod config_reload_tests {
             firestore: true,
             auth: false,
             storage: false,
+            hosting: false,
             functions: false,
             eventarc: false,
             tasks: false,
@@ -5422,6 +5615,7 @@ mod storage_endpoint_tests {
             auth: loopback(9099),
             storage: loopback(9199),
             functions: None,
+            hosting: None,
             eventarc: None,
             tasks: None,
             pubsub: None,
@@ -5575,5 +5769,252 @@ mod storage_endpoint_tests {
             storage_endpoint(&firestore_only, &all).as_deref(),
             Some("http://127.0.0.1:9199")
         );
+    }
+}
+
+#[cfg(test)]
+mod ephemeral_bind_tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    thread_local! {
+        static OFFERED: RefCell<Vec<std::net::TcpListener>> = const { RefCell::new(Vec::new()) };
+    }
+
+    /// Offers the queued listeners first (last one first), then whatever the kernel picks.
+    fn scripted_pick(addr: &str) -> std::io::Result<std::net::TcpListener> {
+        match OFFERED.with(|q| q.borrow_mut().pop()) {
+            Some(listener) => Ok(listener),
+            None => std::net::TcpListener::bind(addr),
+        }
+    }
+
+    fn offer(listeners: Vec<std::net::TcpListener>) {
+        OFFERED.with(|q| *q.borrow_mut() = listeners);
+    }
+
+    fn port_of(listener: &std::net::TcpListener) -> u16 {
+        listener.local_addr().unwrap().port()
+    }
+
+    // The failure seen on Linux CI: the kernel hands the control listener the port a test
+    // had configured for the Auth emulator it left out of --only.
+    #[tokio::test]
+    async fn an_ephemeral_bind_never_takes_a_configured_port() {
+        let configured = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let usable = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let (configured_port, usable_port) = (port_of(&configured), port_of(&usable));
+        offer(vec![usable, configured]);
+        let bound =
+            bind_ephemeral_avoiding("127.0.0.1:0", &[configured_port], scripted_pick).unwrap();
+        assert_eq!(bound.local_addr().unwrap().port(), usable_port);
+    }
+
+    thread_local! {
+        static REJECTED_PORT: std::cell::Cell<u16> = const { std::cell::Cell::new(0) };
+        static STILL_HELD: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+    }
+
+    /// The first offer is the avoided port; at the second, the avoided port must still be
+    /// taken, or the kernel could offer it again.
+    fn checking_pick(addr: &str) -> std::io::Result<std::net::TcpListener> {
+        if let Some(listener) = OFFERED.with(|q| q.borrow_mut().pop()) {
+            return Ok(listener);
+        }
+        let port = REJECTED_PORT.with(std::cell::Cell::get);
+        STILL_HELD.with(|held| {
+            held.set(Some(
+                std::net::TcpListener::bind(format!("127.0.0.1:{port}")).is_err(),
+            ));
+        });
+        std::net::TcpListener::bind(addr)
+    }
+
+    #[tokio::test]
+    async fn a_rejected_port_stays_held_until_a_usable_one_is_found() {
+        let configured = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = port_of(&configured);
+        REJECTED_PORT.with(|cell| cell.set(port));
+        offer(vec![configured]);
+        bind_ephemeral_avoiding("127.0.0.1:0", &[port], checking_pick).unwrap();
+        assert_eq!(STILL_HELD.with(std::cell::Cell::get), Some(true));
+    }
+
+    #[tokio::test]
+    async fn an_ephemeral_bind_with_nothing_to_avoid_takes_the_first_offer() {
+        let first = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let first_port = port_of(&first);
+        offer(vec![first]);
+        let bound = bind_ephemeral_avoiding("127.0.0.1:0", &[], scripted_pick).unwrap();
+        assert_eq!(bound.local_addr().unwrap().port(), first_port);
+    }
+
+    fn same_port(_addr: &str) -> std::io::Result<std::net::TcpListener> {
+        OFFERED
+            .with(|q| q.borrow().last().map(std::net::TcpListener::try_clone))
+            .unwrap()
+    }
+
+    // Every attempt is offered a clone of the same configured socket.
+    #[tokio::test]
+    async fn an_ephemeral_bind_gives_up_when_every_offer_is_configured() {
+        let held = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = port_of(&held);
+        offer(vec![held]);
+        let error = bind_ephemeral_avoiding("127.0.0.1:0", &[port], same_port)
+            .err()
+            .unwrap();
+        assert!(error.contains("configured"), "{error}");
+    }
+
+    fn no_hub_no_logging() -> RuntimeConfig {
+        RuntimeConfig {
+            logging_enabled: false,
+            hub_addr: "127.0.0.1:0".to_owned(),
+            hub_addr_explicit: true,
+            hub_auto_port: false,
+            ..RuntimeConfig::default()
+        }
+    }
+
+    // Wiring: the control listener of a run without Auth avoids the Auth port the
+    // configuration names, which the run leaves alone.
+    #[tokio::test]
+    async fn the_control_listener_avoids_the_unselected_auth_port() {
+        let auth = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut cfg = no_hub_no_logging();
+        cfg.http_addr = format!("127.0.0.1:{}", port_of(&auth));
+        cfg.firestore_addr = "127.0.0.1:0".to_owned();
+        offer(vec![auth.try_clone().unwrap()]);
+        let only = Selection::parse("firestore").unwrap();
+        let listeners = bind_listeners_with(&cfg, &only, scripted_pick)
+            .await
+            .unwrap();
+        assert_ne!(
+            listeners.control.local_addr().unwrap().port(),
+            port_of(&auth)
+        );
+    }
+
+    // Wiring: the automatic Hub avoids the port of a product the run leaves out.
+    #[tokio::test]
+    async fn the_automatic_hub_avoids_an_unselected_products_port() {
+        let firestore = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut cfg = no_hub_no_logging();
+        cfg.hub_auto_port = true;
+        cfg.http_addr = "127.0.0.1:0".to_owned();
+        cfg.firestore_addr = format!("127.0.0.1:{}", port_of(&firestore));
+        offer(vec![firestore.try_clone().unwrap()]);
+        let only = Selection::parse("auth").unwrap();
+        let listeners = bind_listeners_with(&cfg, &only, scripted_pick)
+            .await
+            .unwrap();
+        assert_ne!(
+            listeners.hub.unwrap().local_addr().unwrap().port(),
+            port_of(&firestore)
+        );
+    }
+
+    #[test]
+    fn the_configured_ports_are_every_nonzero_address_port() {
+        let at = |port: u16| format!("127.0.0.1:{port}");
+        let cfg = RuntimeConfig {
+            firestore_addr: at(1),
+            http_addr: at(2),
+            storage_addr: at(3),
+            functions_addr: at(4),
+            hosting_addr: at(5),
+            eventarc_addr: at(6),
+            tasks_addr: at(7),
+            pubsub_addr: at(8),
+            database_addr: at(9),
+            hub_addr: at(10),
+            ui_addr: at(11),
+            logging_addr: at(0),
+            ..RuntimeConfig::default()
+        };
+        assert_eq!(configured_ports(&cfg), (1..=11).collect::<Vec<u16>>());
+        let bracketed = RuntimeConfig {
+            http_addr: "[::1]:12".to_owned(),
+            ..cfg
+        };
+        // 12 is named by no other address, so only the bracketed host can supply it.
+        let mut expected: Vec<u16> = (1..=11).collect();
+        expected[1] = 12;
+        assert_eq!(configured_ports(&bracketed), expected);
+    }
+}
+
+#[cfg(test)]
+mod hosting_bind_tests {
+    use super::*;
+
+    fn hosting_only(addr: String, explicit: bool) -> RuntimeConfig {
+        RuntimeConfig {
+            hosting_addr: addr,
+            hosting_addr_explicit: explicit,
+            hosting: Some(
+                crate::hosting::Config::parse(
+                    &serde_json::json!({"public": "public"}),
+                    std::path::Path::new("/project"),
+                )
+                .unwrap(),
+            ),
+            hub_addr: "127.0.0.1:0".to_owned(),
+            hub_addr_explicit: true,
+            logging_enabled: false,
+            ..RuntimeConfig::default()
+        }
+    }
+
+    // firebase-tools 15.28.2 searches upward from the default Hosting port (5000 is often
+    // taken on macOS) and never lands on 5001, the Functions default.
+    #[tokio::test]
+    async fn a_busy_default_hosting_port_moves_up_and_skips_the_functions_port() {
+        let busy = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = busy.local_addr().unwrap().port();
+        let cfg = hosting_only(format!("127.0.0.1:{port}"), false);
+        let only = Selection::parse("hosting").unwrap();
+        let listeners = bind_listeners(&cfg, &only).await.unwrap();
+        let bound = listeners.hosting.unwrap().local_addr().unwrap().port();
+        assert_ne!(bound, port);
+        assert!(bound > port);
+        let avoided = bind_relocatable_listener(
+            &format!("127.0.0.1:{}", 5000),
+            false,
+            "Hosting emulator",
+            &[5000, 5001],
+        )
+        .await
+        .unwrap();
+        assert!(avoided.local_addr().unwrap().port() > 5001);
+    }
+
+    // Holding 5000 (or finding it already held, as macOS AirPlay does) forces the search.
+    #[tokio::test]
+    async fn the_default_hosting_search_never_takes_5001() {
+        let _held = std::net::TcpListener::bind("127.0.0.1:5000");
+        let cfg = hosting_only("127.0.0.1:5000".to_owned(), false);
+        let only = Selection::parse("hosting").unwrap();
+        let listener = bind_hosting(&cfg, &only).await.unwrap().unwrap();
+        assert_ne!(listener.local_addr().unwrap().port(), 5000);
+        assert_ne!(listener.local_addr().unwrap().port(), 5001);
+    }
+
+    #[tokio::test]
+    async fn hosting_left_out_of_only_binds_nothing_even_when_configured() {
+        let cfg = hosting_only("127.0.0.1:0".to_owned(), false);
+        let only = Selection::parse("auth").unwrap();
+        assert!(bind_hosting(&cfg, &only).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn a_configured_hosting_port_is_never_moved() {
+        let busy = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = busy.local_addr().unwrap().port();
+        let cfg = hosting_only(format!("127.0.0.1:{port}"), true);
+        let only = Selection::parse("hosting").unwrap();
+        let error = bind_listeners(&cfg, &only).await.err().unwrap();
+        assert!(error.contains("bind"), "{error}");
     }
 }

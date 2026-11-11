@@ -47,7 +47,7 @@ env:
 
 jobs:
   build:
-    if: github.repository == 't-k/fireemu'
+    if: github.repository == 'fireemu/fireemu'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     strategy:

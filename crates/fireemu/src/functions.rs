@@ -2341,6 +2341,8 @@ pub fn ignored_warnings(
 /// cannot reach a product this run is not serving.
 #[derive(Debug, Clone)]
 pub struct EmulatorHosts {
+    /// Public signing keys for Python blocking functions.
+    pub blocking_jwks: Option<String>,
     /// App Check on the control listener, independent of whether Auth is selected.
     pub app_check: Option<String>,
     /// Firestore gRPC / REST.
@@ -3243,6 +3245,37 @@ fn launch_codebases(
         .collect()
 }
 
+/// The Functions session every event id is derived from: the seed when the configuration named
+/// one (a replay gets the same ids every run), else the boot nonce (a restart does not repeat a
+/// previous run's ids, so a handler that deduplicates by event id keeps seeing new events).
+const fn session_value(seed: u64, pinned: bool, nonce: u64) -> u128 {
+    if pinned {
+        seed as u128
+    } else {
+        nonce as u128
+    }
+}
+
+/// A random value drawn once per daemon boot from the operating system's entropy; the wall
+/// clock only if the entropy source fails (the daemon refuses to start without one, so this is a
+/// fallback for a library embedding).
+fn boot_nonce() -> u64 {
+    static NONCE: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *NONCE.get_or_init(fresh_nonce)
+}
+
+/// One draw of the nonce: the operating system's entropy, else the wall clock.
+fn fresh_nonce() -> u64 {
+    let mut bytes = [0_u8; 8];
+    if fireemu_adapter_support::entropy::fill(&mut bytes).is_ok() {
+        u64::from_le_bytes(bytes)
+    } else {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX))
+    }
+}
+
 /// The runtime configuration of the Functions backend for this run: the project, the location, the
 /// limits and, by profile, how events are named and shaped.
 fn functions_config(
@@ -3257,7 +3290,7 @@ fn functions_config(
             CompatibilityProfile::Strict => cfg.firestore_location.clone(),
             CompatibilityProfile::Emulator => "nam5".to_owned(),
         },
-        session: SessionId::new(u128::from(cfg.seed)),
+        session: SessionId::new(session_value(cfg.seed, cfg.seed_pinned, boot_nonce())),
         max_running: cfg.functions_max_running,
         debug_mode: cfg.functions_inspect_dynamic || cfg.functions_inspect_port.is_some(),
         retry_attempts: cfg.events_max_attempts,
@@ -3494,6 +3527,12 @@ impl FunctionsDatabaseSink {
         self.runtime
             .database_capture_patterns(project, instance, &self.location)
     }
+
+    fn triggers(&self, instance: &str) -> Vec<DatabaseTrigger> {
+        let project = crate::database_rules::project_of_instance(instance, &self.daemon_project);
+        self.runtime
+            .database_capture_triggers(project, instance, &self.location)
+    }
 }
 
 impl fireemu_adapter_database::changes::ChangeSink for FunctionsDatabaseSink {
@@ -3520,13 +3559,14 @@ impl fireemu_adapter_database::changes::ChangeSink for FunctionsDatabaseSink {
     > {
         use fireemu_adapter_functions::protocol::MAX_FRAME_BYTES;
         use fireemu_adapter_functions::runtime::MAX_ACTIVE_EVENT_RECORDS;
-        match capture_database_references(
-            &self.patterns(namespace),
+        match capture_database_references_limited(
+            &self.triggers(namespace),
             before,
             after,
             scope,
             MAX_ACTIVE_EVENT_RECORDS,
             MAX_FRAME_BYTES,
+            self.runtime.database_event_limit(),
         ) {
             Ok((references, frame_drops)) => {
                 if references.is_empty() {
@@ -3634,8 +3674,19 @@ struct DatabaseReferenceCapture {
     references: BTreeSet<fireemu_adapter_database::changes::Path>,
     record_limit: usize,
     frame_limit: usize,
+    /// The strict profile's event limit: a reference provably over it refuses the write.
+    refuse_over: Option<usize>,
     frame_drops: usize,
+    /// The event kind the trigger being walked accepts. A reference whose change is of another kind
+    /// yields no event for it, so its size is no reason to refuse or drop anything.
+    accepts: fireemu_core_functions::manifest::DocumentEvent,
 }
+
+/// A deployed Database trigger as the capture sees it: its reference pattern and the event kind it accepts.
+type DatabaseTrigger = (
+    fireemu_core_functions::manifest::DatabasePattern,
+    fireemu_core_functions::manifest::DocumentEvent,
+);
 
 impl DatabaseReferenceCapture {
     fn insert(
@@ -3652,11 +3703,33 @@ impl DatabaseReferenceCapture {
         let objects = |node: Option<fireemu_adapter_database::changes::NodeView<'_>>| {
             matches!(node.map(|node| node.leaf().is_none()), Some(true))
         };
-        let mut bound = database_json_lower_bound(before, self.frame_limit);
+        let limit = self
+            .refuse_over
+            .map_or(self.frame_limit, |over| over.min(self.frame_limit));
+        let mut bound = database_json_lower_bound(before, limit);
         if !(objects(before) && objects(after)) {
-            bound = bound.saturating_add(database_json_lower_bound(after, self.frame_limit));
+            bound = bound.saturating_add(database_json_lower_bound(after, limit));
         }
-        if bound > self.frame_limit {
+        if bound > limit {
+            // `before` absent is a creation, `after` absent a deletion, anything else an update (the
+            // runtime's own rule when it builds the event).
+            let actual = if before.is_none() {
+                fireemu_core_functions::manifest::DocumentEvent::Created
+            } else if after.is_none() {
+                fireemu_core_functions::manifest::DocumentEvent::Deleted
+            } else {
+                fireemu_core_functions::manifest::DocumentEvent::Updated
+            };
+            if !self.accepts.accepts(actual) {
+                return Ok(());
+            }
+            if self.refuse_over.is_some_and(|over| bound > over) {
+                return Err(
+                    fireemu_core_types::admission::EventAdmissionError::PayloadTooLarge(
+                        "a trigger event is larger than a function can receive".to_owned(),
+                    ),
+                );
+            }
             self.frame_drops += 1;
             return Ok(());
         }
@@ -3721,6 +3794,7 @@ fn database_json_lower_bound(
 /// `ChangeSink::capture_references_within`), and how many were left out because their
 /// snapshot can never fit `frame_limit`: above `scope` only the branch leading to it is
 /// followed, without comparing its unchanged siblings.
+#[cfg(test)]
 fn capture_database_references<'a>(
     patterns: &[fireemu_core_functions::manifest::DatabasePattern],
     before: impl Into<fireemu_adapter_database::changes::ScopeView<'a>>,
@@ -3732,14 +3806,53 @@ fn capture_database_references<'a>(
     (Vec<fireemu_adapter_database::changes::Path>, usize),
     fireemu_core_types::admission::EventAdmissionError,
 > {
+    let triggers: Vec<DatabaseTrigger> = patterns
+        .iter()
+        .map(|pattern| {
+            (
+                pattern.clone(),
+                fireemu_core_functions::manifest::DocumentEvent::Written,
+            )
+        })
+        .collect();
+    capture_database_references_limited(
+        &triggers,
+        before,
+        after,
+        scope,
+        record_limit,
+        frame_limit,
+        None,
+    )
+}
+
+/// `capture_database_references` that, given `refuse_over`, refuses the write instead of leaving out a
+/// reference whose snapshot is provably larger than that many bytes (the strict profile's event limit).
+/// Each trigger carries the event kind it accepts: an oversized reference whose change is of a kind no
+/// trigger on it accepts produces no event, and is neither refused nor counted as dropped.
+fn capture_database_references_limited<'a>(
+    triggers: &[DatabaseTrigger],
+    before: impl Into<fireemu_adapter_database::changes::ScopeView<'a>>,
+    after: &fireemu_adapter_database::changes::Tree,
+    scope: &fireemu_adapter_database::changes::Path,
+    record_limit: usize,
+    frame_limit: usize,
+    refuse_over: Option<usize>,
+) -> Result<
+    (Vec<fireemu_adapter_database::changes::Path>, usize),
+    fireemu_core_types::admission::EventAdmissionError,
+> {
     let before = before.into();
     let mut capture = DatabaseReferenceCapture {
         references: BTreeSet::new(),
         record_limit,
         frame_limit,
+        refuse_over,
         frame_drops: 0,
+        accepts: fireemu_core_functions::manifest::DocumentEvent::Written,
     };
-    for pattern in patterns {
+    for (pattern, accepts) in triggers {
+        capture.accepts = *accepts;
         let parts: Vec<_> = pattern
             .as_str()
             .trim_matches('/')
@@ -3857,6 +3970,10 @@ fn functions_event_admission_error(
         ),
         SourceEventAdmissionError::InvalidEvent => EventAdmissionError::InvalidEvent(
             "Functions trigger produced an invalid logical event".into(),
+        ),
+        SourceEventAdmissionError::PayloadTooLarge => EventAdmissionError::PayloadTooLarge(
+            "This request would cause a function payload exceeding the maximum size allowed."
+                .into(),
         ),
     }
 }
@@ -3989,9 +4106,15 @@ async fn start_codebase(
             "FIREEMU_APP_CHECK_EMULATOR_HOST"
                 | "FIREEMU_APP_CHECK_JWKS_URL"
                 | "FIREEMU_APP_CHECK_ADMIN"
+                | "FIREEMU_AUTH_BLOCKING_JWKS"
         )
     };
     env.retain(|(name, _)| !is_app_check_route(name));
+    if python {
+        if let Some(jwks) = &hosts.blocking_jwks {
+            env.push(("FIREEMU_AUTH_BLOCKING_JWKS".to_owned(), jwks.clone()));
+        }
+    }
     if admin_app_check_offered(hosts.admin_app_check.is_some(), python) {
         // The daemon owns the question and the answer; the runner only asks (see
         // `tools/runner-node/admin-app-check.mjs`).
@@ -5259,6 +5382,7 @@ pub fn auth_sink(
 /// Identity Platform's synchronous bridge to before-create and before-sign-in functions.
 pub struct BlockingAuthBridge {
     runtime: Arc<FunctionsRuntime>,
+    production_token: Option<Arc<dyn fireemu_core_auth::jwt::IdTokenSigner>>,
     deadline: Duration,
     forward_inbound_credentials: bool,
     settings: Arc<RwLock<BlockingAuthSettings>>,
@@ -5316,11 +5440,18 @@ fn epoch_millis(at: fireemu_core_types::time::LogicalInstant) -> serde_json::Val
     serde_json::json!(i64::try_from(at.as_nanos() / 1_000_000).unwrap_or_default())
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BlockingTokenShape {
+    Emulated,
+    Production,
+}
+
 /// The token's `user_record`: the account's members, with production's absent members left out.
 fn blocking_auth_user_record(
     tenant: Option<&str>,
     request: &fireemu_adapter_http::identity_toolkit::AuthBlockingContext,
     user: &fireemu_core_auth::store::UserRecord,
+    shape: BlockingTokenShape,
 ) -> serde_json::Map<String, serde_json::Value> {
     use serde_json::{json, Map, Value};
     let mut record = Map::new();
@@ -5338,7 +5469,9 @@ fn blocking_auth_user_record(
     if let Some(phone) = &user.phone_number {
         record.insert("phone_number".to_owned(), json!(phone));
     }
-    record.insert("disabled".to_owned(), json!(user.disabled));
+    if shape == BlockingTokenShape::Emulated || user.disabled {
+        record.insert("disabled".to_owned(), json!(user.disabled));
+    }
     if let Some(claims) = user
         .custom_claims
         .attributes_text()
@@ -5424,6 +5557,7 @@ fn blocking_auth_claims(
     event_id: &str,
     issued_at: i64,
     audience: &str,
+    shape: BlockingTokenShape,
 ) -> serde_json::Map<String, serde_json::Value> {
     use serde_json::{json, Map, Value};
 
@@ -5435,18 +5569,35 @@ fn blocking_auth_claims(
     claims.insert("aud".to_owned(), json!(audience));
     claims.insert("iat".to_owned(), json!(issued_at));
     // The official emulator's lifetime: the deadline in milliseconds divided by 100.
-    claims.insert("exp".to_owned(), json!(issued_at + 70));
+    claims.insert(
+        "exp".to_owned(),
+        json!(
+            issued_at
+                + if shape == BlockingTokenShape::Production {
+                    300
+                } else {
+                    70
+                }
+        ),
+    );
     claims.insert("event_id".to_owned(), json!(event_id));
     claims.insert("event_type".to_owned(), json!(event.as_str()));
     claims.insert("user_agent".to_owned(), json!(BLOCKING_AUTH_USER_AGENT));
     claims.insert("ip_address".to_owned(), json!(BLOCKING_AUTH_IP_ADDRESS));
-    claims.insert("locale".to_owned(), json!(BLOCKING_AUTH_LOCALE));
+    claims.insert(
+        "locale".to_owned(),
+        json!(if shape == BlockingTokenShape::Production {
+            "und"
+        } else {
+            BLOCKING_AUTH_LOCALE
+        }),
+    );
     // A mail event has no user: its token names the address and the kind of mail instead.
     if let Some(user) = user {
         claims.insert("sub".to_owned(), json!(user.local_id.as_str()));
         claims.insert(
             "user_record".to_owned(),
-            Value::Object(blocking_auth_user_record(tenant, request, user)),
+            Value::Object(blocking_auth_user_record(tenant, request, user, shape)),
         );
     }
     if let Some(email) = &request.email {
@@ -5483,6 +5634,20 @@ fn blocking_auth_claims(
         }
     }
     claims
+}
+
+fn production_blocking_audience(project: &str, region: &str, function: &str) -> String {
+    format!("https://{region}-{project}.cloudfunctions.net/{function}")
+}
+
+fn signed_blocking_jwt(
+    claims: &serde_json::Map<String, serde_json::Value>,
+    signer: &dyn fireemu_core_auth::jwt::IdTokenSigner,
+) -> String {
+    fireemu_core_auth::jwt::encode_payload_with(
+        &serde_json::Value::Object(claims.clone()).to_string(),
+        Some(signer),
+    )
 }
 
 /// An unsigned (`alg: none`) JWT of `claims`, as the official Auth emulator sends it.
@@ -5818,6 +5983,7 @@ impl BlockingAuthBridge {
         let runtime_now = runtime.now();
         Ok(Self {
             runtime,
+            production_token: None,
             deadline: BLOCKING_AUTH_DEADLINE,
             forward_inbound_credentials,
             settings: Arc::new(RwLock::new(BlockingAuthSettings {
@@ -5828,6 +5994,16 @@ impl BlockingAuthBridge {
             send_events: false,
             trigger_times: RwLock::new([runtime_now; 4]),
         })
+    }
+
+    /// Signs production-shaped blocking tokens with the in-memory blocking key.
+    #[must_use]
+    pub fn with_production_token(
+        mut self,
+        signer: Option<Arc<dyn fireemu_core_auth::jwt::IdTokenSigner>>,
+    ) -> Self {
+        self.production_token = signer;
+        self
     }
 
     /// Serves Identity Platform's email and SMS events too, as production does (the strict
@@ -5896,6 +6072,7 @@ impl BlockingAuthBridge {
     fn with_deadline(runtime: Arc<FunctionsRuntime>, deadline: Duration) -> Self {
         Self {
             runtime,
+            production_token: None,
             deadline,
             forward_inbound_credentials: false,
             settings: Arc::new(RwLock::new(BlockingAuthSettings {
@@ -6531,8 +6708,32 @@ impl BlockingAuthBridge {
             target.region,
             target.function
         );
-        let issued_at =
-            i64::try_from(self.runtime.now().as_nanos() / 1_000_000_000).unwrap_or_default();
+        let issued_at = if self.production_token.is_some() {
+            i64::try_from(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs(),
+            )
+            .unwrap_or_default()
+        } else {
+            i64::try_from(self.runtime.now().as_nanos() / 1_000_000_000).unwrap_or_default()
+        };
+        let audience = self.production_token.as_ref().map_or_else(
+            || format!("http://{}{path}", target.addr),
+            |_| {
+                production_blocking_audience(
+                    self.runtime.project(),
+                    &target.region,
+                    &target.function,
+                )
+            },
+        );
+        let shape = if self.production_token.is_some() {
+            BlockingTokenShape::Production
+        } else {
+            BlockingTokenShape::Emulated
+        };
         let claims = blocking_auth_claims(
             project,
             tenant,
@@ -6541,11 +6742,20 @@ impl BlockingAuthBridge {
             user,
             &format!("fireemu-blocking-{}", self.runtime.trigger_generation()),
             issued_at,
-            &format!("http://{}{path}", target.addr),
+            &audience,
+            shape,
         );
         // The token the function's firebase-functions decodes into its event, as Identity
         // Platform and the official Auth emulator deliver it.
-        let body = serde_json::json!({"data": {"jwt": unsigned_jwt(&claims)}}).to_string();
+        let (jwt, content_type, user_agent) = match &self.production_token {
+            Some(signer) => (
+                signed_blocking_jwt(&claims, signer.as_ref()),
+                "application/json; charset=utf-8",
+                "User-Agent: Google-Firebase\r\n",
+            ),
+            None => (unsigned_jwt(&claims), "application/json", ""),
+        };
+        let body = serde_json::json!({"data": {"jwt": jwt}}).to_string();
         // Recovery and virtual-clock acknowledgement share the platform's native deadline.
         // A warm native-clock runner keeps its full budget; a function with an equal own
         // timeout still times out before the platform envelope.
@@ -6565,7 +6775,7 @@ impl BlockingAuthBridge {
                 TcpStream::connect_timeout(&address, blocking_auth_remaining(deadline)?)
                     .map_err(|error| blocking_auth_io_failure(&error))?;
             let request = format!(
-                "POST {path} HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\nX-Fireemu-Runner-Secret: {}\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
+                "POST {path} HTTP/1.1\r\nHost: {}\r\nContent-Type: {content_type}\r\n{user_agent}X-Fireemu-Runner-Secret: {}\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
                 target.addr,
                 target.secret,
                 body.len(),
@@ -6820,7 +7030,8 @@ impl FunctionsHook for Hook {
         self.0
             .publish_remote_config(body)
             .map_err(|error| match error {
-                SourceEventAdmissionError::InvalidEvent => PublishEventError::Invalid,
+                SourceEventAdmissionError::InvalidEvent
+                | SourceEventAdmissionError::PayloadTooLarge => PublishEventError::Invalid,
                 SourceEventAdmissionError::Capacity => PublishEventError::Capacity,
                 SourceEventAdmissionError::Unavailable => PublishEventError::Unavailable,
             })
@@ -6893,11 +7104,28 @@ impl FunctionsHook for Hook {
         self.0.status()
     }
 
-    fn publish(&self, topic: &str, messages: &[serde_json::Value]) -> Result<Vec<String>, String> {
+    fn publish(
+        &self,
+        topic: &str,
+        messages: &[serde_json::Value],
+    ) -> Result<Vec<String>, fireemu_adapter_http::control::PublishMessagesError> {
+        use fireemu_adapter_functions::runtime::SourceEventAdmissionError;
+        use fireemu_adapter_http::control::PublishMessagesError;
         if topic.is_empty() || topic.len() > 255 {
-            return Err("topic must be 1..=255 characters".to_owned());
+            return Err(PublishMessagesError::Invalid(
+                "topic must be 1..=255 characters".to_owned(),
+            ));
         }
-        Ok(self.0.publish(topic, messages))
+        self.0
+            .publish(topic, messages)
+            .map_err(|error| match error {
+                SourceEventAdmissionError::Capacity => PublishMessagesError::Capacity,
+                SourceEventAdmissionError::Unavailable => PublishMessagesError::Unavailable,
+                SourceEventAdmissionError::InvalidEvent
+                | SourceEventAdmissionError::PayloadTooLarge => {
+                    PublishMessagesError::Invalid("the message cannot become an event".to_owned())
+                }
+            })
     }
 
     fn project(&self) -> String {
@@ -7065,7 +7293,8 @@ impl PubSubBridge {
                 fireemu_adapter_functions::runtime::SourceEventAdmissionError::Unavailable => {
                     fireemu_adapter_pubsub::TopicDeliveryError::Unavailable
                 }
-                fireemu_adapter_functions::runtime::SourceEventAdmissionError::InvalidEvent => {
+                fireemu_adapter_functions::runtime::SourceEventAdmissionError::InvalidEvent
+                | fireemu_adapter_functions::runtime::SourceEventAdmissionError::PayloadTooLarge => {
                     fireemu_adapter_pubsub::TopicDeliveryError::InvalidEvent
                 }
             })
@@ -7170,6 +7399,29 @@ mod tests {
     async fn database_bridge_runtime_with(
         manifest: &serde_json::Value,
     ) -> Arc<fireemu_adapter_functions::runtime::FunctionsRuntime> {
+        database_bridge_runtime_shaped(
+            manifest,
+            fireemu_adapter_functions::events::DatabaseEventShape::default(),
+        )
+        .await
+    }
+
+    /// The emulator profile's runtime: it has no event size limit, so an event larger than a frame (or a
+    /// fanout larger than the budget) is dropped and the write applied.
+    async fn database_bridge_emulator_runtime_with(
+        manifest: &serde_json::Value,
+    ) -> Arc<fireemu_adapter_functions::runtime::FunctionsRuntime> {
+        database_bridge_runtime_shaped(
+            manifest,
+            fireemu_adapter_functions::events::DatabaseEventShape::Official,
+        )
+        .await
+    }
+
+    async fn database_bridge_runtime_shaped(
+        manifest: &serde_json::Value,
+        shape: fireemu_adapter_functions::events::DatabaseEventShape,
+    ) -> Arc<fireemu_adapter_functions::runtime::FunctionsRuntime> {
         use fireemu_adapter_functions::runner::{Runner, SpawnSpec};
         use fireemu_adapter_functions::runtime::{FunctionsConfig, FunctionsRuntime};
         use fireemu_core_types::time::LogicalInstant;
@@ -7196,7 +7448,10 @@ while True:
         let manifest = parse_manifest(manifest).unwrap();
         FunctionsRuntime::new(
             manifest,
-            FunctionsConfig::for_tests(1000, "test".to_owned()),
+            FunctionsConfig {
+                database_event_shape: shape,
+                ..FunctionsConfig::for_tests(1000, "test".to_owned())
+            },
             Arc::new(Mutex::new(VirtualClock::new(
                 LogicalInstant::from_unix_seconds(100),
             ))),
@@ -7347,6 +7602,152 @@ while True:
             super::capture_database_references(&patterns, &before, &after, &root, 2, at_bound - 1)
                 .unwrap(),
             (vec![root.child("users").child("b")], 1)
+        );
+    }
+
+    /// Merge review note (2026-11-10): an oversized reference is refused or counted as dropped only for a
+    /// trigger that accepts the change's kind (creation: before absent, deletion: after absent, otherwise
+    /// an update); `written` accepts all three. A reference no trigger accepts is left out silently.
+    #[test]
+    fn database_bridge_capture_judges_an_oversized_reference_only_for_triggers_that_accept_its_kind(
+    ) {
+        use fireemu_core_functions::manifest::{DatabasePattern, DocumentEvent};
+        use fireemu_core_types::admission::EventAdmissionError;
+        let root = fireemu_adapter_database::changes::Path::root();
+        let big = json!("x".repeat(4096));
+        // (before, after, the kind of the change)
+        let changes = [
+            (
+                json!({}),
+                json!({"users":{"a": big}}),
+                DocumentEvent::Created,
+            ),
+            (
+                json!({"users":{"a": big}}),
+                json!({}),
+                DocumentEvent::Deleted,
+            ),
+            (
+                json!({"users":{"a": big}}),
+                json!({"users":{"a":"y"}}),
+                DocumentEvent::Updated,
+            ),
+        ];
+        let pattern = DatabasePattern::parse("/users/{uid}").unwrap();
+        for (before, after, actual) in &changes {
+            let (before, after) = (database_bridge_tree(before), database_bridge_tree(after));
+            for declared in [
+                DocumentEvent::Created,
+                DocumentEvent::Updated,
+                DocumentEvent::Deleted,
+                DocumentEvent::Written,
+            ] {
+                let accepted = declared.accepts(*actual);
+                let triggers = [(pattern.clone(), declared)];
+                let capture = |refuse_over: Option<usize>| {
+                    super::capture_database_references_limited(
+                        &triggers,
+                        &before,
+                        &after,
+                        &root,
+                        8,
+                        1024,
+                        refuse_over,
+                    )
+                };
+                // dropped for the frame, or refused for the event limit, only when accepted
+                assert_eq!(
+                    capture(None).unwrap(),
+                    (Vec::new(), usize::from(accepted)),
+                    "{declared:?} on a {actual:?}"
+                );
+                assert_eq!(
+                    matches!(
+                        capture(Some(2048)),
+                        Err(EventAdmissionError::PayloadTooLarge(_))
+                    ),
+                    accepted,
+                    "{declared:?} on a {actual:?}"
+                );
+                if !accepted {
+                    assert_eq!(capture(Some(2048)).unwrap(), (Vec::new(), 0));
+                }
+            }
+            // one trigger that accepts is enough, wherever it stands among the others
+            for order in [
+                [DocumentEvent::Created, DocumentEvent::Deleted],
+                [DocumentEvent::Deleted, DocumentEvent::Created],
+            ] {
+                let triggers = order.map(|declared| (pattern.clone(), declared));
+                let refused = super::capture_database_references_limited(
+                    &triggers,
+                    &before,
+                    &after,
+                    &root,
+                    8,
+                    1024,
+                    Some(2048),
+                )
+                .is_err();
+                assert_eq!(
+                    refused,
+                    matches!(actual, DocumentEvent::Created | DocumentEvent::Deleted)
+                );
+            }
+        }
+    }
+
+    /// RTDB-TRIGGERS-KINDS-20261108-01 (k13): where the strict profile refuses a write whose event is too
+    /// large, the capture refuses it from the same lower bound that otherwise leaves the reference out for
+    /// not fitting a frame, before anything is exported.
+    #[test]
+    fn database_bridge_capture_refuses_a_snapshot_provably_over_the_event_limit_when_asked() {
+        use fireemu_core_functions::manifest::DatabasePattern;
+        use fireemu_core_types::admission::EventAdmissionError;
+        let root = fireemu_adapter_database::changes::Path::root();
+        let before = database_bridge_tree(&json!({"users":{"a":"before","b":1}}));
+        let after = database_bridge_tree(&json!({"users":{"a":"x".repeat(4 * 1024 * 1024),"b":2}}));
+        let patterns = [DatabasePattern::parse("/users/{uid}").unwrap()];
+        let written = fireemu_core_functions::manifest::DocumentEvent::Written;
+        let triggers = [(patterns[0].clone(), written)];
+        let at_bound = 8 + 4 * 1024 * 1024 + 2;
+        let capture = |refuse_over: Option<usize>| {
+            super::capture_database_references_limited(
+                &triggers,
+                &before,
+                &after,
+                &root,
+                8,
+                usize::MAX,
+                refuse_over,
+            )
+        };
+        assert!(matches!(
+            capture(Some(at_bound - 1)),
+            Err(EventAdmissionError::PayloadTooLarge(_))
+        ));
+        assert_eq!(capture(Some(at_bound)).unwrap().0.len(), 2);
+        assert_eq!(capture(None).unwrap().0.len(), 2);
+        // a reference over the frame but not over the event limit is still only left out and counted
+        assert_eq!(
+            super::capture_database_references_limited(
+                &triggers,
+                &before,
+                &after,
+                &root,
+                8,
+                at_bound - 1,
+                Some(at_bound),
+            )
+            .unwrap(),
+            (vec![root.child("users").child("b")], 1)
+        );
+        // the frame rule is unchanged when nothing is asked: left out and counted
+        assert_eq!(
+            super::capture_database_references(&patterns, &before, &after, &root, 8, at_bound - 1)
+                .unwrap()
+                .1,
+            1
         );
     }
 
@@ -7644,7 +8045,8 @@ root	unchanged	small	firstGen";
             let mut function = function;
             function["name"] = json!("usersChanged");
             function["trigger"] = json!({"type":"database","eventType":"google.firebase.database.ref.v1.written","instance":"*","ref":"/users/{uid}"});
-            let runtime = database_bridge_runtime_with(&json!({"functions":[function]})).await;
+            let runtime =
+                database_bridge_emulator_runtime_with(&json!({"functions":[function]})).await;
             let delivering = *region != "europeWest1";
             // The value a changed write puts at /users/a/v.
             let leaf = match *fanout {
@@ -7863,11 +8265,486 @@ root	unchanged	small	firstGen";
     /// serialize the whole branch under the database lock before the event was dropped. A cheap
     /// lower bound of the snapshot's JSON size now proves the event can never fit, so the
     /// write stays fast; the event is counted as dropped.
+    /// RTDB-TRIGGERS-KINDS-20261108-01 (k11 to k13), through the real sink and the REST handler: a 100 KiB and a
+    /// 600 KiB value are accepted, a 2 MiB one (and, by the documented 1 MB, 1.05 MB) is refused with 400 and the text production sent, and the
+    /// data is not written; the emulator profile applies all three.
+    #[tokio::test]
+    async fn database_bridge_strict_refuses_a_write_with_an_event_over_the_limit_and_the_emulator_applies_it(
+    ) {
+        use fireemu_adapter_database::rest::{Database, Handled, HttpRequest, RestOptions};
+        use fireemu_adapter_functions::events::DatabaseEventShape;
+        let manifest = json!({"functions":[{"name":"leafWritten","generation":2,"region":"us-central1","trigger":{
+            "type":"database","eventType":"google.firebase.database.ref.v1.written","instance":"*",
+            "ref":"/gl/items/{id}"
+        }}]});
+        for (shape, strict) in [
+            (DatabaseEventShape::Production, true),
+            (DatabaseEventShape::Official, false),
+        ] {
+            let runtime = database_bridge_runtime_shaped(&manifest, shape).await;
+            let mut database = Database::new(RestOptions::default(), 1);
+            database.set_change_sink(super::database_sink(
+                &runtime,
+                "demo-app",
+                "us-central1",
+                "firebaseio.com",
+            ));
+            let mut put = |id: &str, blob: usize| {
+                let Handled::Response { response, .. } = database.handle(
+                    &HttpRequest {
+                        method: "PUT".to_owned(),
+                        target: format!("/gl/items/{id}.json?ns=demo-app-default-rtdb"),
+                        headers: Vec::new(),
+                        body: serde_json::to_vec(&json!({"blob": "x".repeat(blob), "value": 1}))
+                            .unwrap(),
+                    },
+                    100_000,
+                ) else {
+                    panic!("a PUT must not create a stream")
+                };
+                (response.status, String::from_utf8(response.body).unwrap())
+            };
+            assert_eq!(put("l1", 100 * 1024).0, 200);
+            assert_eq!(put("l2", 600 * 1024).0, 200);
+            // the packet v2 ladder around the documented 1 MB
+            assert_eq!(put("l6", 949_900).0, 200);
+            assert_eq!(put("l8", 1_023_900).0, 200, "accepted by production (k24)");
+            assert_eq!(put("l7", 1_049_900).0, if strict { 400 } else { 200 });
+            let (status, body) = put("l3", 2 * 1024 * 1024);
+            if strict {
+                assert_eq!(status, 400);
+                assert_eq!(
+                    body,
+                    "{\n  \"error\" : \"This request would cause a function payload exceeding the maximum size allowed.\"\n}\n"
+                );
+            } else {
+                assert_eq!(status, 200, "{body}");
+            }
+            // an update of an existing object whose delta is large: the capture bound counts only the
+            // node before when both sides are objects, so it is the runtime's measure of the event that
+            // refuses it
+            assert_eq!(put("l4", 10).0, 200);
+            let (status, body) = put("l4", 2 * 1024 * 1024);
+            if strict {
+                assert_eq!(status, 400);
+                assert!(body.contains("function payload exceeding the maximum size allowed"));
+            } else {
+                assert_eq!(status, 200, "{body}");
+            }
+            let tree = database.tree("demo-app-default-rtdb").unwrap();
+            assert_eq!(
+                tree.root()
+                    .and_then(|root| root.child("gl"))
+                    .and_then(|gl| gl.child("items"))
+                    .and_then(|items| items.child("l3"))
+                    .is_some(),
+                !strict,
+                "the refused write is not applied"
+            );
+            // a write no trigger reference can reach is never measured
+            let Handled::Response { response, .. } = database.handle(
+                &HttpRequest {
+                    method: "PUT".to_owned(),
+                    target: "/elsewhere.json?ns=demo-app-default-rtdb".to_owned(),
+                    headers: Vec::new(),
+                    body: serde_json::to_vec(&json!("y".repeat(3 * 1024 * 1024))).unwrap(),
+                },
+                100_001,
+            ) else {
+                panic!("a PUT must not create a stream")
+            };
+            assert_eq!(response.status, 200);
+            runtime.shutdown().await;
+        }
+    }
+
+    /// Merge review note (2026-11-10): the capture used to refuse an oversized reference by path alone, before
+    /// asking whether any deployed trigger accepts the change's kind. A write that produces no event is
+    /// never refused for an event size (production for this case is unrecorded); one a deployed trigger
+    /// would receive still is, at the same limit, through REST PUT, PATCH and POST.
+    #[tokio::test]
+    async fn database_bridge_strict_refuses_only_writes_whose_event_a_deployed_trigger_receives() {
+        use fireemu_adapter_database::rest::{Database, Handled, HttpRequest, RestOptions};
+        use fireemu_adapter_functions::events::DatabaseEventShape;
+        let limit = 1_048_576usize;
+        let at_limit = "x".repeat(limit);
+        for (event, overwrite_refused, create_refused, delete_refused) in [
+            ("created", false, true, false),
+            ("updated", true, false, false),
+            ("deleted", false, false, true),
+            ("written", true, true, true),
+        ] {
+            let manifest = json!({"functions":[{"name":"leaf","generation":2,"region":"us-central1","trigger":{
+                "type":"database","eventType":format!("google.firebase.database.ref.v1.{event}"),
+                "instance":"*","ref":"/users/{uid}"
+            }}]});
+            let runtime =
+                database_bridge_runtime_shaped(&manifest, DatabaseEventShape::Production).await;
+            let mut database = Database::new(RestOptions::default(), 1);
+            let call = |database: &mut Database,
+                        method: &str,
+                        target: &str,
+                        body: &serde_json::Value,
+                        at: i64| {
+                let Handled::Response { response, .. } = database.handle(
+                    &HttpRequest {
+                        method: method.to_owned(),
+                        target: format!("{target}?ns=demo-app-default-rtdb"),
+                        headers: Vec::new(),
+                        body: serde_json::to_vec(body).unwrap(),
+                    },
+                    at,
+                ) else {
+                    panic!("a REST write must not create a stream")
+                };
+                response.status
+            };
+            // the oversized values are there before the trigger is attached
+            assert_eq!(
+                call(&mut database, "PUT", "/users/a.json", &json!(at_limit), 1),
+                200
+            );
+            assert_eq!(
+                call(&mut database, "PUT", "/users/d.json", &json!(at_limit), 2),
+                200
+            );
+            database.set_change_sink(super::database_sink(
+                &runtime,
+                "demo-app",
+                "us-central1",
+                "firebaseio.com",
+            ));
+            let verdict = |refused: bool| if refused { 400 } else { 200 };
+            assert_eq!(
+                call(&mut database, "PUT", "/users/a.json", &json!("y"), 3),
+                verdict(overwrite_refused),
+                "{event}: overwrite of an at-limit value"
+            );
+            assert_eq!(
+                call(&mut database, "PUT", "/users/c.json", &json!(at_limit), 4),
+                verdict(create_refused),
+                "{event}: creating an at-limit value"
+            );
+            assert_eq!(
+                call(&mut database, "PUT", "/users/d.json", &json!(null), 5),
+                verdict(delete_refused),
+                "{event}: deleting an at-limit value"
+            );
+            runtime.shutdown().await;
+        }
+    }
+
+    /// The strict event limit is exact, and the same on every write route (merge review note, 2026-11-10):
+    /// a creation whose event (the `null` before plus the value as the delta) is exactly the limit is
+    /// applied, one byte more is refused and nothing is written, through REST PUT, PATCH and POST, and the
+    /// realtime put, update and `onDisconnect` writes. The measure is the serialized JSON, so an escaped
+    /// quote counts twice and a two-byte UTF-8 character twice, where the capture's lower bound counts raw bytes.
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn database_bridge_strict_event_limit_is_exact_on_every_write_route() {
+        use fireemu_adapter_database::realtime::{Opened, Session};
+        use fireemu_adapter_database::rest::{Database, Handled, HttpRequest, RestOptions};
+        use fireemu_adapter_functions::events::DatabaseEventShape;
+        #[derive(Clone, Copy, Debug)]
+        enum Route {
+            Put,
+            Patch,
+            Post,
+            WsPut,
+            WsUpdate,
+            OnDisconnect,
+        }
+        const LIMIT: usize = 1_048_576;
+        // the delta's JSON length is the value's length plus two quotes, and the before is `null`
+        let ascii = |bytes: usize| "x".repeat(bytes - 6);
+        let manifest = json!({"functions":[{"name":"leaf","generation":2,"region":"us-central1","trigger":{
+            "type":"database","eventType":"google.firebase.database.ref.v1.written","instance":"*",
+            "ref":"/users/{uid}"
+        }}]});
+        let runtime =
+            database_bridge_runtime_shaped(&manifest, DatabaseEventShape::Production).await;
+        let mut database = Database::new(RestOptions::default(), 1);
+        database.set_change_sink(super::database_sink(
+            &runtime,
+            "demo-app",
+            "us-central1",
+            "firebaseio.com",
+        ));
+        let mut session = match database
+            .open_realtime("/.ws?v=5&ns=demo-app-default-rtdb", None, 100)
+            .unwrap()
+        {
+            Opened::Session(session, _) => session,
+            other @ Opened::Shutdown(_) => panic!("unexpected realtime open: {other:?}"),
+        };
+        let rest =
+            |database: &mut Database, method: &str, target: &str, body: &serde_json::Value| {
+                let Handled::Response { response, .. } = database.handle(
+                    &HttpRequest {
+                        method: method.to_owned(),
+                        target: format!("{target}?ns=demo-app-default-rtdb"),
+                        headers: Vec::new(),
+                        body: serde_json::to_vec(body).unwrap(),
+                    },
+                    1_000,
+                ) else {
+                    panic!("a REST write must not create a stream")
+                };
+                response
+            };
+        let frame = |session: &mut Session,
+                     database: &mut Database,
+                     action: &str,
+                     body: serde_json::Value| {
+            let text = json!({"t":"d","d":{"r":1,"a":action,"b":body}}).to_string();
+            let received = session.receive(database, &text, 1_000);
+            serde_json::from_str::<serde_json::Value>(&received.replies[0]).unwrap()["d"]["b"]["s"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+        let mut next = 0u32;
+        // Writes `value` as a new child of /users by `route`; whether it was applied.
+        let mut write = |database: &mut Database,
+                         session: &mut Session,
+                         route: Route,
+                         value: &str|
+         -> bool {
+            next += 1;
+            let key = format!("k{next}");
+            let wrote = |database: &Database| {
+                database
+                    .tree("demo-app-default-rtdb")
+                    .unwrap()
+                    .root()
+                    .and_then(|root| root.child("users"))
+                    .and_then(|users| users.child(&key))
+                    .is_some()
+            };
+            match route {
+                Route::Put => {
+                    let response = rest(
+                        database,
+                        "PUT",
+                        &format!("/users/{key}.json"),
+                        &json!(value),
+                    );
+                    assert!(
+                        response.status == 200 || response.status == 400,
+                        "{}",
+                        response.status
+                    );
+                    if response.status == 400 {
+                        assert_eq!(
+                            String::from_utf8(response.body).unwrap(),
+                            "{\n  \"error\" : \"This request would cause a function payload exceeding the maximum size allowed.\"\n}\n"
+                        );
+                    }
+                }
+                Route::Patch => {
+                    let status =
+                        rest(database, "PATCH", "/users.json", &json!({ &key: value })).status;
+                    assert!(status == 200 || status == 400, "{status}");
+                }
+                Route::Post => {
+                    // a push key is generated, so the write is found by the size of /users instead of by key
+                    let before = database
+                        .tree("demo-app-default-rtdb")
+                        .unwrap()
+                        .root()
+                        .and_then(|root| root.child("users"))
+                        .map_or(0, fireemu_adapter_database::changes::Node::retained_bytes);
+                    let status = rest(database, "POST", "/users.json", &json!(value)).status;
+                    assert!(status == 200 || status == 400, "{status}");
+                    let after = database
+                        .tree("demo-app-default-rtdb")
+                        .unwrap()
+                        .root()
+                        .and_then(|root| root.child("users"))
+                        .map_or(0, fireemu_adapter_database::changes::Node::retained_bytes);
+                    assert_eq!(
+                        after > before,
+                        status == 200,
+                        "a refused push writes nothing"
+                    );
+                    return status == 200;
+                }
+                Route::WsPut => {
+                    let status = frame(
+                        session,
+                        database,
+                        "p",
+                        json!({"p": format!("/users/{key}"), "d": value}),
+                    );
+                    assert!(status == "ok" || status == "invalid_parameters", "{status}");
+                }
+                Route::WsUpdate => {
+                    let status = frame(
+                        session,
+                        database,
+                        "m",
+                        json!({"p": "/users", "d": {&key: value}}),
+                    );
+                    assert!(status == "ok" || status == "invalid_parameters", "{status}");
+                }
+                Route::OnDisconnect => {
+                    let status = frame(
+                        session,
+                        database,
+                        "o",
+                        json!({"p": format!("/users/{key}"), "d": value}),
+                    );
+                    assert_eq!(status, "ok", "registering is not a write");
+                    // The connection ends and the registered write is made at the root; a payload refusal drops it.
+                    database.close_realtime(session.client(), 1_000);
+                    let fresh = match database
+                        .open_realtime("/.ws?v=5&ns=demo-app-default-rtdb", None, 100)
+                        .unwrap()
+                    {
+                        Opened::Session(fresh, _) => fresh,
+                        other @ Opened::Shutdown(_) => {
+                            panic!("unexpected realtime open: {other:?}")
+                        }
+                    };
+                    *session = fresh;
+                }
+            }
+            wrote(database)
+        };
+        let routes = [
+            Route::Put,
+            Route::Patch,
+            Route::Post,
+            Route::WsPut,
+            Route::WsUpdate,
+            Route::OnDisconnect,
+        ];
+        let exact_quotes = "\"".repeat((LIMIT - 6) / 2);
+        let exact_utf8 = "\u{e9}".repeat((LIMIT - 6) / 2);
+        for route in routes {
+            assert!(
+                write(&mut database, &mut session, route, &ascii(LIMIT)),
+                "{route:?}: exactly the limit"
+            );
+            assert!(
+                !write(&mut database, &mut session, route, &ascii(LIMIT + 1)),
+                "{route:?}: one byte over"
+            );
+        }
+        for route in [Route::Put, Route::Patch, Route::WsPut] {
+            assert!(
+                write(&mut database, &mut session, route, &exact_quotes),
+                "{route:?}: escaped quotes, exactly the limit"
+            );
+            assert!(
+                !write(
+                    &mut database,
+                    &mut session,
+                    route,
+                    &format!("{exact_quotes}\"")
+                ),
+                "{route:?}: one more quote is two bytes over, though the capture counts one"
+            );
+            assert!(
+                write(&mut database, &mut session, route, &exact_utf8),
+                "{route:?}: two-byte characters, exactly the limit"
+            );
+            assert!(
+                !write(
+                    &mut database,
+                    &mut session,
+                    route,
+                    &format!("{exact_utf8}x")
+                ),
+                "{route:?}: one ASCII byte over"
+            );
+            assert!(
+                !write(
+                    &mut database,
+                    &mut session,
+                    route,
+                    &format!("{exact_utf8}\u{e9}")
+                ),
+                "{route:?}: one character over"
+            );
+        }
+        runtime.shutdown().await;
+    }
+
+    /// The strict profile refuses, rather than drops, an event larger than a frame, and does it from the
+    /// capture, before any snapshot is exported: a node of about 18 MB that was there before the trigger.
+    #[tokio::test]
+    async fn database_bridge_strict_refuses_a_frame_sized_snapshot_before_exporting_it() {
+        use fireemu_adapter_database::rest::{Database, Handled, HttpRequest, RestOptions};
+        let runtime = database_bridge_runtime_with(
+            &json!({"functions":[{"name":"topChanged","generation":2,"region":"us-central1","trigger":{
+                "type":"database","eventType":"google.firebase.database.ref.v1.written","instance":"*","ref":"/{top}"
+            }}]}),
+        )
+        .await;
+        let mut database = Database::new(RestOptions::default(), 1);
+        let big: serde_json::Map<_, _> = (0..200_000)
+            .map(|n| (format!("k{n:06}"), json!({"v": "x".repeat(70)})))
+            .collect();
+        assert_eq!(
+            database_bridge_write(&mut database, &json!({"big": big})),
+            200
+        );
+        database.set_change_sink(super::database_sink(
+            &runtime,
+            "demo-app",
+            "us-central1",
+            "firebaseio.com",
+        ));
+        let started = std::time::Instant::now();
+        let Handled::Response { response, .. } = database.handle(
+            &HttpRequest {
+                method: "PUT".to_owned(),
+                target: "/big/new.json?ns=demo-app-default-rtdb".to_owned(),
+                headers: Vec::new(),
+                body: b"1".to_vec(),
+            },
+            100_000,
+        ) else {
+            panic!("a PUT must not create a stream")
+        };
+        assert_eq!(response.status, 400);
+        assert!(String::from_utf8(response.body)
+            .unwrap()
+            .contains("function payload exceeding the maximum size allowed"));
+        assert!(
+            started.elapsed() < Duration::from_secs(60),
+            "{:?}",
+            started.elapsed()
+        );
+        let Handled::Response { response, .. } = database.handle(
+            &HttpRequest {
+                method: "GET".to_owned(),
+                target: "/big/new.json?ns=demo-app-default-rtdb".to_owned(),
+                headers: Vec::new(),
+                body: Vec::new(),
+            },
+            100_001,
+        ) else {
+            panic!("a GET without a stream header must not create a stream")
+        };
+        assert_eq!(
+            String::from_utf8(response.body).unwrap().trim(),
+            "null",
+            "the refused write is not applied"
+        );
+        assert_eq!(
+            runtime.source_event_accounting().unwrap().reserved_records,
+            0
+        );
+        runtime.shutdown().await;
+    }
+
     #[tokio::test]
     async fn database_bridge_drops_a_frame_sized_snapshot_without_exporting_it() {
         use fireemu_adapter_database::rest::{Database, Handled, HttpRequest, RestOptions};
         use fireemu_adapter_functions::runtime::DATABASE_FANOUT_DROPPED;
-        let runtime = database_bridge_runtime_with(
+        let runtime = database_bridge_emulator_runtime_with(
             &json!({"functions":[{"name":"topChanged","generation":2,"region":"us-central1","trigger":{
                 "type":"database","eventType":"google.firebase.database.ref.v1.written","instance":"*","ref":"/{top}"
             }}]}),
@@ -8822,6 +9699,7 @@ root	unchanged	small	firstGen";
         let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../fireemu-adapter-functions/tests/fake_runner.py");
         let hosts = super::EmulatorHosts {
+            blocking_jwks: None,
             app_check: None,
             firestore: None,
             auth: None,
@@ -8930,6 +9808,7 @@ root	unchanged	small	firstGen";
         let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../fireemu-adapter-functions/tests/fake_runner.py");
         let hosts = super::EmulatorHosts {
+            blocking_jwks: None,
             app_check: None,
             firestore: None,
             auth: None,
@@ -9023,6 +9902,7 @@ root	unchanged	small	firstGen";
         let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../fireemu-adapter-functions/tests/fake_runner.py");
         let hosts = super::EmulatorHosts {
+            blocking_jwks: None,
             app_check: None,
             firestore: None,
             auth: None,
@@ -9128,6 +10008,7 @@ root	unchanged	small	firstGen";
         let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../fireemu-adapter-functions/tests/fake_runner.py");
         let hosts = super::EmulatorHosts {
+            blocking_jwks: None,
             app_check: None,
             firestore: None,
             auth: None,
@@ -9258,6 +10139,7 @@ exports.add = onCall({{}}, observe("add"));
         let runner = root.join("tools/runner-node/index.mjs");
         let node = std::env::var("FIREEMU_NODE").unwrap_or_else(|_| "node".to_owned());
         let hosts = super::EmulatorHosts {
+            blocking_jwks: None,
             app_check: None,
             firestore: None,
             auth: None,
@@ -9330,6 +10212,145 @@ exports.add = onCall({{}}, observe("add"));
         );
     }
 
+    static BLOCKING_TEST_SIGNER: std::sync::OnceLock<
+        Arc<fireemu_adapter_http::signing::RsaSigner>,
+    > = std::sync::OnceLock::new();
+    static OTHER_BLOCKING_TEST_SIGNER: std::sync::OnceLock<
+        Arc<fireemu_adapter_http::signing::RsaSigner>,
+    > = std::sync::OnceLock::new();
+
+    #[test]
+    fn signed_blocking_token_has_a_verifiable_signature() {
+        use fireemu_core_auth::jwt::{base64url_decode, IdTokenSigner};
+        let signer = BLOCKING_TEST_SIGNER
+            .get_or_init(|| fireemu_adapter_http::signing::RsaSigner::from_seed(1).unwrap());
+        let other = OTHER_BLOCKING_TEST_SIGNER
+            .get_or_init(|| fireemu_adapter_http::signing::RsaSigner::from_seed(2).unwrap());
+        let claims = serde_json::json!({"aud": "example"})
+            .as_object()
+            .unwrap()
+            .clone();
+        let jwt = super::signed_blocking_jwt(&claims, signer.as_ref());
+        let parts: Vec<_> = jwt.split('.').collect();
+        assert_eq!(parts.len(), 3);
+        let header: serde_json::Value =
+            serde_json::from_slice(&base64url_decode(parts[0]).unwrap()).unwrap();
+        assert_eq!(
+            header,
+            serde_json::json!({"alg":"RS256", "kid":signer.kid(), "typ":"JWT"})
+        );
+        let input = format!("{}.{}", parts[0], parts[1]);
+        let mut signature = base64url_decode(parts[2]).unwrap();
+        assert!(signer.verify(input.as_bytes(), &signature));
+        assert!(!other.verify(input.as_bytes(), &signature));
+        let mut altered = input.into_bytes();
+        let index = parts[0].len() + 1;
+        altered[index] ^= 1;
+        assert!(!signer.verify(&altered, &signature));
+        signature[0] ^= 1;
+        assert!(!signer.verify(format!("{}.{}", parts[0], parts[1]).as_bytes(), &signature));
+    }
+
+    #[test]
+    fn production_blocking_token_claims_and_audience() {
+        use fireemu_core_auth::mfa::TotpPolicy;
+        use fireemu_core_auth::store::{AuthStore, NewUser};
+        use fireemu_core_functions::manifest::BlockingAuthEvent;
+        use fireemu_core_types::{determinism::SplitMix64, time::LogicalInstant};
+        let mut store = AuthStore::new("demo-app", SplitMix64::new(7), TotpPolicy::default());
+        let uid = store
+            .create_user(
+                NewUser::email("person@example.test"),
+                LogicalInstant::from_unix_seconds(100),
+            )
+            .unwrap();
+        let mut user = store.user_by_id(uid.as_str()).unwrap().clone();
+        let context = fireemu_adapter_http::identity_toolkit::AuthBlockingContext {
+            sign_in_method: Some("password".to_owned()),
+            ..Default::default()
+        };
+        let audience = super::production_blocking_audience("demo-app", "us-central1", "fn");
+        assert_eq!(
+            audience,
+            "https://us-central1-demo-app.cloudfunctions.net/fn"
+        );
+        let claims = super::blocking_auth_claims(
+            "demo-app",
+            None,
+            BlockingAuthEvent::BeforeCreate,
+            &context,
+            Some(&user),
+            "event",
+            100,
+            &audience,
+            super::BlockingTokenShape::Production,
+        );
+        assert_eq!(claims["exp"], 400);
+        assert_eq!(claims["locale"], "und");
+        assert_eq!(claims["aud"], audience);
+        assert!(claims["user_record"].get("disabled").is_none());
+        let emulated = super::blocking_auth_claims(
+            "demo-app",
+            None,
+            BlockingAuthEvent::BeforeCreate,
+            &context,
+            Some(&user),
+            "event",
+            100,
+            &audience,
+            super::BlockingTokenShape::Emulated,
+        );
+        assert_eq!(emulated["exp"], 170);
+        assert_eq!(emulated["locale"], "en");
+        assert_eq!(emulated["user_record"]["disabled"], false);
+        assert_eq!(
+            claims.keys().collect::<Vec<_>>(),
+            emulated.keys().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            claims.keys().map(String::as_str).collect::<Vec<_>>(),
+            [
+                "aud",
+                "event_id",
+                "event_type",
+                "exp",
+                "iat",
+                "ip_address",
+                "iss",
+                "locale",
+                "sign_in_method",
+                "sub",
+                "user_agent",
+                "user_record"
+            ]
+        );
+        user.disabled = true;
+        let disabled = super::blocking_auth_claims(
+            "demo-app",
+            None,
+            BlockingAuthEvent::BeforeCreate,
+            &context,
+            Some(&user),
+            "event",
+            100,
+            &audience,
+            super::BlockingTokenShape::Production,
+        );
+        assert_eq!(disabled["user_record"]["disabled"], true);
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn production_audience_preserves_parts(project in "[a-z][a-z0-9-]{0,20}", region in "[a-z][a-z0-9-]{0,20}", function in "[a-z][a-z0-9-]{0,20}") {
+            let result = super::production_blocking_audience(&project, &region, &function);
+            let suffix = format!(".cloudfunctions.net/{function}");
+            proptest::prop_assert!(result.starts_with("https://"));
+            proptest::prop_assert!(result.ends_with(&suffix));
+            let host = result.strip_prefix("https://").unwrap().strip_suffix(&suffix).unwrap();
+            proptest::prop_assert_eq!(host.strip_prefix(&format!("{region}-")), Some(project.as_str()));
+        }
+    }
+
     fn claims_for(
         tenant: Option<&str>,
         event: fireemu_core_functions::manifest::BlockingAuthEvent,
@@ -9345,6 +10366,7 @@ exports.add = onCall({{}}, observe("add"));
             "event-1",
             1_788_004_860,
             "http://127.0.0.1:1/demo-app/us-central1/fn",
+            super::BlockingTokenShape::Emulated,
         ))
     }
 
@@ -9813,7 +10835,7 @@ exports.add = onCall({{}}, observe("add"));
                 ids.extend(stored.iter().map(|stored| stored.message_id.clone()));
             }
             for _ in 0..=(round % 2) {
-                ids.extend(runtime.publish("jobs", &[json!({"data": "YQ=="})]));
+                ids.extend(runtime.publish("jobs", &[json!({"data": "YQ=="})]).unwrap());
             }
         }
         assert!(ids.len() > 100, "{}", ids.len());
@@ -9831,6 +10853,60 @@ exports.add = onCall({{}}, observe("add"));
             ids.len(),
             "two messages share an id: {ids:?}"
         );
+    }
+
+    /// The control hook maps the runtime's publish outcomes onto the control API's: a bad topic
+    /// is invalid, a full queue is a capacity refusal that issues no ids, and a publish that
+    /// fits answers its message ids.
+    #[tokio::test(flavor = "current_thread")]
+    async fn the_control_hook_maps_publish_outcomes_to_the_control_errors() {
+        use fireemu_adapter_http::control::{FunctionsHook, PublishMessagesError};
+        let runtime = runtime_with_blocking_auth_targets(&[]).await;
+        let hook = super::Hook(runtime.clone());
+        let message = json!({"data": "YQ=="});
+        assert!(matches!(
+            hook.publish("", std::slice::from_ref(&message)),
+            Err(PublishMessagesError::Invalid(_))
+        ));
+        assert!(matches!(
+            hook.publish(&"t".repeat(256), std::slice::from_ref(&message)),
+            Err(PublishMessagesError::Invalid(_))
+        ));
+        let longest = "t".repeat(255);
+        assert_eq!(
+            hook.publish(&longest, std::slice::from_ref(&message))
+                .unwrap()
+                .len(),
+            1,
+            "255 characters is the longest topic"
+        );
+        assert_eq!(
+            hook.publish("nobody", std::slice::from_ref(&message))
+                .unwrap()
+                .len(),
+            1
+        );
+        // Each publish to `jobs` queues one delivery; reserving every other record fills the queue.
+        let queued = || runtime.source_event_accounting().unwrap().published_records;
+        let before = queued();
+        assert_eq!(
+            hook.publish("jobs", std::slice::from_ref(&message))
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(queued(), before + 1, "one subscriber of `jobs`");
+        let free = fireemu_adapter_functions::runtime::MAX_ACTIVE_EVENT_RECORDS - queued();
+        let others: Vec<serde_json::Value> = (0..free)
+            .map(|n| json!({"data": "YQ==", "messageId": format!("m{n}")}))
+            .collect();
+        let reservation = runtime.reserve_pubsub_events("jobs", &others).unwrap();
+        assert_eq!(
+            hook.publish("jobs", std::slice::from_ref(&message)),
+            Err(PublishMessagesError::Capacity)
+        );
+        drop(reservation);
+        assert_eq!(hook.publish("jobs", &[message]).unwrap().len(), 1);
     }
 
     /// Identity Platform's email and SMS events are served by the strict profile's bridge only
@@ -10048,6 +11124,104 @@ exports.add = onCall({{}}, observe("add"));
         runtime.shutdown().await;
     }
 
+    #[tokio::test(flavor = "current_thread")]
+    async fn bridge_delivers_production_and_emulated_tokens() {
+        use fireemu_adapter_http::identity_toolkit::AuthBlockingHook;
+        use fireemu_core_auth::{
+            jwt::base64url_decode,
+            mfa::TotpPolicy,
+            store::{AuthStore, NewUser},
+        };
+        use fireemu_core_functions::manifest::BlockingAuthEvent;
+        use fireemu_core_types::{determinism::SplitMix64, time::LogicalInstant};
+        let signer = BLOCKING_TEST_SIGNER
+            .get_or_init(|| fireemu_adapter_http::signing::RsaSigner::from_seed(1).unwrap())
+            .clone();
+        let runtime = runtime_with_blocking_auth_policy_order(&[("guardA", false, false)]).await;
+        let mut store = AuthStore::new("demo-app", SplitMix64::new(7), TotpPolicy::default());
+        let uid = store
+            .create_user(
+                NewUser::email("person@example.test"),
+                LogicalInstant::from_unix_seconds(100),
+            )
+            .unwrap();
+        let user = store.user_by_id(uid.as_str()).unwrap().clone();
+        let production =
+            BlockingAuthBridge::new(runtime.clone()).with_production_token(Some(signer));
+        let emulated = BlockingAuthBridge::new(runtime.clone());
+        let runtime_seconds = i64::try_from(runtime.now().as_nanos() / 1_000_000_000).unwrap();
+        let before = i64::try_from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+        )
+        .unwrap();
+        let answers = tokio::task::spawn_blocking(move || {
+            [
+                production
+                    .invoke(BlockingAuthEvent::BeforeCreate, &user)
+                    .unwrap(),
+                emulated
+                    .invoke(BlockingAuthEvent::BeforeCreate, &user)
+                    .unwrap(),
+            ]
+        })
+        .await
+        .unwrap();
+        let after = i64::try_from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+        )
+        .unwrap();
+        assert!(!(before..=after).contains(&runtime_seconds));
+        for (answer, production) in answers.iter().zip([true, false]) {
+            let body: serde_json::Value =
+                serde_json::from_str(answer["body"].as_str().unwrap()).unwrap();
+            let parts: Vec<_> = body["data"]["jwt"].as_str().unwrap().split('.').collect();
+            let header: serde_json::Value =
+                serde_json::from_slice(&base64url_decode(parts[0]).unwrap()).unwrap();
+            let claims: serde_json::Value =
+                serde_json::from_slice(&base64url_decode(parts[1]).unwrap()).unwrap();
+            let headers = answer["headers"].as_array().unwrap();
+            let get = |name: &str| {
+                headers
+                    .iter()
+                    .find(|h| h[0] == name)
+                    .map(|h| h[1].as_str().unwrap())
+            };
+            if production {
+                assert!((before..=after).contains(&claims["iat"].as_i64().unwrap()));
+                assert_eq!(header["alg"], "RS256");
+                assert_eq!(
+                    claims["aud"],
+                    "https://us-central1-demo-app.cloudfunctions.net/guardA"
+                );
+                assert_eq!(
+                    claims["exp"].as_i64().unwrap() - claims["iat"].as_i64().unwrap(),
+                    300
+                );
+                assert_eq!(get("content-type"), Some("application/json; charset=utf-8"));
+                assert_eq!(get("user-agent"), Some("Google-Firebase"));
+            } else {
+                assert_eq!(claims["iat"], runtime_seconds);
+                assert_eq!(header["alg"], "none");
+                assert_eq!(
+                    claims["aud"],
+                    format!(
+                        "http://{}/demo-app/us-central1/guardA",
+                        get("host").unwrap()
+                    )
+                );
+                assert_eq!(get("content-type"), Some("application/json"));
+                assert_eq!(get("user-agent"), None);
+            }
+        }
+        runtime.shutdown().await;
+    }
+
     /// Each invocation path delivers its event to the selected function and answers what the
     /// function answered (the fake runner echoes the request): the user events carry the
     /// user, the mail event the address, and a bridge without the email event runs nothing.
@@ -10228,6 +11402,7 @@ exports.add = onCall({{}}, observe("add"));
             "event-1",
             1_788_004_860,
             "http://127.0.0.1:1/demo-app/us-central1/fn",
+            super::BlockingTokenShape::Emulated,
         );
         assert_eq!(claims["event_type"], "beforeSendEmail");
         assert_eq!(claims["email"], "a@example.com");
@@ -10917,6 +12092,7 @@ exports.add = onCall({{}}, observe("add"));
             ignore: Vec::new(),
         };
         let hosts = super::EmulatorHosts {
+            blocking_jwks: None,
             app_check: None,
             firestore: None,
             auth: None,
@@ -10991,6 +12167,7 @@ exports.add = onCall({{}}, observe("add"));
 
     fn no_hosts() -> super::EmulatorHosts {
         super::EmulatorHosts {
+            blocking_jwks: None,
             app_check: None,
             firestore: None,
             auth: None,
@@ -11208,6 +12385,59 @@ sys.stdin.buffer.read()
     }
 
     #[tokio::test]
+    async fn blocking_jwks_is_owned_by_the_daemon_and_only_sent_to_python() {
+        let script = r"
+import json,os,sys
+value=json.dumps({'type':'hello','runner':'probe','manifest':{'functions':[{'name':'job','trigger':{'type':'schedule','schedule':'every 1 minutes'}}]},'adminAppCheck':{'instrumentation':json.dumps([os.environ.get('FIREEMU_AUTH_BLOCKING_JWKS'), json.loads(os.environ.get('FIREEMU_LOCAL_SECRETS_JSON','{}')).get('FIREEMU_AUTH_BLOCKING_JWKS')])}}).encode()
+sys.stdout.buffer.write(str(len(value)).encode()+b'\n'+value)
+sys.stdout.buffer.flush()
+sys.stdin.buffer.read()
+";
+        let (dir, python) = python_codebase("blocking-jwks");
+        let manifest_path = dir.join("manifest.json");
+        std::fs::write(&manifest_path, scheduled_with(json!({})).to_string()).unwrap();
+        std::fs::write(dir.join(".env"), "FIREEMU_AUTH_BLOCKING_JWKS=user-value\n").unwrap();
+        std::fs::write(
+            dir.join(".secret.local"),
+            "FIREEMU_AUTH_BLOCKING_JWKS=secret-value\n",
+        )
+        .unwrap();
+        let cfg = crate::config::RuntimeConfig {
+            functions_runner: Some(vec![
+                "python3".to_owned(),
+                "-c".to_owned(),
+                script.to_owned(),
+            ]),
+            functions_manifest: Some(manifest_path.display().to_string()),
+            ..crate::config::RuntimeConfig::default()
+        };
+        let node = crate::config::FunctionsCodebase {
+            runtime: Some("nodejs20".to_owned()),
+            ..python.clone()
+        };
+        let cache = Arc::new(super::NodeProbeCache::default());
+        let snapshot = VirtualClock::new(cfg.clock_start).snapshot();
+        for (codebase, jwks, expected) in [
+            (&python, Some("public-jwks"), Some("public-jwks")),
+            (&python, None, None),
+            (&node, Some("public-jwks"), None),
+        ] {
+            let mut hosts = no_hosts();
+            hosts.blocking_jwks = jwks.map(str::to_owned);
+            let started =
+                super::start_codebase(&cfg, codebase, &hosts, "s", false, &cache, snapshot)
+                    .await
+                    .unwrap();
+            let report = started.runner.hello().admin_app_check.clone().unwrap();
+            let values: serde_json::Value =
+                serde_json::from_str(report["instrumentation"].as_str().unwrap()).unwrap();
+            assert_eq!(values, json!([expected, null]));
+            started.runner.kill_now();
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
     async fn a_virtual_date_is_refused_for_a_runner_without_a_clock_and_the_message_names_python() {
         // A runner that says hello and announces no clock capability, as the Python runner does.
         let script = r"
@@ -11313,6 +12543,7 @@ sys.stdin.buffer.read()
             ignore: Vec::new(),
         };
         let hosts = super::EmulatorHosts {
+            blocking_jwks: None,
             app_check: None,
             firestore: None,
             auth: None,
@@ -14739,6 +15970,61 @@ exit 0
             inspected.functions_inspect_port = Some(9229);
             assert!(super::functions_config(&inspected, None, "s").debug_mode);
         }
+    }
+
+    proptest::proptest! {
+        /// E4: a pinned seed ignores the nonce, an unpinned start ignores the seed.
+        #[test]
+        fn the_session_is_a_function_of_the_seed_or_the_nonce_never_both(
+            seed in proptest::prelude::any::<u64>(),
+            nonce in proptest::prelude::any::<u64>(),
+            other in proptest::prelude::any::<u64>(),
+        ) {
+            proptest::prop_assert_eq!(super::session_value(seed, true, nonce), u128::from(seed));
+            proptest::prop_assert_eq!(super::session_value(seed, true, other), u128::from(seed));
+            proptest::prop_assert_eq!(super::session_value(seed, false, nonce), u128::from(nonce));
+            proptest::prop_assert_eq!(super::session_value(other, false, nonce), u128::from(nonce));
+        }
+    }
+
+    /// E1/E2: the Functions session, which every event id is derived from, is the seed only when
+    /// the configuration names one. A plain start gets a per-boot session, so a restart does not
+    /// repeat the previous run's ids; an explicit seed still gives the documented golden ids.
+    #[test]
+    fn a_plain_start_does_not_derive_event_ids_from_the_default_seed() {
+        use crate::config::RuntimeConfig;
+        use fireemu_core_types::ids::SessionId;
+        let pinned =
+            RuntimeConfig::from_json(&json!({"schemaVersion": 1, "daemon": {"seed": 42}})).unwrap();
+        assert!(pinned.seed_pinned);
+        assert_eq!(
+            super::functions_config(&pinned, None, "s").session,
+            SessionId::new(42)
+        );
+        let plain = RuntimeConfig::from_json(&json!({"schemaVersion": 1})).unwrap();
+        assert!(!plain.seed_pinned);
+        assert_ne!(
+            super::functions_config(&plain, None, "s").session,
+            SessionId::new(42),
+            "a plain start must not be the seed-42 session"
+        );
+        // One boot, one session: every codebase and every call sees the same nonce, and it is a
+        // draw, not a constant. Two draws differ (the odds of a repeat are 2^-64).
+        let again = RuntimeConfig::from_json(&json!({"schemaVersion": 1})).unwrap();
+        let session = super::functions_config(&plain, None, "s").session;
+        assert_eq!(session, super::functions_config(&again, None, "s").session);
+        assert!(
+            session.value() > 1,
+            "the nonce is drawn, not a small constant"
+        );
+        assert_eq!(session.value(), u128::from(super::boot_nonce()));
+        assert_ne!(super::fresh_nonce(), super::fresh_nonce());
+        let other =
+            RuntimeConfig::from_json(&json!({"schemaVersion": 1, "daemon": {"seed": 7}})).unwrap();
+        assert_eq!(
+            super::functions_config(&other, None, "s").session,
+            SessionId::new(7)
+        );
     }
 
     #[test]

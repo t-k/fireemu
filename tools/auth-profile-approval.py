@@ -15,7 +15,7 @@ spec.loader.exec_module(publisher)
 
 APPROVAL = ROOT / "spec/compatibility/evidence/auth-profile/approval.json"
 PAGE = ROOT / "docs/compatibility/auth-profile-approval.md"
-SUBJECT = "23913299c5d414abbdffe0692711f77ead500b639318a09a60a5802bd1f199d2"
+SUBJECT = "8176f98733cb63ed4712037391a7861cfb06e857739e5fc42070f07d2d08e299"
 SCOPE = "Photo URL setting, replacement and deletion through REST using end-user tokens; no tenant; local strict profile and recorded production configuration; only the recorded artifact, configuration and auth-photo-url corpus revision 1 twelve cases; approved as redacted semantic observations matching the published checks."
 
 

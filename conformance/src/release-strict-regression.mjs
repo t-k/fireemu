@@ -41,6 +41,9 @@ import { federationEnvironment } from "./release-openssl.mjs";
 import { bindingProblems } from "./harness-registry.mjs";
 import { EXPECTED_ACTIONS, localSetupDigest } from "./harness-target/local-tenancy.mjs";
 import { findPackagedRunner, packagedRunnerCandidates } from "./packaged-runner.mjs";
+import { judgeHosting } from "./hosting-production/release-judge.mjs";
+
+export { judgeHosting };
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const CONFORMANCE = join(ROOT, "conformance");
@@ -168,6 +171,40 @@ const rtdbRun = (id, campaign, files) => ({
   ],
 });
 
+/**
+ * The Hosting comparisons (HOSTING closure): the production corpus served by the strict profile
+ * under productionExact on the binary under test and compared with the two committed recordings.
+ * One run exports the three comparison documents; each committed file must equal its own.
+ */
+const HOSTING_COMPARISONS = [
+  "conformance/hosting-production-run-comparison.json",
+  "conformance/hosting-production-strict-vs-pass-1.json",
+  "conformance/hosting-production-strict-vs-pass-2.json",
+];
+const hostingRun = (id) => ({
+  id,
+  kind: "hosting-comparison-v1",
+  comparisonPaths: HOSTING_COMPARISONS,
+  clear: [],
+  commands: [
+    {
+      mode: "local",
+      argv: [
+        "node",
+        "conformance/src/hosting-production/release-replay.mjs",
+        "local",
+        "--fireemu",
+        "{bin}",
+        "--export",
+        "{export}",
+      ],
+      env: {},
+      expectedExitCodes: [0],
+      timeoutMs: 10 * 60 * 1000,
+    },
+  ],
+});
+
 export const RUNS = [
   (() => {
     const run = rtdbRun("R22", "rest-old", [
@@ -206,6 +243,9 @@ export const RUNS = [
   rtdbRun("R32", "sdk-tokens", ["RTDB-sdk-tokens-comparison.json"]),
   rtdbRun("R33", "sdk-rules-load", ["RTDB-sdk-rules-load-comparison.json"]),
   rtdbRun("R34", "breadth", ["RTDB-breadth-comparison.json"]),
+  rtdbRun("R35", "sdk-rules-syntax", ["RTDB-sdk-rules-syntax-comparison.json"]),
+  rtdbRun("R36", "kinds", ["RTDB-kinds-comparison.json"]),
+  hostingRun("R37"),
   laneRun(
     "R1",
     "fs-query-index-comparison-v1",
@@ -422,24 +462,6 @@ export const RUNS = [
     clear: ["fs-transaction"],
     commands: [
       {
-        mode: "check",
-        argv: [
-          "uv",
-          "run",
-          "--python",
-          "3.12.13",
-          "python",
-          "tools/compat-broad/fs-write-txn/fs_txn_release.py",
-          "check",
-          "--binary",
-          "{bin}",
-          "--out",
-          "{export}.check",
-        ],
-        env: {},
-        expectedExitCodes: [0],
-      },
-      {
         mode: "export-comparison",
         argv: [
           "uv",
@@ -513,6 +535,16 @@ export const RUNS = [
     { FIREEMU_SANDBOX_LANE: "fs-ent-pipeline" },
   ),
 ];
+
+export const GROUPS = {
+  eventarc: ["R20"],
+  transaction: ["R19"],
+  "rtdb-a": ["R22", "R24", "R25", "R28", "R30", "R31", "R32", "R33", "R34", "R35"],
+  "rtdb-b": ["R23", "R26", "R27", "R29", "R36"],
+};
+GROUPS.rest = RUNS.map(({ id }) => id).filter(
+  (id) => !Object.values(GROUPS).some((ids) => ids.includes(id)),
+);
 
 /** Composite comparison files: which part each run covers. Other keys are metadata. */
 const COMPOSITE_KINDS = {
@@ -599,6 +631,12 @@ export const EXCLUDED_KINDS = [
     reason:
       "the comparison is produced by a Rust test (crates/fireemu-core-firestore/tests/text_closure_comparison.rs) that replays the committed public fixtures through the core text engine on every commit and fails when the committed file differs; there is no harness yet that drives an installed binary over REST with a check and an export-comparison mode, so the release job cannot rerun it against the binary under test",
     issue: "fs-text-search-comparison-needs-a-release-binary-run.md",
+  },
+  {
+    kind: "functions-python-pass-comparison-v1",
+    reason:
+      "the rows compare the committed masked fixtures of the production passes against each other and are recomputed by the FUNCTIONS-PYTHON closure test on every commit; the real Python SDK replay of those fixtures runs in the functions-python CI job against the Python runner source, so the release job has no installed-binary comparison to rerun and no pinned Python SDK environment",
+    issue: "functions-python-comparison-needs-a-release-binary-run.md",
   },
   {
     kind: "fs-listen-sdk-comparison-v1",
@@ -714,13 +752,16 @@ export function parseArguments(args) {
   for (let index = 0; index < args.length; index += 1) {
     const name = args[index];
     const value = args[index + 1];
-    if (name !== "--out" && name !== "--dist") throw new Error(`unknown argument ${name}`);
+    if (name !== "--out" && name !== "--dist" && name !== "--group")
+      throw new Error(`unknown argument ${name}`);
     if (!value || value.startsWith("--")) throw new Error(`${name} needs a value`);
     parsed[name.slice(2)] = value;
     index += 1;
   }
   if (!parsed.out)
     throw new Error("usage: release-strict-regression.mjs --out <dir> [--dist <dir>]");
+  if (parsed.group && !Object.hasOwn(GROUPS, parsed.group))
+    throw new Error(`unknown group ${parsed.group}`);
   return parsed;
 }
 
@@ -746,7 +787,8 @@ export function planComparisons(
     // PUBSUB registers its per-case comparison (a disclosed exclusion) before the parent review.
     const pendingPubsub = parent === "PUBSUB" && entry.closure.parentStatus === "IMPLEMENTING";
     const reopenedParent =
-      ["RTDB", "FS-PIPELINE"].includes(parent) && entry.closure.parentStatus === "IMPLEMENTING";
+      ["RTDB", "FS-PIPELINE", "FUNCTIONS-PYTHON"].includes(parent) &&
+      entry.closure.parentStatus === "IMPLEMENTING";
     if (
       entry.closure.parentStatus !== "COMPAT_VERIFIED" &&
       !pendingEventarc &&
@@ -890,8 +932,32 @@ export function localSetupDifferences(actual) {
   return differences;
 }
 
+export const EVENTARC_REBIND_PATHS = ["conformance/src/eventarc-production/run.mjs"];
+
+export function eventarcSourceRebinds(readBytes) {
+  const path = "spec/compatibility/closure/evidence/EVENTARC-adjudication.json";
+  try {
+    const bytes = readBytes(path);
+    const digest = sha256Bytes(bytes);
+    const records = JSON.parse(readBytes("spec/compatibility/closure/record-digests.json"));
+    const closure = JSON.parse(readBytes("spec/compatibility/closure/EVENTARC.json"));
+    if (digest !== records.records[path] || digest !== closure.retrospectiveAdjudication.sha256) {
+      throw new Error("digest mismatch");
+    }
+    const rebinds = JSON.parse(bytes).sourceRebinds ?? [];
+    for (const rebind of rebinds) {
+      if (!EVENTARC_REBIND_PATHS.includes(rebind.path)) {
+        throw new Error(`rebind for ${rebind.path} is not allowed`);
+      }
+    }
+    return rebinds;
+  } catch (error) {
+    throw new Error(`EVENTARC adjudication: ${error.message}`, { cause: error });
+  }
+}
+
 /** Differences between a lane export and the committed comparison file. */
-export function compareLaneExport(expected, actual, binarySha256) {
+export function compareLaneExport(expected, actual, binarySha256, { sourceRebinds = [] } = {}) {
   if (!actual || typeof actual !== "object" || !Array.isArray(actual.rows)) {
     return ["no comparison was exported"];
   }
@@ -912,9 +978,25 @@ export function compareLaneExport(expected, actual, binarySha256) {
       differences.push(`EVENTARC semantic evidence: ${error.message}`);
     }
   }
+  const sourcePins = { ...expected.sourcePins };
+  if (expected.kind === "eventarc-production-comparison-v1") {
+    for (const rebind of sourceRebinds) {
+      if (!EVENTARC_REBIND_PATHS.includes(rebind.path)) {
+        differences.push(`sourcePins: rebind for ${rebind.path} is not allowed`);
+        continue;
+      }
+      if (expected.sourcePins[rebind.path] === rebind.previousSha256) {
+        sourcePins[rebind.path] = rebind.sha256;
+      }
+    }
+  }
   for (const field of fields) {
-    if (!isDeepStrictEqual(expected[field], actual[field])) {
-      differences.push(`${field}: expected ${brief(expected[field])} got ${brief(actual[field])}`);
+    const value = field === "sourcePins" ? sourcePins : expected[field];
+    if (
+      !isDeepStrictEqual(value, actual[field]) &&
+      !(field === "sourcePins" && isDeepStrictEqual(expected.sourcePins, actual.sourcePins))
+    ) {
+      differences.push(`${field}: expected ${brief(value)} got ${brief(actual[field])}`);
     }
   }
   if ("rangeTotals" in expected && !isDeepStrictEqual(expected.rangeTotals, actual.rangeTotals)) {
@@ -1142,21 +1224,67 @@ function parseUniqueJson(text) {
 const isPlainObject = (value) =>
   value !== null && typeof value === "object" && !Array.isArray(value);
 
+/** The slash-led words the strict `fireemu exec` banner of the historical replay prints. */
+const DAEMON_LOG_ROUTES = new Set(["/", "/health/live", "/v1/rules"]);
+const LOOPBACK_URL = /^http:\/\/127\.0\.0\.1:\d{1,5}(?:\/[\w-][\w.-]*)*\/?$/;
+
+const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 /**
  * The historical judge requires absolute paths at these root binding fields, so only they leave
- * the public evidence check. Everything else in the binding is still checked.
+ * the public evidence check. Everything else in the binding is still checked. The judge also
+ * requires the daemon's banner (`daemonLog`), which names the config file and `<cwd>/firebase.json`;
+ * only those exempt paths, matched whole (longest first), preceded by a line start or whitespace
+ * and followed by the end of the log, whitespace or a colon that ends a word, are masked there; any
+ * other word left in the banner that holds a slash, a backslash or a leading tilde must be one of
+ * its routes or a loopback URL.
  */
 function withoutHistoricalBindingPaths(comparison) {
   if (!isPlainObject(comparison) || !isPlainObject(comparison.profileBinding)) return comparison;
-  const { cwd, argv, binary, config, indexes, ...binding } = comparison.profileBinding;
+  const { cwd, argv, binary, config, indexes, daemonLog, ...binding } = comparison.profileBinding;
   const withoutPaths = (value, ...names) =>
     isPlainObject(value)
       ? Object.fromEntries(Object.entries(value).filter(([name]) => !names.includes(name)))
       : value;
+  const exemptPaths = [
+    cwd,
+    typeof cwd === "string" ? `${cwd}/firebase.json` : undefined,
+    ...(Array.isArray(argv) ? argv : []),
+    binary?.path,
+    config?.path,
+    config?.sourcePath,
+    indexes?.path,
+    indexes?.sourcePath,
+  ]
+    .filter((path) => typeof path === "string" && path.startsWith("/") && path.length > 1)
+    .sort((left, right) => right.length - left.length);
+  const maskedLog =
+    typeof daemonLog === "string" && exemptPaths.length > 0
+      ? daemonLog.replace(
+          new RegExp(
+            `(?<=^|\\s)(?:${exemptPaths.map(escapeRegExp).join("|")})(?=$|\\s|:(?:\\s|$))`,
+            "gm",
+          ),
+          "<binding-path>",
+        )
+      : daemonLog;
+  if (typeof maskedLog === "string") {
+    // The generic guard recognises only some path forms inside prose, so the banner fails closed:
+    // after masking, every word holding a slash, a backslash or a leading tilde must be one of the
+    // banner's routes or a loopback URL.
+    for (const word of maskedLog.split(/\s+/)) {
+      // Only punctuation at the edges of a word is prose; inside a word it may be part of a name.
+      const trimmed = word.replace(/^[([]+/, "").replace(/[)\];,.:]+$/, "");
+      if (!/[\\/]|^~/.test(trimmed)) continue;
+      if (DAEMON_LOG_ROUTES.has(trimmed) || LOOPBACK_URL.test(trimmed)) continue;
+      throw new Error("public evidence contains a disallowed filesystem path in daemonLog");
+    }
+  }
   return {
     ...comparison,
     profileBinding: {
       ...binding,
+      ...(daemonLog === undefined ? {} : { daemonLog: maskedLog }),
       cwd: typeof cwd === "string" ? undefined : cwd,
       argv: Array.isArray(argv) ? argv.filter((item) => typeof item !== "string") : argv,
       binary: withoutPaths(binary, "path"),
@@ -1574,6 +1702,8 @@ export function judge(comparison, observations, context) {
       R32: "sdk-tokens",
       R33: "sdk-rules-load",
       R34: "breadth",
+      R35: "sdk-rules-syntax",
+      R36: "kinds",
     };
     return judgeRtdbExport(
       comparison.runIds[0] === "R22" &&
@@ -1601,10 +1731,23 @@ export function judge(comparison, observations, context) {
   if (comparison.kind === "functions-http-integrated-regression") {
     return judgeFunctionsHttp(expected, observations.R12);
   }
+  if (comparison.kind === "hosting-comparison-v1") {
+    return judgeHosting(comparison.path, expected, observations[comparison.runIds[0]], context);
+  }
   const observed = observations[comparison.runIds[0]];
   const run = RUNS.find((r) => r.id === comparison.runIds[0]);
+  let sourceRebinds = [];
+  let rebindRefusal;
+  if (comparison.kind === "eventarc-production-comparison-v1") {
+    try {
+      sourceRebinds = eventarcSourceRebinds(context.readBytes);
+    } catch (error) {
+      rebindRefusal = `EVENTARC source rebinds refused: ${error.message}`;
+    }
+  }
   return [
-    ...compareLaneExport(expected, observed, context.binarySha256),
+    ...compareLaneExport(expected, observed, context.binarySha256, { sourceRebinds }),
+    ...(rebindRefusal ? [rebindRefusal] : []),
     ...(run?.localSetup ? localSetupDifferences(observed) : []),
   ];
 }
@@ -1621,7 +1764,8 @@ export function exportCopies(comparisons, runs) {
         run.commands.some(
           (command) =>
             command.mode === "export-comparison" ||
-            (run.kind === "rtdb-production-comparison-v1" && command.mode === "local"),
+            (run.kind === "rtdb-production-comparison-v1" && command.mode === "local") ||
+            (run.kind === "hosting-comparison-v1" && command.mode === "local"),
         ),
       )
       .map((run) => run.id),
@@ -1635,6 +1779,17 @@ export function exportCopies(comparisons, runs) {
           ? "EVENTARC-comparison.json"
           : comparison.path.split("/").at(-1),
     }));
+}
+
+export function selectGroup(plan, group) {
+  const ids = group ? new Set(GROUPS[group]) : undefined;
+  return {
+    runs: ids ? RUNS.filter((run) => ids.has(run.id)) : RUNS,
+    comparisons: ids
+      ? plan.comparisons.filter((comparison) => comparison.runIds.every((id) => ids.has(id)))
+      : plan.comparisons,
+    reportsR10: !ids || ids.has("R10"),
+  };
 }
 
 /** Validate each retained export snapshot before writing any public comparison copy. */
@@ -1707,6 +1862,7 @@ async function main() {
     .filter((name) => name.endsWith(".json") && name !== "record-digests.json")
     .map((name) => ({ name, closure: readJson(`${CLOSURE_DIR}/${name}`) }));
   const plan = planRelease(closures, readJson);
+  const { runs, comparisons, reportsR10 } = selectGroup(plan, args.group);
   const binarySha256 = await sha256File(binary);
   const tarballs = {};
   if (args.dist) {
@@ -1720,9 +1876,11 @@ async function main() {
     functionsNode,
     out,
     readJson,
+    readBytes: (path) => readFileSync(join(ROOT, path)),
     env: { ...process.env, FIREEMU_BIN: binary, FIREEMU_NODE: functionsNode },
   };
   const summary = {
+    ...(args.group ? { group: args.group } : {}),
     binary: { path: binary, sha256: binarySha256 },
     tarballs,
     node: process.version,
@@ -1735,7 +1893,7 @@ async function main() {
   const observations = {};
   let fatalTimeout = false;
   if (plan.errors.length === 0) {
-    fatalTimeout = await runUntilFatal(RUNS, async (run) => {
+    fatalTimeout = await runUntilFatal(runs, async (run) => {
       console.log(`== ${run.id} ${run.kind}${run.part ? ` (${run.part})` : ""}`);
       const entry = await runEntry(run, context);
       observations[run.id] = await observeUnlessFatal(entry, () => observe(run, entry, context));
@@ -1747,14 +1905,13 @@ async function main() {
       return entry;
     });
     if (!fatalTimeout)
-      for (const comparison of plan.comparisons) {
+      for (const comparison of comparisons) {
         const differences = judge(comparison, observations, context);
         summary.comparisons.push({ ...comparison, differences });
       }
-    if (!fatalTimeout)
-      await copyValidatedExportSnapshots(out, exportCopies(plan.comparisons, RUNS));
+    if (!fatalTimeout) await copyValidatedExportSnapshots(out, exportCopies(comparisons, runs));
   }
-  if (!fatalTimeout) {
+  if (!fatalTimeout && reportsR10) {
     const expectedRaw = context.readJson(
       "spec/compatibility/closure/evidence/integration-v0.8.0/FS-DATA-WRITE-regression.json",
     ).current.rawLocalResultDigests.strict;

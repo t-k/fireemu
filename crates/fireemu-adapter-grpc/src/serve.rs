@@ -1013,6 +1013,23 @@ where
                 let rest = rest.clone();
                 let hub = hub.clone();
                 async move {
+                    if let Err(refusal) = fireemu_core_session::host_guard::admits_request(
+                        req.version() == hyper::Version::HTTP_2,
+                        req.headers()
+                            .get_all(hyper::header::HOST)
+                            .iter()
+                            .map(hyper::header::HeaderValue::as_bytes),
+                    ) {
+                        // DNS rebinding: a page whose name was re-pointed at this listener.
+                        return Ok(Response::builder()
+                            .status(403)
+                            .header(
+                                "content-type",
+                                fireemu_core_session::host_guard::REFUSAL_CONTENT_TYPE,
+                            )
+                            .body(full(Bytes::from(refusal.body())))
+                            .unwrap_or_else(|_| Response::new(full(Bytes::new()))));
+                    }
                     if is_grpc(&req) {
                         let write_stream =
                             req.uri().path() == "/google.firestore.v1.Firestore/Write";

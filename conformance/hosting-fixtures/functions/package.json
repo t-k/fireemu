@@ -1,0 +1,11 @@
+{
+  "name": "hosting-local-functions-fixture",
+  "private": true,
+  "main": "index.cjs",
+  "engines": {
+    "node": "24"
+  },
+  "dependencies": {
+    "firebase-functions": "7.3.2"
+  }
+}

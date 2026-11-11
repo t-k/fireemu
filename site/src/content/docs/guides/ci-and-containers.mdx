@@ -24,11 +24,42 @@ jobs:
 
 Fireemu needs no Java and no download at startup: the npm package installs a native binary for the runner's platform.
 
-To also check what the development defaults let through, such as unsigned test tokens, add a job that runs with a `fireemu.toml` that sets [`productionExact`](../profiles/):
+To also check what the development defaults let through, such as unsigned test tokens, add a job that runs with a second configuration file that sets [`productionExact`](../profiles/), for example `fireemu.production-exact.toml`:
+
+<Tabs syncKey="config-format">
+<TabItem label="TOML">
+
+```toml
+# Configuration schema version: 1.
+schemaVersion = 1
+# Compatibility profile: "strict" or "emulator".
+profile = "strict"
+# Use production behavior for development defaults: true or false; requires strict.
+productionExact = true
+# Path to Firebase project configuration, relative to this file; a non-empty string.
+firebaseJson = "firebase.json"
+```
+
+</TabItem>
+<TabItem label="JSON">
+
+```json
+{
+  "schemaVersion": 1,
+  "profile": "strict",
+  "productionExact": true,
+  "firebaseJson": "firebase.json"
+}
+```
+
+</TabItem>
+</Tabs>
 
 ```sh
-npx fireemu exec --config fireemu.production-exact.json -- npm test
+npx fireemu exec --config fireemu.production-exact.toml -- npm test
 ```
+
+With the JSON form, name the file `fireemu.production-exact.json`.
 
 ### Container jobs
 
@@ -48,10 +79,13 @@ By default every listener is on loopback, which a published container port canno
 <TabItem label="TOML">
 
 ```toml
+# Configuration schema version: 1.
 schemaVersion = 1
+# Path to Firebase project configuration, relative to this file; a non-empty string.
 firebaseJson = "firebase.json"
 
 [network]
+# Allow product emulators to bind non-loopback hosts: true or false.
 allowNonLoopbackHosts = true
 ```
 
@@ -86,3 +120,65 @@ allowNonLoopbackHosts = true
 - Because a forwarder inside that namespace (`kubectl port-forward`, a sidecar proxy) connects from loopback, every control API request also needs `Authorization: Bearer <control token>` once the option is on, from a process as from a page; only `/health/` is exempt. The routes that load Security Rules or clear Firestore data are not held to the token, so `@firebase/rules-unit-testing` keeps working; a client that reaches the emulator through such a forwarder can call them, as it could on the official emulator. `fireemu exec` gives its command the token in `FIREEMU_CONTROL_TOKEN`, and `fireemu/testing` and the UI send it.
 - Browser pages must still come from a loopback origin (`http://localhost:...`), so a page served from another host cannot use the exposed ports.
 - A listener on `0.0.0.0` or `::` is advertised as `127.0.0.1` or `::1` in the environment and the Hub, as the official CLI does.
+- With the option on, the emulators also answer a single-label `Host` such as a Compose service name (`fireemu:8080`). Other names must be listed in `network.allowedHosts`; see below.
+
+## Host names the emulators answer
+
+A web page can re-point a name it controls at `127.0.0.1` after it has loaded (DNS rebinding). The browser then treats requests to the emulators as same-origin and sends no `Origin`, so the page could read local data that the emulators serve without a credential. To prevent that, the product emulators (Firestore, Authentication and the control API, Storage, Functions, Eventarc, Cloud Tasks, Pub/Sub, the Realtime Database and Hosting) answer `403` to an HTTP/1 request whose `Host` header names any other host than:
+
+- `localhost` and names under `.localhost`;
+- any IP address, so `10.0.2.2` from the Android emulator, a LAN address or a bridge address works;
+- names under `.internal`, the reserved suffix of the names container runtimes give a container for its host: `host.docker.internal` and `gateway.docker.internal` (Docker), `host.containers.internal` (Podman), `host.lima.internal` (Lima and Colima), `host.orb.internal` (OrbStack);
+- names under `.firebaseio.com` and `.firebasedatabase.app`, by which the Realtime Database selects a namespace;
+- names under `.cloudworkstations.dev`, the preview and port URLs of Firebase Studio and Cloud Workstations;
+- names under `.app.github.dev`, the forwarded-port URLs of GitHub Codespaces;
+- names under the special-use suffixes `.test`, `.local` and `.home.arpa`, which public DNS does not answer: `/etc/hosts` aliases such as `myapp.test`, mDNS names such as `my-mac.local`, Kubernetes service names under the default `svc.cluster.local`, and home-network names;
+- with `network.allowNonLoopbackHosts`, single-label names such as a Compose service name;
+- the names in `network.allowedHosts`.
+
+The special-use and `.internal` names are safe only while local name resolution can be trusted. On an untrusted network a malicious resolver (for example one handed out by DHCP on a public Wi-Fi, a risk RFC 8375 section 6.1 notes for `.home.arpa`) or an mDNS peer on the LAN (for `.local`) can answer them and rebind a page to the emulators. `network.allowedHosts` only adds names; no setting removes these defaults.
+
+A request without `Host` (HTTP/1.0) and HTTP/2 requests (gRPC clients) are not checked, because no browser sends them. The comparison ignores case, the port and one trailing dot. The Hub, the UI and the Logging emulator answer loopback names only. The official emulator does not check `Host`; production has no counterpart, so the check is the same in both profiles.
+
+Add the other names your clients use, for example a tunnel, a name in `/etc/hosts` outside the special-use suffixes, or a Kubernetes service under a custom cluster domain. An entry is a name, a name with a leading dot for that domain and all its subdomains, or `"*"` to answer every `Host` (which turns the defence off):
+
+<Tabs syncKey="config-format">
+<TabItem label="TOML">
+
+```toml
+[network]
+# Allow product emulators to bind non-loopback hosts: true or false.
+allowNonLoopbackHosts = true
+# Additional accepted host names: exact names, dot-prefixed domains, or "*".
+allowedHosts = ["emulator.ci.example", ".corp.example"]
+```
+
+</TabItem>
+<TabItem label="JSON">
+
+```json
+{
+  "network": {
+    "allowNonLoopbackHosts": true,
+    "allowedHosts": ["emulator.ci.example", ".corp.example"]
+  }
+}
+```
+
+</TabItem>
+</Tabs>
+
+An entry has no scheme, port or path. Listing a name only lets requests naming it through; the browser-origin checks are unchanged, so a page must still come from a loopback origin to use the privileged routes. Fireemu prints a `warning:` line at start for `"*"` and for an entry that covers a whole top-level domain such as `".com"`, because any web page can register a name there.
+
+A refused request gets a `403` whose message names the setting, and the daemon logs one `warning: refused Host "<name>"` line per refused name (at most 32 names), so a client whose SDK hides the response body still leaves a trace.
+
+The entries for common environments:
+
+| Environment | Entry |
+|---|---|
+| A Kubernetes service under a custom cluster domain | `".svc.<cluster domain>"` (or the exact service name) |
+| ngrok | the exact tunnel name, for example `"abc123.ngrok-free.app"` |
+| Cloudflare Tunnel | the exact public hostname of the tunnel |
+| A name in `/etc/hosts` outside `.test`, `.local` and `.home.arpa` | that name |
+
+List exact tunnel names rather than the tunnel provider's whole domain: anyone can open a tunnel under it. Firebase Studio's `.cloudworkstations.dev`, Codespaces' `.app.github.dev`, mDNS `.local`, Kubernetes `svc.cluster.local` and `.test` names need no entry. The policy is read when the daemon starts; restart it after changing `network.allowedHosts`.

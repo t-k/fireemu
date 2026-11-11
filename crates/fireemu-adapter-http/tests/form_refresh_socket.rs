@@ -70,12 +70,13 @@ impl Server {
     }
 
     async fn start_with(stateless_refresh_tokens: bool) -> Self {
+        Self::start_state(auth_state(stateless_refresh_tokens)).await
+    }
+
+    async fn start_state(state: Arc<AuthState>) -> Self {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let task = tokio::spawn(fireemu_adapter_http::server::serve(
-            listener,
-            auth_state(stateless_refresh_tokens),
-        ));
+        let task = tokio::spawn(fireemu_adapter_http::server::serve(listener, state));
         Self { addr, task }
     }
 
@@ -338,8 +339,7 @@ async fn malformed_escapes_and_invalid_utf8_are_refused_with_a_json_4xx() {
 /// `application/json; charset=UTF-8` with camelCase members (`grantType`, `refreshToken`) to
 /// `<emulator>/securetoken.googleapis.com/v1/token?key=<apiKey>`. The official emulator
 /// camel-cases every body key, so it accepts this and the `snake_case` form alike; the SDK itself
-/// is what is known to work against production (production's own reading of the camelCase JSON
-/// was not recorded here). Both profiles answer it.
+/// is known to work against production. Both profiles answer it.
 #[tokio::test]
 async fn android_sdk_camel_case_json_refresh_returns_an_id_token_in_both_profiles() {
     for stateless in [true, false] {
@@ -365,103 +365,532 @@ async fn android_sdk_camel_case_json_refresh_returns_an_id_token_in_both_profile
     }
 }
 
-/// Which spelling of the refresh fields is read, by body kind. camelCase is read only from a
-/// JSON body that uses it alone (the Android SDK's recorded shape); a form keeps `snake_case`
-/// only, and a body that mixes the spellings is read as `snake_case` only, as before.
 #[tokio::test]
-async fn refresh_field_spelling_table_by_body_kind_in_both_profiles() {
-    const OK: &str = "";
+async fn refresh_rejects_invalid_raw_value_payload() {
+    let server = Server::start().await;
+    let (status, body) = server
+        .post(
+            REFRESH,
+            "application/json",
+            br#"{"$serde_json::private::RawValue":null}"#,
+        )
+        .await;
+    assert_eq!(status, 400);
+    assert_eq!(body["error"]["message"], "INVALID_JSON_PAYLOAD");
+}
+
+#[tokio::test]
+async fn refresh_treats_raw_value_marker_as_an_unknown_field() {
+    let server = Server::start().await;
+    let (status, body) = server
+        .post(
+            REFRESH,
+            "application/json",
+            br#"{"$serde_json::private::RawValue":"{\"grant_type\":\"invalid\"}"}"#,
+        )
+        .await;
+    assert_eq!(status, 400);
+    assert_eq!(body["error"]["message"], "MISSING_GRANT_TYPE");
+}
+
+/// PICT table (work+auth-markers.securetoken-nested): `serde_json`'s `RawValue` marker key is an
+/// ordinary object key to a JSON reader. Where it sits as a *nested* value it is an object, so
+/// a string field it wraps is not a string: the refresh answers as if the field were absent.
+/// A payload the marker cannot decode keeps being refused as invalid JSON (the first parse
+/// stays authoritative for acceptance). Columns: carrier, depth, payload, stateless, position.
+const NESTED_MARKER_ROWS: &[(&str, &str, &str, bool, &str)] = &[
+    (
+        "grant_type",
+        "direct",
+        "wraps_real_value",
+        false,
+        "marker_first",
+    ),
+    (
+        "refresh_token",
+        "direct",
+        "wraps_real_value",
+        false,
+        "marker_first",
+    ),
+    (
+        "refresh_token",
+        "direct",
+        "wraps_real_value",
+        true,
+        "marker_last",
+    ),
+    (
+        "unrelated",
+        "direct",
+        "wraps_other_json_string",
+        true,
+        "marker_first",
+    ),
+    (
+        "grant_type",
+        "in_nested_object",
+        "wraps_object",
+        false,
+        "marker_last",
+    ),
+    (
+        "refresh_token",
+        "in_array",
+        "invalid_non_json_text",
+        true,
+        "marker_first",
+    ),
+    (
+        "refreshToken",
+        "in_array",
+        "wraps_real_value",
+        false,
+        "marker_first",
+    ),
+    (
+        "refreshToken",
+        "in_nested_object",
+        "invalid_non_json_text",
+        true,
+        "marker_first",
+    ),
+    (
+        "grant_type",
+        "in_array",
+        "invalid_null",
+        true,
+        "marker_first",
+    ),
+    (
+        "unrelated",
+        "in_nested_object",
+        "invalid_null",
+        false,
+        "marker_first",
+    ),
+    (
+        "unrelated",
+        "in_array",
+        "invalid_non_json_text",
+        false,
+        "marker_first",
+    ),
+    ("grantType", "direct", "wraps_object", true, "marker_first"),
+    (
+        "unrelated",
+        "in_array",
+        "wraps_object",
+        false,
+        "marker_last",
+    ),
+    (
+        "grantType",
+        "in_nested_object",
+        "wraps_real_value",
+        false,
+        "marker_last",
+    ),
+    (
+        "grant_type",
+        "direct",
+        "invalid_non_json_text",
+        false,
+        "marker_first",
+    ),
+    (
+        "refreshToken",
+        "direct",
+        "invalid_null",
+        true,
+        "marker_first",
+    ),
+    (
+        "grantType",
+        "in_array",
+        "invalid_null",
+        false,
+        "marker_first",
+    ),
+    (
+        "grantType",
+        "direct",
+        "invalid_non_json_text",
+        true,
+        "marker_first",
+    ),
+    (
+        "grant_type",
+        "in_array",
+        "wraps_other_json_string",
+        false,
+        "marker_last",
+    ),
+    (
+        "refreshToken",
+        "in_nested_object",
+        "wraps_object",
+        true,
+        "marker_last",
+    ),
+    (
+        "refresh_token",
+        "in_nested_object",
+        "wraps_object",
+        true,
+        "marker_first",
+    ),
+    (
+        "grantType",
+        "in_nested_object",
+        "wraps_other_json_string",
+        false,
+        "marker_first",
+    ),
+    (
+        "refreshToken",
+        "in_array",
+        "wraps_other_json_string",
+        true,
+        "marker_first",
+    ),
+    (
+        "refresh_token",
+        "in_array",
+        "invalid_null",
+        true,
+        "marker_first",
+    ),
+    (
+        "unrelated",
+        "in_nested_object",
+        "wraps_real_value",
+        true,
+        "marker_last",
+    ),
+    (
+        "refresh_token",
+        "direct",
+        "wraps_other_json_string",
+        false,
+        "marker_last",
+    ),
+];
+
+#[tokio::test]
+async fn refresh_nested_raw_value_marker_table() {
+    const MARKER: &str = "$serde_json::private::RawValue";
+    let mut servers = Vec::new();
     for stateless in [true, false] {
         let server = Server::start_with(stateless).await;
-        let t = server.sign_up("table@example.com", "password1").await;
-        let json_cases: Vec<(&str, Value, &str)> = vec![
-            (
-                "json snake",
-                json!({"grant_type": "refresh_token", "refresh_token": t}),
-                OK,
+        let token = server.sign_up("marker@example.com", "password1").await;
+        servers.push((stateless, server, token));
+    }
+    for &(carrier, depth, payload, stateless, position) in NESTED_MARKER_ROWS {
+        let (_, server, token) = servers.iter().find(|s| s.0 == stateless).unwrap();
+        let grant = matches!(carrier, "grant_type" | "grantType");
+        let real = if grant {
+            "refresh_token"
+        } else if carrier == "unrelated" {
+            "x"
+        } else {
+            token.as_str()
+        };
+        let literal = |text: &str| serde_json::to_string(text).unwrap();
+        let marker_value = match payload {
+            "wraps_real_value" => literal(&literal(real)),
+            "wraps_other_json_string" => literal(&literal("other")),
+            "wraps_object" => literal(r#"{"a":1}"#),
+            "invalid_null" => "null".to_owned(),
+            "invalid_non_json_text" => literal("not json"),
+            other => panic!("{other}"),
+        };
+        let marker = format!("{{{}:{marker_value}}}", literal(MARKER));
+        let nested = match depth {
+            "direct" => marker,
+            "in_array" => format!("[{marker}]"),
+            "in_nested_object" => format!("{{\"inner\":{marker}}}"),
+            other => panic!("{other}"),
+        };
+        let carried = format!("{}:{nested}", literal(carrier));
+        let companion = match carrier {
+            "grant_type" | "grantType" => format!("\"refresh_token\":{}", literal(token)),
+            "unrelated" => format!(
+                "\"grant_type\":\"refresh_token\",\"refresh_token\":{}",
+                literal(token)
             ),
-            (
-                "json camel",
-                json!({"grantType": "refresh_token", "refreshToken": t}),
-                OK,
-            ),
-            (
-                "json mixed grant snake, token camel",
-                json!({"grant_type": "refresh_token", "refreshToken": t}),
-                "MISSING_REFRESH_TOKEN",
-            ),
-            (
-                "json mixed grant camel, token snake",
-                json!({"grantType": "refresh_token", "refresh_token": t}),
-                "MISSING_GRANT_TYPE",
-            ),
-            (
-                "json empty snake token hides the camel one",
-                json!({"grant_type": "refresh_token", "refresh_token": "", "refreshToken": t}),
-                "MISSING_REFRESH_TOKEN",
-            ),
-            (
-                "json snake grant type wins",
-                json!({"grant_type": "password", "grantType": "refresh_token", "refresh_token": t}),
-                "INVALID_GRANT_TYPE",
-            ),
-            (
-                "json snake token wins over a bad camel one",
-                json!({"grant_type": "refresh_token", "refresh_token": t, "refreshToken": "bogus"}),
-                OK,
-            ),
-            (
-                "json bad snake token is not rescued by camel",
-                json!({"grant_type": "refresh_token", "refresh_token": "bogus", "refreshToken": t}),
-                "INVALID_REFRESH_TOKEN",
-            ),
-        ];
-        for (name, body, expected) in json_cases {
-            let (status, got) = server.post_json(REFRESH, &body).await;
-            check_refresh_outcome(name, stateless, status, &got, expected);
-        }
-        let form_cases: Vec<(&str, String, &str)> = vec![
-            (
-                "form snake",
-                format!("grant_type=refresh_token&refresh_token={t}"),
-                OK,
-            ),
-            (
-                "form camel",
-                format!("grantType=refresh_token&refreshToken={t}"),
-                "MISSING_GRANT_TYPE",
-            ),
-            (
-                "form mixed grant snake, token camel",
-                format!("grant_type=refresh_token&refreshToken={t}"),
-                "MISSING_REFRESH_TOKEN",
-            ),
-            (
-                "form mixed grant camel, token snake",
-                format!("grantType=refresh_token&refresh_token={t}"),
-                "MISSING_GRANT_TYPE",
-            ),
-        ];
-        for (name, body, expected) in form_cases {
-            let (status, got) = server.post_form(REFRESH, body).await;
-            check_refresh_outcome(name, stateless, status, &got, expected);
+            _ => "\"grant_type\":\"refresh_token\"".to_owned(),
+        };
+        let body = match position {
+            "marker_first" => format!("{{{carried},{companion}}}"),
+            "marker_last" => format!("{{{companion},{carried}}}"),
+            other => panic!("{other}"),
+        };
+        let (status, answer) = server
+            .post(REFRESH, "application/json", body.as_bytes())
+            .await;
+        let row = format!("{carrier}/{depth}/{payload}/stateless={stateless}/{position}");
+        if payload.starts_with("invalid") {
+            assert_eq!(status, 400, "{row}: {answer}");
+            assert_eq!(answer["error"]["message"], "INVALID_JSON_PAYLOAD", "{row}");
+        } else if carrier == "unrelated" {
+            assert_id_token(status, &answer);
+        } else {
+            let expected = if grant {
+                "MISSING_GRANT_TYPE"
+            } else {
+                "MISSING_REFRESH_TOKEN"
+            };
+            assert_eq!(status, 400, "{row}: {answer}");
+            assert_eq!(answer["error"]["message"], expected, "{row}");
         }
     }
 }
 
-fn check_refresh_outcome(name: &str, stateless: bool, status: u16, body: &Value, expected: &str) {
-    if expected.is_empty() {
-        assert_id_token(status, body);
-    } else {
-        assert_eq!(status, 400, "{name} stateless={stateless}: {body}");
-        assert!(
-            body["error"]["message"]
-                .as_str()
-                .is_some_and(|m| m.starts_with(expected)),
-            "{name} stateless={stateless}: expected {expected}: {body}"
+/// SECURETOKEN-BODY production rows, preserving the recorded wire order.
+#[allow(clippy::too_many_lines)]
+#[tokio::test]
+async fn refresh_field_spelling_table_by_body_kind_in_both_profiles() {
+    for stateless in [true, false] {
+        let mut state = auth_state(stateless);
+        let registry = fireemu_core_auth::store::AuthRegistry::new("demo-app", state.store.clone());
+        Arc::get_mut(&mut state).unwrap().registry = Some(Arc::new(registry));
+        let admin_headers = fireemu_adapter_http::identity_toolkit::RequestHeaders {
+            authorization: Some("Bearer owner".to_owned()),
+            ..Default::default()
+        };
+        let call = |method: &str, path: &str, body: &Value| {
+            let result = fireemu_adapter_http::identity_toolkit::handle_with(
+                &state,
+                method,
+                path,
+                &admin_headers,
+                body,
+            );
+            assert_eq!(result.status, 200, "{path}: {}", result.body);
+            result.body
+        };
+        if !stateless {
+            call("PATCH", "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config?updateMask=multiTenant.allowTenants", &json!({"multiTenant":{"allowTenants":true}}));
+        }
+        let tenant = call(
+            "POST",
+            "/identitytoolkit.googleapis.com/v2/projects/demo-app/tenants",
+            &json!({"displayName":"body-tenant","allowPasswordSignup":true}),
         );
+        let tenant = tenant["name"].as_str().unwrap().rsplit('/').next().unwrap();
+        call(
+            "POST",
+            &format!("{V1}/projects/demo-app/tenants/{tenant}/accounts"),
+            &json!({"email":"table-t@example.com","password":"password1"}),
+        );
+        let signed = call(
+            "POST",
+            &format!("{V1}/accounts:signInWithPassword"),
+            &json!({"tenantId":tenant,"email":"table-t@example.com","password":"password1","returnSecureToken":true}),
+        );
+        let t = signed["refreshToken"].as_str().unwrap().to_owned();
+        let server = Server::start_state(state).await;
+        let a = server.sign_up("table-a@example.com", "password1").await;
+        let b = server.sign_up("table-b@example.com", "password1").await;
+        let rows = [
+            (
+                "form-snake",
+                FORM,
+                format!("grant_type=refresh_token&refresh_token={a}"),
+                "a",
+            ),
+            (
+                "json-snake",
+                "application/json",
+                format!(r#"{{"grant_type":"refresh_token","refresh_token":"{a}"}}"#),
+                "a",
+            ),
+            (
+                "json-camel",
+                "application/json",
+                format!(r#"{{"grantType":"refresh_token","refreshToken":"{a}"}}"#),
+                "a",
+            ),
+            (
+                "form-camel",
+                FORM,
+                format!("grantType=refresh_token&refreshToken={a}"),
+                "a",
+            ),
+            (
+                "json-mixed-snake-grant-camel-token",
+                "application/json",
+                format!(r#"{{"grant_type":"refresh_token","refreshToken":"{a}"}}"#),
+                "a",
+            ),
+            (
+                "json-mixed-camel-grant-snake-token",
+                "application/json",
+                format!(r#"{{"grantType":"refresh_token","refresh_token":"{a}"}}"#),
+                "a",
+            ),
+            (
+                "form-mixed-snake-grant-camel-token",
+                FORM,
+                format!("grant_type=refresh_token&refreshToken={a}"),
+                "a",
+            ),
+            (
+                "json-both-tokens-snake-first",
+                "application/json",
+                format!(
+                    r#"{{"grant_type":"refresh_token","refresh_token":"{a}","refreshToken":"{b}"}}"#
+                ),
+                "b",
+            ),
+            (
+                "json-both-tokens-camel-first",
+                "application/json",
+                format!(
+                    r#"{{"grant_type":"refresh_token","refreshToken":"{b}","refresh_token":"{a}"}}"#
+                ),
+                "a",
+            ),
+            (
+                "form-both-tokens",
+                FORM,
+                format!("grant_type=refresh_token&refresh_token={a}&refreshToken={b}"),
+                "b",
+            ),
+            (
+                "json-both-grants-snake-first",
+                "application/json",
+                format!(
+                    r#"{{"grant_type":"refresh_token","grantType":"password","refresh_token":"{a}"}}"#
+                ),
+                "INVALID_GRANT_TYPE",
+            ),
+            (
+                "json-both-grants-camel-first",
+                "application/json",
+                format!(
+                    r#"{{"grantType":"password","grant_type":"refresh_token","refresh_token":"{a}"}}"#
+                ),
+                "a",
+            ),
+            (
+                "json-snake-empty-camel-valid",
+                "application/json",
+                format!(
+                    r#"{{"grant_type":"refresh_token","refresh_token":"","refreshToken":"{a}"}}"#
+                ),
+                "a",
+            ),
+            (
+                "json-camel-invalid-token",
+                "application/json",
+                r#"{"grantType":"refresh_token","refreshToken":"not-a-refresh-token"}"#.to_owned(),
+                "INVALID_REFRESH_TOKEN",
+            ),
+            (
+                "json-snake-invalid-token",
+                "application/json",
+                r#"{"grant_type":"refresh_token","refresh_token":"not-a-refresh-token"}"#
+                    .to_owned(),
+                "INVALID_REFRESH_TOKEN",
+            ),
+            (
+                "json-camel-wrong-grant",
+                "application/json",
+                format!(r#"{{"grantType":"password","refreshToken":"{a}"}}"#),
+                "INVALID_GRANT_TYPE",
+            ),
+            (
+                "json-camel-no-grant",
+                "application/json",
+                format!(r#"{{"refreshToken":"{a}"}}"#),
+                "MISSING_GRANT_TYPE",
+            ),
+            (
+                "json-camel-no-token",
+                "application/json",
+                r#"{"grantType":"refresh_token"}"#.to_owned(),
+                "MISSING_REFRESH_TOKEN",
+            ),
+            (
+                "tenant-form-snake",
+                FORM,
+                format!("grant_type=refresh_token&refresh_token={t}"),
+                "t",
+            ),
+            (
+                "tenant-json-snake",
+                "application/json",
+                format!(r#"{{"grant_type":"refresh_token","refresh_token":"{t}"}}"#),
+                "t",
+            ),
+            (
+                "tenant-json-camel",
+                "application/json",
+                format!(r#"{{"grantType":"refresh_token","refreshToken":"{t}"}}"#),
+                "t",
+            ),
+            (
+                "tenant-form-camel",
+                FORM,
+                format!("grantType=refresh_token&refreshToken={t}"),
+                "t",
+            ),
+            (
+                "tenant-json-both-tokens",
+                "application/json",
+                format!(
+                    r#"{{"grant_type":"refresh_token","refresh_token":"{a}","refreshToken":"{t}"}}"#
+                ),
+                "t",
+            ),
+            (
+                "json-snake-after",
+                "application/json",
+                format!(r#"{{"grant_type":"refresh_token","refresh_token":"{a}"}}"#),
+                "a",
+            ),
+            (
+                "duplicate-json-token",
+                "application/json",
+                format!(
+                    r#"{{"grant_type":"refresh_token","refresh_token":"{a}","refresh_token":"{b}"}}"#
+                ),
+                "b",
+            ),
+            (
+                "duplicate-form-token",
+                FORM,
+                format!("grant_type=refresh_token&refresh_token={a}&refresh_token={b}"),
+                "b",
+            ),
+        ];
+        for (id, content_type, request, expected) in rows {
+            let (status, body) = server.post(REFRESH, content_type, request.as_bytes()).await;
+            if ["a", "b", "t"].contains(&expected) {
+                assert_eq!(status, 200, "{id} stateless={stateless}: {body}");
+                assert_eq!(
+                    body["refresh_token"].as_str(),
+                    Some(match expected {
+                        "a" => a.as_str(),
+                        "b" => b.as_str(),
+                        _ => t.as_str(),
+                    }),
+                    "{id}"
+                );
+            } else {
+                assert_eq!(status, 400, "{id} stateless={stateless}: {body}");
+                assert_eq!(
+                    body,
+                    json!({"error":{"code":400,"message":expected,"status":"INVALID_ARGUMENT"}}),
+                    "{id}"
+                );
+            }
+        }
     }
 }
+
 /// The camelCase reading adds no leniency: a wrong grant type or an empty token is still refused
 /// with the Secure Token's own messages.
 #[tokio::test]

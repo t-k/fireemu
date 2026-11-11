@@ -1,0 +1,4711 @@
+{
+  "version": 1,
+  "recordedAgainst": {
+    "target": "production Firestore REST v1 and gRPC google.firestore.v1, Enterprise edition, Native API, database entpipe1",
+    "project": "demo-fs-query-index",
+    "note": "Two recordings per program. Run-window times, execution durations, page and transaction tokens (also where an answer echoes a token the request carried) and the project id are placeholders; the project id is recorded as demo-fs-query-index in every lane. Missing-index links keep their encoded index with the project id replaced. `second` holds the other recording of rows that differed."
+  },
+  "programs": {
+    "fs-ent-pipeline-regex/rx/backslash": {
+      "corpusDigest": "5bc929d704a890c93d03db57abf857b8f7cdd52fe49073aa5b847770c9aa7fa8",
+      "harnessDigest": "4b61aaa20f2c9cf89607d4741a61f40408d8f6af8d78166f2539f095b926ed77",
+      "recordedAt": "2026-11-10T08:34:39.754Z",
+      "gitSha": "fab7dbca7f73279a5dfee5e1657613749aee7295",
+      "steps": {
+        "regex-contains-bs-lit": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-bs-lit": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-bs-lit": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "\\"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-bs-lit": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "\\"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-bs-lit-run": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-bs-lit-run": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-bs-lit-run": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "a\\b"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-bs-lit-run": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "a\\b"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-bs-in-class": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-bs-in-class": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-bs-in-class": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "\\"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-bs-in-class": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "\\"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-bs-hex": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-bs-hex": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-bs-hex": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "\\"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-bs-hex": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "\\"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-bsd-pair": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-bsd-pair": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-bsd-pair": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "\\d"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-bsd-pair": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "\\d"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-bsd-digit": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-bsd-digit": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-bsd-digit": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-bsd-digit": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {}
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-bs-trailing": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Unsupported regex syntax.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "regex-match-bs-trailing": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Unsupported regex syntax.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "regex-find-bs-trailing": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Unsupported regex syntax.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "regex-find-all-bs-trailing": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Unsupported regex syntax.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "fs-ent-pipeline-regex/rx/capture": {
+      "corpusDigest": "496f720ca84a015281f0700058fcee5769942d3bb26de655a650d038b0f044e1",
+      "harnessDigest": "4b61aaa20f2c9cf89607d4741a61f40408d8f6af8d78166f2539f095b926ed77",
+      "recordedAt": "2026-11-10T08:34:39.754Z",
+      "gitSha": "fab7dbca7f73279a5dfee5e1657613749aee7295",
+      "steps": {
+        "regex-contains-cap-alt-first": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-cap-alt-first": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-cap-alt-first": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "At most one capture group is supported.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "regex-find-all-cap-alt-first": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "At most one capture group is supported.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "regex-contains-cap-alt-second": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-cap-alt-second": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-cap-alt-second": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "At most one capture group is supported.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "regex-find-all-cap-alt-second": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "At most one capture group is supported.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "regex-contains-cap-opt-unmatched": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-cap-opt-unmatched": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-cap-opt-unmatched": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-cap-opt-unmatched": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "nullValue": null
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-cap-alt-one": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-cap-alt-one": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-cap-alt-one": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-cap-alt-one": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "nullValue": null
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-cap-two": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-cap-two": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-cap-two": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "At most one capture group is supported.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "regex-find-all-cap-two": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "At most one capture group is supported.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "regex-contains-cap-noncapturing": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-cap-noncapturing": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-cap-noncapturing": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "ab"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-cap-noncapturing": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "ab"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-cap-named": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-cap-named": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-cap-named": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "a"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-cap-named": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "a"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-cap-nested": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-cap-nested": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-cap-nested": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "At most one capture group is supported.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "regex-find-all-cap-nested": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "At most one capture group is supported.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "regex-contains-cap-empty": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-cap-empty": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-cap-empty": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": ""
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-cap-empty": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": ""
+                          },
+                          {
+                            "stringValue": ""
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-cap-all-alt": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-cap-all-alt": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-cap-all-alt": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "a"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-cap-all-alt": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "a"
+                          },
+                          {
+                            "nullValue": null
+                          },
+                          {
+                            "stringValue": "a"
+                          },
+                          {
+                            "nullValue": null
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-cap-all-opt": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-cap-all-opt": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-cap-all-opt": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "At most one capture group is supported.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "regex-find-all-cap-all-opt": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "At most one capture group is supported.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "fs-ent-pipeline-regex/rx/control": {
+      "corpusDigest": "f55021bf65d3c5d50f3fa451cfd675ff6d62d3e6e5941e34e1df217d4c03d4ae",
+      "harnessDigest": "4b61aaa20f2c9cf89607d4741a61f40408d8f6af8d78166f2539f095b926ed77",
+      "recordedAt": "2026-11-10T08:34:39.754Z",
+      "gitSha": "fab7dbca7f73279a5dfee5e1657613749aee7295",
+      "steps": {
+        "regex-contains-ctl-hex": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-ctl-hex": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-ctl-hex": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "a\u0001b"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-ctl-hex": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "a\u0001b"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-ctl-class": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Unsupported regex syntax.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "regex-match-ctl-class": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Unsupported regex syntax.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "regex-find-ctl-class": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Unsupported regex syntax.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "regex-find-all-ctl-class": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Unsupported regex syntax.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "regex-contains-ctl-range": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-ctl-range": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-ctl-range": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "\u0001"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-ctl-range": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "\u0001"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-ctl-dot": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-ctl-dot": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-ctl-dot": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "a\u0001b"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-ctl-dot": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "a\u0001b"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-del-class": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Unsupported regex syntax.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "regex-match-del-class": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Unsupported regex syntax.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "regex-find-del-class": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Unsupported regex syntax.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "regex-find-all-del-class": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Unsupported regex syntax.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "regex-contains-tab-s": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-tab-s": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-tab-s": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "a\tb"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-tab-s": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "a\tb"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-tab-lit": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-tab-lit": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-tab-lit": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "a\tb"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-tab-lit": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "a\tb"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "fs-ent-pipeline-regex/rx/digit": {
+      "corpusDigest": "116b7b08e7b2e195db8115caaf22feafd0bf3a914c6d831b5e14d5a76ebdf1b5",
+      "harnessDigest": "4b61aaa20f2c9cf89607d4741a61f40408d8f6af8d78166f2539f095b926ed77",
+      "recordedAt": "2026-11-10T08:34:39.754Z",
+      "gitSha": "fab7dbca7f73279a5dfee5e1657613749aee7295",
+      "steps": {
+        "regex-contains-d-arabic": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-d-arabic": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-d-arabic": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-d-arabic": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {}
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-d-arabic-run": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-d-arabic-run": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-d-arabic-run": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-d-arabic-run": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {}
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-nd-arabic": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-nd-arabic": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-nd-arabic": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "١"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-nd-arabic": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "١"
+                          },
+                          {
+                            "stringValue": "٢"
+                          },
+                          {
+                            "stringValue": "٣"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-d-ascii-ctl": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-d-ascii-ctl": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-d-ascii-ctl": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "123"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-d-ascii-ctl": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "123"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-d-bracket": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-d-bracket": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-d-bracket": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-d-bracket": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {}
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-pnd-arabic": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-pnd-arabic": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-pnd-arabic": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "١٢٣"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-pnd-arabic": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "١٢٣"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-posix-digit": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Unsupported regex syntax.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "regex-match-posix-digit": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Unsupported regex syntax.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "regex-find-posix-digit": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Unsupported regex syntax.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "regex-find-all-posix-digit": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Unsupported regex syntax.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "regex-contains-range-ctl": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-range-ctl": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-range-ctl": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-range-ctl": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {}
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "fs-ent-pipeline-regex/rx/flag": {
+      "corpusDigest": "604effff4dc81f07af962dbdc89693ac9c40e9339c909feebf4b586c6c52f5f9",
+      "harnessDigest": "4b61aaa20f2c9cf89607d4741a61f40408d8f6af8d78166f2539f095b926ed77",
+      "recordedAt": "2026-11-10T08:34:39.754Z",
+      "gitSha": "fab7dbca7f73279a5dfee5e1657613749aee7295",
+      "steps": {
+        "regex-contains-i-eacute": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-i-eacute": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-i-eacute": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-i-eacute": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {}
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-i-sigma": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-i-sigma": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-i-sigma": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-i-sigma": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {}
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-i-kelvin": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-i-kelvin": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-i-kelvin": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-i-kelvin": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {}
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-i-ascii-ctl": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-i-ascii-ctl": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-i-ascii-ctl": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "Ab"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-i-ascii-ctl": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "Ab"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-i-group": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-i-group": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-i-group": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "Ab"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-i-group": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "Ab"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-i-off": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-i-off": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-i-off": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "Ab"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-i-off": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "Ab"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-s-dot": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-s-dot": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-s-dot": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-s-dot": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {}
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-s-dotall": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-s-dotall": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-s-dotall": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "a\nb"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-s-dotall": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "a\nb"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-m-anchor": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Unsupported regex syntax.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "regex-match-m-anchor": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Unsupported regex syntax.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "regex-find-m-anchor": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Unsupported regex syntax.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "regex-find-all-m-anchor": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Unsupported regex syntax.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "regex-contains-m-off": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-m-off": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-m-off": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-m-off": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {}
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-u-flag": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-u-flag": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-u-flag": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-u-flag": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {}
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-nu-flag": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-nu-flag": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-nu-flag": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-nu-flag": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {}
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-ungreedy": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-ungreedy": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-ungreedy": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "aaa"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-ungreedy": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "aaa"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "fs-ent-pipeline-regex/rx/space": {
+      "corpusDigest": "c77be1219048c0139af6b9c41810a499f979a87e8bc8e662ec219e1ca5a0c590",
+      "harnessDigest": "4b61aaa20f2c9cf89607d4741a61f40408d8f6af8d78166f2539f095b926ed77",
+      "recordedAt": "2026-11-10T08:34:39.754Z",
+      "gitSha": "fab7dbca7f73279a5dfee5e1657613749aee7295",
+      "steps": {
+        "regex-contains-s-nbsp": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-s-nbsp": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-s-nbsp": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-s-nbsp": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {}
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-ns-nbsp": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-ns-nbsp": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-ns-nbsp": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "a b"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-ns-nbsp": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "a b"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-s-nbsp-only": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-s-nbsp-only": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-s-nbsp-only": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-s-nbsp-only": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {}
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-s-vt": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-s-vt": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-s-vt": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "a\u000bb"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-s-vt": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "a\u000bb"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-s-nel": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-s-nel": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-s-nel": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-s-nel": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {}
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-s-em": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-s-em": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-s-em": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-s-em": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {}
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-s-space-ctl": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-s-space-ctl": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-s-space-ctl": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "a b"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-s-space-ctl": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "a b"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-posix-nbsp": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Unsupported regex syntax.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "regex-match-posix-nbsp": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Unsupported regex syntax.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "regex-find-posix-nbsp": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Unsupported regex syntax.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "regex-find-all-posix-nbsp": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Unsupported regex syntax.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "regex-contains-posix-vt": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Unsupported regex syntax.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "regex-match-posix-vt": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Unsupported regex syntax.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "regex-find-posix-vt": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Unsupported regex syntax.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "regex-find-all-posix-vt": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Unsupported regex syntax.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "regex-contains-hex-nbsp": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-hex-nbsp": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-hex-nbsp": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "a b"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-hex-nbsp": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "a b"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "fs-ent-pipeline-regex/rx/word": {
+      "corpusDigest": "e7d99ac12443766a046a8975ec9e4ebea950f77a8ad013640c3a96fe43023835",
+      "harnessDigest": "4b61aaa20f2c9cf89607d4741a61f40408d8f6af8d78166f2539f095b926ed77",
+      "recordedAt": "2026-11-10T08:34:39.754Z",
+      "gitSha": "fab7dbca7f73279a5dfee5e1657613749aee7295",
+      "steps": {
+        "regex-contains-w-eacute": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-w-eacute": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-w-eacute": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-w-eacute": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {}
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-nw-eacute": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-nw-eacute": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-nw-eacute": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "é"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-nw-eacute": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "é"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-w-cafe-run": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-w-cafe-run": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-w-cafe-run": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "caf"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-w-cafe-run": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "caf"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-nw-cafe": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-nw-cafe": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-nw-cafe": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "é"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-nw-cafe": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "é"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-b-cafe-edge": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-b-cafe-edge": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-b-cafe-edge": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "caf"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-b-cafe-edge": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "caf"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-b-cafe-whole": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-b-cafe-whole": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-b-cafe-whole": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-b-cafe-whole": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {}
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-b-eacute": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-b-eacute": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-b-eacute": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-b-eacute": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {}
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-nb-eacute": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-nb-eacute": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-nb-eacute": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": ""
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-nb-eacute": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": ""
+                          },
+                          {
+                            "stringValue": ""
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-w-decomposed": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-w-decomposed": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-w-decomposed": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "e"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-w-decomposed": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "e"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-pl-eacute": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-pl-eacute": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-pl-eacute": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "é"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-pl-eacute": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "é"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-w-bracket": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-w-bracket": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-w-bracket": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-w-bracket": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {}
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-posix-word": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Unsupported regex syntax.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "regex-match-posix-word": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Unsupported regex syntax.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "regex-find-posix-word": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Unsupported regex syntax.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "regex-find-all-posix-word": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Unsupported regex syntax.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

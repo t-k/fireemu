@@ -29,7 +29,7 @@
     "packages": [
       {
         "path": "spec/compatibility/broad-runs/auth-password-policy-sdk-next-v8.json",
-        "sha256": "eca51ff315551c5a876da4bc65119da1be5abd688d618ae0b59d54ae72f6b210",
+        "sha256": "1ce7aba68b3521ed60ac145ac3e10d7f00958492ecd893f917c50247685bc04d",
         "codeSourceHead": "27c07e041c3ee5bf21eff9beff2cfc62131c6ab3",
         "evidencePackageCommit": "ce2152fa27e4c2bd29929debbb6f4bf4ea67243a",
         "collectorCommit": "e8d86723aaea340dea3a2f073a358f624d72afbe",
@@ -41,7 +41,7 @@
       },
       {
         "path": "spec/compatibility/broad-runs/auth-settings-sdk-next-v8.json",
-        "sha256": "bc96c5168e0293788b49ac78ecf00ff1f20e98bd9f868ca81ad3409062326dcc",
+        "sha256": "d6ea2e9683347ccaff20d4b158ee76c098a6df08d7dfb1de40f2c6c2ee512831",
         "codeSourceHead": "27c07e041c3ee5bf21eff9beff2cfc62131c6ab3",
         "evidencePackageCommit": "ce2152fa27e4c2bd29929debbb6f4bf4ea67243a",
         "collectorCommit": "ca9894d0275c33f478b999aeb2c4d1ea32c5d9b5",
@@ -81,7 +81,7 @@
     ],
     "priorReplay": {
       "path": "spec/compatibility/broad-runs/515f0cf4-auth-saved-reference-replay.json",
-      "sha256": "5d7c9e8aad4bc749d05e7d211609793854966c7f05704d68aba50885848f19c9",
+      "sha256": "20898f381e0765a0174f3e1f5031b03cf73f98d60632e449060ef0004b9e0ce5",
       "sourceCommit": "515f0cf4afa1b12e887b84552aa20851ab3142ae",
       "classification": "saved-production-reference MATCH only; current source recompare remains required",
       "preserved": true
@@ -103,7 +103,7 @@
   },
   "priorReport": {
     "path": "spec/compatibility/broad-runs/auth-core-oracle-preparation-current-head-20260917-v6.json",
-    "sha256": "171f478374fadde6a0beae69c453d34fb662509a378c256fea3a1c8002a7dc13",
+    "sha256": "096a2498521881bb2d7dfbeeff58faeab98fe601d1149939fb10dc1f587be351",
     "preserved": true
   },
   "productionExecuted": false,
@@ -111,28 +111,28 @@
   "rebindPackages": [
     {
       "path": "spec/compatibility/broad-runs/auth-password-policy-sdk-next-v8.json",
-      "sha256": "eca51ff315551c5a876da4bc65119da1be5abd688d618ae0b59d54ae72f6b210",
+      "sha256": "1ce7aba68b3521ed60ac145ac3e10d7f00958492ecd893f917c50247685bc04d",
       "codeSourceHead": "27c07e041c3ee5bf21eff9beff2cfc62131c6ab3",
       "evidencePackageCommit": "ce2152fa27e4c2bd29929debbb6f4bf4ea67243a",
       "collectorCommit": "e8d86723aaea340dea3a2f073a358f624d72afbe",
       "comparatorId": "typed-sdk-policy-v1",
       "prior": {
         "path": "spec/compatibility/broad-runs/auth-password-policy-sdk-next-v7.json",
-        "sha256": "03fa75fdc15aae0d7d21012cc3bf145374e12b147e7199582daba7de07bedf09",
+        "sha256": "67d26f95b82dedfa5143cb784e96995519f38d54205f064eca990829cc5fc0db",
         "preserved": true
       },
       "status": "BLOCKED_OWNER"
     },
     {
       "path": "spec/compatibility/broad-runs/auth-settings-sdk-next-v8.json",
-      "sha256": "bc96c5168e0293788b49ac78ecf00ff1f20e98bd9f868ca81ad3409062326dcc",
+      "sha256": "d6ea2e9683347ccaff20d4b158ee76c098a6df08d7dfb1de40f2c6c2ee512831",
       "codeSourceHead": "27c07e041c3ee5bf21eff9beff2cfc62131c6ab3",
       "evidencePackageCommit": "ce2152fa27e4c2bd29929debbb6f4bf4ea67243a",
       "collectorCommit": "ca9894d0275c33f478b999aeb2c4d1ea32c5d9b5",
       "comparatorId": "auth-settings-v1",
       "prior": {
         "path": "spec/compatibility/broad-runs/auth-settings-sdk-next-v7.json",
-        "sha256": "81bcbcfd9fa16e9b572e09f1b4d45154b093dc2a45ac643c54af1c2b416196ce",
+        "sha256": "60ed3af45ee3f542b9ce547c8cd37f0feea3f30f726cbc4102e5576477cea11a",
         "preserved": true
       },
       "status": "BLOCKED_OWNER"
@@ -169,25 +169,25 @@
   "staleBindings": [
     {
       "path": "spec/compatibility/broad-runs/auth-password-policy-sdk-next-v7.json",
-      "sha256": "03fa75fdc15aae0d7d21012cc3bf145374e12b147e7199582daba7de07bedf09",
+      "sha256": "67d26f95b82dedfa5143cb784e96995519f38d54205f064eca990829cc5fc0db",
       "reason": "Version 7 binds source head 348ae38d9, not the current codeSourceHead.",
       "action": "Preserve unchanged; use v8 for current-head Gate binding."
     },
     {
       "path": "spec/compatibility/broad-runs/auth-settings-sdk-next-v7.json",
-      "sha256": "81bcbcfd9fa16e9b572e09f1b4d45154b093dc2a45ac643c54af1c2b416196ce",
+      "sha256": "60ed3af45ee3f542b9ce547c8cd37f0feea3f30f726cbc4102e5576477cea11a",
       "reason": "Version 7 binds source head 348ae38d9, not the current codeSourceHead.",
       "action": "Preserve unchanged; use v8 for current-head Gate binding."
     },
     {
       "path": "spec/compatibility/broad-runs/auth-core-oracle-preparation-current-head-20260917-v6.json",
-      "sha256": "171f478374fadde6a0beae69c453d34fb662509a378c256fea3a1c8002a7dc13",
+      "sha256": "096a2498521881bb2d7dfbeeff58faeab98fe601d1149939fb10dc1f587be351",
       "reason": "Version 6 report records the prior current-head and v7 package binding.",
       "action": "Preserve unchanged; use this v7 report for current binding."
     },
     {
       "path": "spec/compatibility/broad-runs/515f0cf4-auth-saved-reference-replay.json",
-      "sha256": "5d7c9e8aad4bc749d05e7d211609793854966c7f05704d68aba50885848f19c9",
+      "sha256": "20898f381e0765a0174f3e1f5031b03cf73f98d60632e449060ef0004b9e0ce5",
       "reason": "Valid immutable saved-production replay bound to source 515f0cf4, not current-head evidence.",
       "action": "Do not rewrite; perform a new saved-reference recompare when an artifact is available."
     }

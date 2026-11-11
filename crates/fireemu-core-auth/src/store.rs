@@ -390,6 +390,12 @@ pub struct UserRecord {
     /// Whether the account was created through the Admin API (create or import). Production
     /// then reports `disabled` and `validSince` in every read of it.
     pub admin_created: bool,
+    /// Whether the account came in through an import (the Admin batch import or an artifact
+    /// restore) rather than being created. firebase-tools gives an imported account a
+    /// `validSince` always, and an account created through the Admin API only when it is
+    /// created with a password (`operations.js:164-169`, `:341`); the emulator profile's token
+    /// verification reads it (see `jwt::official_valid_since_is_set`).
+    pub imported: bool,
     /// Whether a custom-token sign-in created the account. Production then reports
     /// `customAuth` and `validSince` in every read of it (sandbox recording 2026-09-24).
     pub custom_auth: bool,
@@ -2801,6 +2807,7 @@ impl AuthStore {
                 tokens_revoked: user.tokens_valid_after > Self::whole_second(user.created_at),
                 federated: user.federated,
                 admin_created: true,
+                imported: true,
                 custom_auth: false,
                 email_link_signin: false,
                 email_link_created: false,
@@ -3520,6 +3527,7 @@ impl AuthStore {
             tokens_revoked: false,
             federated: Vec::new(),
             admin_created: false,
+            imported: false,
             custom_auth: false,
             email_link_signin: false,
             email_link_created: false,

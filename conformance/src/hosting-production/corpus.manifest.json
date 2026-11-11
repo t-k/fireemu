@@ -1,0 +1,2270 @@
+{
+  "schemaVersion": 1,
+  "corpusId": "hosting-production-v1",
+  "versions": [
+    {
+      "id": "v01",
+      "name": "routing",
+      "hosting": {
+        "redirects": [
+          {
+            "source": "/old/**",
+            "destination": "/page.html",
+            "type": 302
+          },
+          {
+            "source": "/old/**",
+            "destination": "/second.html",
+            "type": 301
+          },
+          {
+            "source": "/capture/:name",
+            "destination": "/new/:name",
+            "type": 301
+          },
+          {
+            "source": "/capture/:id/:id2",
+            "destination": "/new/:id2/:id",
+            "type": 301
+          },
+          {
+            "source": "/go1/:name",
+            "destination": "/:name",
+            "type": 302
+          },
+          {
+            "source": "/go2/:name",
+            "destination": "/next/:name",
+            "type": 302
+          },
+          {
+            "source": "/go3/:name",
+            "destination": "https://example.test/:name",
+            "type": 302
+          }
+        ],
+        "rewrites": [
+          {
+            "source": "/rewrite/**",
+            "destination": "/first.html"
+          },
+          {
+            "source": "/rewrite/**",
+            "destination": "/second.html"
+          }
+        ],
+        "headers": [
+          {
+            "source": "/**",
+            "headers": [
+              {
+                "key": "X-Fixture",
+                "value": "first"
+              }
+            ]
+          },
+          {
+            "source": "/data.json",
+            "headers": [
+              {
+                "key": "X-Fixture",
+                "value": "second"
+              },
+              {
+                "key": "Cache-Control",
+                "value": "public, max-age=123"
+              }
+            ]
+          }
+        ]
+      },
+      "optionalConfig": [],
+      "readiness": {
+        "path": "/ready.txt",
+        "accept": [200]
+      },
+      "files": {
+        "404.html": {
+          "bytes": 19,
+          "sha256": "df6a0af1ba14d6755f7a82be0c39beba76a7a98ec2e6d4afab6437db6a41c6af"
+        },
+        "compress/big.json": {
+          "bytes": 4500,
+          "sha256": "9e3e864092648eea2d4b5cb3ad75e87719960e576b479e734bca38da27ce7c3a"
+        },
+        "compress/big.txt": {
+          "bytes": 4500,
+          "sha256": "9e3e864092648eea2d4b5cb3ad75e87719960e576b479e734bca38da27ce7c3a"
+        },
+        "ct/.dotfile": {
+          "bytes": 2,
+          "sha256": "73cb3858a687a8494ca3323053016282f3dad39d42cf62ca4e79dda2aac7d9ac"
+        },
+        "ct/UPPER.HTML": {
+          "bytes": 2,
+          "sha256": "73cb3858a687a8494ca3323053016282f3dad39d42cf62ca4e79dda2aac7d9ac"
+        },
+        "ct/archive.tar.gz": {
+          "bytes": 2,
+          "sha256": "73cb3858a687a8494ca3323053016282f3dad39d42cf62ca4e79dda2aac7d9ac"
+        },
+        "ct/file.avif": {
+          "bytes": 2,
+          "sha256": "73cb3858a687a8494ca3323053016282f3dad39d42cf62ca4e79dda2aac7d9ac"
+        },
+        "ct/file.css": {
+          "bytes": 2,
+          "sha256": "73cb3858a687a8494ca3323053016282f3dad39d42cf62ca4e79dda2aac7d9ac"
+        },
+        "ct/file.csv": {
+          "bytes": 2,
+          "sha256": "73cb3858a687a8494ca3323053016282f3dad39d42cf62ca4e79dda2aac7d9ac"
+        },
+        "ct/file.gif": {
+          "bytes": 2,
+          "sha256": "73cb3858a687a8494ca3323053016282f3dad39d42cf62ca4e79dda2aac7d9ac"
+        },
+        "ct/file.html": {
+          "bytes": 2,
+          "sha256": "73cb3858a687a8494ca3323053016282f3dad39d42cf62ca4e79dda2aac7d9ac"
+        },
+        "ct/file.ico": {
+          "bytes": 2,
+          "sha256": "73cb3858a687a8494ca3323053016282f3dad39d42cf62ca4e79dda2aac7d9ac"
+        },
+        "ct/file.jpg": {
+          "bytes": 2,
+          "sha256": "73cb3858a687a8494ca3323053016282f3dad39d42cf62ca4e79dda2aac7d9ac"
+        },
+        "ct/file.js": {
+          "bytes": 2,
+          "sha256": "73cb3858a687a8494ca3323053016282f3dad39d42cf62ca4e79dda2aac7d9ac"
+        },
+        "ct/file.json": {
+          "bytes": 2,
+          "sha256": "73cb3858a687a8494ca3323053016282f3dad39d42cf62ca4e79dda2aac7d9ac"
+        },
+        "ct/file.map": {
+          "bytes": 2,
+          "sha256": "73cb3858a687a8494ca3323053016282f3dad39d42cf62ca4e79dda2aac7d9ac"
+        },
+        "ct/file.md": {
+          "bytes": 2,
+          "sha256": "73cb3858a687a8494ca3323053016282f3dad39d42cf62ca4e79dda2aac7d9ac"
+        },
+        "ct/file.mjs": {
+          "bytes": 2,
+          "sha256": "73cb3858a687a8494ca3323053016282f3dad39d42cf62ca4e79dda2aac7d9ac"
+        },
+        "ct/file.mp3": {
+          "bytes": 2,
+          "sha256": "73cb3858a687a8494ca3323053016282f3dad39d42cf62ca4e79dda2aac7d9ac"
+        },
+        "ct/file.mp4": {
+          "bytes": 2,
+          "sha256": "73cb3858a687a8494ca3323053016282f3dad39d42cf62ca4e79dda2aac7d9ac"
+        },
+        "ct/file.pdf": {
+          "bytes": 2,
+          "sha256": "73cb3858a687a8494ca3323053016282f3dad39d42cf62ca4e79dda2aac7d9ac"
+        },
+        "ct/file.png": {
+          "bytes": 2,
+          "sha256": "73cb3858a687a8494ca3323053016282f3dad39d42cf62ca4e79dda2aac7d9ac"
+        },
+        "ct/file.svg": {
+          "bytes": 2,
+          "sha256": "73cb3858a687a8494ca3323053016282f3dad39d42cf62ca4e79dda2aac7d9ac"
+        },
+        "ct/file.ts": {
+          "bytes": 2,
+          "sha256": "73cb3858a687a8494ca3323053016282f3dad39d42cf62ca4e79dda2aac7d9ac"
+        },
+        "ct/file.ttf": {
+          "bytes": 2,
+          "sha256": "73cb3858a687a8494ca3323053016282f3dad39d42cf62ca4e79dda2aac7d9ac"
+        },
+        "ct/file.txt": {
+          "bytes": 2,
+          "sha256": "73cb3858a687a8494ca3323053016282f3dad39d42cf62ca4e79dda2aac7d9ac"
+        },
+        "ct/file.unknownext": {
+          "bytes": 2,
+          "sha256": "73cb3858a687a8494ca3323053016282f3dad39d42cf62ca4e79dda2aac7d9ac"
+        },
+        "ct/file.wasm": {
+          "bytes": 2,
+          "sha256": "73cb3858a687a8494ca3323053016282f3dad39d42cf62ca4e79dda2aac7d9ac"
+        },
+        "ct/file.webmanifest": {
+          "bytes": 2,
+          "sha256": "73cb3858a687a8494ca3323053016282f3dad39d42cf62ca4e79dda2aac7d9ac"
+        },
+        "ct/file.webp": {
+          "bytes": 2,
+          "sha256": "73cb3858a687a8494ca3323053016282f3dad39d42cf62ca4e79dda2aac7d9ac"
+        },
+        "ct/file.woff": {
+          "bytes": 2,
+          "sha256": "73cb3858a687a8494ca3323053016282f3dad39d42cf62ca4e79dda2aac7d9ac"
+        },
+        "ct/file.woff2": {
+          "bytes": 2,
+          "sha256": "73cb3858a687a8494ca3323053016282f3dad39d42cf62ca4e79dda2aac7d9ac"
+        },
+        "ct/file.xml": {
+          "bytes": 2,
+          "sha256": "73cb3858a687a8494ca3323053016282f3dad39d42cf62ca4e79dda2aac7d9ac"
+        },
+        "ct/file.zip": {
+          "bytes": 2,
+          "sha256": "73cb3858a687a8494ca3323053016282f3dad39d42cf62ca4e79dda2aac7d9ac"
+        },
+        "ct/noext": {
+          "bytes": 2,
+          "sha256": "73cb3858a687a8494ca3323053016282f3dad39d42cf62ca4e79dda2aac7d9ac"
+        },
+        "data.json": {
+          "bytes": 17,
+          "sha256": "218589323cbe80b7ed077e3ee36f1663e7cb5f8f4e4ad02c938ad8a5c2c5a6b9"
+        },
+        "dir/index.html": {
+          "bytes": 19,
+          "sha256": "14e5d39c55374fef471e87c89d8a871ac6b6a97b57b5d8cc623d6d2afe4ecab4"
+        },
+        "first.html": {
+          "bytes": 6,
+          "sha256": "b640e840b19d378660b32fb51ae18d67dccb4a8596a29e7bd72c1b2ae5928f41"
+        },
+        "index.html": {
+          "bytes": 14,
+          "sha256": "25bd9226c1514c5b63d541ca4f280ab769a4dab6f9e0c510669713d16d686065"
+        },
+        "page.html": {
+          "bytes": 14,
+          "sha256": "1b7916b1d133dccc2a866d876e5cfad7c2d67a03db40000ce7b9107152e47082"
+        },
+        "ready.txt": {
+          "bytes": 6,
+          "sha256": "ed1a545bb85e55816bbf9566b028b2a0bc456b88f49f6f266c0401048824194b"
+        },
+        "second.html": {
+          "bytes": 7,
+          "sha256": "480c2336b410f1ad5f8bf1b28944490255804b65350c527787e74ebdd511e3a4"
+        }
+      },
+      "requests": [
+        {
+          "id": "v01.root",
+          "condition": "static-files",
+          "method": "GET",
+          "target": "/",
+          "headers": {}
+        },
+        {
+          "id": "v01.static",
+          "condition": "static-files",
+          "method": "GET",
+          "target": "/data.json",
+          "headers": {},
+          "also": ["headers-cache"]
+        },
+        {
+          "id": "v01.query",
+          "condition": "static-files",
+          "method": "GET",
+          "target": "/data.json?q=1",
+          "headers": {}
+        },
+        {
+          "id": "v01.encoded-static",
+          "condition": "static-files",
+          "method": "GET",
+          "target": "/%64ata.json",
+          "headers": {}
+        },
+        {
+          "id": "v01.directory",
+          "condition": "static-files",
+          "method": "GET",
+          "target": "/dir",
+          "headers": {}
+        },
+        {
+          "id": "v01.directory-slash",
+          "condition": "static-files",
+          "method": "GET",
+          "target": "/dir/",
+          "headers": {}
+        },
+        {
+          "id": "v01.index-file",
+          "condition": "static-files",
+          "method": "GET",
+          "target": "/index.html",
+          "headers": {}
+        },
+        {
+          "id": "v01.page",
+          "condition": "static-files",
+          "method": "GET",
+          "target": "/page?q=1",
+          "headers": {}
+        },
+        {
+          "id": "v01.page-slash",
+          "condition": "trailing-slash",
+          "method": "GET",
+          "target": "/page/?q=1",
+          "headers": {}
+        },
+        {
+          "id": "v01.page-html",
+          "condition": "static-files",
+          "method": "GET",
+          "target": "/page.html?q=1",
+          "headers": {}
+        },
+        {
+          "id": "v01.dir-index-html",
+          "condition": "static-files",
+          "method": "GET",
+          "target": "/dir/index.html?q=1",
+          "headers": {}
+        },
+        {
+          "id": "v01.head-static",
+          "condition": "static-files",
+          "method": "HEAD",
+          "target": "/data.json",
+          "headers": {}
+        },
+        {
+          "id": "v01.head-root",
+          "condition": "static-files",
+          "method": "HEAD",
+          "target": "/",
+          "headers": {}
+        },
+        {
+          "id": "v01.post-static",
+          "condition": "static-files",
+          "method": "POST",
+          "target": "/data.json",
+          "headers": {
+            "content-type": "text/plain"
+          },
+          "body": "post\n"
+        },
+        {
+          "id": "v01.put-static",
+          "condition": "static-files",
+          "method": "PUT",
+          "target": "/data.json",
+          "headers": {
+            "content-type": "text/plain"
+          },
+          "body": "put\n"
+        },
+        {
+          "id": "v01.delete-static",
+          "condition": "static-files",
+          "method": "DELETE",
+          "target": "/data.json",
+          "headers": {}
+        },
+        {
+          "id": "v01.options-static",
+          "condition": "static-files",
+          "method": "OPTIONS",
+          "target": "/data.json",
+          "headers": {}
+        },
+        {
+          "id": "v01.post-missing",
+          "condition": "not-found",
+          "method": "POST",
+          "target": "/missing",
+          "headers": {
+            "content-type": "text/plain"
+          },
+          "body": "post\n"
+        },
+        {
+          "id": "v01.range",
+          "condition": "static-files",
+          "method": "GET",
+          "target": "/data.json",
+          "headers": {
+            "range": "bytes=0-3"
+          }
+        },
+        {
+          "id": "v01.range-suffix",
+          "condition": "static-files",
+          "method": "GET",
+          "target": "/data.json",
+          "headers": {
+            "range": "bytes=-3"
+          }
+        },
+        {
+          "id": "v01.cond-etag",
+          "condition": "static-files",
+          "method": "GET",
+          "target": "/data.json",
+          "headers": {},
+          "headersFrom": [
+            {
+              "header": "if-none-match",
+              "fromRequest": "v01.static",
+              "fromHeader": "etag"
+            }
+          ]
+        },
+        {
+          "id": "v01.cond-etag-wrong",
+          "condition": "static-files",
+          "method": "GET",
+          "target": "/data.json",
+          "headers": {
+            "if-none-match": "\"fireemu-no-such-etag\""
+          }
+        },
+        {
+          "id": "v01.cond-since-future",
+          "condition": "static-files",
+          "method": "GET",
+          "target": "/data.json",
+          "headers": {
+            "if-modified-since": "Fri, 01 Jan 2100 00:00:00 GMT"
+          }
+        },
+        {
+          "id": "v01.cond-since-past",
+          "condition": "static-files",
+          "method": "GET",
+          "target": "/data.json",
+          "headers": {
+            "if-modified-since": "Mon, 01 Jan 2001 00:00:00 GMT"
+          }
+        },
+        {
+          "id": "v01.missing",
+          "condition": "not-found",
+          "method": "GET",
+          "target": "/missing",
+          "headers": {},
+          "also": ["headers-cache"]
+        },
+        {
+          "id": "v01.not-found-direct",
+          "condition": "not-found",
+          "method": "GET",
+          "target": "/404.html",
+          "headers": {}
+        },
+        {
+          "id": "v01.head-missing",
+          "condition": "not-found",
+          "method": "HEAD",
+          "target": "/missing",
+          "headers": {}
+        },
+        {
+          "id": "v01.rewrite-first",
+          "condition": "rewrites",
+          "method": "GET",
+          "target": "/rewrite/a",
+          "headers": {},
+          "also": ["headers-cache"]
+        },
+        {
+          "id": "v01.cond-etag-rewrite",
+          "condition": "static-files",
+          "method": "GET",
+          "target": "/rewrite/a",
+          "headers": {},
+          "headersFrom": [
+            {
+              "header": "if-none-match",
+              "fromRequest": "v01.rewrite-first",
+              "fromHeader": "etag"
+            }
+          ]
+        },
+        {
+          "id": "v01.rewrite-query",
+          "condition": "rewrites",
+          "method": "GET",
+          "target": "/rewrite/a/b?q=1",
+          "headers": {}
+        },
+        {
+          "id": "v01.redirect-first",
+          "condition": "redirects",
+          "method": "GET",
+          "target": "/old/a?q=1",
+          "headers": {},
+          "also": ["headers-cache"]
+        },
+        {
+          "id": "v01.head-redirect",
+          "condition": "redirects",
+          "method": "HEAD",
+          "target": "/old/a",
+          "headers": {}
+        },
+        {
+          "id": "v01.redirect-capture",
+          "condition": "redirects",
+          "method": "GET",
+          "target": "/capture/name",
+          "headers": {}
+        },
+        {
+          "id": "v01.redirect-capture-prefix",
+          "condition": "redirects",
+          "method": "GET",
+          "target": "/capture/one/two",
+          "headers": {}
+        },
+        {
+          "id": "v01.redirect-capture-literal",
+          "condition": "redirects",
+          "method": "GET",
+          "target": "/capture/:id2/two",
+          "headers": {}
+        },
+        {
+          "id": "v01.header-index",
+          "condition": "headers-cache",
+          "method": "GET",
+          "target": "/index.html",
+          "headers": {}
+        },
+        {
+          "id": "v01.header-not-found-direct",
+          "condition": "headers-cache",
+          "method": "GET",
+          "target": "/404.html",
+          "headers": {}
+        },
+        {
+          "id": "v01.reserved-json",
+          "condition": "reserved-paths",
+          "method": "GET",
+          "target": "/__/firebase/init.json",
+          "headers": {}
+        },
+        {
+          "id": "v01.reserved-js",
+          "condition": "reserved-paths",
+          "method": "GET",
+          "target": "/__/firebase/init.js",
+          "headers": {}
+        },
+        {
+          "id": "v01.reserved-emulator-js",
+          "condition": "reserved-paths",
+          "method": "GET",
+          "target": "/__/firebase/init.js?useEmulator=true",
+          "headers": {}
+        },
+        {
+          "id": "v01.reserved-unknown",
+          "condition": "reserved-paths",
+          "method": "GET",
+          "target": "/__/missing",
+          "headers": {}
+        },
+        {
+          "id": "v01.reserved-sdk-10",
+          "condition": "reserved-paths",
+          "method": "HEAD",
+          "target": "/__/firebase/10.14.1/firebase-app.js",
+          "headers": {}
+        },
+        {
+          "id": "v01.reserved-sdk-12",
+          "condition": "reserved-paths",
+          "method": "HEAD",
+          "target": "/__/firebase/12.0.0/firebase-app-compat.js",
+          "headers": {}
+        },
+        {
+          "id": "v01.reserved-auth-handler",
+          "condition": "reserved-paths",
+          "method": "HEAD",
+          "target": "/__/auth/handler",
+          "headers": {}
+        },
+        {
+          "id": "v01.gz-none",
+          "condition": "compression-vary",
+          "method": "GET",
+          "target": "/compress/big.txt",
+          "headers": {}
+        },
+        {
+          "id": "v01.gz-identity",
+          "condition": "compression-vary",
+          "method": "GET",
+          "target": "/compress/big.txt",
+          "headers": {
+            "accept-encoding": "identity"
+          }
+        },
+        {
+          "id": "v01.gz-gzip",
+          "condition": "compression-vary",
+          "method": "GET",
+          "target": "/compress/big.txt",
+          "headers": {
+            "accept-encoding": "gzip"
+          }
+        },
+        {
+          "id": "v01.gz-br",
+          "condition": "compression-vary",
+          "method": "GET",
+          "target": "/compress/big.txt",
+          "headers": {
+            "accept-encoding": "br"
+          }
+        },
+        {
+          "id": "v01.gz-gzip-br",
+          "condition": "compression-vary",
+          "method": "GET",
+          "target": "/compress/big.txt",
+          "headers": {
+            "accept-encoding": "gzip, br"
+          }
+        },
+        {
+          "id": "v01.gz-br-refused",
+          "condition": "compression-vary",
+          "method": "GET",
+          "target": "/compress/big.txt",
+          "headers": {
+            "accept-encoding": "br;q=0, gzip"
+          }
+        },
+        {
+          "id": "v01.gz-head-gzip",
+          "condition": "compression-vary",
+          "method": "HEAD",
+          "target": "/compress/big.txt",
+          "headers": {
+            "accept-encoding": "gzip"
+          }
+        },
+        {
+          "id": "v01.gz-json-gzip",
+          "condition": "compression-vary",
+          "method": "GET",
+          "target": "/compress/big.json",
+          "headers": {
+            "accept-encoding": "gzip"
+          }
+        },
+        {
+          "id": "v01.gz-json-br",
+          "condition": "compression-vary",
+          "method": "GET",
+          "target": "/compress/big.json",
+          "headers": {
+            "accept-encoding": "br"
+          }
+        },
+        {
+          "id": "v01.gz-png-gzip",
+          "condition": "compression-vary",
+          "method": "GET",
+          "target": "/ct/file.png",
+          "headers": {
+            "accept-encoding": "gzip"
+          }
+        },
+        {
+          "id": "v01.safety-parent",
+          "condition": "path-safety",
+          "method": "GET",
+          "target": "/../outside.txt",
+          "headers": {},
+          "infoOnly": true
+        },
+        {
+          "id": "v01.safety-encoded-parent",
+          "condition": "path-safety",
+          "method": "GET",
+          "target": "/%2e%2e/outside.txt",
+          "headers": {},
+          "infoOnly": true
+        },
+        {
+          "id": "v01.safety-bad-percent",
+          "condition": "path-safety",
+          "method": "GET",
+          "target": "/%GG",
+          "headers": {},
+          "infoOnly": true
+        },
+        {
+          "id": "v01.ct-html",
+          "condition": "content-types",
+          "method": "GET",
+          "target": "/ct/file.html",
+          "headers": {}
+        },
+        {
+          "id": "v01.ct-css",
+          "condition": "content-types",
+          "method": "GET",
+          "target": "/ct/file.css",
+          "headers": {}
+        },
+        {
+          "id": "v01.ct-js",
+          "condition": "content-types",
+          "method": "GET",
+          "target": "/ct/file.js",
+          "headers": {}
+        },
+        {
+          "id": "v01.ct-mjs",
+          "condition": "content-types",
+          "method": "GET",
+          "target": "/ct/file.mjs",
+          "headers": {}
+        },
+        {
+          "id": "v01.ct-json",
+          "condition": "content-types",
+          "method": "GET",
+          "target": "/ct/file.json",
+          "headers": {}
+        },
+        {
+          "id": "v01.ct-map",
+          "condition": "content-types",
+          "method": "GET",
+          "target": "/ct/file.map",
+          "headers": {}
+        },
+        {
+          "id": "v01.ct-xml",
+          "condition": "content-types",
+          "method": "GET",
+          "target": "/ct/file.xml",
+          "headers": {}
+        },
+        {
+          "id": "v01.ct-svg",
+          "condition": "content-types",
+          "method": "GET",
+          "target": "/ct/file.svg",
+          "headers": {}
+        },
+        {
+          "id": "v01.ct-txt",
+          "condition": "content-types",
+          "method": "GET",
+          "target": "/ct/file.txt",
+          "headers": {}
+        },
+        {
+          "id": "v01.ct-md",
+          "condition": "content-types",
+          "method": "GET",
+          "target": "/ct/file.md",
+          "headers": {}
+        },
+        {
+          "id": "v01.ct-csv",
+          "condition": "content-types",
+          "method": "GET",
+          "target": "/ct/file.csv",
+          "headers": {}
+        },
+        {
+          "id": "v01.ct-ico",
+          "condition": "content-types",
+          "method": "GET",
+          "target": "/ct/file.ico",
+          "headers": {}
+        },
+        {
+          "id": "v01.ct-png",
+          "condition": "content-types",
+          "method": "GET",
+          "target": "/ct/file.png",
+          "headers": {}
+        },
+        {
+          "id": "v01.ct-jpg",
+          "condition": "content-types",
+          "method": "GET",
+          "target": "/ct/file.jpg",
+          "headers": {}
+        },
+        {
+          "id": "v01.ct-gif",
+          "condition": "content-types",
+          "method": "GET",
+          "target": "/ct/file.gif",
+          "headers": {}
+        },
+        {
+          "id": "v01.ct-webp",
+          "condition": "content-types",
+          "method": "GET",
+          "target": "/ct/file.webp",
+          "headers": {}
+        },
+        {
+          "id": "v01.ct-avif",
+          "condition": "content-types",
+          "method": "GET",
+          "target": "/ct/file.avif",
+          "headers": {}
+        },
+        {
+          "id": "v01.ct-woff",
+          "condition": "content-types",
+          "method": "GET",
+          "target": "/ct/file.woff",
+          "headers": {}
+        },
+        {
+          "id": "v01.ct-woff2",
+          "condition": "content-types",
+          "method": "GET",
+          "target": "/ct/file.woff2",
+          "headers": {}
+        },
+        {
+          "id": "v01.ct-ttf",
+          "condition": "content-types",
+          "method": "GET",
+          "target": "/ct/file.ttf",
+          "headers": {}
+        },
+        {
+          "id": "v01.ct-pdf",
+          "condition": "content-types",
+          "method": "GET",
+          "target": "/ct/file.pdf",
+          "headers": {}
+        },
+        {
+          "id": "v01.ct-wasm",
+          "condition": "content-types",
+          "method": "GET",
+          "target": "/ct/file.wasm",
+          "headers": {}
+        },
+        {
+          "id": "v01.ct-zip",
+          "condition": "content-types",
+          "method": "GET",
+          "target": "/ct/file.zip",
+          "headers": {}
+        },
+        {
+          "id": "v01.ct-webmanifest",
+          "condition": "content-types",
+          "method": "GET",
+          "target": "/ct/file.webmanifest",
+          "headers": {}
+        },
+        {
+          "id": "v01.ct-mp4",
+          "condition": "content-types",
+          "method": "GET",
+          "target": "/ct/file.mp4",
+          "headers": {}
+        },
+        {
+          "id": "v01.ct-mp3",
+          "condition": "content-types",
+          "method": "GET",
+          "target": "/ct/file.mp3",
+          "headers": {}
+        },
+        {
+          "id": "v01.ct-ts",
+          "condition": "content-types",
+          "method": "GET",
+          "target": "/ct/file.ts",
+          "headers": {}
+        },
+        {
+          "id": "v01.ct-upper",
+          "condition": "content-types",
+          "method": "GET",
+          "target": "/ct/UPPER.HTML",
+          "headers": {}
+        },
+        {
+          "id": "v01.ct-noext",
+          "condition": "content-types",
+          "method": "GET",
+          "target": "/ct/noext",
+          "headers": {}
+        },
+        {
+          "id": "v01.ct-unknown",
+          "condition": "content-types",
+          "method": "GET",
+          "target": "/ct/file.unknownext",
+          "headers": {}
+        },
+        {
+          "id": "v01.ct-double",
+          "condition": "content-types",
+          "method": "GET",
+          "target": "/ct/archive.tar.gz",
+          "headers": {}
+        },
+        {
+          "id": "v01.ct-dotfile",
+          "condition": "content-types",
+          "method": "GET",
+          "target": "/ct/.dotfile",
+          "headers": {}
+        },
+        {
+          "id": "v01.edge-1-00",
+          "condition": "redirects",
+          "method": "GET",
+          "target": "/go1/",
+          "headers": {}
+        },
+        {
+          "id": "v01.edge-1-01",
+          "condition": "redirects",
+          "method": "GET",
+          "target": "/go1/%5cevil.example",
+          "headers": {}
+        },
+        {
+          "id": "v01.edge-1-02",
+          "condition": "redirects",
+          "method": "GET",
+          "target": "/go1/%255cevil.example",
+          "headers": {}
+        },
+        {
+          "id": "v01.edge-1-03",
+          "condition": "redirects",
+          "method": "GET",
+          "target": "/go1/%2fevil.example",
+          "headers": {}
+        },
+        {
+          "id": "v01.edge-1-04",
+          "condition": "redirects",
+          "method": "GET",
+          "target": "/go1/a%20b",
+          "headers": {}
+        },
+        {
+          "id": "v01.edge-1-05",
+          "condition": "redirects",
+          "method": "GET",
+          "target": "/go1/a%09b",
+          "headers": {}
+        },
+        {
+          "id": "v01.edge-1-06",
+          "condition": "redirects",
+          "method": "GET",
+          "target": "/go1/%E6%97%A5",
+          "headers": {}
+        },
+        {
+          "id": "v01.edge-1-07",
+          "condition": "redirects",
+          "method": "GET",
+          "target": "/go1/a:b",
+          "headers": {}
+        },
+        {
+          "id": "v01.edge-1-08",
+          "condition": "redirects",
+          "method": "GET",
+          "target": "/go1/%3Aother",
+          "headers": {}
+        },
+        {
+          "id": "v01.edge-1-09",
+          "condition": "redirects",
+          "method": "GET",
+          "target": "/go1/a%25b",
+          "headers": {}
+        },
+        {
+          "id": "v01.edge-1-10",
+          "condition": "redirects",
+          "method": "GET",
+          "target": "/go1/a%3Fb",
+          "headers": {}
+        },
+        {
+          "id": "v01.edge-1-11",
+          "condition": "redirects",
+          "method": "GET",
+          "target": "/go1/plain?x=%5c",
+          "headers": {}
+        },
+        {
+          "id": "v01.edge-1-12",
+          "condition": "redirects",
+          "method": "GET",
+          "target": "/go1/\\evil.example",
+          "headers": {}
+        },
+        {
+          "id": "v01.edge-2-00",
+          "condition": "redirects",
+          "method": "GET",
+          "target": "/go2/",
+          "headers": {}
+        },
+        {
+          "id": "v01.edge-2-01",
+          "condition": "redirects",
+          "method": "GET",
+          "target": "/go2/%5cevil.example",
+          "headers": {}
+        },
+        {
+          "id": "v01.edge-2-02",
+          "condition": "redirects",
+          "method": "GET",
+          "target": "/go2/%255cevil.example",
+          "headers": {}
+        },
+        {
+          "id": "v01.edge-2-03",
+          "condition": "redirects",
+          "method": "GET",
+          "target": "/go2/%2fevil.example",
+          "headers": {}
+        },
+        {
+          "id": "v01.edge-2-04",
+          "condition": "redirects",
+          "method": "GET",
+          "target": "/go2/a%20b",
+          "headers": {}
+        },
+        {
+          "id": "v01.edge-2-05",
+          "condition": "redirects",
+          "method": "GET",
+          "target": "/go2/a%09b",
+          "headers": {}
+        },
+        {
+          "id": "v01.edge-2-06",
+          "condition": "redirects",
+          "method": "GET",
+          "target": "/go2/%E6%97%A5",
+          "headers": {}
+        },
+        {
+          "id": "v01.edge-2-07",
+          "condition": "redirects",
+          "method": "GET",
+          "target": "/go2/a:b",
+          "headers": {}
+        },
+        {
+          "id": "v01.edge-2-08",
+          "condition": "redirects",
+          "method": "GET",
+          "target": "/go2/%3Aother",
+          "headers": {}
+        },
+        {
+          "id": "v01.edge-2-09",
+          "condition": "redirects",
+          "method": "GET",
+          "target": "/go2/a%25b",
+          "headers": {}
+        },
+        {
+          "id": "v01.edge-2-10",
+          "condition": "redirects",
+          "method": "GET",
+          "target": "/go2/a%3Fb",
+          "headers": {}
+        },
+        {
+          "id": "v01.edge-2-11",
+          "condition": "redirects",
+          "method": "GET",
+          "target": "/go2/plain?x=%5c",
+          "headers": {}
+        },
+        {
+          "id": "v01.edge-2-12",
+          "condition": "redirects",
+          "method": "GET",
+          "target": "/go2/\\evil.example",
+          "headers": {}
+        },
+        {
+          "id": "v01.edge-3-00",
+          "condition": "redirects",
+          "method": "GET",
+          "target": "/go3/",
+          "headers": {}
+        },
+        {
+          "id": "v01.edge-3-01",
+          "condition": "redirects",
+          "method": "GET",
+          "target": "/go3/%5cevil.example",
+          "headers": {}
+        },
+        {
+          "id": "v01.edge-3-02",
+          "condition": "redirects",
+          "method": "GET",
+          "target": "/go3/%255cevil.example",
+          "headers": {}
+        },
+        {
+          "id": "v01.edge-3-03",
+          "condition": "redirects",
+          "method": "GET",
+          "target": "/go3/%2fevil.example",
+          "headers": {}
+        },
+        {
+          "id": "v01.edge-3-04",
+          "condition": "redirects",
+          "method": "GET",
+          "target": "/go3/a%20b",
+          "headers": {}
+        },
+        {
+          "id": "v01.edge-3-05",
+          "condition": "redirects",
+          "method": "GET",
+          "target": "/go3/a%09b",
+          "headers": {}
+        },
+        {
+          "id": "v01.edge-3-06",
+          "condition": "redirects",
+          "method": "GET",
+          "target": "/go3/%E6%97%A5",
+          "headers": {}
+        },
+        {
+          "id": "v01.edge-3-07",
+          "condition": "redirects",
+          "method": "GET",
+          "target": "/go3/a:b",
+          "headers": {}
+        },
+        {
+          "id": "v01.edge-3-08",
+          "condition": "redirects",
+          "method": "GET",
+          "target": "/go3/%3Aother",
+          "headers": {}
+        },
+        {
+          "id": "v01.edge-3-09",
+          "condition": "redirects",
+          "method": "GET",
+          "target": "/go3/a%25b",
+          "headers": {}
+        },
+        {
+          "id": "v01.edge-3-10",
+          "condition": "redirects",
+          "method": "GET",
+          "target": "/go3/a%3Fb",
+          "headers": {}
+        },
+        {
+          "id": "v01.edge-3-11",
+          "condition": "redirects",
+          "method": "GET",
+          "target": "/go3/plain?x=%5c",
+          "headers": {}
+        },
+        {
+          "id": "v01.edge-3-12",
+          "condition": "redirects",
+          "method": "GET",
+          "target": "/go3/\\evil.example",
+          "headers": {}
+        }
+      ]
+    },
+    {
+      "id": "v02",
+      "name": "clean-urls",
+      "hosting": {
+        "cleanUrls": true,
+        "appAssociation": "AUTO"
+      },
+      "optionalConfig": ["appAssociation"],
+      "readiness": {
+        "path": "/ready.txt",
+        "accept": [200]
+      },
+      "files": {
+        "data.json": {
+          "bytes": 17,
+          "sha256": "218589323cbe80b7ed077e3ee36f1663e7cb5f8f4e4ad02c938ad8a5c2c5a6b9"
+        },
+        "dir/index.html": {
+          "bytes": 19,
+          "sha256": "14e5d39c55374fef471e87c89d8a871ac6b6a97b57b5d8cc623d6d2afe4ecab4"
+        },
+        "index.html": {
+          "bytes": 14,
+          "sha256": "25bd9226c1514c5b63d541ca4f280ab769a4dab6f9e0c510669713d16d686065"
+        },
+        "page.html": {
+          "bytes": 14,
+          "sha256": "1b7916b1d133dccc2a866d876e5cfad7c2d67a03db40000ce7b9107152e47082"
+        },
+        "ready.txt": {
+          "bytes": 6,
+          "sha256": "ed1a545bb85e55816bbf9566b028b2a0bc456b88f49f6f266c0401048824194b"
+        }
+      },
+      "requests": [
+        {
+          "id": "v02.page",
+          "condition": "clean-urls",
+          "method": "GET",
+          "target": "/page?q=1",
+          "headers": {}
+        },
+        {
+          "id": "v02.page-slash",
+          "condition": "clean-urls",
+          "method": "GET",
+          "target": "/page/?q=1",
+          "headers": {}
+        },
+        {
+          "id": "v02.page-html",
+          "condition": "clean-urls",
+          "method": "GET",
+          "target": "/page.html?q=1",
+          "headers": {}
+        },
+        {
+          "id": "v02.dir",
+          "condition": "clean-urls",
+          "method": "GET",
+          "target": "/dir?q=1",
+          "headers": {}
+        },
+        {
+          "id": "v02.dir-slash",
+          "condition": "clean-urls",
+          "method": "GET",
+          "target": "/dir/?q=1",
+          "headers": {}
+        },
+        {
+          "id": "v02.dir-index-html",
+          "condition": "clean-urls",
+          "method": "GET",
+          "target": "/dir/index.html?q=1",
+          "headers": {}
+        },
+        {
+          "id": "v02.root",
+          "condition": "clean-urls",
+          "method": "GET",
+          "target": "/",
+          "headers": {}
+        },
+        {
+          "id": "v02.assetlinks",
+          "condition": "app-association",
+          "method": "GET",
+          "target": "/.well-known/assetlinks.json",
+          "headers": {}
+        },
+        {
+          "id": "v02.apple-app-site-association",
+          "condition": "app-association",
+          "method": "GET",
+          "target": "/.well-known/apple-app-site-association",
+          "headers": {}
+        }
+      ]
+    },
+    {
+      "id": "v03",
+      "name": "trailing-slash-true",
+      "hosting": {
+        "trailingSlash": true
+      },
+      "optionalConfig": [],
+      "readiness": {
+        "path": "/ready.txt",
+        "accept": [200]
+      },
+      "files": {
+        "data.json": {
+          "bytes": 17,
+          "sha256": "218589323cbe80b7ed077e3ee36f1663e7cb5f8f4e4ad02c938ad8a5c2c5a6b9"
+        },
+        "dir/index.html": {
+          "bytes": 19,
+          "sha256": "14e5d39c55374fef471e87c89d8a871ac6b6a97b57b5d8cc623d6d2afe4ecab4"
+        },
+        "index.html": {
+          "bytes": 14,
+          "sha256": "25bd9226c1514c5b63d541ca4f280ab769a4dab6f9e0c510669713d16d686065"
+        },
+        "page.html": {
+          "bytes": 14,
+          "sha256": "1b7916b1d133dccc2a866d876e5cfad7c2d67a03db40000ce7b9107152e47082"
+        },
+        "ready.txt": {
+          "bytes": 6,
+          "sha256": "ed1a545bb85e55816bbf9566b028b2a0bc456b88f49f6f266c0401048824194b"
+        }
+      },
+      "requests": [
+        {
+          "id": "v03.page",
+          "condition": "trailing-slash",
+          "method": "GET",
+          "target": "/page?q=1",
+          "headers": {}
+        },
+        {
+          "id": "v03.page-slash",
+          "condition": "trailing-slash",
+          "method": "GET",
+          "target": "/page/?q=1",
+          "headers": {}
+        },
+        {
+          "id": "v03.page-html",
+          "condition": "trailing-slash",
+          "method": "GET",
+          "target": "/page.html?q=1",
+          "headers": {}
+        },
+        {
+          "id": "v03.dir",
+          "condition": "trailing-slash",
+          "method": "GET",
+          "target": "/dir?q=1",
+          "headers": {}
+        },
+        {
+          "id": "v03.dir-slash",
+          "condition": "trailing-slash",
+          "method": "GET",
+          "target": "/dir/?q=1",
+          "headers": {}
+        },
+        {
+          "id": "v03.dir-index-html",
+          "condition": "trailing-slash",
+          "method": "GET",
+          "target": "/dir/index.html?q=1",
+          "headers": {}
+        },
+        {
+          "id": "v03.root",
+          "condition": "trailing-slash",
+          "method": "GET",
+          "target": "/",
+          "headers": {}
+        }
+      ]
+    },
+    {
+      "id": "v04",
+      "name": "trailing-slash-false",
+      "hosting": {
+        "trailingSlash": false
+      },
+      "optionalConfig": [],
+      "readiness": {
+        "path": "/ready.txt",
+        "accept": [200]
+      },
+      "files": {
+        "data.json": {
+          "bytes": 17,
+          "sha256": "218589323cbe80b7ed077e3ee36f1663e7cb5f8f4e4ad02c938ad8a5c2c5a6b9"
+        },
+        "dir/index.html": {
+          "bytes": 19,
+          "sha256": "14e5d39c55374fef471e87c89d8a871ac6b6a97b57b5d8cc623d6d2afe4ecab4"
+        },
+        "index.html": {
+          "bytes": 14,
+          "sha256": "25bd9226c1514c5b63d541ca4f280ab769a4dab6f9e0c510669713d16d686065"
+        },
+        "page.html": {
+          "bytes": 14,
+          "sha256": "1b7916b1d133dccc2a866d876e5cfad7c2d67a03db40000ce7b9107152e47082"
+        },
+        "ready.txt": {
+          "bytes": 6,
+          "sha256": "ed1a545bb85e55816bbf9566b028b2a0bc456b88f49f6f266c0401048824194b"
+        }
+      },
+      "requests": [
+        {
+          "id": "v04.page",
+          "condition": "trailing-slash",
+          "method": "GET",
+          "target": "/page?q=1",
+          "headers": {}
+        },
+        {
+          "id": "v04.page-slash",
+          "condition": "trailing-slash",
+          "method": "GET",
+          "target": "/page/?q=1",
+          "headers": {}
+        },
+        {
+          "id": "v04.page-html",
+          "condition": "trailing-slash",
+          "method": "GET",
+          "target": "/page.html?q=1",
+          "headers": {}
+        },
+        {
+          "id": "v04.dir",
+          "condition": "trailing-slash",
+          "method": "GET",
+          "target": "/dir?q=1",
+          "headers": {}
+        },
+        {
+          "id": "v04.dir-slash",
+          "condition": "trailing-slash",
+          "method": "GET",
+          "target": "/dir/?q=1",
+          "headers": {}
+        },
+        {
+          "id": "v04.dir-index-html",
+          "condition": "trailing-slash",
+          "method": "GET",
+          "target": "/dir/index.html?q=1",
+          "headers": {}
+        },
+        {
+          "id": "v04.root",
+          "condition": "trailing-slash",
+          "method": "GET",
+          "target": "/",
+          "headers": {}
+        }
+      ]
+    },
+    {
+      "id": "v05",
+      "name": "clean-urls-slash",
+      "hosting": {
+        "cleanUrls": true,
+        "trailingSlash": true
+      },
+      "optionalConfig": [],
+      "readiness": {
+        "path": "/ready.txt",
+        "accept": [200]
+      },
+      "files": {
+        "data.json": {
+          "bytes": 17,
+          "sha256": "218589323cbe80b7ed077e3ee36f1663e7cb5f8f4e4ad02c938ad8a5c2c5a6b9"
+        },
+        "dir/index.html": {
+          "bytes": 19,
+          "sha256": "14e5d39c55374fef471e87c89d8a871ac6b6a97b57b5d8cc623d6d2afe4ecab4"
+        },
+        "index.html": {
+          "bytes": 14,
+          "sha256": "25bd9226c1514c5b63d541ca4f280ab769a4dab6f9e0c510669713d16d686065"
+        },
+        "page.html": {
+          "bytes": 14,
+          "sha256": "1b7916b1d133dccc2a866d876e5cfad7c2d67a03db40000ce7b9107152e47082"
+        },
+        "ready.txt": {
+          "bytes": 6,
+          "sha256": "ed1a545bb85e55816bbf9566b028b2a0bc456b88f49f6f266c0401048824194b"
+        }
+      },
+      "requests": [
+        {
+          "id": "v05.page",
+          "condition": "trailing-slash",
+          "method": "GET",
+          "target": "/page?q=1",
+          "headers": {}
+        },
+        {
+          "id": "v05.page-slash",
+          "condition": "trailing-slash",
+          "method": "GET",
+          "target": "/page/?q=1",
+          "headers": {}
+        },
+        {
+          "id": "v05.page-html",
+          "condition": "trailing-slash",
+          "method": "GET",
+          "target": "/page.html?q=1",
+          "headers": {}
+        },
+        {
+          "id": "v05.dir",
+          "condition": "trailing-slash",
+          "method": "GET",
+          "target": "/dir?q=1",
+          "headers": {}
+        },
+        {
+          "id": "v05.dir-slash",
+          "condition": "trailing-slash",
+          "method": "GET",
+          "target": "/dir/?q=1",
+          "headers": {}
+        },
+        {
+          "id": "v05.dir-index-html",
+          "condition": "trailing-slash",
+          "method": "GET",
+          "target": "/dir/index.html?q=1",
+          "headers": {}
+        },
+        {
+          "id": "v05.root",
+          "condition": "trailing-slash",
+          "method": "GET",
+          "target": "/",
+          "headers": {}
+        }
+      ]
+    },
+    {
+      "id": "v06",
+      "name": "clean-urls-noslash",
+      "hosting": {
+        "cleanUrls": true,
+        "trailingSlash": false
+      },
+      "optionalConfig": [],
+      "readiness": {
+        "path": "/ready.txt",
+        "accept": [200]
+      },
+      "files": {
+        "data.json": {
+          "bytes": 17,
+          "sha256": "218589323cbe80b7ed077e3ee36f1663e7cb5f8f4e4ad02c938ad8a5c2c5a6b9"
+        },
+        "dir/index.html": {
+          "bytes": 19,
+          "sha256": "14e5d39c55374fef471e87c89d8a871ac6b6a97b57b5d8cc623d6d2afe4ecab4"
+        },
+        "index.html": {
+          "bytes": 14,
+          "sha256": "25bd9226c1514c5b63d541ca4f280ab769a4dab6f9e0c510669713d16d686065"
+        },
+        "page.html": {
+          "bytes": 14,
+          "sha256": "1b7916b1d133dccc2a866d876e5cfad7c2d67a03db40000ce7b9107152e47082"
+        },
+        "ready.txt": {
+          "bytes": 6,
+          "sha256": "ed1a545bb85e55816bbf9566b028b2a0bc456b88f49f6f266c0401048824194b"
+        }
+      },
+      "requests": [
+        {
+          "id": "v06.page",
+          "condition": "trailing-slash",
+          "method": "GET",
+          "target": "/page?q=1",
+          "headers": {}
+        },
+        {
+          "id": "v06.page-slash",
+          "condition": "trailing-slash",
+          "method": "GET",
+          "target": "/page/?q=1",
+          "headers": {}
+        },
+        {
+          "id": "v06.page-html",
+          "condition": "trailing-slash",
+          "method": "GET",
+          "target": "/page.html?q=1",
+          "headers": {}
+        },
+        {
+          "id": "v06.dir",
+          "condition": "trailing-slash",
+          "method": "GET",
+          "target": "/dir?q=1",
+          "headers": {}
+        },
+        {
+          "id": "v06.dir-slash",
+          "condition": "trailing-slash",
+          "method": "GET",
+          "target": "/dir/?q=1",
+          "headers": {}
+        },
+        {
+          "id": "v06.dir-index-html",
+          "condition": "trailing-slash",
+          "method": "GET",
+          "target": "/dir/index.html?q=1",
+          "headers": {}
+        },
+        {
+          "id": "v06.root",
+          "condition": "trailing-slash",
+          "method": "GET",
+          "target": "/",
+          "headers": {}
+        }
+      ]
+    },
+    {
+      "id": "v07",
+      "name": "i18n",
+      "hosting": {
+        "i18n": {
+          "root": "locales"
+        }
+      },
+      "optionalConfig": [],
+      "readiness": {
+        "path": "/ready.txt",
+        "accept": [200]
+      },
+      "files": {
+        "dir/index.html": {
+          "bytes": 19,
+          "sha256": "14e5d39c55374fef471e87c89d8a871ac6b6a97b57b5d8cc623d6d2afe4ecab4"
+        },
+        "index.html": {
+          "bytes": 14,
+          "sha256": "25bd9226c1514c5b63d541ca4f280ab769a4dab6f9e0c510669713d16d686065"
+        },
+        "locales/ALL_CA/page.html": {
+          "bytes": 7,
+          "sha256": "6b631d7dfa329b5cb8a3eb22ce218b5b4345edbfbdb51c36c02cfb85921d2528"
+        },
+        "locales/en_ALL/page.html": {
+          "bytes": 6,
+          "sha256": "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03"
+        },
+        "locales/fr/page.html": {
+          "bytes": 8,
+          "sha256": "9cec0af545144159bac85c7b908d5e0b9b0ef961497401c5ad8da26f065ad926"
+        },
+        "locales/fr_CA/page.html": {
+          "bytes": 15,
+          "sha256": "d1e3d78b1c4af5cf718a78649d751bb4b6b00a9c9745535d041e9becb2c3df13"
+        },
+        "page.html": {
+          "bytes": 14,
+          "sha256": "1b7916b1d133dccc2a866d876e5cfad7c2d67a03db40000ce7b9107152e47082"
+        },
+        "ready.txt": {
+          "bytes": 6,
+          "sha256": "ed1a545bb85e55816bbf9566b028b2a0bc456b88f49f6f266c0401048824194b"
+        }
+      },
+      "requests": [
+        {
+          "id": "v07.language",
+          "condition": "i18n",
+          "method": "GET",
+          "target": "/page.html",
+          "headers": {
+            "accept-language": "fr"
+          }
+        },
+        {
+          "id": "v07.country-header",
+          "condition": "i18n",
+          "method": "GET",
+          "target": "/page.html",
+          "headers": {
+            "accept-language": "fr",
+            "x-country-code": "CA"
+          }
+        },
+        {
+          "id": "v07.country-header-only",
+          "condition": "i18n",
+          "method": "GET",
+          "target": "/page.html",
+          "headers": {
+            "x-country-code": "CA"
+          }
+        },
+        {
+          "id": "v07.language-cookie",
+          "condition": "i18n",
+          "method": "GET",
+          "target": "/page.html",
+          "headers": {
+            "accept-language": "en",
+            "cookie": "firebase-language-override=fr"
+          }
+        },
+        {
+          "id": "v07.fallback",
+          "condition": "i18n",
+          "method": "GET",
+          "target": "/page.html",
+          "headers": {
+            "accept-language": "de"
+          }
+        },
+        {
+          "id": "v07.country-cookie",
+          "condition": "i18n",
+          "method": "GET",
+          "target": "/page.html",
+          "headers": {
+            "accept-language": "fr",
+            "cookie": "firebase-country-override=CA"
+          }
+        },
+        {
+          "id": "v07.country-cookie-only",
+          "condition": "i18n",
+          "method": "GET",
+          "target": "/page.html",
+          "headers": {
+            "cookie": "firebase-country-override=CA"
+          }
+        },
+        {
+          "id": "v07.both-cookies",
+          "condition": "i18n",
+          "method": "GET",
+          "target": "/page.html",
+          "headers": {
+            "cookie": "firebase-language-override=fr; firebase-country-override=CA"
+          }
+        },
+        {
+          "id": "v07.none",
+          "condition": "i18n",
+          "method": "GET",
+          "target": "/page.html",
+          "headers": {}
+        },
+        {
+          "id": "v07.region-tag",
+          "condition": "i18n",
+          "method": "GET",
+          "target": "/page.html",
+          "headers": {
+            "accept-language": "fr-CA"
+          }
+        },
+        {
+          "id": "v07.quality",
+          "condition": "i18n",
+          "method": "GET",
+          "target": "/page.html",
+          "headers": {
+            "accept-language": "de;q=0.9, fr;q=0.8"
+          }
+        },
+        {
+          "id": "v07.root",
+          "condition": "i18n",
+          "method": "GET",
+          "target": "/",
+          "headers": {
+            "accept-language": "fr"
+          }
+        },
+        {
+          "id": "v07.head-language",
+          "condition": "i18n",
+          "method": "HEAD",
+          "target": "/page.html",
+          "headers": {
+            "accept-language": "fr"
+          }
+        }
+      ]
+    },
+    {
+      "id": "v08",
+      "name": "i18n-clean-slash",
+      "hosting": {
+        "i18n": {
+          "root": "locales"
+        },
+        "cleanUrls": true,
+        "trailingSlash": true
+      },
+      "optionalConfig": [],
+      "readiness": {
+        "path": "/ready.txt",
+        "accept": [200]
+      },
+      "files": {
+        "dir/index.html": {
+          "bytes": 19,
+          "sha256": "14e5d39c55374fef471e87c89d8a871ac6b6a97b57b5d8cc623d6d2afe4ecab4"
+        },
+        "index.html": {
+          "bytes": 14,
+          "sha256": "25bd9226c1514c5b63d541ca4f280ab769a4dab6f9e0c510669713d16d686065"
+        },
+        "locales/ALL_CA/page.html": {
+          "bytes": 7,
+          "sha256": "6b631d7dfa329b5cb8a3eb22ce218b5b4345edbfbdb51c36c02cfb85921d2528"
+        },
+        "locales/en_ALL/page.html": {
+          "bytes": 6,
+          "sha256": "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03"
+        },
+        "locales/fr/page.html": {
+          "bytes": 8,
+          "sha256": "9cec0af545144159bac85c7b908d5e0b9b0ef961497401c5ad8da26f065ad926"
+        },
+        "locales/fr_CA/page.html": {
+          "bytes": 15,
+          "sha256": "d1e3d78b1c4af5cf718a78649d751bb4b6b00a9c9745535d041e9becb2c3df13"
+        },
+        "page.html": {
+          "bytes": 14,
+          "sha256": "1b7916b1d133dccc2a866d876e5cfad7c2d67a03db40000ce7b9107152e47082"
+        },
+        "ready.txt": {
+          "bytes": 6,
+          "sha256": "ed1a545bb85e55816bbf9566b028b2a0bc456b88f49f6f266c0401048824194b"
+        }
+      },
+      "requests": [
+        {
+          "id": "v08.page-html",
+          "condition": "i18n",
+          "method": "GET",
+          "target": "/page.html",
+          "headers": {
+            "accept-language": "fr"
+          }
+        },
+        {
+          "id": "v08.page",
+          "condition": "i18n",
+          "method": "GET",
+          "target": "/page",
+          "headers": {
+            "accept-language": "fr"
+          }
+        },
+        {
+          "id": "v08.page-slash",
+          "condition": "i18n",
+          "method": "GET",
+          "target": "/page/",
+          "headers": {
+            "accept-language": "fr"
+          }
+        },
+        {
+          "id": "v08.dir",
+          "condition": "trailing-slash",
+          "method": "GET",
+          "target": "/dir",
+          "headers": {
+            "accept-language": "fr"
+          }
+        },
+        {
+          "id": "v08.page-country-cookie",
+          "condition": "i18n",
+          "method": "GET",
+          "target": "/page/",
+          "headers": {
+            "accept-language": "fr",
+            "cookie": "firebase-country-override=CA"
+          }
+        }
+      ]
+    },
+    {
+      "id": "v09",
+      "name": "reserved-precedence",
+      "hosting": {
+        "redirects": [
+          {
+            "source": "**",
+            "destination": "/page.html",
+            "type": 302
+          }
+        ]
+      },
+      "optionalConfig": [],
+      "readiness": {
+        "path": "/ready.txt",
+        "accept": [302]
+      },
+      "files": {
+        "dir/index.html": {
+          "bytes": 19,
+          "sha256": "14e5d39c55374fef471e87c89d8a871ac6b6a97b57b5d8cc623d6d2afe4ecab4"
+        },
+        "index.html": {
+          "bytes": 14,
+          "sha256": "25bd9226c1514c5b63d541ca4f280ab769a4dab6f9e0c510669713d16d686065"
+        },
+        "page.html": {
+          "bytes": 14,
+          "sha256": "1b7916b1d133dccc2a866d876e5cfad7c2d67a03db40000ce7b9107152e47082"
+        },
+        "ready.txt": {
+          "bytes": 6,
+          "sha256": "ed1a545bb85e55816bbf9566b028b2a0bc456b88f49f6f266c0401048824194b"
+        }
+      },
+      "requests": [
+        {
+          "id": "v09.reserved-json",
+          "condition": "reserved-paths",
+          "method": "GET",
+          "target": "/__/firebase/init.json",
+          "headers": {}
+        },
+        {
+          "id": "v09.reserved-js",
+          "condition": "reserved-paths",
+          "method": "GET",
+          "target": "/__/firebase/init.js",
+          "headers": {}
+        },
+        {
+          "id": "v09.reserved-unknown",
+          "condition": "reserved-paths",
+          "method": "GET",
+          "target": "/__/missing",
+          "headers": {}
+        },
+        {
+          "id": "v09.reserved-auth-handler",
+          "condition": "reserved-paths",
+          "method": "HEAD",
+          "target": "/__/auth/handler",
+          "headers": {}
+        },
+        {
+          "id": "v09.control",
+          "condition": "redirects",
+          "method": "GET",
+          "target": "/other",
+          "headers": {}
+        },
+        {
+          "id": "v09.control-static",
+          "condition": "redirects",
+          "method": "GET",
+          "target": "/index.html",
+          "headers": {}
+        }
+      ]
+    },
+    {
+      "id": "v10",
+      "name": "glob-matrix",
+      "hosting": {
+        "rewrites": [
+          {
+            "source": "**",
+            "destination": "/index.html"
+          }
+        ],
+        "headers": [
+          {
+            "source": "/**",
+            "headers": [
+              {
+                "key": "X-G00",
+                "value": "1"
+              }
+            ]
+          },
+          {
+            "source": "/a/*",
+            "headers": [
+              {
+                "key": "X-G01",
+                "value": "1"
+              }
+            ]
+          },
+          {
+            "source": "/a/**",
+            "headers": [
+              {
+                "key": "X-G02",
+                "value": "1"
+              }
+            ]
+          },
+          {
+            "source": "/a/?",
+            "headers": [
+              {
+                "key": "X-G03",
+                "value": "1"
+              }
+            ]
+          },
+          {
+            "source": "/{a,b}/x",
+            "headers": [
+              {
+                "key": "X-G04",
+                "value": "1"
+              }
+            ]
+          },
+          {
+            "source": "/a/[ab]",
+            "headers": [
+              {
+                "key": "X-G05",
+                "value": "1"
+              }
+            ]
+          },
+          {
+            "source": "/a/!(x)",
+            "headers": [
+              {
+                "key": "X-G06",
+                "value": "1"
+              }
+            ]
+          },
+          {
+            "source": "/a/@(x|y)",
+            "headers": [
+              {
+                "key": "X-G07",
+                "value": "1"
+              }
+            ]
+          },
+          {
+            "source": "/a/+(x|y)",
+            "headers": [
+              {
+                "key": "X-G08",
+                "value": "1"
+              }
+            ]
+          },
+          {
+            "source": "/a/?(x)",
+            "headers": [
+              {
+                "key": "X-G09",
+                "value": "1"
+              }
+            ]
+          },
+          {
+            "source": "/a/*(x)",
+            "headers": [
+              {
+                "key": "X-G10",
+                "value": "1"
+              }
+            ]
+          },
+          {
+            "source": "!/a/x",
+            "headers": [
+              {
+                "key": "X-G11",
+                "value": "1"
+              }
+            ]
+          },
+          {
+            "source": "/a/\\*",
+            "headers": [
+              {
+                "key": "X-G12",
+                "value": "1"
+              }
+            ]
+          },
+          {
+            "source": "/a/.hidden",
+            "headers": [
+              {
+                "key": "X-G13",
+                "value": "1"
+              }
+            ]
+          },
+          {
+            "source": "/a/**/x",
+            "headers": [
+              {
+                "key": "X-G14",
+                "value": "1"
+              }
+            ]
+          },
+          {
+            "source": "/{a,{b,c}}/x",
+            "headers": [
+              {
+                "key": "X-G15",
+                "value": "1"
+              }
+            ]
+          }
+        ]
+      },
+      "optionalConfig": [],
+      "readiness": {
+        "path": "/ready.txt",
+        "accept": [200]
+      },
+      "files": {
+        "dir/index.html": {
+          "bytes": 19,
+          "sha256": "14e5d39c55374fef471e87c89d8a871ac6b6a97b57b5d8cc623d6d2afe4ecab4"
+        },
+        "index.html": {
+          "bytes": 14,
+          "sha256": "25bd9226c1514c5b63d541ca4f280ab769a4dab6f9e0c510669713d16d686065"
+        },
+        "page.html": {
+          "bytes": 14,
+          "sha256": "1b7916b1d133dccc2a866d876e5cfad7c2d67a03db40000ce7b9107152e47082"
+        },
+        "ready.txt": {
+          "bytes": 6,
+          "sha256": "ed1a545bb85e55816bbf9566b028b2a0bc456b88f49f6f266c0401048824194b"
+        }
+      },
+      "requests": [
+        {
+          "id": "v10.path-00",
+          "condition": "glob-matching",
+          "method": "GET",
+          "target": "/a/x",
+          "headers": {}
+        },
+        {
+          "id": "v10.path-01",
+          "condition": "glob-matching",
+          "method": "GET",
+          "target": "/a/y",
+          "headers": {}
+        },
+        {
+          "id": "v10.path-02",
+          "condition": "glob-matching",
+          "method": "GET",
+          "target": "/a/xx",
+          "headers": {}
+        },
+        {
+          "id": "v10.path-03",
+          "condition": "glob-matching",
+          "method": "GET",
+          "target": "/a/a",
+          "headers": {}
+        },
+        {
+          "id": "v10.path-04",
+          "condition": "glob-matching",
+          "method": "GET",
+          "target": "/b/x",
+          "headers": {}
+        },
+        {
+          "id": "v10.path-05",
+          "condition": "glob-matching",
+          "method": "GET",
+          "target": "/a/",
+          "headers": {}
+        },
+        {
+          "id": "v10.path-06",
+          "condition": "glob-matching",
+          "method": "GET",
+          "target": "/a/n/x",
+          "headers": {}
+        },
+        {
+          "id": "v10.path-07",
+          "condition": "glob-matching",
+          "method": "GET",
+          "target": "/a/.hidden",
+          "headers": {}
+        },
+        {
+          "id": "v10.path-08",
+          "condition": "glob-matching",
+          "method": "GET",
+          "target": "/a/*",
+          "headers": {}
+        },
+        {
+          "id": "v10.path-09",
+          "condition": "glob-matching",
+          "method": "GET",
+          "target": "/c/x",
+          "headers": {}
+        },
+        {
+          "id": "v10.path-10",
+          "condition": "glob-matching",
+          "method": "GET",
+          "target": "/d/x",
+          "headers": {}
+        },
+        {
+          "id": "v10.static-over-rewrite",
+          "condition": "rewrites",
+          "method": "GET",
+          "target": "/ready.txt",
+          "headers": {}
+        }
+      ]
+    }
+  ],
+  "corpusSha256": "fa57f2b080426de0ea30e5b9758f117481a770561e625903974c4672fca43150"
+}

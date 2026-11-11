@@ -770,7 +770,7 @@
     ],
     "confirmedMissing": true
   },
-  "verifiedProjectNumber": "592603257417",
+  "verifiedProjectNumber": "<project-number>",
   "database": {
     "name": "projects/fireemu-35fe6/databases/(default)",
     "type": "FIRESTORE_NATIVE",

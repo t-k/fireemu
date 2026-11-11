@@ -36,7 +36,7 @@ from o8_campaign import CAMPAIGN_APPROVAL_FIELDS, CampaignDescriptor
 commit_baseline = campaign.commit_baseline
 
 NONCE = "b" * 32
-PROJECT_BODY = {"projectId": "fireemu-35fe6", "projectNumber": "592603257417"}
+PROJECT_BODY = {"projectId": "fireemu-35fe6", "projectNumber": "<project-number>"}
 DATABASE_BODY = {
     "name": "projects/fireemu-35fe6/databases/(default)",
     "uid": "fixture-uid",
@@ -44,7 +44,7 @@ DATABASE_BODY = {
     "databaseEdition": "STANDARD",
     "locationId": "us-central1",
 }
-AUTH_BODY = {"name": "projects/592603257417/config", "mfa": {"state": "DISABLED"}}
+AUTH_BODY = {"name": "projects/<project-number>/config", "mfa": {"state": "DISABLED"}}
 BASELINE_BODIES = [
     (commit_baseline.ROUTES["projectIdentity"], PROJECT_BODY),
     (commit_baseline.ROUTES["database"], DATABASE_BODY),

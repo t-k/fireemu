@@ -182,6 +182,21 @@ test("S0 passes only on exactly the expected database, and says why when it does
     assert.equal(verdict.ok, false, JSON.stringify(overrides));
     assert.match(verdict.reasons.join(";"), pattern);
   }
+  // The operations list of a database just created holds its done CreateDatabase operation
+  // (the O-1 create answer of 2026-10-19: done true, a response that is the database).
+  const created = ok({
+    operations: [
+      {
+        name: `${DB}/operations/create-1`,
+        metadata: {
+          "@type": "type.googleapis.com/google.firestore.admin.v1.CreateDatabaseMetadata",
+        },
+        done: true,
+        response: { "@type": "type.googleapis.com/google.firestore.admin.v1.Database", name: DB },
+      },
+    ],
+  });
+  assert.equal(judgeS0(s0Answers({ "s0-operations": created })).ok, true);
   // A missing answer (the run stopped earlier) is not a pass.
   const stopped = s0Answers();
   delete stopped["s0-operations"];
@@ -270,6 +285,33 @@ test("the read-back closes only on the list without this database and the record
   assert.equal(judgeA2(answers(listed(OTHER), notFound), snapshot).verdict, "deleted");
   assert.equal(judgeA2(answers(listed(OTHER, DB), ok({ name: DB })), snapshot).verdict, "present");
   assert.equal(judgeA2(answers(listed(OTHER), ok({ name: DB })), snapshot).verdict, "present");
+  // The second variant production gave for the same deleted database ten minutes later
+  // (2026-10-27T16:39Z, entpipe1's retirement, second read-back).
+  const lateNotFound = {
+    status: 404,
+    body: {
+      error: {
+        code: 404,
+        message: `Project '${PROJECT}' or database 'entpipe1' does not exist.`,
+        status: "NOT_FOUND",
+      },
+    },
+  };
+  assert.equal(judgeA2(answers(listed(OTHER), lateNotFound), snapshot).verdict, "deleted");
+  // Near misses: the other project or database named in that message, a changed status text.
+  for (const message of [
+    `Project 'other-project' or database 'entpipe1' does not exist.`,
+    `Project '${PROJECT}' or database 'entpipe2' does not exist.`,
+    `Project '${PROJECT}' or database 'entpipe1' does not exist`,
+  ]) {
+    const near = { ...lateNotFound, body: { error: { ...lateNotFound.body.error, message } } };
+    assert.equal(judgeA2(answers(listed(OTHER), near), snapshot).verdict, "unknown", message);
+  }
+  const wrongStatus = {
+    ...lateNotFound,
+    body: { error: { ...lateNotFound.body.error, status: "PERMISSION_DENIED" } },
+  };
+  assert.equal(judgeA2(answers(listed(OTHER), wrongStatus), snapshot).verdict, "unknown");
   // Not settled: another message or status, a failing list, a list that lost or gained a database.
   const otherNotFound = {
     ...notFound,

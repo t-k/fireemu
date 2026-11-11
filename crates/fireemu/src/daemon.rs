@@ -67,6 +67,7 @@ struct BoundStartup {
     app_check_gate: Option<fireemu_core_app_check::AppCheckGate>,
     callable_trusted_protocol: bool,
     functions_runtime: Option<Arc<fireemu_adapter_functions::runtime::FunctionsRuntime>>,
+    blocking_signer: Option<Arc<fireemu_adapter_http::signing::RsaSigner>>,
 }
 
 struct ServiceAssembly {
@@ -551,6 +552,7 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
         app_check_gate,
         callable_trusted_protocol,
         functions_runtime,
+        blocking_signer,
     } = bound;
     let Listeners {
         firestore: grpc_listener,
@@ -558,6 +560,7 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
         auth_selected,
         storage: storage_listener,
         functions: functions_listener,
+        hosting: hosting_listener,
         eventarc: eventarc_listener,
         tasks: tasks_listener,
         pubsub: pubsub_listener,
@@ -775,7 +778,10 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
                         restrictions,
                     )
                     .map_err(|error| format!("auth.blockingFunctions: {error}"))?
-                    .for_profile(cfg.profile),
+                    .for_profile(cfg.profile)
+                    .with_production_token(
+                        blocking_signer.clone().map(|s| s as Arc<dyn IdTokenSigner>),
+                    ),
                 )
                     as Arc<
                         dyn fireemu_adapter_http::identity_toolkit::AuthBlockingHook,
@@ -807,6 +813,9 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
             }
         },
         client_api_key: match cfg.profile {
+            crate::config::CompatibilityProfile::Emulator if cfg.auth_require_client_api_key => {
+                fireemu_adapter_http::identity_toolkit::ClientApiKeyPolicy::EmulatorRequired
+            }
             crate::config::CompatibilityProfile::Emulator => {
                 fireemu_adapter_http::identity_toolkit::ClientApiKeyPolicy::Optional
             }
@@ -945,6 +954,7 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
             auth_selected,
             storage: storage_listener,
             functions: functions_listener,
+            hosting: hosting_listener,
             eventarc: eventarc_listener,
             tasks: tasks_listener,
             pubsub: pubsub_listener,
@@ -1142,6 +1152,7 @@ fn firestore_profile_settings(
         ))
         .with_refusal_without_ruleset(cfg.refuse_without_ruleset)
         .with_end_user_transactions(cfg.end_user_transactions)
+        .with_official_query_answers(cfg.profile.official_query_answers())
         .with_listen_stream_lifetime(cfg.listen_stream_lifetime)
 }
 
@@ -1222,6 +1233,7 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
             exporter.products,
             &cfg.auth_project,
             cfg.profile != crate::config::CompatibilityProfile::Strict,
+            cfg.storage_max_object_bytes,
         )
         .map_err(|e| format!("--import {}: {e}", dir.display()))?;
         if !quiet {
@@ -1480,6 +1492,7 @@ async fn serve_suite(
         auth_selected: _,
         storage: storage_listener,
         functions: functions_listener,
+        hosting: hosting_listener,
         eventarc: eventarc_listener,
         tasks: tasks_listener,
         pubsub: pubsub_listener,
@@ -1525,6 +1538,8 @@ async fn serve_suite(
         )
     );
     if let Some(listener) = storage_listener {
+        fireemu_adapter_http::storage_server::BODY_BUDGET
+            .set_limit(cfg.storage_buffered_body_budget_bytes);
         spawn_server!(
             "Storage",
             fireemu_adapter_http::storage_server::serve_storage(listener, storage.clone())
@@ -1532,6 +1547,31 @@ async fn serve_suite(
     }
     if let Some(listener) = hub_listener {
         spawn_server!("Emulator Hub", hub::serve(listener, hub_state.clone()));
+    }
+    let mut hosting_info = None;
+    if let (Some(listener), Some(config)) = (hosting_listener, cfg.hosting.clone()) {
+        let site_config = config.data().clone();
+        let emulators = serde_json::Value::Object(hub_emulators(&addrs).into_iter().filter(|entry| matches!(entry.name, "auth"|"firestore"|"functions"|"storage"|"database")).map(|entry| (entry.name.to_owned(), serde_json::json!({"host":entry.addr.ip().to_string(),"port":entry.addr.port(),"hostAndPort":entry.addr.to_string()}))).collect());
+        let prepared = crate::hosting::prepare(
+            config,
+            cfg.auth_project.clone(),
+            addrs.functions,
+            emulators,
+            crate::hosting::Mode {
+                strict: matches!(cfg.profile, crate::config::CompatibilityProfile::Strict),
+                default_cache_control: cfg.hosting_cache_control
+                    == crate::config::HostingCacheControl::Production,
+                client_country: cfg.hosting_client_country
+                    == crate::config::HostingClientCountry::Honoured,
+            },
+        )?;
+        hosting_info = addrs.hosting.map(|addr| fireemu_adapter_ui::HostingInfo {
+            addr: addr.to_string(),
+            public_root: prepared.public_root().to_owned(),
+            public_exists: prepared.public_exists(),
+            config: site_config,
+        });
+        spawn_server!("Hosting", crate::hosting::serve(listener, prepared));
     }
     let functions_http_admission = fireemu_adapter_functions::http::HttpAdmission::new();
     let functions_http_profile = match cfg.profile {
@@ -1712,6 +1752,7 @@ async fn serve_suite(
             storage: storage.clone(),
             control: control.clone(),
             functions: functions_runtime.clone(),
+            hosting: hosting_info,
             app_check,
             addrs: (
                 addrs.firestore.unwrap_or(addrs.control),
@@ -1731,6 +1772,7 @@ async fn serve_suite(
         &storage_admin_capability,
     );
     let descriptor = serde_json::json!({"schemaVersion":1,"pid":std::process::id(),"projectId":cfg.auth_project,
+        "hostingUrl":addrs.hosting.map(|addr| format!("http://{addr}/")),
         "uiUrl":addrs.ui.map(|addr| format!("http://{addr}/ui/")),
         "controlUrl":format!("http://{}",addrs.control),"controlToken":control_token,
         "environment":environment.iter().cloned().collect::<std::collections::BTreeMap<_,_>>()});
@@ -2177,13 +2219,20 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         // the operating system CSPRNG once per daemon instance (spec 7.2).
         let want_auth_key = only.uses_auth_identity()
             && cfg.id_token_signing == fireemu_core_auth::jwt::SigningMode::SessionRsa;
+        let want_blocking_key = cfg.profile == crate::config::CompatibilityProfile::Strict
+            && cfg.functions_auth_blocking_token == crate::config::AuthBlockingToken::Production
+            && only.functions && only.auth;
         let want_app_check = only.app_check_available(&cfg.app_check);
-        if (want_auth_key || (want_app_check && !cfg.app_check.implicit())) && !quiet {
+        if (want_auth_key || want_blocking_key || (want_app_check && !cfg.app_check.implicit())) && !quiet {
             println!("  generating the RSA signing keys ...");
         }
         let auth_key = want_auth_key.then(|| {
             let seed = cfg.seed ^ 0x2256;
             tokio::task::spawn_blocking(move || session_rsa_cache::load_or_generate(seed))
+        });
+        let blocking_key = want_blocking_key.then(|| {
+            let seed = cfg.seed ^ 0xB10C;
+            tokio::task::spawn_blocking(move || fireemu_adapter_http::signing::RsaSigner::from_seed(seed))
         });
         // The development default serves App Check without anyone asking for it, so its key is
         // generated when something first needs it; an App Check the configuration enables is
@@ -2240,7 +2289,11 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         apply_auth_password_policy_overrides(&cfg, &registry)?;
         apply_auth_config_overrides(&cfg, &registry)?;
         let mut compilations = RulesCompilationCache::default();
-        let rules = Arc::new(RulesetSlot::new(load_rules(&cfg, &mut compilations)?));
+        let rules_literals = cfg.profile.lone_surrogates();
+        let rules = Arc::new(
+            RulesetSlot::new(load_rules(&cfg, &mut compilations)?)
+                .with_lone_surrogates(rules_literals),
+        );
         let mut database_rules = std::collections::BTreeMap::new();
         for (database, files) in &cfg.firestore_databases {
             if database == fireemu_core_types::ids::DatabaseId::DEFAULT {
@@ -2256,7 +2309,10 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                 }
                 None => LoadedRules::default(),
             };
-            database_rules.insert(database.clone(), Arc::new(RulesetSlot::new(loaded)));
+            database_rules.insert(
+                database.clone(),
+                Arc::new(RulesetSlot::new(loaded).with_lone_surrogates(rules_literals)),
+            );
         }
         let storage_rules = load_storage_rules(&cfg, &mut compilations)?;
         drop(compilations);
@@ -2274,6 +2330,7 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             auth_selected,
             storage: storage_listener,
             functions: functions_listener,
+        hosting: hosting_listener,
             eventarc: eventarc_listener,
             tasks: tasks_listener,
             pubsub: pubsub_listener,
@@ -2315,6 +2372,7 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                 ("auth", auth_selected.then_some(http_addr)),
                 ("storage", storage_addr),
                 ("functions", functions_addr),
+                ("hosting", hosting_listener.as_ref().and_then(|l| l.local_addr().ok())),
                 ("eventarc", eventarc_addr),
                 ("tasks", tasks_addr),
                 ("pubsub", pubsub_addr),
@@ -2336,6 +2394,7 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             auth: auth_selected.then_some(http_addr),
             storage: storage_addr,
             functions: connectable(functions_addr),
+            hosting: connectable(hosting_listener.as_ref().and_then(|l| l.local_addr().ok())),
             eventarc: connectable(eventarc_addr),
             tasks: connectable(tasks_addr),
             pubsub: connectable(pubsub_addr),
@@ -2388,6 +2447,15 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         // The runner's functions see exactly the services this run selected: an unselected
         // one leaves its variable unset there too, so a handler cannot reach a product the
         // suite is not running.
+        let blocking_signer = if let Some(task) = blocking_key {
+            let signer = task.await.map_err(|e| format!("blocking RSA key: {e}"))??;
+            if !quiet {
+                println!("  blocking tokens:  production (RS256 kid {}), key held in memory only", signer.kid());
+            }
+            Some(signer)
+        } else {
+            None
+        };
         let functions_runtime = match functions_listener.as_ref() {
             Some(_) => Some(
                 functions::start(
@@ -2395,6 +2463,7 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                     &clock,
                     &backend,
                     &functions::EmulatorHosts {
+                        blocking_jwks: blocking_signer.as_ref().map(|signer| signer.jwks().to_string()),
                         app_check: want_app_check.then(|| addrs.control.to_string()),
                         firestore: grpc_addr.map(|a| a.to_string()),
                         auth: addrs.auth.map(|a| a.to_string()),
@@ -2462,6 +2531,7 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                     auth_selected,
                     storage: storage_listener,
                     functions: functions_listener,
+        hosting: hosting_listener,
                     eventarc: eventarc_listener,
                     tasks: tasks_listener,
                     pubsub: pubsub_listener,
@@ -2478,6 +2548,7 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                 app_check_gate,
                 callable_trusted_protocol,
                 functions_runtime,
+                blocking_signer,
             })?;
         let ready = assemble_suite(assembly, exec.is_some())?;
         serve_suite(ready, exec, signals, ready_file, owner_stdin).await

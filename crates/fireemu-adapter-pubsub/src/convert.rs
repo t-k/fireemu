@@ -8,8 +8,8 @@ use fireemu_core_pubsub::subscription::{
     DEFAULT_RETRY_MINIMUM_BACKOFF_SECONDS, MAX_RETRY_BACKOFF_SECONDS, MIN_DEAD_LETTER_ATTEMPTS,
 };
 use fireemu_core_pubsub::{
-    Code, Filter, PubSubError, PubsubMessage, ReceivedMessage, Snapshot, StoredMessage,
-    SubscriptionConfig, SubscriptionName, TopicName,
+    Code, Filter, MessageStoragePolicy, PubSubError, PubsubMessage, ReceivedMessage, Snapshot,
+    StoredMessage, SubscriptionConfig, SubscriptionName, TopicName, TopicUpdate,
 };
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 
@@ -291,10 +291,14 @@ pub fn validate_subscription_options(sub: &pb::Subscription) -> Result<(), PubSu
 }
 
 /// Topic fields declared by `google.pubsub.v1.Topic` whose value the emulator applies, plus the
-/// output-only fields it accepts and ignores on input.
-pub const SUPPORTED_TOPIC_FIELDS: [&str; 5] = [
+/// output-only fields it accepts and ignores on input. Some fields are applied in the emulator
+/// profile only; see [`STRICT_REFUSED_TOPIC_FIELDS`].
+pub const SUPPORTED_TOPIC_FIELDS: [&str; 8] = [
     "name",
     "labels",
+    "message_storage_policy",
+    "kms_key_name",
+    "tags",
     "state",
     "satisfies_pzs",
     "message_retention_duration",
@@ -303,14 +307,16 @@ pub const SUPPORTED_TOPIC_FIELDS: [&str; 5] = [
 /// Topic fields declared by `google.pubsub.v1.Topic` that the emulator cannot represent. Naming
 /// one of these is an explicit unsupported-feature refusal; a name outside both tables is an
 /// unknown field, which is an invalid argument.
-pub const UNSUPPORTED_TOPIC_FIELDS: [&str; 6] = [
+pub const UNSUPPORTED_TOPIC_FIELDS: [&str; 3] = [
     "schema_settings",
-    "kms_key_name",
-    "message_storage_policy",
     "ingestion_data_source_settings",
     "message_transforms",
-    "tags",
 ];
+
+/// Supported topic fields that the strict profile still refuses, because production's answer for
+/// them depends on inventories or production behavior not recorded here.
+pub const STRICT_REFUSED_TOPIC_FIELDS: [&str; 3] =
+    ["message_storage_policy", "kms_key_name", "tags"];
 
 /// Reports whether `field` is a topic field declared by the wire schema.
 #[must_use]
@@ -318,52 +324,214 @@ pub fn is_declared_topic_field(field: &str) -> bool {
     SUPPORTED_TOPIC_FIELDS.contains(&field) || UNSUPPORTED_TOPIC_FIELDS.contains(&field)
 }
 
-/// Rejects topic fields that are accepted by the wire schema but not represented by the core
-/// broker state. Output-only and reserved fields are intentionally ignored by this validator.
-pub fn validate_topic_options(topic: &pb::Topic) -> Result<(), PubSubError> {
-    let unsupported = if topic.schema_settings.is_some() {
+/// The refusal for a topic field the profile does not store.
+fn unsupported_topic_field(field: &str, policy: crate::PagingPolicy) -> PubSubError {
+    if policy == crate::PagingPolicy::Strict
+        && field != "message_storage_policy"
+        && STRICT_REFUSED_TOPIC_FIELDS.contains(&field)
+    {
+        let reason = if field == "kms_key_name" {
+            "production checks the key against Cloud KMS and the Pub/Sub service agent's access to it; Fireemu has no Cloud KMS inventory"
+        } else {
+            "production checks Resource Manager tag keys and values and the caller's permission to bind them; Fireemu has no tag inventory"
+        };
+        return PubSubError::unimplemented(format!("topic.{field} is refused by the strict profile: {reason}, and production's answer is not recorded. Leave the field out, or select profile = \"emulator\", which stores it as given and returns it from get and list"));
+    }
+    if policy == crate::PagingPolicy::Strict && STRICT_REFUSED_TOPIC_FIELDS.contains(&field) {
+        return PubSubError::unimplemented(format!(
+            "topic.{field} is not supported by the strict profile: production checks every \
+             allowed_persistence_regions entry against Google Cloud's list of Pub/Sub regions and \
+             answers INVALID_ARGUMENT for one it does not know, and Fireemu has no cited copy of \
+             that list to check against, so it cannot give production's answer. Leave \
+             {field} out, or select the emulator profile (profile = \"emulator\"), which stores \
+             the policy as given and returns it from get, list and update, as the official \
+             emulator does"
+        ));
+    }
+    PubSubError::unimplemented(format!(
+        "topic.{field} is not supported by the Pub/Sub emulator"
+    ))
+}
+
+/// Reports the first topic field of `topic` that `policy` cannot store.
+fn first_unstored_topic_field(
+    topic: &pb::Topic,
+    policy: crate::PagingPolicy,
+) -> Option<&'static str> {
+    if topic.schema_settings.is_some() {
         Some("schema_settings")
-    } else if !topic.kms_key_name.is_empty() {
+    } else if !topic.kms_key_name.is_empty() && policy == crate::PagingPolicy::Strict {
         Some("kms_key_name")
-    } else if topic.message_storage_policy.is_some() {
+    } else if topic.message_storage_policy.is_some() && policy == crate::PagingPolicy::Strict {
         Some("message_storage_policy")
     } else if topic.ingestion_data_source_settings.is_some() {
         Some("ingestion_data_source_settings")
     } else if !topic.message_transforms.is_empty() {
         Some("message_transforms")
-    } else if !topic.tags.is_empty() {
+    } else if !topic.tags.is_empty() && policy == crate::PagingPolicy::Strict {
         Some("tags")
     } else {
         None
-    };
-    unsupported.map_or(Ok(()), |field| {
-        Err(PubSubError::unimplemented(format!(
-            "topic.{field} is not supported by the Pub/Sub emulator"
-        )))
-    })
+    }
+}
+
+/// Rejects topic fields that are accepted by the wire schema but not represented by the core
+/// broker state. Output-only and reserved fields are intentionally ignored by this validator.
+pub fn validate_topic_options(
+    topic: &pb::Topic,
+    policy: crate::PagingPolicy,
+) -> Result<(), PubSubError> {
+    first_unstored_topic_field(topic, policy)
+        .map_or(Ok(()), |field| Err(unsupported_topic_field(field, policy)))
 }
 
 /// Rejects unsupported fields named by an `UpdateTopic` field mask before the endpoint's generic
 /// unsupported response. This keeps a future update implementation from silently dropping them.
-pub fn validate_topic_update_options(request: &pb::UpdateTopicRequest) -> Result<(), PubSubError> {
+pub fn validate_topic_update_options(
+    request: &pb::UpdateTopicRequest,
+    policy: crate::PagingPolicy,
+) -> Result<(), PubSubError> {
     if let Some(mask) = request.update_mask.as_ref() {
         for path in &mask.paths {
             let head = path.split_once('.').map_or(path.as_str(), |(head, _)| head);
-            if UNSUPPORTED_TOPIC_FIELDS.contains(&head) {
-                return Err(PubSubError::unimplemented(format!(
-                    "topic.{head} is not supported by the Pub/Sub emulator"
-                )));
+            if UNSUPPORTED_TOPIC_FIELDS.contains(&head)
+                || (policy == crate::PagingPolicy::Strict
+                    && STRICT_REFUSED_TOPIC_FIELDS.contains(&head))
+            {
+                return Err(unsupported_topic_field(head, policy));
             }
-            if !is_declared_topic_field(head) {
+            if head == "tags" {
+                return Err(PubSubError::invalid_argument(
+                    "topic.tags is immutable: tags can only be set when the topic is created",
+                ));
+            }
+            let unknown_policy_member = head == "message_storage_policy"
+                && path != head
+                && !matches!(
+                    path.as_str(),
+                    "message_storage_policy.allowed_persistence_regions"
+                        | "message_storage_policy.enforce_in_transit"
+                );
+            if !is_declared_topic_field(head) || unknown_policy_member {
                 return Err(PubSubError::invalid_argument(format!(
                     "unknown update_mask path {path}"
                 )));
             }
         }
     } else if let Some(topic) = request.topic.as_ref() {
-        validate_topic_options(topic)?;
+        validate_topic_options(topic, policy)?;
     }
     Ok(())
+}
+
+/// The wire policy as the core stores it.
+#[must_use]
+pub fn storage_policy_from_proto(policy: &pb::MessageStoragePolicy) -> MessageStoragePolicy {
+    MessageStoragePolicy {
+        allowed_persistence_regions: policy.allowed_persistence_regions.clone(),
+        enforce_in_transit: policy.enforce_in_transit,
+    }
+}
+
+/// The stored policy as the wire carries it.
+#[must_use]
+pub fn storage_policy_to_proto(policy: &MessageStoragePolicy) -> pb::MessageStoragePolicy {
+    pb::MessageStoragePolicy {
+        allowed_persistence_regions: policy.allowed_persistence_regions.clone(),
+        enforce_in_transit: policy.enforce_in_transit,
+    }
+}
+
+/// The update-mask paths of an `UpdateTopic` the emulator can apply.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct TopicUpdatePaths {
+    labels: bool,
+    kms: bool,
+    policy: PolicyPaths,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum PolicyPaths {
+    #[default]
+    None,
+    Whole,
+    Parts {
+        regions: bool,
+        enforce_in_transit: bool,
+    },
+}
+
+impl TopicUpdatePaths {
+    /// Reads a mask; `None` when it is empty or names a path the emulator cannot apply. The whole
+    /// policy path covers its nested paths.
+    pub(crate) fn from_mask(paths: &[String]) -> Option<Self> {
+        let mut selected = Self::default();
+        let (mut regions, mut enforce_in_transit, mut whole) = (false, false, false);
+        if paths.is_empty() {
+            return None;
+        }
+        for path in paths {
+            match path.as_str() {
+                "labels" => selected.labels = true,
+                "kms_key_name" => selected.kms = true,
+                "message_storage_policy" => whole = true,
+                "message_storage_policy.allowed_persistence_regions" => regions = true,
+                "message_storage_policy.enforce_in_transit" => enforce_in_transit = true,
+                _ => return None,
+            }
+        }
+        selected.policy = if whole {
+            PolicyPaths::Whole
+        } else if regions || enforce_in_transit {
+            PolicyPaths::Parts {
+                regions,
+                enforce_in_transit,
+            }
+        } else {
+            PolicyPaths::None
+        };
+        Some(selected)
+    }
+
+    /// The update these paths select from `topic`, given the policy stored now.
+    pub(crate) fn build(
+        self,
+        topic: &pb::Topic,
+        stored: Option<&MessageStoragePolicy>,
+    ) -> TopicUpdate {
+        let requested = topic.message_storage_policy.as_ref();
+        let message_storage_policy = match self.policy {
+            PolicyPaths::None => None,
+            PolicyPaths::Whole => Some(requested.map(storage_policy_from_proto)),
+            PolicyPaths::Parts {
+                regions,
+                enforce_in_transit,
+            } => {
+                let mut merged = stored.cloned().unwrap_or_default();
+                if regions {
+                    merged.allowed_persistence_regions = requested
+                        .map(|policy| policy.allowed_persistence_regions.clone())
+                        .unwrap_or_default();
+                }
+                if enforce_in_transit {
+                    merged.enforce_in_transit =
+                        requested.is_some_and(|policy| policy.enforce_in_transit);
+                }
+                Some(Some(merged))
+            }
+        };
+        TopicUpdate {
+            labels: self.labels.then(|| {
+                topic
+                    .labels
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect()
+            }),
+            message_storage_policy,
+            kms_key_name: self.kms.then(|| topic.kms_key_name.clone()),
+        }
+    }
 }
 
 /// Builds a validated [`SubscriptionConfig`] from a wire `Subscription`.
@@ -647,6 +815,7 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
+    use crate::PagingPolicy;
     use proptest::prelude::*;
 
     proptest! {
@@ -803,33 +972,100 @@ mod tests {
             .into_iter()
             .filter(|(field, _)| *field != "message_retention_duration")
         {
-            let error = validate_topic_options(&topic).unwrap_err();
+            // The strict profile refuses every one of them; the emulator profile stores the policy.
+            let error = validate_topic_options(&topic, PagingPolicy::Strict).unwrap_err();
             assert_eq!(error.code(), Code::Unimplemented);
             assert!(error.message().contains(field), "{field}: {error}");
+            let emulator = validate_topic_options(&topic, PagingPolicy::Emulator);
+            if ["message_storage_policy", "kms_key_name", "tags"].contains(&field) {
+                assert!(emulator.is_ok());
+            } else {
+                assert_eq!(emulator.unwrap_err(), error, "{field}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_strict_refusal_of_a_storage_policy_says_why_and_how_to_proceed() {
+        let topic = pb::Topic {
+            message_storage_policy: Some(pb::MessageStoragePolicy::default()),
+            ..Default::default()
+        };
+        let error = validate_topic_options(&topic, PagingPolicy::Strict).unwrap_err();
+        for needle in [
+            "topic.message_storage_policy",
+            "strict profile",
+            "list of Pub/Sub regions",
+            "no cited copy",
+            "profile = \"emulator\"",
+        ] {
+            assert!(error.message().contains(needle), "{needle}: {error}");
+        }
+    }
+
+    #[test]
+    fn the_strict_refusals_of_a_key_name_and_of_tags_each_give_their_own_reason() {
+        let kms = pb::Topic {
+            kms_key_name: "projects/p/locations/l/keyRings/r/cryptoKeys/k".to_owned(),
+            ..Default::default()
+        };
+        let tags = pb::Topic {
+            tags: HashMap::from([(String::from("env"), String::from("test"))]),
+            ..Default::default()
+        };
+        for (topic, field, reason, other_reason) in [
+            (kms, "kms_key_name", "Cloud KMS", "Resource Manager"),
+            (tags, "tags", "Resource Manager", "Cloud KMS"),
+        ] {
+            let error = validate_topic_options(&topic, PagingPolicy::Strict).unwrap_err();
+            assert_eq!(error.code(), Code::Unimplemented);
+            for needle in [
+                &format!("topic.{field}"),
+                "strict profile",
+                "not recorded",
+                reason,
+                "profile = \"emulator\"",
+            ] {
+                assert!(
+                    error.message().contains(needle),
+                    "{field} {needle}: {error}"
+                );
+            }
+            assert!(!error.message().contains(other_reason), "{field}: {error}");
+            // The policy's own text (its region list) is not borrowed.
+            assert!(!error.message().contains("regions"), "{field}: {error}");
         }
     }
 
     #[test]
     fn topic_option_validation_accepts_supported_and_output_only_defaults() {
-        assert!(validate_topic_options(&pb::Topic::default()).is_ok());
-        assert!(validate_topic_options(&pb::Topic {
-            name: "projects/p/topics/t".to_owned(),
-            labels: HashMap::from([(String::from("env"), String::from("test"))]),
-            satisfies_pzs: true,
-            state: pb::topic::State::Active as i32,
-            ..Default::default()
-        })
-        .is_ok());
+        for policy in [PagingPolicy::Strict, PagingPolicy::Emulator] {
+            assert!(validate_topic_options(&pb::Topic::default(), policy).is_ok());
+            assert!(validate_topic_options(
+                &pb::Topic {
+                    name: "projects/p/topics/t".to_owned(),
+                    labels: HashMap::from([(String::from("env"), String::from("test"))]),
+                    satisfies_pzs: true,
+                    state: pb::topic::State::Active as i32,
+                    ..Default::default()
+                },
+                policy
+            )
+            .is_ok());
+        }
     }
 
     #[test]
     fn topic_update_validation_rejects_unsupported_mask_even_without_a_value() {
-        let error = validate_topic_update_options(&pb::UpdateTopicRequest {
-            update_mask: Some(prost_types::FieldMask {
-                paths: vec!["schema_settings".to_owned()],
-            }),
-            ..Default::default()
-        })
+        let error = validate_topic_update_options(
+            &pb::UpdateTopicRequest {
+                update_mask: Some(prost_types::FieldMask {
+                    paths: vec!["schema_settings".to_owned()],
+                }),
+                ..Default::default()
+            },
+            PagingPolicy::Strict,
+        )
         .unwrap_err();
         assert_eq!(error.code(), Code::Unimplemented);
         assert!(error.message().contains("schema_settings"));
@@ -837,15 +1073,180 @@ mod tests {
 
     #[test]
     fn topic_update_validation_only_checks_values_selected_by_the_mask() {
-        assert!(validate_topic_update_options(&pb::UpdateTopicRequest {
-            topic: Some(pb::Topic {
-                schema_settings: Some(pb::SchemaSettings::default()),
-                ..Default::default()
-            }),
-            update_mask: Some(prost_types::FieldMask {
-                paths: vec!["labels".to_owned()],
-            }),
-        })
+        assert!(validate_topic_update_options(
+            &pb::UpdateTopicRequest {
+                topic: Some(pb::Topic {
+                    schema_settings: Some(pb::SchemaSettings::default()),
+                    ..Default::default()
+                }),
+                update_mask: Some(prost_types::FieldMask {
+                    paths: vec!["labels".to_owned()],
+                }),
+            },
+            PagingPolicy::Strict
+        )
         .is_ok());
+    }
+
+    fn mask_request(paths: &[&str]) -> pb::UpdateTopicRequest {
+        pb::UpdateTopicRequest {
+            topic: Some(pb::Topic::default()),
+            update_mask: Some(prost_types::FieldMask {
+                paths: paths.iter().map(|path| (*path).to_owned()).collect(),
+            }),
+        }
+    }
+
+    #[test]
+    fn a_storage_policy_mask_path_is_admitted_in_the_emulator_profile_only() {
+        for path in [
+            "message_storage_policy",
+            "message_storage_policy.allowed_persistence_regions",
+            "message_storage_policy.enforce_in_transit",
+        ] {
+            assert!(
+                validate_topic_update_options(&mask_request(&[path]), PagingPolicy::Emulator)
+                    .is_ok(),
+                "{path}"
+            );
+            let error = validate_topic_update_options(&mask_request(&[path]), PagingPolicy::Strict)
+                .unwrap_err();
+            assert_eq!(error.code(), Code::Unimplemented, "{path}");
+            assert!(error.message().contains("profile = \"emulator\""), "{path}");
+        }
+        // The head is compared whole, and a nested name must be one of the two members.
+        for unknown in [
+            "message_storage_policy_x",
+            "message_storage_policy.anything",
+            "message_storage_policy.allowed_persistence_region",
+            "message_storage_policy.enforce_in_transit.x",
+        ] {
+            let error =
+                validate_topic_update_options(&mask_request(&[unknown]), PagingPolicy::Emulator)
+                    .unwrap_err();
+            assert_eq!(error.code(), Code::InvalidArgument, "{unknown}");
+        }
+    }
+
+    #[test]
+    fn update_paths_select_only_the_supported_mask_paths() {
+        let owned = |paths: &[&str]| {
+            paths
+                .iter()
+                .map(|path| (*path).to_owned())
+                .collect::<Vec<_>>()
+        };
+        assert!(TopicUpdatePaths::from_mask(&[]).is_none());
+        for unsupported in [
+            vec!["state"],
+            vec!["message_retention_duration"],
+            vec!["labels", "satisfies_pzs"],
+            vec!["message_storage_policy.enforce_in_transit.x"],
+            vec!["Labels"],
+            vec!["message_storage_policy", ""],
+        ] {
+            assert!(
+                TopicUpdatePaths::from_mask(&owned(&unsupported)).is_none(),
+                "{unsupported:?}"
+            );
+        }
+        for supported in [
+            vec!["labels"],
+            vec!["message_storage_policy"],
+            vec![
+                "message_storage_policy.allowed_persistence_regions",
+                "labels",
+            ],
+            vec!["labels", "labels"],
+        ] {
+            assert!(
+                TopicUpdatePaths::from_mask(&owned(&supported)).is_some(),
+                "{supported:?}"
+            );
+        }
+    }
+
+    fn arbitrary_wire_policy() -> impl Strategy<Value = pb::MessageStoragePolicy> {
+        (
+            proptest::collection::vec(".{0,12}", 0..5),
+            proptest::bool::ANY,
+        )
+            .prop_map(|(allowed_persistence_regions, enforce_in_transit)| {
+                pb::MessageStoragePolicy {
+                    allowed_persistence_regions,
+                    enforce_in_transit,
+                }
+            })
+    }
+
+    proptest! {
+        #[test]
+        fn key_and_tags_validation_and_mask_follow_the_profile(
+            kms in ".{0,12}", tags in proptest::collection::hash_map(".{0,6}", ".{0,6}", 0..5),
+        ) {
+            let topic = pb::Topic { kms_key_name: kms.clone(), tags: tags.clone(), ..Default::default() };
+            prop_assert!(validate_topic_options(&topic, PagingPolicy::Emulator).is_ok());
+            prop_assert_eq!(validate_topic_options(&topic, PagingPolicy::Strict).is_err(), !kms.is_empty() || !tags.is_empty());
+            let paths = vec!["kms_key_name".to_owned(), "labels".to_owned()];
+            let update = TopicUpdatePaths::from_mask(&paths).unwrap().build(&topic, None);
+            prop_assert_eq!(update.kms_key_name, Some(kms));
+        }
+
+        #[test]
+        fn a_storage_policy_survives_the_wire_to_core_round_trip(policy in arbitrary_wire_policy()) {
+            let stored = storage_policy_from_proto(&policy);
+            prop_assert_eq!(&stored.allowed_persistence_regions, &policy.allowed_persistence_regions);
+            prop_assert_eq!(stored.enforce_in_transit, policy.enforce_in_transit);
+            prop_assert_eq!(storage_policy_to_proto(&stored), policy);
+        }
+
+        /// A mask over the policy applies exactly like a field-by-field merge of the request into
+        /// the stored value, with the whole path replacing it.
+        #[test]
+        fn the_selected_policy_update_matches_a_field_merge_reference(
+            stored in proptest::option::of(arbitrary_wire_policy()),
+            requested in proptest::option::of(arbitrary_wire_policy()),
+            labels in proptest::bool::ANY,
+            whole in proptest::bool::ANY,
+            regions in proptest::bool::ANY,
+            enforce in proptest::bool::ANY,
+        ) {
+            let mut paths = Vec::new();
+            if labels { paths.push("labels".to_owned()); }
+            if whole { paths.push("message_storage_policy".to_owned()); }
+            if regions { paths.push("message_storage_policy.allowed_persistence_regions".to_owned()); }
+            if enforce { paths.push("message_storage_policy.enforce_in_transit".to_owned()); }
+            let topic = pb::Topic {
+                labels: HashMap::from([(String::from("k"), String::from("v"))]),
+                message_storage_policy: requested.clone(),
+                ..Default::default()
+            };
+            let stored = stored.as_ref().map(storage_policy_from_proto);
+            let Some(selected) = TopicUpdatePaths::from_mask(&paths) else {
+                prop_assert!(paths.is_empty());
+                return Ok(());
+            };
+            let update = selected.build(&topic, stored.as_ref());
+
+            prop_assert_eq!(update.labels.is_some(), labels);
+            let expected = if whole {
+                Some(requested.as_ref().map(storage_policy_from_proto))
+            } else if regions || enforce {
+                let mut merged = stored.clone().unwrap_or_default();
+                if regions {
+                    merged.allowed_persistence_regions = requested
+                        .as_ref()
+                        .map(|policy| policy.allowed_persistence_regions.clone())
+                        .unwrap_or_default();
+                }
+                if enforce {
+                    merged.enforce_in_transit = requested.as_ref().is_some_and(|policy| policy.enforce_in_transit);
+                }
+                Some(Some(merged))
+            } else {
+                None
+            };
+            prop_assert_eq!(update.message_storage_policy, expected);
+        }
     }
 }

@@ -459,6 +459,7 @@ pub fn prepare(
     products: Products,
     project: &str,
     rtdb_lone_surrogates: bool,
+    storage_max_object_bytes: u64,
 ) -> Result<Prepared, ArtifactError> {
     ensure_directory_inside(dir, dir).map_err(|e| ArtifactError::new("import", dir, e))?;
     let manifest_path = dir.join(METADATA_FILE_NAME);
@@ -514,7 +515,13 @@ pub fn prepare(
                 prepared.firestore_field_config = read_field_config(dir)?;
             }
             Product::Auth => prepared.auth = Some(read_auth_section(dir, section, project)?),
-            Product::Storage => prepared.storage = Some(read_storage_section(dir, section)?),
+            Product::Storage => {
+                prepared.storage = Some(read_storage_section(
+                    dir,
+                    section,
+                    storage_max_object_bytes,
+                )?);
+            }
             Product::Database => {
                 prepared.database =
                     Some(read_database_section(dir, section, rtdb_lone_surrogates)?);
@@ -2760,13 +2767,14 @@ fn read_storage_blob(
     remaining_bytes: &mut u64,
     object: &str,
     expected_size: u64,
+    max_object_bytes: u64,
 ) -> Result<Vec<u8>, ArtifactError> {
     let bytes = read_inside_budgeted(
         dir,
         path,
         remaining_bytes,
         IMPORT_STORAGE_TOTAL_BYTES_LIMIT,
-        fireemu_core_storage::store::MAX_OBJECT_BYTES,
+        max_object_bytes,
         "Storage files",
     )
     .map_err(|error| {
@@ -2867,7 +2875,11 @@ fn read_database_section_within(
     Ok(namespaces)
 }
 
-fn read_storage_section(dir: &Path, section: &Section) -> Result<PreparedStorage, ArtifactError> {
+fn read_storage_section(
+    dir: &Path,
+    section: &Section,
+    max_object_bytes: u64,
+) -> Result<PreparedStorage, ArtifactError> {
     let section_dir = dir.join(&section.path);
     scan_storage_import_tree(dir, &section_dir)?;
     let mut remaining_bytes = IMPORT_STORAGE_TOTAL_BYTES_LIMIT;
@@ -2941,9 +2953,7 @@ fn read_storage_section(dir: &Path, section: &Section) -> Result<PreparedStorage
                 "it is a symlink, which an import never follows",
             ));
         }
-        if blob_meta.len() > fireemu_core_storage::store::MAX_OBJECT_BYTES
-            || blob_meta.len() != meta.size
-        {
+        if blob_meta.len() > max_object_bytes || blob_meta.len() != meta.size {
             return Err(ArtifactError::new(
                 "storage",
                 &blob_path,
@@ -2953,8 +2963,14 @@ fn read_storage_section(dir: &Path, section: &Section) -> Result<PreparedStorage
                 ),
             ));
         }
-        let bytes =
-            read_storage_blob(dir, &blob_path, &mut remaining_bytes, &meta.name, meta.size)?;
+        let bytes = read_storage_blob(
+            dir,
+            &blob_path,
+            &mut remaining_bytes,
+            &meta.name,
+            meta.size,
+            max_object_bytes,
+        )?;
         objects.push((imported_object(&meta, &path)?, bytes));
     }
     Ok((objects, buckets.buckets))
@@ -5844,6 +5860,7 @@ mod tests {
             },
             "demo-app",
             false,
+            fireemu_core_storage::store::MAX_OBJECT_BYTES,
         )
         .expect("Auth export is prepared");
         super::apply(prepared, &destination_endpoints).expect("Auth import succeeds");
@@ -6655,6 +6672,74 @@ mod tests {
         }
         assert_eq!(restored.users_by_email("shared@example.com").len(), 2);
         assert!(!restored.config().allow_duplicate_emails);
+    }
+
+    /// firebase-tools gives every imported account a `validSince` (`operations.js:341`), so an
+    /// account restored from an artifact refuses a token with no usable `iat` (emulator profile),
+    /// whether it was imported before or created passwordless, and keeps refusing it through a
+    /// second export and import. An account that was never imported does not refuse it.
+    #[test]
+    fn an_imported_passwordless_account_keeps_its_valid_since_through_export_and_import() {
+        use fireemu_core_auth::{
+            jwt::{encode_payload_with, verify_id_token, FutureClaims, JwtError},
+            mfa::TotpPolicy,
+            store::{AuthStore, NewUser},
+        };
+        use fireemu_core_export::auth::UserRecord;
+        use fireemu_core_types::{
+            determinism::SplitMix64,
+            json::{parse, JsonValue},
+            time::LogicalInstant,
+        };
+        let now = LogicalInstant::from_unix_seconds(1_788_004_860);
+        let path = std::path::Path::new("offline.json");
+        let bare_token = |store: &AuthStore, uid: &str| {
+            let local = store.user_by_id(uid).unwrap().local_id.clone();
+            let claims = store.id_token_claims(&local, None, now).unwrap();
+            let JsonValue::Object(mut object) = parse(&claims.canonical_json()).unwrap() else {
+                panic!("claims are an object");
+            };
+            object.remove("iat");
+            object.remove("auth_time");
+            let mut payload = String::new();
+            fireemu_core_auth::claims::ClaimValue::from_json(&JsonValue::Object(object))
+                .write_canonical_json(&mut payload);
+            encode_payload_with(&payload, None)
+        };
+        let answer = |store: &mut AuthStore, uid: &str| {
+            store.set_future_id_token_claims(FutureClaims::Accept);
+            verify_id_token(&bare_token(store, uid), store, now).map(|_| ())
+        };
+        let mut source = AuthStore::new("demo-app", SplitMix64::new(1), TotpPolicy::default());
+        let created = source
+            .create_user(NewUser::email("created@example.com"), now)
+            .unwrap();
+        let record = UserRecord {
+            local_id: "imported".to_owned(),
+            email: Some("imported@example.com".to_owned()),
+            created_at: Some("100000".to_owned()),
+            ..UserRecord::default()
+        };
+        source
+            .import_user(super::imported_user(&record, path).unwrap())
+            .unwrap();
+        assert_eq!(answer(&mut source, created.as_str()), Ok(()));
+        assert_eq!(answer(&mut source, "imported"), Err(JwtError::Revoked));
+        // Export and import twice: both accounts come back as imported ones.
+        let mut round = source;
+        for _ in 0..2 {
+            let mut next = AuthStore::new("demo-app", SplitMix64::new(2), TotpPolicy::default());
+            for uid in [created.as_str(), "imported"] {
+                let exported =
+                    super::exported_account(&round, round.user_by_id(uid).unwrap(), None);
+                next.import_user_trusted(super::imported_user(&exported, path).unwrap())
+                    .unwrap();
+            }
+            round = next;
+            for uid in [created.as_str(), "imported"] {
+                assert_eq!(answer(&mut round, uid), Err(JwtError::Revoked), "{uid}");
+            }
+        }
     }
 
     /// The project's multi-factor configuration is not account data: an export carries the

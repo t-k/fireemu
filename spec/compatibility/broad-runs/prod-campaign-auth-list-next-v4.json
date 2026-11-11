@@ -115,7 +115,7 @@
       "productionExecuted": false,
       "recordingComplete": true,
       "recoveryRequests": 19,
-      "sha256": "dfce602d8198acbc94163ca68cc149afd88f70fbbbe64678e20cbd86445ec670",
+      "sha256": "506f0a369752471e1e37178598981a75251cd4ce920d041c094f3bfc75ef4c39",
       "stateValidation": true,
       "status": "passed-owned-loopback-artifact",
       "totalRequests": 39,

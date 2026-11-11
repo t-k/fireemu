@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://raw.githubusercontent.com/t-k/fireemu/main/spec/config/fireemu.schema.json",
+  "$id": "https://raw.githubusercontent.com/fireemu/fireemu/main/spec/config/fireemu.schema.json",
   "title": "fireemu canonical configuration",
   "description": "Single source of truth for the daemon configuration (spec section 17). Unknown keys are errors everywhere. Cross-field constraints that JSON Schema cannot express are enforced by tools/config-schema-check and by the Rust config loader.",
   "type": "object",
@@ -9,8 +9,8 @@
   "properties": {
     "$schema": {
       "type": "string",
-      "enum": ["https://raw.githubusercontent.com/t-k/fireemu/main/spec/config/fireemu.schema.json", "https://fireemu.dev/spec/config/fireemu.schema.json"],
-      "examples": ["https://raw.githubusercontent.com/t-k/fireemu/main/spec/config/fireemu.schema.json"]
+      "enum": ["https://raw.githubusercontent.com/fireemu/fireemu/main/spec/config/fireemu.schema.json", "https://fireemu.dev/spec/config/fireemu.schema.json"],
+      "examples": ["https://raw.githubusercontent.com/fireemu/fireemu/main/spec/config/fireemu.schema.json"]
     },
     "eventarc": {
       "type": "object",
@@ -61,7 +61,13 @@
         "allowNonLoopbackHosts": {
           "type": "boolean",
           "default": false,
-          "description": "Let emulators.<name>.host in firebase.json name a non-loopback IP address such as 0.0.0.0 or :: for the product emulators (firestore, auth, storage, functions, eventarc, tasks, pubsub), for example to publish them from a container. They serve without a credential, so every such listener is warned about at start. The Hub, the UI and the Logging emulator stay on loopback, and Auth, whose port serves the control API, binds loopback or every interface only. The control API (/v1/, /health/), App Check debug-token management and the routes that load Security Rules or clear Firestore data answer loopback peers only, and every control API request but /health/ then needs Authorization: Bearer <control token> (FIREEMU_CONTROL_TOKEN in a fireemu exec command). The rule-loading and data-clear routes keep their unauthenticated access for a loopback peer, so a forwarder inside the network namespace (kubectl port-forward, a sidecar proxy) still reaches them."
+          "description": "Let emulators.<name>.host in firebase.json name a non-loopback IP address such as 0.0.0.0 or :: for the product emulators (firestore, auth, storage, functions, eventarc, tasks, pubsub), for example to publish them from a container. They serve without a credential, so every such listener is warned about at start. The Hub, the UI and the Logging emulator stay on loopback, and Auth, whose port serves the control API, binds loopback or every interface only. The control API (/v1/, /health/), App Check debug-token management and the routes that load Security Rules or clear Firestore data answer loopback peers only, and every control API request but /health/ then needs Authorization: Bearer <control token> (FIREEMU_CONTROL_TOKEN in a fireemu exec command). The rule-loading and data-clear routes keep their unauthenticated access for a loopback peer, so a forwarder inside the network namespace (kubectl port-forward, a sidecar proxy) still reaches them. With this set, the product emulators also answer a single-label Host such as a Compose service name (see allowedHosts)."
+        },
+        "allowedHosts": {
+          "type": "array",
+          "default": [],
+          "items": { "type": "string", "pattern": "^(\\*|\\.?[A-Za-z0-9_-]+(\\.[A-Za-z0-9_-]+)*\\.?)$" },
+          "description": "Host names the product emulators (Firestore, Auth, Storage, Functions, Eventarc, Cloud Tasks, Pub/Sub, Realtime Database, Hosting) answer in addition to the defaults, as a defence against DNS rebinding: a web page cannot re-point a name it controls at the emulator, because a request naming a Host outside the list is answered 403. Always answered: localhost and names under .localhost, every IP address (so 10.0.2.2 from the Android emulator and LAN addresses work), names under .internal (host.docker.internal, host.containers.internal, host.lima.internal, host.orb.internal), names under .firebaseio.com and .firebasedatabase.app, names under .cloudworkstations.dev (Firebase Studio) and .app.github.dev (GitHub Codespaces), and names under the special-use suffixes .test, .local and .home.arpa; with allowNonLoopbackHosts, single-label names too. \"*\" and an entry for a whole top-level domain (\".com\") are warned about at start; each refused name is logged once. An entry is a name matched exactly (no scheme or port, any case, a trailing dot ignored), a name with a leading dot (\".corp.example\") for that domain and its subdomains, or \"*\" to answer every Host. HTTP/2 (gRPC) requests are not checked. The Hub, the UI and the Logging emulator answer loopback Hosts only."
         }
       }
     },
@@ -268,6 +274,7 @@
         "enabled": { "type": "boolean", "description": "Currently has no effect." },
         "projectIssuer": { "type": "string", "pattern": "^https://securetoken\\.google\\.com/[a-z0-9-]+$", "description": "Currently has no effect." },
         "idTokenSigning": { "enum": ["session-rsa", "unsigned-emulator"] },
+        "requireClientApiKey": { "type": "boolean", "default": false, "description": "In the emulator profile, refuse client requests without an API key or Authorization header with the official emulator 403. Strict profile behavior is unchanged." },
         "apiKeys": {
           "type": "array",
           "minItems": 1,
@@ -775,6 +782,7 @@
         "httpPort": { "type": "integer", "minimum": 0, "maximum": 65535 },
         "storagePort": { "type": "integer", "minimum": 0, "maximum": 65535 },
         "functionsPort": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "hostingPort": { "type": "integer", "minimum": 0, "maximum": 65535 },
         "eventarcPort": { "type": "integer", "minimum": 0, "maximum": 65535 },
         "tasksPort": { "type": "integer", "minimum": 0, "maximum": 65535 },
         "pubsubPort": { "type": "integer", "minimum": 0, "maximum": 65535 },
@@ -814,6 +822,18 @@
         "rules": { "type": "string", "description": "Path of the Storage Security Rules file (service firebase.storage)." },
         "mode": { "enum": ["native"] },
         "objectNameNormalization": { "enum": ["preserve"] },
+        "maxObjectBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2143289343,
+          "description": "Maximum bytes in one Storage object. Defaults to 268435456; the request body limit is this value plus 4194304 bytes."
+        },
+        "bufferedBodyBudgetBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647,
+          "description": "Process-wide budget for concurrently buffered Storage request bodies, in bytes. Defaults to 1073741824."
+        },
         "maxStoredBytes": {
           "type": "integer",
           "minimum": 1,
@@ -854,6 +874,23 @@
           "enum": ["open", "locked"],
           "default": "open",
           "description": "What a database instance without a rules file allows; an instance with one follows its rules. \"open\" (development default, as the official emulator): every request. \"locked\" (productionExact; strict profile only): only the emulator's owner credential (Authorization: Bearer owner), as a new production database in locked mode admits only administrators."
+        }
+      }
+    },
+    "hosting": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Firebase Hosting behaviour that firebase.json has no counterpart for. Both keys are development defaults of the strict profile; the emulator profile always answers as the official emulator.",
+      "properties": {
+        "cacheControl": {
+          "enum": ["none", "production"],
+          "default": "none",
+          "description": "The Cache-Control of a deployed file whose headers rules set none. \"none\" (development default, as the official emulator): no header, so an edited file shows at once. \"production\" (productionExact; strict profile only): max-age=3600, as Hosting production answers."
+        },
+        "clientCountry": {
+          "enum": ["honoured", "ignored"],
+          "default": "honoured",
+          "description": "Whether the X-Country-Code header and the firebase-country-override cookie of a request select localized (i18n) content. \"honoured\" (development default, as the official emulator): they do, which is the only way to test country content locally. \"ignored\" (productionExact; strict profile only): they do not, because Hosting production decides the country at its edge."
         }
       }
     },
@@ -908,6 +945,7 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "authBlockingToken": { "enum": ["emulated", "production"], "default": "emulated", "description": "The development default is emulated; productionExact selects production, which requires the strict profile. Production delivers a signed token and the Python runner verifies it using the SDK rules. Node functions receive the same production-shaped token but do not verify it, so they behave as before." },
         "clock": { "type": "object", "additionalProperties": false, "properties": {
           "date": { "enum": ["real", "virtual"], "default": "real" },
           "timers": { "enum": ["real", "virtual"], "default": "real" },

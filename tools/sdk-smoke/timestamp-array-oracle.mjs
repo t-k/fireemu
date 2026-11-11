@@ -23,7 +23,11 @@ if (host) {
   token = "owner";
 } else {
   assert.equal(project, "fireemu-35fe6");
-  assert.equal(process.env.PRODUCTION_ORACLE_EXPECTED_PROJECT_NUMBER, "592603257417");
+  assert.match(
+    process.env.PRODUCTION_ORACLE_EXPECTED_PROJECT_NUMBER ?? "",
+    /^\d{10,13}$/,
+    "PRODUCTION_ORACLE_EXPECTED_PROJECT_NUMBER must be the oracle project number",
+  );
   token = execFileSync("gcloud", ["auth", "application-default", "print-access-token"], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
@@ -46,7 +50,7 @@ if (!host) {
   const selected = await request(
     `https://cloudresourcemanager.googleapis.com/v1/projects/${project}`,
   );
-  assert.equal(selected.projectNumber, "592603257417");
+  assert.equal(selected.projectNumber, process.env.PRODUCTION_ORACLE_EXPECTED_PROJECT_NUMBER);
 }
 const root = `${origin}/v1/`;
 const database = `projects/${project}/databases/(default)`;

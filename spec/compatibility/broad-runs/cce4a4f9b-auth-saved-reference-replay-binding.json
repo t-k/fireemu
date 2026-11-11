@@ -17,7 +17,7 @@
   "comparison": {
     "digest": "20d0c8b727ff824d38cabbae401b3a6c15f3f0c20d45649d107a8a9cd0ff4ad8",
     "path": "spec/compatibility/broad-runs/cce4a4f9b-auth-saved-reference-replay.json",
-    "sha256": "815cdae0db502c453ce4a7158445498e4b44ba4b138152385c26b1a007a82b2e"
+    "sha256": "3b2fae7c5ecfc22ab6618c433d9818b45a96223f12c7478198a7194a565f3b4b"
   },
   "corpusSpec": {
     "path": "spec/compatibility/broad-runs/auth-saved-reference-replay-v2.json",
@@ -36,19 +36,19 @@
   "savedReferences": [
     {
       "path": "spec/compatibility/evidence/auth-basic-v2/receipt.json",
-      "sha256": "0fb1648416ad615a7f18bcb79b2abad7c26b7ced6e202276cdb3a2eeb409304a"
+      "sha256": "1e17e65215fa40525f57a2b3dbc1467bc39e34f61f4f7c0e77ec77d99c01c3b2"
     },
     {
       "path": "spec/compatibility/evidence/auth-display-name/receipt.json",
-      "sha256": "1c1a1aba0bd2cadc0cba6f80e5fbd1266163f73242c9d90ce652b6e0cce02f47"
+      "sha256": "8179f37658a3bbb235f1e0f5e5ec5f89eb2ff290fbe37cee09a33fa459165b60"
     },
     {
       "path": "spec/compatibility/evidence/auth-password/receipt.json",
-      "sha256": "2054ac0ede30d54e91e59f3e6c5454714e97118dc6845fd22a34f86e70255d2f"
+      "sha256": "cc1c5645da9980f8aa486be235e04437eb1c03a137a7f9919f2cc6ee2dbe8b6d"
     },
     {
       "path": "spec/compatibility/evidence/auth-profile/receipt.json",
-      "sha256": "75a58259e1dc8e26665e955bcea1b32bc008acc2bdb50e42430f9563500c7f87"
+      "sha256": "60b174c6106598e7afef4384618ae9ff34bd902115b8a07fc6d76a670f40901b"
     }
   ],
   "scope": "48 finite saved cases; configuration projections remain separate evidence. Historical v9/source-9830 preparation is unchanged.",

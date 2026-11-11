@@ -16,7 +16,7 @@ Row-by-row comparison of the approved production record of the provider-unlink t
 
 Differing rows: none.
 
-Comparison subject (unapproved): `767e115915759a2969b22c82908130aa2a7bf26349cc6ea09dfbb18c7e0db253`. Production subject compared: `8628018a57979e03f35c49950dbd7114e50c8e0b97d0b2f9063f09aa100c2f24`.
+Comparison subject (unapproved): `3548d07a23f33305bdffbe6707a1f53938f29cc373006f5426390f68dc780301`. Production subject compared: `cb6853bcf078ea3632340c87c6f361ac4fee8353efad0c14b157d9e58fcb7b10`.
 
 Local artifact `0.7.0` built from the tree at `d3c2f4fc3772af8cd9a5095c481e42bc4ee4d299` (repository HEAD `d3c2f4fc3772af8cd9a5095c481e42bc4ee4d299` at run time) with recorder files at `d3c2f4fc3772af8cd9a5095c481e42bc4ee4d299`; strict profile. Owned process exit 0 with listeners closed; the account was deleted with absence confirmation.
 

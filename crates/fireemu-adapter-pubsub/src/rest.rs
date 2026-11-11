@@ -15,8 +15,8 @@ use fireemu_core_pubsub::subscription::{
     DEFAULT_RETRY_MINIMUM_BACKOFF_SECONDS, MAX_RETRY_BACKOFF_SECONDS,
 };
 use fireemu_core_pubsub::{
-    Code, Filter, PubSubError, PubSubState, PubsubMessage, ReceivedMessage, Snapshot,
-    StoredMessage, SubscriptionConfig, SubscriptionName, TopicName,
+    Code, Filter, MessageStoragePolicy, PubSubError, PubSubState, PubsubMessage, ReceivedMessage,
+    Snapshot, StoredMessage, SubscriptionConfig, SubscriptionName, TopicName,
 };
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 use serde_json::{json, Map, Value};
@@ -24,7 +24,7 @@ use tokio_stream::StreamExt;
 
 use crate::convert::{
     is_declared_subscription_field, is_declared_topic_field, validate_subscription_update_paths,
-    validate_topic_options, SUPPORTED_SUBSCRIPTION_FIELDS,
+    validate_topic_options, TopicUpdatePaths, SUPPORTED_SUBSCRIPTION_FIELDS,
 };
 use crate::rest_json::Schema;
 use crate::{PubSubHandle, MAX_MESSAGE_BYTES};
@@ -56,6 +56,18 @@ impl RestError {
         let mut error = Self::invalid(description.clone());
         error.details = Some(
             json!([{"@type":"type.googleapis.com/google.rpc.BadRequest","fieldViolations":[{"description":description}]}]),
+        );
+        error
+    }
+
+    /// An unknown name inside a nested message, in the form the Google front end uses.
+    fn unknown_nested_json_field(name: &str, parent: &str) -> Self {
+        let description = format!(
+            "Invalid JSON payload received. Unknown name \"{name}\" at '{parent}': Cannot find field."
+        );
+        let mut error = Self::invalid(description.clone());
+        error.details = Some(
+            json!([{"@type":"type.googleapis.com/google.rpc.BadRequest","fieldViolations":[{"field":parent,"description":description}]}]),
         );
         error
     }
@@ -479,14 +491,7 @@ fn dispatch_topic(
         let topics = state
             .list_topics(project)
             .into_iter()
-            .map(|name| {
-                let labels = state.topic_labels(&name).cloned().unwrap_or_default();
-                topic_json(
-                    &name,
-                    &labels,
-                    state.topic_retention(&name).unwrap_or_default(),
-                )
-            })
+            .map(|name| stored_topic_json(&state, &name).unwrap_or_default())
             .collect::<Vec<_>>();
         return Ok((
             StatusCode::OK,
@@ -559,18 +564,9 @@ fn dispatch_topic(
         (&Method::PATCH, None) => update_topic(&topic, body, handle),
         (&Method::GET, None) => {
             let state = handle.state();
-            let labels = state
-                .topic_labels(&topic)
-                .cloned()
+            let rendered = stored_topic_json(&state, &topic)
                 .map_err(|error| RestError::from_resource_get(error, topic.topic()))?;
-            Ok((
-                StatusCode::OK,
-                topic_json(
-                    &topic,
-                    &labels,
-                    state.topic_retention(&topic).unwrap_or_default(),
-                ),
-            ))
+            Ok((StatusCode::OK, rendered))
         }
         (&Method::DELETE, None) => {
             handle
@@ -596,7 +592,7 @@ fn create_topic(
         body,
         handle.paging_policy == crate::PagingPolicy::Strict,
     )?;
-    validate_topic_options(&topic_options).map_err(RestError::from_core)?;
+    validate_topic_options(&topic_options, handle.paging_policy).map_err(RestError::from_core)?;
     let labels = topic_options.labels.into_iter().collect();
     if handle.paging_policy == crate::PagingPolicy::Strict {
         fireemu_core_pubsub::configuration::validate_labels(&labels)
@@ -604,25 +600,29 @@ fn create_topic(
     }
     let mut state = handle.state();
     state
-        .create_topic_with_retention(
+        .create_topic_with_options(
             topic.clone(),
             labels,
-            topic_options
-                .message_retention_duration
-                .as_ref()
-                .map(crate::convert::duration_from_proto)
-                .transpose()
-                .map_err(RestError::from_core)?,
+            fireemu_core_pubsub::TopicOptions {
+                message_retention_duration: topic_options
+                    .message_retention_duration
+                    .as_ref()
+                    .map(crate::convert::duration_from_proto)
+                    .transpose()
+                    .map_err(RestError::from_core)?,
+                message_storage_policy: topic_options
+                    .message_storage_policy
+                    .as_ref()
+                    .map(crate::convert::storage_policy_from_proto),
+                kms_key_name: topic_options.kms_key_name,
+                tags: topic_options.tags.into_iter().collect(),
+            },
         )
         .map_err(RestError::from_core)?;
-    let labels = state
-        .topic_labels(topic)
-        .cloned()
-        .map_err(RestError::from_core)?;
-    let retention = state.topic_retention(topic).map_err(RestError::from_core)?;
+    let rendered = stored_topic_json(&state, topic).map_err(RestError::from_core)?;
     drop(state);
     handle.retry_pending_dead_letters();
-    Ok((StatusCode::OK, topic_json(topic, &labels, retention)))
+    Ok((StatusCode::OK, rendered))
 }
 
 fn collection_json(field: &str, resources: Vec<Value>) -> Value {
@@ -712,41 +712,48 @@ fn update_topic(
     if update_mask.is_empty() {
         validate_subscription_update_paths(&[""]).map_err(RestError::from_core)?;
     }
+    if let Some(path) = update_mask
+        .split(',')
+        .find(|path| !is_proto_json_name(path))
+    {
+        return Err(RestError::invalid(format!(
+            "unknown update_mask path {path}"
+        )));
+    }
     let paths = update_mask.split(',').map(snake_case_field).collect();
     let request = pb::UpdateTopicRequest {
         topic: Some(topic_options),
         update_mask: Some(prost_types::FieldMask { paths }),
     };
-    crate::convert::validate_topic_update_options(&request).map_err(RestError::from_core)?;
-    if request
+    crate::convert::validate_topic_update_options(&request, handle.paging_policy)
+        .map_err(RestError::from_core)?;
+    let Some(paths) = request
         .update_mask
         .as_ref()
-        .is_none_or(|mask| mask.paths != ["labels"])
-    {
+        .and_then(|mask| TopicUpdatePaths::from_mask(&mask.paths))
+    else {
         return Err(RestError::unimplemented(
             "UpdateTopic is not supported by the Pub/Sub emulator",
         ));
-    }
+    };
+    let requested = request.topic.expect("the topic was constructed above");
     let mut state = handle.state();
+    let update = paths.build(
+        &requested,
+        state
+            .topic_storage_policy(topic)
+            .map_err(RestError::from_core)?,
+    );
     state
-        .update_topic_labels(
+        .update_topic(
             topic,
-            request
-                .topic
-                .expect("the topic was constructed above")
-                .labels
-                .into_iter()
-                .collect(),
+            update,
             handle.paging_policy == crate::PagingPolicy::Strict,
         )
         .map_err(RestError::from_core)?;
     Ok((
         StatusCode::OK,
-        topic_json(
-            topic,
-            state.topic_labels(topic).map_err(RestError::from_core)?,
-            state.topic_retention(topic).map_err(RestError::from_core)?,
-        ),
+        stored_topic_json(&state, topic).map_err(RestError::from_core)?,
     ))
 }
 
@@ -1699,15 +1706,103 @@ fn topic_json(
     name: &TopicName,
     labels: &BTreeMap<String, String>,
     retention: Option<LogicalDuration>,
+    storage_policy: Option<&MessageStoragePolicy>,
+    kms: &str,
+    tags: &BTreeMap<String, String>,
 ) -> Value {
     let mut value = json!({"name": name.to_full()});
+    if !kms.is_empty() {
+        value["kmsKeyName"] = json!(kms);
+    }
+    if !tags.is_empty() {
+        value["tags"] = json!(tags);
+    }
     if !labels.is_empty() {
         value["labels"] = json!(labels);
+    }
+    if let Some(policy) = storage_policy {
+        // Proto3 JSON leaves a default-valued field out, but a present policy stays present.
+        let mut rendered = Map::new();
+        if !policy.allowed_persistence_regions.is_empty() {
+            rendered.insert(
+                "allowedPersistenceRegions".to_owned(),
+                json!(policy.allowed_persistence_regions),
+            );
+        }
+        if policy.enforce_in_transit {
+            rendered.insert("enforceInTransit".to_owned(), json!(true));
+        }
+        value["messageStoragePolicy"] = Value::Object(rendered);
     }
     if let Some(retention) = retention {
         value["messageRetentionDuration"] = json!(duration_json(retention));
     }
     value
+}
+
+/// A stored topic as the REST resource renders it.
+fn stored_topic_json(state: &PubSubState, name: &TopicName) -> Result<Value, PubSubError> {
+    Ok(topic_json(
+        name,
+        state.topic_labels(name)?,
+        state.topic_retention(name)?,
+        state.topic_storage_policy(name)?,
+        state.topic_kms_key_name(name)?,
+        state.topic_tags(name)?,
+    ))
+}
+
+/// Reads the `messageStoragePolicy` of a topic body: `null` is absence, anything else must be a
+/// message with the two declared fields, spelled once each.
+fn storage_policy_from_json(
+    object: &Map<String, Value>,
+) -> Result<Option<pb::MessageStoragePolicy>, RestError> {
+    let Some(value) = json_field(object, "messageStoragePolicy").filter(|value| !value.is_null())
+    else {
+        return Ok(None);
+    };
+    let policy = value
+        .as_object()
+        .ok_or_else(|| RestError::invalid("topic.messageStoragePolicy must be an object"))?;
+    reject_duplicate_spellings("topic.messageStoragePolicy", policy)?;
+    let mut parsed = pb::MessageStoragePolicy::default();
+    for key in policy.keys() {
+        match snake_case_field(key).as_str() {
+            "allowed_persistence_regions" | "enforce_in_transit" if is_proto_json_name(key) => {}
+            _ => {
+                return Err(RestError::unknown_nested_json_field(
+                    key,
+                    "message_storage_policy",
+                ))
+            }
+        }
+    }
+    if let Some(regions) =
+        json_field(policy, "allowedPersistenceRegions").filter(|value| !value.is_null())
+    {
+        parsed.allowed_persistence_regions = regions
+            .as_array()
+            .ok_or_else(|| {
+                RestError::invalid(
+                    "topic.messageStoragePolicy.allowedPersistenceRegions must be an array",
+                )
+            })?
+            .iter()
+            .map(|region| {
+                region.as_str().map(str::to_owned).ok_or_else(|| {
+                    RestError::invalid(
+                        "topic.messageStoragePolicy.allowedPersistenceRegions must hold strings",
+                    )
+                })
+            })
+            .collect::<Result<_, _>>()?;
+    }
+    if let Some(enforce) = json_field(policy, "enforceInTransit").filter(|value| !value.is_null()) {
+        parsed.enforce_in_transit = enforce.as_bool().ok_or_else(|| {
+            RestError::invalid("topic.messageStoragePolicy.enforceInTransit must be a boolean")
+        })?;
+    }
+    Ok(Some(parsed))
 }
 
 fn topic_from_json(
@@ -1721,7 +1816,7 @@ fn topic_from_json(
     reject_duplicate_spellings("topic", object)?;
     for key in object.keys() {
         let field = snake_case_field(key);
-        if is_declared_topic_field(&field) {
+        if is_declared_topic_field(&field) && is_proto_json_name(key) {
             continue;
         }
         return Err(RestError::unknown_json_field(key));
@@ -1756,9 +1851,7 @@ fn topic_from_json(
                 .clone_into(&mut options.kms_key_name);
         }
     }
-    if json_field(object, "messageStoragePolicy").is_some_and(|value| !value.is_null()) {
-        options.message_storage_policy = Some(pb::MessageStoragePolicy::default());
-    }
+    options.message_storage_policy = storage_policy_from_json(object)?;
     if json_field(object, "ingestionDataSourceSettings").is_some_and(|value| !value.is_null()) {
         options.ingestion_data_source_settings = Some(pb::IngestionDataSourceSettings::default());
     }
@@ -1779,8 +1872,11 @@ fn topic_from_json(
             let tags = value
                 .as_object()
                 .ok_or_else(|| RestError::invalid("topic.tags must be an object"))?;
-            if !tags.is_empty() {
-                options.tags.insert(String::new(), String::new());
+            for (key, value) in tags {
+                let value = value
+                    .as_str()
+                    .ok_or_else(|| RestError::invalid("topic.tags values must be strings"))?;
+                options.tags.insert(key.clone(), value.to_owned());
             }
         }
     }
@@ -1840,6 +1936,35 @@ fn snake_case_field(field: &str) -> String {
         }
     }
     normalized
+}
+
+/// The `lowerCamelCase` JSON name of a `snake_case` protobuf field.
+fn lower_camel_field(snake: &str) -> String {
+    let mut camel = String::with_capacity(snake.len());
+    let mut upper_next = false;
+    for ch in snake.chars() {
+        if ch == '_' {
+            upper_next = true;
+        } else if upper_next {
+            camel.push(ch.to_ascii_uppercase());
+            upper_next = false;
+        } else {
+            camel.push(ch);
+        }
+    }
+    camel
+}
+
+/// Whether `name` is spelled the way proto3 JSON reads a field name: wholly `lowerCamelCase` or
+/// wholly the original `snake_case`. A mixture such as `allowed_persistenceRegions` normalizes to
+/// a declared field but is neither spelling, and the value readers look up only the two, so it is
+/// an unknown name rather than a field whose value is silently dropped. Every segment of a
+/// dotted field-mask path is checked on its own.
+fn is_proto_json_name(name: &str) -> bool {
+    name.split('.').all(|segment| {
+        let snake = snake_case_field(segment);
+        segment == snake || segment == lower_camel_field(&snake)
+    })
 }
 
 fn subscription_json(
@@ -2221,6 +2346,95 @@ mod production_shape_tests {
             prop_assert_eq!(response["messageRetentionDuration"].as_str(), Some(expected.as_str()));
         }
         #[test]
+        fn rendered_key_and_tags_parse_back(kms in ".{0,12}", tags in prop::collection::btree_map(".{0,6}", ".{0,6}", 0..5), camel in any::<bool>()) {
+            let topic = TopicName::new("demo-app", "key-property").unwrap();
+            let mut rendered = topic_json(&topic, &BTreeMap::new(), None, None, &kms, &tags);
+            prop_assert_eq!(rendered.get("kmsKeyName").is_some(), !kms.is_empty());
+            prop_assert_eq!(rendered.get("tags").is_some(), !tags.is_empty());
+            if !camel {
+                if let Some(value) = rendered.as_object_mut().unwrap().remove("kmsKeyName") {
+                    rendered["kms_key_name"] = value;
+                }
+            }
+            let parsed = topic_from_json(&topic, &rendered, false).unwrap();
+            prop_assert_eq!(parsed.kms_key_name, kms);
+            prop_assert_eq!(parsed.tags.into_iter().collect::<BTreeMap<_, _>>(), tags);
+        }
+
+        /// What the resource renders is what a body can send back: a present policy stays present
+        /// (an empty one renders as `{}`), an absent one stays absent, and no field is invented.
+        #[test]
+        fn a_rendered_storage_policy_parses_back_to_the_stored_one(
+            regions in prop::collection::vec(".{0,10}", 0..4),
+            enforce in any::<bool>(),
+            present in any::<bool>(),
+            camel in any::<bool>(),
+        ) {
+            let topic = TopicName::new("demo-app", "policy-property").unwrap();
+            let stored = present.then_some(MessageStoragePolicy {
+                allowed_persistence_regions: regions,
+                enforce_in_transit: enforce,
+            });
+            let rendered = topic_json(&topic, &BTreeMap::new(), None, stored.as_ref(), "", &BTreeMap::new());
+            prop_assert_eq!(rendered.get("messageStoragePolicy").is_some(), present);
+            if let Some(policy) = &stored {
+                let object = rendered["messageStoragePolicy"].as_object().unwrap();
+                prop_assert_eq!(object.contains_key("allowedPersistenceRegions"), !policy.allowed_persistence_regions.is_empty());
+                prop_assert_eq!(object.contains_key("enforceInTransit"), policy.enforce_in_transit);
+            }
+            let body = if camel {
+                rendered.clone()
+            } else {
+                // The same body with the original protobuf spellings.
+                let mut snake = rendered.clone();
+                if let Some(policy) = snake.get_mut("messageStoragePolicy").and_then(Value::as_object_mut) {
+                    let renamed: Map<String, Value> = std::mem::take(policy)
+                        .into_iter()
+                        .map(|(key, value)| (snake_case_field(&key), value))
+                        .collect();
+                    *policy = renamed;
+                }
+                let policy = snake.as_object_mut().unwrap().remove("messageStoragePolicy");
+                if let Some(policy) = policy {
+                    snake["message_storage_policy"] = policy;
+                }
+                snake
+            };
+            let parsed = storage_policy_from_json(body.as_object().unwrap()).unwrap();
+            prop_assert_eq!(parsed.as_ref().map(crate::convert::storage_policy_from_proto), stored);
+        }
+        /// A name is a JSON spelling only when every word boundary is written the same way.
+        #[test]
+        fn only_wholly_camel_or_wholly_snake_names_are_json_spellings(
+            words in prop::collection::vec("[a-z]{1,5}", 3..6),
+            camelised in prop::collection::vec(any::<bool>(), 5),
+        ) {
+            let snake = words.join("_");
+            let camel = lower_camel_field(&snake);
+            prop_assert!(is_proto_json_name(&snake));
+            prop_assert!(is_proto_json_name(&camel));
+            let dotted = format!("{snake}.{camel}");
+            prop_assert!(is_proto_json_name(&dotted));
+            let boundaries = &camelised[..words.len() - 1];
+            let mut mixed = words[0].clone();
+            for (word, camel_here) in words[1..].iter().zip(boundaries) {
+                if *camel_here {
+                    let mut chars = word.chars();
+                    mixed.extend(chars.next().map(|first| first.to_ascii_uppercase()));
+                    mixed.push_str(chars.as_str());
+                } else {
+                    mixed.push('_');
+                    mixed.push_str(word);
+                }
+            }
+            let all_camel = boundaries.iter().all(|flag| *flag);
+            let none_camel = boundaries.iter().all(|flag| !*flag);
+            prop_assert_eq!(is_proto_json_name(&mixed), all_camel || none_camel, "{}", mixed);
+            // The first spelling that is wrong in one segment makes a dotted path wrong.
+            let dotted_mixed = format!("{snake}.{mixed}");
+            prop_assert_eq!(is_proto_json_name(&dotted_mixed), all_camel || none_camel);
+        }
+        #[test]
         fn rest_snapshot_and_topic_labels_are_present_exactly_when_nonempty(labels in prop::collection::btree_map("[a-z]{1,8}","[a-z0-9]{0,8}",0..4)) {
             let topic = TopicName::new("demo-app", "label-property").unwrap();
             let config = crate::convert::subscription_from_proto(&pb::Subscription { name:"projects/demo-app/subscriptions/label-property".into(), topic:topic.to_full(), ..Default::default() }).unwrap();
@@ -2228,7 +2442,7 @@ mod production_shape_tests {
             state.create_topic(topic.clone(), labels.clone()).unwrap();
             state.create_subscription(config.clone()).unwrap();
             let snapshot = state.create_snapshot("projects/demo-app/snapshots/label-property", &config.name, labels.clone(), LogicalInstant::from_unix_seconds(0)).unwrap();
-            for rendered in [topic_json(&topic, &labels, None), snapshot_json(&snapshot)] {
+            for rendered in [topic_json(&topic, &labels, None, None, "", &BTreeMap::new()), snapshot_json(&snapshot)] {
                 prop_assert_eq!(rendered.get("labels").is_some(), !labels.is_empty());
                 if !labels.is_empty() { prop_assert_eq!(&rendered["labels"], &json!(labels)); }
             }

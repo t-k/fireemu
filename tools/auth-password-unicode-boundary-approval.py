@@ -17,7 +17,7 @@ APPROVAL = (
     ROOT / "spec/compatibility/evidence/auth-password-unicode-boundary/approval.json"
 )
 PAGE = ROOT / "docs/compatibility/auth-password-unicode-boundary-approval.md"
-SUBJECT = "3b300cebcbddac2db8528f4c9f9ca29b1b767932ce47aede41ee4e6e6946121c"
+SUBJECT = "3860597a555493c3dcb23881aab26fe94e14046b1eb1f5d07b8d2f8ed79aa2cc"
 SCOPE = "Three auth-password-unicode-boundary revision 1 input patterns, limited to the recorded artifact, configuration and generated patterns. End-user token REST routes, no tenant, local strict profile and recorded production minimum 6 / maximum 4096 password policy. Approval covers 4095/4096 UTF-16-unit acceptance, 4097-unit refusal and error, branch-specific credential use, selected account-state checks and recorded account deletion/process termination. It does not cover all Unicode strings, normalization, minimum-length counting, other API routes, SDK, Rules, elapsed expiry or fault recovery."
 
 

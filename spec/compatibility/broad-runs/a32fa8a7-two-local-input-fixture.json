@@ -238,7 +238,7 @@
       "firstDifference": null
     }
   ],
-  "manifestDigest": "4b6d42bc5acd1a697622b25325ba67620af272d5c44f5d00982dbffe8bb8cc3f",
-  "comparisonContractDigest": "453565e1eb4f74219d8648f3409ee996a0514d83222669f3edf29d8f7feb6434",
+  "manifestDigest": "854aa3d3446158f89da7cd69665cee759dea8dc4ed7fe0e5bd842977923e7811",
+  "comparisonContractDigest": "6915ab4c7f2b1c75affb8fcf865e046db7a7aab840eebdd8e31ec9fe5e065c67",
   "source": "Two actual local runs with synthetic production-side metadata; no oracle observation. Exercises the comparison CLI only."
 }

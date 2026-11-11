@@ -36,14 +36,20 @@ fireemu-core-export = { path = "../fireemu-core-export" }
 fireemu-export-publication = { path = "../fireemu-export-publication" }
 serde_json.workspace = true
 toml.workspace = true
-tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "signal", "sync", "time"] }
-hyper = { version = "1", features = ["http1", "server"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "signal", "sync", "time", "fs", "io-util"] }
+hyper = { version = "1", features = ["http1", "server", "client"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
 bytes = "1"
 libc = "0.2"
 rustix = { version = "1", features = ["fs", "process"] }
 zeroize = "1"
+cap-std = "=4.0.3"
+regex = "=1.13.1"
+md-5 = "=0.10.6"
+sha2.workspace = true
+httpdate = "=1.0.3"
+flate2 = { version = "=1.1.10", default-features = false, features = ["rust_backend"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 fireemu-fd-acl = { path = "../fireemu-fd-acl" }

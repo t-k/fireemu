@@ -50,16 +50,8 @@ def reason(expr, jar_errors, jar_cells, emu_cells):
         return "a lowercase of capital sigma beside other than an edge, a space or a cased Latin, Greek or Cyrillic letter is a rule error (review r11 M41)"
     if ".replace(''" in expr:
         return "replace('', ...) of text beyond the Basic Multilingual Plane is an error here; Java splits its surrogate pairs"
-    if re.search(r"\b(OrderByKey|OrderByValue|OrderByPriority|http)\b|query\.(orderBy|endBefore|isOrderByChild)\b", expr):
-        return "a query or ordering name the official emulator loads is refused here (listed)"
     if "getPriority" in expr and re.search(r"x{700}", expr):
         return "getPriority() near the path length limit is an error here a few bytes before it is one there (fail closed)"
-    if re.search(r"\.(contains|beginsWith|endsWith|replace|toLowerCase|toUpperCase|matches)\s*[!=]", expr):
-        return "a string method read without a call is an error here, a function there"
-    methods = ("contains|beginsWith|endsWith|replace|toLowerCase|toUpperCase|matches|child|parent|"
-               "val|exists|hasChild|hasChildren|getPriority|isNumber|isString|isBoolean")
-    if re.search(rf"\.({methods})\b(?!\s*\()", expr):
-        return "a method read without a call is an error here, a function there"
     if "\\u" in expr and "matches(" not in expr:
         return "a \\u escape in a name or a lone escaped surrogate is refused at load (review r5 S13)"
     if "matches(" in expr:

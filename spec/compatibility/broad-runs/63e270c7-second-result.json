@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "kind": "second-broad-local-v1",
-  "manifestDigest": "ea3b5263bcb31cf318c9146d2afcd988be0b5a6cec85108565ae991bdd7b1097",
+  "manifestDigest": "3113343cc4f7559c179792b53c1a417b82765de55d5fc0320d132a5c1debb8f5",
   "cases": [
     {
       "id": "second/auth/01",
@@ -29193,7 +29193,7 @@
     "tools/compat-broad/test_broad.py": "764388e995fa0fbb61eb5267b85c5bbd34e8c123b7b0062d3c5364fd03615a71",
     "tools/compat-broad/broad_contract.py": "9fc2243f8ac119c42542b689b8d01cc5da4f606a0e1251ed0cb7f31b7c533d9e",
     "tools/compat-broad/second_cases.py": "4791c4963d1d12cf94d2a9f95f2e8e89921d5ed5d1aee9405710d1a27b74ce88",
-    "tools/compat-broad/batch_pair.py": "3a415aba47e28e7a78922ff5499a1d2327cfbb6a1494914b5ebb6db40da6c104",
+    "tools/compat-broad/batch_pair.py": "fa5e74e381fe2d4555fa18a9b2448e58e0be9fdca95f4b8481b637350278414a",
     "tools/compat-broad/broad_cases.py": "19ddca137c4e7d5d88081996cc23f8421b6178a43d5f7abe84fd3a9201711679",
     "tools/compat-broad/test_readiness.py": "b26c134185ed06f13fa573a990dcf085ea6fa4d18b6d8cb8730f9e1df7c0cb04",
     "tools/compat-broad/batch_local.py": "cf7a078cca202226bd32a3176da9cfe1b18320904c1e1007516c6ffbd7495ad1",
@@ -29214,7 +29214,7 @@
     "tools/compat-inventory/evidence_common.py": "054f8dcba3652ae905d489f100eda3bc4528dc6c497ec94c3938b03102dc8750"
   },
   "manifestPath": "spec/compatibility/broad-second-candidate.json",
-  "manifestFileSha256": "d9803292d8f7383456c0ca2b35dc21e47a76b1bfe7fc2d0636c3b9cebb54ffe1",
+  "manifestFileSha256": "96c772db6bb7e91dc27cf6d4b1fa29479a0dadeb1447aec2c417b6ac256b403f",
   "privateObservationFileSha256": "802b90a910b281af41ce80b56aa38ff2c425a6a488d459197d700698876fafd2",
   "selectedProgramDigests": {
     "queries/collection-group": "6318d555216cad20bb05e5d18aaade0d47a32c7250bf56696af4178945a9a2da",
@@ -29241,7 +29241,7 @@
       "recovery": 8
     },
     "observerDigest": "19315d076acea6062153872e22af5c722a3256ef44f5fd0c0e7a909ff3e4b0b8",
-    "manifestDigest": "ea3b5263bcb31cf318c9146d2afcd988be0b5a6cec85108565ae991bdd7b1097",
+    "manifestDigest": "3113343cc4f7559c179792b53c1a417b82765de55d5fc0320d132a5c1debb8f5",
     "productionExecuted": false
   },
   "cleanupVerification": {
@@ -29260,7 +29260,7 @@
     },
     "daemon": {
       "authProjectNumbers": {
-        "fireemu-35fe6": "592603257417"
+        "fireemu-35fe6": "<project-number>"
       }
     }
   },

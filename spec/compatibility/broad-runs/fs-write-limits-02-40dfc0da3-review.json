@@ -41,7 +41,7 @@
       "type": "FIRESTORE_NATIVE"
     },
     "databaseProjectionDigest": "31957f98b7ec76e9c2e7a04803772f7270763a8ed62037fbdefa74c2c8f71d33",
-    "fileSha256": "219a3d6d67a23e4a13a6e16d66895f74aa79a006d1da46a3e48bbe9bbcc982f4",
+    "fileSha256": "9653723fdf0cc64e2173ff0f925d11ebb763b9481490106c7e1fa06ac81c586c",
     "freshPreflightRequired": true,
     "ownerAccepted": false,
     "path": "spec/compatibility/broad-runs/bc38f392-owner-decision.json"

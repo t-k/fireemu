@@ -16,8 +16,10 @@
 //!
 //! What production did not answer is [`EvalError::Unobserved`] under strict (the arguments of
 //! a shape no row covers, a null beside a wrong type, a function used as a whole `where`
-//! condition); the emulator profile evaluates it by the same rules. Regex inputs use a bounded
-//! Rust regex engine; general RE2 equivalence beyond the recorded cases is not established.
+//! condition); the emulator profile evaluates it by the same rules. Regex inputs run on a bounded
+//! Rust regex engine behind an adapter that validates the pattern against the recorded production
+//! grammar (ASCII-only shorthand classes, no POSIX classes or `(?m)`, at most one capture group
+//! for the find functions); strict evaluation refuses constructs that no production row records.
 
 use super::{
     first_error, type_name, Arity, Context, Eval, EvalError, Function, NumberSum, RegexError,
@@ -807,49 +809,6 @@ pub(super) fn int_argument(function: &'static str, arg: &Eval, cx: Context<'_>) 
     })
 }
 
-/// Recognize a conservative common RE2/Rust grammar without interpreting escaped literals as syntax.
-/// Constructs outside this subset are unobserved, not reported as production syntax failures.
-fn common_regex_grammar(pattern: &str) -> bool {
-    let mut chars = pattern.chars().peekable();
-    let mut in_class = false;
-    while let Some(ch) = chars.next() {
-        match ch {
-            '\\' => match chars.next() {
-                Some(
-                    '\\' | '.' | '+' | '*' | '?' | '(' | ')' | '|' | '[' | ']' | '{' | '}' | '^'
-                    | '$',
-                ) => {}
-                Some(_) => return false,
-                None => return true,
-            },
-            '[' if in_class => return false,
-            '[' => in_class = true,
-            ']' if in_class => in_class = false,
-            '&' | '-' | '~' if in_class && chars.peek() == Some(&ch) => return false,
-            '{' | '}' if !in_class => return false,
-            '(' if !in_class && chars.peek() == Some(&'?') => {
-                chars.next();
-                if chars.peek() == Some(&':') {
-                    chars.next();
-                    continue;
-                }
-                let mut has_flag = false;
-                loop {
-                    match chars.next() {
-                        Some('i' | 'm' | 's' | 'U') => has_flag = true,
-                        Some('-') => {}
-                        Some(':' | ')') if has_flag => break,
-                        Some(_) => return false,
-                        None => return true,
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-    true
-}
-
 const TRUNC_PARTS: &str = "[microsecond, millisecond, second, minute, hour, day, week, week(monday), week(tuesday), week(wednesday), week(thursday), week(friday), week(saturday), week(sunday), isoweek, month, quarter, year, isoyear]";
 const EXTRACT_PARTS: &str = "[microsecond, millisecond, second, minute, hour, dayofweek, day, dayofyear, week, week(monday), week(tuesday), week(wednesday), week(thursday), week(friday), week(saturday), week(sunday), isoweek, month, quarter, year, isoyear]";
 
@@ -1239,14 +1198,20 @@ fn regex_eval(
     let [Value::String(subject), Value::String(pattern)] = values.as_slice() else {
         unreachable!()
     };
-    if strict(cx) && !common_regex_grammar(pattern) {
-        return unobserved(name, "a regex construct outside the common RE2 grammar");
-    }
     let Some(resolver) = cx.runtime.regex_resolver else {
         return unobserved(name, "no regex resolver is available");
     };
-    match (operation, resolver(subject, pattern, operation)) {
+    match (
+        operation,
+        resolver(subject, pattern, operation, cx.unrecorded),
+    ) {
         (_, Err(RegexError::InvalidSyntax)) => invalid("Unsupported regex syntax."),
+        (_, Err(RegexError::Unobserved)) => {
+            unobserved(name, "a regex construct no production row records")
+        }
+        (_, Err(RegexError::TooManyCaptureGroups)) => {
+            invalid("At most one capture group is supported.")
+        }
         (_, Err(RegexError::ResourceLimit)) => {
             unobserved(name, "regex compilation exceeded local resources")
         }
@@ -1305,10 +1270,16 @@ fn eval_like(args: &[Eval], cx: Context<'_>) -> Eval {
     let Some(resolver) = cx.runtime.regex_resolver else {
         return unobserved("like", "no regex resolver is available");
     };
-    match resolver(subject, &regex, RegexOperation::Match) {
+    // LIKE builds only literals, dot and dot-star, so the recorded-construct guard does not apply.
+    match resolver(
+        subject,
+        &regex,
+        RegexOperation::Match,
+        Unrecorded::OfficialEmulator,
+    ) {
         Ok(RegexResult::Boolean(value)) => Eval::Value(Value::Boolean(value)),
         Err(RegexError::InvalidSyntax) => invalid("Unsupported regex syntax."),
-        Err(RegexError::ResourceLimit) => {
+        Err(RegexError::Unobserved | RegexError::ResourceLimit) => {
             unobserved("like", "regex compilation exceeded local resources")
         }
         _ => unobserved("like", "the regex resolver returned an incompatible result"),

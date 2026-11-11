@@ -20,9 +20,10 @@ use fireemu_core_database::server_value::resolve;
 use fireemu_core_database::{
     Bound, BoundKey, ErrorKind, Json, Limit, Node, OrderBy, Path, QueryParams, ServerValueContext,
 };
+use fireemu_core_types::admission::EventAdmissionError;
 
 use crate::access::{auth_from_claims, Access, WriteOp};
-use crate::json_parse::{parse_frame, parse_frame_with_keys, parse_with_keys};
+use crate::json_parse::{parse_claims, parse_frame, parse_frame_with_keys, parse_with_keys};
 use crate::json_text::{priority_at, render, wire_json, Style};
 use crate::listen::Listen;
 use crate::namespace::route;
@@ -994,6 +995,9 @@ fn check_registered(
 fn change_failure(err: &crate::changes::ChangeError) -> Failure {
     match err {
         crate::changes::ChangeError::Database(error) => write_failure(error),
+        crate::changes::ChangeError::Admission(EventAdmissionError::PayloadTooLarge(_)) => {
+            invalid(crate::rest::PAYLOAD_TOO_LARGE)
+        }
         crate::changes::ChangeError::Admission(error) => {
             Failure::Status("unavailable", error.message().to_owned())
         }
@@ -1118,10 +1122,10 @@ fn authenticate(
         let answer = Json::object([("auth", auth.clone()), ("expires", Json::Null)]);
         return Ok((answer, Access::User(auth)));
     }
-    let Some(Json::Object(claims)) = jwt_claims(cred) else {
+    let Some((Json::Object(claims), iat_is_number)) = jwt_claims_with_iat(cred) else {
         return Err(unparsable_token());
     };
-    let auth = auth_from_claims(&claims).map_err(|name| {
+    let auth = auth_from_claims(&claims, iat_is_number, credentials.strict).map_err(|name| {
         Failure::Status(
             "invalid_token",
             format!("Missing claim '{name}' in auth token."),
@@ -1144,15 +1148,27 @@ pub(crate) fn jwt_claims(token: &str) -> Option<Json> {
     }
 }
 
-/// The JSON of part `index` of a three-part token.
-fn jwt_part(token: &str, index: usize) -> Option<Json> {
+/// The claims of a token shaped as a JWT (three base64url parts, the second JSON), unverified, and
+/// whether its `iat` is a number as the official emulator reads one (see
+/// [`crate::json_parse::parse_claims`]). The callers take an object only.
+pub(crate) fn jwt_claims_with_iat(token: &str) -> Option<(Json, bool)> {
+    parse_claims(&jwt_part_text(token, 1)?).ok()
+}
+
+/// The decoded text of part `index` of a three-part token.
+fn jwt_part_text(token: &str, index: usize) -> Option<String> {
     let parts: Vec<&str> = token.split('.').collect();
     if parts.len() != 3 {
         return None;
     }
-    let bytes = base64url_decode(parts[index])?;
-    let text = String::from_utf8(bytes).ok()?;
-    parse_with_keys(&text).ok().map(|(json, _)| json)
+    String::from_utf8(base64url_decode(parts[index])?).ok()
+}
+
+/// The JSON of part `index` of a three-part token.
+fn jwt_part(token: &str, index: usize) -> Option<Json> {
+    parse_with_keys(&jwt_part_text(token, index)?)
+        .ok()
+        .map(|(json, _)| json)
 }
 
 /// `appcheck`: the official emulator refuses what is not a JWT and unsigned (`alg: none`)

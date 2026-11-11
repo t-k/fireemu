@@ -255,3 +255,42 @@ it("shows no waiting-task controls for a queue that holds nothing back", () => {
   expect(ui.queryByTestId("run-idleQueue")).toBeNull();
   expect(ui.getByTestId("enqueue-idleQueue-toggle")).toBeTruthy();
 });
+
+it("shows the runtime of each function in its own column, and a dash when the daemon did not say", () => {
+  const base: FunctionInfo = {
+    name: "py",
+    region: "us-central1",
+    entryPoint: "py",
+    trigger: { kind: "http", callable: false },
+    timeoutSeconds: 60,
+    retry: false,
+    concurrency: 1,
+    codebase: "py-app",
+    runtime: { language: "python", declared: "python312" },
+  };
+  const ui = render(() => (
+    <table>
+      <tbody>
+        <FunctionRows
+          functions={[
+            base,
+            {
+              ...base,
+              name: "node",
+              entryPoint: "node",
+              codebase: "default",
+              runtime: { language: "node", declared: null },
+            },
+            { ...base, name: "unknown", entryPoint: "unknown", runtime: undefined },
+          ]}
+          project="demo-a"
+          onNotice={() => {}}
+          onError={() => {}}
+        />
+      </tbody>
+    </table>
+  ));
+  expect(ui.getByTestId("function-runtime-py").textContent).toBe("Python (python312)");
+  expect(ui.getByTestId("function-runtime-node").textContent).toBe("Node.js");
+  expect(ui.getByTestId("function-runtime-unknown").textContent).toBe("-");
+});

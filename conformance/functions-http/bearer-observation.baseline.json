@@ -1,0 +1,36 @@
+{
+  "note": "Recorded production answers this observation is judged against. The stage 3 recorder kept a non-JSON body as its UTF-8 text unchanged, so bodyBytes and bodySha256 are those of the bytes production sent; the echo body is kept only as its key order (a parsed JSON body is re-serialized by that recorder).",
+  "source": {
+    "runId": "functions-http-stage3-2026-09-27T135803.703Z",
+    "recordings": ["recording-1.json", "recording-2.json"],
+    "recordingSha256": "555c1150e708606a6f21ac931d9196a5e75e62486398b760d9e9cfafc8d94e0f",
+    "committedDigest": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json#productionRecordingSha256"
+  },
+  "provisional": {
+    "cite": "functions-http/callable/auth-refusal#malformed-bearer, passes 1 and 2",
+    "status": 401,
+    "contentType": "text/html; charset=UTF-8",
+    "bodyBytes": 294,
+    "bodySha256": "09673563d03ef97396af9ae7ab8cdd9dae9215caba19a896220da01a094376e0",
+    "body": "\n<html><head>\n<meta http-equiv=\"content-type\" content=\"text/html;charset=utf-8\">\n<title>401 Unauthorized</title>\n</head>\n<body text=#000000 bgcolor=#ffffff>\n<h1>Error: Unauthorized</h1>\n<h2>Your client does not have permission to the requested URL <code>/</code>.</h2>\n<h2></h2>\n</body></html>\n"
+  },
+  "control": {
+    "cite": "functions-http/http/request-shape#POST, passes 1 and 2",
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "keys": [
+      "method",
+      "path",
+      "query",
+      "contentType",
+      "customHeader",
+      "forwardedForPresent",
+      "forwardedForHopCount",
+      "forwardedProto",
+      "executionIdPresent",
+      "body",
+      "rawBodyLength",
+      "rawBodySha256"
+    ]
+  }
+}

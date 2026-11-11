@@ -131,10 +131,10 @@ class _Fixture(BaseHTTPRequestHandler):
     def _metadata(self):
         if self.path.endswith("/config"):
             return {
-                "name": "projects/592603257417/config",
+                "name": "projects/<project-number>/config",
                 "mfa": {"state": "DISABLED"},
             }
-        return {"projectId": "fireemu-35fe6", "projectNumber": "592603257417"}
+        return {"projectId": "fireemu-35fe6", "projectNumber": "<project-number>"}
 
     def _reply(self, value, status=200):
         if value.get("email_verified") == "__missing__":
@@ -217,10 +217,10 @@ def test_fixture_bootstrap_charges_exact_four_requests_and_returns_private_hando
         bootstrap.finalize_handoff(result.prepared, observation_digest, result.proof)
     assert result.proof["project"] == {
         "projectId": "fireemu-35fe6",
-        "projectNumber": "592603257417",
+        "projectNumber": "<project-number>",
     }
     assert result.proof["authConfigDigest"] == bootstrap.digest(
-        {"name": "projects/592603257417/config", "mfa": {"state": "DISABLED"}}
+        {"name": "projects/<project-number>/config", "mfa": {"state": "DISABLED"}}
     )
     assert result.charged_requests == 4
 

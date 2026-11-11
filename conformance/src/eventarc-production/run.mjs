@@ -939,20 +939,38 @@ net.Socket.prototype.connect=function(...a){const x=net._normalizeArgs(a)[0];if(
 const lookup=dns.lookup;dns.lookup=function(h,...a){if(!allowed(h))throw Error('offline: remote DNS refused');return lookup.call(this,h,...a)};
 const originalFetch=globalThis.fetch;globalThis.fetch=(u,o)=>{const x=new URL(typeof u==='string'?u:u.url||u);if(x.protocol!=='http:'||!allowed(x.hostname))throw Error('offline: remote fetch refused');return originalFetch(u,{...o,redirect:'error'})};
 `;
-async function reservePorts() {
-  const reservations = [];
+const claimedPorts = new Set();
+export async function reservePorts(count = 7, { makeServer = createServer } = {}) {
+  const servers = [],
+    ports = [];
+  let released;
+  const release = () => {
+    released ??= Promise.all(
+      servers.map((server) => new Promise((done) => server.close(done))),
+    ).then(() => {});
+    return released;
+  };
   try {
-    for (let i = 0; i < 7; i++) {
-      const server = createServer();
+    let extras = 0;
+    while (ports.length < count) {
+      const server = makeServer();
       await new Promise((done, reject) => {
         server.once("error", reject);
         server.listen(0, "127.0.0.1", done);
       });
-      reservations.push({ server, port: server.address().port });
+      servers.push(server);
+      const port = server.address().port;
+      if (claimedPorts.has(port)) {
+        assert.ok(++extras <= 64, "port reservation retries exhausted");
+      } else {
+        claimedPorts.add(port);
+        ports.push(port);
+      }
     }
-    return reservations.map((x) => x.port);
-  } finally {
-    await Promise.all(reservations.map(({ server }) => new Promise((done) => server.close(done))));
+    return { ports, release };
+  } catch (error) {
+    await release();
+    throw error;
   }
 }
 function runnerPins(runner) {
@@ -1258,12 +1276,24 @@ export function deriveLocalBudget(inputs, overallMs = localOverallMs) {
     sessions,
   };
 }
+export function concurrencyFromEnvironment(env = process.env) {
+  const value = env.FIREEMU_EVENTARC_CHECK_CONCURRENCY;
+  if (value === undefined || value === "") return 8;
+  assert.ok(
+    /^[1-9][0-9]*$/.test(value) && Number.isInteger(Number(value)),
+    "positive decimal concurrency required",
+  );
+  return Number(value);
+}
 export async function check({
   binary,
   out,
   inputDirectory = join(here, "fixtures/ad"),
   budgetMs = localOverallMs,
+  concurrency = concurrencyFromEnvironment(),
+  runSession = runExecSession,
 }) {
+  assert.ok(Number.isSafeInteger(concurrency) && concurrency > 0, "positive concurrency required");
   const inputs = loadInputs(inputDirectory);
   sdkInput(inputs); // Refuse missing genuine SDK comparands before starting any installed session.
   const budget = deriveLocalBudget(inputs, budgetMs);
@@ -1301,21 +1331,28 @@ export async function check({
   };
   mkdirSync(out, { recursive: true });
   const deadline = performance.now() + budget.overallMs;
-  for (const [phase, corpusLabels] of [
-    ["raw", labels],
-    ["facets", ["B", "C", "D"]],
-  ]) {
-    for (const label of corpusLabels) {
-      assert.ok(performance.now() < deadline, "finite overall check deadline");
-      const work = mkdtempSync(join(out, `${phase}-${label}-`));
-      const guard = join(work, "offline.cjs"),
-        reportPath = join(work, "report.json"),
-        sessionPath = join(work, "session.json");
-      writeFileSync(guard, offlineGuardSource);
-      const rows = inputs.corpora[label].rows;
-      const project = selectSessionProject(rows);
-      const ports = await reservePorts(),
-        config = sessionConfiguration({ project, ports, runner, guard, fixture });
+  const specifications = [
+    ...labels.map((label) => ({ phase: "raw", label })),
+    ...["B", "C", "D"].map((label) => ({ phase: "facets", label })),
+  ];
+  async function runCheckSession({ phase, label }) {
+    assert.ok(performance.now() < deadline, "finite overall check deadline");
+    const work = mkdtempSync(join(out, `${phase}-${label}-`));
+    const guard = join(work, "offline.cjs"),
+      reportPath = join(work, "report.json"),
+      sessionPath = join(work, "session.json");
+    writeFileSync(guard, offlineGuardSource);
+    const rows = inputs.corpora[label].rows;
+    const project = selectSessionProject(rows);
+    const reservation = await reservePorts();
+    try {
+      const config = sessionConfiguration({
+        project,
+        ports: reservation.ports,
+        runner,
+        guard,
+        fixture,
+      });
       save(join(work, "fireemu.json"), config.fireemu);
       save(join(work, "firebase.json"), config.firebase);
       const home = join(work, "home"),
@@ -1332,7 +1369,8 @@ export async function check({
         deadline - performance.now() >= localSessionMs + localTeardownMs,
         "local session budget infeasible before binary spawn",
       );
-      const processReceipt = await runExecSession({
+      await reservation.release();
+      const processReceipt = await runSession({
         binary,
         args: buildExecArgs({
           work: resolve(work),
@@ -1361,16 +1399,15 @@ export async function check({
         !processReceipt.interrupted;
       const receiptPath = join(work, "process-receipt.json");
       save(receiptPath, processReceipt);
-      evidence.sessions.push({
-        id: basename(work),
-        phase,
-        label,
-        report,
-        processReceiptSha256: digest(receiptPath),
-      });
-      Object.assign(
-        evidence.sessionPins,
-        pins([
+      return {
+        entry: {
+          id: basename(work),
+          phase,
+          label,
+          report,
+          processReceiptSha256: digest(receiptPath),
+        },
+        pins: pins([
           reportPath,
           receiptPath,
           guard,
@@ -1378,11 +1415,35 @@ export async function check({
           join(work, "fireemu.json"),
           join(work, "firebase.json"),
         ]),
-      );
-      save(join(out, "check-evidence.json"), evidence);
-      if (!report.complete) return evidence;
+      };
+    } finally {
+      await reservation.release();
     }
   }
+  const results = Array.from({ length: specifications.length });
+  let next = 0,
+    firstError,
+    failed = false;
+  async function worker() {
+    while (!failed && next < specifications.length) {
+      const index = next++;
+      try {
+        results[index] = await runCheckSession(specifications[index]);
+        evidence.sessions = results.filter(Boolean).map((result) => result.entry);
+        evidence.sessionPins = Object.assign(
+          {},
+          ...results.filter(Boolean).map((result) => result.pins),
+        );
+        save(join(out, "check-evidence.json"), evidence);
+      } catch (error) {
+        if (!failed) firstError = error;
+        failed = true;
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, specifications.length) }, worker));
+  if (failed) throw firstError;
+  if (evidence.sessions.some(({ report }) => !report.complete)) return evidence;
   for (const p of [sourcePins, fixturePins, installedRunnerPins, physicalInputPins]) verifyPins(p);
   assert.equal(digest(binary), evidence.artifactSha256);
   evidence.complete = true;

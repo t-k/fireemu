@@ -1072,12 +1072,12 @@
         }
       ]
     },
-    "publicationContractSha256": "db5e7f800e808f73ca12da40b7d1d6ed6d5095cc32fb834f83121ec764f4ee3a",
+    "publicationContractSha256": "76ab48375add3530ebee84d9ab5df71e3c7bbf830556e8772bfb86f31ed50df4",
     "schemaVersion": 2,
     "scope": "Eighteen sequential REST route observations across baseline, disabled and re-enabled phases for target A and unaffected control B. Fixed initial ID/refresh tokens, password signin and derived-token lookup; no tenant, owned strict artifact and recorded production settings. Admin is used only for owned account state changes/readback and cleanup. No human approval, instant revocation, SDK, Rules or elapsed-expiry claim.",
     "sourceReviewSha256": "2952885914ad79df7b00f2ea938320656a209a1d163f5ef6f079858d54e90f24"
   },
-  "previousSubject": "ff502af7fc37542347394d0f28e8df1b9b1566b64a5acb496a41402f040cf3de",
-  "publicationContractSha256": "b48b772e899d79f954c61e000c40399f7687f4a23c3c7edfd87a758ac5bb9c39",
+  "previousSubject": "2cbaf584ef6568167ea496c998b6cc421488081ac1be190be2b81b5553fcee85",
+  "publicationContractSha256": "cf5e7c9c59e836f04e875433cb4c998416ae2659529c4c354d7b3e05572c6464",
   "schemaVersion": 1
 }

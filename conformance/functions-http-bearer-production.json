@@ -1,0 +1,183 @@
+{
+  "version": 1,
+  "recordedAgainst": {
+    "target": "production Cloud Functions 2nd gen onRequest function fireemuHttpProbe (us-central1, allUsers run.invoker), FUNCTIONS-HTTP sandbox project",
+    "task": "FUNCTIONS-HTTP-BEARER",
+    "envelope": "FUNCTIONS-HTTP-BEARER-20261110-01",
+    "note": "The project id, its number and every bucket name are left out. captures are the recorder's own records (bearer-observation.mjs captureFetch): status, kept headers, every header name, body byte count and SHA-256, body text; the host was never recorded."
+  },
+  "gitSha": "bc0bf1ac4eacbcbff91be04fd960b3f0b1dcd09c",
+  "corpusDigest": "ee831856d3b54a6d53d6f4081dd872d28023ac3803370661ce6e348a8d0e308f",
+  "runId": "onrequest-bearer-obs-2026-11-10T075842.448Z",
+  "recordedAt": "2026-11-10T07:58:42.448Z",
+  "privateCapturesSha256": "fc375030473d3ae808900b5b298bd3954c4156a952b3cf09a366202a1ca57557",
+  "captures": [
+    {
+      "seq": 1,
+      "pass": 1,
+      "caseId": "no-authorization",
+      "method": "POST",
+      "path": "/",
+      "authorization": null,
+      "latencyMs": 375,
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "content-length": "328",
+        "server": "Google Frontend"
+      },
+      "headerNames": [
+        "alt-svc",
+        "content-length",
+        "content-type",
+        "date",
+        "server",
+        "x-cloud-trace-context"
+      ],
+      "bodyBytes": 328,
+      "bodySha256": "288da076ec757b37d34dc97ae87c6d52a15ae1ed4d5367c229f5e8f51532465a",
+      "bodyText": "{\"method\":\"POST\",\"path\":\"/\",\"query\":{},\"contentType\":\"application/json\",\"customHeader\":null,\"forwardedForPresent\":true,\"forwardedForHopCount\":1,\"forwardedProto\":\"https\",\"executionIdPresent\":false,\"body\":{\"data\":{\"op\":\"auth\"}},\"rawBodyLength\":22,\"rawBodySha256\":\"29391fda015383aeaec61a39e9b6e8d07d74fe2ac59a199d973cf6b4fc2e8820\"}",
+      "error": null
+    },
+    {
+      "seq": 2,
+      "pass": 1,
+      "caseId": "malformed-bearer",
+      "method": "POST",
+      "path": "/",
+      "authorization": "Bearer malformed",
+      "latencyMs": 205,
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "content-length": "328",
+        "server": "Google Frontend"
+      },
+      "headerNames": [
+        "alt-svc",
+        "content-length",
+        "content-type",
+        "date",
+        "server",
+        "x-cloud-trace-context"
+      ],
+      "bodyBytes": 328,
+      "bodySha256": "288da076ec757b37d34dc97ae87c6d52a15ae1ed4d5367c229f5e8f51532465a",
+      "bodyText": "{\"method\":\"POST\",\"path\":\"/\",\"query\":{},\"contentType\":\"application/json\",\"customHeader\":null,\"forwardedForPresent\":true,\"forwardedForHopCount\":1,\"forwardedProto\":\"https\",\"executionIdPresent\":false,\"body\":{\"data\":{\"op\":\"auth\"}},\"rawBodyLength\":22,\"rawBodySha256\":\"29391fda015383aeaec61a39e9b6e8d07d74fe2ac59a199d973cf6b4fc2e8820\"}",
+      "error": null
+    },
+    {
+      "seq": 3,
+      "pass": 2,
+      "caseId": "no-authorization",
+      "method": "POST",
+      "path": "/",
+      "authorization": null,
+      "latencyMs": 165,
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "content-length": "328",
+        "server": "Google Frontend"
+      },
+      "headerNames": [
+        "alt-svc",
+        "content-length",
+        "content-type",
+        "date",
+        "server",
+        "x-cloud-trace-context"
+      ],
+      "bodyBytes": 328,
+      "bodySha256": "288da076ec757b37d34dc97ae87c6d52a15ae1ed4d5367c229f5e8f51532465a",
+      "bodyText": "{\"method\":\"POST\",\"path\":\"/\",\"query\":{},\"contentType\":\"application/json\",\"customHeader\":null,\"forwardedForPresent\":true,\"forwardedForHopCount\":1,\"forwardedProto\":\"https\",\"executionIdPresent\":false,\"body\":{\"data\":{\"op\":\"auth\"}},\"rawBodyLength\":22,\"rawBodySha256\":\"29391fda015383aeaec61a39e9b6e8d07d74fe2ac59a199d973cf6b4fc2e8820\"}",
+      "error": null
+    },
+    {
+      "seq": 4,
+      "pass": 2,
+      "caseId": "malformed-bearer",
+      "method": "POST",
+      "path": "/",
+      "authorization": "Bearer malformed",
+      "latencyMs": 171,
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "content-length": "328",
+        "server": "Google Frontend"
+      },
+      "headerNames": [
+        "alt-svc",
+        "content-length",
+        "content-type",
+        "date",
+        "server",
+        "x-cloud-trace-context"
+      ],
+      "bodyBytes": 328,
+      "bodySha256": "288da076ec757b37d34dc97ae87c6d52a15ae1ed4d5367c229f5e8f51532465a",
+      "bodyText": "{\"method\":\"POST\",\"path\":\"/\",\"query\":{},\"contentType\":\"application/json\",\"customHeader\":null,\"forwardedForPresent\":true,\"forwardedForHopCount\":1,\"forwardedProto\":\"https\",\"executionIdPresent\":false,\"body\":{\"data\":{\"op\":\"auth\"}},\"rawBodyLength\":22,\"rawBodySha256\":\"29391fda015383aeaec61a39e9b6e8d07d74fe2ac59a199d973cf6b4fc2e8820\"}",
+      "error": null
+    }
+  ],
+  "judgement": {
+    "verdict": "different",
+    "reasons": [],
+    "differences": [
+      {
+        "field": "status",
+        "provisional": 401,
+        "observed": 200
+      },
+      {
+        "field": "contentType",
+        "provisional": "text/html; charset=UTF-8",
+        "observed": "application/json; charset=utf-8"
+      },
+      {
+        "field": "bodyBytes",
+        "provisional": 294,
+        "observed": 328
+      },
+      {
+        "field": "bodySha256",
+        "provisional": "09673563d03ef97396af9ae7ab8cdd9dae9215caba19a896220da01a094376e0",
+        "observed": "288da076ec757b37d34dc97ae87c6d52a15ae1ed4d5367c229f5e8f51532465a"
+      }
+    ],
+    "servedByFunction": true,
+    "headersNotInBaseline": ["alt-svc", "date", "server", "x-cloud-trace-context"],
+    "needsReview": true,
+    "lockKept": false
+  },
+  "requests": {
+    "invocation": 4,
+    "control": 14,
+    "cleanup": 11,
+    "auth": 0,
+    "cliDeploy": 1,
+    "cliDelete": 1,
+    "token": 1,
+    "upload": 5
+  },
+  "cleanup": {
+    "actions": [
+      "function-deployed",
+      "public-invoker-granted",
+      "public-invoker-revoked",
+      "function-deleted",
+      "source-upload-deleted",
+      "service-identity-generation-possible"
+    ],
+    "builds": [
+      {
+        "status": "SUCCESS",
+        "createTime": "2026-11-10T07:59:21.013229757Z",
+        "finishTime": "2026-11-10T08:00:05.541908Z"
+      }
+    ],
+    "openBuilds": 0,
+    "closureReady": true
+  }
+}

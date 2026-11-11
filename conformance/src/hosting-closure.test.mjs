@@ -1,0 +1,335 @@
+// The Hosting closure record: structure, scope, the two production recordings and the evidence the
+// conditions cite. The record carries no closure review yet: it is the candidate that review reads.
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import test from "node:test";
+
+import { CONDITIONS, buildCorpus, corpusManifest } from "./hosting-production/corpus.mjs";
+import { loadKnownDifferences } from "./hosting-production/compare.mjs";
+
+const root = new URL("../../", import.meta.url);
+const record = JSON.parse(
+  await readFile(new URL("spec/compatibility/closure/HOSTING.json", root), "utf8"),
+);
+const manifest = corpusManifest(buildCorpus());
+const isText = (value) => typeof value === "string" && value.trim().length > 0;
+const bytesOf = (path) => readFile(new URL(path, root));
+const sha = (bytes) => createHash("sha256").update(bytes).digest("hex");
+const jsonOf = async (path) => JSON.parse(await bytesOf(path));
+
+test("the record is the verified Hosting parent with its review, and the corpus pinned", async () => {
+  assert.equal(record.parent, "HOSTING");
+  assert.equal(record.parentStatus, "COMPAT_VERIFIED");
+  assert.equal(record.inventoryStatus, "PROPOSED");
+  const review = record.closureReview;
+  assert.equal(review.decision, "APPROVED");
+  assert.equal(review.decider, "project coordinator");
+  assert.match(review.decidedOn, /^\d{4}-\d{2}-\d{2}$/);
+  assert.match(review.decisionRef, /owner ledger 2435, 2458; coordinator rulings 11-26/);
+  assert.match(review.reviewedCommit, /^[0-9a-f]{40}$/);
+  assert.equal(review.reviews.length, 4);
+  for (const entry of review.reviews.slice(0, 2)) {
+    assert.match(entry.reportPath, /^docs\.local\/reviews\/2026-11-11-hosting-parent-closure-/);
+    assert.match(entry.reportSha256, /^[0-9a-f]{64}$/);
+    assert.match(entry.reviewedCommit, /^[0-9a-f]{40}$/);
+  }
+  assert.equal(
+    review.reviews[2].reportPath,
+    undefined,
+    "the coordinator's re-check has no report file",
+  );
+  assert.equal(review.reviews[2].reviewedCommit, review.reviewedCommit);
+  assert.equal(review.reviews[2].outcome, "APPROVED");
+  // strict gzip is built (owner ledger 2458): no follow-up asks for flate2 any more, and the
+  // gzip probes are named for the next idp packet (the only follow-up that names gzip)
+  // the fourth review read the gzip branch; the commit it names is the one it read
+  const gzipReview = review.reviews[3];
+  assert.equal(gzipReview.reportPath, "docs.local/reviews/2026-11-11-hosting-gzip-delta-review.md");
+  assert.match(gzipReview.reportSha256, /^[0-9a-f]{64}$/);
+  assert.equal(gzipReview.reviewedCommit, "234f8c208760339cc7d4da3fc903df8db6552fa4");
+  assert.equal(gzipReview.outcome, "MERGE-AFTER-FIXES");
+  assert.match(gzipReview.scope, /KD-COMPRESSION narrowed to the four Brotli rows/);
+  assert.equal(
+    review.reviewedCommit,
+    "7c1a191fc5e40ff172f3c27bc16403a3c8a1ad6e",
+    "the promotion review commit stays",
+  );
+  assert.equal(review.decision, "APPROVED");
+  assert.deepEqual(
+    record.followUps.filter((text) => /gzip|flate2/.test(text)),
+    [
+      "Next idp packet: probe gzip beyond the corpus file: a small text file (the size below which production does not compress), text/html and image/svg+xml, a file with no known extension, a Range request with Accept-Encoding: gzip, Accept-Encoding: * and x-gzip, a precompressed file (a `*.br` or `*.gz` file with a headers rule that sets Content-Encoding), so that the types and sizes strict compresses are observed (strict gzip itself is built, owner ledger 2458; Brotli stays a declared difference).",
+    ],
+  );
+  assert.deepEqual(record.recordingPolicy, { observedPasses: 2, requiredPasses: 2, waiver: null });
+  assert.equal(record.corpusPath, "conformance/src/hosting-production/corpus.manifest.json");
+  assert.equal(record.corpusContentSha256, manifest.corpusSha256);
+  assert.equal(record.corpusSha256, sha(await bytesOf(record.corpusPath)));
+});
+
+test("the two recordings are the rows of two runs of the pinned corpus, in corpus order, all answered", async () => {
+  assert.deepEqual(
+    record.recordings.map((r) => r.alias),
+    ["pass-1", "pass-2"],
+  );
+  const ids = buildCorpus().versions.flatMap((v) => v.requests.map((r) => r.id));
+  const runs = new Set();
+  for (const recording of record.recordings) {
+    const bytes = await bytesOf(recording.fixturePath);
+    assert.equal(recording.fixtureSha256, sha(bytes), recording.alias);
+    assert.equal(recording.corpusSha256, manifest.corpusSha256);
+    const document = JSON.parse(bytes);
+    assert.equal(document.corpusSha256, manifest.corpusSha256);
+    assert.equal(document.run, recording.run);
+    runs.add(document.run);
+    assert.deepEqual(
+      document.rows.map((row) => row.id),
+      ids,
+    );
+    assert.ok(
+      document.rows.every((row) => row.outcome === "answered"),
+      recording.alias,
+    );
+    // nothing private: a Google API key, a project's numeric id in a name, a channel host
+    const text = bytes.toString("utf8");
+    assert.doesNotMatch(text, /AIza[0-9A-Za-z_-]{20,}/);
+    assert.doesNotMatch(text, /web\.app|firebaseapp\.com|fireemu-oracle/);
+  }
+  assert.equal(runs.size, 2, "two different runs");
+});
+
+test("the committed comparisons are those of the recordings, with no mismatch and no unknown row", async () => {
+  for (const [name, comparison] of Object.entries(record.comparisons)) {
+    const bytes = await bytesOf(comparison.path);
+    assert.equal(comparison.sha256, sha(bytes), name);
+    const document = JSON.parse(bytes);
+    assert.deepEqual(document.summary, comparison.summary, name);
+    assert.equal(document.summary.MISMATCH, 0, name);
+    assert.equal(document.summary.UNKNOWN, 0, name);
+    assert.equal(document.corpusSha256, manifest.corpusSha256);
+    assert.deepEqual(
+      document.knownDifferences.map((entry) => entry.id).toSorted(),
+      loadKnownDifferences()
+        .filter((entry) => entry.appliesTo.includes(document.comparison))
+        .map((entry) => entry.id)
+        .toSorted(),
+      name,
+    );
+  }
+  const total = (summary) => Object.values(summary).reduce((sum, count) => sum + count, 0);
+  for (const comparison of Object.values(record.comparisons))
+    assert.equal(total(comparison.summary), 201);
+  // a row with a known difference is KNOWN_DIFFERENCE, never MATCH: 18 rows of each strict comparison
+  assert.equal(record.comparisons.strictVsPass1.summary.KNOWN_DIFFERENCE, 18);
+  assert.equal(record.comparisons.strictVsPass2.summary.KNOWN_DIFFERENCE, 18);
+  assert.equal(record.comparisons.runVsRun.summary.KNOWN_DIFFERENCE, 2);
+  const knownFile = await bytesOf(record.knownDifferences.path);
+  assert.equal(record.knownDifferences.sha256, sha(knownFile));
+  assert.deepEqual(
+    record.knownDifferences.entries,
+    JSON.parse(knownFile).entries.map((entry) => entry.id),
+  );
+});
+
+test("every observed condition cites the recordings and comparisons its rows come from", async () => {
+  const expected = {};
+  for (const version of manifest.versions) {
+    for (const request of version.requests) {
+      if (request.infoOnly) continue;
+      for (const condition of [request.condition, ...(request.also ?? [])]) {
+        const entry = (expected[condition] ??= { versions: new Set(), requests: 0 });
+        entry.versions.add(version.id);
+        entry.requests += 1;
+      }
+    }
+  }
+  const ids = record.conditions.map((c) => c.conditionId);
+  assert.equal(new Set(ids).size, ids.length);
+  assert.deepEqual(
+    ids.map((id) => id.replace("HOSTING/", "")).toSorted(),
+    Object.keys(expected).toSorted(),
+    "closure conditions and corpus conditions agree",
+  );
+  const comparisons = {};
+  for (const [name, comparison] of Object.entries(record.comparisons))
+    comparisons[name] = await jsonOf(comparison.path);
+  const knownIds = new Set(record.knownDifferences.entries);
+  for (const condition of record.conditions) {
+    const key = condition.conditionId.replace("HOSTING/", "");
+    assert.ok(CONDITIONS.includes(key), key);
+    assert.equal(condition.status, "VERIFIED", key);
+    assert.equal(condition.observedPasses, 2, key);
+    assert.equal(condition.passComparison, "MATCH", key);
+    assert.equal(condition.reviewRef, record.closureReview.reviews[0].reportSha256, key);
+    assert.deepEqual(
+      condition.productionEvidence.map(({ alias, fixturePath, fixtureSha256 }) => ({
+        alias,
+        fixturePath,
+        fixtureSha256,
+      })),
+      record.recordings.map(({ alias, fixturePath, fixtureSha256 }) => ({
+        alias,
+        fixturePath,
+        fixtureSha256,
+      })),
+    );
+    assert.deepEqual(condition.productionCorpus, {
+      versions: [...expected[key].versions].toSorted(),
+      requests: expected[key].requests,
+    });
+    assert.deepEqual(condition.recipeIds, [`hosting/${key}`]);
+    assert.deepEqual(condition.profiles, {
+      strict: "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
+      emulator: "NO_PRODUCTION_CLAIM",
+    });
+    for (const [name, document] of Object.entries(comparisons)) {
+      const verdict = document.conditions[key];
+      assert.ok(verdict.closable, `${key} ${name}`);
+      assert.equal(verdict.rows, expected[key].requests);
+      assert.deepEqual(condition.comparisons[name], {
+        rows: verdict.rows,
+        counts: verdict.counts,
+        knownDifferenceRows: verdict.knownDifferenceRows,
+      });
+    }
+    for (const id of condition.knownDifferences) assert.ok(knownIds.has(id), id);
+  }
+});
+
+test("the four excluded conditions are NOT_COMPARED with a reason and the ruling that excludes them", () => {
+  assert.deepEqual(
+    record.excludedFromParent.map((c) => c.conditionId),
+    ["HOSTING/function-rewrites", "HOSTING/run-rewrites", "HOSTING/ignore", "HOSTING/local-safety"],
+  );
+  for (const condition of record.excludedFromParent) {
+    assert.equal(condition.status, "NOT_COMPARED");
+    assert.ok(isText(condition.reason) && condition.reason.length > 40);
+    assert.match(condition.authority, /owner ledger 2435/);
+    assert.equal(condition.reviewRef, undefined, "an excluded condition is never reviewed");
+    assert.equal(
+      record.conditions.some((c) => c.conditionId === condition.conditionId),
+      false,
+      "an excluded condition is not also in the claim",
+    );
+  }
+  const reasons = record.excludedFromParent.slice(2).map((c) => c.reason);
+  for (const reason of reasons)
+    assert.match(reason, /not observable in production; official-emulator comparison only/);
+});
+
+test("scope decisions keep the preview-channel and no-live-release rules", () => {
+  const ids = record.scopeDecisions.map((d) => d.id);
+  assert.deepEqual(ids, ["HOSTING-LOCAL-ONLY", "HOSTING-ORACLE", "HOSTING-REST-SCOPE"]);
+  const oracle = record.scopeDecisions.find((d) => d.id === "HOSTING-ORACLE").decision;
+  assert.match(oracle, /preview channels/);
+  assert.match(oracle, /never released to/);
+  assert.match(oracle, /authorized domains/);
+});
+
+test("the release comparisons are the committed ones, and the limitations name what no recording settles", async () => {
+  const regression = record.integratedRegression;
+  assert.deepEqual(
+    regression.comparisons.map((entry) => entry.path),
+    Object.values(record.comparisons).map((entry) => entry.path),
+  );
+  for (const entry of regression.comparisons) {
+    const bytes = await bytesOf(entry.path);
+    assert.equal(entry.sha256, sha(bytes), entry.path);
+    assert.equal(entry.rows, 201);
+    assert.deepEqual(entry.summary, JSON.parse(bytes).summary);
+  }
+  assert.match(regression.releaseBindingNote, /R37/);
+  const limits = record.limitations.join("\n");
+  for (const text of [
+    "KNOWN_DIFFERENCE",
+    "KD-AUTH-HANDLER-PAGE",
+    "ruling 20",
+    "`:id2`",
+    "Inferred, not recorded",
+    "416",
+    "multi-range",
+    "Range on HEAD",
+    "productionExact",
+    "init.js",
+    "raw backslash",
+    "/a/b/..",
+  ]) {
+    assert.ok(limits.includes(text), text);
+  }
+  assert.match(record.followUps.join("\n"), /404 page/);
+  assert.match(record.followUps.join("\n"), /digit-bearing/);
+  const compression = record.conditions.find((c) => c.conditionId === "HOSTING/compression-vary");
+  assert.match(compression.description, /gzip Content-Encoding/);
+  assert.match(compression.description, /KD-COMPRESSION: br only/);
+});
+
+test("KD-COMPRESSION is Brotli only: the gzip rows are compared, match in both strict comparisons and keep their decoded body compared", async () => {
+  const entry = JSON.parse(await bytesOf(record.knownDifferences.path)).entries.find(
+    (candidate) => candidate.id === "KD-COMPRESSION",
+  );
+  assert.deepEqual(entry.rows, [
+    "v01.gz-br",
+    "v01.gz-gzip-br",
+    "v01.gz-br-refused",
+    "v01.gz-json-br",
+  ]);
+  assert.deepEqual(entry.fields, ["header:content-encoding", "header:content-length"]);
+  assert.equal(entry.etagSuffix, "-br");
+  for (const name of ["strictVsPass1", "strictVsPass2"]) {
+    const rows = JSON.parse(await bytesOf(record.comparisons[name].path)).rows;
+    const status = Object.fromEntries(rows.map((row) => [row.id, row.status]));
+    for (const id of ["v01.gz-gzip", "v01.gz-head-gzip", "v01.gz-json-gzip", "v01.gz-png-gzip"]) {
+      assert.equal(status[id], "MATCH_LAYOUT", `${name} ${id}`);
+    }
+    for (const id of entry.rows) {
+      assert.equal(status[id], "KNOWN_DIFFERENCE", `${name} ${id}`);
+      const known = rows.find((row) => row.id === id).known.map((k) => k.field);
+      assert.deepEqual(
+        known.toSorted(),
+        ["header:content-encoding", "header:content-length", "header:etag"],
+        `${name} ${id}`,
+      );
+    }
+  }
+  const limits = record.limitations.join("\n");
+  for (const text of [
+    "Gzip: strict answers",
+    "miniz_oxide",
+    "32 MiB",
+    "x-gzip",
+    "headers rule sets Content-Encoding",
+    "precompressed `*.br` file",
+    "every Accept-Encoding line",
+  ]) {
+    assert.ok(limits.includes(text), text);
+  }
+});
+
+test("every known-difference field is used by a committed comparison, and a wildcard says why", async () => {
+  const entries = JSON.parse(await bytesOf(record.knownDifferences.path)).entries;
+  const used = new Map();
+  for (const comparison of Object.values(record.comparisons)) {
+    for (const row of JSON.parse(await bytesOf(comparison.path)).rows) {
+      for (const { field, entry } of row.known ?? []) {
+        if (!used.has(entry)) used.set(entry, new Set());
+        used.get(entry).add(field);
+      }
+    }
+  }
+  for (const entry of entries) {
+    assert.ok(used.has(entry.id), `${entry.id} is used by no committed comparison`);
+    if (entry.fields === "*") {
+      assert.ok(isText(entry.wildcardReason), `${entry.id}: "*" needs a wildcardReason`);
+      continue;
+    }
+    const listed = new Set(entry.fields);
+    if (entry.etagSuffix) listed.add("header:etag");
+    for (const field of listed) {
+      assert.ok(used.get(entry.id).has(field), `${entry.id} lists ${field}, which no row uses`);
+    }
+    for (const field of used.get(entry.id)) {
+      assert.ok(listed.has(field), `${entry.id} covers ${field} without listing it`);
+    }
+  }
+});

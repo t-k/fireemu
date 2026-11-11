@@ -1173,6 +1173,16 @@ test("fake world: the whole path records twelve answers over two deployments, cl
     assert.equal(terminal.requests.cliDeploy, 2);
     assert.equal(terminal.requests.cliDelete, 2);
     assert.equal(terminal.requests.auth, 6, "a user per program: created, deleted, looked up");
+    assert.deepEqual(terminal.requests, {
+      invocation: 12,
+      control: 21,
+      cleanup: 27,
+      auth: 6,
+      cliDeploy: 2,
+      cliDelete: 2,
+      token: 0,
+      upload: 10,
+    });
     assert.equal(terminal.estimatedUsd, 1.13);
     for (const [kind, cap] of Object.entries(CAPS)) {
       assert.ok(terminal.requests[kind] <= cap, `${kind} ${terminal.requests[kind]} <= ${cap}`);

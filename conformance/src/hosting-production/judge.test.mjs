@@ -451,6 +451,12 @@ test("near misses: encoded bodies of equal length differ by digest; the body kin
     compareRows(a, other).differences.map((d) => d.field),
     ["header:content-encoding", "decodedSha256"],
   );
+  // the sides are reported as given: a is the first row, b the second
+  assert.deepEqual(compareRows(a, other).differences[1], {
+    field: "decodedSha256",
+    a: a.decodedSha256,
+    b: other.bodySha256,
+  });
   const shorter = row(
     { target: "/compress/big.txt" },
     { headers: [["Content-Type", "text/plain"]], body: Buffer.from("aaaa") },

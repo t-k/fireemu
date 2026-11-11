@@ -1040,6 +1040,9 @@ fn rules_requests_route(state: &ControlState, method: &str, is_default: bool) ->
         .collect();
     ok(json!({
         "capacity": REQUEST_TRACE_CAPACITY,
+        "historyEnabled": diagnostics.request_traces_enabled(),
+        "retention": diagnostics.request_trace_capacity(),
+        "dropped": diagnostics.dropped(),
         "loaded": rules.is_loaded(),
         "source": rules.source,
         "generation": rules.generation().to_string(),

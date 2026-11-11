@@ -1206,6 +1206,10 @@ pub struct RuntimeConfig {
     /// printed on stderr with the `allow` conditions it evaluated (`"summary"`, the default) or
     /// not (`"off"`). The client's answer is production's either way.
     pub rules_denial_log: bool,
+    /// Whether request history starts when the daemon starts.
+    pub rules_denial_history_enabled: bool,
+    /// Maximum number of requests kept in the history.
+    pub rules_denial_history_retention: usize,
     /// Functions HTTP bind address.
     pub functions_addr: String,
     /// Hosting HTTP bind address.
@@ -1853,6 +1857,8 @@ impl Default for RuntimeConfig {
             storage_buckets_by_target: BTreeMap::new(),
             rules_enforced: true,
             rules_denial_log: true,
+            rules_denial_history_enabled: false,
+            rules_denial_history_retention: 100,
             functions_addr: "127.0.0.1:5001".to_owned(),
             hosting_addr: "127.0.0.1:5000".to_owned(),
             hosting_addr_explicit: false,
@@ -2328,6 +2334,8 @@ impl RuntimeConfig {
             "firestore.history.maxBytes" => self.history_max_bytes.map(|v| json!(v)),
             "rules.source" => Some(json!(self.rules_file)),
             "rules.denialLog" => Some(json!(if self.rules_denial_log { "summary" } else { "off" })),
+            "rules.denialHistory.enabled" => Some(json!(self.rules_denial_history_enabled)),
+            "rules.denialHistory.retention" => Some(json!(self.rules_denial_history_retention)),
             "storage.rules" => Some(json!(self.storage_rules_file)),
             "storage.maxStoredBytes" => Some(json!(self.storage_max_stored_bytes)),
             "storage.maxObjectBytes" => Some(json!(self.storage_max_object_bytes)),
@@ -4883,6 +4891,41 @@ impl RuntimeConfig {
         if let Some(source) = rules.get("source").and_then(Value::as_str) {
             cfg.rules_file = Some(source.to_owned());
         }
+        if let Some(value) = rules.get("denialHistory") {
+            let history = value
+                .as_object()
+                .ok_or_else(|| ConfigError("rules.denialHistory must be an object".into()))?;
+            for key in history.keys() {
+                if key != "enabled" && key != "retention" {
+                    return Err(ConfigError(format!(
+                        "unknown key rules.denialHistory.{key}"
+                    )));
+                }
+            }
+            if let Some(value) = rules["denialHistory"].get("enabled") {
+                cfg.rules_denial_history_enabled = value.as_bool().ok_or_else(|| {
+                    ConfigError("rules.denialHistory.enabled must be a boolean".into())
+                })?;
+            }
+            if let Some(value) = rules["denialHistory"].get("retention") {
+                cfg.rules_denial_history_retention = usize::try_from(
+                    value
+                        .as_u64()
+                        .filter(|n| (1..=10_000).contains(n))
+                        .ok_or_else(|| {
+                            ConfigError(
+                                "rules.denialHistory.retention must be an integer from 1 to 10000"
+                                    .into(),
+                            )
+                        })?,
+                )
+                .map_err(|_| {
+                    ConfigError(
+                        "rules.denialHistory.retention must be an integer from 1 to 10000".into(),
+                    )
+                })?;
+            }
+        }
         if let Some(value) = rules.get("denialLog") {
             cfg.rules_denial_log = match value.as_str() {
                 Some("summary") => true,
@@ -6550,6 +6593,8 @@ mod tests {
             ),
             ("rules.source", json!(null), "unset"),
             ("rules.denialLog", json!("summary"), "default"),
+            ("rules.denialHistory.enabled", json!(false), "default"),
+            ("rules.denialHistory.retention", json!(100), "default"),
             ("auth.idTokenSigning", json!("unsigned-emulator"), "default"),
             ("auth.apiKeys", json!([]), "default"),
             ("auth.requireClientApiKey", json!(false), "default"),
@@ -7051,6 +7096,14 @@ mod tests {
                     json!(cfg.history_max_bytes.unwrap_or(
                         fireemu_core_firestore::store::HistoryLimits::default().max_bytes
                     )),
+                ),
+                (
+                    "rules.denialHistory.enabled",
+                    json!(cfg.rules_denial_history_enabled),
+                ),
+                (
+                    "rules.denialHistory.retention",
+                    json!(cfg.rules_denial_history_retention),
                 ),
                 (
                     "rules.denialLog",
@@ -8730,6 +8783,45 @@ mod tests {
             .unwrap_err();
         assert!(e.0.contains("unknown config key network.other"), "{}", e.0);
         assert!(!RuntimeConfig::default().allow_non_loopback_hosts);
+    }
+
+    #[test]
+    fn denial_history_config_and_show() {
+        let defaults = RuntimeConfig::default();
+        assert!(!defaults.rules_denial_history_enabled);
+        assert_eq!(defaults.rules_denial_history_retention, 100);
+        for retention in [1, 100, 10_000] {
+            let input = json!({"schemaVersion": 1, "rules": {"denialHistory": {"enabled": true, "retention": retention}}});
+            let config = RuntimeConfig::from_json(&input).unwrap();
+            assert!(config.rules_denial_history_enabled);
+            assert_eq!(config.rules_denial_history_retention, retention);
+            let rows = config.config_show(&input);
+            assert!(rows
+                .iter()
+                .any(|row| row["key"] == "rules.denialHistory.enabled" && row["value"] == true));
+            assert!(rows
+                .iter()
+                .any(|row| row["key"] == "rules.denialHistory.retention"
+                    && row["value"] == retention));
+        }
+        for value in [
+            json!(false),
+            json!({"retention": 0}),
+            json!({"retention": 10001}),
+            json!({"retention": "3"}),
+            json!({"enabled": "yes"}),
+            json!({"unknown": true}),
+        ] {
+            let error = RuntimeConfig::from_json(
+                &json!({"schemaVersion": 1, "rules": {"denialHistory": value}}),
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains("rules.denialHistory"), "{error}");
+        }
+        assert!(RuntimeConfig::from_json(
+            &json!({"schemaVersion": 1, "rules": {"denialHistory": {}}})
+        )
+        .is_ok());
     }
 
     #[test]

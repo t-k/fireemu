@@ -242,6 +242,14 @@
       "properties": {
         "executionMode": { "enum": ["admin-bypass", "native", "oracle", "disabled"] },
         "source": { "type": "string" },
+        "denialHistory": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean", "default": false },
+            "retention": { "type": "integer", "minimum": 1, "maximum": 10000, "default": 100 }
+          }
+        },
         "denialLog": {
           "enum": ["summary", "off"],
           "default": "summary",

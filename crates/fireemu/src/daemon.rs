@@ -2294,6 +2294,10 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             RulesetSlot::new(load_rules(&cfg, &mut compilations)?)
                 .with_lone_surrogates(rules_literals),
         );
+        if cfg.rules_denial_history_enabled {
+            let snapshot = rules.snapshot()?;
+            snapshot.diagnostics.lock().map_err(|_| "rules diagnostics are poisoned".to_owned())?.enable_request_traces_with_capacity(cfg.rules_denial_history_retention);
+        }
         let mut database_rules = std::collections::BTreeMap::new();
         for (database, files) in &cfg.firestore_databases {
             if database == fireemu_core_types::ids::DatabaseId::DEFAULT {

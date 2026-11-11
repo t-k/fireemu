@@ -562,6 +562,9 @@ pub struct RulesDiagnostics {
     requests: VecDeque<RequestTrace>,
     next_sequence: u64,
     request_traces_enabled: bool,
+    request_trace_capacity: usize,
+    configured_trace_capacity: Option<usize>,
+    dropped: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -591,7 +594,7 @@ impl RulesDiagnostics {
             observation_count,
             estimated_coverage_bytes,
             request_trace_count: count(self.requests.len()),
-            request_trace_capacity: count(REQUEST_TRACE_CAPACITY),
+            request_trace_capacity: count(self.request_trace_capacity()),
             request_traces_enabled: self.request_traces_enabled,
         }
     }
@@ -618,7 +621,44 @@ impl RulesDiagnostics {
 
     /// Enables the fireemu-specific request trace ring for subsequent decisions.
     pub fn enable_request_traces(&mut self) {
+        if !self.request_traces_enabled {
+            self.request_traces_enabled = true;
+            self.request_trace_capacity = REQUEST_TRACE_CAPACITY;
+        }
+    }
+
+    /// Enables request traces with the configured retention across ruleset replacements.
+    pub fn enable_request_traces_with_capacity(&mut self, capacity: usize) {
+        assert!((1..=10_000).contains(&capacity));
         self.request_traces_enabled = true;
+        self.request_trace_capacity = capacity;
+        self.configured_trace_capacity = Some(capacity);
+        while self.requests.len() > capacity {
+            self.requests.pop_front();
+            self.dropped += 1;
+        }
+    }
+
+    /// The configured startup retention, if any.
+    #[must_use]
+    pub const fn configured_trace_capacity(&self) -> Option<usize> {
+        self.configured_trace_capacity
+    }
+
+    /// The current retention limit.
+    #[must_use]
+    pub const fn request_trace_capacity(&self) -> usize {
+        if self.request_trace_capacity == 0 {
+            REQUEST_TRACE_CAPACITY
+        } else {
+            self.request_trace_capacity
+        }
+    }
+
+    /// The number of requests removed from the current interval.
+    #[must_use]
+    pub const fn dropped(&self) -> u64 {
+        self.dropped
     }
 
     /// Whether a client has requested fireemu-specific request traces.
@@ -632,6 +672,7 @@ impl RulesDiagnostics {
     pub fn clear(&mut self) {
         self.coverage = Coverage::default();
         self.requests.clear();
+        self.dropped = 0;
     }
 
     /// Folds one decided request into the session's diagnostics.
@@ -642,8 +683,9 @@ impl RulesDiagnostics {
         }
         self.next_sequence += 1;
         let sequence = self.next_sequence;
-        if self.requests.len() >= REQUEST_TRACE_CAPACITY {
+        if self.requests.len() >= self.request_trace_capacity() {
             self.requests.pop_front();
+            self.dropped += 1;
         }
         self.requests.push_back(trace(sequence));
     }
@@ -657,6 +699,43 @@ impl RulesDiagnostics {
 #[cfg(test)]
 mod index_tests {
     use super::*;
+
+    proptest::proptest! {
+        #[test]
+        fn request_trace_retains_newest(capacity in 1usize..=10_000, n in 0usize..20_000) {
+            let mut diagnostics = RulesDiagnostics::default();
+            diagnostics.enable_request_traces_with_capacity(capacity);
+            for _ in 0..n {
+                diagnostics.push(&Coverage::default(), |sequence| RequestTrace {
+                    sequence, method: "get", path: String::new(), allowed: false,
+                    reason: String::new(), uid: None, expressions: Vec::new(),
+                });
+            }
+            let requests = diagnostics.requests();
+            proptest::prop_assert_eq!(requests.len(), n.min(capacity));
+            proptest::prop_assert!(requests.iter().enumerate().all(|(i, request)| request.sequence == (n - i) as u64));
+            proptest::prop_assert_eq!(diagnostics.dropped(), (n - n.min(capacity)) as u64);
+        }
+    }
+
+    #[test]
+    fn default_request_trace_capacity_is_100() {
+        let mut diagnostics = RulesDiagnostics::default();
+        diagnostics.enable_request_traces();
+        for _ in 0..101 {
+            diagnostics.push(&Coverage::default(), |sequence| RequestTrace {
+                sequence,
+                method: "get",
+                path: String::new(),
+                allowed: false,
+                reason: String::new(),
+                uid: None,
+                expressions: Vec::new(),
+            });
+        }
+        assert_eq!(diagnostics.requests().len(), 100);
+        assert_eq!(diagnostics.dropped(), 1);
+    }
 
     /// The reference the indexed path must agree with: a linear scan, bounded the same way.
     fn linear_record(values: &mut Vec<(ExprValue, u64)>, value: ExprValue, count: u64) {

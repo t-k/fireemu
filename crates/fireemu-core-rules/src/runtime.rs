@@ -466,6 +466,19 @@ impl RulesetSlot {
             Some(mode) => loaded.with_lone_surrogates(mode),
             None => loaded,
         };
+        let capacity = active
+            .loaded
+            .diagnostics
+            .lock()
+            .map_err(|_| "rules diagnostics are poisoned".to_owned())?
+            .configured_trace_capacity();
+        if let Some(capacity) = capacity {
+            loaded
+                .diagnostics
+                .lock()
+                .map_err(|_| "rules diagnostics are poisoned".to_owned())?
+                .enable_request_traces_with_capacity(capacity);
+        }
         *active = Arc::new(ActiveRules {
             generation,
             loaded: Arc::new(loaded),

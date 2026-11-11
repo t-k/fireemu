@@ -5,7 +5,7 @@ description: Serve one Firebase Hosting site locally from firebase.json, with re
 
 Fireemu serves one Firebase Hosting site from the `hosting` entry of `firebase.json`: static files, redirects, rewrites, custom headers, clean URLs, trailing-slash handling and localized content. A rewrite can send a request to a function of a Functions codebase in the same run. Hosting is **verified against production for its recorded cases**: the `strict` profile, the default, answers as Firebase Hosting answered 201 requests recorded twice on preview channels, apart from the known differences listed below, and the `emulator` profile is compared offline with `firebase-tools` 15.28.2 on a finite set of cases and makes no production claim (see [Profiles](#profiles) and [Verification status](#verification-status)).
 
-Hosting is available since v0.45.0. Behaviour that changed in a later release is listed under [Changes in v0.47.0](#changes-in-v0470) below.
+Hosting is available since v0.45.0. Behaviour that changed in a later release is listed under [Changes in v0.47.0](#changes-in-v0470) and [Changes in v0.49.0](#changes-in-v0490) below.
 
 ## Start Hosting
 
@@ -127,6 +127,14 @@ These changes are in v0.47.0 and later; v0.45.0 and v0.46.0 behaved differently 
 - `ignore` patterns ignore case the way `firebase-tools` does on macOS and Windows (a JavaScript regular expression with the `i` flag, as the `glob` package compiles them); on Linux they stay case-sensitive.
 - `headers`, `rewrites` and glob `redirects` sources treat a run of slashes as one, and a pattern also matches a path with one trailing slash, as the pinned `superstatic` does. A percent-encoded alias such as `/%64ata.json` still does not get a header rule, as in the pinned emulator.
 - A rule whose `source` is empty matches nothing and falls through to its `regex`, as `superstatic` does.
+
+## Changes in v0.49.0
+
+These changes are in v0.49.0 and later; earlier releases answered the same under `strict` and `emulator` and had no `hosting.cacheControl` or `hosting.clientCountry` key (see the [changelog](https://github.com/fireemu/fireemu/blob/main/CHANGELOG.md)):
+
+- The `strict` profile, the default, answers as Firebase Hosting answered the production corpus; see [Profiles](#profiles) for each answer. The `emulator` profile is unchanged.
+- `hosting.cacheControl` and `hosting.clientCountry` are new [development defaults](#development-defaults); `productionExact` turns both to production's behaviour.
+- Under `strict`, `/__/firebase/init.json` and `init.js` are answered after the redirects, and `appAssociation: "AUTO"` generates the two association documents.
 
 ## Verification status
 

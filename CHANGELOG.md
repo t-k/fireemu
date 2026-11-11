@@ -8,6 +8,8 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+## [0.49.0] - 2026-11-11
+
 ### Added
 
 - Auth: `auth.requireClientApiKey` opts the emulator profile into the official emulator’s 403 for client requests with neither an API key nor an Authorization header. It defaults to false and does not change strict behavior.
@@ -34,7 +36,7 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ### Documentation
 
-- Site: the home page quick start has tabs for automated tests and for local development with the Emulator UI, with a screenshot; the products table uses status badges, with the long Partial cells moved to Limitations; the next steps split new projects from migration from the Local Emulator Suite. Why Fireemu opens with a comparison table whose figures come from the measured Performance page; the Install page lists the prerequisites first and the real output of `fireemu init`; the Cloud Firestore page gains a Connect section, grouped control API notes and refused/accepted `firestore.indexes.json` examples; a new Environment variables reference and error-message answers on the Troubleshooting page are added.
+- Site: the home page quick start has tabs for automated tests and for local development with the Emulator UI; the products table uses status badges, with the long Partial cells moved to Limitations; the next steps split new projects from migration from the Local Emulator Suite. Why Fireemu opens with a comparison table whose figures come from the measured Performance page; the Install page lists the prerequisites first and the real output of `fireemu init`; the Cloud Firestore page gains a Connect section, grouped control API notes and refused/accepted `firestore.indexes.json` examples; a new Environment variables reference and error-message answers on the Troubleshooting page are added.
 - Site: the Authentication page opens with what Fireemu adds and a Connect section, groups the settings by purpose, and has a TOTP enrollment and sign-in walkthrough and the real console output for action links and SMS codes; the App Check page opens with a scope summary, splits quick testing from registered apps and compares the Storage admission modes; the Cloud Storage page gains Connect and Configure sections and a production-behavior summary; the Cloud Functions page gains a Connect snippet, trigger caveats, parameter and secret file tables and a Run now table.
 
 ## [0.48.0] - 2026-11-10
@@ -1294,7 +1296,8 @@ Security Rules (FS-RULES): behavior below was measured against a real Firestore 
 - The `strict` and `firebase` compatibility profiles, the Capability Manifest, and the Compatibility Contract pinned to firebase-tools 15.28.2.
 - `fireemu init`, `up`, `exec`, `emulators:export`, `doctor`, and `capabilities` commands, with the official `emulators:start` and `emulators:exec` spellings as aliases.
 
-[Unreleased]: https://github.com/fireemu/fireemu/compare/v0.48.0...HEAD
+[Unreleased]: https://github.com/fireemu/fireemu/compare/v0.49.0...HEAD
+[0.49.0]: https://github.com/fireemu/fireemu/compare/v0.48.0...v0.49.0
 [0.48.0]: https://github.com/fireemu/fireemu/compare/v0.47.0...v0.48.0
 [0.47.0]: https://github.com/t-k/fireemu/compare/v0.46.0...v0.47.0
 [0.46.0]: https://github.com/t-k/fireemu/compare/v0.45.0...v0.46.0

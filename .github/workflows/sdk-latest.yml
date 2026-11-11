@@ -138,6 +138,8 @@ jobs:
 
   published-light:
     if: (github.event_name == 'schedule' && github.event.schedule == '0 4 * * *') || (github.event_name == 'workflow_dispatch' && inputs.suite == 'light')
+    # Latest SDK runtime code receives read-only cache tokens, as in latest-sdk-under-exec.
+    cache-mode: read
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -186,6 +188,8 @@ jobs:
 
   published-broad:
     if: (github.event_name == 'schedule' && github.event.schedule == '0 3 * * 2') || (github.event_name == 'workflow_dispatch' && inputs.suite == 'broad')
+    # Latest SDK runtime code receives read-only cache tokens, as in latest-sdk-under-exec.
+    cache-mode: read
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:

@@ -51,14 +51,19 @@ module ActionsSecurityContract
       end
     end
     if name == "sdk-latest.yml"
-      job = jobs.fetch(SDK_JOB)
-      effective = job.fetch("cache-mode", workflow["cache-mode"])
-      errors << "SDK execution must have effective read-only cache access" unless %w[read none].include?(effective)
-      steps = job.fetch("steps")
-      checkout = steps.find { |step| step["uses"].to_s.start_with?("actions/checkout@") }
-      errors << "SDK checkout must not persist credentials" unless checkout&.dig("with", "persist-credentials") == false
-      cache = steps.find { |step| step["uses"].to_s.start_with?("Swatinem/rust-cache@") }
-      errors << "SDK cache action must not save" unless cache&.dig("with", "save-if").to_s == "false"
+      jobs.each do |job_name, job|
+        effective = job.fetch("cache-mode", workflow["cache-mode"])
+        errors << "#{job_name} must have effective read-only cache access" unless %w[read none].include?(effective)
+        steps = job.fetch("steps")
+        checkout = steps.find { |step| step["uses"].to_s.start_with?("actions/checkout@") }
+        errors << "#{job_name} checkout must not persist credentials" unless checkout&.dig("with", "persist-credentials") == false
+        steps.each do |step|
+          action = step["uses"].to_s
+          errors << "#{job_name} cache action must not save" if action.start_with?("Swatinem/rust-cache@") && step.dig("with", "save-if").to_s != "false"
+          errors << "#{job_name} must not use actions/cache" if action.match?(%r{\Aactions/cache(?:/|@)})
+        end
+      end
+      steps = jobs.fetch(SDK_JOB).fetch("steps")
       runs = steps.map { |step| step.fetch("run", "") }.join("\n")
       ["npm view firebase-admin version", "npm view firebase version", "npm install --ignore-scripts", "storage.mjs", "client.mjs"].each do |command|
         errors << "SDK latest smoke must retain #{command}" unless runs.include?(command)

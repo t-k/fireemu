@@ -127,6 +127,7 @@ latest_jobs = latest.fetch("jobs")
 assert(latest_jobs.keys.sort == %w[latest-sdk-under-exec published-broad published-light], "sdk-latest must have exactly three jobs")
 latest_steps = latest_jobs.values.flat_map do |job|
   assert(!job.key?("permissions"), "sdk-latest jobs must inherit permissions")
+  assert(job["cache-mode"] == "read", "sdk-latest jobs must declare read-only cache access")
   timeout = job["timeout-minutes"]
   assert(timeout.is_a?(Integer) && (1..60).cover?(timeout), "sdk-latest jobs must have a timeout at most 60 minutes")
   job.fetch("steps")

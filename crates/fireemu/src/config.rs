@@ -4393,11 +4393,6 @@ impl RuntimeConfig {
         } else {
             DeadLetterAuthorization::Implicit
         };
-        self.pubsub_rest_negative_cache = if exact {
-            RestNegativeCacheMode::Production
-        } else {
-            RestNegativeCacheMode::Off
-        };
         self.database_default_access = if exact {
             DatabaseDefaultAccess::Locked
         } else {
@@ -4499,10 +4494,6 @@ impl RuntimeConfig {
             (
                 "pubsub.deadLetterAuthorization",
                 self.pubsub_dead_letter_authorization.as_config_str(),
-            ),
-            (
-                "pubsub.restNegativeCache",
-                self.pubsub_rest_negative_cache.as_config_str(),
             ),
             (
                 "appCheck.debugTokens",
@@ -6940,10 +6931,6 @@ mod tests {
                     json!(cfg.pubsub_dead_letter_authorization.as_config_str()),
                 ),
                 (
-                    "pubsub.restNegativeCache",
-                    json!(cfg.pubsub_rest_negative_cache.as_config_str()),
-                ),
-                (
                     "database.defaultAccess",
                     json!(cfg.database_default_access.as_config_str()),
                 ),
@@ -7013,8 +7000,7 @@ mod tests {
                     (
                         "functions.authBlockingToken"
                         | "eventarc.authentication"
-                        | "hosting.cacheControl"
-                        | "pubsub.restNegativeCache",
+                        | "hosting.cacheControl",
                         true,
                     ) => json!("production"),
                     // The key only matters to the strict profile; the emulator profile
@@ -10763,14 +10749,21 @@ mod tests {
                 RuntimeConfig::from_json(&json!({"schemaVersion": 1, "profile": profile})).unwrap();
             assert_eq!(cfg.pubsub_rest_negative_cache, RestNegativeCacheMode::Off);
         }
-        let mut cfg = RuntimeConfig::default();
-        cfg.set_production_exact(true);
+        // `productionExact` does not turn it on: that link needs an explicit owner decision.
+        for exact in [false, true] {
+            let cfg =
+                RuntimeConfig::from_json(&json!({"schemaVersion": 1, "productionExact": exact}))
+                    .unwrap();
+            assert_eq!(cfg.pubsub_rest_negative_cache, RestNegativeCacheMode::Off);
+        }
+        let cfg = RuntimeConfig::from_json(
+            &json!({"schemaVersion": 1, "productionExact": true, "pubsub": {"restNegativeCache": "production"}}),
+        )
+        .unwrap();
         assert_eq!(
             cfg.pubsub_rest_negative_cache,
             RestNegativeCacheMode::Production
         );
-        cfg.set_production_exact(false);
-        assert_eq!(cfg.pubsub_rest_negative_cache, RestNegativeCacheMode::Off);
     }
 
     #[test]
@@ -10783,7 +10776,6 @@ mod tests {
             "firestore.listenStreamLifetime",
             "auth.tenantIdFormat",
             "pubsub.deadLetterAuthorization",
-            "pubsub.restNegativeCache",
             "appCheck.debugTokens",
             "functions.authBlockingToken",
         ];
@@ -10795,7 +10787,6 @@ mod tests {
             "unlimited",
             "readable",
             "implicit",
-            "off",
             "any",
             "emulated",
         ];
@@ -10807,7 +10798,6 @@ mod tests {
             "oneHour",
             "generated",
             "iam",
-            "production",
             "registered",
             "production",
         ];

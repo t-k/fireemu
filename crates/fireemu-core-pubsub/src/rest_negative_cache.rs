@@ -4,7 +4,8 @@
 //! 404 for roughly 9.5 seconds after a real 404 on the same URL resource, even when the
 //! resource has been created in the meantime. gRPC and topics never show it. A cached 404
 //! right after a successful create makes local tests flaky, so this model is **off unless
-//! `productionExact` asks for it**; the adapter holds it only then.
+//! `pubsub.restNegativeCache = "production"` asks for it** (strict profile only, an explicit
+//! opt-in); the adapter holds it only then.
 //!
 //! The rule below is PROVISIONAL (`negcache-v1`). It is the best fit of the recorded
 //! production runs (see the issue `pubsub-rest-negative-cache-emulation`), not a verified

@@ -2837,14 +2837,14 @@ mod tests {
         for (config, enabled) in [
             (serde_json::json!({}), false),
             (serde_json::json!({"profile": "emulator"}), false),
-            (serde_json::json!({"productionExact": true}), true),
+            (serde_json::json!({"productionExact": true}), false),
             (
                 serde_json::json!({"pubsub": {"restNegativeCache": "production"}}),
                 true,
             ),
             (
-                serde_json::json!({"productionExact": true, "pubsub": {"restNegativeCache": "off"}}),
-                false,
+                serde_json::json!({"productionExact": true, "pubsub": {"restNegativeCache": "production"}}),
+                true,
             ),
         ] {
             let mut input = config;

@@ -522,7 +522,7 @@ impl PubSubHandle {
     /// Whether the REST frontend reproduces production's negative cache: a real 404 for a
     /// subscription or snapshot is repeated for a short window even after the resource exists.
     /// Off by default, because it makes a test that creates a resource right after probing it
-    /// fail; `productionExact` turns it on. gRPC and topics are never affected. The rule is
+    /// fail; the `pubsub.restNegativeCache = "production"` setting turns it on. gRPC and topics are never affected. The rule is
     /// provisional until the observation packet has been recorded.
     #[must_use]
     pub fn with_rest_negative_cache(mut self, enabled: bool) -> Self {

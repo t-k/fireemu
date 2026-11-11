@@ -4,7 +4,7 @@ use std::fmt::Write as _;
 use std::io::{IsTerminal as _, Write};
 use std::path::{Path, PathBuf};
 
-use crate::config::CANONICAL_SCHEMA_URL;
+use crate::config::installed_schema_url;
 use crate::CliError;
 
 static NEXT_TEMP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -97,7 +97,7 @@ pub fn run(args: &[String]) -> Result<PathBuf, CliError> {
         let _ = crate::read_firebase_json(&source)?;
     }
     let mut document = serde_json::json!({
-        "$schema": CANONICAL_SCHEMA_URL,
+        "$schema": installed_schema_url(),
         "schemaVersion": 1,
         "profile": options.profile.unwrap_or(Profile::Strict).as_str(),
         "firestore": { "edition": "standard", "apiMode": "native" }
@@ -109,7 +109,8 @@ pub fn run(args: &[String]) -> Result<PathBuf, CliError> {
         document["firebaseJson"] = firebase_json.into();
     }
     let mut output_document = format!(
-        "#:schema {CANONICAL_SCHEMA_URL}\nschemaVersion = 1\nprofile = {}\n",
+        "#:schema {}\nschemaVersion = 1\nprofile = {}\n",
+        installed_schema_url(),
         document["profile"]
     );
     // Keep the required version and profile first without changing TOML table scope.
@@ -170,7 +171,7 @@ fn reference_document(is_toml: bool) -> String {
         }
     }
     let mut output = if is_toml {
-        format!("#:schema {CANONICAL_SCHEMA_URL}\n# This reference file is not loaded by fireemu. Edit fireemu.toml to configure it.\n# Copying a key into fireemu.toml makes it explicit and stops productionExact from switching that key. Commented examples are not active defaults.\n")
+        format!("#:schema {}\n# This reference file is not loaded by fireemu. Edit fireemu.toml to configure it.\n# Copying a key into fireemu.toml makes it explicit and stops productionExact from switching that key. Commented examples are not active defaults.\n", installed_schema_url())
     } else {
         String::from("// This reference file is not loaded by fireemu. Edit fireemu.json to configure it.\n// Do not create fireemu.toml beside fireemu.json.\n// Copying a key into fireemu.json makes it explicit and stops productionExact from switching that key. Commented examples are not active defaults.\n{\n")
     };
@@ -256,10 +257,15 @@ fn reference_document(is_toml: bool) -> String {
             }
             sections.push((path, commented, false));
         } else {
-            let value = schema
-                .get("default")
-                .or_else(|| schema.get("examples").and_then(|v| v.get(0)))
-                .or_else(|| schema.get("const"));
+            let installed = serde_json::Value::String(installed_schema_url());
+            let value = if path == "$schema" {
+                Some(&installed)
+            } else {
+                schema
+                    .get("default")
+                    .or_else(|| schema.get("examples").and_then(|v| v.get(0)))
+                    .or_else(|| schema.get("const"))
+            };
             let key = if path == "$schema" {
                 "\"$schema\""
             } else {
@@ -653,12 +659,12 @@ fn replace_path(temporary: &Path, destination: &Path, existing: bool) -> Result<
 mod tests {
 
     #[test]
-    fn references_show_the_repository_schema_location() {
+    fn references_show_the_schema_location_of_the_installed_version() {
         for is_toml in [false, true] {
             let reference = super::reference_document(is_toml);
             let (_, section) = reference.split_once("$schema:\n").unwrap();
             let assignment = section.lines().nth(1).unwrap();
-            assert!(assignment.contains(crate::config::CANONICAL_SCHEMA_URL));
+            assert!(assignment.contains(&crate::config::installed_schema_url()));
             assert!(!assignment.contains("fireemu.dev"));
         }
     }

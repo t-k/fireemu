@@ -320,7 +320,7 @@ fn main() -> ExitCode {
             }
             Err(e) => fail_for(command, &e),
         },
-        Some("config") => match config_show_command(&args[1..]) {
+        Some("config") => match config_command(&args[1..]) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => fail_for(command, &e),
         },
@@ -396,12 +396,53 @@ fn test_world_config_command(args: &[String]) -> Result<(), CliError> {
     Ok(())
 }
 
+const CONFIG_USAGE: &str = "usage: fireemu config show [--config <path>] [--firebase-json <path>] [--json]\n       fireemu config schema [--out <path>]";
+
+fn config_command(args: &[String]) -> Result<(), CliError> {
+    match args.first().map(String::as_str) {
+        Some("schema") => config_schema_command(&args[1..]),
+        _ => config_show_command(args),
+    }
+}
+
+/// `fireemu config schema [--out <path>]`: the JSON Schema this binary validates configuration
+/// with, byte for byte, on stdout or in a file. Generated configuration files point at the
+/// schema of their release tag; this prints the same bytes without the network.
+fn config_schema_command(args: &[String]) -> Result<(), CliError> {
+    let mut out: Option<&str> = None;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--out" if out.is_none() => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| CliError::usage("--out needs a value"))?;
+                out = Some(value);
+                index += 2;
+            }
+            other => {
+                return Err(CliError::usage(format!(
+                    "unknown argument {}\n{CONFIG_USAGE}",
+                    diagnostic_text(other)
+                )))
+            }
+        }
+    }
+    match out {
+        Some(path) => std::fs::write(path, config::CONFIG_SCHEMA_JSON)
+            .map_err(|e| CliError::refused(format!("cannot write {}: {e}", diagnostic_text(path)))),
+        None => std::io::Write::write_all(
+            &mut std::io::stdout().lock(),
+            config::CONFIG_SCHEMA_JSON.as_bytes(),
+        )
+        .map_err(|e| CliError::refused(format!("cannot write the schema: {e}"))),
+    }
+}
+
 #[allow(clippy::too_many_lines)]
 fn config_show_command(args: &[String]) -> Result<(), CliError> {
     if args.first().map(String::as_str) != Some("show") {
-        return Err(CliError::usage(
-            "usage: fireemu config show [--config <path>] [--firebase-json <path>] [--json]",
-        ));
+        return Err(CliError::usage(CONFIG_USAGE));
     }
     let mut flags = Vec::new();
     let mut json = false;

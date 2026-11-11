@@ -14,6 +14,7 @@ This reference lists common fireemu commands and options. Run `npx fireemu --hel
 | [`doctor`](#doctor) | Check the installation: binary, UI, Functions runner, Node.js |
 | [`capabilities`](#capabilities) | Print the capability manifest of the resolved profile as JSON |
 | [`config show`](#config-show) | Print every configuration key with its effective value and source |
+| [`config schema`](#config-schema) | Print the configuration schema bundled in this binary, or write it to a file |
 | `--version` (also `-V`, `version`) | Print the version and exit |
 | `help [command]` (also `--help`, `-h`) | Print the command list, or the help of one command |
 
@@ -193,3 +194,7 @@ options: every option of `up` (listed under up above); only --config and --fireb
 - When the runtime does not expose a value, the command uses its explicit file value, its schema default (marked `default (schema)`), or `(unset)` (`null` with source `unset` in JSON).
 - A key the configuration accepts but the daemon does not read (for example `bind`, `limits.catalog`, `firestore.textSearch.*`, `rules.staticLimitChecks`, `auth.enabled` and `trace.*`) has the source `accepted, no effect`: its value is shown as written, or `(unset)`, never as if it were in effect, and a configuration that sets one prints a `note:` line at start-up.
 - `firebaseJson` shows the Firebase configuration file actually selected, including one chosen with `--firebase-json`.
+
+## config schema
+
+`fireemu config schema` prints the JSON Schema that this binary validates configuration with, byte for byte and without the network. `--out <path>` writes it to a file instead (an existing file is replaced, so the copy follows an upgrade) and prints nothing. `fireemu init` writes the schema URL of the installed release into the files it generates; use `config schema` when an editor or tool needs the schema of the installed version and cannot fetch that URL.
